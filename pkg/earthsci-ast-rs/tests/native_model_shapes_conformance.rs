@@ -15,7 +15,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use earthsci_ast::{
     AssertionResult, BuildProviderFactory, Compiler, InlineTestOptions, SolveOptions,
@@ -23,10 +23,6 @@ use earthsci_ast::{
 };
 
 use crate::common;
-
-fn tier_dir() -> PathBuf {
-    common::repo_fixture("conformance/native_model_shapes")
-}
 
 fn run(
     file: &earthsci_ast::EsmFile,
@@ -86,7 +82,7 @@ fn check(id: &str, interp: &[AssertionResult], native: &[AssertionResult]) -> Ve
 /// Every tier document, with the build pipeline on.
 #[test]
 fn tier_shapes_agree_on_the_build_pipeline() {
-    let dir = tier_dir();
+    let dir = common::category_dir("native_model_shapes");
     let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
@@ -120,7 +116,7 @@ fn ingested_shapes_agree() {
     use earthsci_ast::esio_provider::providers_from_document;
     use serde_json::Value;
 
-    let dir = tier_dir().join("ingest");
+    let dir = common::category_dir("native_model_shapes").join("ingest");
     let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());

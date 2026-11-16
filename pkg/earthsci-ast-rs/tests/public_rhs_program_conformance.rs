@@ -6,7 +6,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use earthsci_ast::{
@@ -16,17 +15,6 @@ use ndarray::{ArrayD, IxDyn, ShapeBuilder};
 use serde_json::Value;
 
 use crate::common;
-
-fn suite_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/public_rhs_program")
-        .canonicalize()
-        .expect("suite directory")
-}
-
-fn manifest() -> Value {
-    common::read_json(suite_dir().join("manifest.json"))
-}
 
 fn fnv1a32(key: &str) -> u32 {
     key.bytes().fold(0x811c_9dc5u32, |h, b| {
@@ -50,7 +38,7 @@ fn bits(v: &[f64]) -> Vec<u64> {
 }
 
 fn problem(c: &Value, options: &Value) -> earthsci_ast::EsmProblem {
-    let path = suite_dir().join(c["document"].as_str().unwrap());
+    let path = common::category_dir("public_rhs_program").join(c["document"].as_str().unwrap());
     esm_problem(
         path.as_path(),
         (0.0, 1.0),
@@ -578,7 +566,7 @@ fn fault_case(m: &Value, c: &Value) {
 
 #[test]
 fn public_rhs_program_manifest() {
-    let m = manifest();
+    let m = common::tier_manifest("public_rhs_program");
     for chk in m["generator"]["checks"].as_array().unwrap() {
         let got = h(
             chk["key"].as_str().unwrap(),

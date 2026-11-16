@@ -17,68 +17,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{Alg, SolveOptions, load_string};
-use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/scalar_ic")
-}
+use crate::common::tier::{GoldenCheck, Tier};
 
 #[test]
 fn scalar_ic_matches_golden() {
-    let dir = category_dir();
-    let manifest = common::read_json(dir.join("manifest.json"));
-    common::assert_tier_header(&manifest, "scalar_ic");
-
-    let (rtol, atol) = common::assertion_tolerances(&manifest);
-    let opts = common::erk_solve_options(&manifest);
-
-    for fx in manifest["fixtures"].as_array().expect("fixtures") {
-        let esm_path = dir.join(fx["path"].as_str().expect("path"));
-        let golden = common::read_json(dir.join(fx["golden"].as_str().expect("golden")));
-        assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
-
-        let text =
-            fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-        let file = load_string(&text)
-            .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results = run_inline_tests_with_options(
-            &file,
-            &InlineTestOptions {
-                model_name: fx["model"].as_str().map(str::to_string),
-                solve: opts.clone(),
-                base_dir: Some(dir.clone()),
-                ..Default::default()
-            },
-            None,
-        );
-
-        let expected = golden["assertions"].as_array().expect("golden assertions");
-        assert_eq!(results.len(), expected.len());
-
-        for g in expected {
-            let test_id = g["test_id"].as_str().expect("test_id");
-            let idx = g["assertion_idx"].as_u64().expect("assertion_idx") as usize;
-            let r = results
-                .iter()
-                .find(|r| r.test_id == test_id && r.assertion_idx == idx)
-                .unwrap_or_else(|| panic!("missing assertion {test_id}#{idx}"));
-            assert!(r.passed, "{test_id}#{idx}: {}", r.message);
-            let actual = r
-                .actual
-                .unwrap_or_else(|| panic!("{test_id}#{idx}: no actual"));
-            let want = g["actual"].as_f64().expect("golden actual");
-            let diff = (actual - want).abs();
-            assert!(
-                diff <= atol || diff <= rtol * want.abs().max(actual.abs()),
-                "{test_id}#{idx}: actual {actual} vs golden {want}"
-            );
-        }
-    }
+    Tier::open("scalar_ic").check_all(&GoldenCheck {
+        by_test_id: true,
+        ..Default::default()
+    });
 }
 
 /// Direct coverage of the esm-spec §11.4 seeding precedence on the scalar
@@ -87,7 +37,7 @@ fn scalar_ic_matches_golden() {
 /// §6.6.5), else the declared `default`.
 #[test]
 fn scalar_ic_seeding_precedence() {
-    let dir = category_dir();
+    let dir = common::category_dir("scalar_ic");
     let path = dir.join("fixtures/scalar_ic.esm");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&text).expect("fixture loads");

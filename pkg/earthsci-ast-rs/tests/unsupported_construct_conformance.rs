@@ -14,19 +14,8 @@
 
 use earthsci_ast::load_path;
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
-use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::category_dir("unsupported_construct")
-}
-
-/// A missing manifest is a hard failure, not a skip.
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
 
 /// Which of this binding's evaluators a refusal NAMES.
 ///
@@ -46,7 +35,7 @@ fn evaluator_for(path: &str) -> &'static str {
 
 #[test]
 fn every_case_is_refused_or_runs_as_the_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("unsupported_construct");
     let code = m["code"].as_str().expect("`code` is a string");
     assert_eq!(code, "unsupported_construct");
     assert!(
@@ -65,12 +54,13 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
 
     for case in cases {
         let id = case["id"].as_str().expect("`id` is a string");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("unsupported_construct")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
         let results = run_inline_tests_with_options(
             &file,
             &InlineTestOptions {
-                base_dir: Some(category_dir()),
+                base_dir: Some(common::category_dir("unsupported_construct")),
                 ..Default::default()
             },
             None,

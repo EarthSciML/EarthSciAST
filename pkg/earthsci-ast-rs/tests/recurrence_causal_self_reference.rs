@@ -28,6 +28,8 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
+use crate::common;
+
 /// The REFERENCE compiler, for every fixture in this file.
 ///
 /// What this file is about is the SEMANTICS of the sequential sweep, which is
@@ -44,9 +46,7 @@ fn interpreter_options(base_dir: Option<&std::path::Path>) -> InlineTestOptions 
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/recurrence")
-        .join(name)
+    common::repo_fixture("fixtures/recurrence").join(name)
 }
 
 fn run_fixture(name: &str) -> Vec<AssertionResult> {
@@ -215,8 +215,7 @@ fn thirty_eight_distinct_lags_in_one_node_evaluate() {
 #[test]
 fn a_parameter_valued_lag_is_admitted_and_evaluates() {
     assert_fixture_passes("08_recurrence_parameter_valued_lag.esm");
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/recurrence/08_recurrence_parameter_valued_lag.esm");
+    let path = common::repo_fixture("fixtures/recurrence/08_recurrence_parameter_valued_lag.esm");
     let file = load_path(&path).expect("fixture parses");
     let recurrence: Vec<_> = earthsci_ast::validate(&file)
         .structural_errors
@@ -582,8 +581,7 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
 
 #[test]
 fn the_shared_rejection_corpus_agrees_on_code_and_path() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/recurrence/rejections.json");
+    let path = common::repo_fixture("conformance/recurrence/rejections.json");
     let raw = std::fs::read_to_string(&path).expect("rejections.json is readable");
     let corpus: Value = serde_json::from_str(&raw).expect("rejections.json parses");
 
@@ -721,8 +719,7 @@ fn structural_validator_rejects_a_makearray_region_self_read() {
 /// which is the same defect as admitting an illegal one.
 #[test]
 fn the_valid_corpus_recurrence_validates_clean() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/valid/recurrence_causal_self_reference.esm");
+    let path = common::repo_fixture("valid/recurrence_causal_self_reference.esm");
     let file = load_path(&path).expect("fixture parses");
     let report = earthsci_ast::validate(&file);
     let recurrence: Vec<_> = report

@@ -11,19 +11,8 @@
 
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use earthsci_ast::{ProblemOptions, esm_problem, load_path, validate};
-use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::category_dir("doubly_defined_state")
-}
-
-/// A missing manifest is a hard failure, not a skip.
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
 
 /// Read only to check the manifest itself is well formed, which is what keeps a
 /// typo in it from passing silently. `native` and `interpreter` are both the
@@ -39,7 +28,7 @@ fn check_evaluator_path(path: &str) {
 
 #[test]
 fn every_case_is_refused_or_runs_as_the_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("doubly_defined_state");
     let code = m["code"].as_str().expect("`code` is a string");
     assert_eq!(code, "equation_count_mismatch");
     assert!(
@@ -58,7 +47,8 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
 
     for case in cases {
         let id = case["id"].as_str().expect("`id` is a string");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("doubly_defined_state")
+            .join(case["path"].as_str().expect("`path` is a string"));
         check_evaluator_path(case["evaluator_path"].as_str().expect("`evaluator_path`"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
 
@@ -97,7 +87,7 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                 let results = run_inline_tests_with_options(
                     &file,
                     &InlineTestOptions {
-                        base_dir: Some(category_dir()),
+                        base_dir: Some(common::category_dir("doubly_defined_state")),
                         ..Default::default()
                     },
                     None,
@@ -122,7 +112,7 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                 let results = run_inline_tests_with_options(
                     &file,
                     &InlineTestOptions {
-                        base_dir: Some(category_dir()),
+                        base_dir: Some(common::category_dir("doubly_defined_state")),
                         ..Default::default()
                     },
                     None,

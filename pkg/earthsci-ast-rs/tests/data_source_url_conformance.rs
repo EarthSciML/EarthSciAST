@@ -11,17 +11,8 @@
 //! only pass on the machine that wrote it.
 
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn suite_dir() -> PathBuf {
-    common::repo_root().join("tests/conformance/data_source_url")
-}
-
-fn manifest() -> Value {
-    common::read_json(suite_dir().join("manifest.json"))
-}
 
 fn fixture(m: &Value, id: &str) -> Value {
     m["fixtures"]
@@ -44,9 +35,9 @@ fn expected(pin: &Value) -> String {
 
 #[test]
 fn every_pinned_form_resolves_as_the_shared_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("data_source_url");
     let f = fixture(&m, "relative_catalog");
-    let path = suite_dir().join(f["path"].as_str().expect("path"));
+    let path = common::category_dir("data_source_url").join(f["path"].as_str().expect("path"));
     let doc = earthsci_ast::load_path(&path).expect("the catalog must load");
     let doc = serde_json::to_value(&doc).expect("serializable");
 
@@ -73,10 +64,12 @@ fn resolution_is_idempotent_so_parse_emit_parse_is_stable() {
     // Re-loaded from a DIFFERENT directory, so a template that had somehow
     // stayed relative would resolve somewhere else and be caught, rather than
     // resolving to the same place by accident.
-    let m = manifest();
+    let m = common::tier_manifest("data_source_url");
     let f = fixture(&m, "relative_catalog");
-    let first = earthsci_ast::load_path(suite_dir().join(f["path"].as_str().expect("path")))
-        .expect("the catalog must load");
+    let first = earthsci_ast::load_path(
+        common::category_dir("data_source_url").join(f["path"].as_str().expect("path")),
+    )
+    .expect("the catalog must load");
     let emitted = earthsci_ast::to_json(&first).expect("emits");
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -98,10 +91,10 @@ fn an_unresolvable_template_is_refused_by_a_diagnostic_that_names_it() {
     // yields an I/O error about a path nobody wrote, one step away from a
     // source that delivers a consuming parameter's default and compares
     // nothing.
-    let m = manifest();
+    let m = common::tier_manifest("data_source_url");
     for id in ["env_var_catalog", "env_var_mirror_catalog"] {
         let f = fixture(&m, id);
-        let path = suite_dir().join(f["path"].as_str().expect("path"));
+        let path = common::category_dir("data_source_url").join(f["path"].as_str().expect("path"));
         let e = earthsci_ast::load_path(&path)
             .err()
             .unwrap_or_else(|| panic!("{id} must be REFUSED at load, not accepted"));

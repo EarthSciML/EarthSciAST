@@ -29,22 +29,12 @@ use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::common;
 const FIELD_RTOL: f64 = 1e-9;
 const FIELD_ATOL: f64 = 1e-11;
 const TRAJ_RTOL: f64 = 1e-4;
 const TRAJ_ATOL: f64 = 1e-6;
-
-fn fixture_dir() -> PathBuf {
-    common::repo_fixture("conformance/refresh")
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    let diff = (actual - expected).abs();
-    diff <= abs || diff <= rel * expected.abs().max(actual.abs())
-}
 
 fn f64_vec(v: &Value) -> Vec<f64> {
     v.as_array()
@@ -171,8 +161,12 @@ fn base_opts() -> SolveOptions {
 /// `M.scale_tgt` that the RHS materializes, via [`BuildInspection`].
 #[test]
 fn refresh_regrid_band_matches_golden() {
-    let raw = common::read_json(fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = common::read_json(fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(
+        common::category_dir("refresh").join("fixtures/coupled_refresh_regrid.esm"),
+    );
+    let golden = common::read_json(
+        common::category_dir("refresh").join("golden/coupled_refresh_regrid.json"),
+    );
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
@@ -202,7 +196,7 @@ fn refresh_regrid_band_matches_golden() {
         assert_eq!(got.len(), want.len(), "{name} @ {at}: shape");
         for (g, w) in got.iter().zip(want) {
             assert!(
-                approximately_equal(*g, *w, FIELD_RTOL, FIELD_ATOL),
+                common::close(*g, *w, FIELD_RTOL, FIELD_ATOL),
                 "{name} @ {at}: got {got:?}, want {want:?}"
             );
         }
@@ -237,8 +231,12 @@ fn refresh_regrid_band_matches_golden() {
 /// boundary refresh the DISCRETE forcing, integrate the segment, thread state.
 #[test]
 fn refresh_trajectory_band_matches_golden() {
-    let raw = common::read_json(fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = common::read_json(fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(
+        common::category_dir("refresh").join("fixtures/coupled_refresh_regrid.esm"),
+    );
+    let golden = common::read_json(
+        common::category_dir("refresh").join("golden/coupled_refresh_regrid.json"),
+    );
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
@@ -292,7 +290,7 @@ fn refresh_trajectory_band_matches_golden() {
         for cell in &cells {
             let want = expected[cell].as_f64().unwrap();
             assert!(
-                approximately_equal(got[cell], want, TRAJ_RTOL, TRAJ_ATOL),
+                common::close(got[cell], want, TRAJ_RTOL, TRAJ_ATOL),
                 "{cell} @ t={t}: got {}, want {want}",
                 got[cell]
             );

@@ -14,19 +14,15 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::PathBuf;
-
 use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 
 use crate::common;
 
-fn dir() -> PathBuf {
-    common::repo_fixture("conformance/mount_element_type")
-}
-
 fn expected() -> Value {
-    let text = std::fs::read_to_string(dir().join("expected.json")).expect("expected.json");
+    let text =
+        std::fs::read_to_string(common::category_dir("mount_element_type").join("expected.json"))
+            .expect("expected.json");
     serde_json::from_str(&text).expect("expected.json parses")
 }
 
@@ -58,7 +54,8 @@ fn carried(doc: &Value) -> serde_json::Map<String, Value> {
 }
 
 fn loaded_json(fixture: &str) -> Value {
-    let file = load_path(dir().join(fixture)).unwrap_or_else(|e| panic!("{fixture}: {e}"));
+    let file = load_path(common::category_dir("mount_element_type").join(fixture))
+        .unwrap_or_else(|e| panic!("{fixture}: {e}"));
     serde_json::from_str(&to_json(&file).expect("serializes")).expect("emits JSON")
 }
 
@@ -102,7 +99,7 @@ fn a_reaction_system_cannot_carry_a_mounted_precision() {
     let exp = expected();
     for (fixture, want) in exp["load_errors"].as_object().expect("load_errors") {
         let code = expected_load_error(want, "rust");
-        match load_path(dir().join(fixture)) {
+        match load_path(common::category_dir("mount_element_type").join(fixture)) {
             Ok(_) => panic!("{fixture} loaded; expected a refusal ({code:?})"),
             Err(e) => {
                 if let Some(code) = code {
@@ -118,7 +115,8 @@ fn a_reaction_system_cannot_carry_a_mounted_precision() {
 
 /// Build `model` of `fixture` on the reference evaluator and read `var`.
 fn evaluate(fixture: &str, model: &str, var: &str) -> Result<f64, String> {
-    let file = load_path(dir().join(fixture)).map_err(|e| e.to_string())?;
+    let file = load_path(common::category_dir("mount_element_type").join(fixture))
+        .map_err(|e| e.to_string())?;
     let prob = earthsci_ast::esm_problem(
         &file,
         (0.0, 0.0),

@@ -10,17 +10,8 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::category_dir("strip_and_expose")
-}
-
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
-}
 
 fn classes(v: &Value) -> StripSet {
     StripSet::from_names(
@@ -37,7 +28,7 @@ fn build(
     strip: StripSet,
     compiler: Compiler,
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
-    let p = category_dir().join(path);
+    let p = common::category_dir("strip_and_expose").join(path);
     esm_problem(
         p.as_path(),
         (0.0, 1.0),
@@ -51,7 +42,7 @@ fn build(
 
 #[test]
 fn per_class_strip_builds_its_own_class_and_refuses_the_others() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     for case in m["per_class"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
         let path = case["path"].as_str().unwrap();
@@ -77,7 +68,7 @@ fn per_class_strip_builds_its_own_class_and_refuses_the_others() {
 
 #[test]
 fn stripped_object_matches_the_golden_byte_for_byte() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     let write = std::env::var("ESM_WRITE_STRIP_GOLDENS").is_ok_and(|v| v == "1");
     for case in m["stripped_goldens"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
@@ -91,7 +82,7 @@ fn stripped_object_matches_the_golden_byte_for_byte() {
             .map(|(k, v)| (k.clone(), v.as_f64().unwrap()))
             .collect();
         let prob = esm_problem(
-            category_dir()
+            common::category_dir("strip_and_expose")
                 .join(case["path"].as_str().unwrap())
                 .as_path(),
             tspan,
@@ -104,7 +95,8 @@ fn stripped_object_matches_the_golden_byte_for_byte() {
         )
         .unwrap_or_else(|e| panic!("{id}: {e}"));
         let got = stripped(&prob).canonical_json();
-        let golden = category_dir().join(case["golden"].as_str().unwrap());
+        let golden =
+            common::category_dir("strip_and_expose").join(case["golden"].as_str().unwrap());
         if write {
             std::fs::write(&golden, &got).unwrap();
             continue;
@@ -120,10 +112,10 @@ fn stripped_object_matches_the_golden_byte_for_byte() {
 
 #[test]
 fn a_stripped_problem_is_not_solvable() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     for case in m["not_solvable"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
-        let p = category_dir().join(case["path"].as_str().unwrap());
+        let p = common::category_dir("strip_and_expose").join(case["path"].as_str().unwrap());
         let span = case["tspan"].as_array().unwrap();
         let prob = esm_problem(
             p.as_path(),
@@ -211,7 +203,7 @@ fn close(got: f64, want: f64, rtol: f64, atol: f64) -> bool {
 
 #[test]
 fn kernel_probes_match_their_analytic_anchors() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     let tol = &m["tolerance_classes"]["algebraic"];
     let (rtol, atol) = (tol["rtol"].as_f64().unwrap(), tol["atol"].as_f64().unwrap());
     for case in m["kernels"].as_array().unwrap() {
@@ -288,21 +280,28 @@ fn without_events(v: &mut Value) {
 
 #[test]
 fn the_stripped_rhs_equals_the_event_free_document() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     for case in m["remaining_rhs"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
         let path = case["path"].as_str().unwrap();
         let prob = build(path, classes(&case["strip"]), Compiler::Native).unwrap();
         let ks = compile_kernels(&prob, &specs(&serde_json::json!([{"name": "rhs"}]))).unwrap();
-        let mut doc: Value =
-            serde_json::from_str(&std::fs::read_to_string(category_dir().join(path)).unwrap())
-                .unwrap();
+        let mut doc: Value = serde_json::from_str(
+            &std::fs::read_to_string(common::category_dir("strip_and_expose").join(path)).unwrap(),
+        )
+        .unwrap();
         without_events(&mut doc);
         let control = esm_problem(
             &doc,
             (0.0, 1.0),
             ProblemOptions {
-                base_path: Some(category_dir().join(path).parent().unwrap().to_path_buf()),
+                base_path: Some(
+                    common::category_dir("strip_and_expose")
+                        .join(path)
+                        .parent()
+                        .unwrap()
+                        .to_path_buf(),
+                ),
                 ..Default::default()
             },
         )
@@ -349,7 +348,7 @@ fn the_stripped_rhs_equals_the_event_free_document() {
 
 #[test]
 fn refusals_name_their_code() {
-    let m = manifest();
+    let m = common::tier_manifest("strip_and_expose");
     for case in m["refusals"].as_array().unwrap() {
         let id = case["id"].as_str().unwrap();
         let prob = build(

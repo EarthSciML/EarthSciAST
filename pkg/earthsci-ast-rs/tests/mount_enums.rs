@@ -9,19 +9,14 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::PathBuf;
-
 use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 
 use crate::common;
 
-fn dir() -> PathBuf {
-    common::repo_fixture("conformance/mount_enums")
-}
-
 fn expected() -> Value {
-    let text = std::fs::read_to_string(dir().join("expected.json")).expect("expected.json");
+    let text = std::fs::read_to_string(common::category_dir("mount_enums").join("expected.json"))
+        .expect("expected.json");
     serde_json::from_str(&text).expect("expected.json parses")
 }
 
@@ -48,7 +43,7 @@ fn lowered_value(doc: &Value, path: &str) -> Value {
 fn a_mounted_files_enum_ops_resolve_against_its_own_block() {
     let exp = expected();
     for (fixture, values) in exp["loads"].as_object().expect("loads") {
-        let path = dir().join(fixture);
+        let path = common::category_dir("mount_enums").join(fixture);
         let file = load_path(&path).unwrap_or_else(|e| panic!("{fixture} does not load: {e}"));
         let doc: Value = serde_json::from_str(&to_json(&file).expect("serializes")).unwrap();
         for (var, want) in values.as_object().expect("values") {
@@ -72,7 +67,7 @@ fn an_assemblys_own_enum_op_does_not_see_a_leafs_block() {
     let exp = expected();
     for (fixture, code) in exp["errors"].as_object().expect("errors") {
         let code = code.as_str().expect("code");
-        match load_path(dir().join(fixture)) {
+        match load_path(common::category_dir("mount_enums").join(fixture)) {
             Ok(_) => panic!("{fixture} loaded; expected `{code}`"),
             Err(e) => {
                 let msg = e.to_string();

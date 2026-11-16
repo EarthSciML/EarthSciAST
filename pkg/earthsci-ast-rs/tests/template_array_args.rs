@@ -13,10 +13,10 @@ use earthsci_ast::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::common;
+
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/template_array_args/coupled")
-        .join(name)
+    common::repo_fixture("conformance/template_array_args/coupled").join(name)
 }
 
 fn rhs_at_u0(path: &PathBuf, compiler: Compiler) -> Vec<(String, f64)> {

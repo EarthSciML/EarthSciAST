@@ -28,10 +28,10 @@ use std::path::PathBuf;
 
 use earthsci_ast::load_path;
 
+use crate::common;
+
 fn fixture(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests")
-        .join(rel)
+    common::repo_tests_dir().join(rel)
 }
 
 /// The shared fixture: `Host` mounts both columns, renaming the soil axis.

@@ -27,7 +27,6 @@
 
 use earthsci_ast::{FlattenedSystem, expression_names, flatten, load_path};
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::common;
 
@@ -35,16 +34,6 @@ use crate::common;
 /// order of first use: what the reach assertions below search.
 fn names_text<T: serde::Serialize + ?Sized>(value: &T) -> String {
     expression_names(&crate::common::canon(value)).join(" ")
-}
-
-fn category_dir() -> PathBuf {
-    common::category_dir("merged_rename_reach")
-}
-
-/// A missing manifest is a hard failure, not a skip: the manifest IS the
-/// contract this file exists to enforce.
-fn manifest() -> Value {
-    common::read_json(category_dir().join("manifest.json"))
 }
 
 fn cases_for(m: &Value, surface: &str) -> Vec<Value> {
@@ -58,7 +47,8 @@ fn cases_for(m: &Value, surface: &str) -> Vec<Value> {
 }
 
 fn flatten_case(case: &Value) -> FlattenedSystem {
-    let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+    let path = common::category_dir("merged_rename_reach")
+        .join(case["path"].as_str().expect("`path` is a string"));
     let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
     flatten(&file).unwrap_or_else(|e| panic!("flattening {}: {e}", path.display()))
 }
@@ -77,7 +67,7 @@ fn dependent(lhs: &earthsci_ast::Expr) -> Option<String> {
 #[test]
 fn the_manifest_is_not_empty_and_names_this_binding() {
     // Zero cases would make every test below vacuously green.
-    let m = manifest();
+    let m = common::tier_manifest("merged_rename_reach");
     assert!(!cases_for(&m, "flatten").is_empty(), "no flatten cases");
     assert!(
         !cases_for(&m, "override_keys").is_empty(),
@@ -114,7 +104,7 @@ fn the_merge_records_which_names_it_deleted() {
     // The rename map is what a consumer addressing a state by name resolves
     // through, so it is part of the flattened form's contract, not a private
     // detail of the merge.
-    for case in cases_for(&manifest(), "flatten") {
+    for case in cases_for(&common::tier_manifest("merged_rename_reach"), "flatten") {
         let flat = flatten_case(&case);
         let expected = case["merged_variable_renames"]
             .as_object()
@@ -140,7 +130,7 @@ fn the_merge_records_which_names_it_deleted() {
 fn the_merged_away_name_survives_nowhere() {
     // Not in the variable tables, not in any equation. A reference left behind
     // is a reference to nothing.
-    for case in cases_for(&manifest(), "flatten") {
+    for case in cases_for(&common::tier_manifest("merged_rename_reach"), "flatten") {
         let flat = flatten_case(&case);
         let want: Vec<&str> = case["state_variables"]
             .as_array()
@@ -176,7 +166,7 @@ fn the_later_entry_lands_on_the_survivor() {
     // The non-vacuity anchor for the test above: dropping the entry's reference
     // outright would satisfy "the dead name survives nowhere" by doing nothing
     // at all.
-    for case in cases_for(&manifest(), "flatten") {
+    for case in cases_for(&common::tier_manifest("merged_rename_reach"), "flatten") {
         let flat = flatten_case(&case);
         let target = case["tendency_of"].as_str().expect("`tendency_of`");
         let eq = flat
@@ -209,8 +199,12 @@ fn an_override_key_naming_the_merged_away_state_resolves() {
     use earthsci_ast::{ProblemInput, ProblemOptions, SolveOptions, esm_problem, solve};
     use std::collections::HashMap;
 
-    for case in cases_for(&manifest(), "override_keys") {
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+    for case in cases_for(
+        &common::tier_manifest("merged_rename_reach"),
+        "override_keys",
+    ) {
+        let path = common::category_dir("merged_rename_reach")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let u0: HashMap<String, f64> = case["initial_conditions"]
             .as_object()
             .expect("`initial_conditions` is an object")
@@ -261,8 +255,12 @@ fn a_name_keyed_read_of_the_result_resolves() {
     // not declare.
     use earthsci_ast::{ProblemInput, ProblemOptions, SolveOptions, esm_problem, solve};
 
-    for case in cases_for(&manifest(), "output_selection") {
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+    for case in cases_for(
+        &common::tier_manifest("merged_rename_reach"),
+        "output_selection",
+    ) {
+        let path = common::category_dir("merged_rename_reach")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let prob = esm_problem(
             ProblemInput::Path(&path),
             (0.0, 1.0),
@@ -311,7 +309,7 @@ fn a_name_keyed_read_of_the_result_resolves() {
 /// pointing at a state the flattened system no longer declares.
 #[test]
 fn the_rename_reaches_events_and_variable_updates() {
-    let m = manifest();
+    let m = common::tier_manifest("merged_rename_reach");
     let cases = cases_for(&m, "events_and_updates");
     assert!(
         !cases.is_empty(),
@@ -432,7 +430,7 @@ fn the_rename_reaches_events_and_variable_updates() {
 /// would then disagree with the expand-at-load image). Flatten refuses.
 #[test]
 fn a_registry_body_naming_the_merged_away_state_is_refused() {
-    let m = manifest();
+    let m = common::tier_manifest("merged_rename_reach");
     let cases = cases_for(&m, "template_registry");
     assert!(
         !cases.is_empty(),
@@ -440,7 +438,8 @@ fn a_registry_body_naming_the_merged_away_state_is_refused() {
     );
     for case in &cases {
         let id = case["id"].as_str().unwrap_or("?");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("merged_rename_reach")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
         let err = flatten(&file).expect_err(&format!("{id}: flatten must REFUSE"));
         let text = err.to_string();
@@ -470,12 +469,13 @@ fn a_registry_body_naming_the_merged_away_state_is_refused() {
 #[test]
 #[cfg(feature = "solve")]
 fn an_inline_test_naming_the_merged_away_state_resolves() {
-    let m = manifest();
+    let m = common::tier_manifest("merged_rename_reach");
     let cases = cases_for(&m, "inline_tests");
     assert!(!cases.is_empty(), "no inline_tests cases in the manifest");
     for case in &cases {
         let id = case["id"].as_str().unwrap_or("?");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("merged_rename_reach")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
         let results = earthsci_ast::run_inline_tests(&file, None, &Default::default());
         let want_id = case["test_id"].as_str().expect("`test_id` is a string");

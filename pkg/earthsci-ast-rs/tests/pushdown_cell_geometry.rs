@@ -24,10 +24,10 @@ use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::desugar_pushdown;
-use earthsci_ast::{AxisSel, DataProvider, ProviderError};
+use earthsci_ast::{AxisSel, DataProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
-use crate::common;
+use crate::common::{Fetch, MockGated};
 
 fn ix(f: &str, idx: &[Value]) -> Value {
     let mut args = vec![json!(f)];
@@ -373,32 +373,6 @@ fn const_arrays() -> HashMap<String, ArrayD<f64>> {
     .collect()
 }
 
-/// A pushdown-capable provider: it records whether the engine asked for a
-/// selection or took the whole array.
-struct MockGated {
-    full: ArrayD<f64>,
-    calls: Rc<RefCell<Vec<Option<Vec<AxisSel>>>>>,
-}
-
-impl DataProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
-        self.calls.borrow_mut().push(None);
-        Ok(self.full.clone())
-    }
-
-    fn supports_selection(&self) -> bool {
-        true
-    }
-
-    fn sample_with_selection(
-        &mut self,
-        selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, ProviderError> {
-        self.calls.borrow_mut().push(Some(selection.to_vec()));
-        Ok(common::select_axes(&self.full, selection))
-    }
-}
-
 #[test]
 fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
     // The DENSE arm, checked against a hand oracle first, so a shared bug in
@@ -431,10 +405,7 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let providers: Vec<(String, Box<dyn DataProvider>)> = vec![(
         "Binned.SR_PM25".into(),
-        Box::new(MockGated {
-            full: sr,
-            calls: calls.clone(),
-        }),
+        Box::new(MockGated::new(sr, calls.clone())),
     )];
     let push = esm_problem(
         &doc(),
@@ -478,7 +449,13 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
 
     // And the gate did its job: the SR rows were selected, not taken wholesale.
     let log = calls.borrow();
-    assert!(log.iter().all(Option::is_some), "SR was fetched wholesale");
+    assert!(
+        log.iter().all(|f| matches!(f, Fetch::Selection(_))),
+        "SR was fetched wholesale"
+    );
     assert_eq!(log.len(), 1);
-    assert_eq!(log[0].as_ref().unwrap()[0], AxisSel::Indices(vec![0, 1, 3]));
+    let Fetch::Selection(sel) = &log[0] else {
+        unreachable!()
+    };
+    assert_eq!(sel[0], AxisSel::Indices(vec![0, 1, 3]));
 }

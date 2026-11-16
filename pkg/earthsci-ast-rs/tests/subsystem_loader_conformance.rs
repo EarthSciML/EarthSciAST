@@ -29,22 +29,12 @@ use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Solution, SolveOptions};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::common;
 
 /// Manifest trajectory band (`manifest.json` `tolerances`).
 const TRAJ_RTOL: f64 = 1e-4;
 const TRAJ_ATOL: f64 = 1e-6;
-
-fn fixture_dir() -> PathBuf {
-    common::repo_fixture("conformance/subsystem_loader")
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    let diff = (actual - expected).abs();
-    diff <= abs || diff <= rel * expected.abs().max(actual.abs())
-}
 
 /// Linear interpolation of `series` (sampled at `times`) at `t`, clamped to the
 /// endpoints — the Rust analogue of the Python runner's `np.interp`.
@@ -82,8 +72,10 @@ fn value_at(sol: &Solution, name: &str, t: f64) -> f64 {
 /// `Box.<var>` as a DISCRETE parameter that no equation defines.
 #[test]
 fn subsystem_loader_flattens_to_expressionless_observeds() {
-    let file =
-        load_path(fixture_dir().join("fixtures/subsystem_loader_ode.esm")).expect("load fixture");
+    let file = load_path(
+        common::category_dir("subsystem_loader").join("fixtures/subsystem_loader_ode.esm"),
+    )
+    .expect("load fixture");
     let flat = flatten(&file).expect("flatten");
 
     for name in ["Box.k", "Box.wind"] {
@@ -114,9 +106,13 @@ fn subsystem_loader_flattens_to_expressionless_observeds() {
 /// time-point's `Box.c` within the manifest trajectory band.
 #[test]
 fn subsystem_loader_trajectory_matches_golden() {
-    let file =
-        load_path(fixture_dir().join("fixtures/subsystem_loader_ode.esm")).expect("load fixture");
-    let golden = common::read_json(fixture_dir().join("golden/subsystem_loader_ode.json"));
+    let file = load_path(
+        common::category_dir("subsystem_loader").join("fixtures/subsystem_loader_ode.esm"),
+    )
+    .expect("load fixture");
+    let golden = common::read_json(
+        common::category_dir("subsystem_loader").join("golden/subsystem_loader_ode.json"),
+    );
 
     let flat = flatten(&file).expect("flatten");
     let compiled = ArrayCompiled::from_flattened(&flat).expect("compile subsystem-loader system");
@@ -187,7 +183,7 @@ fn subsystem_loader_trajectory_matches_golden() {
         let want = expected["Box.c"].as_f64().unwrap();
         let got = value_at(&sol, "Box.c", t);
         assert!(
-            approximately_equal(got, want, TRAJ_RTOL, TRAJ_ATOL),
+            common::close(got, want, TRAJ_RTOL, TRAJ_ATOL),
             "Box.c @ t={t}: expected {want}, got {got} (rtol={TRAJ_RTOL}, atol={TRAJ_ATOL})"
         );
     }

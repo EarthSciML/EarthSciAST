@@ -15,7 +15,7 @@
 //! the Python one `pkg/earthsci-ast-py/tests/test_unit_registry_conformance.py`
 //! — same golden.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use earthsci_ast::parse_unit;
 use serde_json::Value;
@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::common;
 
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 fn golden() -> Value {

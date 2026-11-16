@@ -28,12 +28,11 @@ use earthsci_ast::{EsmFile, load_path, load_path_with_options};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::common;
+
 /// The shared fixture directory, at the repo root (the crate dir's grandparent).
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root resolves")
+    common::repo_root()
         .join("tests/fixtures/data_source_extent_scope")
         .join(name)
 }

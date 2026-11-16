@@ -23,26 +23,12 @@
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
 
 /// Manifest trajectory band (`manifest.json` `tolerances`).
 const TRAJ_RTOL: f64 = 1e-4;
 const TRAJ_ATOL: f64 = 1e-6;
-
-fn fixture_dir() -> PathBuf {
-    common::repo_fixture("conformance/build_once_spatial_field")
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    let diff = (actual - expected).abs();
-    if diff <= abs {
-        return true;
-    }
-    let scale = expected.abs().max(actual.abs());
-    diff <= rel * scale
-}
 
 /// Linearly interpolate `series` (sampled at `times`) at `t`, clamping to the
 /// endpoints. Mirrors the Python runner's `np.interp`.
@@ -71,7 +57,8 @@ fn interp(times: &[f64], series: &[f64], t: f64) -> f64 {
 fn build_once_field_flatten_keeps_observeds_and_single_state() {
     use earthsci_ast::flatten;
 
-    let path = fixture_dir().join("fixtures/build_once_spatial_ode.esm");
+    let path = common::category_dir("build_once_spatial_field")
+        .join("fixtures/build_once_spatial_ode.esm");
     let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
     let flat = flatten(&file).unwrap_or_else(|e| panic!("flatten: {e}"));
@@ -101,8 +88,11 @@ fn build_once_field_flatten_keeps_observeds_and_single_state() {
 /// trajectory time-point's `Field.u[c]` within the manifest trajectory band.
 #[test]
 fn build_once_spatial_field_trajectory_matches_golden() {
-    let fixture = fixture_dir().join("fixtures/build_once_spatial_ode.esm");
-    let golden = common::read_json(fixture_dir().join("golden/build_once_spatial_ode.json"));
+    let fixture = common::category_dir("build_once_spatial_field")
+        .join("fixtures/build_once_spatial_ode.esm");
+    let golden = common::read_json(
+        common::category_dir("build_once_spatial_field").join("golden/build_once_spatial_ode.json"),
+    );
 
     let json = fs::read_to_string(&fixture).unwrap_or_else(|e| panic!("read {fixture:?}: {e}"));
     let file = load_string(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
@@ -166,7 +156,7 @@ fn build_once_spatial_field_trajectory_matches_golden() {
             let series = &sol.state[slot_of(cell)];
             let got = interp(&sol.time, series, t);
             assert!(
-                approximately_equal(got, want, TRAJ_RTOL, TRAJ_ATOL),
+                common::close(got, want, TRAJ_RTOL, TRAJ_ATOL),
                 "u[{cell}] @ t={t}: expected {want}, got {got} \
                  (rtol={TRAJ_RTOL}, atol={TRAJ_ATOL})"
             );

@@ -18,7 +18,7 @@
 
 #![cfg(all(feature = "solve", not(target_arch = "wasm32")))]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::common;
 
@@ -100,7 +100,7 @@ const DOCS: &[(&str, &str, &str, usize)] = &[
 ];
 
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 fn read_doc(rel: &str) -> Value {

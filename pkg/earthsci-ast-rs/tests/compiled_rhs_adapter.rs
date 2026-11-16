@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use earthsci_ast::compiled_rhs_adapter::{Engine, parse_args, run_manifest};
 use serde_json::Value;
 
+use crate::common;
+
 /// rtol for the anchor comparison. The tier's own `algebraic` class is 1e-13
 /// and `transcendental` 1e-12; 1e-12 covers both.
 const RTOL: f64 = 1e-12;
@@ -234,7 +236,7 @@ fn unknown_manifest_fields_are_ignored() {
     // directory, and the temp dir has no such ancestor to walk up to — so
     // rewrite them absolute, which the resolver also accepts.
     let mut manifest = manifest;
-    let repo_tests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+    let repo_tests = common::repo_tests_dir();
     for fx in manifest["fixtures"].as_array_mut().expect("fixtures") {
         let rel = fx["path"].as_str().expect("path").to_string();
         fx["path"] = serde_json::json!(repo_tests.join(&rel).to_string_lossy());

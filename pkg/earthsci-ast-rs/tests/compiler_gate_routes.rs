@@ -12,10 +12,10 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
+use crate::common;
+
 fn fixture(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
+    common::repo_root().join(rel)
 }
 
 fn opts(compiler: Compiler) -> ProblemOptions {

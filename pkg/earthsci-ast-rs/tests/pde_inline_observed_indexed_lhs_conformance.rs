@@ -26,93 +26,18 @@
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/pde_inline_observed_indexed_lhs")
-}
+use crate::common::tier::{Closeness, Declared, GoldenCheck, Tier};
 
 #[test]
 fn indexed_lhs_array_observed_runs() {
-    let dir = category_dir();
-    let manifest = common::read_json(dir.join("manifest.json"));
-    common::assert_tier_header(&manifest, "pde_inline_observed_indexed_lhs");
-
-    let rs = &manifest["integrators"]["rust"];
-    assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    let opts = SolveOptions {
-        alg: Alg::Erk,
-        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
-        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
+    Tier::open("pde_inline_observed_indexed_lhs").check_all(&GoldenCheck {
+        golden_variable: true,
+        closeness: Closeness::SumBound,
+        declared: Declared::SameAssertion,
         ..Default::default()
-    };
-    let rtol = manifest["tolerances"]["assertion_rtol"]
-        .as_f64()
-        .expect("assertion_rtol");
-    let atol = manifest["tolerances"]["assertion_atol"]
-        .as_f64()
-        .expect("assertion_atol");
-
-    for fx in manifest["fixtures"].as_array().expect("fixtures") {
-        let esm_path = dir.join(fx["path"].as_str().expect("path"));
-        let golden = common::read_json(dir.join(fx["golden"].as_str().expect("golden")));
-        assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
-
-        let text =
-            fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-        let file = load_string(&text)
-            .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results = run_inline_tests_with_options(
-            &file,
-            &InlineTestOptions {
-                model_name: fx["model"].as_str().map(str::to_string),
-                solve: opts.clone(),
-                base_dir: Some(dir.clone()),
-                ..Default::default()
-            },
-            None,
-        );
-
-        let goldens = golden["assertions"].as_array().expect("golden assertions");
-        assert_eq!(
-            results.len(),
-            goldens.len(),
-            "the fixture ran {} assertions and the golden records {}",
-            results.len(),
-            goldens.len()
-        );
-        // Each assertion is gated against BOTH the golden actual (the
-        // cross-binding anchor) and the fixture's own `expected`.
-        for g in goldens {
-            let idx = g["assertion_idx"].as_u64().expect("assertion_idx") as usize;
-            let r = results
-                .iter()
-                .find(|r| r.assertion_idx == idx)
-                .unwrap_or_else(|| panic!("missing assertion #{idx}"));
-            assert_eq!(r.variable, g["variable"].as_str().expect("variable"));
-            assert!(r.passed, "assertion #{idx} ({}): {}", r.variable, r.message);
-            let actual = r
-                .actual
-                .unwrap_or_else(|| panic!("assertion #{idx}: no actual ({})", r.message));
-            let want = g["actual"].as_f64().expect("golden actual");
-            assert!(
-                (actual - want).abs() <= atol + rtol * want.abs(),
-                "assertion #{idx}: actual {actual} vs golden {want}"
-            );
-        }
-        for decl in fx["assertions"].as_array().expect("declared assertions") {
-            let idx = decl["assertion_idx"].as_u64().expect("assertion_idx") as usize;
-            let r = results
-                .iter()
-                .find(|r| r.assertion_idx == idx)
-                .unwrap_or_else(|| panic!("missing assertion #{idx}"));
-            assert_eq!(r.variable, decl["variable"].as_str().expect("variable"));
-            assert_eq!(r.reduce.as_deref(), decl["reduce"].as_str());
-            assert_eq!(r.expected, decl["expected"].as_f64().expect("expected"));
-        }
-    }
+    });
 }
 
 /// CONFORMANCE_SPEC §5.36.2: a bare-index definition whose RHS is not a `faq`
@@ -121,7 +46,7 @@ fn indexed_lhs_array_observed_runs() {
 /// variable.
 #[test]
 fn bare_index_definition_outside_the_runnable_form_is_refused() {
-    let dir = category_dir();
+    let dir = common::category_dir("pde_inline_observed_indexed_lhs");
     let manifest = common::read_json(dir.join("manifest.json"));
     let rs = &manifest["integrators"]["rust"];
     let opts = SolveOptions {

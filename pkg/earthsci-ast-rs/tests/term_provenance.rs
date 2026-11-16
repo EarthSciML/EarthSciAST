@@ -19,8 +19,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::common;
+
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 fn fixtures_dir() -> PathBuf {
