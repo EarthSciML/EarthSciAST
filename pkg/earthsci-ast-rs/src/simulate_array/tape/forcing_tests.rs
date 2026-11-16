@@ -341,16 +341,19 @@ fn segmented_solve(
         ..Default::default()
     };
     let before = super::section_primes();
+    let none = HashMap::new();
     let sol = compiled
-        .solve_with_refresh_inspect(
-            (0.0, 3.0),
-            &HashMap::new(),
-            &HashMap::new(),
+        .solve_run(
+            &crate::simulate_array::RunSpec {
+                tspan: (0.0, 3.0),
+                params: &none,
+                initial_conditions: &none,
+                discrete_forcing: &discrete,
+                boundaries,
+            },
             &opts,
             None,
-            &discrete,
-            boundaries,
-            |t| {
+            &mut |t| {
                 let mut b = buf.borrow_mut();
                 b.insert("bc".into(), bc_values(n, 1.0 + t));
                 b.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), 0.7));

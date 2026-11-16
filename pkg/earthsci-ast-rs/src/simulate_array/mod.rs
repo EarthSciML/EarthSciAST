@@ -71,6 +71,10 @@ mod layout;
 pub(crate) mod range;
 mod recurrence_group;
 mod rhs;
+#[cfg(feature = "solve")]
+mod session;
+#[cfg(feature = "solve")]
+pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
 mod vectorized;
 
