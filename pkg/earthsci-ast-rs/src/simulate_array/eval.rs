@@ -4855,10 +4855,6 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
     let total = shape.iter().copied().product::<usize>().max(1);
 
-    // Hoist cell-independent (all-static) contraction bounds out of the per-cell
-    // loop; ragged/derived dims are re-derived per output tuple inside.
-    let static_ranges = static_contract_ranges(&contract_dims);
-
     // ---- Forward prefix scan (O(N) instead of the O(N²) triangle) -----------
     // A cumulative reduction (esm-spec §4.3.1) reaches here as a full triangular
     // double loop: N output cells × N contracted terms, each re-summing a window
@@ -4873,14 +4869,18 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // start accepting these, which regressed
     // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
     // aggregate returns `None` here and goes to the overlay as before.
-    let scan = detect_prefix_scan(
+    let cells = FaqCells::new(
         idx_names,
         &ranges,
-        &contract_names,
-        static_ranges.as_deref(),
         body,
+        &contract_names,
+        &contract_dims,
+        reduce,
         filter,
+        None,
+        &gates,
     );
+    let scan = cells.scan;
 
     // ---- Vectorized fast path (whole-array) --------------------------------
     // Evaluate the aggregate with the same verified `eval_vec` overlay the
@@ -4954,7 +4954,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         && scan.is_none()
         && gates.is_empty()
         && ctx.recur.is_none()
-        && let Some(box_ranges) = static_ranges.as_deref()
+        && let Some(box_ranges) = cells.static_ranges.as_deref()
     {
         let terms = with_faq_pool(|pool| {
             try_eval_faq_vectorized(
@@ -5014,148 +5014,241 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         }
     }
     let mut buf = vec![0.0f64; total];
-    let saved_binds: Vec<(String, Option<i64>)> = idx_names
-        .iter()
-        .chain(contract_names.iter())
-        .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
-        .collect();
-    if let Some(scan) = scan {
-        let (scan_lo, scan_hi) = ranges[scan.axis];
-        // Sweep the scanned axis inside; every OTHER output axis is an
-        // independent scan and forms the outer loop.
-        let outer_ranges: Vec<(i64, i64)> = ranges
-            .iter()
-            .enumerate()
-            .filter(|(d, _)| *d != scan.axis)
-            .map(|(_, r)| *r)
-            .collect();
-        // Axis position and symbol name of each outer axis, paired once so the
-        // per-tuple loop binds the symbol and records the coordinate together.
-        let outer_axes: Vec<(usize, &String)> = idx_names
-            .iter()
-            .enumerate()
-            .filter(|(d, _)| *d != scan.axis)
-            .collect();
-        let sweep = ScanSweep {
-            scan,
-            i_name: &idx_names[scan.axis],
-            j_name: &contract_names[0],
-            // One step of one scan when the walk is to stop at its first cell.
-            bounds: if !stop_at_first_cell() {
-                (scan_lo, scan_hi)
-            } else if scan.reverse {
-                (scan_lo.max(scan_hi), scan_hi)
-            } else {
-                (scan_lo, scan_hi.min(scan_lo))
-            },
-            body,
-            reduce,
-        };
-        let mut full = vec![0i64; ranges.len()];
-        let mut outer = CartesianTuples::new(&outer_ranges);
-        while let Some(otuple) = outer.next() {
-            for ((d, name), val) in outer_axes.iter().zip(otuple.iter()) {
-                set_bind(&mut ctx.loop_binds, name, *val);
-                full[*d] = *val;
-            }
-            run_prefix_scan(&sweep, ctx, |i, acc, _| {
-                note_per_cell_cell();
-                full[scan.axis] = i;
-                buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
-            });
-            if stop_after_first_cell() {
-                break;
-            }
-        }
-    } else {
-        let cellbox = CellBox {
-            names: idx_names,
-            origin: &origin,
-            ranges: &ranges,
-            rule: None,
-        };
-        let spec = ReduceSpec {
-            contract_names: &contract_names,
-            body,
-            reduce,
-            filter,
-            cell: Some(&cellbox),
-        };
-        // Per-node cost accounting. The counter is thread-local and bumped
-        // only on the gate-driven unroll, so the delta across this output loop
-        // is exactly the leaves THIS aggregate enumerated.
-        let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_log_enabled())
-            .then(crate::broad_phase::overlap_enum_visits);
-        // The gated walk's cell-independent plan and its per-cell buffers,
-        // built once for the whole output loop.
-        let gate_plan = GatePlan::new(
-            contract_names.len(),
-            gates.iter().map(|(g, p)| (&*g.index, p.src, p.tgt)),
-        );
-        let mut gate_bufs = gate_plan.bufs();
-        let mut tuples = CartesianTuples::new(&ranges);
-        while let Some(tuple) = tuples.next() {
-            for (name, val) in idx_names.iter().zip(tuple.iter()) {
-                set_bind(&mut ctx.loop_binds, name, *val);
-            }
-            let v = if gates.is_empty() {
-                reduce_contraction(&spec, &contract_dims, static_ranges.as_deref(), ctx)
-            } else {
-                // This cell's contraction bounds: the hoisted static ones when
-                // every dim is cell-independent, else re-derived here exactly
-                // as `reduce_contraction` does.
-                let derived: SmallVec<[(i64, i64); 4]>;
-                let cell_ranges: &[(i64, i64)] = match static_ranges.as_deref() {
-                    Some(r) => r,
-                    None => {
-                        derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
-                        &derived
-                    }
-                };
-                reduce_contraction_gated(
-                    &spec,
-                    cell_ranges,
-                    &gates,
-                    &gate_plan,
-                    &mut gate_bufs,
-                    ctx,
-                )
-            };
-            let flat = multi_to_flat_col_major(tuple, &shape, &origin);
-            buf[flat] = v;
-            if is_walk {
-                note_per_cell_cell();
-                if stop_after_first_cell() {
-                    break;
-                }
-            }
-        }
-        if let Some(before) = stats_from {
-            let desc = gates
-                .iter()
-                .map(|(g, _)| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
-                .collect::<Vec<_>>()
-                .join(",");
-            eprintln!(
-                "[join-gate] gates={desc} cells={total} leaves={}",
-                crate::broad_phase::overlap_enum_visits().wrapping_sub(before),
-            );
-        }
-    }
-    for (name, saved) in saved_binds {
-        match saved {
-            Some(v) => {
-                ctx.loop_binds.insert(name, v);
-            }
-            None => {
-                ctx.loop_binds.remove(&name);
-            }
-        }
-    }
+    cells.walk(ctx, |cell, v, _| {
+        buf[multi_to_flat_col_major(cell, &shape, &origin)] = v;
+    });
     if shape.is_empty() {
         Value::Scalar(buf[0])
     } else {
         Value::Array(Box::new(col_major_to_arrayd(&buf, &shape)))
+    }
+}
+
+/// One `faq`'s per-cell walk: every output cell's ⊕-reduced value, handed to
+/// a sink with the cell's output tuple, in the oracle's visiting order.
+///
+/// The one evaluation order of the construct, shared by a standalone `faq`
+/// ([`eval_faq`]) and the per-cell oracle's state-derivative and observed
+/// rules (`rhs.rs`). It recognizes a forward prefix scan
+/// ([`detect_prefix_scan`]) and sweeps it in O(N); drives the contraction
+/// from resolved join gates when there are any; and honours a
+/// [`StopAtFirstCell`], counting each cell it evaluates.
+pub(super) struct FaqCells<'s> {
+    idx_names: &'s [String],
+    ranges: &'s [(i64, i64)],
+    body: &'s Expr,
+    contract_names: &'s [String],
+    contract_dims: &'s [ContractDim],
+    reduce: ReduceKind,
+    filter: Option<&'s Expr>,
+    /// The variable the rule being walked defines, for a diagnostic to name.
+    rule: Option<&'s str>,
+    gates: &'s [(JoinGate, GatePlacement)],
+    /// The contraction bounds when every contracted dim is cell-independent,
+    /// hoisted out of the cell loop.
+    pub(super) static_ranges: Option<RangeVec>,
+    /// The prefix scan the walk sweeps instead of the triangular product.
+    pub(super) scan: Option<PrefixScan>,
+}
+
+impl<'s> FaqCells<'s> {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        idx_names: &'s [String],
+        ranges: &'s [(i64, i64)],
+        body: &'s Expr,
+        contract_names: &'s [String],
+        contract_dims: &'s [ContractDim],
+        reduce: ReduceKind,
+        filter: Option<&'s Expr>,
+        rule: Option<&'s str>,
+        gates: &'s [(JoinGate, GatePlacement)],
+    ) -> Self {
+        let static_ranges = static_contract_ranges(contract_dims);
+        let scan = detect_prefix_scan(
+            idx_names,
+            ranges,
+            contract_names,
+            static_ranges.as_deref(),
+            body,
+            filter,
+        );
+        FaqCells {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+            rule,
+            gates,
+            static_ranges,
+            scan,
+        }
+    }
+
+    /// Walk every cell, calling `sink(cell, value, ctx)` with the cell's
+    /// output tuple and its reduced value; `ctx` has the cell's output (and,
+    /// in a scan, contracted) symbols bound. The binds `ctx` held for these
+    /// symbols are restored afterwards.
+    pub(super) fn walk(&self, ctx: &mut EvalCtx, mut sink: impl FnMut(&[i64], f64, &EvalCtx)) {
+        let &FaqCells {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+            rule,
+            gates,
+            ref static_ranges,
+            scan,
+        } = self;
+        // A rank-0 node with nothing to contract is a single evaluation, not
+        // a walk: it neither counts a cell nor stops.
+        let is_walk = !idx_names.is_empty() || !contract_names.is_empty();
+        let saved_binds: Vec<(String, Option<i64>)> = idx_names
+            .iter()
+            .chain(contract_names.iter())
+            .map(|n| (n.clone(), ctx.loop_binds.get(n).copied()))
+            .collect();
+        if let Some(scan) = scan {
+            let (scan_lo, scan_hi) = ranges[scan.axis];
+            // Sweep the scanned axis inside; every OTHER output axis is an
+            // independent scan and forms the outer loop.
+            let outer_ranges: Vec<(i64, i64)> = ranges
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != scan.axis)
+                .map(|(_, r)| *r)
+                .collect();
+            let outer_axes: Vec<(usize, &String)> = idx_names
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != scan.axis)
+                .collect();
+            let sweep = ScanSweep {
+                scan,
+                i_name: &idx_names[scan.axis],
+                j_name: &contract_names[0],
+                // One step of one scan when the walk is to stop at its first cell.
+                bounds: if !stop_at_first_cell() {
+                    (scan_lo, scan_hi)
+                } else if scan.reverse {
+                    (scan_lo.max(scan_hi), scan_hi)
+                } else {
+                    (scan_lo, scan_hi.min(scan_lo))
+                },
+                body,
+                reduce,
+            };
+            let mut full = vec![0i64; ranges.len()];
+            let mut outer = CartesianTuples::new(&outer_ranges);
+            while let Some(otuple) = outer.next() {
+                for ((d, name), val) in outer_axes.iter().zip(otuple.iter()) {
+                    set_bind(&mut ctx.loop_binds, name, *val);
+                    full[*d] = *val;
+                }
+                run_prefix_scan(&sweep, ctx, |i, acc, ctx| {
+                    note_per_cell_cell();
+                    full[scan.axis] = i;
+                    sink(&full, acc, ctx);
+                });
+                if stop_after_first_cell() {
+                    break;
+                }
+            }
+        } else {
+            let origin: DimI = ranges.iter().map(|(lo, _)| *lo).collect();
+            let cellbox = CellBox {
+                names: idx_names,
+                origin: &origin,
+                ranges,
+                rule,
+            };
+            let spec = ReduceSpec {
+                contract_names,
+                body,
+                reduce,
+                filter,
+                cell: Some(&cellbox),
+            };
+            // Per-node cost accounting. The counter is thread-local and bumped
+            // only on the gate-driven unroll, so the delta across this output
+            // loop is exactly the leaves THIS aggregate enumerated.
+            let stats_from = (!gates.is_empty() && crate::broad_phase::join_gate_log_enabled())
+                .then(crate::broad_phase::overlap_enum_visits);
+            // The gated walk's cell-independent plan and its per-cell buffers,
+            // built once for the whole output loop.
+            let gate_plan = GatePlan::new(
+                contract_names.len(),
+                gates.iter().map(|(g, p)| (&*g.index, p.src, p.tgt)),
+            );
+            let mut gate_bufs = gate_plan.bufs();
+            let mut tuples = CartesianTuples::new(ranges);
+            while let Some(tuple) = tuples.next() {
+                for (name, val) in idx_names.iter().zip(tuple.iter()) {
+                    set_bind(&mut ctx.loop_binds, name, *val);
+                }
+                let v = if gates.is_empty() {
+                    reduce_contraction(&spec, contract_dims, static_ranges.as_deref(), ctx)
+                } else {
+                    // This cell's contraction bounds: the hoisted static ones
+                    // when every dim is cell-independent, else re-derived here
+                    // exactly as `reduce_contraction` does.
+                    let derived: SmallVec<[(i64, i64); 4]>;
+                    let cell_ranges: &[(i64, i64)] = match static_ranges.as_deref() {
+                        Some(r) => r,
+                        None => {
+                            derived = contract_dims.iter().map(|d| d.concrete(ctx)).collect();
+                            &derived
+                        }
+                    };
+                    reduce_contraction_gated(
+                        &spec,
+                        cell_ranges,
+                        gates,
+                        &gate_plan,
+                        &mut gate_bufs,
+                        ctx,
+                    )
+                };
+                sink(tuple, v, ctx);
+                if is_walk {
+                    note_per_cell_cell();
+                    if stop_after_first_cell() {
+                        break;
+                    }
+                }
+            }
+            if let Some(before) = stats_from {
+                let total: usize = ranges
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .product();
+                let desc = gates
+                    .iter()
+                    .map(|(g, _)| format!("{}~{}:{}", g.sym_src, g.sym_tgt, g.index.len()))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                eprintln!(
+                    "[join-gate] gates={desc} cells={total} leaves={}",
+                    crate::broad_phase::overlap_enum_visits().wrapping_sub(before),
+                );
+            }
+        }
+        for (name, saved) in saved_binds {
+            match saved {
+                Some(v) => {
+                    ctx.loop_binds.insert(name, v);
+                }
+                None => {
+                    ctx.loop_binds.remove(&name);
+                }
+            }
+        }
     }
 }
 

@@ -582,30 +582,26 @@ fn materialize_observed(
             let total = padded_shape.iter().copied().product::<usize>().max(1);
             let mut buf = vec![0.0f64; total];
             {
-                // One eval context for the whole cell loop (scoped so its
-                // read borrow of `dst` releases before the write below). The
-                // output index names are the same every cell, so `set_bind`
-                // rebinds in place — no per-cell `IdxMap` alloc or key clone.
+                // Scoped so the context's read borrow of `dst` releases before
+                // the write below.
                 let mut ctx = env.ctx(&*dst);
-                let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
-                let cellbox = CellBox {
-                    names: output_idx_names,
-                    origin: &output_origin,
-                    ranges: output_ranges,
-                    rule: Some(var.as_str()),
-                };
-                let mut tuples = CartesianTuples::new(output_ranges);
-                while let Some(tuple) = tuples.next() {
-                    for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                        set_bind(&mut ctx.loop_binds, name, *val);
-                    }
-                    let v = eval(body, &mut ctx);
-                    let v = cell_term(v, body, Some(&cellbox), &ctx);
-                    let flat = multi_to_flat_col_major(tuple, &padded_shape, &padded_origin);
+                FaqCells::new(
+                    output_idx_names,
+                    output_ranges,
+                    body,
+                    &[],
+                    &[],
+                    ReduceKind::Sum,
+                    None,
+                    Some(var.as_str()),
+                    &[],
+                )
+                .walk(&mut ctx, |cell, v, _| {
+                    let flat = multi_to_flat_col_major(cell, &padded_shape, &padded_origin);
                     if flat < buf.len() {
                         buf[flat] = v;
                     }
-                }
+                });
             }
             let arr = col_major_to_arrayd(&buf, &padded_shape);
             dst.insert(var.clone(), arr);
@@ -785,107 +781,29 @@ fn evaluate_rhs_per_cell(
                 let filter = filter.as_deref();
 
                 stats.scalar_rules += 1;
-                // Hoist the eval context and the static contraction bounds out of
-                // the per-cell loop: the bound key set (output_idx + contract
-                // names) is identical every cell, so `set_bind` rebinds in place
-                // and we avoid both a fresh `IdxMap` allocation and the per-cell
-                // range re-derivation on every output tuple.
-                let static_ranges = static_contract_ranges(contract_dims);
-                // Origin of the output box — the alignment an ARRAY-valued §5.3
-                // `filter` is resolved against.
-                let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
                 let mut ctx = env.ctx(observed_arrays);
-                // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
-                // A cumulative reduction (esm-spec §4.3.1) is a triangular double
-                // loop that re-sums, for every output cell, the window the
-                // previous cell already summed — and it never vectorizes, because
-                // its filter reads an output index symbol as a value. Recognized
-                // here it collapses to one sweep with a running accumulator,
-                // bit-identical because both fold the window ascending in the same
-                // association (`PrefixScan`).
-                if let Some(scan) = detect_prefix_scan(
+                FaqCells::new(
                     output_idx_names,
                     output_ranges,
-                    contract_names,
-                    static_ranges.as_deref(),
                     body,
-                    filter,
-                ) {
-                    let (scan_lo, scan_hi) = output_ranges[scan.axis];
-                    let outer_ranges: Vec<(i64, i64)> = output_ranges
-                        .iter()
-                        .enumerate()
-                        .filter(|(d, _)| *d != scan.axis)
-                        .map(|(_, r)| *r)
-                        .collect();
-                    let outer_names: Vec<&String> = output_idx_names
-                        .iter()
-                        .enumerate()
-                        .filter(|(d, _)| *d != scan.axis)
-                        .map(|(_, n)| n)
-                        .collect();
-                    let sweep = ScanSweep {
-                        scan,
-                        i_name: &output_idx_names[scan.axis],
-                        j_name: &contract_names[0],
-                        bounds: (scan_lo, scan_hi),
-                        body,
-                        reduce: *reduce,
-                    };
-                    let mut outer = CartesianTuples::new(&outer_ranges);
-                    while let Some(otuple) = outer.next() {
-                        for (name, val) in outer_names.iter().zip(otuple.iter()) {
-                            set_bind(&mut ctx.loop_binds, name, *val);
-                        }
-                        run_prefix_scan(&sweep, &mut ctx, |_, acc, ctx| {
-                            // Address the destination exactly as the oracle
-                            // does — through the LHS index expressions under
-                            // the current binds, not by assuming a bare index.
-                            let actual_multi: Vec<i64> = lhs_idx_exprs
-                                .iter()
-                                .map(|e| eval_simple_index(e, &ctx.loop_binds))
-                                .collect();
-                            let flat =
-                                multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
-                            dy[vs.flat_offset + flat] = acc;
-                        });
-                    }
-                    continue;
-                }
-
-                let cellbox = CellBox {
-                    names: output_idx_names,
-                    origin: &output_origin,
-                    ranges: output_ranges,
-                    rule: Some(var_name.as_str()),
-                };
-                let spec = ReduceSpec {
                     contract_names,
-                    body,
-                    reduce: *reduce,
+                    contract_dims,
+                    *reduce,
                     filter,
-                    cell: Some(&cellbox),
-                };
-                let mut tuples = CartesianTuples::new(output_ranges);
-                while let Some(tuple) = tuples.next() {
-                    for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
-                        set_bind(&mut ctx.loop_binds, name, *val);
-                    }
-                    // Generalized einsum: contracted indices (incl. ragged
-                    // per-cell dynamic bounds) are unrolled and ⊕-combined here.
-                    let v = reduce_contraction(
-                        &spec,
-                        contract_dims,
-                        static_ranges.as_deref(),
-                        &mut ctx,
-                    );
+                    Some(var_name.as_str()),
+                    &[],
+                )
+                .walk(&mut ctx, |_, v, ctx| {
+                    // Address the destination through the LHS index
+                    // expressions under the cell's binds, not by assuming a
+                    // bare index.
                     let actual_multi: Vec<i64> = lhs_idx_exprs
                         .iter()
                         .map(|e| eval_simple_index(e, &ctx.loop_binds))
                         .collect();
                     let flat = multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
                     dy[vs.flat_offset + flat] = v;
-                }
+                });
             }
         }
     }
