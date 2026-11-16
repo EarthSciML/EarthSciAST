@@ -1108,7 +1108,10 @@ impl TapeBuilder<'_> {
         for d in 0..nd {
             let col = Expr::operator(ExpressionNode {
                 op: "const".to_string(),
-                value: Some(serde_json::json!(cols[d])),
+                value: Some(crate::ConstValue::from_dense(
+                    &[m],
+                    std::mem::take(&mut cols[d]),
+                )),
                 ..Default::default()
             });
             subs.insert(

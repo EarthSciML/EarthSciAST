@@ -987,7 +987,7 @@ fn propagate_operator_dim(
         CoreOp::Other(O::Const) => match op.units.as_deref().map(parse_unit) {
             Some(Ok(unit)) => Dim::Known(unit),
             Some(Err(_)) => Dim::Unknown,
-            None => literal_dim(op.value.as_ref().and_then(serde_json::Value::as_f64), env),
+            None => literal_dim(op.value.as_ref().and_then(crate::ConstValue::as_f64), env),
         },
         // No dimensional rule: the deprecated `neg` (the loader rewrites it to
         // `-` before any check runs), the boolean literals, the load-time ops
@@ -1334,7 +1334,7 @@ pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
         return node
             .value
             .as_ref()
-            .and_then(serde_json::Value::as_f64)
+            .and_then(crate::ConstValue::as_f64)
             .and_then(Rational::from_f64);
     }
     let values = node
@@ -2279,7 +2279,7 @@ fn bare_literal(expr: &Expr) -> Option<BareLiteral> {
                 if node.units.is_some() {
                     return None;
                 }
-                let value = node.value.as_ref()?;
+                let value = node.value.as_ref()?.as_json()?;
                 return Some(BareLiteral {
                     value: value.as_f64()?,
                     text: value.to_string(),
@@ -4735,7 +4735,7 @@ mod tests {
         let konst = |units: Option<&str>| {
             Expr::Operator(std::sync::Arc::new(ExpressionNode {
                 op: "const".into(),
-                value: Some(serde_json::json!(0.44704)),
+                value: Some(serde_json::json!(0.44704).into()),
                 units: units.map(str::to_string),
                 ..ExpressionNode::default()
             }))
@@ -5107,7 +5107,7 @@ mod tests {
         let unitless_const = |value: serde_json::Value| {
             Expr::operator(ExpressionNode {
                 op: "const".to_string(),
-                value: Some(value),
+                value: Some(value.into()),
                 ..ExpressionNode::default()
             })
         };
@@ -5162,7 +5162,7 @@ mod tests {
         // A unit-bearing `const` keeps its declared unit under the new rule.
         let with_units = Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!(273.15)),
+            value: Some(serde_json::json!(273.15).into()),
             units: Some("K".to_string()),
             ..ExpressionNode::default()
         });
@@ -5751,7 +5751,7 @@ mod tests {
     fn konst(value: f64, units: Option<&str>) -> Expr {
         Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!(value)),
+            value: Some(serde_json::json!(value).into()),
             units: units.map(str::to_string),
             ..ExpressionNode::default()
         })

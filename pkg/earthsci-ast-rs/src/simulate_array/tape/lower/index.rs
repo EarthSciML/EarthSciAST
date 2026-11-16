@@ -37,7 +37,7 @@ impl<'m> TapeBuilder<'m> {
         // use the ghost-0 fill (§5.5.5).
         let const_base = self.const_arrays.is_const_base(&node.args[0]);
         // An inline array literal as the base is read whole, as the oracle's
-        // gather reads it (`const_lit_array`): one CONST-section literal. It
+        // gather reads it (the payload's own array): one CONST-section literal. It
         // is lowered here and nowhere else in a box, where an array value in
         // an elementwise position would mean something else per cell.
         let arg0 = match &node.args[0] {
@@ -627,7 +627,8 @@ impl<'m> TapeBuilder<'m> {
             }
             Expr::Operator(n) => {
                 if matches!(n.op.as_str(), "const" | "faq" | "makearray" | "broadcast")
-                    && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
+                    && !(n.op == "const"
+                        && n.value.as_ref().is_some_and(crate::ConstValue::is_number))
                 {
                     return false;
                 }

@@ -1608,7 +1608,7 @@ impl ShapeInference<'_, '_> {
                     && node
                         .value
                         .as_ref()
-                        .is_some_and(serde_json::Value::is_number))
+                        .is_some_and(crate::ConstValue::is_number))
                     || node.op == "true"
                     || node.op == "false" =>
             {

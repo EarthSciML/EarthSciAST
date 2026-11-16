@@ -323,8 +323,8 @@ pub use solver::{
     solver_external_location, time_origin, timestamp_to_seconds,
 };
 pub use types::{
-    AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
-    CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
+    AffectEquation, AutoRecords, ConstValue, ContinuousEvent, Coordinate, CouplingEntry,
+    CouplingRole, CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, HasSubsystems, InlineValue, Metadata, Model,

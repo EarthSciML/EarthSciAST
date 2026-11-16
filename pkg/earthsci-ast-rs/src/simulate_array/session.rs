@@ -452,7 +452,6 @@ impl ArrayCompiled {
             RuntimeMode::Interpreter => SolveRhs::PerCell(Box::new(PerCellRhs {
                 compiled: self,
                 continuous_rules: &setup.cadence.continuous_rules,
-                rule_set: next_rule_set_id(),
                 seed: self.segment_seed(
                     &setup.static_obs,
                     &setup.cadence.segment_static_rules,

@@ -343,7 +343,6 @@ pub(super) enum SolveRhs<'a> {
 pub(super) struct PerCellRhs<'a> {
     pub(super) compiled: &'a ArrayCompiled,
     pub(super) continuous_rules: &'a [AlgebraicRule],
-    pub(super) rule_set: u64,
     pub(super) seed: ArrMap,
     pub(super) rhs: RefCell<Option<RhsScratch>>,
     pub(super) jac: RefCell<Option<RhsScratch>>,
@@ -389,7 +388,6 @@ impl SolveRhs<'_> {
                 evaluate_rhs_with_scratch(
                     &RhsCall {
                         observed_rules: pc.continuous_rules,
-                        rule_set: pc.rule_set,
                         ..c.rhs_call(state, params, t)
                     },
                     out,
@@ -829,12 +827,11 @@ impl ArrayCompiled {
             forcing: &self.forcing,
             t,
             declared: &self.declared_names,
-            rule_set: self.rule_set,
         }
     }
 
     /// An evaluation environment over this model at `state_arrays`, `params`
-    /// and `t`, with no inline-`const` memo.
+    /// and `t`.
     fn eval_env<'a>(&'a self, state_arrays: &'a ArrMap, params: &'a [f64], t: f64) -> EvalEnv<'a> {
         EvalEnv {
             state_arrays,
@@ -843,7 +840,6 @@ impl ArrayCompiled {
             t,
             derived_extents: empty_derived_extents(),
             forcing: &self.forcing,
-            const_lits: None,
             const_arrays: &self.const_scope,
             declared: &self.declared_names,
         }

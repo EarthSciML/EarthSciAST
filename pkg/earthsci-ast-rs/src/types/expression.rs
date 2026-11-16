@@ -215,25 +215,8 @@ fn serialize_canonical_eps<S: serde::Serializer>(
     }
 }
 
-/// `serialize_with` adapter for [`ExpressionNode::value`]: a `const` node's
-/// inline value written in canonical-number form (§5.5.3.1 rule 1). Every
-/// number at any depth (nested arrays, and the objects a `bc` value may hold)
-/// goes through [`serialize_canonical_f64`], so `[100.0, 0.5]` is written
-/// `[100,0.5]` whether it was parsed from a document or built in code, as the
-/// Julia binding writes it. The value in
-/// memory is left as it was parsed or built.
-fn serialize_canonical_value<S: serde::Serializer>(
-    value: &Option<serde_json::Value>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        Some(v) => CanonicalJson(v).serialize(serializer),
-        None => serializer.serialize_none(),
-    }
-}
-
 /// A JSON value that serializes its numbers in canonical-number form.
-struct CanonicalJson<'a>(&'a serde_json::Value);
+pub(super) struct CanonicalJson<'a>(pub(super) &'a serde_json::Value);
 
 impl Serialize for CanonicalJson<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -695,15 +678,11 @@ pub struct ExpressionNode {
 
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
-    /// Held as parsed or built; written in canonical-number form
-    /// (§5.5.3.1): every integral number that fits `i64`, at any depth, is
-    /// written as an integer.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_canonical_value"
-    )]
-    pub value: Option<serde_json::Value>,
+    /// A numeric array is held dense ([`ConstValue`]); every form is written
+    /// in canonical-number form (§5.5.3.1): every integral number that fits
+    /// `i64`, at any depth, is written as an integer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<super::ConstValue>,
 
     /// For the `const` op (esm 1.2.0): the declared unit `value` is in. A
     /// unit-bearing constant has that dimension and exact scale in dimensional
@@ -1056,7 +1035,24 @@ mod expr_deserialize_token_mapping_tests {
             );
             // Memory keeps what was parsed: only the output is canonical.
             let Expr::Operator(node) = &e else { panic!() };
-            assert!(node.value.as_ref().unwrap()[0][0].is_f64());
+            assert!(node.value.as_ref().unwrap().as_json().unwrap()[0][0].is_f64());
+            // A dense payload (all floats, or all integers) writes the same.
+            for (src, want) in [
+                ("[[100.0, 0.5], [-0.0, 1.0e300]]", "[[100,0.5],[0,1e+300]]"),
+                (
+                    "[[1, -2], [3, 9007199254740992]]",
+                    "[[1,-2],[3,9007199254740992]]",
+                ),
+            ] {
+                let e =
+                    parse(&format!(r#"{{"op": "const", "args": [], "value": {src}}}"#)).unwrap();
+                let Expr::Operator(node) = &e else { panic!() };
+                assert!(node.value.as_ref().unwrap().as_dense().is_some(), "{src}");
+                assert_eq!(
+                    serde_json::to_string(&e).unwrap(),
+                    format!(r#"{{"op":"const","args":[],"value":{want}}}"#)
+                );
+            }
             let scalar = parse(r#"{"op": "const", "args": [], "value": 4.0}"#).unwrap();
             assert_eq!(
                 serde_json::to_value(&scalar).unwrap()["value"],
@@ -1079,7 +1075,7 @@ mod expr_deserialize_token_mapping_tests {
         // Built in code (holding `f64`s): same bytes.
         let built = Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!([100.0, 0.5])),
+            value: Some(serde_json::json!([100.0, 0.5]).into()),
             ..Default::default()
         });
         assert_eq!(

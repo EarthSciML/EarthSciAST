@@ -1213,7 +1213,6 @@ impl RhsProgram {
                     &RhsCall {
                         rhs_rules: &m.rhs_rules,
                         observed_rules: &m.observed_rules,
-                        rule_set: m.rule_set,
                         var_shapes: &m.var_shapes,
                         param_names: &m.param_names,
                         state,

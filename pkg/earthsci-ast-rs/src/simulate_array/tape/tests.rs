@@ -1638,7 +1638,6 @@ fn ab_scan_fused_with_its_neighbours() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(&mut ctx, &call, &mut dy, &mut stats);
         for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
@@ -2264,7 +2263,6 @@ fn output_only_observeds_leave_the_rhs() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
@@ -2325,7 +2323,6 @@ fn export_demotion_skips_unread_publishes() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };

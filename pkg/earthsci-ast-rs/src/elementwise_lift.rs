@@ -330,7 +330,9 @@ fn walk<'a>(expr: &'a Expr, bound: &HashSet<String>, inside: bool, f: &mut dyn F
                         walk(b, &inner, true, f);
                     }
                 }
-                "const" if inside && node.value.as_ref().is_some_and(|v| v.is_array()) => {
+                "const"
+                    if inside && node.value.as_ref().is_some_and(crate::ConstValue::is_array) =>
+                {
                     f(Seen::Anonymous { node });
                 }
                 "reshape" if inside => f(Seen::Anonymous { node }),

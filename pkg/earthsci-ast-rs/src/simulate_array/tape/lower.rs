@@ -808,7 +808,16 @@ fn int_range(e: &Expr, bx: &LBox, refine: &[(&str, (f64, f64))]) -> Option<(f64,
                         }
                         let mut acc = None;
                         let v = c.value.as_ref()?;
-                        walk(v, &mut acc).then_some(acc).flatten().and_then(exact)
+                        let whole = match v.as_dense() {
+                            Some(d) => d.iter().all(|&x| {
+                                acc = Some(
+                                    acc.map_or((x, x), |(l, h): (f64, f64)| (l.min(x), h.max(x))),
+                                );
+                                true
+                            }),
+                            None => walk(&v.to_json(), &mut acc),
+                        };
+                        whole.then_some(acc).flatten().and_then(exact)
                     }
                     _ => None,
                 },
@@ -1016,11 +1025,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// the rule when the base is one; an in-range gather
     /// compiles exactly as before.
     const_arrays: &'m ConstArrayScope,
-    /// The shaped parameters whose declared default the compiler lowered into
-    /// a `const` observed, as the dense row-major data that literal was
-    /// written from ([`ArrayCompiled::inline_param_arrays`]), so the tape takes
-    /// the numbers directly rather than reading the literal's JSON back.
-    inline_params: Option<&'m HashMap<String, (Vec<usize>, Vec<f64>)>>,
     /// The program's observed rules, so a CONST-cadence observed the build
     /// must know (a join key column) can be folded from its own rule
     /// ([`TapeBuilder::fold_const_observed`]). Empty for a standalone rule.
@@ -1405,7 +1409,6 @@ impl<'m> TapeBuilder<'m> {
             param_ix,
             obs_tier,
             const_arrays,
-            inline_params: None,
             observed_rules: &[],
             baked_params: FxHashMap::default(),
             array_bool_reductions: false,
@@ -2797,7 +2800,7 @@ impl<'m> TapeBuilder<'m> {
     fn emit_const_array(&mut self, a: &ndarray::ArrayD<f64>) -> LResult<LV> {
         let shape: DimU = a.shape().iter().copied().collect();
         if shape.is_empty() {
-            // `json_to_value` never produces one (a rank-0 literal arrives as
+            // `eval_const` never produces one (a rank-0 literal arrives as
             // `Value::Scalar`), and a 0-d array slot would need scalar, not
             // array, operand semantics.
             bail_tape!("wholesale: rank-0 array-valued `const`");
@@ -3488,7 +3491,7 @@ impl<'m> TapeBuilder<'m> {
             Expr::Number(_) | Expr::Integer(_) => true,
             Expr::Variable(v) => !self.const_arrays.is_const(v),
             Expr::Operator(n) => {
-                if n.op == "const" && !n.value.as_ref().is_some_and(|v| v.is_number()) {
+                if n.op == "const" && !n.value.as_ref().is_some_and(crate::ConstValue::is_number) {
                     return false;
                 }
                 if n.op == "index"
@@ -4154,7 +4157,6 @@ pub(super) fn build_tape_program(
     }
 
     let mut b = TapeBuilder::new(var_shapes, param_names, obs_tier, const_arrays, forcing);
-    b.inline_params = Some(&compiled.inline_param_arrays);
     b.observed_rules = observed_rules;
     b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
