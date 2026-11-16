@@ -2802,7 +2802,7 @@ esm validate model.esm
 
 # Pretty-print
 esm display model.esm
-esm display model.esm --format=latex
+esm display model.esm --format=markdown
 
 # Extract a single model
 esm extract model.esm --component=SuperFast > superfast.esm

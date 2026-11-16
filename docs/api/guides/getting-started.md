@@ -72,17 +72,20 @@ parameters.
 
 ## Display equations
 
-The display functions render an expression, an equation, or a larger part of
-a document for people to read: plain text, Unicode with sub- and superscripts,
-or LaTeX for papers and notebooks.
+`print_math` prints an expression or an equation for people to read, as LaTeX
+for papers, notebooks and Markdown, or as Typst math, the same math an ESM
+Markdown or Typst document writes. It takes the names the expression may use
+(`expression_names` lists them), because a run of letters is one name only
+when it is declared.
 
 <!-- example: display -->
 
 ## Build and change expressions
 
 Expressions are trees of operators and their arguments. You can build one
-directly, or parse it from text, then ask which variables it uses and
-substitute values or other expressions into it.
+directly, or read it from LaTeX or Typst math with `parse_math` (the inverse of
+`print_math`), then ask which variables it uses and substitute values or other
+expressions into it.
 
 <!-- example: expressions -->
 

@@ -96,8 +96,8 @@ esm validate model.esm
 # Convert to compact JSON
 esm convert model.esm -o model_compact.json --to compact-json
 
-# Pretty print expressions (unicode, latex, or ascii)
-esm pretty model.esm -f latex
+# Print the equations as math: typst (the default) or markdown (LaTeX)
+esm pretty model.esm -f markdown
 
 # Run a simulation
 esm simulate model.esm --time 10 -o results.json

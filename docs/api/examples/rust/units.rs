@@ -2,7 +2,7 @@
 //! dimensionally consistent.
 
 use earthsci_ast::{
-    build_unit_env, convert_units, load_path, parse_equation, parse_unit,
+    DocumentFormat, Equation, build_unit_env, convert_units, load_path, parse_math, parse_unit,
     validate_equation_dimensions,
 };
 use earthsci_ast_api_examples::fixture;
@@ -26,7 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // half_life = log(2) / lambda: seconds on both sides.
     validate_equation_dimensions(&model.equations[1], &env)?;
     // half_life is in s but lambda is in 1/s.
-    let wrong = parse_equation("half_life = lambda")?;
+    let names = ["half_life", "lambda"].map(String::from);
+    let wrong = parse_math(
+        r"\mathit{half\_life} = \lambda",
+        &names,
+        DocumentFormat::Markdown,
+    )?;
+    let wrong: Equation = serde_json::from_value(wrong)?;
     let err = validate_equation_dimensions(&wrong, &env).unwrap_err();
     println!("{err}");
     assert!(err.to_string().contains("mismatch"));

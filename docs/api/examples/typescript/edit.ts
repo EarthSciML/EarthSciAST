@@ -9,16 +9,17 @@ import {
   loadString,
   addVariable,
   addEquation,
-  parseEquation,
+  parseMath,
   observedUnknowns,
   toJson,
   writePath,
 } from '@earthsciml/ast'
+import type { Equation } from '@earthsciml/ast'
 
 const fixture = (name: string): string => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
 const outDir = mkdtempSync(join(tmpdir(), 'esm-ts-edit-'))
 
-// region: edit ops=add_variable,add_equation,to_json,write_path
+// region: edit ops=add_variable,add_equation,parse_math,to_json,write_path
 const doc = loadPath(fixture('decay.esm'))
 const model = doc.models!.Decay
 assert.ok(!('ref' in model)) // narrows away an unresolved `{ ref }` mount
@@ -29,7 +30,9 @@ const withVar = addVariable(model, 'fraction', {
   units: '1',
   description: 'Fraction of the initial amount remaining',
 })
-const edited = addEquation(withVar, parseEquation('fraction = N / 100'))
+// The new equation, read from Typst math under the names it uses.
+const fraction = parseMath('fraction = N/100', ['fraction', 'N'], 'typst') as Equation
+const edited = addEquation(withVar, fraction)
 assert.equal(model.equations.length, 2)
 assert.equal(edited.equations.length, 3)
 assert.deepEqual(observedUnknowns(edited), ['fraction', 'half_life'])

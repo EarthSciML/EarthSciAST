@@ -85,11 +85,10 @@ ops = [
 [[group]]
 id = "expressions"
 title = "Expressions"
-description = "Parsing, inspecting, substituting into, simplifying and evaluating expressions and equations."
+description = "Building, reading from math, inspecting, substituting into, simplifying and evaluating expressions and equations."
 profile = "core"
 ops = [
-  "expr", "expr_node", "parse_expression", "parse_equation",
-  "expression_parse_error", "free_variables", "contains",
+  "expr", "expr_node", "parse_math", "free_variables", "contains",
   "substitute", "substitute_with_context", "substitute_in_equations",
   "substitute_in_model", "substitute_in_model_with_context",
   "substitute_in_reaction_system", "substitute_in_reaction_system_with_context",
@@ -99,9 +98,9 @@ ops = [
 [[group]]
 id = "display"
 title = "Display"
-description = "Rendering expressions, equations, models and whole documents for people, as plain text, Unicode or LaTeX."
+description = "Printing expressions and equations as math for people to read, LaTeX or Typst, under the names they use."
 profile = "core"
-ops = ["to_ascii", "to_unicode", "to_latex", "to_julia_code"]
+ops = ["print_math", "expression_names", "to_julia_code"]
 
 [[group]]
 id = "editing"
