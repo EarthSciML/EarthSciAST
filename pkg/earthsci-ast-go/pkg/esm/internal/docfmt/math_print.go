@@ -415,6 +415,19 @@ func prCallFormOk(o string, fs Obj) bool {
 	return true
 }
 
+// prOpnCallOk is the test the printer's open-operator form makes of a node
+// with operator o and fields fs (besides `args` and `op`) under the symbol
+// table s, apart from its field keys (prKeyOk): a core operator has a call
+// form and no annotation field (prCallFormOk), a name `\operatorname{…}` carries, and no
+// template o in scope. The parser's call form reads only nodes that pass it.
+func prOpnCallOk(s *Sym, o string, fs Obj) bool {
+	if !prCallFormOk(o, fs) || !prOpnOk(o) {
+		return false
+	}
+	_, isTemplate := prTparams(s, o)
+	return !isTemplate
+}
+
 // prMathKeys is `Math.mathKeys`: the fields of a core operator in the call form
 // that hold an expression; the others print as JSON, even a string that is a
 // name.
@@ -1032,7 +1045,13 @@ func prNumToks(ns []JNum) [][]Tok {
 	return out
 }
 
-// prArrToks is `Math.arrToks`: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`.
+// prBmatMaxCols is the most columns a LaTeX `bmatrix` holds (amsmath's
+// MaxMatrixCols); a wider matrix prints as `\left[\begin{array}{c…c} …
+// \end{array}\right]`, one `c` per column.
+const prBmatMaxCols = 10
+
+// prArrToks is `Math.arrToks`: LaTeX `bmatrix` (or the `array` of a wider
+// matrix), Typst `vec(…)` / `mat(…)`.
 func prArrToks(sf Sf, a AForm) []Tok {
 	if a.Mat == nil {
 		if sf == SfLatex {
@@ -1044,6 +1063,9 @@ func prArrToks(sf Sf, a AForm) []Tok {
 	if sf == SfLatex {
 		for i, r := range a.Mat {
 			rows[i] = prSepBy(kws(KwAmp), prNumToks(r))
+		}
+		if n := len(a.Mat[0]); n > prBmatMaxCols {
+			return cat(kws(KwLbkg), []Tok{tArrC(n)}, prSepBy(kws(KwNl), rows), kws(KwEarr, KwRbkg))
 		}
 		return cat(kws(KwBmat), prSepBy(kws(KwNl), rows), kws(KwEmat))
 	}
@@ -1801,10 +1823,7 @@ func prPr(c Ctx, e Json) Out {
 			return esc()
 		}
 		fs := prFieldsOf(kvs)
-		if !prCallFormOk(os, fs) || !prOpnOk(os) {
-			return esc()
-		}
-		if _, ok := prTparams(c.s, os); ok {
+		if !prOpnCallOk(c.s, os, fs) {
 			return esc()
 		}
 		for _, kv := range fs {
@@ -1882,9 +1901,9 @@ func prPr(c Ctx, e Json) Out {
 		}
 		if emptyArgs() && strAt(1, "op", "const") {
 			v, _ := field(2, "value")
-			if xs, ok := v.([]Json); ok {
-				if af, ok := prArrForm(xs); ok {
-					return prMkOut(10, prArrToks(sf, af))
+			if _, ok := v.([]Json); ok {
+				if nat, ok := prNative(c, kvs); ok {
+					return nat()
 				}
 				return opn()
 			}
@@ -1892,20 +1911,13 @@ func prPr(c Ctx, e Json) Out {
 	case 4:
 		if emptyArgs() && strAt(1, "op", "const") {
 			uv, _ := field(2, "units")
-			if u, ok := uv.(string); ok {
-				v, _ := field(3, "value")
-				switch x := v.(type) {
-				case JNum:
-					if prUnitsOk(sf, u) {
-						return prMkOut(7, prQtyToks(x, prFactorsOf(u)))
-					}
-					return opn()
-				case []Json:
-					if af, ok := prArrForm(x); ok {
-						if prUnitsOk(sf, u) {
-							return prMkOut(7, cat(prArrToks(sf, af), prUnitToks(prFactorsOf(u))))
-						}
-						return opn()
+			v, _ := field(3, "value")
+			_, isStr := uv.(string)
+			switch v.(type) {
+			case JNum, []Json:
+				if isStr {
+					if nat, ok := prNative(c, kvs); ok {
+						return nat()
 					}
 					return opn()
 				}
@@ -1921,13 +1933,60 @@ func prPr(c Ctx, e Json) Out {
 			}
 		}
 	}
-	if f, ok := prFaqForm(kvs); ok && prFaqOk(f) {
-		return prFaqOut(c, f)
-	}
-	if m, ok := prMkForm(kvs); ok && prMkOk(m) {
-		return prMkOutT(c, m)
+	if nat, ok := prNative(c, kvs); ok {
+		return nat()
 	}
 	return opn()
+}
+
+// prNative is the native spelling the dispatch of `Math.pr` gives a `const`,
+// `faq` or `makearray` node, when one applies: a constant array (with a unit
+// the surface spells), a quantity, a reduction, a table. It returns the
+// printing to do, so a caller asking only whether one applies prints nothing.
+func prNative(c Ctx, kvs Obj) (func() Out, bool) {
+	sf := c.sf
+	field := func(i int, k string) (Json, bool) {
+		if i < len(kvs) && kvs[i].K == k {
+			return kvs[i].V, true
+		}
+		return nil, false
+	}
+	a, _ := field(0, "args")
+	o, _ := field(1, "op")
+	args, okA := a.([]Json)
+	if os, ok := o.(string); okA && ok && len(args) == 0 && os == "const" {
+		switch len(kvs) {
+		case 3:
+			v, _ := field(2, "value")
+			if xs, ok := v.([]Json); ok {
+				if af, ok := prArrForm(xs); ok {
+					return func() Out { return prMkOut(10, prArrToks(sf, af)) }, true
+				}
+			}
+		case 4:
+			uv, _ := field(2, "units")
+			v, _ := field(3, "value")
+			if u, ok := uv.(string); ok && prUnitsOk(sf, u) {
+				switch x := v.(type) {
+				case JNum:
+					return func() Out { return prMkOut(7, prQtyToks(x, prFactorsOf(u))) }, true
+				case []Json:
+					if af, ok := prArrForm(x); ok {
+						return func() Out {
+							return prMkOut(7, cat(prArrToks(sf, af), prUnitToks(prFactorsOf(u))))
+						}, true
+					}
+				}
+			}
+		}
+	}
+	if f, ok := prFaqForm(kvs); ok && prFaqOk(f) {
+		return func() Out { return prFaqOut(c, f) }, true
+	}
+	if m, ok := prMkForm(kvs); ok && prMkOk(m) {
+		return func() Out { return prMkOutT(c, m) }, true
+	}
+	return nil, false
 }
 
 // prPlain is the [("args", .arr as), ("op", .str o)] case of `Math.pr`.

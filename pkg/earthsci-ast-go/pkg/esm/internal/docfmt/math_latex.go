@@ -8,7 +8,10 @@ package docfmt
 // tokens where the reader needs one (needSpace) and where it reads better
 // (pretty); latexLex reads it back, skipping spaces and the spacing commands.
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // ## Spelling
 
@@ -196,6 +199,8 @@ func latexTokChars(t Tok) []rune {
 		return wrap("\\,\\mathrm{", unitsLatexBody(t.U))
 	case TKw:
 		return []rune(latexKwChars(t.W))
+	case TArrC:
+		return []rune("\\begin{array}{" + strings.Repeat("c", t.Cols) + "}")
 	}
 	return nil
 }
@@ -206,7 +211,7 @@ func latexFirstChar(t Tok) (rune, bool) {
 	switch t.K {
 	case TLetter:
 		return t.C, true
-	case TGreek, TIt, TRm, TOpn, TTxt, TJstr, TEsc, TUnits:
+	case TGreek, TIt, TRm, TOpn, TTxt, TJstr, TEsc, TUnits, TArrC:
 		return '\\', true
 	case TWord:
 		for _, c := range t.S {
@@ -385,6 +390,15 @@ func latexCtrlTok(w string, r []rune) (Tok, []rune, bool) {
 		}
 		if r2, ok := surfDropP("{array}{l|l}", r); ok {
 			return tKw(KwBarr), r2, true
+		}
+		if r2, ok := surfDropP("{array}{", r); ok {
+			n := 0
+			for n < len(r2) && r2[n] == 'c' {
+				n++
+			}
+			if n > 0 && n < len(r2) && r2[n] == '}' {
+				return tArrC(n), r2[n+1:], true
+			}
 		}
 		return Tok{}, nil, false
 	case "end":

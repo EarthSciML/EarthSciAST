@@ -8,6 +8,9 @@ package docfmt
 
 // mlDelta is `Source.delta`: how a token changes the delimiter depth.
 func mlDelta(t *Tok) int64 {
+	if t.K == TArrC {
+		return 1
+	}
 	if t.K != TKw {
 		return 0
 	}

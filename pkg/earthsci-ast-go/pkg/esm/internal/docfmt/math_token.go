@@ -125,6 +125,7 @@ const (
 	TCode                  // J
 	TUnits                 // U
 	TKw                    // W
+	TArrC                  // Cols
 )
 
 // UpsPair is one entry of an Ups token.
@@ -141,6 +142,9 @@ type Tok struct {
 	J   Json      // TCode
 	U   []Factor  // TUnits
 	W   Kw        // TKw
+	// Cols is the column count of a LaTeX `\begin{array}{c…c}` (TArrC): the
+	// opener of a constant matrix wider than a `bmatrix` holds.
+	Cols int
 }
 
 // Token constructors.
@@ -159,6 +163,7 @@ func tEsc(s string) Tok          { return Tok{K: TEsc, S: s} }
 func tCode(j Json) Tok           { return Tok{K: TCode, J: j} }
 func tUnits(u []Factor) Tok      { return Tok{K: TUnits, U: u} }
 func tKw(k Kw) Tok               { return Tok{K: TKw, W: k} }
+func tArrC(n int) Tok            { return Tok{K: TArrC, Cols: n} }
 func (t Tok) isKw(k Kw) bool     { return t.K == TKw && t.W == k }
 func (t Tok) isNum(z int64) bool { return t.K == TNum && t.N.IsInt(z) }
 
@@ -201,6 +206,8 @@ func (t Tok) Equal(u Tok) bool {
 		return factorsEqual(t.U, u.U)
 	case TKw:
 		return t.W == u.W
+	case TArrC:
+		return t.Cols == u.Cols
 	}
 	return t.S == u.S
 }

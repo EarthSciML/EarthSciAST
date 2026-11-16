@@ -1349,7 +1349,7 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 		return nil, nil, false
 	}
 	if len(ts) == 0 {
-		if prTnameOk(n) {
+		if psBareTnameOk(c.s, n) {
 			return psTNode(n, Obj{}), ts, true
 		}
 		return nil, nil, false
@@ -1409,15 +1409,12 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 			}
 			return nil, nil, false
 		case at(r1, 0, KwSemi):
-			if slices.Contains(exprRemovedOps, n) || (prCoreOps[n] && !slices.Contains(prFieldCallOps, n)) {
-				return nil, nil, false
-			}
-			if _, ok := prTparams(c.s, n); ok {
+			if slices.Contains(exprRemovedOps, n) {
 				return nil, nil, false
 			}
 			vs, ok1 := psAllPos(args)
 			fs, r2, ok2 := psPFields(c, f, r1[1:])
-			if ok1 && ok2 && at(r2, 0, KwRp) {
+			if ok1 && ok2 && at(r2, 0, KwRp) && psPrintsCallForm(c, n, vs, fs) {
 				return prMkNode(n, vs, fs), r2[1:], true
 			}
 		}
@@ -1429,10 +1426,40 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 		}
 		return nil, nil, false
 	}
-	if prTnameOk(n) {
+	if psBareTnameOk(c.s, n) {
 		return psTNode(n, Obj{}), ts, true
 	}
 	return nil, nil, false
+}
+
+// psPrintsCallForm is whether the node `\operatorname{n}(vs; fs)` reads as
+// is one the printer writes in that form: the fields fs are distinct and
+// none is `op` or `args`, its call-form test holds (prOpnCallOk: an
+// annotation field refuses a core operator only) and its dispatch gives it
+// no native spelling (a `faq`, `makearray` or `const` that prints natively).
+// A field key that is not an identifier is still read (the printer escapes
+// it).
+func psPrintsCallForm(c Ctx, n string, vs []Json, fs Obj) bool {
+	if !psNodupKeys(fs) || !prOpnCallOk(c.s, n, fs) {
+		return false
+	}
+	for _, kv := range fs {
+		if kv.K == "op" || kv.K == "args" {
+			return false
+		}
+	}
+	_, native := prNative(c, prMkNode(n, vs, fs).(Obj))
+	return !native
+}
+
+// psBareTnameOk is whether a bare `\operatorname{n}` reads as a template
+// applied with no bindings: the printer writes that node bare unless a
+// template n with no parameters is in scope, which it writes `n()`.
+func psBareTnameOk(s *Sym, n string) bool {
+	if ps, ok := prTparams(s, n); ok && len(ps) == 0 {
+		return false
+	}
+	return prTnameOk(n)
 }
 
 // psPDCall is `Math.pDCall`: `\operatorname{D}_{x}(u, a, b)` after the `_`.
@@ -1534,7 +1561,26 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return fail()
 		}
+		// a matrix wider than a bmatrix holds prints as an array
+		for _, row := range rows {
+			if len(row) > prBmatMaxCols {
+				return fail()
+			}
+		}
 		return psConstTail(psGridJson(rows), r2)
+	}
+	if t0.isKw(KwLbkg) && len(r) > 0 && r[0].K == TArrC {
+		n := r[0].Cols
+		rows, r2, ok := psPGrid(KwAmp, KwNl, KwEarr, r[1:])
+		if !ok || n <= prBmatMaxCols || !at(r2, 0, KwRbkg) {
+			return fail()
+		}
+		for _, row := range rows {
+			if len(row) != n {
+				return fail()
+			}
+		}
+		return psConstTail(psGridJson(rows), r2[1:])
 	}
 	if t0.isKw(KwVec) && len(r) >= 1 {
 		if !psIsLp(r[0]) {
