@@ -7474,7 +7474,8 @@ function _makearray_region_equations(
     (ma isa OpExpr && (ma::OpExpr).op == "makearray") || return nothing
     ma = ma::OpExpr
     (ma.regions === nothing || ma.values === nothing) && return nothing
-    regions, values = ma.regions, ma.values
+    regions = ma.regions
+    values = _bind_makearray_loops(ma, ma.values, ASTExpr[VarExpr(l) for l in idx_names])
     (isempty(regions) || length(regions) != length(values)) && return nothing
     all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
     elo = Int[first(r) for r in range_iters]

@@ -16,9 +16,9 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from ._show import canonical_key
 from . import compiler as _compiler
 from . import op_registry
+from ._show import canonical_key
 from .classification import inlined_unknowns, observed_unknowns, ode_states
 from .error_handling import (
     TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE,
@@ -2951,6 +2951,32 @@ def _apply_couplings(
             metadata.coupling_rewritten_names.add(resolved.to_var)
 
 
+def _same_expression_key(expr: Expr) -> str:
+    """A key equal for two expressions exactly when they state the same math.
+
+    The canonical JSON of ``expr`` (:func:`~earthsci_ast._show.canonical_key`)
+    after two normalizations: a ``D`` node with no ``wrt`` takes ``wrt: "t"``,
+    which an absent ``wrt`` means (esm-spec §4.2); and the two node annotations
+    that change no value are dropped — ``id`` (a node address, RFC §6.1) and
+    ``expect_cadence`` (an author assertion the cadence pass checks). Every
+    other field takes part, ``attrs`` included: it holds an open op's scheme
+    parameters, so two nodes differing there are different math.
+    """
+
+    def normalize(e: Expr) -> Expr:
+        if not isinstance(e, ExprNode):
+            return e
+        out = map_children(e, normalize)
+        return replace(
+            out,
+            wrt=TIME_VAR if out.op == "D" and out.wrt is None else out.wrt,
+            id=None,
+            expect_cadence=None,
+        )
+
+    return canonical_key(normalize(expr))
+
+
 def _assemble_system(
     esm_file: EsmFile,
     components: OrderedDict[str, _ComponentSystem],
@@ -2991,7 +3017,7 @@ def _assemble_system(
         if dep is not None and not is_array_eq:
             if dep in seen_lhs:
                 existing = seen_lhs[dep]
-                if canonical_key(existing.rhs) != canonical_key(eq.rhs):
+                if _same_expression_key(existing.rhs) != _same_expression_key(eq.rhs):
                     # A single source system that authored two equations
                     # with the same scalar LHS expressed an algebraic
                     # constraint on purpose — e.g. an equilibrium model

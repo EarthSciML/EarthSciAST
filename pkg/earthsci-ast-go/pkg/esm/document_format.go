@@ -12,8 +12,11 @@ package esm
 // golden set is tests/conformance/document_format/.
 
 import (
+	"encoding/json"
 	"fmt"
-	"reflect"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/docfmt"
 )
@@ -93,12 +96,11 @@ func PrintDocument(doc any, format DocumentFormat) string {
 // holds, without its delimiters; it is meant for showing one expression outside
 // a document, so no template is in scope.
 //
-// expr may also be one of this package's typed values (an ExprNode, an
-// Equation, a pointer to one), which prints as its JSON encoding does.
+// expr may also be, or hold at any depth (an equation map whose `rhs` is an
+// ExprNode), one of this package's typed values (an ExprNode, an Equation, a
+// pointer to one), which prints as its JSON encoding does.
 func PrintMath(expr any, names []string, f DocumentFormat) string {
-	if k := reflect.ValueOf(expr).Kind(); k == reflect.Struct || k == reflect.Pointer {
-		expr = decodedValue(expr)
-	}
+	expr = decodedValue(expr)
 	return docfmt.PrintMath(docfmt.FromGo(CanonicalizeDocument(expr)), names, f != DocumentTypst)
 }
 
@@ -165,15 +167,12 @@ func ParseMath(text string, names []string, format DocumentFormat) (any, error) 
 }
 
 // decodedValue is v as encoding/json decodes it: a typed value of this package
-// (ExprNode, Equation, a pointer to one, at any depth) becomes its JSON tree,
-// in which an operator node built with no Args has the empty `args` the schema
-// requires. A value holding a non-finite number, which no JSON holds, is
-// returned as it is.
+// (ExprNode, Equation, a pointer to one, at any depth, inside a map or a slice
+// too) becomes its JSON tree, in which an operator node built with no Args has
+// the empty `args` the schema requires. A non-finite number, which no JSON
+// holds, stays a float64 in the tree.
 func decodedValue(v any) any {
-	tree, err := canonicalizeForJSON(v)
-	if err != nil {
-		return v
-	}
+	tree := jsonTree(v)
 	var fill func(any)
 	fill = func(x any) {
 		switch t := x.(type) {
@@ -278,8 +277,84 @@ func documentRefusal(removedOp string, format DocumentFormat) *DocumentFormatErr
 }
 
 // sameExpression reports whether two expressions, decoded or typed, are the
-// same in canonical form (CanonicalizeDocument; numbers in their canonical
-// kind, CONFORMANCE §5.5.3.1).
+// same: whether their expressionKey is.
 func sameExpression(a, b any) bool {
-	return reflect.DeepEqual(CanonicalizeDocument(decodedValue(a)), CanonicalizeDocument(decodedValue(b)))
+	return expressionKey(a) == expressionKey(b)
+}
+
+// expressionNodeAnnotations are the operator-node fields that annotate a node
+// without changing the value it computes: the `id` a derived index set names
+// and the author's `expect_cadence`. A rewrite-target op's `attrs` are its
+// scheme parameters, so they stay in the key.
+var expressionNodeAnnotations = []string{"id", "expect_cadence"}
+
+// expressionKey is the comparison key of an expression or an equation,
+// decoded or typed: its canonical form (CanonicalizeDocument; numbers in their
+// canonical kind, CONFORMANCE §5.5.3.1) with every `D` that names no `wrt`
+// given the independent variable it means (esm-spec §4.2), and with the
+// expressionNodeAnnotations of every operator node dropped, written out as
+// text. Everything else is kept, and a non-finite number is written out as
+// well, so a NaN constant has the same key as itself.
+func expressionKey(v any) string {
+	var b strings.Builder
+	writeExpressionKey(&b, CanonicalizeDocument(decodedValue(v)))
+	return b.String()
+}
+
+func writeExpressionKey(b *strings.Builder, v any) {
+	switch x := v.(type) {
+	case nil:
+		b.WriteString("null")
+	case bool:
+		b.WriteString(strconv.FormatBool(x))
+	case string:
+		b.WriteString(strconv.Quote(x))
+	case int64:
+		b.WriteString("i")
+		b.WriteString(strconv.FormatInt(x, 10))
+	case float64:
+		b.WriteString("f")
+		b.WriteString(strconv.FormatFloat(x, 'g', -1, 64))
+	case json.Number:
+		b.WriteString("n")
+		b.WriteString(string(x))
+	case []any:
+		b.WriteString("[")
+		for i, item := range x {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			writeExpressionKey(b, item)
+		}
+		b.WriteString("]")
+	case map[string]any:
+		_, isNode := x["op"]
+		if isNode {
+			if x["op"] == "D" {
+				if _, has := x["wrt"]; !has {
+					x["wrt"] = DefaultIndepVar
+				}
+			}
+			for _, k := range expressionNodeAnnotations {
+				delete(x, k)
+			}
+		}
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("{")
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(strconv.Quote(k))
+			b.WriteString(":")
+			writeExpressionKey(b, x[k])
+		}
+		b.WriteString("}")
+	default:
+		fmt.Fprintf(b, "%T(%#v)", x, x)
+	}
 }

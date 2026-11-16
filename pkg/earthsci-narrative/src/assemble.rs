@@ -675,18 +675,19 @@ impl<'a> Assembler<'a> {
             .map(|q| q.name.clone())
             .collect();
         let sides = parse_math(&eq.math, &names, DocumentFormat::Typst)
-            .map_err(|e| (e.code, e.message))
+            .map_err(|e| (e.code, e.message, e.at))
             .and_then(|parsed| match parsed {
                 Value::Object(mut fields) if fields.contains_key("lhs") => {
                     let side = |v: Option<Value>| {
                         serde_json::from_value::<Expr>(v.unwrap_or_default())
-                            .map_err(|e| ("parse_error", e.to_string()))
+                            .map_err(|e| ("parse_error", e.to_string(), None))
                     };
                     Ok((side(fields.remove("lhs"))?, side(fields.remove("rhs"))?))
                 }
                 _ => Err((
                     "parse_error",
                     "it is an expression, not an equation (`lhs = rhs`)".to_string(),
+                    None,
                 )),
             });
         match sides {
@@ -714,14 +715,21 @@ impl<'a> Assembler<'a> {
                 }
                 self.record(path, index);
             }
-            Err((code, message)) => {
-                self.error(
+            Err((code, message, at)) => {
+                let diagnostic = self.error(
                     index,
                     code,
                     format!(
                         "cannot read the equation as Typst math: {message} (a name of more than one letter must be declared with `var` or `param`, and spelled as an ESM Typst display spells it)"
                     ),
                 );
+                if let Some(at) = at {
+                    // Math that ends too soon underlines its last character.
+                    let len = eq.math.chars().count();
+                    let start = at.min(len.saturating_sub(1));
+                    let end = (start + 1).min(len);
+                    diagnostic.span = Some(crate::diagnostic::TextSpan { start, end });
+                }
             }
         }
     }
@@ -1699,6 +1707,44 @@ mod tests {
         assert_eq!(
             a.esm["models"]["Model"]["equations"][0]["rhs"]["args"][0]["args"][0],
             "kappa"
+        );
+    }
+
+    #[test]
+    fn parse_errors_carry_a_span() {
+        let d = doc(json!([
+            {"kind": "var", "name": "x", "default": 1},
+            {"kind": "param", "name": "k", "default": 1},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k x ) + 1"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k +"},
+            {"kind": "eq", "math": "(dif x)/(dif t) = -k ? x"}
+        ]));
+        let a = assemble(&d);
+        let spans: Vec<_> = a
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "parse_error")
+            .map(|d| (d.element, d.code.as_str(), d.span))
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                (
+                    Some(2),
+                    "parse_error",
+                    Some(crate::diagnostic::TextSpan { start: 23, end: 24 })
+                ),
+                (
+                    Some(3),
+                    "parse_error",
+                    Some(crate::diagnostic::TextSpan { start: 21, end: 22 })
+                ),
+                (
+                    Some(4),
+                    "parse_error",
+                    Some(crate::diagnostic::TextSpan { start: 21, end: 22 })
+                ),
+            ]
         );
     }
 

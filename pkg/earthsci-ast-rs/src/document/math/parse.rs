@@ -1363,8 +1363,20 @@ fn op_allowed(o: &str) -> bool {
     op_ok(o) && !REMOVED_OPS.contains(&o) && !DEPRECATED_OPS.contains(&o)
 }
 
-/// `Math.pPrim`: a primary.
+/// `Math.pPrim`: a primary. Where it starts and, when it reads one, where it
+/// ends are recorded ([`limits::reached`]), so a refused text can say how far
+/// the parser got.
 pub fn p_prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
+    limits::reached(ts);
+    let out = prim(c, f, ts);
+    if let Some((_, r)) = &out {
+        limits::reached(r);
+    }
+    out
+}
+
+/// The body of [`p_prim`].
+fn prim<'a>(c: Ctx, f: usize, ts: &'a [Tok]) -> P<'a, Json> {
     let f = f.checked_sub(1)?;
     note_removed_op(ts);
     let paren_close = |r: &'a [Tok]| -> P<'a, Json> {
@@ -1982,6 +1994,10 @@ pub fn need(l: usize, len: usize) -> usize {
 pub fn parse_toks(sf: Sf, s: &super::expr::Sym, ts: &[Tok]) -> Option<Json> {
     match p_or(Ctx { sf, s }, need(1, ts.len()), ts) {
         Some((e, [])) => Some(e),
-        _ => None,
+        Some((_, r)) => {
+            limits::reached(r);
+            None
+        }
+        None => None,
     }
 }

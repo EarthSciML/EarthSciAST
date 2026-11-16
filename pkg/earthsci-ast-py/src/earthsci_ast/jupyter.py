@@ -65,9 +65,45 @@ def _reaction_system_rows(rs: ReactionSystem) -> list[str]:
     return rows + _equation_rows(rs.constraint_equations, names)
 
 
+# Each character TeX gives a meaning, as the math-mode symbol that prints it.
+# Text-mode escapes do not travel: MathJax takes the argument of ``\textbf``
+# literally unless its ``textmacros`` package is loaded, and has no
+# ``\textbackslash`` when it is. These symbols render in MathJax and KaTeX alike.
+_TEX_SPECIALS = {
+    "\\": "\\backslash ",
+    "{": "\\{",
+    "}": "\\}",
+    "$": "\\$",
+    "&": "\\&",
+    "#": "\\#",
+    "%": "\\%",
+    "_": "\\_",
+    "^": "\\hat{}",
+    "~": "\\tilde{}",
+}
+
+
+def _bold_text(text: str) -> str:
+    """``text`` as bold display-math content, every character printed as written:
+    the runs of ordinary characters in ``\\textbf``, each TeX special between
+    them as its math-mode symbol."""
+    out: list[str] = []
+    run = ""
+    for ch in text:
+        if ch in _TEX_SPECIALS:
+            if run:
+                out.append(f"\\textbf{{{run}}}")
+                run = ""
+            out.append(_TEX_SPECIALS[ch])
+        else:
+            run += ch
+    if run:
+        out.append(f"\\textbf{{{run}}}")
+    return "".join(out)
+
+
 def _titled(name: str, rows: list[str]) -> list[str]:
-    title = name.replace("\\", "").replace("{", "").replace("}", "")
-    return [f"\\textbf{{{title}}}", *rows] if rows else []
+    return [_bold_text(name), *rows] if rows else []
 
 
 def _equation_repr_latex(self: Equation) -> str:

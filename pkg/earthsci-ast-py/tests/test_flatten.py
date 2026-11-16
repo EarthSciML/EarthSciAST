@@ -567,6 +567,60 @@ def test_flatten_conflicting_derivatives_raise():
         flatten(file)
 
 
+def _two_systems_one_tendency(rhs_a, rhs_b):
+    """`A.x` and `B.x` unified by a variable_map, each giving `D(x)` the RHS passed."""
+
+    def model(name, rhs):
+        return Model(
+            name=name,
+            variables={"x": ModelVariable(type="unknown")},
+            equations=[Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs=rhs)],
+        )
+
+    vm = VariableMapCoupling(from_var="A.x", to_var="B.x", transform="param_to_var")
+    return _empty_file(models={"A": model("A", rhs_a), "B": model("B", rhs_b)}, coupling=[vm])
+
+
+def _rate(**node):
+    """`-1 * D(x)` with the given fields on the `D` node and `id` on the product."""
+    product_id = node.pop("product_id", None)
+    return ExprNode(op="*", args=[-1, ExprNode(op="D", args=["x"], **node)], id=product_id)
+
+
+@pytest.mark.parametrize(
+    ("rhs_a", "rhs_b"),
+    [
+        # An absent `wrt` means `t` (esm-spec §4.2).
+        (_rate(), _rate(wrt="t")),
+        # `id` addresses a node and `expect_cadence` asserts its class; neither
+        # changes the value.
+        (_rate(product_id="n1"), _rate()),
+        (_rate(wrt="t", expect_cadence="continuous"), _rate()),
+    ],
+)
+def test_flatten_same_rhs_in_two_systems_is_one_equation(rhs_a, rhs_b):
+    """The same tendency written in two systems is a duplicate, not a conflict."""
+    flat = flatten(_two_systems_one_tendency(rhs_a, rhs_b))
+    tendencies = [eq for eq in flat.equations if isinstance(eq.lhs, ExprNode) and eq.lhs.op == "D"]
+    assert len(tendencies) == 1
+
+
+@pytest.mark.parametrize(
+    ("rhs_a", "rhs_b"),
+    [
+        (_rate(wrt="t"), _rate(wrt="z")),
+        (
+            ExprNode(op="scheme", args=["x"], attrs={"order": 1}),
+            ExprNode(op="scheme", args=["x"], attrs={"order": 2}),
+        ),
+    ],
+)
+def test_flatten_rhs_differing_in_meaning_still_conflicts(rhs_a, rhs_b):
+    """A different `wrt` or different scheme parameters are different math."""
+    with pytest.raises(ConflictingDerivativeError):
+        flatten(_two_systems_one_tendency(rhs_a, rhs_b))
+
+
 def test_flatten_same_system_multi_lhs_passes_through():
     """A single source system with two algebraic equations sharing an LHS is a
     legitimate DAE (e.g. equilibrium model: K = f(T) AND K = product([H+], [OH-])).

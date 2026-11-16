@@ -26,7 +26,7 @@ impl fmt::Display for Severity {
     }
 }
 
-/// A character range within an element's own text (an equation's `text`), so
+/// A character range within an element's own text (an equation's `math`), so
 /// a front end can underline the exact spot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextSpan {

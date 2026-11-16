@@ -65,6 +65,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # gate, the four validity rules and the flatten rewrite.
     include("variable_bounds_test.jl")
     include("expression_test.jl")
+    include("show_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
     include("reaction_lowering_form_test.jl")  # exact lowered tree (esm-libraries-spec §4.6.2)
@@ -340,6 +341,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("relational_rewrites_test.jl")          # the lib/relational.esm template forms of the relational fixtures
     include("rank_count_setup_test.jl")             # rank_of_set lookups as a setup table; the count over sorted constant keys
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
+    include("makearray_output_idx_test.jl")         # makearray output_idx binds its loop symbols (esm-spec §4.3)
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
     include("native_lifted_makearray_test.jl")      # a makearray gathered in a lifted equation (EarthSciIntegrator #34)
