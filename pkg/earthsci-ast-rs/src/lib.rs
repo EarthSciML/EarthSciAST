@@ -131,6 +131,7 @@ pub mod precision_infer;
 pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
+pub(crate) mod ref_reader;
 pub(crate) mod reference_resolution;
 pub(crate) mod relational;
 pub(crate) mod serialize;

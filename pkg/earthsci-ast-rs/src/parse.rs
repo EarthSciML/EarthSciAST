@@ -154,6 +154,10 @@ pub fn load_string_with_options(
 /// no type error anywhere to catch the difference.
 fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
     let mut json_value = json_value;
+    // Every document this load reaches by reference is read and parsed once
+    // (`crate::ref_reader`): the mount-tree scan below and the mount pipeline
+    // read the same files.
+    let _parse_cache = crate::ref_reader::ParseCacheScope::on();
 
     // Removed ops (and `function_tables`) are refused by name at the wire
     // boundary, ahead of every other pass (esm-spec §4.2).

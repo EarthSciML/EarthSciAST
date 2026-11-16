@@ -364,58 +364,54 @@ const REACTION_SYSTEM_MOUNT: TopLevelMountForm = TopLevelMountForm {
     ref_noun: &TOPLEVEL_REACTION_SYSTEM_REF,
 };
 
-/// The shared "load a referenced .esm document" sequence both ref-resolvers run:
-/// reject a remote URL, canonicalize `ref_str` against `base`, guard against a
-/// cycle, mark the path visited, then read + parse it. Returns the canonical
-/// path (still marked visited) and the parsed JSON.
+/// Load a document a §4.7 mount edge references: locate and read it through
+/// [`crate::ref_reader`] (which owns `${VAR}` expansion, the bundled standard
+/// library, the remote refusal and file identity), guard against a cycle, mark
+/// it visited, then give it the per-file wire treatment and version gates.
+/// Returns the file's identity (still marked visited) and the parsed JSON.
 ///
 /// On success the CALLER owns the visited mark: it recurses into the loaded
 /// document (so nested refs see this path on the stack) and must
-/// `visited.remove(&canonical)` when done — mirroring the manual insert/remove
-/// this used to duplicate at both sites. On any failure here the mark is not
+/// `visited.remove(&canonical)` when done. On any failure here the mark is not
 /// left dangling (it is removed before returning a read/parse error, and is
-/// never inserted on the URL / canonicalize / cycle errors).
+/// never inserted on the locate / cycle errors).
 fn load_ref_document(
     ref_str: &str,
     base: &Path,
     visited: &mut HashSet<PathBuf>,
     noun: &RefNoun,
 ) -> Result<(PathBuf, Value), DiagnosticError> {
-    // esm-spec §4.7: `${VAR}` expands from the environment BEFORE the ref is
-    // classified, so a variable holding a URL is recognised as the remote ref
-    // it expands to rather than joined onto `base` as a path segment.
-    // A standard-library ref (`esm:...`) is taken as written and resolves to
-    // the bundled copy of lib/, as does a relative ref inside a bundled file.
-    let expanded = crate::stdlib::expand_ref(ref_str);
+    use crate::ref_reader::RefError;
+    let expanded = crate::ref_reader::expand(ref_str);
     let ref_str: &str = &expanded;
-    let (canonical, bundled) = match crate::stdlib::resolve(ref_str, base) {
-        Some(Ok((identity, text))) => (PathBuf::from(identity), Some(text)),
-        Some(Err(why)) => {
-            return Err(err(
-                noun.code,
-                format!("failed to resolve {} {ref_str:?}: {why}", noun.item),
-            ));
-        }
-        None => {
-            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-                return Err(err(
-                    noun.code,
-                    format!(
-                        "Remote {} are not supported in the Rust loader; \
-                         download {ref_str:?} to a local file first",
-                        noun.remote_plural
-                    ),
-                ));
-            }
-            let canonical = base.join(ref_str).canonicalize().map_err(|e| {
-                err(
-                    noun.code,
-                    format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
-                )
-            })?;
-            (canonical, None)
-        }
+    let read_error = |e: RefError| match e {
+        RefError::Bundled(why) => err(
+            noun.code,
+            format!("failed to resolve {} {ref_str:?}: {why}", noun.item),
+        ),
+        RefError::Remote => err(
+            noun.code,
+            format!(
+                "Remote {} are not supported in the Rust loader; \
+                 download {ref_str:?} to a local file first",
+                noun.remote_plural
+            ),
+        ),
+        RefError::Missing { err: e, .. } => err(
+            noun.code,
+            format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
+        ),
+        RefError::Read { path, err: e } => err(
+            noun.code,
+            format!("failed to read {} {}: {e}", noun.item, path.display()),
+        ),
+        RefError::Parse { path, err: e } => err(
+            noun.code,
+            format!("failed to parse {} {}: {e}", noun.item, path.display()),
+        ),
     };
+    let located = crate::ref_reader::locate(ref_str, base).map_err(read_error)?;
+    let canonical = located.identity.clone();
 
     if visited.contains(&canonical) {
         return Err(err(
@@ -430,36 +426,12 @@ fn load_ref_document(
     visited.insert(canonical.clone());
 
     let loaded = (|| -> Result<Value, DiagnosticError> {
-        let content = match bundled {
-            Some(text) => Cow::Borrowed(text),
-            None => Cow::Owned(std::fs::read_to_string(&canonical).map_err(|e| {
-                err(
-                    noun.code,
-                    format!(
-                        "failed to read {} {}: {}",
-                        noun.item,
-                        canonical.display(),
-                        e
-                    ),
-                )
-            })?),
-        };
-        let mut parsed: Value = serde_json::from_str(&content).map_err(|e| {
-            err(
-                noun.code,
-                format!(
-                    "failed to parse {} {}: {}",
-                    noun.item,
-                    canonical.display(),
-                    e
-                ),
-            )
-        })?;
+        let mut parsed = crate::ref_reader::read(&located).map_err(read_error)?;
         // A REFERENCED document is a document: it gets the same wire-boundary
         // treatment as the root (removed-op rejection, the `faq` version gate,
-        // and `aggregate` -> `faq` normalization). Without this the alias and
-        // `arrayop` both survive a `{ref}` all the way into `emit`
-        // (docs/content/rfcs/faq-node-rename.md §5.2).
+        // and the deprecated-op rewrite). Without this a removed op survives a
+        // `{ref}` all the way into `emit` (docs/content/rfcs/faq-node-rename.md
+        // §5.2).
         let authored = crate::parse::prepare_document_ops_scanned(&mut parsed)
             .map_err(|e| err(noun.code, format!("{}: {e}", canonical.display())))?;
         // Every version gate that applies to a mounted file

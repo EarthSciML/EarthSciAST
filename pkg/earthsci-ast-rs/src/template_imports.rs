@@ -45,7 +45,7 @@ use crate::lower_expression_templates::{
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 const COMPONENT_KINDS: [&str; 2] = ["models", "reaction_systems"];
 
@@ -242,6 +242,8 @@ fn is_rename_protected(k: &str) -> bool {
 }
 
 use crate::diagnostic::{codes, err};
+#[cfg(test)]
+use crate::ref_reader::lexical_normalize;
 
 // ---------------------------------------------------------------------------
 // Spec-version gate (esm-spec §9.6.5)
@@ -1936,43 +1938,12 @@ fn instantiate_scope(
     Ok(())
 }
 
-/// Lexically normalize a path (collapse `.` and `..` components) — the
-/// canonical key for import-cycle detection (esm-spec §9.7.2, as §4.7). The
-/// normalization is lexical so that a not-yet-read path still has a stable
-/// key.
-fn lexical_normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                // `PathBuf::pop` succeeds on a trailing `..`, so a naive
-                // `if !out.pop()` wrongly collapses consecutive parent
-                // segments (e.g. `../../x` → `x`). Only pop a real (normal)
-                // tail; if `out` is empty or already ends in `..`, the `..`
-                // escapes the base and must survive — this value is BOTH the
-                // import-cycle key and the path read by `load_import_raw`.
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
-                    out.pop();
-                } else {
-                    out.push("..");
-                }
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
+/// The import-cycle key of a ref (esm-spec §9.7.2, as §4.7): the file
+/// identity [`crate::ref_reader`] gives every referenced document, built from
+/// the EXPANDED ref so it names the file [`load_import_raw`] reads.
 fn canonical_ref(ref_str: &str, base_dir: &Path) -> String {
-    // esm-spec §4.7: the cycle/cache key is built from the EXPANDED ref, so it
-    // names the same file `load_import_raw` actually reads.
-    let expanded = crate::stdlib::expand_ref(ref_str);
-    // A bundled file's key is its `esm:std/<name>` identity (esm-spec §4.7).
-    if let Some(found) = crate::stdlib::resolve(&expanded, base_dir) {
-        return found.map_or_else(|_| expanded.into_owned(), |(identity, _)| identity);
-    }
-    lexical_normalize(&base_dir.join(expanded.as_ref()))
+    let expanded = crate::ref_reader::expand(ref_str);
+    crate::ref_reader::identity_key(&expanded, base_dir)
         .to_string_lossy()
         .into_owned()
 }
@@ -1982,67 +1953,53 @@ fn load_import_raw(
     base_dir: &Path,
     origin: &str,
 ) -> Result<(Value, PathBuf, crate::parse::AuthoredFacts), ExpressionTemplateError> {
+    use crate::ref_reader::RefError;
     // esm-spec §4.7: expand before classifying, so a variable holding a URL is
     // rejected as the remote ref it expands to rather than joined onto
     // `base_dir` as a path segment.
-    let expanded = crate::stdlib::expand_ref(ref_str);
+    let expanded = crate::ref_reader::expand(ref_str);
     let ref_str: &str = &expanded;
-    let (path, content) = match crate::stdlib::resolve(ref_str, base_dir) {
-        Some(Ok((identity, text))) => (PathBuf::from(identity), text.to_string()),
-        Some(Err(why)) => {
-            return Err(err(
-                codes::TEMPLATE_IMPORT_UNRESOLVED,
-                format!("{origin}: failed to load template-library ref '{ref_str}': {why}"),
-            ));
-        }
-        None => {
-            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-                return Err(err(
-                    codes::TEMPLATE_IMPORT_UNRESOLVED,
-                    format!(
-                        "{origin}: failed to load template-library ref '{ref_str}': remote refs \
-                         are not fetched by the Rust loader; download the file and import it by \
-                         local path"
-                    ),
-                ));
-            }
-            let path = lexical_normalize(&base_dir.join(ref_str));
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                err(
-                    codes::TEMPLATE_IMPORT_UNRESOLVED,
-                    format!(
-                        "{origin}: template-library file not found or unreadable: {} (from ref \
-                         '{ref_str}'): {e}",
-                        path.display()
-                    ),
-                )
-            })?;
-            (path, content)
-        }
-    };
-    let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
-        err(
+    let read_error = |e: RefError| match e {
+        RefError::Bundled(why) => err(
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            format!("{origin}: failed to load template-library ref '{ref_str}': {why}"),
+        ),
+        RefError::Remote => err(
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            format!(
+                "{origin}: failed to load template-library ref '{ref_str}': remote refs \
+                 are not fetched by the Rust loader; download the file and import it by \
+                 local path"
+            ),
+        ),
+        RefError::Missing { path, err: e } | RefError::Read { path, err: e } => err(
+            codes::TEMPLATE_IMPORT_UNRESOLVED,
+            format!(
+                "{origin}: template-library file not found or unreadable: {} (from ref \
+                 '{ref_str}'): {e}",
+                path.display()
+            ),
+        ),
+        RefError::Parse { path, err: e } => err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
             format!(
                 "{origin}: template-library ref '{}' is not valid JSON: {e}",
                 path.display()
             ),
-        )
-    })?;
+        ),
+    };
+    let located = crate::ref_reader::locate(ref_str, base_dir).map_err(read_error)?;
+    let mut raw = crate::ref_reader::read(&located).map_err(read_error)?;
     // A template library is a document too, and its template BODIES carry
     // expression nodes — so it needs the same wire-boundary treatment as the
     // root (docs/content/rfcs/faq-node-rename.md §5.2).
     let authored = crate::parse::prepare_document_ops_scanned(&mut raw).map_err(|e| {
         err(
             codes::TEMPLATE_IMPORT_UNRESOLVED,
-            format!("{origin}: {}: {e}", path.display()),
+            format!("{origin}: {}: {e}", located.identity.display()),
         )
     })?;
-    let dir = path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| base_dir.to_path_buf());
-    Ok((raw, dir, authored))
+    Ok((raw, located.dir, authored))
 }
 
 /// Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load
@@ -2571,59 +2528,30 @@ fn visit_mount_ref(
     let Some(ref_str) = entry.get("ref").and_then(|v| v.as_str()) else {
         return;
     };
-    // esm-spec §4.7 `${VAR}` expansion, before the remote classification below.
-    let expanded = crate::stdlib::expand_ref(ref_str);
-    let ref_str: &str = &expanded;
-    if let Some(found) = crate::stdlib::resolve(ref_str, base_path) {
-        // A bundled library file: same walk, over its text, from the bundle's
-        // virtual directory. An unresolved one contributes nothing, as an
-        // unreadable file does below.
-        let Ok((identity, text)) = found else {
-            return;
-        };
-        if !seen.insert(identity) {
-            return;
-        }
-        let Ok(child) = serde_json::from_str::<Value>(text) else {
-            return;
-        };
-        if let Some(decls) = child.get("metaparameters").and_then(|v| v.as_object()) {
-            out.extend(decls.keys().cloned());
-        }
-        let std_dir = Path::new(crate::stdlib::STD_BASE);
-        collect_mount_declared_into(&child, std_dir, follow_imports, seen, out);
-        return;
-    }
-    // Remote refs are not fetched by this crate: the ref loader refuses them at
-    // BOTH mount forms (`load_ref_document`), so no document here is ever
-    // URL-loaded and no relative ref ever needs joining onto a URL directory.
-    // Contributing nothing is safe for the same reason an unreadable file is
-    // (below): every caller that widens a mount edge's site-4 check with this
-    // set runs it on a leaf whose nested refs the loader resolves FIRST
-    // (`walk_top_level` before the leaf's close), so the remote / unreadable /
-    // unparsable ref is reported with its own code before the forwarded
-    // binding's `template_import_unknown_name` check could fire.
-    if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-        return;
-    }
-    let path = lexical_normalize(&base_path.join(ref_str));
-    if !seen.insert(path.to_string_lossy().into_owned()) {
-        return;
-    }
-    let Ok(content) = std::fs::read_to_string(&path) else {
+    // Read through the same reader the mount pipeline uses, so a file this
+    // scan reads is parsed once per load (the pipeline then reads it from the
+    // cache). A remote ref is not fetched by this crate: the ref loader
+    // refuses it at BOTH mount forms (`load_ref_document`). Contributing
+    // nothing for it, or for an unreadable or unparsable file, is safe: every
+    // caller that widens a mount edge's site-4 check with this set runs it on a
+    // leaf whose nested refs the loader resolves FIRST (`walk_top_level`
+    // before the leaf's close), so the bad ref is reported with its own code
+    // before the forwarded binding's `template_import_unknown_name` check
+    // could fire.
+    let expanded = crate::ref_reader::expand(ref_str);
+    let Ok(located) = crate::ref_reader::locate(&expanded, base_path) else {
         return;
     };
-    let Ok(child) = serde_json::from_str::<Value>(&content) else {
+    if !seen.insert(located.identity.to_string_lossy().into_owned()) {
+        return;
+    }
+    let Ok(child) = crate::ref_reader::read(&located) else {
         return;
     };
     if let Some(decls) = child.get("metaparameters").and_then(|v| v.as_object()) {
         out.extend(decls.keys().cloned());
     }
-    let child_dir = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| base_path.to_path_buf());
-    collect_mount_declared_into(&child, &child_dir, follow_imports, seen, out);
+    collect_mount_declared_into(&child, &located.dir, follow_imports, seen, out);
 }
 
 /// Fold ONE §4.7 mount contribution's interval `size` against the MOUNTING
