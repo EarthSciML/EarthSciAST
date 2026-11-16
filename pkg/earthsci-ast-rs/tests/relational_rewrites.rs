@@ -16,7 +16,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{
     Compiler, EsmProblem, InlineTestOptions, Key, LoadOptions, ProblemOptions, Rhs, esm_problem,
     load_string_with_options, materialize_value_invention, observed_field,
@@ -212,8 +211,6 @@ fn rhs_at_golden(
     g: &Value,
 ) -> HashMap<String, f64> {
     let names: Vec<String> = prob
-        .debug_array_compiled()
-        .expect("a right-hand side")
         .state_variable_names()
         .iter()
         .map(|n| elem_key(n, model))
@@ -225,36 +222,16 @@ fn rhs_at_golden(
     want.sort();
     assert_eq!(sorted, want, "{label}: state elements");
     let state: Vec<f64> = names.iter().map(|n| gs[n].as_f64().unwrap()).collect();
-    let (_, dy) = rhs_at(prob, compiler, label, &state);
+    let dy = rhs_at(prob, compiler, label, &state);
     names.into_iter().zip(dy).collect()
 }
 
-/// `dy` at `state`: the interpreter, or the strict native tape with no rule
-/// off it.
-fn rhs_at(
-    prob: &EsmProblem,
-    compiler: Compiler,
-    label: &str,
-    state: &[f64],
-) -> (Vec<String>, Vec<f64>) {
-    let comp = prob.debug_array_compiled().expect("a right-hand side");
-    let names = comp.state_variable_names().to_vec();
-    let state = state.to_vec();
-    let dy = if compiler == Compiler::Native {
-        let _precision = comp.debug_precision_env().enter();
-        let params = comp.debug_resolve_params(prob.p());
-        let mut dy = vec![0.0f64; state.len()];
-        let mut scratch = comp
-            .debug_new_scratch_taped()
-            .unwrap_or_else(|e| panic!("{label}: strict native: {e}"));
-        let mut stats = RhsStats::default();
-        comp.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-        assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-        dy
-    } else {
-        comp.debug_eval_rhs(&state, 0.0, prob.p()).0
-    };
-    (names, dy)
+/// `dy` at `state` through the Problem's public program: the interpreter, or
+/// the strict native tape with no rule off it.
+fn rhs_at(prob: &EsmProblem, compiler: Compiler, label: &str, state: &[f64]) -> Vec<f64> {
+    let mut rhs = common::rhs::ProblemRhs::new(prob);
+    assert_eq!(rhs.program().compiler(), compiler, "{label}: compiler");
+    rhs.eval(state, 0.0)
 }
 
 fn bits(v: &[f64]) -> Vec<u64> {

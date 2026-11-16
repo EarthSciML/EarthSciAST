@@ -59,6 +59,8 @@
     clippy::needless_range_loop
 )]
 
+#[cfg(test)]
+mod cadence_tier_tests;
 mod compile;
 mod driver;
 #[cfg(feature = "solve")]

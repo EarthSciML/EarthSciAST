@@ -11,7 +11,6 @@
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
-use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
@@ -56,27 +55,17 @@ fn rhs_both(rel: &str, arrays: &[(&str, ArrayD<f64>)], p: &[(&str, f64)]) -> Has
     for c in [Compiler::Interpreter, Compiler::Native] {
         let prob = build(rel, arrays, p, None, c, Rhs::Always)
             .unwrap_or_else(|e| panic!("{rel} [{}]: {e}", c.as_str()));
-        let comp = prob.debug_array_compiled().expect("a right-hand side");
-        let names = comp.state_variable_names();
+        let names: Vec<String> = prob
+            .state_variable_names()
+            .iter()
+            .map(|n| common::rhs::bare_slot(n).to_string())
+            .collect();
         let state: Vec<f64> = (0..names.len())
             .map(|k| 1.0 + 0.1 * (0.37 * k as f64).sin())
             .collect();
-        let dy = if c == Compiler::Native {
-            // The taped right-hand side, with no rule off the tape.
-            let _precision = comp.debug_precision_env().enter();
-            let params = comp.debug_resolve_params(prob.p());
-            let mut dy = vec![0.0f64; state.len()];
-            let mut scratch = comp
-                .debug_new_scratch_taped()
-                .expect("the tape lowers every rule");
-            let mut stats = RhsStats::default();
-            comp.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-            assert!(scratch.has_tape(), "{rel}: the tape declined a rule");
-            dy
-        } else {
-            comp.debug_eval_rhs(&state, 0.0, prob.p()).0
-        };
-        out.push((names.to_vec(), dy));
+        // Through the public program: native's is the strict tape.
+        let dy = common::rhs::ProblemRhs::new(&prob).eval(&state, 0.0);
+        out.push((names, dy));
     }
     assert_eq!(out[0].0, out[1].0, "{rel}: state order");
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();

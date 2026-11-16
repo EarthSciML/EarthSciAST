@@ -13,11 +13,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use earthsci_ast::load_string;
-use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
+use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem};
+
+#[path = "portable/rhs.rs"]
+mod rhs;
+use rhs::ProblemRhs;
 
 /// A pass-through allocator that counts heap allocations (and reallocations,
 /// which may move/grow a block) while `MEASURING` is set. Deallocations are not
@@ -173,47 +175,59 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
         .replace("__NLAT__", &nlat.to_string())
 }
 
-fn compile_json(json: &str) -> ArrayCompiled {
-    let file = load_string(json).expect("load json model");
-    ArrayCompiled::from_file(&file).expect("compile json model")
+/// The model's right-hand side under `native` through the public program:
+/// the strict tape, which refuses the program if any rule leaves it.
+fn compile_json(json: &str) -> ProblemRhs {
+    // The measured loop passes the state explicitly; any starting value
+    // builds the Problem, so every unknown without one starts at 0.
+    let mut doc: serde_json::Value = serde_json::from_str(json).expect("parse json model");
+    for model in doc["models"].as_object_mut().expect("models").values_mut() {
+        for var in model["variables"]
+            .as_object_mut()
+            .expect("variables")
+            .values_mut()
+        {
+            if var["type"] == "unknown" && var.get("default").is_none() {
+                var["default"] = serde_json::json!(0.0);
+            }
+        }
+    }
+    let prob = esm_problem(
+        &doc,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Native),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .expect("build json model");
+    ProblemRhs::new(&prob)
 }
 
 fn sample_state(n: usize) -> Vec<f64> {
     (0..n).map(|k| (0.7 * k as f64 + 0.3).sin()).collect()
 }
 
-/// Warm up the buffer pool, confirm the RHS takes the vectorized path, then
-/// measure heap allocations over a tight loop of RHS evaluations. The fences
-/// bracket only the measured loop; the counter reads are atomic loads and
-/// `debug_eval_rhs_into` borrows all its buffers, so nothing else allocates
-/// between them. Returns the allocation count (expected 0 in steady state).
-fn measure_taped_steady_state_allocs(label: &str, compiled: &ArrayCompiled) -> usize {
-    let n = compiled.state_variable_names().len();
+/// Warm up the workspace, then measure heap allocations over a tight loop of
+/// right-hand-side evaluations. The fences bracket only the measured loop; the
+/// counter reads are atomic loads and the evaluation borrows all its buffers,
+/// so nothing else allocates between them. Returns the allocation count
+/// (expected 0 in steady state).
+fn measure_taped_steady_state_allocs(label: &str, rhs: &mut ProblemRhs) -> usize {
+    let n = rhs.n_states();
     let state = sample_state(n);
-    let params = compiled.debug_resolve_params(&HashMap::new());
-    let mut scratch = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    assert!(
-        scratch.has_tape(),
-        "{label}: taped scratch must carry a tape"
-    );
     let mut dy = vec![0.0f64; n];
-    let mut stats = RhsStats::default();
 
     for _ in 0..32 {
-        compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+        rhs.eval_into(&state, 0.0, &mut dy);
     }
-
-    let mut probe = RhsStats::default();
-    compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut probe);
-    assert!(probe.taped_rules >= 1, "{label}: RHS did not run the tape");
 
     let iters = 200usize;
     let before = ALLOC_COUNT.load(Ordering::Relaxed);
     MEASURING.store(true, Ordering::Relaxed);
     for _ in 0..iters {
-        compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+        rhs.eval_into(&state, 0.0, &mut dy);
     }
     MEASURING.store(false, Ordering::Relaxed);
     let allocs = ALLOC_COUNT.load(Ordering::Relaxed) - before;
@@ -231,7 +245,7 @@ fn taped_rhs_is_allocation_free_in_steady_state() {
     // the einsum-contraction fold and the periodic-wrap gather — at two grid
     // sizes. One test only: the allocation counter is process-global, so the
     // cases must run sequentially.
-    let cases: [(&str, ArrayCompiled); 6] = [
+    let mut cases: [(&str, ProblemRhs); 6] = [
         ("makearray N=4", compile_json(&heat1d_json(4))),
         ("makearray N=8", compile_json(&heat1d_json(8))),
         ("einsum N=4", compile_json(&einsum_heat1d_json(4))),
@@ -239,8 +253,8 @@ fn taped_rhs_is_allocation_free_in_steady_state() {
         ("periodic-wrap 4x2", compile_json(&latlon_heat_json(4, 2))),
         ("periodic-wrap 8x2", compile_json(&latlon_heat_json(8, 2))),
     ];
-    for (label, compiled) in &cases {
-        let allocs = measure_taped_steady_state_allocs(&format!("taped {label}"), compiled);
+    for (label, rhs) in &mut cases {
+        let allocs = measure_taped_steady_state_allocs(&format!("taped {label}"), rhs);
         assert_eq!(
             allocs, 0,
             "taped {label}: expected zero steady-state allocations"

@@ -20,7 +20,8 @@
 
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::simulate_array::RhsStats;
+use crate::common;
+
 use earthsci_ast::{
     Alg, Compiler, EsmProblem, InlineTestOptions, ProblemOptions, Rhs, SolveOptions, esm_problem,
     load_path, load_string, run_inline_tests_with_options, solve,
@@ -238,28 +239,16 @@ fn with_a_state(doc: &Value, var: &str, rank: usize) -> Value {
     doc
 }
 
-/// The two right-hand sides at one state, bit for bit, with native's on the
-/// tape alone.
+/// The two right-hand sides at one state, bit for bit, through each Problem's
+/// public program (native's is the strict tape).
 fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
-    let nc = native
-        .debug_array_compiled()
-        .expect("native has a right-hand side");
-    let ic = interp
-        .debug_array_compiled()
-        .expect("the interpreter has a right-hand side");
-    let _precision = nc.debug_precision_env().enter();
-    let state: Vec<f64> = (0..nc.state_variable_names().len())
+    let names = native.state_variable_names();
+    assert_eq!(names, interp.state_variable_names(), "{label}: state order");
+    let state: Vec<f64> = (0..names.len())
         .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
         .collect();
-    let params = nc.debug_resolve_params(native.p());
-    let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut stats = RhsStats::default();
-    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p());
+    let dy = common::rhs::ProblemRhs::new(native).eval(&state, 0.0);
+    let idy = common::rhs::ProblemRhs::new(interp).eval(&state, 0.0);
     assert_eq!(
         bits(dy.clone()),
         bits(idy.clone()),
