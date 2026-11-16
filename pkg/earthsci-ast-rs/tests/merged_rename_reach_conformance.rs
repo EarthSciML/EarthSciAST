@@ -27,18 +27,18 @@
 
 use earthsci_ast::{FlattenedSystem, flatten, load_path, to_ascii};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/merged_rename_reach")
+    common::category_dir("merged_rename_reach")
 }
 
 /// A missing manifest is a hard failure, not a skip: the manifest IS the
 /// contract this file exists to enforce.
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the merged_rename_reach manifest is readable");
-    serde_json::from_str(&raw).expect("the merged_rename_reach manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 fn cases_for(m: &Value, surface: &str) -> Vec<Value> {

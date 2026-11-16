@@ -27,16 +27,12 @@ use serde_json::{Value, json};
 
 use crate::common;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn rewrites_dir() -> PathBuf {
-    repo_root().join("tests/conformance/relational_templates/rewrites")
+    common::repo_root().join("tests/conformance/relational_templates/rewrites")
 }
 
 fn library() -> String {
-    repo_root()
+    common::repo_root()
         .join("lib/relational.esm")
         .canonicalize()
         .expect("lib/relational.esm")
@@ -93,7 +89,7 @@ fn elem_key(name: &str, model: &str) -> String {
 
 fn rewrite_path(entry: &Value) -> PathBuf {
     match entry.get("out").and_then(Value::as_str) {
-        Some(out) => repo_root().join(out),
+        Some(out) => common::repo_root().join(out),
         None => rewrites_dir().join(format!("{}.esm", entry["id"].as_str().unwrap())),
     }
 }
@@ -425,7 +421,7 @@ fn check_vi_only(
     let arrays = case_arrays(case);
     let params = case_params(case);
     let options = LoadOptions {
-        base_path: Some(repo_root()),
+        base_path: Some(common::repo_root()),
         ..Default::default()
     };
     let file = load_string_with_options(&tp_doc.to_string(), &options)

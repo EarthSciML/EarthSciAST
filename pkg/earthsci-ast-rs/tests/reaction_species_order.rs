@@ -21,7 +21,8 @@
 use earthsci_ast::{Expr, ReactionSystem, derive_odes, load_document, stoichiometric_matrix};
 use serde::Deserialize;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+
+use crate::common;
 
 // --- corpus shapes ----------------------------------------------------------
 
@@ -50,17 +51,8 @@ struct Corpus {
 
 // --- fixtures ---------------------------------------------------------------
 
-/// The repository root — `pkg/earthsci-ast-rs/..`/`..`.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("repository root")
-}
-
 fn corpus() -> Corpus {
-    let path = repo_root().join("tests/conformance/reactions/species_order.json");
+    let path = common::repo_root().join("tests/conformance/reactions/species_order.json");
     let json = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     serde_json::from_str(&json).unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()))

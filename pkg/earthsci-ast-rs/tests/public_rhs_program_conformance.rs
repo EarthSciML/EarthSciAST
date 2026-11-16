@@ -15,6 +15,8 @@ use earthsci_ast::{
 use ndarray::{ArrayD, IxDyn, ShapeBuilder};
 use serde_json::Value;
 
+use crate::common;
+
 fn suite_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/conformance/public_rhs_program")
@@ -23,8 +25,7 @@ fn suite_dir() -> PathBuf {
 }
 
 fn manifest() -> Value {
-    let text = std::fs::read_to_string(suite_dir().join("manifest.json")).expect("manifest");
-    serde_json::from_str(&text).expect("manifest parses")
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 fn fnv1a32(key: &str) -> u32 {

@@ -25,13 +25,7 @@ use earthsci_ast::{
     ProviderGate, esm_problem, load_string, observed_field, run_inline_tests_with_options,
 };
 
-struct MockConst(Vec<f64>);
-
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
+use crate::common::MockConst;
 
 /// A model with one data-fed column `p` over `rows` and its sum `total`.
 fn ingesting_model() -> Value {

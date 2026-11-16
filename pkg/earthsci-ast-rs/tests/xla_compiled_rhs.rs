@@ -31,6 +31,8 @@ use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::xla_runtime::{CompileRhsError, CompiledRhs};
 use serde_json::Value;
 
+use crate::common;
+
 /// Fixture ids the emitter is expected to lower completely. Anything else in
 /// the manifest must refuse, by name — see assertion 3 in the module docs.
 ///
@@ -66,17 +68,8 @@ const EXPECTED_LOWERED: &[&str] = &[
     "datetime_log10",
 ];
 
-fn repo_root() -> PathBuf {
-    // <repo>/pkg/earthsci-ast-rs
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crate sits two levels below the repository root")
-        .to_path_buf()
-}
-
 fn manifest() -> Value {
-    let p = repo_root().join("tests/conformance/compiled_rhs/manifest.json");
+    let p = common::repo_root().join("tests/conformance/compiled_rhs/manifest.json");
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
     serde_json::from_str(&text).expect("manifest parses")
 }
@@ -137,7 +130,7 @@ enum Outcome {
 fn run_fixture(fx: &Value) -> Outcome {
     let rel = fx["path"].as_str().expect("fixture.path");
     let class = fx["tolerance_class"].as_str().expect("tolerance_class");
-    let path = repo_root().join("tests").join(rel);
+    let path = common::repo_root().join("tests").join(rel);
     let compiled = build(&path);
     let program = match CompiledRhs::compile(&compiled) {
         Ok(p) => p,
@@ -308,7 +301,7 @@ fn a_recurrence_sweep_is_refused_by_name() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
+    let path = common::repo_root().join("tests/fixtures/recurrence/01_recurrence_doubling.esm");
     let compiled = build(&path);
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!(
@@ -426,7 +419,7 @@ fn the_device_resident_path_agrees_with_the_host_round_trip() {
     let mut checked = 0usize;
     for fx in m["fixtures"].as_array().expect("fixtures") {
         let rel = fx["path"].as_str().expect("fixture.path");
-        let path = repo_root().join("tests").join(rel);
+        let path = common::repo_root().join("tests").join(rel);
         let compiled = build(&path);
         let program = match CompiledRhs::compile(&compiled) {
             Ok(p) => p,
@@ -502,8 +495,8 @@ fn the_on_device_euler_loop_tracks_the_host_loop() {
     if !runtime_available() {
         return;
     }
-    let path =
-        repo_root().join("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm");
+    let path = common::repo_root()
+        .join("tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n8.esm");
     let compiled = build(&path);
     let program = CompiledRhs::compile(&compiled).expect("diffusion_1d_periodic_n8 lowers");
     let params: HashMap<String, f64> = HashMap::new();
@@ -878,7 +871,7 @@ fn phase3_array_forms_lower() {
     ];
     let params: HashMap<String, f64> = HashMap::new();
     for (rel, opcode, class) in cases {
-        let path = repo_root().join(rel);
+        let path = common::repo_root().join(rel);
         let compiled = build(&path);
         let listing = compiled.debug_tape_listing();
         assert!(
@@ -920,7 +913,7 @@ fn a_program_that_faults_is_refused_with_the_fault() {
     if !runtime_available() {
         return;
     }
-    let path = repo_root()
+    let path = common::repo_root()
         .join("tests/conformance/const_array_gather_bounds/fixtures/named_1d_past_end.esm");
     let compiled = build(&path);
     assert!(compiled.debug_tape_listing().contains(" Fault {"));
@@ -945,7 +938,7 @@ fn geometry_and_data_subscript_gathers_lower() {
     if !runtime_available() {
         return;
     }
-    let root = repo_root().join("tests/conformance/scaling/fixtures");
+    let root = common::repo_root().join("tests/conformance/scaling/fixtures");
     for (path, opcode) in [
         ("regrid/regrid_N100.esm", None),
         (

@@ -33,11 +33,6 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/assertion_nonfinite")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 /// The class the manifest names for one actual value.
 fn class_of(v: f64) -> &'static str {
     if v.is_nan() {
@@ -54,18 +49,8 @@ fn class_of(v: f64) -> &'static str {
 #[test]
 fn nonfinite_actuals_fail_every_finite_expectation() {
     let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(manifest["category"].as_str(), Some("assertion_nonfinite"));
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
+    let manifest = common::read_json(dir.join("manifest.json"));
+    common::assert_tier_header(&manifest, "assertion_nonfinite");
 
     let rs = &manifest["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));

@@ -9,7 +9,6 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{
@@ -21,12 +20,8 @@ use serde_json::{Value, json};
 
 use crate::common;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn library() -> String {
-    repo_root()
+    common::repo_root()
         .join("lib/relational.esm")
         .canonicalize()
         .expect("lib/relational.esm")
@@ -77,7 +72,7 @@ fn template_values(op: &str, values: &[Value], label: &str) -> [f64; 2] {
     })
     .to_string();
     let options = LoadOptions {
-        base_path: Some(repo_root()),
+        base_path: Some(common::repo_root()),
         ..Default::default()
     };
     let file =
@@ -143,7 +138,7 @@ fn field_both(doc: &Value, arrays: &[(&str, Vec<f64>)], name: &str, label: &str)
 
 #[test]
 fn relational_template_scenarios_give_the_expected_index() {
-    let path = repo_root().join("tests/conformance/relational_templates/scenarios.json");
+    let path = common::repo_root().join("tests/conformance/relational_templates/scenarios.json");
     let spec: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     for s in spec["scenarios"].as_array().unwrap() {
         let name = s["name"].as_str().unwrap();

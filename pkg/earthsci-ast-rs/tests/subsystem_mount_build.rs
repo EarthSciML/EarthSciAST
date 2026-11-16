@@ -18,21 +18,13 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::{
-    Compiler, PrepareError, PrepareProvider, ProblemOptions, esm_problem, load_string,
-    observed_field,
+    Compiler, PrepareProvider, ProblemOptions, esm_problem, load_string, observed_field,
 };
 
-struct MockConst(Vec<f64>);
-
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
+use crate::common::MockConst;
 
 /// A leaf with one data-fed column `p` over `rows` and its sum `total`.
 /// `element_type`, when given, is declared on both.
