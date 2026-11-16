@@ -87,7 +87,7 @@ use crate::provider::DataProvider;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
-use crate::simulate::{KeyMatch, SimulateError, key_spells};
+use crate::simulate::{KeyMatch, KeyPolicy, KeyResolver, SimulateError, namespace_scope};
 use crate::simulate_array::{
     ArrMap, BuildInput, BuiltVariables, ConstArrayScope, NormalizedModel, StandaloneScope,
     Value as EvalValue, run_value_invention_with_params,
@@ -447,8 +447,9 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 ///
 /// Provider keys, gate targets, supplied arrays and scalar overrides all come
 /// spelled `"<ModelPath>.<var>"` or bare, while the built model spells its
-/// names one of two ways. [`Spelling::resolve`] is the one rule that maps a
-/// key onto them.
+/// names one of two ways, and each way has its rule ([`KeyPolicy`]): a model
+/// built alone reaches every name a key spells, the whole document follows
+/// esm-spec §6.6.2.
 #[derive(Clone, Debug)]
 enum Spelling {
     /// One model built alone, the selected or the only one: its names are
@@ -459,61 +460,23 @@ enum Spelling {
 }
 
 impl Spelling {
-    /// The names among `declared` that `key` spells, each with how.
-    ///
-    /// A key that is not a name reaches the names it is a dotted suffix of
-    /// (the static route's rule, esm-spec §6.6.2). Model-local, it reaches
-    /// every such name, the model's own scope. In the whole-document build a
-    /// key that is the suffix of several names is refused, naming them,
-    /// rather than applied to all of them: the caller has to say which one it
-    /// means.
-    fn resolve<'n>(
+    /// A resolver over `names` by this spelling's rule, a rule-2 key's
+    /// leading segments checked against the namespaces of `scope`.
+    fn resolver<'a>(
         &self,
-        key: &str,
-        declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Vec<(&'n str, KeyMatch)>, SimulateError> {
-        let model = match self {
-            Spelling::ModelLocal(m) => Some(m.as_str()),
-            Spelling::Qualified => None,
+        names: impl IntoIterator<Item = &'a str>,
+        scope: impl IntoIterator<Item = &'a str>,
+    ) -> KeyResolver {
+        let policy = match self {
+            Spelling::ModelLocal(m) => KeyPolicy::EveryName { model: m.clone() },
+            Spelling::Qualified => KeyPolicy::Spec,
         };
-        let mut out: Vec<(&'n str, KeyMatch)> = declared
-            .into_iter()
-            .filter_map(|n| Some((n.as_str(), key_spells(key, n, model)?)))
-            .collect();
-        // Strongest first, then by name.
-        out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
-        if matches!(self, Spelling::Qualified)
-            && out.len() > 1
-            && out.iter().all(|(_, m)| *m == KeyMatch::Suffix)
-        {
-            let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
-            return Err(err(format!(
-                "'{key}' ends the names of several variables of the models this \
-                 document builds; qualify it as one of: {}",
-                names.join(", ")
-            )));
-        }
-        Ok(out)
-    }
-
-    /// The one name among `declared` that `key` spells most strongly, or
-    /// `None` when it spells none, or several equally.
-    fn resolve_one<'n>(
-        &self,
-        key: &str,
-        declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Option<&'n str>, SimulateError> {
-        let found = self.resolve(key, declared)?;
-        let Some(&(first, best)) = found.first() else {
-            return Ok(None);
-        };
-        let unique = found.iter().filter(|(_, m)| *m == best).count() == 1;
-        Ok(unique.then_some(first))
+        KeyResolver::new(policy, names, namespace_scope(scope, []))
     }
 }
 
 /// Every declared 0-D parameter's default (overridden by `overrides`, each key
-/// read through [`Spelling::resolve`]) — the scalar evaluation scope, sorted
+/// read by the spelling's rule, [`Spelling::resolver`]) — the scalar evaluation scope, sorted
 /// by name. A parameter with no `default` is in it only when an override
 /// gives its value.
 ///
@@ -551,25 +514,19 @@ fn scalar_params(
         .map(|(k, _)| k.clone())
         .collect();
     names.sort();
-    // Each override reaches the names its key spells; a name reached by
-    // several keys takes the strongest one's value (the exact name over the
-    // model-prefixed one over the bare last segment).
-    let mut chosen: HashMap<&str, (KeyMatch, f64)> = HashMap::new();
-    for (key, &value) in overrides {
-        for (n, how) in spelling.resolve(key, &names)? {
-            match chosen.get(n) {
-                Some((held, _)) if *held <= how => {}
-                _ => {
-                    chosen.insert(n, (how, value));
-                }
-            }
-        }
-    }
+    // Each name takes the value of the key that supplies it.
+    let chosen = spelling
+        .resolver(
+            names.iter().map(String::as_str),
+            model.variables.keys().map(String::as_str),
+        )
+        .canonical(overrides.keys().map(String::as_str))
+        .map_err(crate::simulate::param_key_error)?;
     let (vals, names): (Vec<f64>, Vec<String>) = names
         .iter()
         .filter_map(|n| {
             let v = match chosen.get(n.as_str()) {
-                Some(&(_, v)) => v,
+                Some(key) => overrides[*key],
                 None => model.variables[n].default_scalar()?,
             };
             Some((v, n.clone()))
@@ -1463,6 +1420,9 @@ struct BuildState<'o> {
     /// How the built model's names are spelled: model-local for one model,
     /// `Model.var` for the whole document (see [`PreparedBuild::model_name`]).
     spelling: Spelling,
+    /// The built model's variable names, and the spelling's rule for
+    /// mapping a caller key onto them.
+    keys: KeyResolver,
     /// See [`PreparedBuild::metaparameters`].
     metaparameters: BTreeMap<String, i64>,
     /// See [`PreparedBuild::flattened`].
@@ -1644,11 +1604,16 @@ impl<'o> BuildState<'o> {
         let data_shaped = shapes.data_shaped;
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.problem.p)?;
+        let keys = spelling.resolver(
+            model.variables.keys().map(String::as_str),
+            model.variables.keys().map(String::as_str),
+        );
 
         Ok(BuildState {
             opts,
             model,
             spelling,
+            keys,
             metaparameters,
             flattened,
             index_sets,
@@ -1764,8 +1729,16 @@ impl<'o> BuildState<'o> {
         pd_gates: &HashMap<String, ProviderGate>,
     ) -> Result<Vec<GatedProvider>, SimulateError> {
         self.arrays = ArrMap::default();
+        let routes = self.array_routes(
+            const_arrays
+                .keys()
+                .chain(providers.iter().map(|(k, _)| k))
+                .map(String::as_str),
+        )?;
         for (k, a) in const_arrays {
-            let name = self.array_name(&k)?;
+            let Some(name) = routes[&k].clone() else {
+                continue;
+            };
             let rounded = round_external(&name, a);
             self.arrays.insert(name, rounded);
         }
@@ -1781,7 +1754,9 @@ impl<'o> BuildState<'o> {
             if let Some(a) = discovered.remove(&k) {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
-                let name = self.array_name(&k)?;
+                let Some(name) = routes[&k].clone() else {
+                    continue;
+                };
                 self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             } else if let Some(gate) = pd_gates.get(&k) {
@@ -1792,7 +1767,7 @@ impl<'o> BuildState<'o> {
             } else if let Some(gate) = prov.gate_spec() {
                 // Provider-declared gate (the fallback protocol) — also deferred.
                 gated.push((k, prov, gate));
-            } else {
+            } else if let Some(name) = routes[&k].clone() {
                 let a = prov
                     .sample()
                     .map_err(|e| err(format!("materialize const provider '{k}': {}", e.0)))?;
@@ -1800,7 +1775,6 @@ impl<'o> BuildState<'o> {
                     "  [prepare] const provider {k} -> {:?}",
                     a.shape()
                 ));
-                let name = self.array_name(&k)?;
                 self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             }
@@ -1859,24 +1833,61 @@ impl<'o> BuildState<'o> {
         }
     }
 
-    /// The name the evaluation namespace holds an array supplied under `key`
-    /// (a caller's `const_arrays` entry or a provider's sample).
+    /// The name the evaluation namespace holds each array supplied under one
+    /// of `keys` (the caller's `const_arrays` keys and the provider keys), or
+    /// `None` for a key an exact key for the same variable shadows.
     ///
     /// In the whole-document build that is the declared `Model.var` the key
-    /// spells ([`Spelling::resolve`]), so a bare key reaches the one variable
-    /// it names. Model-locally the array is held under its key, and
-    /// [`Self::alias_pushdown_names`] publishes the model-local spellings
-    /// beside it. A key that names no declared variable (a whole source's
-    /// provider, a coupling's source side) is held as it is.
-    fn array_name(&self, key: &str) -> Result<String, SimulateError> {
-        Ok(match &self.spelling {
-            Spelling::Qualified => self
-                .spelling
-                .resolve_one(key, self.model.variables.keys())?
-                .unwrap_or(key)
-                .to_string(),
-            Spelling::ModelLocal(_) => key.to_string(),
-        })
+    /// designates (esm-spec §6.6.2): an exact key wins, a bare key reaches the
+    /// one variable it ends, and two keys for one variable, or a key several
+    /// variables end, are refused. Model-locally the array is held under its
+    /// key, and [`Self::alias_pushdown_names`] publishes the model-local
+    /// spellings beside it. A key that names no declared variable (a whole
+    /// source's provider, a coupling's source side) is held as it is.
+    fn array_routes<'k>(
+        &self,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<HashMap<String, Option<String>>, SimulateError> {
+        let keys: Vec<&str> = keys.into_iter().collect();
+        if let Spelling::ModelLocal(_) = self.spelling {
+            return Ok(keys
+                .into_iter()
+                .map(|k| (k.to_string(), Some(k.to_string())))
+                .collect());
+        }
+        let routed: HashMap<&str, String> = self
+            .keys
+            .canonical(keys.iter().copied())
+            .map_err(crate::problem::provider_key_error)?
+            .into_iter()
+            .map(|(name, k)| (k, name))
+            .collect();
+        let mut out = HashMap::with_capacity(keys.len());
+        for k in keys {
+            let name = match routed.get(k) {
+                Some(name) => Some(name.clone()),
+                None if self.keys.designates_any(k) => None,
+                None => Some(k.to_string()),
+            };
+            out.insert(k.to_string(), name);
+        }
+        Ok(out)
+    }
+
+    /// The name the evaluation namespace holds a declared variable `name`
+    /// under: in the whole-document build the `Model.var` it designates, else
+    /// `name` itself.
+    fn declared_name(&self, name: &str) -> Result<String, SimulateError> {
+        if let Spelling::ModelLocal(_) = self.spelling {
+            return Ok(name.to_string());
+        }
+        Ok(self
+            .keys
+            .designates(name)
+            .map_err(crate::problem::provider_key_error)?
+            .into_iter()
+            .next()
+            .map_or_else(|| name.to_string(), |(n, _)| n))
     }
 
     /// Provider-key name aliasing.
@@ -1893,7 +1904,7 @@ impl<'o> BuildState<'o> {
     ///
     /// `pd_coupling` routes an array supplied under a coupling's source side
     /// (`"<source>.<file_variable>"`) onto the variable it feeds. The
-    /// whole-document build needs nothing more: [`Self::array_name`] already
+    /// whole-document build needs nothing more: [`Self::array_routes`] already
     /// holds every array under the `Model.var` its expressions read.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
         if matches!(self.spelling, Spelling::Qualified) {
@@ -1929,11 +1940,12 @@ impl<'o> BuildState<'o> {
             .arrays
             .keys()
             .filter_map(|k| {
-                let found = self.spelling.resolve(k, self.model.variables.keys()).ok()?;
-                let (l, _) = found
+                let (l, _) = self
+                    .keys
+                    .spells(k)
                     .into_iter()
                     .find(|(l, how)| *how == KeyMatch::ModelPrefixed && l.contains('.'))?;
-                Some((k.clone(), l.to_string()))
+                Some((k.clone(), l))
             })
             .collect();
         for (k, l) in local {
@@ -1945,7 +1957,8 @@ impl<'o> BuildState<'o> {
     /// The model variable a gated provider's slab is published under (see
     /// [`Self::fetch_gated_providers`]): the variable the coupling routes the
     /// provider onto, else the one its key names, else the gate's own target,
-    /// each read through [`Spelling::resolve`]. Model-locally a key the
+    /// each the one name it spells most strongly ([`KeyResolver::strongest`]).
+    /// Model-locally a key the
     /// built model does not declare falls back to its last segment, the
     /// spelling the gate's `applies_to` carries.
     fn gated_target(
@@ -1963,8 +1976,12 @@ impl<'o> BuildState<'o> {
             .chain([key])
             .chain(gate.applies_to.first().map(String::as_str));
         for c in candidates {
-            if let Some(n) = self.spelling.resolve_one(c, self.model.variables.keys())? {
-                return Ok(n.to_string());
+            if let Some(n) = self
+                .keys
+                .strongest(c)
+                .map_err(crate::problem::provider_key_error)?
+            {
+                return Ok(n);
             }
         }
         let last = routed.unwrap_or_else(|| gate.applies_to.first().map_or(key, String::as_str));
@@ -2252,7 +2269,7 @@ impl<'o> BuildState<'o> {
                 .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
             // The registry names the factor as its model declares it; the
             // whole-document build reads it as `Model.<factor>`.
-            let name = self.array_name(mf)?;
+            let name = self.declared_name(mf)?;
             self.arrays.insert(name, arr);
         }
         self.report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
@@ -3225,37 +3242,63 @@ mod whole_document_tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn a_model_local_bare_key_reaches_every_name_it_ends() {
-        let declared = names(&["k", "Leaf.k", "Other.k", "m"]);
-        let s = Spelling::ModelLocal("M".into());
-        let got = s.resolve("k", &declared).unwrap();
-        assert_eq!(
-            got,
-            vec![
-                ("k", KeyMatch::Exact),
-                ("Leaf.k", KeyMatch::Suffix),
-                ("Other.k", KeyMatch::Suffix)
-            ]
-        );
-        assert_eq!(
-            s.resolve("M.Leaf.k", &declared).unwrap(),
-            vec![("Leaf.k", KeyMatch::ModelPrefixed)]
-        );
-        assert_eq!(s.resolve_one("k", &declared).unwrap(), Some("k"));
+    fn resolver(s: &Spelling, declared: &[String]) -> crate::simulate::KeyResolver {
+        let names = declared.iter().map(String::as_str);
+        s.resolver(names.clone(), names)
     }
 
     #[test]
-    fn a_qualified_bare_key_reaches_one_name_or_is_refused() {
+    fn a_model_local_bare_key_reaches_every_name_it_ends() {
+        let declared = names(&["k", "Leaf.k", "Other.k", "m"]);
+        let r = resolver(&Spelling::ModelLocal("M".into()), &declared);
+        let got = r.designates("k").unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("k".to_string(), KeyMatch::Exact),
+                ("Leaf.k".to_string(), KeyMatch::Suffix),
+                ("Other.k".to_string(), KeyMatch::Suffix)
+            ]
+        );
+        assert_eq!(
+            r.designates("M.Leaf.k").unwrap(),
+            vec![("Leaf.k".to_string(), KeyMatch::ModelPrefixed)]
+        );
+        assert_eq!(r.strongest("k").unwrap().as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn a_qualified_key_designates_by_the_spec_rules() {
         let declared = names(&["A.k", "B.k", "A.m"]);
-        let s = Spelling::Qualified;
-        assert_eq!(s.resolve_one("m", &declared).unwrap(), Some("A.m"));
-        assert_eq!(s.resolve_one("A.k", &declared).unwrap(), Some("A.k"));
-        assert_eq!(s.resolve_one("nothing", &declared).unwrap(), None);
+        let r = resolver(&Spelling::Qualified, &declared);
+        let one = |k: &str| {
+            r.designates(k)
+                .unwrap()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(one("m"), ["A.m"]);
+        assert_eq!(one("A.k"), ["A.k"]);
+        assert!(one("nothing").is_empty());
         let nested = names(&["P.sub.g", "Q.g"]);
-        assert_eq!(s.resolve_one("sub.g", &nested).unwrap(), Some("P.sub.g"));
-        let e = s.resolve("k", &declared).unwrap_err().to_string();
-        assert!(e.contains("qualify it as one of: A.k, B.k"), "{e}");
+        let rn = resolver(&Spelling::Qualified, &nested);
+        assert_eq!(rn.designates("sub.g").unwrap()[0].0, "P.sub.g");
+        // Rule 2: a leading segment that names a namespace is dropped; one
+        // that names nothing is not.
+        let rl = resolver(&Spelling::Qualified, &names(&["sub.k", "A.x"]));
+        assert_eq!(rl.designates("A.sub.k").unwrap()[0].0, "sub.k");
+        assert!(rl.designates("Typo.sub.k").unwrap().is_empty());
+        match r.designates("k") {
+            Err(crate::simulate::OverrideKeyError::Ambiguous { candidates, .. }) => {
+                assert_eq!(candidates, ["A.k", "B.k"])
+            }
+            other => panic!("{other:?}"),
+        }
+        // Two keys for one variable collide; an exact key shadows the rest.
+        assert!(r.canonical(["m", "A.m"]).unwrap()["A.m"] == "A.m");
+        let rk = resolver(&Spelling::Qualified, &names(&["A.k", "A.sub.m"]));
+        assert!(rk.canonical(["m", "sub.m"]).is_err());
     }
 
     fn model(rhs: f64) -> Value {

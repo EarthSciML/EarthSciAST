@@ -1704,31 +1704,44 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
-    let known: std::collections::HashSet<String> = prob.parameter_names().into_iter().collect();
-    let known_bare: HashMap<String, usize> = {
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for n in &known {
-            *counts
-                .entry(n.rsplit('.').next().unwrap_or(n).to_string())
-                .or_insert(0) += 1;
-        }
-        counts
-    };
+    // Each new key designates one parameter of the compiled system by the
+    // esm-spec §6.6.2 rules, as Julia's `remake_parameters` and Python's
+    // `remake` resolve it: an ambiguous key, or two keys for one parameter,
+    // is refused here rather than at the next solve.
+    let names = prob.parameter_names();
+    let keys = crate::simulate::KeyResolver::new(
+        crate::simulate::KeyPolicy::Spec,
+        names.iter().map(String::as_str),
+        crate::simulate::namespace_scope(
+            names.iter().map(String::as_str),
+            prob.model_name.as_deref(),
+        ),
+    );
+    let canonical: HashMap<&str, String> = keys
+        .canonical(changes.p.keys().map(String::as_str))
+        .map_err(crate::simulate::param_key_error)?
+        .into_iter()
+        .map(|(name, k)| (k, name))
+        .collect();
 
     // A baked parameter is recorded under the spelling the build saw; a key
-    // refuses when it and that spelling designate one parameter, either one
-    // spelling the other (esm-spec §6.6.2).
+    // refuses when the parameter it designates and that spelling designate
+    // one parameter, either one spelling the other (esm-spec §6.6.2).
     let model = prob.model_name.as_deref();
     let same_parameter = |a: &str, b: &str| {
         crate::simulate::key_spells(a, b, model).is_some()
             || crate::simulate::key_spells(b, a, model).is_some()
     };
-    for name in changes.p.keys() {
+    let mut keys_in_order: Vec<&String> = changes.p.keys().collect();
+    keys_in_order.sort();
+    for name in keys_in_order {
+        let designated = canonical.get(name.as_str());
+        let spelled = designated.map_or(name.as_str(), String::as_str);
         if let Some(baked) = prob
             .build
             .baked_parameters
             .iter()
-            .find(|b| same_parameter(b, name))
+            .find(|b| same_parameter(b, spelled) || same_parameter(b, name))
         {
             let class = if prob.build.join_baked_parameters.contains(baked) {
                 "baked into the build as a load-time constant, because a join reads it — an \
@@ -1744,10 +1757,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
                 class: class.to_string(),
             });
         }
-        if prob.is_dynamic()
-            && !known.contains(name)
-            && known_bare.get(name).copied().unwrap_or(0) == 0
-        {
+        if prob.is_dynamic() && designated.is_none() && !keys.designates_any(name) {
             return Err(SimulateError::UnsubstitutableBinding {
                 name: name.clone(),
                 class: "not a parameter of the compiled system".to_string(),
@@ -4660,7 +4670,7 @@ fn loader_error(given: &HashMap<String, String>, e: crate::provider::LoaderError
 /// A provider key the §6.6.2 rules cannot route, as a
 /// [`SimulateError::ProviderError`].
 #[cfg(not(target_arch = "wasm32"))]
-fn provider_key_error(e: crate::simulate::OverrideKeyError) -> SimulateError {
+pub(crate) fn provider_key_error(e: crate::simulate::OverrideKeyError) -> SimulateError {
     use crate::simulate::OverrideKeyError;
     match e {
         OverrideKeyError::Ambiguous { key, candidates } => SimulateError::ProviderError {
