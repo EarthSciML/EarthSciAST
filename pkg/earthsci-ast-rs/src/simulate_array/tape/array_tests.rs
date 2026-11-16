@@ -615,7 +615,7 @@ fn undeclared_ifelse_observed_takes_its_array_arms_box() {
             var,
             declared_shape,
             ..
-        } if var == "X" => Some(declared_shape.clone()),
+        } if var == "M.X" => Some(declared_shape.clone()),
         _ => None,
     });
     assert_eq!(declared, Some(Some(vec![3])));
@@ -931,7 +931,7 @@ fn ifelse_reading_an_array_const_node_is_not_promoted() {
     let arr = json!({"op": "const", "args": [], "value": [1.0, 2.0, 3.0]});
     let x = mixed_ifelse(json!({"op": "*", "args": ["F", arr]}), json!(0.0));
     let compiled = compile(undeclared_mixed_doc(x, json!({}), vec![]));
-    assert!(!compiled.conditional_shapes.contains_key("X"));
+    assert!(!compiled.conditional_shapes.contains_key("M.X"));
 }
 
 /// Where the data arm is consumed whole, or meets an array of another shape,

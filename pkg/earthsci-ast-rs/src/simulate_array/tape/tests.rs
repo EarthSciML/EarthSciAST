@@ -1090,7 +1090,11 @@ fn exports_materialize_as_observed_arrays() {
     assert_eq!(s.ndim(), 0);
     assert_eq!(s[ndarray::IxDyn(&[])].to_bits(), 3.0f64.to_bits());
     // The slot value backing the export is the scalar 3.0.
-    let (_, slot) = prog.exports.iter().find(|(n, _)| n == "s").expect("export");
+    let (_, slot) = prog
+        .exports
+        .iter()
+        .find(|(n, _)| n == "M.s")
+        .expect("export");
     match &run.slots[*slot as usize] {
         Some(RefVal::Scalar(v)) => assert_eq!(v.to_bits(), 3.0f64.to_bits()),
         other => panic!("unexpected export slot value {other:?}"),
@@ -1646,7 +1650,7 @@ fn ab_scan_fused_with_its_neighbours() {
         }
         if publish {
             // P[k] = sum over m <= k of u[m] * w[m], folded from 0.0.
-            let p = ctx.exec.obs.get("P").expect("P published");
+            let p = ctx.exec.obs.get("M.P").expect("P published");
             let mut acc = 0.0f64;
             for k in 0..n {
                 let w = 1.0 + 0.5 * ((k + 1) as f64).sin();
@@ -2248,7 +2252,7 @@ fn output_only_observeds_leave_the_rhs() {
         "o's instructions leave the call: {:?}",
         prog.instrs
     );
-    let exported = prog.exports.iter().any(|(n, _)| n == "o");
+    let exported = prog.exports.iter().any(|(n, _)| n == "M.o");
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = vec![1.5f64];
@@ -2277,7 +2281,7 @@ fn output_only_observeds_leave_the_rhs() {
     run_call(&mut ctx, &mut dy2);
     assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
     if exported {
-        let o = ctx.exec.obs.get("o").expect("o published");
+        let o = ctx.exec.obs.get("M.o").expect("o published");
         assert_eq!(
             o[ndarray::IxDyn(&[])].to_bits(),
             (1.5f64.sin() * 3.0).to_bits()
@@ -2337,7 +2341,7 @@ fn export_demotion_skips_unread_publishes() {
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
     assert!(
-        !ctx.exec.obs.contains_key("s"),
+        !ctx.exec.obs.contains_key("M.s"),
         "demoted export must not publish"
     );
 
@@ -2347,7 +2351,7 @@ fn export_demotion_skips_unread_publishes() {
     let mut dy2 = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy2);
     assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
-    let s = ctx.exec.obs.get("s").expect("export array");
+    let s = ctx.exec.obs.get("M.s").expect("export array");
     assert_eq!(
         s[ndarray::IxDyn(&[])].to_bits(),
         3.0f64.to_bits(),
@@ -2813,8 +2817,8 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
     assert_eq!(names, ["M.r", "M.g", "D(M.u)"]);
     for (name, reason) in &rules[1..] {
         assert!(
-            reason.contains("observed `r` is produced by a declined rule")
-                || reason.contains("observed `g` is produced by a declined rule"),
+            reason.contains("observed `M.r` is produced by a declined rule")
+                || reason.contains("observed `M.g` is produced by a declined rule"),
             "{name}: {reason}"
         );
     }

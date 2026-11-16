@@ -6185,19 +6185,19 @@ mod subsystem_ragged_and_inspection_tests {
         assert_eq!(s[IxDyn(&[1])], 60.0);
         // Mounted const factors and their aliases are captured too.
         for name in [
-            "mesh.nEdgesOnCell",
-            "mesh.edgesOnCell",
-            "mesh.w",
-            "nEdgesOnCell",
-            "edgesOnCell",
+            "M.mesh.nEdgesOnCell",
+            "M.mesh.edgesOnCell",
+            "M.mesh.w",
+            "M.nEdgesOnCell",
+            "M.edgesOnCell",
         ] {
             assert!(insp.setup_arrays.contains_key(name), "missing '{name}'");
         }
         assert_eq!(
-            insp.setup_arrays["nEdgesOnCell"],
-            insp.setup_arrays["mesh.nEdgesOnCell"]
+            insp.setup_arrays["M.nEdgesOnCell"],
+            insp.setup_arrays["M.mesh.nEdgesOnCell"]
         );
-        assert!(insp.observed_exprs.contains_key("s"));
+        assert!(insp.observed_exprs.contains_key("M.s"));
     }
 
     /// Filling the inspection never changes the run: the trajectory is
@@ -6380,10 +6380,10 @@ mod subsystem_ragged_and_inspection_tests {
         assert_eq!(a_ij.shape(), [2, 1]);
         assert_eq!(a_ij[IxDyn(&[0, 0])], 1.0);
         assert_eq!(a_ij[IxDyn(&[1, 0])], 1.0);
-        let a_j = insp.setup_arrays.get("A_j").expect("A_j captured");
+        let a_j = insp.setup_arrays.get("R.A_j").expect("A_j captured");
         assert_eq!(a_j.shape(), [1]);
         assert_eq!(a_j[IxDyn(&[0])], 2.0);
-        let w_ij = insp.setup_arrays.get("W_ij").expect("W_ij captured");
+        let w_ij = insp.setup_arrays.get("R.W_ij").expect("W_ij captured");
         assert_eq!(w_ij.shape(), [2, 1]);
         assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
         assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
