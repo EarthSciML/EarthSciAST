@@ -43,7 +43,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -57,24 +59,31 @@ PARTICIPANTS = ("lean", "rust", "julia", "python", "typescript", "go")
 FORMATS = (("markdown", "md"), ("typst", "typ"))
 INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
 SHOWN = 20  # failures listed per kind
+CRASHES = 20  # driver crashes tolerated in one run before the run is abandoned
+
+
+def _doc_corpus():
+    """formal/scripts/doc-corpus.py, the Lean round trip, whose corpus and `esm-lean`
+    call the gate shares."""
+    spec = importlib.util.spec_from_file_location(
+        "doc_corpus", ROOT / "formal/scripts/doc-corpus.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+DOC_CORPUS = _doc_corpus()
 
 
 # ---------------------------------------------------------------- corpus
 
 
 def corpus() -> list[dict]:
-    """The JSON-object `.esm` files under tests/, as `{"id", "path"}` in path order."""
-    out = []
-    tests = ROOT / "tests"
-    for f in sorted(tests.rglob("*.esm")):
-        try:
-            doc = json.loads(f.read_text(encoding="utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            continue
-        if isinstance(doc, dict):
-            rel = f.relative_to(tests).as_posix()
-            out.append({"id": rel[: -len(".esm")].replace("/", "__"), "path": str(f)})
-    return out
+    """The corpus of formal/scripts/doc-corpus.py (the JSON-object `.esm` files under
+    tests/), as `{"id", "path"}` in path order."""
+    files, _ = DOC_CORPUS.corpus()
+    return [{"id": DOC_CORPUS.doc_id(f), "path": str(f)} for f in files]
 
 
 # ---------------------------------------------------------------- drivers
@@ -137,29 +146,67 @@ def _driver_cwd(participant: str) -> Path:
     return ROOT / "pkg/earthsci-ast-go" if participant == "go" else ROOT
 
 
+def _missing_steps(mode: str, item: dict, out: Path) -> list[str]:
+    """The output steps of one manifest item that a driver has not written yet: for
+    `print`, `canon` (then nothing else is expected), `md` and `typ`; for `parse`, the
+    single step `""`."""
+    stem = out / item["id"]
+    if mode == "parse":
+        return [] if any(Path(f"{stem}{s}").is_file() for s in (".json", ".error")) else [""]
+    if Path(f"{stem}.canon.error").is_file():
+        return []
+    if not Path(f"{stem}.canon.json").is_file():
+        return ["canon"]
+    return [
+        ext
+        for _, ext in FORMATS
+        if not any(Path(f"{stem}.{ext}{s}").is_file() for s in ("", ".error"))
+    ]
+
+
 def run_driver(participant: str, mode: str, manifest: list[dict], out: Path, args) -> None:
+    """Run a participant's driver over the manifest. A driver that dies partway (a stack
+    overflow or out-of-memory error is fatal in Go and Julia, and no driver can turn it
+    into a per-item error) is blamed on the item it was on, the first one without output
+    (drivers work in manifest order), which gets an `.error` file; the driver is then
+    run again on the items after it."""
+    out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     if participant == "lean":
         _lean(mode, manifest, out, _lean_binary(args), args.jobs)
         return
     mpath = out.parent / f".{out.name}.{mode}-manifest.json"
-    mpath.write_text(json.dumps(manifest), encoding="utf-8")
-    cmd = driver_command(participant, args) + [mode, str(mpath), str(out.resolve())]
     print(f"[{participant}] {mode}: {len(manifest)} items", flush=True)
-    r = subprocess.run(cmd, cwd=_driver_cwd(participant))
-    mpath.unlink()
-    if r.returncode != 0:
-        sys.exit(f"[{participant}] {mode} driver exited {r.returncode}")
+    todo, crashes = manifest, 0
+    while todo:
+        mpath.write_text(json.dumps(todo), encoding="utf-8")
+        cmd = driver_command(participant, args) + [mode, str(mpath), str(out)]
+        r = subprocess.run(cmd, cwd=_driver_cwd(participant))
+        mpath.unlink()
+        if r.returncode == 0:
+            return
+        i = next((i for i, it in enumerate(todo) if _missing_steps(mode, it, out)), None)
+        # A driver that fails before its first item (a build or load error) is not a
+        # crash on that item.
+        if i is None or (todo is manifest and i == 0):
+            sys.exit(f"[{participant}] {mode} driver exited {r.returncode}")
+        crashes += 1
+        item = todo[i]
+        msg = f"the {participant} driver crashed (exit {r.returncode}) on this item"
+        print(f"[{participant}] {msg}: {item['id']}", flush=True)
+        for step in _missing_steps(mode, item, out):
+            Path(f"{out / item['id']}{'.' + step if step else ''}.error").write_text(
+                msg, encoding="utf-8"
+            )
+        if crashes >= CRASHES:
+            sys.exit(f"[{participant}] {mode} driver crashed {crashes} times; giving up")
+        todo = todo[i + 1 :]
 
 
 def _lean(mode, manifest, out: Path, binary: Path, jobs):
     def call(lean_mode, path):
-        p = subprocess.run([str(binary), lean_mode, str(path)], capture_output=True, text=True)
-        return (
-            (p.stdout, None)
-            if p.returncode == 0
-            else (None, p.stderr.strip() or f"exit {p.returncode}")
-        )
+        rc, stdout, stderr = DOC_CORPUS.run(binary, lean_mode, path)
+        return (stdout, None) if rc == 0 else (None, stderr or f"exit {rc}")
 
     def print_one(item):
         canon, err = call("canon", item["path"])
@@ -167,13 +214,13 @@ def _lean(mode, manifest, out: Path, binary: Path, jobs):
             (out / f"{item['id']}.canon.error").write_text(err, encoding="utf-8")
             return
         cpath = out / f"{item['id']}.canon.json"
-        cpath.write_text(canon, encoding="utf-8")
+        cpath.write_bytes(canon)
         for _, ext in FORMATS:
             text, err = call(f"print-{ext}", cpath)
             if text is None:
                 (out / f"{item['id']}.{ext}.error").write_text(err, encoding="utf-8")
             else:
-                (out / f"{item['id']}.{ext}").write_text(text, encoding="utf-8")
+                (out / f"{item['id']}.{ext}").write_bytes(text)
 
     def parse_one(item):
         ext = dict(FORMATS)[item["format"]]
@@ -181,7 +228,7 @@ def _lean(mode, manifest, out: Path, binary: Path, jobs):
         if doc is None:
             (out / f"{item['id']}.error").write_text(err, encoding="utf-8")
         else:
-            (out / f"{item['id']}.json").write_text(doc, encoding="utf-8")
+            (out / f"{item['id']}.json").write_bytes(doc)
 
     print(f"[lean] {mode}: {len(manifest)} items", flush=True)
     with ThreadPoolExecutor(jobs or os.cpu_count() or 1) as pool:
@@ -212,11 +259,17 @@ def printed_texts(prints: list[Path]) -> dict[str, dict]:
 
 def normalize(v):
     """A JSON value with every number in its canonical kind (CONFORMANCE §5.5.3.1): an
-    integral value in Int64 is an integer, any other number a binary64."""
+    integral value in Int64 is an integer, any other number a binary64. An integer past
+    the binary64 range is an infinity, as `json.loads` reads `1e400`."""
     if isinstance(v, bool) or v is None or isinstance(v, str):
         return v
     if isinstance(v, int):
-        return v if INT64_MIN <= v <= INT64_MAX else float(v)
+        if INT64_MIN <= v <= INT64_MAX:
+            return v
+        try:
+            return float(v)
+        except OverflowError:
+            return math.inf if v > 0 else -math.inf
     if isinstance(v, float):
         if v.is_integer() and INT64_MIN <= v <= INT64_MAX:
             return int(v)
@@ -229,16 +282,21 @@ def normalize(v):
 def _load(path: Path):
     try:
         return normalize(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
         return e
 
 
-def _first_diff(a: str, b: str) -> str:
-    al, bl = a.splitlines(), b.splitlines()
+def _first_diff(a: bytes, b: bytes) -> str:
+    """Where text `b` first differs from the reference `a`. Lines keep their endings, so
+    a `\\r\\n` or a missing final newline shows in the line quoted."""
+    al = a.decode("utf-8", "replace").splitlines(keepends=True)
+    bl = b.decode("utf-8", "replace").splitlines(keepends=True)
     for i, (x, y) in enumerate(zip(al, bl)):
         if x != y:
             return f"line {i + 1}: {y!r} (reference {x!r})"
-    return f"length {len(bl)} lines (reference {len(al)})"
+    if len(al) != len(bl):
+        return f"length {len(bl)} lines (reference {len(al)})"
+    return "differs in bytes that are not valid UTF-8"
 
 
 def compare(
@@ -254,18 +312,20 @@ def compare(
     qdir = {d.name.removeprefix("parses-"): d for d in parses}
     if reference not in pdir:
         sys.exit(f"no prints from the reference participant {reference!r}")
-    missing = [p for p in required if p not in pdir or p not in qdir]
-    if missing:
-        sys.exit(
-            f"no prints or no reads from {', '.join(missing)}: the gate needs every participant"
-        )
-    printers = [p for p in PARTICIPANTS if p in pdir] + sorted(set(pdir) - set(PARTICIPANTS))
-    readers = [p for p in PARTICIPANTS if p in qdir] + sorted(set(qdir) - set(PARTICIPANTS))
-    ref_dir = pdir[reference]
     fails: dict[str, list[str]] = {}
 
     def fail(kind, msg):
         fails.setdefault(kind, []).append(msg)
+
+    # A missing participant fails the gate, but the others are still compared, so one
+    # participant's broken job does not hide what the rest found.
+    for p in required:
+        for what, dirs in (("prints", pdir), ("reads", qdir)):
+            if p not in dirs:
+                fail("missing participants", f"no {what} from {p}")
+    printers = [p for p in PARTICIPANTS if p in pdir] + sorted(set(pdir) - set(PARTICIPANTS))
+    readers = [p for p in PARTICIPANTS if p in qdir] + sorted(set(qdir) - set(PARTICIPANTS))
+    ref_dir = pdir[reference]
 
     refs = {}
     for doc in docs:
@@ -311,7 +371,7 @@ def compare(
                 if data != wdata:
                     fail(
                         f"{p} print {fmt}",
-                        f"{doc['id']}: {_first_diff(wdata.decode('utf-8', 'replace'), data.decode('utf-8', 'replace'))}",
+                        f"{doc['id']}: {_first_diff(wdata, data)}",
                     )
                 else:
                     ok += 1

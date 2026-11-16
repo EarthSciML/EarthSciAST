@@ -6,13 +6,19 @@
 //     node typescript_driver.mjs print MANIFEST OUT   canonical form and both printed texts
 //     node typescript_driver.mjs parse MANIFEST OUT   read each text back
 //
+// A corpus file is read with `losslessJsonParse`, the reader
+// `canonicalizeDocument` is documented against: it keeps an integer token past
+// 2^53 as a bigint of the integer written, where `JSON.parse` would round it to
+// a double (or, past the binary64 range, to Infinity).
+//
 // The gate compares numbers by their canonical kind (an integral value in Int64
-// is an integer), which follows from the value, so a plain number is enough. A
-// canonical document holds an Int64 value past 2^53 as a bigint, written as its
-// digits. An integral number is written with all its digits too (`BigInt`):
-// `JSON.stringify` writes the shortest decimal that rounds to the same double,
-// which above 2^53 reads back as a different integer (-19999999999999992 as
-// -19999999999999990).
+// is an integer), which follows from the value. A canonical document holds an
+// Int64 value past 2^53 as a bigint, written as its digits. An integral number
+// is written with all its digits too (`BigInt`): `JSON.stringify` writes the
+// shortest decimal that rounds to the same double, which above 2^53 reads back
+// as a different integer (-19999999999999992 as -19999999999999990). An
+// infinity is written as `1e999`, which the gate reads back as one;
+// `JSON.stringify` would write `null`.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -20,15 +26,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = path.resolve(here, '../../pkg/earthsci-ast-ts/dist/esm/index.js')
-const { canonicalizeDocument, parseDocument, printDocument } = await import(pathToFileURL(pkg).href)
+const { canonicalizeDocument, isNumericLiteral, losslessJsonParse, parseDocument, printDocument } =
+  await import(pathToFileURL(pkg).href)
 
 const EXT = { markdown: 'md', typst: 'typ' }
 const [mode, manifestPath, out] = process.argv.slice(2)
 const items = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
 
+function number(x) {
+  if (Number.isInteger(x)) return BigInt(x).toString()
+  if (x === Infinity) return '1e999'
+  if (x === -Infinity) return '-1e999'
+  if (Number.isNaN(x)) throw new Error('NaN has no JSON form')
+  return JSON.stringify(x)
+}
+
 function exact(v) {
   if (typeof v === 'bigint') return v.toString()
-  if (typeof v === 'number' && Number.isInteger(v)) return BigInt(v).toString()
+  if (typeof v === 'number') return number(v)
+  if (isNumericLiteral(v)) return number(v.value)
   if (Array.isArray(v)) return `[${v.map(exact).join(',')}]`
   if (v !== null && typeof v === 'object') {
     const parts = Object.entries(v)
@@ -46,7 +62,7 @@ if (mode === 'print') {
     const stem = path.join(out, item.id)
     let canon
     try {
-      canon = canonicalizeDocument(JSON.parse(fs.readFileSync(item.path, 'utf-8')))
+      canon = canonicalizeDocument(losslessJsonParse(fs.readFileSync(item.path, 'utf-8')))
       fs.writeFileSync(`${stem}.canon.json`, exact(canon))
     } catch (e) {
       fs.writeFileSync(`${stem}.canon.error`, message(e))

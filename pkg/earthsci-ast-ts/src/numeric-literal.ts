@@ -170,7 +170,14 @@ class Parser {
       this.skipWhitespace()
       this.expect(':')
       const value = this.parseValue()
-      result[key] = value
+      // Defined as an own property, as `JSON.parse` does: an assignment would
+      // turn a key named `__proto__` into the object's prototype.
+      Object.defineProperty(result, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      })
       this.skipWhitespace()
       const next = this.peek()
       if (next === ',') {

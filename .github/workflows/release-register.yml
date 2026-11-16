@@ -68,6 +68,13 @@ jobs:
     needs: release-analysis
     if: needs.release-analysis.outputs.needs_release == 'true'
     uses: ./.github/workflows/mtk-compiler.yml
+    # Its `changes` job asks for `pull-requests: read` to list a pull
+    # request's files, and a called workflow may ask for no more than the
+    # caller grants. On this push-triggered call it lists nothing and selects
+    # every suite.
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       release_validation: true
     secrets: inherit

@@ -1,0 +1,48 @@
+name: Cancel CI for closed pull requests
+
+# Once a pull request is merged or closed, its still-running and queued runs
+# test code nobody will merge again: a merge re-tests the result on main's own
+# push run. Left alone they hold runner slots — shared across the EarthSciML
+# organization — that the push run on main then waits behind. The workflows'
+# own `concurrency` groups do not help here, because closing is not a push and
+# so never starts a run that would supersede them.
+#
+# `pull_request_target`, not `pull_request`: pull requests here come from forks,
+# and a fork's `pull_request` token is read-only, so it cannot cancel anything.
+# That is safe only because this workflow never checks out or runs the pull
+# request's code; it only calls the API. The branch and repository names come
+# from the fork, so they reach the script as environment variables, never
+# interpolated into it.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel this pull request's unfinished runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          # Every unfinished run of this branch from this head repository —
+          # not only the last commit's, since a superseded run can still be
+          # queued in a workflow that has no concurrency group.
+          for status in queued in_progress waiting pending requested; do
+            gh api --paginate -X GET "repos/$REPO/actions/runs" \
+              -f event=pull_request -f status="$status" -f branch="$HEAD_REF" \
+              --jq '.workflow_runs[] | [.id, .head_repository.full_name, .name] | @tsv'
+          done | sort -u | while IFS=$'\t' read -r id repo name; do
+            [ "$repo" = "$HEAD_REPO" ] || continue
+            echo "Cancelling run $id ($name)"
+            gh api -X POST "repos/$REPO/actions/runs/$id/cancel" \
+              || echo "::warning::could not cancel run $id ($name); it may have just finished"
+          done

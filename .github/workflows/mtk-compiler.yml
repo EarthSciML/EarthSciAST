@@ -15,7 +15,10 @@ name: ModelingToolkit Compiler
 # The `mtk` leg of the compiler-agreement tier (CONFORMANCE_SPEC §5.44), kept
 # OUT of `conformance-testing.yml` but gated JUST AS OFTEN: the trigger set
 # below is the same one that workflow carries, so every push and every pull
-# request that could move this verdict still moves it.
+# request that could move this verdict still moves it. On a pull request both
+# jobs are skipped when the change is confined to another binding's directory
+# (scripts/ci-changed-bindings.sh), exactly as conformance-testing.yml skips
+# its julia jobs.
 #
 # Why it is separate at all. `mtk` is Julia-only and needs ModelingToolkit plus
 # OrdinaryDiffEqNonlinearSolve in the adapter's session — between them most of
@@ -91,12 +94,41 @@ env:
   JULIA_VERSION: 'lts'
 
 jobs:
+  # Which binding suites this run needs (scripts/ci-changed-bindings.sh). On a
+  # pull request a change confined to one binding's directory runs only that
+  # binding's suite; every other event, and every change outside a single
+  # binding, runs them all.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      julia: ${{ steps.select.outputs.julia }}
+      typescript: ${{ steps.select.outputs.typescript }}
+      python: ${{ steps.select.outputs.python }}
+      rust: ${{ steps.select.outputs.rust }}
+      go: ${{ steps.select.outputs.go }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci-changed-bindings.sh
+          sparse-checkout-cone-mode: false
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/ci-changed-bindings.sh
+
   # The ModelingToolkit / Catalyst test suite (pkg/EarthSciAST.jl/test/mtk/).
   # A matrix over the same two Julia versions as conformance-testing.yml's
   # `julia-tests`, because that is where these tests ran before they moved.
   mtk-tests:
     name: ModelingToolkit test suite (julia ${{ matrix.julia-version }})
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.julia == 'true'
     # Cold, dominated by resolving and precompiling the SciML symbolic stack
     # twice over (ModelingToolkit and Catalyst); warm, by the suite's
     # `mtkcompile` builds and solves. A budget, not a measurement.
@@ -148,6 +180,8 @@ jobs:
   mtk-compiler-agreement:
     name: ModelingToolkit compiler agreement (julia)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.julia == 'true'
     # Cold, this is dominated by resolving and precompiling the SciML symbolic
     # stack; warm, by six `mtkcompile` builds and their solves. A budget, not a
     # measurement.

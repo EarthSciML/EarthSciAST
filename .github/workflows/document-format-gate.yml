@@ -90,6 +90,11 @@ jobs:
   parse:
     name: parse (${{ matrix.participant }})
     needs: print
+    # Run even when a printer failed: the readers still read every text the
+    # other printers wrote, and the gate still compares them. A participant
+    # whose own print job failed has no driver to download, so its parse job
+    # fails too, and the gate reports it missing.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -142,12 +147,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Require both stages
-        if: ${{ needs.print.result != 'success' || needs.parse.result != 'success' }}
-        run: |
-          echo "::error::print: ${{ needs.print.result }}, parse: ${{ needs.parse.result }}. A participant could not print or read the corpus; see its job."
-          exit 1
-
+      # Compare whatever the stages produced, even when a job failed: the matrix
+      # of the participants that did run localizes a binding bug, and the
+      # missing ones are listed as failures.
       - name: Download the printed corpora
         uses: actions/download-artifact@v8
         with:
@@ -162,6 +164,13 @@ jobs:
 
       - name: Compare
         run: |
+          shopt -s nullglob
           python3 scripts/run-document-format-gate.py compare \
             --prints "$GATE"/prints/prints-* --parses "$GATE"/parses/parses-* \
             --reference lean --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Require both stages
+        if: ${{ always() && (needs.print.result != 'success' || needs.parse.result != 'success') }}
+        run: |
+          echo "::error::print: ${{ needs.print.result }}, parse: ${{ needs.parse.result }}. A participant could not print or read the corpus; see its job."
+          exit 1

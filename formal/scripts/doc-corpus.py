@@ -37,7 +37,10 @@ KATEX_CHECK = Path(__file__).resolve().parent / "katex-check.cjs"
 
 
 def corpus():
-    """The JSON-object `.esm` files under tests/, and the count of those skipped."""
+    """The JSON-object `.esm` files under tests/, and the count of those skipped.
+
+    This is the corpus of the cross-binding gate too (scripts/run-document-format-gate.py
+    imports it), so the Lean round trip and the gate always cover the same documents."""
     files, skipped = [], 0
     for f in sorted((ROOT / "tests").rglob("*.esm")):
         try:
@@ -52,19 +55,27 @@ def corpus():
     return files, skipped
 
 
+def doc_id(src):
+    """A corpus document's identity: its path under tests/, `/` as `__`, without `.esm`."""
+    return src.relative_to(ROOT / "tests").as_posix().replace("/", "__")[: -len(".esm")]
+
+
 def run(binary, mode, path):
-    p = subprocess.run([str(binary), mode, str(path)], capture_output=True, text=True)
-    return p.returncode, p.stdout, p.stderr.strip()
+    """One `esm-lean` call: (exit code, stdout bytes, stderr text). The output is kept as
+    bytes: it is the reference text, compared byte for byte, so it is never decoded with
+    the locale's encoding or put through newline translation."""
+    p = subprocess.run([str(binary), mode, str(path)], capture_output=True)
+    return p.returncode, p.stdout, p.stderr.decode("utf-8", "replace").strip()
 
 
 def check_one(binary, src, out_dir, typst):
     """The failures of one document, as (kind, message) pairs."""
-    stem = str(src.relative_to(ROOT / "tests")).replace(os.sep, "__")[: -len(".esm")]
+    stem = doc_id(src)
     rc, canon, err = run(binary, "canon", src)
     if rc != 0:
         return [("canon", f"{src}: {err}")]
     canon_path = out_dir / (stem + ".canon.json")
-    canon_path.write_text(canon, encoding="utf-8")
+    canon_path.write_bytes(canon)
     fails = []
     for fmt, ext in (("md", ".md"), ("typ", ".typ")):
         rc, text, err = run(binary, f"print-{fmt}", canon_path)
@@ -72,7 +83,7 @@ def check_one(binary, src, out_dir, typst):
             fails.append((f"print-{fmt}", f"{src}: {err}"))
             continue
         printed = out_dir / (stem + ext)
-        printed.write_text(text, encoding="utf-8")
+        printed.write_bytes(text)
         rc, back, err = run(binary, f"parse-{fmt}", printed)
         if rc != 0:
             fails.append((f"parse-{fmt}", f"{src}: {err}"))
