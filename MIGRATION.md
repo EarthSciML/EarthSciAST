@@ -1647,6 +1647,7 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 
 | Old | New | Kind |
 |---|---|---|
+| `Compile` (deprecated alias since 0.2.0) | `Rhs` | `deleted` |
 | `ArrayCompiled::debug_eval_rhs(state, t, params, force_scalar)` | `debug_eval_rhs(state, t, params)`, always the per-cell oracle | `deleted` |
 | `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
 

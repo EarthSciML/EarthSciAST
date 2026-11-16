@@ -209,19 +209,6 @@ pub enum Rhs {
     Never,
 }
 
-/// The former spelling of [`Rhs`], kept for one minor (API_SPEC §8 item 22).
-///
-/// `Compile` and [`Compiler`] differ by one letter and answer different
-/// questions — `Rhs` decides WHETHER a right-hand side is built at all, and
-/// `Compiler` decides WHICH strategy builds it — so the two sat on the same
-/// `ProblemOptions` as `compile` and `compiler`. The type is `extension` tier,
-/// so the rename is a minor.
-#[deprecated(
-    since = "0.2.0",
-    note = "renamed to `Rhs`; the field is now `ProblemOptions::rhs`"
-)]
-pub type Compile = Rhs;
-
 /// The pattern rewrites the tape compilers (`native`, `xla`) apply to the
 /// expanded expression tree: each recognises one small algebraic shape and
 /// lowers it to a faster instruction with the same bits as the lowering it
