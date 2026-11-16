@@ -289,18 +289,20 @@ impl TapeBuilder<'_> {
     /// Lower a join-gated or ragged contraction as a tuple list (module
     /// docs). The result is over the output box `ranges` (a scalar for a
     /// rank-0 output).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_tuple_contraction(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         ranges: &[(i64, i64)],
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
         join: Option<&[JoinClause]>,
     ) -> LResult<LV> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+        } = *c;
         // A scalar reduction may be `bool_and_or`; an array-valued one may not
         // (CONFORMANCE_SPEC §5.6.1), outside the build pipeline.
         let combine_op = if ranges.is_empty() {

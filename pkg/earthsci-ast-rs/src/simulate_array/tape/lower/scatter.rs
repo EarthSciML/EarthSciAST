@@ -339,18 +339,20 @@ impl TapeBuilder<'_> {
     /// costs at least as much. Nothing is emitted before the tuple list is
     /// lowered, so a `None` needs no rollback; an `Err` comes from that
     /// lowering, after the charge, and the caller's rollback undoes both.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_equality_scatter(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
     ) -> LResult<Option<LV>> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+        } = *c;
         let Some(filter) = filter else {
             return Ok(None);
         };
@@ -402,17 +404,7 @@ impl TapeBuilder<'_> {
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
             return Ok(None);
         };
-        if let Some(v) = self.lower_shift_scatter(
-            idx_names,
-            lo,
-            shape,
-            body,
-            contract_names,
-            &bounds,
-            reduce,
-            &parts,
-            &pins,
-        )? {
+        if let Some(v) = self.lower_shift_scatter(c, lo, shape, &bounds, &parts, &pins)? {
             return Ok(Some(v));
         }
         // A point's values: the output indices, then the contracted names
@@ -708,19 +700,22 @@ impl TapeBuilder<'_> {
     /// Only for `+` and `*`, whose one-term fold is the elementwise kernel
     /// itself; `max` / `min` keep the tuple list, whose fold step is the
     /// reduction's own.
-    #[allow(clippy::too_many_arguments)]
     fn lower_shift_scatter(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
         bounds: &[DimBound],
-        reduce: ReduceKind,
         parts: &[&Expr],
         pins: &[Option<&Expr>],
     ) -> LResult<Option<LV>> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            reduce,
+            ..
+        } = *c;
         if !matches!(reduce, ReduceKind::Sum | ReduceKind::Product) || parts.len() != 1 {
             return Ok(None);
         }
