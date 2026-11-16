@@ -17,8 +17,8 @@
 
 use super::super::{ArrayCompiled, RhsStats};
 use super::ir::Instr;
-use super::lowering_limit_tests::oracle_ab;
-use super::tests::seeded_state;
+use super::test_support::oracle_ab;
+use super::test_support::seeded_state;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -399,13 +399,13 @@ fn widest(prog: &super::ir::TapeProgram) -> usize {
 #[test]
 fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
     let n = 100;
-    let sparse = super::tests::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
+    let sparse = super::test_support::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
     assert!(
         widest(&sparse) <= n * n,
         "the overlap body ran over a box of {} elements",
         widest(&sparse)
     );
-    let dense = super::tests::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
+    let dense = super::test_support::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
     assert!(
         widest(&dense) >= n * n * 4,
         "a gate keeping every cell is not compacted"

@@ -2452,15 +2452,15 @@ mod tests {
             q.extend([k, k + 0.125]);
         }
         let n = q.len();
-        let d = super::super::array_tests::doc(
+        let d = super::super::test_support::doc(
             serde_json::json!({"u": {"type": "unknown", "shape": ["i"]}}),
-            vec![super::super::array_tests::d_eq(
+            vec![super::super::test_support::d_eq(
                 "u",
                 n as i64,
                 serde_json::json!({"op": "neg", "args": [{"op": "index", "args": ["u", "i"]}]}),
             )],
         );
-        let compiled = super::super::array_tests::compile(d);
+        let compiled = super::super::test_support::compile(d);
         let (prog, _) = compiled.build_tape_layout(&HashSet::new(), None, false);
         let prog = prog.expect("tape");
         let client = crate::xla_runtime::client().expect("client");

@@ -13,7 +13,7 @@
 //!   * the per-cell program does not grow with the number of cells.
 
 use super::ir::*;
-use super::lowering_limit_tests::{count, counts, flat_in_n, oracle_ab};
+use super::test_support::{counts, flat_in_n, opcount, oracle_ab};
 use serde_json::{Value, json};
 
 fn op(o: &str, args: Vec<Value>) -> Value {
@@ -177,7 +177,7 @@ fn interp_templates_per_cell_query_count_once() {
     for (which, name) in LOOKUPS {
         let prog = flat_in_n(|m| model(which, Some(m), false), 4, 33);
         assert_eq!(counts(&prog), expected_counts(which), "{name}: per cell");
-        assert_eq!(count(&prog, "Reduce"), 0, "{name}: no fold is left");
+        assert_eq!(opcount(&prog, "Reduce"), 0, "{name}: no fold is left");
         oracle_ab(model(which, Some(17), false));
     }
 }
@@ -187,7 +187,7 @@ fn interp_templates_scalar_query_count_once() {
     for (which, name) in LOOKUPS {
         let (prog, _) = oracle_ab(model(which, None, false));
         assert_eq!(counts(&prog), expected_counts(which), "{name}: scalar");
-        assert_eq!(count(&prog, "Reduce"), 0, "{name}: no fold is left");
+        assert_eq!(opcount(&prog, "Reduce"), 0, "{name}: no fold is left");
     }
 }
 
@@ -214,7 +214,7 @@ fn interp_templates_nan_query() {
 /// `[1, n]` whose derivative reads the scalar observed `c = body`, with the
 /// interpolation library loaded.
 fn scalar_lookup_doc(n: i64, body: Value) -> Value {
-    use super::array_tests::{d_eq, doc, idx};
+    use super::test_support::{d_eq, doc, idx};
     let mut d = doc(
         json!({
             "u": {"type": "unknown", "shape": ["i"]},
@@ -247,7 +247,7 @@ fn apply(name: &str, bindings: Value) -> Value {
 /// every call and counts the unsorted seeded states entry by entry.
 #[test]
 fn scalar_lookup_loop_matches_the_oracle() {
-    use super::array_tests::{ab, compile, no_params, opcount};
+    use super::test_support::{ab, compile, no_params, opcount};
     let axis: Vec<f64> = AXIS.iter().map(|a| a * 1.6 - 2.0).collect();
     // Three queries, `s`, `4 s` and `s / 5`, so each seeded state reaches
     // the interior and, mostly, a clamp.
@@ -286,7 +286,7 @@ fn scalar_lookup_loop_matches_the_oracle() {
 /// the entry. Seeded queries fall on both sides.
 #[test]
 fn scalar_lookup_gather_past_the_end_matches_the_oracle() {
-    use super::array_tests::{ab, compile, idx, no_params, opcount};
+    use super::test_support::{ab, compile, idx, no_params, opcount};
     let xs = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0];
     let bracket = |x: Value| {
         apply(

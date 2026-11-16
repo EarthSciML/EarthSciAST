@@ -8,7 +8,7 @@
 //! must refuse rather than answer differently.
 
 use super::super::ArrayCompiled;
-use super::array_tests::{ab, compare_tape_at, compile, idx, lit, no_params, opcount, plus};
+use super::test_support::{ab, compare_tape_at, compile, idx, lit, no_params, opcount, plus};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 

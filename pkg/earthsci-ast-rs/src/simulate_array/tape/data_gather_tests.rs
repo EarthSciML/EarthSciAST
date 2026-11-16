@@ -7,10 +7,10 @@
 //! the fault it latches, against the per-cell oracle and the whole-array
 //! overlay, on both executors, fused and unfused ([`ab`]).
 
-use super::array_tests::{
+use super::taped;
+use super::test_support::{
     ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, no_params, opcount, plus,
 };
-use super::taped;
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
@@ -567,7 +567,7 @@ fn a_failed_sub_box_lowering_falls_back_to_the_full_box() {
     .0;
     let unfused = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, -2.0, 2.0);
+        let state = super::test_support::seeded_state(n, seed, -2.0, 2.0);
         let mut dy_f = vec![0.0f64; n];
         let mut dy_u = vec![0.0f64; n];
         super::refexec::run_reference(&fused, &compiled, &state, &pv, 0.0, &mut dy_f);

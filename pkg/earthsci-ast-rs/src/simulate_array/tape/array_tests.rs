@@ -11,192 +11,12 @@
 //! fused and unfused — together with the fault the evaluation latches, which
 //! is part of what the interpreter answers.
 
-use super::super::{ArrayCompiled, ConstArrayScope, RhsScratch, RhsStats};
-use super::ir::*;
-use super::refexec::run_reference;
+use super::super::{ArrayCompiled, ConstArrayScope, RhsStats};
 use super::taped;
-use crate::simulate_array::take_const_array_oob;
+use super::test_support::*;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-
-pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
-    let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
-    ArrayCompiled::from_file(&file).expect("fixture compiles")
-}
-
-fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
-    let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
-    (0..n)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let u = (x >> 11) as f64 / (1u64 << 53) as f64;
-            lo + u * (hi - lo)
-        })
-        .collect()
-}
-
-fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
-    assert_eq!(a.len(), b.len(), "{what}: length");
-    for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-        assert_eq!(
-            x.to_bits(),
-            y.to_bits(),
-            "{what}: dy[{k}] diverged: {x:?} ({:016x}) vs {y:?} ({:016x})",
-            x.to_bits(),
-            y.to_bits()
-        );
-    }
-}
-
-fn cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg { ext_pairs: true }
-}
-
-/// A fresh scratch carrying `prog`.
-fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
-    let mut s = RhsScratch::new(&compiled.var_shapes);
-    s.set_const_arrays(std::sync::Arc::clone(&compiled.const_scope));
-    s.install_tape(std::sync::Arc::new(prog));
-    s
-}
-
-/// Build the fused and unfused tapes — neither may carry a fallback — and
-/// compare `dy` and the latched fault against the oracle and the overlay at
-/// several states, times and parameter maps. The fast executor is compared
-/// on a FRESH scratch per evaluation: a CONST-section fault latches when the
-/// section primes, which a warm scratch has already done. Returns the fused
-/// program.
-pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProgram {
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg())));
-    assert!(
-        report.fallbacks.is_empty(),
-        "fallbacks: {:?}",
-        report.fallbacks
-    );
-    let n = compiled.state_variable_names().len();
-    for params in param_maps {
-        for seed in 0..3u64 {
-            let state = seeded_state(n, seed, -2.0, 2.0);
-            for &t in &[0.0, 0.7] {
-                compare_at(compiled, params, &state, t);
-            }
-        }
-    }
-    prog
-}
-
-/// Compare the fused and unfused tapes, in both executors, against the
-/// oracle and the overlay at one state, time and parameter map: `dy` bit for
-/// bit and the latched fault.
-fn compare_at(compiled: &ArrayCompiled, params: &HashMap<String, f64>, state: &[f64], t: f64) {
-    compare_tape_at(compiled, params, state, t, true);
-}
-
-/// [`compare_at`], checking the overlay against the oracle only when
-/// `overlay` is set: the tapes are always compared against the oracle.
-pub(super) fn compare_tape_at(
-    compiled: &ArrayCompiled,
-    params: &HashMap<String, f64>,
-    state: &[f64],
-    t: f64,
-    overlay: bool,
-) {
-    let n = state.len();
-    let pv = compiled.debug_resolve_params(params);
-    take_const_array_oob();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
-    let f_oracle = take_const_array_oob();
-    if overlay {
-        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
-        let f_overlay = take_const_array_oob();
-        assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
-        assert_eq!(f_overlay, f_oracle, "overlay fault");
-    }
-    for fused in [true, false] {
-        let label = if fused { "fused" } else { "unfused" };
-        let p = taped(compiled.build_tape_opts(&HashSet::new(), fused.then(cfg))).0;
-        let mut dy = vec![0.0f64; n];
-        run_reference(&p, compiled, state, &pv, t, &mut dy);
-        let f_ref = take_const_array_oob();
-        assert_bits_eq(&dy, &dy_oracle, &format!("{label} reference executor"));
-        assert_eq!(f_ref, f_oracle, "{label} reference executor fault");
-        let mut scratch = scratch_with(compiled, p);
-        let mut dy = vec![0.0f64; n];
-        compiled.debug_eval_rhs_into(
-            state,
-            t,
-            &pv,
-            &mut dy,
-            &mut scratch,
-            &mut RhsStats::default(),
-        );
-        let f_fast = take_const_array_oob();
-        assert_bits_eq(&dy, &dy_oracle, &format!("{label} fast executor"));
-        assert_eq!(f_fast, f_oracle, "{label} fast executor fault");
-    }
-}
-
-/// The tape's refusals when it refuses any rule; otherwise [`compare_at`] at
-/// each of `states` under each parameter map, and no refusals.
-pub(super) fn agrees_or_refuses(
-    compiled: &ArrayCompiled,
-    param_maps: &[HashMap<String, f64>],
-    states: &[Vec<f64>],
-) -> Vec<(String, String)> {
-    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
-    if !report.fallbacks.is_empty() {
-        return report.fallbacks;
-    }
-    for params in param_maps {
-        for state in states {
-            compare_at(compiled, params, state, 0.0);
-        }
-    }
-    Vec::new()
-}
-
-pub(super) fn no_params() -> Vec<HashMap<String, f64>> {
-    vec![HashMap::new()]
-}
-
-pub(super) fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
-
-/// `D(u[i]) = rhs` over `i ∈ [1, n]`.
-pub(super) fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
-    json!({
-        "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
-                "ranges": {"i": [1, n]}},
-        "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, n]}, "expr": rhs}
-    })
-}
-
-pub(super) fn idx(base: serde_json::Value, subs: &[serde_json::Value]) -> serde_json::Value {
-    let mut args = vec![base];
-    args.extend(subs.iter().cloned());
-    json!({"op": "index", "args": args})
-}
-
-pub(super) fn plus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
-    json!({"op": "+", "args": [a, b]})
-}
-
-pub(super) fn lit(v: &[f64]) -> serde_json::Value {
-    json!({"op": "const", "args": [], "value": v})
-}
-
-pub(super) fn doc(vars: serde_json::Value, eqs: Vec<serde_json::Value>) -> serde_json::Value {
-    json!({
-        "esm": "2.0.0",
-        "metadata": {"name": "tape_array_forms"},
-        "models": {"M": {"variables": vars, "equations": eqs}}
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Const-array gathers out of range.
@@ -820,7 +640,7 @@ fn undeclared_ifelse_consumed_whole_is_still_refused() {
             json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}}),
             vec![],
         ));
-        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
         assert!(
             report
                 .fallbacks
@@ -847,7 +667,7 @@ fn declared_box(compiled: &ArrayCompiled, name: &str) -> Option<Option<Vec<usize
 
 /// Whether native refused some rule because its `ifelse` arms differ in box.
 fn refuses_mixed_arms(compiled: &ArrayCompiled) -> bool {
-    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
     report
         .fallbacks
         .iter()
@@ -1000,7 +820,7 @@ fn data_fed_ifelse_observed_takes_the_datas_shape() {
         let params = HashMap::from([("lev".to_string(), lev)]);
         let pv = compiled.debug_resolve_params(&params);
         let mut oracle = compiled.debug_new_scratch();
-        let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg()))).0;
+        let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0;
         let mut tape = scratch_with(&compiled, prog);
         tape.set_exports_active(true);
         for scratch in [&mut oracle, &mut tape] {

@@ -17,7 +17,7 @@
 //!     within the compiled tier's tolerance classes.
 
 use super::super::ArrayCompiled;
-use super::array_tests::{compile, d_eq, doc, idx, lit, plus};
+use super::test_support::{compile, d_eq, doc, idx, lit, plus};
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use crate::xla_runtime::{CompileRhsError, CompiledRhs};
@@ -323,7 +323,7 @@ fn a_faulting_computed_gather_is_refused_by_name() {
 fn assert_close(compiled: &ArrayCompiled, prog: &CompiledRhs, rtol: f64, atol: f64, what: &str) {
     let n = compiled.state_variable_names().len();
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, 0.25, 2.5);
+        let state = super::test_support::seeded_state(n, seed, 0.25, 2.5);
         let (got, want) = both(compiled, prog, &state, 0.7);
         let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -383,7 +383,7 @@ fn a_gather_over_compile_time_data_is_evaluated_ahead_of_the_program() {
     let prog = program(&compiled);
     let n = compiled.state_variable_names().len();
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, -1.0, 1.0);
+        let state = super::test_support::seeded_state(n, seed, -1.0, 1.0);
         assert_bits(
             &compiled,
             &prog,
