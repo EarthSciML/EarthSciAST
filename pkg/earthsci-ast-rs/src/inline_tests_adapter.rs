@@ -30,15 +30,17 @@
 //! drive exactly the path the binary runs — the same split
 //! [`crate::compiler_agreement_adapter`] uses.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+pub use crate::adapter_support::Report;
+use crate::adapter_support::{
+    self, Answer, Manifest, Tier, required_compiler, solver_alg, truncate,
+};
 use crate::inline_tests::{InlineTestOptions, run_inline_tests_with_options};
 use crate::problem::Compiler;
-use crate::simulate::{Alg, SolveOptions};
-use crate::types::EsmFile;
+use crate::simulate::SolveOptions;
 
 /// The coded diagnostics a refusal can carry. A message naming one of these is
 /// this binding declining to evaluate the document, which the tier gates as a
@@ -53,82 +55,22 @@ const REFUSAL_CODES: [&str; 5] = [
     "unsupported_construct",
 ];
 
-/// The adapter's parsed command line.
-pub struct Args {
-    /// Path to the tier manifest.
-    pub manifest: PathBuf,
-    /// Path the report is written to.
-    pub output: PathBuf,
-    /// The compiler every fixture is built with. REQUIRED: one adapter binary
-    /// serves every compiler this binding offers, and a default would make the
-    /// report's `compiler` field a guess.
-    pub compiler: Compiler,
-}
+/// The adapter's parsed command line: `--manifest <m> --output <o>
+/// --compiler <c>`.
+pub type Args = adapter_support::Args<Compiler>;
 
-/// Parse `--manifest <m> --output <o> --compiler <c>`, rejecting anything else.
-///
-/// A value outside API_SPEC §5.8's closed vocabulary is `compiler_unknown` and
-/// fails the invocation: it is a typo, not a missing runtime.
+/// Parse `--manifest <m> --output <o> --compiler <c>`, rejecting anything else
+/// ([`required_compiler`]).
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
-    let mut manifest: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut compiler: Option<Compiler> = None;
-    let mut it = args.into_iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--manifest" => manifest = it.next().map(PathBuf::from),
-            "--output" => output = it.next().map(PathBuf::from),
-            "--compiler" => {
-                let v = it.next().ok_or("--compiler needs a value")?;
-                compiler = Some(Compiler::parse_named(&v)?);
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
-    }
-    match (manifest, output, compiler) {
-        (Some(manifest), Some(output), Some(compiler)) => Ok(Args {
-            manifest,
-            output,
-            compiler,
-        }),
-        _ => Err("--manifest, --output and --compiler are required".to_string()),
-    }
+    adapter_support::parse_args(args, Some("--compiler"), required_compiler)
 }
 
-/// What a manifest run produced: the report payload to write, plus the ids of
-/// the fixtures that answered with an `error`. A non-zero exit WITH a parsable
-/// report is legal, and is how a run that broke on one fixture still hands the
-/// runner the rest.
-pub struct Report {
-    /// The document written to `--output`.
-    pub payload: Value,
-    /// Ids of fixtures whose entry is an `error`.
-    pub failed: Vec<String>,
-}
+/// This tier under one compiler.
+pub struct InlineTests(pub Compiler);
 
-/// The repository `tests/` directory, found by walking UP from the manifest.
-fn tests_root(manifest_path: &Path) -> PathBuf {
-    let abs = std::path::absolute(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
-    let mut cur = abs.as_path();
-    while let Some(parent) = cur.parent() {
-        if parent.file_name().is_some_and(|n| n == "tests") {
-            return parent.to_path_buf();
-        }
-        cur = parent;
-    }
-    abs.parent().unwrap_or(Path::new(".")).to_path_buf()
-}
-
-/// Resolve a fixture's `.esm`: against the manifest's own directory first (a
-/// document the tier authored), then against `tests/` (a document another tier
-/// already owns). The two-step rule every binding's adapter applies, so a tier
-/// is free to reference rather than copy.
-fn fixture_path(manifest_dir: &Path, tests: &Path, rel: &str) -> PathBuf {
-    let local = manifest_dir.join(rel);
-    if local.is_file() {
-        return local;
-    }
-    tests.join(rel)
+/// The tier the binary's `--compiler` names ([`required_compiler`]).
+pub fn configure(value: Option<&str>) -> Result<InlineTests, String> {
+    required_compiler(value).map(InlineTests)
 }
 
 /// The coded diagnostic a message names, or `None`. Matched against the closed
@@ -148,48 +90,14 @@ fn refusal_code(message: &str) -> Option<String> {
     Some(message[start..end].to_string())
 }
 
-/// The algorithm this fixture integrates with. esm-spec §2.2's `solver` block
-/// is the document's declaration about ITSELF, and `stiffness: "high"` selects
-/// the stiff family; everything else takes the explicit Runge-Kutta arm rather
-/// than this binding's stiff default, so two bindings integrate the same
-/// document with the same family. The TOLERANCES are the manifest's.
-fn solver_alg(file: &EsmFile) -> Alg {
-    match file.solver.as_ref().and_then(|s| s.stiffness.as_deref()) {
-        Some("high") => Alg::Bdf,
-        _ => Alg::Erk,
-    }
-}
-
-/// What one fixture answered: an entry for the report, or the whole-output
-/// `unavailable` this compiler forces.
-enum Answer {
-    Entry(Value),
-    Unavailable(String),
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    let end = s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len());
-    s[..end].to_string()
-}
-
-fn run_fixture(
-    fx: &Value,
-    manifest: &Value,
-    manifest_dir: &Path,
-    tests: &Path,
-    compiler: Compiler,
-) -> Result<Answer, String> {
-    let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
-    let path = fixture_path(manifest_dir, tests, rel);
-    if !path.is_file() {
-        return Err(format!("fixture document not found at {}", path.display()));
-    }
+fn run_fixture(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<Answer, String> {
+    let path = manifest.fixture_path(fx)?;
     // Loaded from its path, so its relative refs (subsystems,
     // `expression_template_imports`) resolve against its own directory.
     let file = crate::load_path(&path).map_err(|e| format!("load: {e:?}"))?;
     let model = fx["model"].as_str().ok_or("fixture.model missing")?;
 
-    let integ = &manifest["integrators"]["rust"];
+    let integ = manifest.integrator();
     let opts = InlineTestOptions {
         model_name: Some(model.to_string()),
         solve: SolveOptions {
@@ -251,60 +159,30 @@ fn run_fixture(
     Ok(Answer::Entry(json!({ "assertions": entries })))
 }
 
-/// Run a whole manifest under one compiler and build the report payload.
-///
-/// Every fixture is attempted; one that throws becomes its own `error` entry
-/// and the run continues, so a single broken fixture cannot hide the rest. A
-/// `compiler_unavailable` ends the run and replaces the whole payload:
-/// availability is a property of the binding, and reporting it per fixture
-/// would make a missing runtime look like a coverage gap.
-pub fn run_manifest(manifest_path: &Path, compiler: Compiler) -> Result<Report, String> {
-    let text = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("failed to read manifest {}: {e}", manifest_path.display()))?;
-    let manifest: Value =
-        serde_json::from_str(&text).map_err(|e| format!("failed to parse manifest: {e}"))?;
-    let abs = std::path::absolute(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
-    let manifest_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let tests = tests_root(manifest_path);
-
-    let empty: Vec<Value> = Vec::new();
-    let mut fixtures = Map::new();
-    let mut failed = Vec::new();
-    for fx in manifest["fixtures"].as_array().unwrap_or(&empty) {
-        let id = fx["id"].as_str().unwrap_or("<unknown>").to_string();
-        let entry = match run_fixture(fx, &manifest, &manifest_dir, &tests, compiler) {
-            Ok(Answer::Entry(v)) => v,
-            Ok(Answer::Unavailable(reason)) => {
-                return Ok(Report {
-                    payload: json!({
-                        "binding": "rust",
-                        "compiler": compiler.as_str(),
-                        "status": "unavailable",
-                        "reason": reason,
-                    }),
-                    failed: Vec::new(),
-                });
-            }
-            Err(e) => {
-                if let Some(code) = refusal_code(&e) {
-                    json!({ "status": "refused", "code": code, "reason": truncate(&e, 400) })
-                } else {
-                    eprintln!("fixture {id}: {e}");
-                    failed.push(id.clone());
-                    json!({ "error": truncate(&e, 800) })
-                }
-            }
-        };
-        fixtures.insert(id, entry);
+impl Tier for InlineTests {
+    fn header(&self) -> Option<(&'static str, &'static str)> {
+        Some(("compiler", self.0.as_str()))
     }
-    Ok(Report {
-        payload: json!({
-            "binding": "rust",
-            "compiler": compiler.as_str(),
-            "fixtures": Value::Object(fixtures),
-        }),
-        failed,
-    })
+
+    fn run_fixture(&self, fx: &Value, manifest: &Manifest) -> Result<Answer, String> {
+        run_fixture(fx, manifest, self.0)
+    }
+
+    /// An error naming a coded diagnostic is this compiler declining the
+    /// document (a build-time refusal), reported as `refused`, not `error`.
+    fn excuse(&self, error: &str) -> Option<Value> {
+        refusal_code(error).map(
+            |code| json!({ "status": "refused", "code": code, "reason": truncate(error, 400) }),
+        )
+    }
+}
+
+/// Run a whole manifest under one compiler and build the report
+/// ([`adapter_support::run_manifest`]): a fixture that throws is its own
+/// `error` entry unless it names a refusal code, and a `compiler_unavailable`
+/// replaces the whole payload.
+pub fn run_manifest(manifest_path: &Path, compiler: Compiler) -> Result<Report, String> {
+    adapter_support::run_manifest(&InlineTests(compiler), manifest_path)
 }
 
 #[cfg(test)]
@@ -339,6 +217,6 @@ mod tests {
             "interpreter".to_string(),
         ])
         .expect("parses");
-        assert_eq!(a.compiler, Compiler::Interpreter);
+        assert_eq!(a.config, Compiler::Interpreter);
     }
 }

@@ -31,7 +31,6 @@ use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
 use crate::common;
@@ -42,11 +41,6 @@ const TRAJ_ATOL: f64 = 1e-6;
 
 fn fixture_dir() -> PathBuf {
     common::repo_fixture("conformance/refresh")
-}
-
-fn read_json(path: &PathBuf) -> Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
 fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
@@ -183,8 +177,8 @@ fn base_opts() -> SolveOptions {
 /// `M.scale_tgt` that the RHS materializes, via [`BuildInspection`].
 #[test]
 fn refresh_regrid_band_matches_golden() {
-    let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
+    let golden = common::read_json(fixture_dir().join("golden/coupled_refresh_regrid.json"));
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
@@ -249,8 +243,8 @@ fn refresh_regrid_band_matches_golden() {
 /// boundary refresh the DISCRETE forcing, integrate the segment, thread state.
 #[test]
 fn refresh_trajectory_band_matches_golden() {
-    let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
+    let golden = common::read_json(fixture_dir().join("golden/coupled_refresh_regrid.json"));
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");

@@ -17,14 +17,6 @@ pub enum EsmError {
     #[error("Structural validation error: {0}")]
     StructuralValidation(String),
 
-    /// Expression evaluation error
-    #[error("Expression evaluation error: {0}")]
-    ExpressionEvaluation(String),
-
-    /// Unit validation error
-    #[error("Unit validation error: {0}")]
-    UnitValidation(String),
-
     /// Failed to read a file from disk (I/O error with the offending path).
     #[error("failed to read {path}: {source}")]
     FileRead {
@@ -42,10 +34,6 @@ pub enum EsmError {
         /// Underlying I/O error.
         source: std::io::Error,
     },
-
-    /// Generic error with message
-    #[error("{0}")]
-    Other(String),
 
     /// A schema-stage load refusal that carries its stable diagnostic code
     /// (`ERROR_CODES`). Renders exactly as [`EsmError::SchemaValidation`]

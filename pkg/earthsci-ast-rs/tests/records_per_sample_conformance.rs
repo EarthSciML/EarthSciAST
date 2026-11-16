@@ -21,13 +21,14 @@ use earthsci_ast::{
 use serde_json::Value;
 use std::path::PathBuf;
 
+use crate::common;
+
 fn tier_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/records_per_sample")
 }
 
 fn manifest() -> Value {
-    serde_json::from_str(&std::fs::read_to_string(tier_dir().join("manifest.json")).unwrap())
-        .unwrap()
+    common::read_json(tier_dir().join("manifest.json"))
 }
 
 fn cases<'a>(m: &'a Value, expect: &str) -> Vec<&'a Value> {

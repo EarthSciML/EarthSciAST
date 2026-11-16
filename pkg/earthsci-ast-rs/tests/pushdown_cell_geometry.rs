@@ -27,6 +27,8 @@ use earthsci_ast::desugar_pushdown;
 use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
+use crate::common;
+
 fn ix(f: &str, idx: &[Value]) -> Value {
     let mut args = vec![json!(f)];
     args.extend(idx.iter().cloned());
@@ -393,13 +395,7 @@ impl PrepareProvider for MockGated {
         selection: &[AxisSel],
     ) -> Result<ArrayD<f64>, PrepareError> {
         self.calls.borrow_mut().push(Some(selection.to_vec()));
-        let mut arr = self.full.clone();
-        for (i, ax) in selection.iter().enumerate() {
-            if let AxisSel::Indices(idx) = ax {
-                arr = arr.select(ndarray::Axis(i), idx);
-            }
-        }
-        Ok(arr)
+        Ok(common::select_axes(&self.full, selection))
     }
 }
 

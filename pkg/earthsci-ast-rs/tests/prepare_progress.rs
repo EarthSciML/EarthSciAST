@@ -31,6 +31,8 @@ use serde_json::Value;
 use earthsci_ast::{AxisSel, Flow, PrepareError, PreparePhase, PrepareProgress, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem};
 
+use crate::common;
+
 // ---- Lambert conformal conic (unit sphere), to place points inside cells ----
 
 struct Lcc {
@@ -97,13 +99,7 @@ impl PrepareProvider for MockGated {
         selection: &[AxisSel],
     ) -> Result<ArrayD<f64>, PrepareError> {
         self.calls.borrow_mut().push(selection.to_vec());
-        let mut arr = self.full.clone();
-        for (i, ax) in selection.iter().enumerate() {
-            if let AxisSel::Indices(idx) = ax {
-                arr = arr.select(ndarray::Axis(i), idx);
-            }
-        }
-        Ok(arr)
+        Ok(common::select_axes(&self.full, selection))
     }
 }
 

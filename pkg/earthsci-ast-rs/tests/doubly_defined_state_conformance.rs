@@ -13,17 +13,17 @@ use earthsci_ast::{
     ProblemOptions, SolveOptions, esm_problem, load_path, run_inline_tests_with_base_dir, validate,
 };
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/doubly_defined_state")
+    common::category_dir("doubly_defined_state")
 }
 
 /// A missing manifest is a hard failure, not a skip.
 fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the doubly_defined_state manifest is readable");
-    serde_json::from_str(&raw).expect("the doubly_defined_state manifest parses")
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 /// Read only to check the manifest itself is well formed, which is what keeps a

@@ -13,26 +13,14 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    // <repo>/pkg/earthsci-ast-rs/tests/this_file.rs
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("the crate sits two levels under the repository root")
-        .to_path_buf()
-}
+use crate::common;
 
 fn suite_dir() -> PathBuf {
-    repo_root().join("tests/conformance/solver_external")
+    common::repo_root().join("tests/conformance/solver_external")
 }
 
 fn manifest() -> Value {
-    let p = suite_dir().join("manifest.json");
-    serde_json::from_str(
-        &std::fs::read_to_string(&p)
-            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
-    )
-    .expect("manifest.json is JSON")
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 fn fixtures(m: &Value, expect: &str) -> Vec<Value> {
@@ -85,7 +73,7 @@ fn expected_location(pin: &Value) -> Option<String> {
         return Some(v.to_string());
     }
     if let Some(rel) = pin.get("repo_path").and_then(Value::as_str) {
-        return Some(file_url(&repo_root().join(rel)));
+        return Some(file_url(&common::repo_root().join(rel)));
     }
     let rel = pin["cwd_path"]
         .as_str()
@@ -123,7 +111,7 @@ fn every_accepted_fixture_holds_resolves_and_emits_as_the_shared_manifest_says()
         );
 
         let base = f["base"].get("repo_path").and_then(Value::as_str);
-        let base = base.map(|rel| repo_root().join(rel));
+        let base = base.map(|rel| common::repo_root().join(rel));
         let location = earthsci_ast::solver_external_location(&doc, base.as_deref())
             .unwrap_or_else(|e| panic!("{id}: the accessor must resolve: {e}"));
         assert_eq!(

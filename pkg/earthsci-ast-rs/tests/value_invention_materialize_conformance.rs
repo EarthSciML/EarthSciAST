@@ -22,9 +22,7 @@ fn category_dir() -> PathBuf {
 }
 
 fn manifest() -> serde_json::Value {
-    let path = category_dir().join("manifest.json");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 #[test]

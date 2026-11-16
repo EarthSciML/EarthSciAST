@@ -11,28 +11,16 @@
 //! only pass on the machine that wrote it.
 
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-fn repo_root() -> PathBuf {
-    // <repo>/pkg/earthsci-ast-rs/tests/this_file.rs
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("the crate sits two levels under the repository root")
-        .to_path_buf()
-}
+use crate::common;
 
 fn suite_dir() -> PathBuf {
-    repo_root().join("tests/conformance/data_source_url")
+    common::repo_root().join("tests/conformance/data_source_url")
 }
 
 fn manifest() -> Value {
-    let p = suite_dir().join("manifest.json");
-    serde_json::from_str(
-        &std::fs::read_to_string(&p)
-            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
-    )
-    .expect("manifest.json is JSON")
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 fn fixture(m: &Value, id: &str) -> Value {
@@ -51,7 +39,7 @@ fn expected(pin: &Value) -> String {
         return v.to_string();
     }
     let rel = pin["repo_path"].as_str().expect("repo_path or verbatim");
-    format!("file://{}", repo_root().join(rel).display())
+    format!("file://{}", common::repo_root().join(rel).display())
 }
 
 #[test]

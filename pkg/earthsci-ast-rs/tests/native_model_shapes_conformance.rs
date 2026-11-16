@@ -15,26 +15,17 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use earthsci_ast::{
     AssertionResult, BuildProviderFactory, Compiler, InlineTestOptions, SolveOptions,
     run_inline_tests_with_options,
 };
-use serde_json::Value;
 
 use crate::common;
 
 fn tier_dir() -> PathBuf {
     common::repo_fixture("conformance/native_model_shapes")
-}
-
-fn read_json(path: &Path) -> Value {
-    serde_json::from_str(
-        &fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
-    )
-    .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 fn run(
@@ -96,7 +87,7 @@ fn check(id: &str, interp: &[AssertionResult], native: &[AssertionResult]) -> Ve
 #[test]
 fn tier_shapes_agree_on_the_build_pipeline() {
     let dir = tier_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
+    let manifest = common::read_json(dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
     // No data sources: an empty provider set still routes the build through
@@ -129,13 +120,13 @@ fn ingested_shapes_agree() {
     use earthsci_ast::esio_provider::providers_from_document;
 
     let dir = tier_dir().join("ingest");
-    let manifest = read_json(&dir.join("manifest.json"));
+    let manifest = common::read_json(&dir.join("manifest.json"));
     let fixtures = manifest["fixtures"].as_array().expect("fixtures");
     assert!(!fixtures.is_empty());
     let mut bad = Vec::new();
     for fx in fixtures {
         let id = fx["id"].as_str().expect("id");
-        let mut doc = read_json(&dir.join(fx["path"].as_str().expect("path")));
+        let mut doc = common::read_json(&dir.join(fx["path"].as_str().expect("path")));
         let mut overrides: HashMap<String, String> = HashMap::new();
         for (src, rel) in fx["url_overrides"].as_object().expect("url_overrides") {
             let p = dir

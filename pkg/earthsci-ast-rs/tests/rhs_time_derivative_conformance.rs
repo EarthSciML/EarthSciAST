@@ -45,13 +45,8 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/rhs_time_derivative")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 fn manifest() -> serde_json::Value {
-    read_json(&category_dir().join("manifest.json"))
+    common::read_json(category_dir().join("manifest.json"))
 }
 
 /// The manifest is the contract; a binding must not silently drop out of it,

@@ -261,12 +261,7 @@ EXTENSION_OVERRIDES = {
     ("param_map", "function"),
     ("parameter_classes", "function"),
     ("remake_parameters", "function"),
-    # Rust's interning / performance / array-simulation internals.
-    ("compact_expr", "type"),
-    ("performance_error", "error"),
-    ("parallel_evaluator", "type"),
-    ("model_allocator", "type"),
-    ("stoichiometric_matrix_parallel", "function"),
+    # Rust's array-simulation internals.
     ("compile_array", "function"),
     # Host/runtime integration seams: callbacks, sinks, providers, checkpoints.
     ("build_refresh_callback", "function"),

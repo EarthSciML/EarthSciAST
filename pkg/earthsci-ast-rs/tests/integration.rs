@@ -249,8 +249,6 @@ mod pde_inline_observed_state_dependent_conformance;
 mod pde_inline_reference_dimension_names_conformance;
 #[path = "pde_vectorized_eval.rs"]
 mod pde_vectorized_eval;
-#[path = "performance.rs"]
-mod performance;
 #[path = "pipeline_flatten_rewrites.rs"]
 mod pipeline_flatten_rewrites;
 #[path = "pointwise_lift_values.rs"]

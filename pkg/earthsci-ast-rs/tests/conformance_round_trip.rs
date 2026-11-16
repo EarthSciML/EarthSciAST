@@ -22,16 +22,10 @@
 use earthsci_ast::*;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+
+use crate::common;
 
 const BINDING: &str = "rust";
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root")
-}
 
 /// Applied to BOTH sides, so no relaxation can hide a drop. Implements the five
 /// normalizations in `tests/conformance/README.md` (admissions 1 and 2 of
@@ -151,7 +145,7 @@ fn strings(v: &Value) -> Vec<String> {
 
 #[test]
 fn conformance_round_trip_manifest() {
-    let root = repo_root();
+    let root = common::repo_root();
     let tests_dir = root.join("tests");
     let manifest_path = tests_dir.join("conformance/round_trip/manifest.json");
     let manifest: Value = serde_json::from_str(

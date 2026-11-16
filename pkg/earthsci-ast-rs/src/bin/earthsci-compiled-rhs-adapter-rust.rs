@@ -31,37 +31,13 @@
 
 use std::process::ExitCode;
 
-use earthsci_ast::adapter_support::write_report;
-use earthsci_ast::compiled_rhs_adapter::{parse_args, run_manifest};
+use earthsci_ast::adapter_support::adapter_main;
+use earthsci_ast::compiled_rhs_adapter::Engine;
 
 fn main() -> ExitCode {
-    let args = match parse_args(std::env::args().skip(1)) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("compiled-rhs-adapter-rust: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let report = match run_manifest(&args.manifest, args.engine) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("compiled-rhs-adapter-rust: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Write the report FIRST, so the runner still gets the per-fixture detail
-    // for whatever failed, then fail the process.
-    if let Err(e) = write_report(&args.output, &report.payload) {
-        eprintln!("compiled-rhs-adapter-rust: failed to write output: {e}");
-        return ExitCode::FAILURE;
-    }
-    if !report.failed.is_empty() {
-        eprintln!(
-            "compiled-rhs-adapter-rust: {} fixture(s) produced no numbers: {}",
-            report.failed.len(),
-            report.failed.join(", ")
-        );
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+    adapter_main(
+        "compiled-rhs-adapter-rust",
+        Some("--engine"),
+        Engine::configure,
+    )
 }

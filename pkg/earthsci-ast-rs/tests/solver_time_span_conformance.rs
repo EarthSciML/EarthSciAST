@@ -10,6 +10,8 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+use crate::common;
+
 fn suite_dir() -> PathBuf {
     // <repo>/pkg/earthsci-ast-rs/tests/this_file.rs
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -20,12 +22,7 @@ fn suite_dir() -> PathBuf {
 }
 
 fn manifest() -> Value {
-    let p = suite_dir().join("manifest.json");
-    serde_json::from_str(
-        &std::fs::read_to_string(&p)
-            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
-    )
-    .expect("manifest.json is JSON")
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 fn fixtures(m: &Value, expect: &str) -> Vec<Value> {
