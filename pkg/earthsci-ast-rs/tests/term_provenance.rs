@@ -65,7 +65,7 @@ fn corpus_fixtures() -> Vec<(String, PathBuf)> {
 
 /// Independent sampled states per equation. One state can sum to the same bits
 /// in every association by chance; several make that vanishingly unlikely.
-const SAMPLES: u64 = 8;
+const SAMPLES: u64 = 32;
 
 /// A deterministic, non-default value for `name` in sample `salt`, spread over
 /// many decades so that summing in another association rounds differently.
