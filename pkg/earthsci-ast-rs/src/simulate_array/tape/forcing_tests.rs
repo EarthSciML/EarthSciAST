@@ -73,8 +73,8 @@ fn bc_values(n: usize, scale: f64) -> ArrayD<f64> {
 fn feed(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
     let buf = compiled.forcing_handle();
     let mut buf = buf.borrow_mut();
-    buf.insert("bc".into(), bc_values(n, scale));
-    buf.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
+    buf.insert("M.bc".into(), bc_values(n, scale));
+    buf.insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), k));
 }
 
 fn state_of(n: usize, seed: u64) -> Vec<f64> {
@@ -153,18 +153,18 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
     assert_eq!(
         none,
         [
-            ("bc".to_string(), Cadence::Const),
-            ("k".to_string(), Cadence::Const)
+            ("M.bc".to_string(), Cadence::Const),
+            ("M.k".to_string(), Cadence::Const)
         ]
     );
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let mut some = sections(&discrete);
     some.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
         some,
         [
-            ("bc".to_string(), Cadence::Segment),
-            ("k".to_string(), Cadence::Const)
+            ("M.bc".to_string(), Cadence::Segment),
+            ("M.k".to_string(), Cadence::Const)
         ]
     );
 }
@@ -229,7 +229,7 @@ fn a_forcing_entry_of_another_shape_faults() {
     compiled
         .forcing_handle()
         .borrow_mut()
-        .insert("bc".into(), bc_values(n + 1, 1.0));
+        .insert("M.bc".into(), bc_values(n + 1, 1.0));
     let dy = fast_dy(
         &compiled,
         &mut scratch_for(&prog),
@@ -239,7 +239,7 @@ fn a_forcing_entry_of_another_shape_faults() {
     );
     let msg = crate::simulate_array::take_const_array_oob().expect("the mismatch faults");
     assert!(
-        msg.contains("'bc' with shape [5]") && msg.contains("reads it as [4]"),
+        msg.contains("'M.bc' with shape [5]") && msg.contains("reads it as [4]"),
         "{msg}"
     );
     assert!(dy.iter().any(|v| v.is_nan()));
@@ -252,7 +252,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     feed(&compiled, n, 1.0, 0.7);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let (prog, report) =
         taped(compiled.build_tape_opts(&discrete, Some(super::fuse::SuperopCfg::from_env())));
     assert!(report.fallbacks.is_empty(), "{report}");
@@ -305,7 +305,7 @@ fn segmented_solve(
     let mut compiled = compile(forced_doc(n as i64));
     compiled.runtime_mode = mode;
     let buf = compiled.forcing_handle();
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let opts = crate::simulate::SolveOptions {
         saveat: Some(vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0]),
         ..Default::default()
@@ -325,8 +325,8 @@ fn segmented_solve(
             None,
             &mut |t| {
                 let mut b = buf.borrow_mut();
-                b.insert("bc".into(), bc_values(n, 1.0 + t));
-                b.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), 0.7));
+                b.insert("M.bc".into(), bc_values(n, 1.0 + t));
+                b.insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), 0.7));
                 Ok(())
             },
         )
@@ -423,7 +423,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         compiled
             .forcing_handle()
             .borrow_mut()
-            .insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
+            .insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), k));
         let params = HashMap::new();
         let param_vec = compiled.debug_resolve_params(&params);
         let cfg = Some(super::fuse::SuperopCfg::from_env());

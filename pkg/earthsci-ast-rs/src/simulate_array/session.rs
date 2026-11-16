@@ -217,7 +217,6 @@ impl SolveSession<'_> {
             solver_name,
             &self.stats,
             self.compiled.merged_renames.clone(),
-            self.compiled.namespace.clone(),
         )
     }
 

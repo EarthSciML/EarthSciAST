@@ -42,7 +42,7 @@
 //! UI from). Every item is re-exported here, so `crate::simulate::*` paths
 //! resolve unchanged.
 
-use crate::flatten::{FlattenedSystem, flatten};
+use crate::flatten::FlattenedSystem;
 use crate::types::EsmFile;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;

@@ -737,13 +737,16 @@ pub struct ArrayCompiled {
     /// layout: a slot's name (`"u[2,3]"`, `"s"`) is computed from it
     /// (`layout::slot_name`, `layout::lookup_slot`) rather than stored.
     var_shapes: IndexMap<String, VarShape>,
-    /// Every slot's name, parallel to the flat state vector, built the first
-    /// time [`Self::state_variable_names`] is asked. Nothing inside the build
-    /// or a solve's setup reads it; it is the public surface's spelling.
+    /// Every slot's name as [`Self::state_variable_names`] shows it (without
+    /// `namespace`), parallel to the flat state vector, built on first ask.
+    /// Nothing inside the build or a solve's setup reads it.
     state_names: std::cell::OnceCell<Vec<String>>,
-    /// The same names qualified by `namespace`, built on first ask
-    /// ([`Self::qualified_state_names`]).
+    /// Every slot's name as the build made it, parallel to the flat state
+    /// vector, built on first ask ([`Self::qualified_state_names`]).
     qualified_state_names: std::cell::OnceCell<Vec<String>>,
+    /// The parameter names as [`Self::parameter_names`] shows them (without
+    /// `namespace`), built on first ask.
+    shown_param_names: std::cell::OnceCell<Vec<String>>,
     /// Each state variable's default, parallel to `var_shapes`.
     state_defaults: Vec<StateDefault>,
     param_names: Vec<String>,
@@ -834,14 +837,12 @@ pub struct ArrayCompiled {
     /// cloning the name set every step. Empty for a model with no const
     /// factors, which reads byte-identically to the pre-§5.5.5 evaluator.
     const_scope: std::sync::Arc<ConstArrayScope>,
-    /// The single-model namespace (the top-level `models` map key), set by
-    /// [`Self::from_file`]. The raw single-model path keys params/states by their
-    /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
-    /// Julia toolkit namespace them (`Model.R_0`).
-    /// So a caller's `parameters` / `initial_conditions` override key is accepted
-    /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
-    /// cross-toolkit override-naming parity). `None` on the `from_flattened`
-    /// path, whose names are already fully namespaced.
+    /// The model a one-model document is shown under: the key of its only
+    /// model, `None` for any other build. Every name this build makes is the
+    /// flattened, qualified one (`M.u`); a one-model document's names are shown
+    /// without `M.` where this artifact presents them — its public name
+    /// lists, the rows of [`Self::solve`] and the errors it raises — because
+    /// that is how its author wrote them.
     namespace: Option<String>,
     /// The working precision this model was COMPILED under
     /// (`crate::precision`), captured so evaluation reproduces it even when the

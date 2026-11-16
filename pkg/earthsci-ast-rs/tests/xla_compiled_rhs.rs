@@ -755,11 +755,12 @@ fn forced_doc(n: i64) -> String {
     .to_string()
 }
 
+/// The forcing buffer is keyed by the build's qualified names (`M.bc`).
 fn feed_forced(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
     let buf = compiled.forcing_handle();
     let mut buf = buf.borrow_mut();
     buf.insert(
-        "bc".into(),
+        "M.bc".into(),
         ndarray::ArrayD::from_shape_vec(
             ndarray::IxDyn(&[n]),
             (0..n).map(|i| scale * (0.1 + i as f64 * 0.37)).collect(),
@@ -767,7 +768,7 @@ fn feed_forced(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
         .expect("1-D"),
     );
     buf.insert(
-        "k".into(),
+        "M.k".into(),
         ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), k),
     );
 }
@@ -816,7 +817,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
         );
     }
 
-    compiled.forcing_handle().borrow_mut().remove("bc");
+    compiled.forcing_handle().borrow_mut().remove("M.bc");
     earthsci_ast::simulate_array::take_const_array_oob();
     compiled.debug_eval_rhs(&u, 0.0, &params);
     let want = earthsci_ast::simulate_array::take_const_array_oob().expect("the oracle faults");

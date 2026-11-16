@@ -541,17 +541,28 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
                 .map_err(|e| SimulateError::Compile(crate::compile_error::CompileError::from(e)))?
         }
     };
-    let forcing = match &*prob.backend {
-        crate::problem::Backend::Array(c) => problem_forcing(c, &flat),
-        crate::problem::Backend::Static(_) => HashMap::new(),
-    };
-    RhsProgram::compile(
-        Arc::new(flat),
-        compiler,
-        None,
-        ForcingSource::Problem(&forcing),
-        prob.runtime_array_parameters,
-    )
+    match &*prob.backend {
+        // The Problem's own compiled model, copied rather than compiled again:
+        // the program and the Problem run the same rules under the same names.
+        crate::problem::Backend::Array(c) => {
+            let forcing = problem_forcing(c, &flat);
+            RhsProgram::from_compiled(
+                c.program_copy(),
+                Arc::new(flat),
+                compiler,
+                None,
+                ForcingSource::Problem(&forcing),
+                prob.runtime_array_parameters,
+            )
+        }
+        crate::problem::Backend::Static(_) => RhsProgram::compile(
+            Arc::new(flat),
+            compiler,
+            None,
+            ForcingSource::Problem(&HashMap::new()),
+            prob.runtime_array_parameters,
+        ),
+    }
 }
 
 /// The Problem's forcing buffer, keyed by the flattened names: an entry whose
@@ -677,12 +688,32 @@ impl RhsProgram {
             ForcingSource::Parent(p) => Some(&*p.conditional_shapes),
             ForcingSource::Problem(_) => None,
         };
-        let mut compiled = ArrayCompiled::from_flattened_shaped(
+        let compiled = ArrayCompiled::from_flattened_shaped(
             &flat,
             runtime_array_parameters,
             inherited,
             compiler,
         )?;
+        Self::from_compiled(
+            compiled,
+            flat,
+            compiler,
+            writes,
+            forcing,
+            runtime_array_parameters,
+        )
+    }
+
+    /// The program of `compiled`, a build of `flat` under `compiler`, as
+    /// [`Self::compile`] makes it.
+    fn from_compiled(
+        mut compiled: ArrayCompiled,
+        flat: Arc<FlattenedSystem>,
+        compiler: Compiler,
+        writes: Option<&[String]>,
+        forcing: ForcingSource,
+        runtime_array_parameters: bool,
+    ) -> Result<RhsProgram, SimulateError> {
         let conditional_shapes = Arc::new(std::mem::take(&mut compiled.conditional_shapes));
         // Every forcing read compiles against the shape the data has.
         let shapes: Vec<(String, Vec<usize>)> = match &forcing {

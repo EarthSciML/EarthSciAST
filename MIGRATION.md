@@ -1756,6 +1756,9 @@ time derivative. A flattened name with a dot prints as a quoted name joined by
 | a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
 | — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
 | a `faq`-valued `initialization_equations` entry seeded the initial state only for a document of one model | `FlattenedSystem::initialization_faqs` carries them, namespaced, from every component and subsystem, and every build seeds them; a struct literal of `FlattenedSystem` names the new field | `added` |
+| `compile_array`, `ArrayCompiled::from_file` / `from_file_owned` / `from_model_with_arrays` compiled a one-model document's model as authored, and dropped a reaction system beside it | every build flattens the document and compiles the flattened system; a one-model document's names are shown without its model's name (the public name lists, the rows of `ArrayCompiled::solve`, and errors), as before | `semantics` |
+| `ArrayCompiled::forcing_handle()` of a one-model document from `compile_array` / `from_file` / `from_file_owned` was keyed by bare names (`k`) | keyed by the qualified name (`M.k`; `Model.k` from `from_model_with_arrays`), as it already was for a flattened system: an entry keyed `k` is not read | `changed` |
+| `rhs_program` compiled the Problem's document a second time, without the Problem's `CompilerRewrites` | it copies the Problem's compiled model, rewrites included | `semantics` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

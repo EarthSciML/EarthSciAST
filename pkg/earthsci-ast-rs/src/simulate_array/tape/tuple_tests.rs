@@ -345,7 +345,7 @@ fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
     assert!(
         refused
             .iter()
-            .any(|(_, r)| r.contains("ragged offsets factor `cnt`")),
+            .any(|(_, r)| r.contains("ragged offsets factor `M.cnt`")),
         "{refused:?}"
     );
 

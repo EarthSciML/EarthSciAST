@@ -191,7 +191,7 @@ fn index_on_a_scalar_parameter_faults() {
     ));
     let prog = ab(&compiled, &no_params());
     assert_eq!(opcount(&prog, "Fault"), 1);
-    assert!(prog.tables.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'rate'"));
+    assert!(prog.tables.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'M.rate'"));
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +657,7 @@ fn declared_box(compiled: &ArrayCompiled, name: &str) -> Option<Option<Vec<usize
             var,
             declared_shape,
             ..
-        } if var == name => Some(declared_shape.clone()),
+        } if *var == format!("M.{name}") => Some(declared_shape.clone()),
         _ => None,
     })
 }
@@ -732,7 +732,7 @@ fn data_fed_mixed(
         "source": {"url_template": "file:///nonexistent/f.nc"}}});
     let compiled = compile(doc);
     compiled.forcing_handle().borrow_mut().insert(
-        "F".to_string(),
+        "M.F".to_string(),
         ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.5, -2.0, 0.75])
             .expect("shape"),
     );
@@ -823,9 +823,9 @@ fn data_fed_ifelse_observed_takes_the_datas_shape() {
         for scratch in [&mut oracle, &mut tape] {
             compiled.debug_eval_rhs_into(&[], 0.0, &pv, &mut [], scratch, &mut RhsStats::default());
         }
-        let tape_x = tape.taped_observeds().expect("a tape")["X"].clone();
+        let tape_x = tape.taped_observeds().expect("a tape")["M.X"].clone();
         for (who, x) in [
-            ("oracle", &oracle.observed_arrays()["X"]),
+            ("oracle", &oracle.observed_arrays()["M.X"]),
             ("tape", &tape_x),
         ] {
             assert_eq!(x.shape(), &[3], "{who}, lev = {lev}");
@@ -867,7 +867,7 @@ fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
         vars["D"] = json!({"type": "unknown"});
         readers.push(d.clone());
         let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-        assert_eq!(compiled.conditional_shapes["X"], ["cell"]);
+        assert_eq!(compiled.conditional_shapes["M.X"], ["cell"]);
         assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])));
         ab(&compiled, &both_arms());
         // Unread, as `NEI2016Emis.CO` is in reseact.
@@ -910,7 +910,7 @@ fn ifelse_reading_a_scalar_const_node_takes_the_array_arms_box() {
             vars["H"] = json!({"type": "unknown"});
             readers.push(h.clone());
             let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-            assert_eq!(compiled.conditional_shapes["X"], ["cell"], "{x}");
+            assert_eq!(compiled.conditional_shapes["M.X"], ["cell"], "{x}");
             assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])), "{x}");
             ab(&compiled, &both_arms());
             // Unread, as `NEI2016Emis.CO` is in reseact.

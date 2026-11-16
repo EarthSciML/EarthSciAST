@@ -632,7 +632,7 @@ fn a_filtered_out_const_gather_never_faults() {
         // at build time for the fault it cannot place; it never faults.
         let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
         assert!(
-            refused.iter().all(|(rule, why)| rule == "D(u)"
+            refused.iter().all(|(rule, why)| rule == "D(M.u)"
                 && why.contains("E_TREEWALK_CONSTARRAY_OOB")
                 && why.contains("fault scan")),
             "{refused:?}"

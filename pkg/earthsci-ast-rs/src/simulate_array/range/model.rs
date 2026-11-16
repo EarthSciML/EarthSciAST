@@ -31,7 +31,6 @@ pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) data_fed: Vec<(String, String)>,
     pub(in crate::simulate_array) index_sets: HashMap<String, IndexSet>,
     pub(in crate::simulate_array) const_scope: Arc<ConstArrayScope>,
-    pub(in crate::simulate_array) namespace: Option<String>,
     pub(in crate::simulate_array) precision: crate::precision::Env,
     pub(in crate::simulate_array) declared_names: HashSet<String>,
     pub(in crate::simulate_array) inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
@@ -39,6 +38,55 @@ pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) declared_forcing_shapes: IndexMap<String, Option<Vec<usize>>>,
     pub(in crate::simulate_array) forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
     pub(in crate::simulate_array) unvalued_shaped_params: Vec<String>,
+}
+
+impl ArrayCompiled {
+    /// A copy of this model's rules and tables with empty caches and its own
+    /// forcing buffer: what [`crate::rhs_program`] builds a Problem's program
+    /// from instead of compiling the document a second time. The names are the
+    /// build's own, qualified ones.
+    pub(in crate::simulate_array) fn program_copy(&self) -> ArrayCompiled {
+        ArrayCompiled {
+            runtime_mode: self.runtime_mode,
+            rewrites: self.rewrites,
+            #[cfg(feature = "xla")]
+            xla_rhs: std::cell::OnceCell::new(),
+            var_shapes: self.var_shapes.clone(),
+            state_names: std::cell::OnceCell::new(),
+            qualified_state_names: std::cell::OnceCell::new(),
+            shown_param_names: std::cell::OnceCell::new(),
+            state_defaults: self.state_defaults.clone(),
+            param_names: self.param_names.clone(),
+            param_index: self.param_index.clone(),
+            param_defaults: self.param_defaults.clone(),
+            observed_rules: self.observed_rules.clone(),
+            rhs_rules: self.rhs_rules.clone(),
+            rule_set: crate::simulate_array::rhs::next_rule_set_id(),
+            n_states: self.n_states,
+            declared_names: self.declared_names.clone(),
+            conditional_shapes: self.conditional_shapes.clone(),
+            built_variables: self.built_variables.clone(),
+            forcing: Default::default(),
+            data_fed: self.data_fed.clone(),
+            field_ics: self.field_ics.clone(),
+            init_faqs: self.init_faqs.clone(),
+            ic_scope: self.ic_scope.clone(),
+            index_sets: self.index_sets.clone(),
+            namespace: None,
+            const_scope: Arc::clone(&self.const_scope),
+            precision: self.precision.clone(),
+            merged_renames: self.merged_renames.clone(),
+            #[cfg(feature = "solve")]
+            field_ic_memo: std::cell::RefCell::new(None),
+            inline_param_arrays: self.inline_param_arrays.clone(),
+            forcing_decls: self.forcing_decls.clone(),
+            declared_forcing_shapes: self.declared_forcing_shapes.clone(),
+            forcing_defaults: self.forcing_defaults.clone(),
+            unvalued_shaped_params: self.unvalued_shaped_params.clone(),
+            held_at_ic: self.held_at_ic.clone(),
+            tape_cache: crate::simulate_array::tape::TapeCache::new(),
+        }
+    }
 }
 
 impl ProgramModel {
@@ -60,7 +108,6 @@ impl ProgramModel {
             data_fed: c.data_fed,
             index_sets: c.index_sets,
             const_scope: c.const_scope,
-            namespace: c.namespace,
             precision: c.precision,
             declared_names: c.declared_names,
             inline_param_arrays: c.inline_param_arrays,
@@ -94,6 +141,7 @@ impl ProgramModel {
             var_shapes,
             state_names: std::cell::OnceCell::new(),
             qualified_state_names: std::cell::OnceCell::new(),
+            shown_param_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names: self.param_names.clone(),
             param_index: self.param_index.clone(),
@@ -109,7 +157,7 @@ impl ProgramModel {
             ic_scope: Default::default(),
             index_sets: self.index_sets.clone(),
             const_scope: Arc::clone(&self.const_scope),
-            namespace: self.namespace.clone(),
+            namespace: None,
             precision: self.precision.clone(),
             declared_names: self.declared_names.clone(),
             // Read only by the build's downstream readers, which take it
@@ -141,7 +189,7 @@ impl ProgramModel {
                 .iter()
                 .chain(self.var_shapes.keys())
                 .map(String::as_str),
-            self.namespace.as_deref(),
+            [],
         );
         let given = crate::simulate::canonicalize_override_keys(
             &self.param_index,

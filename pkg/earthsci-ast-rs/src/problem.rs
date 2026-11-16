@@ -1084,7 +1084,7 @@ impl EsmProblem {
     /// EsmProblem.
     pub fn parameter_names(&self) -> Vec<String> {
         match &*self.backend {
-            Backend::Array(c) => qualify_array_names(c, c.parameter_names()),
+            Backend::Array(c) => c.qualified_parameter_names().to_vec(),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -1179,7 +1179,7 @@ impl EsmProblem {
     /// solution. Empty on the static backend, which has no run to vary along.
     pub fn observed_variable_names(&self) -> Vec<String> {
         match &*self.backend {
-            Backend::Array(c) => qualify_array_names(c, &c.observed_variable_names()),
+            Backend::Array(c) => c.observed_rule_names().collect(),
             Backend::Static(_) => Vec::new(),
         }
     }
@@ -1261,29 +1261,6 @@ pub(crate) fn qualify(model: &str, key: &str) -> String {
     } else {
         format!("{model}.{key}")
     }
-}
-
-/// `names` under the array runtime's single-model namespace, when that build
-/// left them bare.
-///
-/// Presentation only: the compiled artifact keeps its own spelling, and the
-/// override-key canonicalization (`canonicalize_override_keys`) already
-/// resolves a `<namespace>.`-prefixed key against a bare slot, so a caller may
-/// hand back exactly the names it was given.
-///
-/// This exists because the array runtime names its slots differently on its two
-/// build routes: the single-model build leaves them bare, the flattened one
-/// qualifies them. Without it the SAME document would report `M.y` or `y`
-/// depending on a routing decision the caller cannot see, which is the failure
-/// §2.5.10 exists to prevent.
-fn qualify_array_names(
-    compiled: &crate::simulate_array::ArrayCompiled,
-    names: &[String],
-) -> Vec<String> {
-    let Some(ns) = compiled.namespace() else {
-        return names.to_vec();
-    };
-    names.iter().map(|n| qualify(ns, n)).collect()
 }
 
 /// The component that owns a qualified name — everything before the final
@@ -1629,29 +1606,15 @@ fn array_observed_trajectories(
     sol: &Solution,
     names: &[String],
 ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
-    let declared = compiled.observed_variable_names();
-    // The COMPILED model's namespace, not `prob.model_name`: a problem built
-    // from a typed single-model document carries no `model_name` (the caller
-    // named none), while the artifact knows the `models` key it consumed. With
-    // the empty string here, §5.8's rule-2 strip never fires and a caller's
-    // component-qualified spelling resolves to nothing.
-    let model = compiled
-        .namespace()
-        .or(prob.model_name.as_deref())
-        .unwrap_or("");
+    let declared: Vec<String> = compiled.observed_rule_names().collect();
+    let model = prob.model_name.as_deref().unwrap_or("");
     let single = components_of(&declared, model) == 1;
     let mut out = Vec::new();
     for name in names {
         let Ok(resolved) = resolve_observed_name(&declared, model, single, name) else {
             continue;
         };
-        // The solution's rows carry the qualified spelling (see
-        // `qualify_array_names`); the compiled model's rule names are bare.
-        let row_name = match compiled.namespace() {
-            Some(ns) => qualify(ns, &resolved),
-            None => resolved.clone(),
-        };
-        match sol.state_variable_names.iter().position(|r| *r == row_name) {
+        match sol.state_variable_names.iter().position(|r| *r == resolved) {
             Some(i) => out.push((name.clone(), sol.state[i].clone())),
             None => {
                 return Err(SimulateError::Compile(
@@ -1660,7 +1623,8 @@ fn array_observed_trajectories(
                          carries no scalar trajectory — it is array-valued, and the array \
                          runtime appends one row per cell only for an observed the solve was \
                          asked for. Name it in `SolveOptions::output_observed` and read the \
-                         `{resolved}[i,j]` rows of the solution."
+                         `{}[i,j]` rows of the solution.",
+                        compiled.shown(&resolved)
                     )),
                 ));
             }
@@ -2664,7 +2628,7 @@ fn build_problem(
     // After (5b), which resolved the field `ic`s this reads.
     #[cfg(feature = "solve")]
     if let Backend::Array(c) = &backend {
-        refuse_missing_initial_values(c, &opts.u0)?;
+        refuse_missing_initial_values(c, &opts.u0).map_err(|e| c.show_error(e))?;
     }
 
     // ---- (5c) `xla`: emit and compile, here, once. ------------------------
@@ -2935,12 +2899,7 @@ pub(crate) fn evaluate_static_observeds_over(
     times: &[f64],
 ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
     let _precision_guard = prob.precision.enter();
-    let rows = graph.evaluate_stateless_observeds(&prob.p, times)?;
-    let names: Vec<String> = rows.iter().map(|(name, _)| name.clone()).collect();
-    Ok(qualify_array_names(graph, &names)
-        .into_iter()
-        .zip(rows.into_iter().map(|(_, values)| values))
-        .collect())
+    graph.evaluate_stateless_observeds(&prob.p, times)
 }
 
 /// Every observed field of a problem with **nothing to integrate** whose
@@ -3221,7 +3180,9 @@ fn build_compiler_report(
     };
     // Before either compiler's own gate, so both refuse a live envelope
     // factor the same way (CONFORMANCE_SPEC §5.5.6).
-    compiled.refuse_live_overlap_factors()?;
+    compiled
+        .refuse_live_overlap_factors()
+        .map_err(|e| compiled.show_error(e))?;
     #[cfg_attr(not(feature = "solve"), allow(unused_mut))]
     let mut report = rule_report(compiled, model_name, compiler, discrete_forcing, true)?;
     // The field initial conditions are evaluated by the reference evaluator
@@ -3234,7 +3195,9 @@ fn build_compiler_report(
         let mut ic_rows = Vec::new();
         // An `ic` that reads a state has no value at the start of the run
         // (esm-spec §11.4.2): refused before anything evaluates one.
-        compiled.refuse_ic_state_reads()?;
+        compiled
+            .refuse_ic_state_reads()
+            .map_err(|e| compiled.show_error(e))?;
         for r in compiled.field_ic_records(p, compiler.is_strict(), t0, discrete_forcing) {
             let reason = r.per_cell.then(|| {
                 "evaluated by the reference evaluator at setup, and a `faq` in it is not one \
@@ -3985,13 +3948,14 @@ fn is_externally_fed(var: &crate::types::ModelVariable) -> bool {
     })
 }
 
-/// Whether `name` — a compiled or flattened name — or its model-local tail is a
-/// key of `keys`.
+/// Whether a key of `keys` spells `name`, a compiled or flattened name: the
+/// name itself or one of its dotted suffixes (esm-spec §6.6.2,
+/// [`crate::simulate::key_spells`]).
 fn names_key<V>(keys: &HashMap<String, V>, name: &str) -> bool {
     keys.contains_key(name)
-        || name
-            .split_once('.')
-            .is_some_and(|(_, tail)| keys.contains_key(tail))
+        || keys
+            .keys()
+            .any(|k| crate::simulate::key_spells(k, name, None).is_some())
 }
 
 /// The declared variable a compiled or flattened `name` refers to, for a
@@ -4285,12 +4249,6 @@ impl SuppliedData {
         ingested: &mut HashMap<String, ArrayD<f64>>,
         retained: &std::collections::HashSet<String>,
     ) -> Result<(), SimulateError> {
-        // The parameter as the caller addresses it: by full name (esm-spec
-        // §6.6.2), which a single-model build compiles bare under its namespace.
-        let full = |name: &str| match c.namespace() {
-            Some(ns) if !name.starts_with(&format!("{ns}.")) => format!("{ns}.{name}"),
-            _ => name.to_string(),
-        };
         let forcing = c.forcing_handle();
         for name in c.forcing_names() {
             if forcing.borrow().contains_key(name) {
@@ -4338,10 +4296,7 @@ impl SuppliedData {
             // §6.3), and with none the parameter is missing data (§10.10).
             let value = match declared_default_forcing(c, name) {
                 None => {
-                    return Err(missing_data_error(
-                        &full(name),
-                        declared_variable(file, name),
-                    ));
+                    return Err(missing_data_error(name, declared_variable(file, name)));
                 }
                 // A default over a shape that does not resolve yet (an
                 // unmaterialized derived set) has no field to fill here.
@@ -4352,10 +4307,7 @@ impl SuppliedData {
         }
         for name in c.unvalued_shaped_params() {
             if !names_key(p, name) {
-                return Err(missing_data_error(
-                    &full(name),
-                    declared_variable(file, name),
-                ));
+                return Err(missing_data_error(name, declared_variable(file, name)));
             }
         }
         // A scalar parameter no default, caller `p` or `distribution` gives a
@@ -4367,24 +4319,24 @@ impl SuppliedData {
             {
                 continue;
             }
-            return Err(missing_data_error(&full(&name), var));
+            return Err(missing_data_error(&name, var));
         }
         Ok(())
     }
 
-    /// The captured snapshot for forcing name `name` — a compiled name, which
-    /// is `Model.param` on a coupled build and the bare `param` on a
-    /// single-model one.
+    /// The captured snapshot for forcing name `name`, a compiled name: the one
+    /// the caller keyed by that name, else the only one keyed by a dotted
+    /// suffix of it ([`crate::simulate::key_spells`]).
     #[cfg(not(target_arch = "wasm32"))]
     fn forcing_array(&self, name: &str) -> Option<ArrayD<f64>> {
         let arrays = self.forcing_arrays.borrow();
         if let Some(a) = arrays.get(name) {
             return Some(a.clone());
         }
-        let mut tails = arrays
+        let mut spelled = arrays
             .iter()
-            .filter(|(k, _)| k.split_once('.').is_some_and(|(_, tail)| tail == name));
-        match (tails.next(), tails.next()) {
+            .filter(|(k, _)| crate::simulate::key_spells(k, name, None).is_some());
+        match (spelled.next(), spelled.next()) {
             (Some((_, a)), None) => Some(a.clone()),
             _ => None,
         }
@@ -4674,11 +4626,18 @@ fn bind_providers(
         if routing.shadowed.contains(&key) {
             continue;
         }
-        let target = routing
-            .targets
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| key.clone());
+        // A key that designates no parameter feeds the name it spells: in a
+        // one-model document, that name under the model, as `flatten` names
+        // an undeclared field the model reads.
+        let target =
+            routing
+                .targets
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| match compiled.namespace() {
+                    Some(ns) if !key.contains('.') => qualify(ns, &key),
+                    _ => key.clone(),
+                });
         if let Some(other) = given.insert(target.clone(), key.clone()) {
             // An unrouted key that is spelled as another key's target.
             return Err(SimulateError::ProviderError {
@@ -4992,34 +4951,15 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
             let sink = prob.inspect.then_some(&mut insp);
             let mut forcing = ProviderRefresh::new(prob, compiled);
             let run = forcing.run_spec();
-            let sol = compiled.solve_run(&run, &effective, sink, &mut |t| forcing.at(t))?;
+            let sol = compiled
+                .solve_run(&run, &effective, sink, &mut |t| forcing.at(t))
+                .map_err(|e| compiled.show_error(e))?;
             if prob.inspect {
                 *prob.inspection.borrow_mut() = insp;
             }
-            Ok(spell_rows(compiled, sol))
+            Ok(sol)
         }
     }
-}
-
-/// One spelling per document, whichever route it took: the single-model array
-/// build names its rows bare, the flattened one qualifies them (see
-/// `qualify_array_names`). Every row then carries the namespace, so none is
-/// reached through it.
-#[cfg(feature = "solve")]
-fn spell_rows(compiled: &ArrayCompiled, mut sol: Solution) -> Solution {
-    if compiled.namespace().is_some() {
-        // The state rows' names are the model's (kept, already qualified);
-        // only the observed rows after them are spelled here.
-        let states = compiled.qualified_state_names();
-        let observed = sol
-            .state_variable_names
-            .split_off(states.len().min(sol.state_variable_names.len()));
-        let mut names = states.to_vec();
-        names.extend(qualify_array_names(compiled, &observed));
-        sol.state_variable_names = names;
-    }
-    sol.metadata.namespace = None;
-    sol
 }
 
 /// The provider refresh a run of a Problem drives
@@ -5500,10 +5440,6 @@ impl Integrator<'_> {
         let sol = self
             .session
             .advance(t_next, Some(&[t_next]), &mut |t| forcing.at(t))?;
-        let sol = match &*self.prob.backend {
-            Backend::Array(compiled) => spell_rows(compiled, sol),
-            Backend::Static(_) => sol,
-        };
 
         if self.state.is_empty() {
             // The state rows, then the observed rows the first step reported.
@@ -5536,9 +5472,7 @@ impl Integrator<'_> {
     /// legal suffix in Rust.
     pub fn solve_to_completion(&mut self) -> Result<Solution, SimulateError> {
         while matches!(self.step()?, StepStatus::Advanced) {}
-        let mut metadata = self.session.metadata();
-        // Every row carries the namespace, as in `solve`.
-        metadata.namespace = None;
+        let metadata = self.session.metadata();
         Ok(Solution {
             time: std::mem::take(&mut self.time),
             state: std::mem::take(&mut self.state),
