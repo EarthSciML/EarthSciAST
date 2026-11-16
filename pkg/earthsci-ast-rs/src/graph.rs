@@ -1027,49 +1027,6 @@ fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
     }
 }
 
-/// Index symbols a node BINDS for its own body: a `faq`'s
-/// `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
-///
-/// Narrower than `structural::bound_index_symbols`, which also treats every bare
-/// name in an `index(A, i, j)` position as bound. Those positions are exactly
-/// where an aggregate's binders appear, and subtracting them THERE rather than
-/// at the binding node would hide a real reference to a declared variable used
-/// as an index. The binder itself is caught at its `faq`.
-fn graph_bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
-    let mut bound = Vec::new();
-    if let Some(ranges) = &node.ranges {
-        bound.extend(ranges.keys().cloned());
-    }
-    if let Some(idx) = &node.output_idx {
-        bound.extend(idx.iter().cloned());
-    }
-    if let Some(v) = &node.int_var {
-        bound.push(v.clone());
-    }
-    bound
-}
-
-/// Accumulate `expr`'s variable references into `out`, subtracting each node's
-/// own binders at that node.
-fn collect_graph_variables(expr: &crate::Expr, out: &mut std::collections::HashSet<String>) {
-    match expr {
-        crate::Expr::Variable(name) => {
-            out.insert(name.clone());
-        }
-        crate::Expr::Operator(node) => {
-            // Collect this node's subtree into a LOCAL set, subtract the symbols
-            // this node binds, and only then promote what is left to the caller.
-            let mut local = std::collections::HashSet::new();
-            node.for_each_child(&mut |child| collect_graph_variables(child, &mut local));
-            for symbol in graph_bound_index_symbols(node) {
-                local.remove(&symbol);
-            }
-            out.extend(local);
-        }
-        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
-    }
-}
-
 /// Extract the variable names an expression REFERENCES, with every locally-bound
 /// index symbol removed, sorted and deduplicated for deterministic node/edge
 /// ordering — the node set §4.8.2 asks for.
@@ -1079,22 +1036,20 @@ fn collect_graph_variables(expr: &crate::Expr, out: &mut std::collections::HashS
 /// aggregate bodies, `filter` predicates, integral bounds and makearray
 /// `values` all contribute graph edges.
 ///
-/// Deliberately NOT [`crate::expression::collect_variables`]. That collector
-/// reports every bare name it reaches, so a `faq`'s own range binders
-/// (`sum over a of src[a]`) came back looking like model variables and became
-/// graph nodes with no declaration, no units and no kind. A binder is introduced
-/// by the aggregate's own `ranges` clause and is scoped to it; it is not a
-/// variable of the system, so it is not a node. The subtraction is PER NODE, at
-/// the binder that introduces the symbol, so a name bound inside one reduction
-/// and free outside it is still reported.
-///
-/// `collect_variables` itself is unchanged: it backs the public `free_variables`
-/// and is shared with unit conversion, where "every name the subtree mentions"
-/// is the wanted answer.
+/// Deliberately NOT [`crate::expression::collect_variables`], which reports
+/// every bare name it reaches, including a `faq`'s own range binders
+/// (`sum over a of src[a]`): those are scoped to the aggregate and are not
+/// variables of the system, so they are not graph nodes. The binders are the
+/// [`crate::binders::Binders::SCOPE`] kinds, subtracted at the node that
+/// introduces them, so a name bound inside one reduction and free outside it
+/// is still reported. Bare `index` subscripts are not binders here: those
+/// positions are exactly where an aggregate's binders appear, and subtracting
+/// them there would hide a real reference to a declared variable used as an
+/// index.
 fn extract_variables_from_expr(expr: &crate::Expr) -> Vec<String> {
-    let mut set = std::collections::HashSet::new();
-    collect_graph_variables(expr, &mut set);
-    let mut vars: Vec<String> = set.into_iter().collect();
+    let mut vars: Vec<String> = crate::binders::free_names(expr, crate::binders::Binders::SCOPE)
+        .into_iter()
+        .collect();
     vars.sort();
     vars
 }

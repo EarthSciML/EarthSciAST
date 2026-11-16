@@ -1221,26 +1221,15 @@ impl ReservedIndexScan {
                  but '{sym}' is {role}"
             ));
         };
-        if let Some(ranges) = crate::json_visit::small_get(obj, "ranges").and_then(Value::as_object)
-        {
-            for key in ranges.keys() {
-                if let Some(role) = reserved(key) {
-                    seen.push(key);
-                    record("a `ranges` key", key, role);
-                }
+        crate::binders::for_each_json_loop_binder(value, |kind, sym| {
+            let Some(role) = reserved(sym) else { return };
+            if kind == crate::binders::Binders::RANGES {
+                seen.push(sym);
+                record("a `ranges` key", sym, role);
+            } else if !seen.contains(&sym) {
+                record("an `output_idx` entry", sym, role);
             }
-        }
-        if let Some(output_idx) =
-            crate::json_visit::small_get(obj, "output_idx").and_then(Value::as_array)
-        {
-            for entry in output_idx.iter().filter_map(Value::as_str) {
-                if let Some(role) = reserved(entry)
-                    && !seen.contains(&entry)
-                {
-                    record("an `output_idx` entry", entry, role);
-                }
-            }
-        }
+        });
     }
 
     pub(crate) fn finish(self) -> Result<(), crate::diagnostic::DiagnosticError> {

@@ -5,13 +5,13 @@
 //! lowering helpers.
 
 use super::*;
+use crate::binders::Binders;
+use crate::causal_self_read::{self, SelfReadDefect};
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
 use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{
-    EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
-};
+use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{ValueInventionResult, materialize_value_invention};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -277,17 +277,15 @@ pub(crate) fn mount_subsystems(
         for (k, v) in sub_sets {
             index_sets.entry(k).or_insert(v);
         }
-        let siblings: Vec<String> = {
-            let mut s: Vec<String> = sub_model.variables.keys().cloned().collect();
-            s.sort();
-            s
-        };
+        // Every sibling reference is prefixed in ONE pass, so a nested
+        // subsystem that repeats this one's name (`s.b` beside a local `b`)
+        // cannot have the local's new name renamed again as the nested one.
+        // A loop symbol spelled like a sibling shadows it.
+        let siblings: HashSet<&str> = sub_model.variables.keys().map(String::as_str).collect();
         let rename_all = |expr: &Expr| -> Expr {
-            let mut out = expr.clone();
-            for s in &siblings {
-                out = rename_free_symbol(&out, s, &format!("{sub_name}.{s}"));
-            }
-            out
+            crate::binders::rename_free_names(expr, Binders::LOOP, &|n| {
+                siblings.contains(n).then(|| format!("{sub_name}.{n}"))
+            })
         };
         for (vname, var) in &sub_model.variables {
             let mounted = format!("{sub_name}.{vname}");
@@ -1484,7 +1482,7 @@ pub(crate) fn check_free_variables(
         // doc note on `collect_dims_and_index_heads`.
         let mut binders = NameSet::default();
         if is_ic_lhs(&eq.lhs) {
-            collect_free_bare_symbols(&eq.rhs, &mut bound);
+            crate::binders::collect_bare_symbols(&eq.rhs, &mut bound);
             collect_dims_and_index_heads(&eq.lhs, &mut bound);
             collect_dims_and_index_heads(&eq.rhs, &mut bound);
         } else {
@@ -1517,7 +1515,7 @@ pub(crate) fn check_free_variables(
             if failure.is_some() {
                 return;
             }
-            collect_binders(expr, &mut binders);
+            crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
                 check_expr_free_vars(expr, &|name: &str| {
                     declared.contains(name) || scope.contains(name)
@@ -1562,62 +1560,13 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
     matches!(lhs, Expr::Operator(op) if op.op == "ic")
 }
 
-/// The index / integration symbols a single node BINDS for its body (mirrors
-/// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
-/// `integral` `int_var`, the BARE subscript positions of
-/// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
-fn node_binders(node: &ExpressionNode, out: &mut NameSet) {
-    node_loop_binders(node, out);
-    if node.op == "index" {
-        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
-        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
-        for arg in node.args.iter().skip(1) {
-            if let Expr::Variable(name) = arg {
-                out.insert(name.clone());
-            }
+/// Insert every name `node` binds as one of `kinds` into `out`.
+fn insert_binders(node: &ExpressionNode, kinds: Binders, out: &mut NameSet) {
+    node.for_each_binder(kinds, |n| {
+        if !out.contains(n) {
+            out.insert(n.to_string());
         }
-    }
-}
-
-/// [`node_binders`] less the bare `index` subscripts: the names a node binds
-/// for its body and nothing else.
-fn node_loop_binders(node: &ExpressionNode, out: &mut NameSet) {
-    if let Some(idx) = &node.output_idx {
-        out.extend(idx.iter().cloned());
-    }
-    if let Some(ranges) = &node.ranges {
-        out.extend(ranges.keys().cloned());
-    }
-    if let Some(v) = &node.int_var {
-        out.insert(v.clone());
-    }
-    if let Some(bindings) = &node.bindings {
-        out.extend(bindings.keys().cloned());
-    }
-}
-
-/// Union every binder introduced anywhere in the subtree (whole-tree, like
-/// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
-/// prevents a false positive, which is the cardinal requirement here.
-fn collect_binders(expr: &Expr, out: &mut NameSet) {
-    if let Expr::Operator(node) = expr {
-        node_binders(node, out);
-        node.for_each_child(&mut |child| collect_binders(child, out));
-    }
-}
-
-/// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
-/// used to credit an `ic` RHS's coordinate symbols into the bound set.
-fn collect_free_bare_symbols(expr: &Expr, out: &mut NameSet) {
-    match expr {
-        Expr::Variable(name) if !name.contains('.') && !is_builtin_function_name(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Collect, in one walk of the subtree:
@@ -1648,7 +1597,7 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
 }
 
 /// [`collect_dims_and_index_heads`] into `credited` and, in the same walk, the
-/// binders into `binders`: as [`collect_binders`] for a left-hand side
+/// binders into `binders`: every [`Binders::ALL`] binder for a left-hand side
 /// (`rhs: None`); for a right-hand side (`rhs: Some(enclosed)`), the same less
 /// one case: a bare `index(array, i)` subscript that no enclosing node binds
 /// and the left-hand side does not bind either. There it is a READ of `i` with
@@ -1677,16 +1626,13 @@ fn collect_dims_heads_and_binders(
     }
     let child_rhs = match rhs {
         None => {
-            node_binders(node, binders);
+            insert_binders(node, Binders::ALL, binders);
             None
         }
         Some(enclosed) => {
-            let carries = node.output_idx.is_some()
-                || node.ranges.is_some()
-                || node.int_var.is_some()
-                || node.bindings.is_some();
+            let carries = node.carries_binders(Binders::BODY);
             if enclosed || node.op != "index" {
-                node_binders(node, binders);
+                insert_binders(node, Binders::ALL, binders);
             }
             Some(enclosed || carries)
         }
@@ -1773,31 +1719,12 @@ pub(super) struct IcScope {
     pub(super) state_reads: Vec<(String, String)>,
 }
 
-/// The names `expr` reads FREE: every bare variable reference not bound by an
-/// enclosing node (a `faq`'s `output_idx` / `ranges` keys, an `integral`'s
-/// variable, …). A loop index is no read of the observed or state that
-/// happens to share its name.
-fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) if !bound.contains(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            let mut own = NameSet::default();
-            node_loop_binders(node, &mut own);
-            let depth = bound.len();
-            bound.extend(own);
-            node.for_each_child(&mut |child| collect_free_names(child, bound, out));
-            bound.truncate(depth);
-        }
-        _ => {}
-    }
-}
-
+/// The names `expr` reads FREE: every variable reference not bound by an
+/// enclosing node ([`Binders::BODY`]: a `faq`'s `output_idx` / `ranges` keys,
+/// an `integral`'s variable, a template application's parameters). A loop
+/// index is no read of the observed or state that happens to share its name.
 pub(super) fn free_names(expr: &Expr) -> HashSet<String> {
-    let mut out = HashSet::new();
-    collect_free_names(expr, &mut Vec::new(), &mut out);
-    out
+    crate::binders::free_names(expr, Binders::BODY)
 }
 
 /// Memoized walk over the observed definitions marking each one that reads
@@ -2644,19 +2571,7 @@ fn build_param_tables(
 // structural and costs a document that has no such read one walk of each
 // algebraic RHS at build time; everything below is skipped when
 // `collect_self_reads` finds nothing, which is the overwhelmingly common case.
-//
-// Rationale, alternatives, and the reason the lag is DERIVED rather than
-// declared: `docs/content/rfcs/causal-self-reference-recurrence.md`.
-
-/// One causal self-read found in a variable's own defining RHS.
-struct SelfRead {
-    /// The read's index arguments (`args[1..]` of the `index` node).
-    args: Vec<Expr>,
-    /// Bounds of every index symbol bound by an enclosing `faq` at the
-    /// point the read was found — the scope a symbol-valued lag is proved in.
-    /// Innermost binding wins, matching the evaluator's `loop_binds` shadowing.
-    env: HashMap<String, (i64, i64)>,
-}
+// The analysis itself is shared with the validator: `crate::causal_self_read`.
 
 /// A recurrence definition, lowered to the frame + per-cell body the sweep
 /// runs (see [`AlgebraicRule::Recurrence`]).
@@ -2675,218 +2590,61 @@ fn recur_err(code: &str, detail: String) -> CompileError {
     }
 }
 
-/// The affine form of an index expression with respect to the frame symbol
-/// `sym`: the coefficient of `sym`, plus the integer bounds of the symbol-free
-/// part — `None` when those bounds cannot be proved.
-///
-/// The two halves carry different weight. The **coefficient** must be provable:
-/// unless the expression carries `sym` exactly once with coefficient 1 it does
-/// not name a position relative to the cell being written, and there is nothing
-/// to interpret. The **constant part** need not be: an unprovable offset is a
-/// lag whose sign is unknown, which esm-spec §4.3.1.1 admits and leaves to the
-/// runtime's fail-closed read — a cell the sweep has not published cannot be
-/// read, so an unprovable lag cannot produce a wrong number, only a fault.
-///
-/// Treating an unresolvable symbol as fatal instead would make the VALIDATOR
-/// reject documents the evaluator accepts (it resolves ranges against the
-/// registry first and so proves more), which is the one disagreement between
-/// the two that is never defensible.
-struct Affine {
-    coef: i64,
-    konst: Option<(i64, i64)>,
-}
-
-fn affine_in_sym(e: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> Option<Affine> {
-    let konst = |lo: i64, hi: i64| {
-        Some(Affine {
-            coef: 0,
-            konst: Some((lo, hi)),
-        })
-    };
-    match e {
-        Expr::Integer(n) => konst(*n, *n),
-        Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
-            let n = *f as i64;
-            konst(n, n)
-        }
-        Expr::Variable(v) if v == sym => Some(Affine {
-            coef: 1,
-            konst: Some((0, 0)),
-        }),
-        Expr::Variable(v) => Some(Affine {
-            coef: 0,
-            konst: env.get(v).copied(),
-        }),
-        Expr::Operator(node) if node.args.len() == 2 => {
-            let a = affine_in_sym(&node.args[0], sym, env)?;
-            let b = affine_in_sym(&node.args[1], sym, env)?;
-            let both = a.konst.zip(b.konst);
-            match node.op.as_str() {
-                "+" => Some(Affine {
-                    coef: a.coef + b.coef,
-                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
-                }),
-                "-" => Some(Affine {
-                    coef: a.coef - b.coef,
-                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
-                }),
-                // Scaling only by a symbol-free integer whose value is PINNED
-                // (`lo == hi`): otherwise the product is not affine with a known
-                // coefficient, and the coefficient is the half that must be
-                // provable.
-                "*" => {
-                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
-                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
-                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
-                        _ => return None,
-                    };
-                    Some(Affine {
-                        coef: other.coef * k,
-                        konst: other.konst.map(|(lo, hi)| {
-                            let (p, q) = (lo * k, hi * k);
-                            (p.min(q), p.max(q))
-                        }),
-                    })
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// How one index argument of a causal self-read relates to the frame symbol at
-/// that axis. Written in terms of the LAG `sym - <index expression>`, so a
-/// positive lag is an earlier position.
-enum SelfIdx {
-    /// The lag is exactly zero: the read stays on this axis's own cell, so this
-    /// axis is not the one the recurrence folds along.
-    Identity,
-    /// A lag that is not provably zero-or-forward, so this axis IS the
-    /// recurrence axis. `proven` records whether every value of the lag was
-    /// shown `>= 1` statically; when it is false the read may name the cell
-    /// being written or a later one for some values of a contracted symbol, and
-    /// the runtime's fail-closed read is what rules those out (esm-spec
-    /// §4.3.1.1 point 5) — a cell that has not been published cannot be read,
-    /// whether the sweep will publish it later or never.
-    Offset { proven: bool, max_lag: i64 },
-    /// A lag that is provably `<= 0` for every value: a same-cell or forward
-    /// read, which no sweep order can satisfy.
-    Forward,
-    /// Not affine in the frame symbol at all.
-    Bad,
-}
-
-fn classify_self_index(arg: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> SelfIdx {
-    // lag = sym - arg. `arg` must carry `sym` with coefficient exactly 1, or
-    // "the previous position along this axis" is not what it names.
-    let Some(Affine { coef, konst }) = affine_in_sym(arg, sym, env) else {
-        return SelfIdx::Bad;
-    };
-    if coef != 1 {
-        return SelfIdx::Bad;
-    }
-    let Some((clo, chi)) = konst else {
-        // A lag whose sign could not be proved. Admitted as the recurrence
-        // axis: it is not provably wrong, and the cells where it would be
-        // ill-founded cannot be read (they are not published), so the runtime
-        // faults there instead of returning a number.
-        return SelfIdx::Offset {
-            proven: false,
-            max_lag: 0,
-        };
-    };
-    let (lag_lo, lag_hi) = (-chi, -clo);
-    if lag_lo == 0 && lag_hi == 0 {
-        return SelfIdx::Identity;
-    }
-    if lag_hi <= 0 {
-        return SelfIdx::Forward;
-    }
-    SelfIdx::Offset {
-        proven: lag_lo >= 1,
-        max_lag: lag_hi,
-    }
-}
-
-/// Bounds every `faq` range in `node` contributes to the symbol scope.
-fn aggregate_range_env(node: &ExpressionNode) -> Vec<(String, (i64, i64))> {
-    node.ranges
-        .as_ref()
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, spec)| spec.bounds().map(|b| (k.clone(), (b[0], b[1]))))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Walk `e` collecting every `index(var, …)` read, and note whether `var` is
-/// ever read BARE (which is never a causal read — esm-spec §4.3.1.1 rejection
-/// 4 — because the whole array does not exist during the sweep).
-fn collect_self_reads(
-    e: &Expr,
+/// The build error for a causal self-read that is not well founded.
+fn recurrence_defect_error(
     var: &str,
-    env: &mut Vec<(String, (i64, i64))>,
-    out: &mut Vec<SelfRead>,
-    bare: &mut bool,
-) {
-    match e {
-        Expr::Integer(_) | Expr::Number(_) => {}
-        Expr::Variable(v) => {
-            if v == var {
-                *bare = true;
-            }
+    idx_names: &[String],
+    defect: SelfReadDefect,
+) -> CompileError {
+    let detail = match defect {
+        SelfReadDefect::Arity { supplied, axes } => format!(
+            "a self-read of '{var}' supplies {supplied} indices but its frame has {axes} axes \
+             ({idx_names:?}). Every causal self-read indexes every axis (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::MemberSelect { hi, .. } => format!(
+            "a read of the stacked recurrence group '{var}' does not select a member with a \
+             constant in 1..{hi} (esm-spec §4.3.1.2)."
+        ),
+        SelfReadDefect::Forward { d } => format!(
+            "index {d} of a self-read of '{var}' names the cell being written, or a LATER one, \
+             on axis '{}'. A causal self-reference reads strictly EARLIER positions; no sweep \
+             order can satisfy a forward or same-cell read (esm-spec §4.3.1.1).",
+            idx_names[d]
+        ),
+        SelfReadDefect::MultiAxis { .. } => format!(
+            "a self-read of '{var}' is offset on more than one axis. A causal self-reference \
+             folds along exactly ONE axis; every other index must be the bare frame symbol \
+             (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::NotAffine { d } | SelfReadDefect::Coefficient { d, .. } => {
+            let sym = &idx_names[d];
+            format!(
+                "index {d} of a self-read of '{var}' is not an offset of the frame symbol \
+                 '{sym}'. A causal self-read names a position RELATIVE to the cell being \
+                 written — `{sym} - c`, `{sym} - a`, `{sym} - a - c` — so that which axis the \
+                 recurrence folds along, and in which direction, is decidable. An index that \
+                 does not carry '{sym}' with coefficient 1 (a bare constant, `2*{sym}`, another \
+                 axis's symbol) is rejected rather than guessed at (esm-spec §4.3.1.1). {}",
+                causal_self_read::data_lag_guidance(var, sym)
+            )
         }
-        Expr::Operator(node) => {
-            let pushed = if crate::faq::is_faq_op(&node.op) {
-                let add = aggregate_range_env(node);
-                let n = add.len();
-                env.extend(add);
-                n
-            } else {
-                0
-            };
-            let is_self_index = node.op == "index"
-                && matches!(node.args.first(), Some(Expr::Variable(v)) if v == var);
-            if is_self_index {
-                // Innermost binding wins: later entries overwrite earlier ones.
-                let mut snapshot: HashMap<String, (i64, i64)> = HashMap::new();
-                for (k, v) in env.iter() {
-                    snapshot.insert(k.clone(), *v);
-                }
-                out.push(SelfRead {
-                    args: node.args[1..].to_vec(),
-                    env: snapshot,
-                });
-            }
-            // `args[0]` of a self-read is the name itself, not a bare read of
-            // the array; every other operand is walked normally (an index
-            // expression may itself contain a self-read).
-            let skip = usize::from(is_self_index);
-            for a in node.args.iter().skip(skip) {
-                collect_self_reads(a, var, env, out, bare);
-            }
-            for side in [
-                node.expr.as_deref(),
-                node.filter.as_deref(),
-                node.key.as_deref(),
-                node.lower.as_deref(),
-                node.upper.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                collect_self_reads(side, var, env, out, bare);
-            }
-            if let Some(vs) = node.values.as_ref() {
-                for v in vs {
-                    collect_self_reads(v, var, env, out, bare);
-                }
-            }
-            env.truncate(env.len() - pushed);
-        }
-    }
+        SelfReadDefect::SameCell => format!(
+            "a self-read of '{var}' is at the SAME cell on every axis, so it defines '{var}' in \
+             terms of itself rather than of an earlier position. A causal self-reference must \
+             be strictly earlier along one axis (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::AxisDisagree { prev, d } => format!(
+            "the self-reads of '{var}' disagree on the recurrence axis: one folds along '{}' and \
+             another along '{}'. A definition folds along exactly one axis (esm-spec §4.3.1.1).",
+            idx_names[prev], idx_names[d]
+        ),
+        SelfReadDefect::PeerUnproven { target, d } => format!(
+            "the read of '{target}' in the definition of '{var}' is not provably strictly \
+             earlier on axis '{}' (esm-spec §4.3.1.2).",
+            idx_names[d]
+        ),
+    };
+    recur_err("recurrence_not_wellfounded", detail)
 }
 
 /// Is `e` an `index(var, sym…)` whose indices are exactly `idx_names` in order
@@ -2956,14 +2714,13 @@ pub(super) fn lower_recurrence(
     lhs: &Expr,
     rhs: &Expr,
 ) -> Result<Option<RecurLowering>, CompileError> {
-    let mut env: Vec<(String, (i64, i64))> = Vec::new();
-    let mut reads: Vec<SelfRead> = Vec::new();
-    let mut bare = false;
-    collect_self_reads(rhs, var, &mut env, &mut reads, &mut bare);
-    if reads.is_empty() {
+    let found = causal_self_read::collect_self_reads(rhs, &[var], &|spec| {
+        spec.bounds().map(|b| (b[0], b[1]))
+    });
+    if found.reads.is_empty() {
         return Ok(None);
     }
-    if bare {
+    if found.bare.is_some() {
         return Err(recur_err(
             "recurrence_not_wellfounded",
             format!(
@@ -3036,136 +2793,31 @@ pub(super) fn lower_recurrence(
         .cloned()
         .zip(ranges.iter().copied())
         .collect();
-    let mut axis: Option<usize> = None;
-    let mut max_lag: i64 = 0;
-    let mut lag_proven = true;
-    for read in &reads {
-        if read.args.len() != idx_names.len() {
-            return Err(recur_err(
-                "recurrence_not_wellfounded",
-                format!(
-                    "a self-read of '{var}' supplies {} indices but its frame has {} axes \
-                     ({idx_names:?}). Every causal self-read indexes every axis (esm-spec \
-                     §4.3.1.1).",
-                    read.args.len(),
-                    idx_names.len()
-                ),
-            ));
-        }
-        let mut env = frame_env.clone();
-        for (k, v) in &read.env {
-            env.insert(k.clone(), *v);
-        }
-        let mut lagged: Option<(usize, i64)> = None;
-        for (d, arg) in read.args.iter().enumerate() {
-            // The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
-            // `recurrence_group`): a read SELECTS a member with a constant, and
-            // this is the one axis where a non-identity index is admitted.
-            if idx_names[d] == super::recurrence_group::MEMBER_SYM {
-                let (_, hi) = ranges[d];
-                if matches!(arg, Expr::Integer(q) if (1..=hi).contains(q)) {
-                    continue;
-                }
-                return Err(recur_err(
-                    "recurrence_not_wellfounded",
-                    format!(
-                        "a read of the stacked recurrence group '{var}' does not select a member \
-                         with a constant in 1..{hi} (esm-spec §4.3.1.2)."
-                    ),
-                ));
-            }
-            match classify_self_index(arg, &idx_names[d], &env) {
-                SelfIdx::Identity => {}
-                SelfIdx::Forward => {
-                    return Err(recur_err(
-                        "recurrence_not_wellfounded",
-                        format!(
-                            "index {d} of a self-read of '{var}' names the cell being written, \
-                             or a LATER one, on axis '{}'. A causal self-reference reads \
-                             strictly EARLIER positions; no sweep order can satisfy a forward \
-                             or same-cell read (esm-spec §4.3.1.1).",
-                            idx_names[d]
-                        ),
-                    ));
-                }
-                SelfIdx::Offset {
-                    proven,
-                    max_lag: hi,
-                } => {
-                    lag_proven &= proven;
-                    if lagged.is_some() {
-                        return Err(recur_err(
-                            "recurrence_not_wellfounded",
-                            format!(
-                                "a self-read of '{var}' is offset on more than one axis. A \
-                                 causal self-reference folds along exactly ONE axis; every \
-                                 other index must be the bare frame symbol (esm-spec §4.3.1.1)."
-                            ),
-                        ));
-                    }
-                    lagged = Some((d, hi));
-                }
-                SelfIdx::Bad => {
-                    return Err(recur_err(
-                        "recurrence_not_wellfounded",
-                        format!(
-                            "index {d} of a self-read of '{var}' is not an offset of the frame \
-                             symbol '{}'. A causal self-read names a position RELATIVE to the \
-                             cell being written — `{} - c`, `{} - a`, `{} - a - c` — so that \
-                             which axis the recurrence folds along, and in which direction, is \
-                             decidable. An index that does not carry '{}' with coefficient 1 \
-                             (a bare constant, `2*{}`, another axis's symbol) is rejected \
-                             rather than guessed at (esm-spec §4.3.1.1). {}",
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            crate::structural::data_lag_guidance(var, &idx_names[d])
-                        ),
-                    ));
-                }
-            }
-        }
-        let Some((d, hi)) = lagged else {
-            // A stacked group's same-cell read of an EARLIER member
-            // (esm-spec §4.3.1.2 rule 1): the frame cell, another member. The
-            // sweep publishes members in within-cell order, so the fail-closed
-            // read admits it exactly when that member precedes this one.
-            if idx_names
-                .iter()
-                .any(|n| n == super::recurrence_group::MEMBER_SYM)
-            {
-                continue;
-            }
-            return Err(recur_err(
-                "recurrence_not_wellfounded",
-                format!(
-                    "a self-read of '{var}' is at the SAME cell on every axis, so it defines \
-                     '{var}' in terms of itself rather than of an earlier position. A causal \
-                     self-reference must be strictly earlier along one axis (esm-spec §4.3.1.1)."
-                ),
-            ));
-        };
-        match axis {
-            None => axis = Some(d),
-            Some(prev) if prev == d => {}
-            Some(prev) => {
-                return Err(recur_err(
-                    "recurrence_not_wellfounded",
-                    format!(
-                        "the self-reads of '{var}' disagree on the recurrence axis: one folds \
-                         along '{}' and another along '{}'. A definition folds along exactly one \
-                         axis (esm-spec §4.3.1.1).",
-                        idx_names[prev], idx_names[d]
-                    ),
-                ));
-            }
-        }
-        max_lag = max_lag.max(hi);
-    }
-    let axis = axis.expect("at least one self-read, each of which set the axis");
+    let member_axis = idx_names
+        .iter()
+        .position(|n| n == super::recurrence_group::MEMBER_SYM)
+        .map(|d| (d, ranges[d].1));
+    let fold = causal_self_read::classify_self_reads(
+        &found.reads,
+        var,
+        &idx_names,
+        &frame_env,
+        member_axis,
+    )
+    .map_err(|defect| recurrence_defect_error(var, &idx_names, defect))?;
+    let Some(axis) = fold.axis else {
+        // Every read is a stacked group's same-cell read of an earlier member,
+        // which names no axis to fold along.
+        return Err(recur_err(
+            "recurrence_not_wellfounded",
+            format!(
+                "every self-read of '{var}' is at the SAME cell on every axis, so it defines \
+                 '{var}' in terms of itself rather than of an earlier position. A causal \
+                 self-reference must be strictly earlier along one axis (esm-spec §4.3.1.1)."
+            ),
+        ));
+    };
+    let (max_lag, lag_proven) = (fold.max_lag, fold.lag_proven);
 
     // ---- the per-cell body -------------------------------------------------
     let body = match rhs {
@@ -4780,22 +4432,6 @@ fn value_invention_factors(
         }
         node.for_each_child(&mut |c| index_targets(c, out));
     }
-    /// The names `e` reads that it does not bind itself.
-    fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
-        match e {
-            Expr::Variable(v) if !bound.contains(v) => {
-                out.insert(v.clone());
-            }
-            Expr::Operator(node) => {
-                let mark = bound.len();
-                bound.extend(node.output_idx.iter().flatten().cloned());
-                bound.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
-                node.for_each_child(&mut |c| free_names(c, bound, out));
-                bound.truncate(mark);
-            }
-            _ => {}
-        }
-    }
     struct Cx<'a> {
         defs: BTreeMap<String, Expr>,
         index_sets: &'a HashMap<String, IndexSet>,
@@ -4812,7 +4448,9 @@ fn value_invention_factors(
             return false;
         };
         let mut free = BTreeSet::new();
-        free_names(&body, &mut Vec::new(), &mut free);
+        crate::binders::for_each_free_name(&body, Binders::LOOP, &mut |n| {
+            free.insert(n.to_string());
+        });
         for v in &free {
             if !cx.index_sets.contains_key(v) && !derive(cx, v, depth + 1) {
                 return false;
@@ -5210,10 +4848,10 @@ fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, St
 /// Apply the `(qualified, local)` rewrites of [`self_qualified_references`] to
 /// every expression of `model`, in ONE capture-aware pass.
 ///
-/// Capture-aware in BOTH directions, which is why this is not a loop over
-/// [`rename_free_symbol`]. That helper shadows on the name it renames FROM,
-/// which for a `<model>.`-qualified source is never a loop symbol; the direction
-/// that matters here is the TARGET. A node that binds the LOCAL name — model
+/// Capture-aware in BOTH directions, which is why this is not
+/// [`crate::binders::rename_free_names`]. That helper shadows on the name it
+/// renames FROM, which for a `<model>.`-qualified source is never a loop
+/// symbol; the direction that matters here is the TARGET. A node that binds the LOCAL name — model
 /// variable `i` read as `M.i` inside `aggregate(i from x; …)` — would otherwise
 /// capture the rewritten reference and silently read the loop index instead of
 /// the variable. The rewrite is therefore dropped for that subtree and the
@@ -5247,13 +4885,7 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             .get(v.as_str())
             .map_or_else(|| expr.clone(), |l| Expr::Variable((*l).to_string())),
         Expr::Operator(node) => {
-            let binds = |s: &str| {
-                node.output_idx
-                    .as_ref()
-                    .is_some_and(|ix| ix.iter().any(|x| x == s))
-                    || node.ranges.as_ref().is_some_and(|r| r.contains_key(s))
-                    || node.int_var.as_deref() == Some(s)
-            };
+            let binds = |s: &str| node.binds(Binders::SCOPE, s);
             // Only reallocate the map on the rare node that shadows something.
             let narrowed: Option<HashMap<&str, &str>> =
                 hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
@@ -5266,91 +4898,23 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             let mut out = node.map_children(&mut |a| rewrite_self_qualified(a, sub));
             // `map_children` preserves `join` verbatim, so the node's
             // string-encoded variable references catch up with its child ones
-            // here — see [`rename_join_names`].
+            // here, through [`crate::types::JoinClause::map_reference_names`].
             if let Some(join) = &out.join {
-                let mut renamed = join.clone();
-                for (q, l) in sub {
-                    renamed = rename_join_names(&renamed, q, l);
-                }
-                out.join = Some(renamed);
+                out.join = Some(
+                    join.iter()
+                        .map(|c| {
+                            c.map_reference_names(|n| {
+                                sub.get(n.as_str())
+                                    .map_or_else(|| n.clone(), |l| l.to_string())
+                            })
+                        })
+                        .collect(),
+                );
             }
             Expr::operator(out)
         }
         Expr::Number(_) | Expr::Integer(_) => expr.clone(),
     }
-}
-
-/// Capture-aware rename of a free loop symbol: every free `Variable(from)`
-/// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
-/// or `ranges` declare it) shadows the outer symbol and is left untouched.
-///
-/// Renames the plain-string names a `join` clause carries as well — see
-/// [`rename_join_names`]. That is not an extra: `map_children` is an
-/// `Expr`-CHILD walker, and a `join.on` key column or an `overlap` envelope
-/// factor is a variable reference that happens to be encoded as a string on the
-/// node (CONFORMANCE_SPEC §5.5.6), so a walker that skipped them would rename
-/// half of what one node says about the same variable.
-pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
-    match expr {
-        Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
-        Expr::Operator(node) => {
-            let binds = node
-                .output_idx
-                .as_ref()
-                .map(|ix| ix.iter().any(|s| s == from))
-                .unwrap_or(false)
-                || node
-                    .ranges
-                    .as_ref()
-                    .map(|r| r.contains_key(from))
-                    .unwrap_or(false);
-            if binds {
-                return expr.clone();
-            }
-            let mut out = node.map_children(&mut |a| rename_free_symbol(a, from, to));
-            // `map_children` preserves `join` verbatim, so this is where the
-            // node's string-encoded references catch up with its child ones.
-            // The binder test above has already returned for a node that binds
-            // `from`, which is the shadowing rule an `on` key column needs: a
-            // column naming one of THIS node's own loop symbols resolves against
-            // its `ranges` (`join.rs::resolve_side`), never against the variable
-            // registry, so renaming it would make it resolve to nothing.
-            if let Some(join) = &out.join {
-                out.join = Some(rename_join_names(join, from, to));
-            }
-            Expr::operator(out)
-        }
-        _ => expr.clone(),
-    }
-}
-
-/// Rename `from` → `to` in every plain-string VARIABLE REFERENCE a node's
-/// `join` clauses carry (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
-/// `overlap` envelope factor, and the data-column names of an already-resolved
-/// `on_gate`. The array-runtime twin of `flatten.rs::rename_join_names`, which
-/// does the same job for a `variable_map` that removes a parameter.
-///
-/// A clause's LOOP SYMBOLS are left alone — `OverlapClause::sym_src` /
-/// `sym_tgt` and the `on_gate`'s two gated symbols are binders of the node, not
-/// references into the variable registry. (`map_column_names` renames the gate's
-/// COLUMNS only, for exactly that reason.)
-fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
-    let ren = |n: &String| -> String { if n == from { to.to_string() } else { n.clone() } };
-    join.iter()
-        .map(|c| JoinClause {
-            on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
-            // Binders of the node, not references — renaming leaves them alone.
-            syms: c.syms.clone(),
-            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                src_env: ov.src_env.iter().map(&ren).collect(),
-                tgt_env: ov.tgt_env.iter().map(&ren).collect(),
-                eps: ov.eps,
-                sym_src: ov.sym_src.clone(),
-                sym_tgt: ov.sym_tgt.clone(),
-            }),
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
-        })
-        .collect()
 }
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
@@ -5398,13 +4962,17 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
                         _ => return value.clone(),
                     }
                 }
-                let mut inlined = body.as_ref().clone();
-                for (sym, loop_name) in idx.iter().zip(loops.iter()) {
-                    if sym != loop_name {
-                        inlined = rename_free_symbol(&inlined, sym, loop_name);
-                    }
-                }
-                inlined
+                // One pass, so an output symbol renamed onto a name another
+                // output symbol carries (`[i, j]` onto `[j, i]`) is not renamed
+                // again.
+                let renames: HashMap<&str, &str> = idx
+                    .iter()
+                    .zip(loops.iter())
+                    .map(|(sym, loop_name)| (sym.as_str(), loop_name.as_str()))
+                    .collect();
+                crate::binders::rename_free_names(body, Binders::LOOP, &|n| {
+                    renames.get(n).map(|l| (*l).to_string())
+                })
             })
             .collect(),
     );
@@ -6413,6 +5981,59 @@ mod subsystem_ragged_and_inspection_tests {
             .expect("overlap survives");
         assert_eq!(ov.src_env, vec!["Geo.X".to_string()]);
         assert_eq!(ov.tgt_env, vec!["Geo.W".to_string()]);
+    }
+
+    /// A nested subsystem that repeats its parent's name: inside `s`, the
+    /// local `b` and the nested `s.b` are two variables, and mounting `s`
+    /// must prefix each exactly once. Renaming one name at a time would turn
+    /// the local `b` into `s.b` and then rename it again with the nested one.
+    #[test]
+    fn mounting_a_nested_subsystem_that_repeats_its_parents_name() {
+        let mut m = model(json!({
+            "variables": { "out": { "type": "unknown" } },
+            "equations": [ { "lhs": "out", "rhs": "s.b" } ],
+            "subsystems": { "s": {
+                "variables": { "b": { "type": "unknown" } },
+                "equations": [ { "lhs": "b", "rhs": { "op": "*", "args": [3, "s.b"] } } ],
+                "subsystems": { "s": {
+                    "variables": { "b": { "type": "unknown" } },
+                    "equations": [ { "lhs": "b", "rhs": 2 } ]
+                }}
+            }}
+        }));
+        let mut sets: HashMap<String, IndexSet> = HashMap::new();
+        mount_subsystems(&mut m, &mut sets).expect("mounts");
+
+        let eqs: Vec<serde_json::Value> =
+            m.equations.iter().map(|e| json!([e.lhs, e.rhs])).collect();
+        assert!(
+            eqs.contains(&json!(["s.b", { "op": "*", "args": [3, "s.s.b"] }])),
+            "the parent subsystem's own `b` is `s.b` and reads the nested `s.s.b`: {eqs:?}"
+        );
+        assert!(
+            eqs.contains(&json!(["s.s.b", 2])),
+            "the nested `b` is `s.s.b`: {eqs:?}"
+        );
+    }
+
+    /// Inlining a region value renames all of its output symbols at once, so
+    /// a symbol renamed onto a name another output symbol carries is not
+    /// renamed a second time.
+    #[test]
+    fn inlining_a_region_value_swaps_its_output_symbols() {
+        let node: ExpressionNode = serde_json::from_value(json!({
+            "op": "makearray", "args": [],
+            "regions": [[[1, 3], [1, 2]]],
+            "values": [{ "op": "faq", "args": [], "output_idx": ["i", "j"],
+                         "ranges": { "i": [1, 3], "j": [1, 2] },
+                         "expr": { "op": "index", "args": ["u", "i", "j"] } }]
+        }))
+        .expect("node parses");
+        let out = inline_region_aggregates(&node, &["j".to_string(), "i".to_string()]);
+        assert_eq!(
+            json!(out.values.expect("values")[0]),
+            json!({ "op": "index", "args": ["u", "j", "i"] })
+        );
     }
 
     fn erk_opts() -> SolveOptions {

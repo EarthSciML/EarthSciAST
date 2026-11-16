@@ -1363,22 +1363,9 @@ pub(crate) fn apply_mount_index_set_rename(
 /// Mirrors the Julia `_collect_bound_syms!`.
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
     crate::json_visit::visit_values(x, &mut |_path, v| {
-        let Some(obj) = v.as_object() else { return };
-        if !obj.contains_key("op") {
-            return;
-        }
-        if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {
-            for e in oi {
-                if let Some(s) = e.as_str() {
-                    out.insert(s.to_string());
-                }
-            }
-        }
-        if let Some(rg) = obj.get("ranges").and_then(|w| w.as_object()) {
-            for k in rg.keys() {
-                out.insert(k.clone());
-            }
-        }
+        crate::binders::for_each_json_loop_binder(v, |_, s| {
+            out.insert(s.to_string());
+        });
     });
 }
 
