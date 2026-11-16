@@ -799,55 +799,46 @@ pub(super) enum VecOp {
 /// Resolve an operator name to its [`eval_vec_op`] arm. ONE string match per AST
 /// node; every dispatch below it is on the returned code.
 pub(super) fn vec_op_code(op: &str) -> VecOp {
-    match op {
-        crate::precision_infer::MARKER_OP => VecOp::Precision,
-        "+" => VecOp::Arith(BinCode::Add),
-        "-" => VecOp::Arith(BinCode::Sub),
-        "*" => VecOp::Arith(BinCode::Mul),
-        "/" => VecOp::Arith(BinCode::Div),
-        "^" | "pow" => VecOp::Arith(BinCode::Pow),
-        "min" => VecOp::Arith(BinCode::Min),
-        "max" => VecOp::Arith(BinCode::Max),
-        "atan2" => VecOp::Arith(BinCode::Atan2),
-        "and" => VecOp::Arith(BinCode::And),
-        "or" => VecOp::Arith(BinCode::Or),
-        "==" => VecOp::Cmp(BinCode::Eq),
-        "!=" => VecOp::Cmp(BinCode::Ne),
-        "<" => VecOp::Cmp(BinCode::Lt),
-        "<=" => VecOp::Cmp(BinCode::Le),
-        ">" => VecOp::Cmp(BinCode::Gt),
-        ">=" => VecOp::Cmp(BinCode::Ge),
-        "exp" => VecOp::Unary(UnCode::Exp),
-        "log" => VecOp::Unary(UnCode::Ln),
-        "log10" => VecOp::Unary(UnCode::Log10),
-        "sqrt" => VecOp::Unary(UnCode::Sqrt),
-        "abs" => VecOp::Unary(UnCode::Abs),
-        "sign" => VecOp::Unary(UnCode::Sign),
-        "floor" => VecOp::Unary(UnCode::Floor),
-        "ceil" => VecOp::Unary(UnCode::Ceil),
-        "sin" => VecOp::Unary(UnCode::Sin),
-        "cos" => VecOp::Unary(UnCode::Cos),
-        "tan" => VecOp::Unary(UnCode::Tan),
-        "asin" => VecOp::Unary(UnCode::Asin),
-        "acos" => VecOp::Unary(UnCode::Acos),
-        "atan" => VecOp::Unary(UnCode::Atan),
-        "sinh" => VecOp::Unary(UnCode::Sinh),
-        "cosh" => VecOp::Unary(UnCode::Cosh),
-        "tanh" => VecOp::Unary(UnCode::Tanh),
-        "asinh" => VecOp::Unary(UnCode::Asinh),
-        "acosh" => VecOp::Unary(UnCode::Acosh),
-        "atanh" => VecOp::Unary(UnCode::Atanh),
-        "not" => VecOp::Unary(UnCode::Not),
-        "neg" => VecOp::Neg,
-        "index" => VecOp::Index,
-        "faq" => VecOp::Aggregate,
-        "makearray" => VecOp::Makearray,
-        "const" => VecOp::Const,
-        "true" => VecOp::BoolLit(true),
-        "false" => VecOp::BoolLit(false),
-        "ifelse" => VecOp::Ifelse,
-        "broadcast" => VecOp::Broadcast,
-        _ => VecOp::Unsupported,
+    use crate::op_registry::{CoreOp, OtherOp as O};
+    let Some(core) = CoreOp::from_name(op) else {
+        return VecOp::Unsupported;
+    };
+    match core {
+        CoreOp::Unary(f) => VecOp::Unary(UnCode::from_unary(f)),
+        CoreOp::Compare(_) => VecOp::Cmp(BinCode::from_core(core)),
+        CoreOp::Other(o) => match o {
+            O::Add
+            | O::Sub
+            | O::Mul
+            | O::Div
+            | O::Pow
+            | O::PowWord
+            | O::Min
+            | O::Max
+            | O::Atan2
+            | O::And
+            | O::Or => VecOp::Arith(BinCode::from_core(core)),
+            O::Not => VecOp::Unary(UnCode::Not),
+            O::Precision => VecOp::Precision,
+            O::Neg => VecOp::Neg,
+            O::Index => VecOp::Index,
+            O::Faq => VecOp::Aggregate,
+            O::Makearray => VecOp::Makearray,
+            O::Const => VecOp::Const,
+            O::True => VecOp::BoolLit(true),
+            O::False => VecOp::BoolLit(false),
+            O::Ifelse => VecOp::Ifelse,
+            O::Broadcast => VecOp::Broadcast,
+            O::D
+            | O::Ic
+            | O::Pre
+            | O::Enum
+            | O::ApplyExpressionTemplate
+            | O::Reshape
+            | O::Transpose
+            | O::Concat
+            | O::Distinct => VecOp::Unsupported,
+        },
     }
 }
 
@@ -940,14 +931,14 @@ fn eval_vec_op_code<'a>(
         // Scalar comparisons and `ifelse` over *scalar* operands — the einsum
         // weight idiom `ifelse(k==0,-2,1)` folds to a constant per contraction
         // tuple. Bit-identical to the oracle's `eval_op` (same exact-equality
-        // `scalar_compare` and `c != 0.0` branch test). An *array* operand (a
+        // comparison kernel and `c != 0.0` branch test). An *array* operand (a
         // per-cell-varying condition) is not on the fast path and bails to the oracle.
         VecOp::Cmp(code) => {
             if node.args.len() != 2 {
                 return None;
             }
-            // Route through `vec_combine` → `apply_binary`, whose comparison arm
-            // IS `scalar_compare` (eval.rs) — so a SCALAR result (the einsum weight
+            // Route through `vec_combine` → `apply_binary`, whose comparison arms
+            // are the oracle's (eval.rs) — so a SCALAR result (the einsum weight
             // idiom `ifelse(k==0,…)`) and a whole-array 0/1 MASK (a per-cell fuel
             // gate `code >= 1`, a regrid `overlap > 0` filter) are both produced
             // bit-identically to the oracle, from the same kernel.
@@ -1143,25 +1134,6 @@ fn eval_vec_nested_aggregate<'a>(
     )?;
     *ops += sub_ops;
     Some(v)
-}
-
-/// The shared scalar-comparison kernel: the per-cell oracle (`apply_binary`,
-/// eval.rs) and this vectorized overlay both route through it, so the two paths
-/// are bit-identical by construction. `==`/`!=` test EXACT equality with the
-/// native `f64` relops (`a == b` / `a != b`) — the pinned cross-binding semantic
-/// (Python `np.equal` / `np.not_equal`), including `inf == inf ⇒ true`. The
-/// orderings use the native relops too. Result is `1.0` (true) / `0.0` (false).
-pub(super) fn scalar_compare(op: &str, a: f64, b: f64) -> f64 {
-    let t = match op {
-        "==" => a == b,
-        "!=" => a != b,
-        "<" => a < b,
-        "<=" => a <= b,
-        ">" => a > b,
-        ">=" => a >= b,
-        _ => return f64::NAN,
-    };
-    if t { 1.0 } else { 0.0 }
 }
 
 pub(super) fn vec_negate<'a>(v: VecValue<'a>, pool: &mut Pool) -> VecValue<'a> {
