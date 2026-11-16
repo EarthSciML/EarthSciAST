@@ -168,14 +168,16 @@ pub fn resolve_subsystem_refs_with_metaparameters(
     let mut visited = HashSet::new();
     walk_top_level(
         value,
-        base_path,
+        &DocScope {
+            base_path,
+            parent_meta: &root_meta,
+            api_meta,
+            forwarded: &BTreeMap::new(),
+            caller_env: &root_meta,
+            enclosing_precision: DEFAULT_ELEMENT_TYPE,
+        },
         &mut visited,
-        &root_meta,
-        api_meta,
-        &BTreeMap::new(),
         true,
-        &root_meta,
-        DEFAULT_ELEMENT_TYPE,
     )
 }
 
@@ -498,23 +500,58 @@ fn index_set_names(value: &Value) -> std::collections::BTreeSet<String> {
         .unwrap_or_default()
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A metaparameter environment: name to closed integer value.
+type MetaEnv = BTreeMap<String, i64>;
+
+/// What a document being walked for mount edges inherits from the scope that
+/// loads it. Built once at the root ([`resolve_subsystem_refs_with_metaparameters`])
+/// and once per mount edge ([`resolve_mount_edge`]).
+struct DocScope<'a> {
+    /// The directory this document's relative refs resolve against.
+    base_path: &'a Path,
+    /// The closed environment this document's edge `bindings` expressions
+    /// fold against.
+    parent_meta: &'a MetaEnv,
+    /// The loader-API bindings (§9.7.6 site 4); they reach every depth.
+    api_meta: &'a MetaEnv,
+    /// Edge bindings forwarded through an assembly (§4.7 "Bindings reach
+    /// through an assembly"); see [`close_mount_edge`].
+    forwarded: &'a MetaEnv,
+    /// The edge `bindings` that closed this document (the root's own
+    /// environment at depth zero), overlaid on its declared defaults to form
+    /// the fold environment of its registry.
+    caller_env: &'a MetaEnv,
+    /// The precision of the document mounting this one.
+    enclosing_precision: &'a str,
+}
+
+/// The scope every mount edge a document carries resolves under: the
+/// document's directory, the environments that reach its edges, and the two
+/// facts [`walk_top_level`] derives for the document itself.
+struct MountScope<'a> {
+    /// The MOUNTING document's directory.
+    base_path: &'a Path,
+    parent_meta: &'a MetaEnv,
+    api_meta: &'a MetaEnv,
+    forwarded: &'a MetaEnv,
+    /// The mounting document's own closed environment, which a contribution
+    /// landing in its registry folds against.
+    merge_env: &'a MetaEnv,
+    /// The mounting document's effective working precision.
+    precision: &'a str,
+}
+
 fn walk_top_level(
     value: &mut Value,
-    base_path: &Path,
+    doc: &DocScope<'_>,
     visited: &mut HashSet<PathBuf>,
-    parent_meta: &BTreeMap<String, i64>,
-    api_meta: &BTreeMap<String, i64>,
-    forwarded: &BTreeMap<String, i64>,
     defer: bool,
-    caller_env: &BTreeMap<String, i64>,
-    enclosing_precision: &str,
 ) -> Result<Map<String, Value>, DiagnosticError> {
     // esm-spec §4.7 "Working precision crosses a mount": THIS document's
     // effective precision is its own `domain.element_type`, else the one it
     // inherits from the document mounting it (`"Float64"` at a root). Every
     // edge this document carries compares its leaf's declaration against it.
-    let precision = effective_element_type(value, enclosing_precision);
+    let precision = effective_element_type(value, doc.enclosing_precision);
     // esm-spec §4.7 "Which environment a contribution folds against": the
     // registry a contribution lands in here belongs to THIS document, so the
     // fold environment is this document's own CLOSED one — not the caller's.
@@ -530,20 +567,28 @@ fn walk_top_level(
     // Without it one resolved document disagrees with ITSELF: an axis the
     // document declares goes through `resolve_template_machinery` with the edge
     // bindings and folds to 7, while an axis contributed by its own nested mount
-    // folded against the unoverlaid defaults and came out 4.
+    // would fold against the unoverlaid defaults and come out 4.
     let merge_env = {
-        let mut env = root_metaparameter_env(value, api_meta);
+        let mut env = root_metaparameter_env(value, doc.api_meta);
         let declared: Vec<String> = value
             .get("metaparameters")
             .and_then(|v| v.as_object())
             .map(|o| o.keys().cloned().collect())
             .unwrap_or_default();
-        for (k, v) in caller_env {
+        for (k, v) in doc.caller_env {
             if declared.contains(k) {
                 env.insert(k.clone(), *v);
             }
         }
         env
+    };
+    let scope = MountScope {
+        base_path: doc.base_path,
+        parent_meta: doc.parent_meta,
+        api_meta: doc.api_meta,
+        forwarded: doc.forwarded,
+        merge_env: &merge_env,
+        precision: &precision,
     };
     let obj = match value.as_object_mut() {
         Some(o) => o,
@@ -555,12 +600,12 @@ fn walk_top_level(
     // the referenced leaf's single model, carrying the edge's
     // `expression_template_imports` into that model's own scope, BEFORE the
     // ordinary subsystem walk (the spliced model may itself carry subsystems).
-    // The leaf resolves in its OWN scope at the edge — the §4.7 edge pipeline,
-    // the same one a `subsystems.<k>` ref runs — so BOTH environments are
+    // The leaf resolves in its OWN scope at the edge ([`resolve_mount_edge`],
+    // the same pipeline a `subsystems.<k>` ref runs), so BOTH environments are
     // threaded in, and they are NOT interchangeable: edge `bindings` fold
     // against `parent_meta` (the mounting document's full closed environment),
     // while only `api_meta` — the loader-API bindings, §9.7.6 site 4 —
-    // backfills the leaf's own close. See `inline_toplevel_refs`.
+    // backfills the leaf's own close.
     // `defer` splits INLINING from MERGING (esm-spec §4.7). The content must be
     // spliced in HERE, before the root's own §9.7 machinery, so a rewrite target
     // inside a mounted component lowers at all; but the `index_sets` it
@@ -579,14 +624,9 @@ fn walk_top_level(
         inline_toplevel_refs(
             form,
             obj,
-            base_path,
+            &scope,
             visited,
-            parent_meta,
-            api_meta,
-            forwarded,
             if defer { Some(&mut staged) } else { None },
-            &merge_env,
-            &precision,
         )?;
     }
 
@@ -609,17 +649,7 @@ fn walk_top_level(
 
     if let Some(map) = obj.get_mut("models").and_then(|v| v.as_object_mut()) {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(
-                system,
-                base_path,
-                visited,
-                Some(&mut registry),
-                parent_meta,
-                api_meta,
-                forwarded,
-                &merge_env,
-                &precision,
-            )?;
+            walk_subsystems(system, &scope, visited, Some(&mut registry))?;
         }
     }
     if let Some(map) = obj
@@ -627,17 +657,7 @@ fn walk_top_level(
         .and_then(|v| v.as_object_mut())
     {
         for (_name, system) in map.iter_mut() {
-            walk_subsystems(
-                system,
-                base_path,
-                visited,
-                None,
-                parent_meta,
-                api_meta,
-                forwarded,
-                &merge_env,
-                &precision,
-            )?;
+            walk_subsystems(system, &scope, visited, None)?;
         }
     }
 
@@ -742,59 +762,363 @@ fn hoist_subsystem_data_sources(obj: &mut Map<String, Value>) -> Result<(), Diag
     Ok(())
 }
 
+/// How one mount edge names itself in the diagnostics its pipeline raises.
+struct EdgeNouns<'a> {
+    /// Starts the library-target refusal: `"Subsystem"`, `"Model"`, ….
+    library: &'a str,
+    /// Names the edge in a `bindings` diagnostic.
+    bindings: &'a str,
+    /// Names the edge everywhere else.
+    edge: &'a str,
+}
+
+/// A referenced document resolved in its own scope at a §4.7 mount edge, ready
+/// for its caller to extract the component and splice it in.
+struct MountedLeaf {
+    /// The resolved, lowered document, its `index_sets` renamed by the edge
+    /// and its `data_sources` taken out into [`MountedLeaf::data_sources`].
+    doc: Value,
+    /// The leaf file's identity (its canonical path, or a bundled library's).
+    canonical: PathBuf,
+    /// The directory the leaf's own relative refs resolve against.
+    leaf_dir: PathBuf,
+    /// The leaf's declared `domain.element_type`, read before resolution.
+    precision: Option<String>,
+    /// The leaf's `data_sources`, bound by the edge's `url_substitutions` and
+    /// resolved against the leaf's directory; `None` when it declares none.
+    data_sources: Option<Value>,
+}
+
+/// The §4.7 edge pipeline, run once for both mount forms ("Two mount forms, one
+/// mechanism": the forms differ only in where the component lands, which
+/// component a multi-component leaf yields, and that the top-level form drops
+/// the leaf's `tests`). Those differences stay with the callers,
+/// [`inline_toplevel_refs`] and [`resolve_value`].
+///
+/// In order:
+///
+/// 1. the referenced document loads ([`load_ref_document`], which runs the
+///    per-file version gates against the leaf's own `esm`), passes the
+///    template-machinery version gates, and must not be a template or
+///    coupling library;
+/// 2. the leaf resolves in its OWN scope (esm-spec §4.7 "Edge pipeline" step
+///    1): this edge closes its metaparameters ([`close_mount_edge`]), its own
+///    nested refs of either form are inlined in its directory FIRST
+///    ("before validation or any other processing", so the fixpoint sees the
+///    components the leaf mounts — issue #311), this edge's §9.7.10 injection
+///    is appended, and its §9.7 machinery resolves, lowers and expands;
+/// 3. its `enum` ops lower against its own `enums` block (esm-spec §9.3);
+/// 4. the contributions its nested mounts staged merge into its own registry,
+///    now that it has closed;
+/// 5. this edge's `index_set_rename` applies (step 2), over the axes the leaf
+///    declares and imports only;
+/// 6. this edge's `url_substitutions` bind the leaf's data-source
+///    placeholders, and the leaf's `data_sources` resolve against its own
+///    directory (esm-spec §8.2.1).
+///
+/// The caller then merges the leaf's `index_sets` (step 3) and splices the
+/// component in. The leaf's path is marked visited for the whole pipeline, so
+/// a self- or mutually-importing document is `circular …`, and unmarked on
+/// every exit.
+fn resolve_mount_edge(
+    edge: &Map<String, Value>,
+    ref_str: &str,
+    ref_noun: &RefNoun,
+    nouns: &EdgeNouns<'_>,
+    scope: &MountScope<'_>,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<MountedLeaf, DiagnosticError> {
+    let (canonical, mut comp) = load_ref_document(ref_str, scope.base_path, visited, ref_noun)?;
+    // Read before anything below can consume the leaf's `domain`.
+    let precision = declared_element_type(&comp);
+    let leaf_dir = canonical.parent().unwrap_or(scope.base_path).to_path_buf();
+    let result = resolve_loaded_leaf(&mut comp, &leaf_dir, &canonical, edge, ref_str, nouns, scope, visited);
+    visited.remove(&canonical);
+    let data_sources = result?;
+    Ok(MountedLeaf {
+        doc: comp,
+        canonical,
+        leaf_dir,
+        precision,
+        data_sources,
+    })
+}
+
+/// Steps 1 (after the load) to 6 of [`resolve_mount_edge`], on the loaded leaf
+/// `comp`, in place. Returns the leaf's resolved `data_sources`, taken out of
+/// `comp`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_loaded_leaf(
+    comp: &mut Value,
+    leaf_dir: &Path,
+    canonical: &Path,
+    edge: &Map<String, Value>,
+    ref_str: &str,
+    nouns: &EdgeNouns<'_>,
+    scope: &MountScope<'_>,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<Option<Value>, DiagnosticError> {
+    crate::lower_expression_templates::reject_expression_templates_pre_v04(comp)?;
+    crate::template_imports::reject_template_imports_pre_v08(comp)?;
+    // A §4.7 mount MUST NOT target a template-library file — the two reference
+    // mechanisms are disjoint (esm-spec §9.7.1) — nor a coupling-library file,
+    // which is imported via a `coupling_import` coupling entry (§10.9).
+    if crate::template_imports::is_template_library_doc(comp) {
+        return Err(err(
+            codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+            format!(
+                "{} ref '{ref_str}' targets a template-library file ({}); \
+                 libraries are imported via expression_template_imports \
+                 (esm-spec 9.7.1)",
+                nouns.library,
+                canonical.display()
+            ),
+        ));
+    }
+    if crate::coupling_imports::is_coupling_library_doc(comp) {
+        return Err(err(
+            codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+            format!(
+                "{} ref '{ref_str}' targets a coupling-library file ({}); \
+                 libraries are imported via a coupling_import coupling entry \
+                 (esm-spec 10.9)",
+                nouns.library,
+                canonical.display()
+            ),
+        ));
+    }
+
+    // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit edge
+    // `bindings` win, backfilled by the LOADER-API bindings (site 4) for the
+    // names the leaf DECLARES — so a leaf mounted with no edge bindings still
+    // inherits the loader's grid instead of falling to its own defaults (a
+    // discovered `extent`, §8.9.4, sizes the leaf from the data). Names the
+    // leaf does not declare are never forwarded, so they cannot raise
+    // `template_import_unknown_name` against it. Mirrors the Python
+    // `_load_ref_data` backfill.
+    //
+    // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
+    // additionally carries the mounting document's OWN declared defaults, and
+    // forwarding those would let an assembler's unrelated `NLEV` silently
+    // override the leaf's own default for a name the edge never bound.
+    // `parent_meta` is the scope edge `bindings` EXPRESSIONS fold against, and
+    // that is all it is.
+    //
+    // The same edge also forwards a binding through an assembly (§4.7
+    // "Bindings reach through an assembly"); see [`close_mount_edge`].
+    let EdgeClose {
+        bindings,
+        forwarded: leaf_forwarded,
+        mount_declared: leaf_mount_declared_pre,
+    } = close_mount_edge(
+        comp,
+        leaf_dir,
+        edge,
+        scope.parent_meta,
+        scope.api_meta,
+        scope.forwarded,
+        nouns.bindings,
+    )?;
+
+    // §4.7: a `{ref}` resolves "before validation or any other processing", so
+    // the leaf's OWN nested refs — of either mount form, in the leaf's
+    // directory — are inlined HERE, before the §9.6.3 fixpoint below. A leaf's
+    // template scope reaches the components it mounts (a rule declared in its
+    // own `expression_template_imports` lowers a rewrite-target inside its
+    // `subsystems.<k>`), and §9.7.10 defines the edge injection as "as if the
+    // target had added those entries to the end of its own
+    // `expression_template_imports`" — so the fixpoint must see the mounted
+    // content for the two to agree.
+    //
+    // Nested edge `bindings` fold against the leaf's own closed metaparameter
+    // environment — its declared defaults overlaid with this edge's close —
+    // which is exactly what a STANDALONE load of the leaf hands them
+    // (`root_metaparameter_env` in `load_with_meta`). `caller_env` is this
+    // edge's `bindings`, the overlay that makes the leaf's fold environment
+    // CLOSED rather than just its defaults (see `walk_top_level`).
+    //
+    // `defer: true` is load-bearing, and it is the SAME split the root makes:
+    // the content splices in early so the fixpoint can lower through it, but
+    // the `index_sets` it contributes are STAGED, not merged, because THIS leaf
+    // has not closed yet. They land in `apply_staged_index_sets` after the
+    // close below.
+    let leaf_env = root_metaparameter_env(comp, &bindings);
+    let staged_nested = walk_top_level(
+        comp,
+        &DocScope {
+            base_path: leaf_dir,
+            parent_meta: &leaf_env,
+            api_meta: scope.api_meta,
+            forwarded: &leaf_forwarded,
+            caller_env: &bindings,
+            enclosing_precision: scope.precision,
+        },
+        visited,
+        true,
+    )?;
+
+    // §9.7.10 form A: the edge's `expression_template_imports` inject a
+    // discretization into the leaf's own scope BEFORE resolution, so the
+    // §9.6.3 fixpoint lowers its rewrite-targets at the mount. Consumed here
+    // (the mount round-trips as the lowered inline component). Their own
+    // relative refs are authored by the assembler carrying the edge, so they
+    // absolutize against the MOUNTING document's directory, not the leaf's, at
+    // both mount forms.
+    let injected: Vec<Value> = edge
+        .get("expression_template_imports")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            let mut a = a.clone();
+            for e in a.iter_mut() {
+                absolutize_nested_refs(e, scope.base_path);
+            }
+            a
+        })
+        .unwrap_or_default();
+    crate::template_imports::apply_scope_injections(comp, &injected)?;
+
+    // This IS a §4.7 mount edge, so the leaf resolves under the two
+    // mount-scope facts a root document does not have:
+    //
+    // * `mount_declared` — what the leaf's OWN nested mounts declare — so the
+    //   §9.7.6 site-4 widening composes down the reference DAG;
+    // * `mounted_leaf` — the leaf is NOT the last scope that can close a name.
+    //   Its `index_sets` merge into the mounting document's registry after
+    //   this and close there (§9.7.6 site 5), so an axis sized by a name only
+    //   the assembler declares stays symbolic rather than failing here.
+    let mut leaf_mount_declared =
+        crate::template_imports::collect_mount_declared_metaparameters(comp, leaf_dir);
+    leaf_mount_declared.extend(leaf_mount_declared_pre);
+    let mut resolved = crate::template_imports::resolve_template_machinery_scoped(
+        comp,
+        leaf_dir,
+        &bindings,
+        &leaf_mount_declared,
+        true,
+    )?
+    .unwrap_or_else(|| std::mem::take(comp));
+    // A mounted component is a self-contained build boundary (mirrors Julia
+    // `_load_ref` → `_lower_and_coerce`): lower under Option B, then `expand`,
+    // so the spliced component carries the fully-expanded Option-A image and
+    // the assembling document's lowering never resolves the leaf's template
+    // names against its own registry. A leaf with no §9.7 machinery still
+    // expands here: its own calls bind their parameters, so an `enum` op a
+    // parameter spells resolves against the leaf's block below (esm-spec
+    // §9.3).
+    crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
+    crate::lower_expression_templates::expand(&mut resolved)?;
+    *comp = resolved;
+
+    // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN `enums`
+    // block, here, while that block is still at hand. The mounting document's
+    // block is a different one and `enums` do not merge across a mount, so an
+    // importer declaring an enum of the same name cannot change what the leaf
+    // computes. The leaf's own nested mounts were lowered at their own edges.
+    lower_mounted_enums_at_edge(comp, nouns.edge)?;
+
+    // The leaf has now CLOSED, so the contributions its own nested mounts
+    // staged can land — folded against the leaf's own closed environment and
+    // compared deep-equal, the §4.7 merge rule run at the leaf rather than at
+    // the importer. A nested contribution that is deep-equal to an axis the
+    // leaf declares itself is idempotent and adds no key, which is what leaves
+    // it renameable below.
+    let before_nested = index_set_names(comp);
+    apply_staged_index_sets(comp, staged_nested, &leaf_env)?;
+    let nested_contributed: BTreeSet<String> = index_set_names(comp)
+        .difference(&before_nested)
+        .cloned()
+        .collect();
+
+    // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2.
+    // `index_set_rename` speaks the resolved leaf's own post-resolution
+    // vocabulary, so it applies HERE — after the close and fold above, over
+    // the leaf's own and imported axes only: an axis that reached the registry
+    // through a mount nested inside it is renamed (or not) at that nested
+    // edge, so `nested_contributed` is held out. Absent or empty ⇒ identity.
+    crate::template_imports::apply_mount_index_set_rename(
+        comp,
+        edge,
+        nouns.edge,
+        &nested_contributed,
+    )?;
+
+    // §4.7 "Binding a data source's location at the mount": this edge's
+    // `url_substitutions` bind the leaf's placeholders FIRST, so a spliced
+    // segment resolves with the leaf's own location and a leading value anchors
+    // on the MOUNTING document's directory. Then the leaf's `data_sources` —
+    // its own, and those its own mounts already merged into it — resolve
+    // against the LEAF's directory (§8.2.1), here, because once merged into
+    // the mounting document an entry is indistinguishable from one the
+    // importer declared.
+    crate::data_source_urls::apply_mount_url_substitutions(
+        comp,
+        edge,
+        scope.base_path,
+        nouns.edge,
+    )?;
+    crate::data_source_urls::resolve_data_source_urls(comp, leaf_dir)?;
+    Ok(comp
+        .as_object_mut()
+        .and_then(|o| o.remove("data_sources"))
+        .filter(|v| v.as_object().is_some_and(|m| !m.is_empty())))
+}
+
+/// What both mount forms do to the component they extracted from a resolved
+/// leaf, before it splices in.
+fn finish_mounted_component(
+    component: &mut Value,
+    leaf: &MountedLeaf,
+    scope: &MountScope<'_>,
+    edge_label: String,
+    mount_noun: &str,
+) -> Result<(), DiagnosticError> {
+    // esm-spec §4.7 "A mounted document's data sources": the leaf's entries
+    // ride on the spliced component under a private key and merge, with every
+    // other mount's, in [`hoist_subsystem_data_sources`] — one merge rule for
+    // both forms.
+    if let (Some(src), Some(obj)) = (&leaf.data_sources, component.as_object_mut()) {
+        obj.insert(
+            HOISTED_SOURCES_KEY.to_string(),
+            serde_json::json!({ "edge": edge_label, "sources": src }),
+        );
+    }
+    // esm-spec §4.7 "Working precision crosses a mount": the leaf's declared
+    // `domain.element_type` does not merge (one document, one domain), so it
+    // travels on the variables it governs.
+    carry_mounted_element_type(
+        component,
+        leaf.precision.as_deref(),
+        scope.precision,
+        mount_noun,
+    )?;
+    // Any relative `{ref}` the resolution above did not consume anchors at the
+    // LEAF's directory, not at the parent it is about to land in.
+    absolutize_nested_refs(component, &leaf.leaf_dir);
+    Ok(())
+}
+
 /// Inline every top-level `models.<k>` MOUNT EDGE — a bare `{ref}` (has `ref`,
 /// no inline `variables`) — by resolving the referenced leaf IN ITS OWN SCOPE
-/// and splicing in its single model.
+/// ([`resolve_mount_edge`], the pipeline a `subsystems.<k>` edge runs too) and
+/// splicing in its single model.
 ///
-/// This runs the SAME normative edge pipeline (esm-spec §4.7 "Edge pipeline")
-/// that [`resolve_value`] runs at a `subsystems.<k>` edge, because "Two mount
-/// forms, one mechanism" forbids the two attachment points from differing:
-///
-/// 1. the referenced document resolves in its OWN scope — its own nested refs,
-///    of EITHER form, through [`walk_top_level`] in the leaf's directory
-///    FIRST (esm-spec §4.7 "before validation or any other processing", so the
-///    fixpoint below sees the components the leaf mounts — issue #311), then
-///    the library gates, this edge's `bindings` and §9.7.10 form-A injection,
-///    its metaparameter close and fold, the §9.6.3 fixpoint;
-/// 2. this edge's `index_set_rename` applies to that resolved document, over
-///    the axes the leaf itself declares and imports only — an axis that
-///    arrived through one of those nested mounts is renamed at ITS edge;
-/// 3. the renamed `index_sets` merge into THIS document's registry under the
-///    deep-equal-or-`subsystem_index_set_conflict` rule, and the component
-///    splices in.
-///
-/// The nested walk shares this walk's path-scoped cycle set, so a self- or
-/// mutually-importing document is still `circular …` rather than unbounded
-/// recursion, and the merge composes transitively. On top of the
-/// shared pipeline this form additionally merges the leaf's `data_sources` up
-/// (parent wins on a key clash) and drops the leaf's
-/// inline `tests` (§6.6: they do not cross a mount edge).
-///
-/// `parent_meta` is the MOUNTING document's closed metaparameter environment
-/// (its `default`s overlaid with the loader-API bindings, §9.7.6 sites 4-5).
-/// Edge `bindings` expressions fold against it, and — mirroring the Python
-/// `_load_ref_data` backfill — the entries naming a metaparameter the LEAF
-/// declares also seed the leaf's close, so a leaf mounted with no explicit edge
-/// `bindings` still resolves under the assembler's grid (`NX`/`NY`) instead of
-/// falling back to its own defaults. Explicit edge `bindings` win; names the
-/// leaf does not declare are never forwarded, so they cannot raise
-/// `template_import_unknown_name` against the leaf.
+/// What this form adds to the shared pipeline is what esm-spec §4.7 says
+/// differs: the component lands under the same key of this document's
+/// `models` block, a `model` selector picks one of a multi-model leaf, and the
+/// leaf's inline `tests` are dropped (§6.6: they do not cross a mount edge).
+/// The leaf's renamed `index_sets` merge into THIS document's registry (or are
+/// staged, when the root defers its merge) under the
+/// deep-equal-or-`subsystem_index_set_conflict` rule.
 ///
 /// The same function serves a top-level `reaction_systems.<k>` `{ref}`, through
 /// `form` ([`TopLevelMountForm`]): only the block the component comes from and
 /// lands in, the inline discriminator and the selector key differ.
-#[allow(clippy::too_many_arguments)]
 fn inline_toplevel_refs(
     form: &TopLevelMountForm,
     obj: &mut Map<String, Value>,
-    base_path: &Path,
+    scope: &MountScope<'_>,
     visited: &mut HashSet<PathBuf>,
-    parent_meta: &BTreeMap<String, i64>,
-    api_meta: &BTreeMap<String, i64>,
-    forwarded: &BTreeMap<String, i64>,
     mut staged: Option<&mut Map<String, Value>>,
-    merge_env: &BTreeMap<String, i64>,
-    precision: &str,
 ) -> Result<(), DiagnosticError> {
     // An entry is a mount edge only when its `ref` is a STRING (and it carries
     // no inline body). Any other `ref` value leaves the entry to the typed
@@ -812,9 +1136,6 @@ fn inline_toplevel_refs(
             .collect(),
         None => return Ok(()),
     };
-    if edge_names.is_empty() {
-        return Ok(());
-    }
 
     for name in edge_names {
         let entry = obj
@@ -827,323 +1148,81 @@ fn inline_toplevel_refs(
             .get("ref")
             .and_then(|v| v.as_str())
             .expect("edge filter admits only a string ref");
-        // `read_edge_bindings` is shared with the `subsystems.<k>` edge, so it
-        // is told which mount form it is reporting for.
         let mount_noun = format!("top-level {} ref '{ref_str}'", form.noun);
-        let (canonical, mut comp) = load_ref_document(ref_str, base_path, visited, form.ref_noun)?;
-        // Read before anything below can consume the leaf's `domain`.
-        let leaf_precision = declared_element_type(&comp);
-        let leaf_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
+        let leaf = resolve_mount_edge(
+            entry_obj,
+            ref_str,
+            form.ref_noun,
+            &EdgeNouns {
+                library: form.noun_cap,
+                bindings: &mount_noun,
+                edge: &mount_noun,
+            },
+            scope,
+            visited,
+        )?;
 
-        // `comp` stays owned here; the closure only borrows it (so the visited
-        // mark can be removed and `comp`'s by-name blocks merged below on every
-        // exit path), and yields the spliced model.
-        let build: Result<Value, DiagnosticError> = (|| {
-            // esm-spec §4.7 "Edge pipeline" step (1): the referenced document
-            // resolves in its OWN scope. Identical to the `subsystems.<k>` edge
-            // in `resolve_value` — the two mount forms are one mechanism, so a
-            // binding MUST NOT make them differ.
-            crate::lower_expression_templates::reject_expression_templates_pre_v04(&comp)?;
-            crate::template_imports::reject_template_imports_pre_v08(&comp)?;
-            if crate::template_imports::is_template_library_doc(&comp) {
-                return Err(err(
-                    codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
-                    format!(
-                        "{} ref '{ref_str}' targets a template-library file ({}); \
-                         libraries are imported via expression_template_imports \
-                         (esm-spec 9.7.1)",
-                        form.noun_cap,
-                        canonical.display()
-                    ),
-                ));
-            }
-            if crate::coupling_imports::is_coupling_library_doc(&comp) {
-                return Err(err(
-                    codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
-                    format!(
-                        "{} ref '{ref_str}' targets a coupling-library file ({}); \
-                         libraries are imported via a coupling_import coupling entry \
-                         (esm-spec 10.9)",
-                        form.noun_cap,
-                        canonical.display()
-                    ),
-                ));
-            }
-
-            // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
-            // edge `bindings` win, backfilled by the LOADER-API bindings (site
-            // 4) for the names the leaf DECLARES — so a leaf mounted with no
-            // edge bindings still inherits the loader's grid instead of falling
-            // to its own defaults. Names the leaf does not declare are never
-            // forwarded, so they cannot raise `template_import_unknown_name`
-            // against it. Mirrors the Python `_load_ref_data` backfill.
-            //
-            // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
-            // additionally carries the mounting document's OWN declared
-            // defaults, and forwarding those would let an assembler's unrelated
-            // `NLEV` silently override the leaf's own default for a name the
-            // edge never bound — a different answer from the one the SAME leaf
-            // gets at a `subsystems.<k>` mount, which is exactly what §4.7
-            // forbids. `parent_meta` is the scope edge `bindings` EXPRESSIONS
-            // fold against, and that is all it is.
-            //
-            // The same edge also forwards a binding through an assembly (§4.7
-            // "Bindings reach through an assembly"); see [`close_mount_edge`].
-            let EdgeClose {
-                bindings,
-                forwarded: leaf_forwarded,
-                mount_declared: leaf_mount_declared_pre,
-            } = close_mount_edge(
-                &comp,
-                &leaf_dir,
-                entry_obj,
-                parent_meta,
-                api_meta,
-                forwarded,
-                &mount_noun,
-            )?;
-
-            // §4.7: a `{ref}` resolves "before validation or any other
-            // processing", so the leaf's OWN nested refs — of either mount form,
-            // in the leaf's directory — are inlined HERE, before the §9.6.3
-            // fixpoint below. A leaf's template scope reaches the components it
-            // mounts (a rule declared in its own `expression_template_imports`
-            // lowers a rewrite-target inside its `subsystems.<k>`), and §9.7.10
-            // defines the edge injection as "as if the target had added those
-            // entries to the end of its own `expression_template_imports`" — so
-            // the fixpoint must see the mounted content for the two to agree.
-            // Resolving them after it left a nested rewrite-target unlowerable
-            // from any mount edge (issue #311).
-            //
-            // Nested edge `bindings` fold against the leaf's own closed
-            // metaparameter environment — its declared defaults overlaid with
-            // this edge's close — which is exactly what a STANDALONE load of the
-            // leaf hands them (`root_metaparameter_env` in `load_with_meta`).
-            let leaf_env = root_metaparameter_env(&comp, &bindings);
-            //
-            // `defer: true` is load-bearing, and it is the SAME split #317 made
-            // at the root: the content splices in early so the fixpoint can
-            // lower through it, but the `index_sets` it contributes are STAGED,
-            // not merged, because THIS leaf has not closed yet. They land in
-            // `apply_staged_index_sets` after the close below.
-            let staged_nested =
-                // `caller_env` is this edge's `bindings` — the overlay that makes the
-                // leaf's fold environment CLOSED rather than just its defaults
-                // (see `walk_top_level`). `parent_meta` stays the leaf's full
-                // environment: this walk runs BEFORE the leaf's close, so a nested
-                // edge's binding EXPRESSIONS still name the leaf's metaparameters.
-                walk_top_level(
-                    &mut comp,
-                    &leaf_dir,
-                    visited,
-                    &leaf_env,
-                    api_meta,
-                    &leaf_forwarded,
-                    true,
-                    &bindings,
-                    precision,
-                )?;
-
-            // §9.7.10 form A: the edge's `expression_template_imports` inject a
-            // discretization into the leaf's own scope BEFORE resolution, so the
-            // §9.6.3 fixpoint lowers its rewrite-targets at the mount. Their own
-            // relative refs are authored by the assembler carrying the edge, so
-            // they absolutize against THIS document's directory, not the leaf's.
-            let injected: Vec<Value> = entry_obj
-                .get("expression_template_imports")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    let mut a = a.clone();
-                    for e in a.iter_mut() {
-                        absolutize_nested_refs(e, base_path);
-                    }
-                    a
-                })
-                .unwrap_or_default();
-            crate::template_imports::apply_scope_injections(&mut comp, &injected)?;
-
-            // This IS a §4.7 mount edge, so the leaf resolves under the two
-            // mount-scope facts a root document does not have:
-            //
-            // * `mount_declared` — what the leaf's OWN nested mounts declare —
-            //   so the §9.7.6 site-4 widening composes down the reference DAG;
-            // * `mounted_leaf` — the leaf is NOT the last scope that can close a
-            //   name. Its `index_sets` merge into THIS document's registry below
-            //   and close there (§9.7.6 site 5), so an axis sized by a name only
-            //   the assembler declares stays symbolic rather than failing here.
-            let mut leaf_mount_declared =
-                crate::template_imports::collect_mount_declared_metaparameters(&comp, &leaf_dir);
-            leaf_mount_declared.extend(leaf_mount_declared_pre);
-            let mut resolved = crate::template_imports::resolve_template_machinery_scoped(
-                &comp,
-                &leaf_dir,
-                &bindings,
-                &leaf_mount_declared,
-                true,
-            )?
-            .unwrap_or_else(|| std::mem::take(&mut comp));
-            // A mounted component is a self-contained build boundary: lower
-            // under Option B, then `expand`, so the spliced component carries
-            // the fully-expanded Option-A image and the assembling document's
-            // lowering never resolves the leaf's template names against its
-            // own registry. A leaf with no §9.7 machinery still expands here:
-            // its own calls bind their parameters, so an `enum` op a parameter
-            // spells resolves against the leaf's block below (esm-spec §9.3).
-            crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-            crate::lower_expression_templates::expand(&mut resolved)?;
-            comp = resolved;
-
-            // esm-spec §9.3: the leaf's `enum` ops resolve against ITS OWN
-            // `enums` block, here, while that block is still at hand. The
-            // mounting document's block is a different one and `enums` do not
-            // merge across a mount, so an importer declaring an enum of the same
-            // name cannot change what the leaf computes. The leaf's own nested
-            // mounts were lowered at their own edges above.
-            lower_mounted_enums_at_edge(&mut comp, &mount_noun)?;
-
-            // The leaf has now CLOSED, so the contributions its own nested
-            // mounts staged can land — folded against the leaf's own closed
-            // environment and compared deep-equal, the §4.7 merge rule run at
-            // the leaf rather than at the importer. A nested contribution that
-            // is deep-equal to an axis the leaf declares itself is idempotent
-            // and adds no key, which is what leaves it renameable below.
-            let before_nested = index_set_names(&comp);
-            apply_staged_index_sets(&mut comp, staged_nested, &leaf_env)?;
-            let nested_contributed: std::collections::BTreeSet<String> = index_set_names(&comp)
-                .difference(&before_nested)
-                .cloned()
-                .collect();
-
-            // Step (2): `index_set_rename` speaks the resolved leaf's own
-            // post-resolution vocabulary, so it applies HERE — after the close
-            // and fold above, over the leaf's own and imported axes only (each
-            // nested edge renames what IT brings, at its own edge).
-            crate::template_imports::apply_mount_index_set_rename(
-                &mut comp,
-                entry_obj,
-                &mount_noun,
-                &nested_contributed,
-            )?;
-
-            let sel = entry_obj.get(form.selector).and_then(|v| v.as_str());
-            let mut model = extract_toplevel_component(form, &comp, sel, ref_str, &canonical)?;
-            // esm-spec §6.6: inline tests do NOT cross a mount edge. They are
-            // assertions about the leaf under the leaf's OWN standalone
-            // conditions, and the mounting document may couple it — replacing a
-            // parameter, reshaping it, feeding it another component's state — so
-            // re-running them here would check a claim the leaf's author never
-            // made. They run when the leaf's own file is the test target, which
-            // a directory-wide `esm test` reaches anyway.
-            if let Some(model_obj) = model.as_object_mut() {
-                model_obj.remove("tests");
-            }
-            // esm-spec §4.7 "Working precision crosses a mount": the leaf's
-            // declared `domain.element_type` does not merge (one document, one
-            // domain), so it travels on the variables it governs.
-            carry_mounted_element_type(
-                &mut model,
-                leaf_precision.as_deref(),
-                precision,
-                &mount_noun,
-            )?;
-            // Any relative `{ref}` the resolution above did not consume anchors
-            // at the LEAF's directory, not at the parent it is about to land in.
-            absolutize_nested_refs(&mut model, &leaf_dir);
-            Ok(model)
-        })();
-        visited.remove(&canonical);
-        let model = build?;
-
-        // Splice the resolved component back under the same key, then merge the
-        // leaf's by-name blocks (parent wins on a clash).
+        let sel = entry_obj.get(form.selector).and_then(|v| v.as_str());
+        let mut component =
+            extract_toplevel_component(form, &leaf.doc, sel, ref_str, &leaf.canonical)?;
+        // esm-spec §6.6: inline tests do NOT cross a mount edge. They are
+        // assertions about the leaf under the leaf's OWN standalone conditions,
+        // and the mounting document may couple it — replacing a parameter,
+        // reshaping it, feeding it another component's state — so re-running
+        // them here would check a claim the leaf's author never made. They run
+        // when the leaf's own file is the test target.
+        if let Some(component_obj) = component.as_object_mut() {
+            component_obj.remove("tests");
+        }
+        finish_mounted_component(
+            &mut component,
+            &leaf,
+            scope,
+            format!("{}.{name} ({mount_noun})", form.block),
+            &mount_noun,
+        )?;
         obj.get_mut(form.block)
             .and_then(|v| v.as_object_mut())
             .expect("mount block present")
-            .insert(name.clone(), model);
-        // esm-spec §8.2.1: a hoisted `data_sources` block's locations anchor on
-        // the directory of the file they were READ from, not on the importer's.
-        // Resolved here, before the merge below, because afterwards the entry is
-        // indistinguishable from one the importer declared. A no-op when the leaf
-        // declares no sources, which is almost every leaf.
-        //
-        // §4.7 "Binding a data source's location at the mount": this edge's
-        // `url_substitutions` bind the leaf's placeholders FIRST, so a spliced
-        // segment resolves with the leaf's own location and a leading value
-        // anchors on THIS (the mounting) document's directory.
-        crate::data_source_urls::apply_mount_url_substitutions(
-            &mut comp,
-            entry_obj,
-            base_path,
-            &mount_noun,
-        )?;
-        crate::data_source_urls::resolve_data_source_urls(&mut comp, &leaf_dir)
-            .map_err(|e| err(e.code, e.message))?;
-        // esm-spec §4.7 "Index-set merge": a top-level `models.<k>` mount edge
-        // merges the leaf's document-scoped `index_sets` into THIS document's
-        // registry, exactly as a subsystem mount does — the two mount forms are
-        // one mechanism at two attachment points, so an assembly may shape its
-        // coupling over the leaf's axes without redeclaring them. Deep-equal
-        // redeclaration is idempotent; a non-deep-equal collision is
-        // `subsystem_index_set_conflict`. Merged AFTER the leaf's own resolution
-        // and nested mounts above, so `comp`'s registry already carries whatever
-        // ITS own mounts brought in and the merge composes transitively. Unlike
-        // the by-name blocks below, the importer does NOT silently win a clash.
-        //
-        // Every declaration merges, including an `interval` whose `size` is a
-        // metaparameter name. Before the edge close existed this merge held such
-        // a declaration back, and the assembly had to redeclare the axis — the
-        // gap §4.7's "without redeclaring them" forbids.
+            .insert(name.clone(), component);
+
+        // esm-spec §4.7 "Index-set merge": the leaf's document-scoped
+        // `index_sets` merge into THIS document's registry, exactly as at a
+        // subsystem mount, so an assembly may shape its coupling over the
+        // leaf's axes without redeclaring them. `comp`'s registry already
+        // carries whatever ITS own mounts brought in, so the merge composes
+        // transitively. Unlike the by-name blocks, the importer does NOT
+        // silently win a clash.
         //
         // A `size` is concrete here only when the leaf HAS §9.7 machinery: then
-        // the edge closed and folded its `metaparameters` above (§9.7.6 site 3).
-        // A leaf with NO machinery has no close to run, so a `size` naming a
-        // metaparameter the ASSEMBLER declares still arrives here SYMBOLIC and
-        // merges that way, to be closed by the mounting document's own §9.7.6
-        // pass. `merge_subsystem_index_sets` compares declarations structurally
-        // and has no symbolic handling, so on that path the idempotence it
-        // enforces is SYNTACTIC: a mount that restates the leaf's axis verbatim
+        // the edge closed and folded its `metaparameters`. A leaf with NO
+        // machinery has no close to run, so a `size` naming a metaparameter the
+        // ASSEMBLER declares still arrives here SYMBOLIC and merges that way, to
+        // be closed by the mounting document's own §9.7.6 pass.
+        // `merge_subsystem_index_sets` compares declarations structurally and
+        // has no symbolic handling, so on that path the idempotence it enforces
+        // is SYNTACTIC: a mount that restates the leaf's axis verbatim
         // (`size: "n_rows"`) merges clean, and one that restates it with the
         // concrete number the name folds to (`size: 7`) is a
         // `subsystem_index_set_conflict`. Python agrees on both.
-        if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
+        if let Some(loaded) = leaf.doc.get("index_sets").and_then(|v| v.as_object())
             && !loaded.is_empty()
         {
             // Deferred at the ROOT (see `walk_top_level`): the contribution is
             // staged, not merged, until the mounting document has closed.
             if let Some(staged) = staged.as_deref_mut() {
-                merge_subsystem_index_sets(staged, &loaded, ref_str, merge_env)?;
+                merge_subsystem_index_sets(staged, loaded, ref_str, scope.merge_env)?;
             } else {
                 let registry = obj
                     .entry("index_sets".to_string())
                     .or_insert_with(|| Value::Object(Map::new()));
                 if let Some(registry) = registry.as_object_mut() {
-                    merge_subsystem_index_sets(registry, &loaded, ref_str, merge_env)?;
+                    merge_subsystem_index_sets(registry, loaded, ref_str, scope.merge_env)?;
                 }
             }
         }
         // Not `enums`: it is file-local (esm-spec §9.3), and the leaf's `enum`
         // ops were already lowered against it at the edge.
-        // esm-spec §4.7 "A mounted document's data sources": the entries ride
-        // on the spliced model and merge, with every other mount's, in
-        // [`hoist_subsystem_data_sources`] — one merge rule for both forms.
-        if let Some(src) = comp
-            .as_object_mut()
-            .and_then(|o| o.remove("data_sources"))
-            .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()))
-            && let Some(model) = obj
-                .get_mut(form.block)
-                .and_then(|v| v.as_object_mut())
-                .and_then(|m| m.get_mut(&name))
-                .and_then(Value::as_object_mut)
-        {
-            model.insert(
-                HOISTED_SOURCES_KEY.to_string(),
-                serde_json::json!({
-                    "edge": format!("{}.{name} ({mount_noun})", form.block),
-                    "sources": src,
-                }),
-            );
-        }
     }
     Ok(())
 }
@@ -1265,53 +1344,24 @@ fn absolutize_nested_refs(value: &mut Value, base_dir: &Path) {
 /// Walk a model or reaction system value and resolve any refs in its
 /// `subsystems` map. `registry`, when `Some`, accumulates referenced files'
 /// top-level `index_sets` (esm-spec §4.7 model-subsystem merge).
-///
-/// `parent_meta` and `api_meta` are the two mounting-scope environments a
-/// `subsystems.<k>` edge needs, and they are NOT interchangeable — exactly as at
-/// the top-level `models.<k>` form ([`walk_top_level`]): edge `bindings`
-/// EXPRESSIONS fold against `parent_meta`, while only `api_meta` (the loader-API
-/// bindings, §9.7.6 site 4) backfills the leaf's own close.
-#[allow(clippy::too_many_arguments)]
 fn walk_subsystems(
     value: &mut Value,
-    base_path: &Path,
+    scope: &MountScope<'_>,
     visited: &mut HashSet<PathBuf>,
     mut registry: Option<&mut Map<String, Value>>,
-    parent_meta: &BTreeMap<String, i64>,
-    api_meta: &BTreeMap<String, i64>,
-    forwarded: &BTreeMap<String, i64>,
-    merge_env: &BTreeMap<String, i64>,
-    precision: &str,
 ) -> Result<(), DiagnosticError> {
-    let obj = match value.as_object_mut() {
-        Some(o) => o,
-        None => return Ok(()),
-    };
-
-    let subs_val = match obj.get_mut("subsystems") {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-
-    let subs = match subs_val.as_object_mut() {
-        Some(m) => m,
-        None => return Ok(()),
+    let Some(subs) = value
+        .as_object_mut()
+        .and_then(|o| o.get_mut("subsystems"))
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
     };
 
     let names: Vec<String> = subs.keys().cloned().collect();
     for name in names {
         let entry = subs.remove(&name).unwrap_or(Value::Null);
-        let resolved = resolve_value(
-            entry,
-            base_path,
-            visited,
-            registry.as_deref_mut(),
-            parent_meta,
-            api_meta,
-            forwarded,
-            merge_env,
-            precision,
-        )?;
+        let resolved = resolve_value(entry, scope, visited, registry.as_deref_mut())?;
         subs.insert(name, resolved);
     }
 
@@ -1452,31 +1502,22 @@ fn close_mount_edge(
     })
 }
 
-/// If `value` is a `{ "ref": "..." }` object, load the referenced file and
-/// inline the single top-level system from it. Otherwise recurse into the
+/// If `value` is a `{ "ref": "..." }` object, resolve the referenced file at
+/// this mount edge ([`resolve_mount_edge`], the pipeline the top-level form
+/// runs too) and inline its single top-level system. Otherwise recurse into the
 /// value's own `subsystems` map.
 ///
-/// esm-spec §9.7: a subsystem ref MUST NOT target a template-library file
-/// (`subsystem_ref_is_template_library` — the two reference mechanisms are
-/// disjoint, §9.7.1), and the referenced document's own §9.7 machinery
-/// (template imports + metaparameters) is resolved in the referenced file's
-/// directory, closed with this edge's `bindings` (§9.7.6 binding site 3) and
-/// lowered to the §9.6.3 fixpoint, before the single component is extracted.
-/// Template-import diagnostics propagate as
-/// [`crate::lower_expression_templates::ExpressionTemplateError`] (a
-/// [`DiagnosticError`]), carrying their stable `code`, matching how `load_string()`
-/// surfaces them.
-#[allow(clippy::too_many_arguments)]
+/// What this form adds to the shared pipeline is where the component lands —
+/// in this `subsystems.<k>` slot — and that the leaf must hold exactly one
+/// system ([`extract_single_system`]); its `tests` stay (a subsystem's tests
+/// are never run by the mounting document). The leaf's renamed `index_sets`
+/// merge into `registry` when it is `Some` (model subsystems; reaction-system
+/// subsystems do not merge).
 fn resolve_value(
     value: Value,
-    base_path: &Path,
+    scope: &MountScope<'_>,
     visited: &mut HashSet<PathBuf>,
     registry: Option<&mut Map<String, Value>>,
-    parent_meta: &BTreeMap<String, i64>,
-    api_meta: &BTreeMap<String, i64>,
-    forwarded: &BTreeMap<String, i64>,
-    merge_env: &BTreeMap<String, i64>,
-    precision: &str,
 ) -> Result<Value, DiagnosticError> {
     if let Some(obj) = value.as_object()
         && let Some(ref_val) = obj.get("ref")
@@ -1484,270 +1525,35 @@ fn resolve_value(
         let ref_str = ref_val
             .as_str()
             .ok_or_else(|| err(SUBSYSTEM_REF.code, "subsystem ref must be a string"))?;
-
-        let (canonical, mut parsed) =
-            load_ref_document(ref_str, base_path, visited, &SUBSYSTEM_REF)?;
-        // Read before anything below can consume the leaf's `domain`.
-        let leaf_precision = declared_element_type(&parsed);
-
-        // A §4.7 subsystem ref MUST NOT target a template-library file — the
-        // two reference mechanisms are disjoint (esm-spec §9.7.1).
-        if crate::template_imports::is_template_library_doc(&parsed) {
-            visited.remove(&canonical);
-            return Err(err(
-                codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
-                format!(
-                    "Subsystem ref '{ref_str}' targets a \
-                     template-library file ({}); libraries are imported via \
-                     expression_template_imports (esm-spec 9.7.1)",
-                    canonical.display()
-                ),
-            ));
-        }
-
-        // Likewise, a §4.7 subsystem ref MUST NOT target a coupling-library
-        // file — those are imported via a `coupling_import` coupling entry, not
-        // mounted as a subsystem (esm-spec §10.9).
-        if crate::coupling_imports::is_coupling_library_doc(&parsed) {
-            visited.remove(&canonical);
-            return Err(err(
-                codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
-                format!(
-                    "Subsystem ref '{ref_str}' targets a \
-                     coupling-library file ({}); libraries are imported via a coupling_import \
-                     coupling entry (esm-spec 10.9)",
-                    canonical.display()
-                ),
-            ));
-        }
-
-        // Resolve the referenced document's §9.7 machinery in its own
-        // directory, closing its metaparameters with this edge's `bindings`
-        // (esm-spec §9.7.6 binding site 3), then run the §9.6.3 fixpoint so
-        // the inlined component carries only concrete Expression ASTs.
-        let parent_dir = canonical.parent().unwrap_or(base_path).to_path_buf();
-        let edge_result: Result<(), DiagnosticError> = (|| {
-            crate::lower_expression_templates::reject_expression_templates_pre_v04(&parsed)?;
-            crate::template_imports::reject_template_imports_pre_v08(&parsed)?;
-            // §9.7.6 binding site 3: close the leaf's metaparameters. Explicit
-            // edge `bindings` win, backfilled by the LOADER-API bindings (site
-            // 4) for the names the leaf DECLARES — the SAME backfill the
-            // top-level `models.<k>` mount runs (§4.7 "Two mount forms, one
-            // mechanism"). Without it a discovered `extent` (§8.9.4) reached a
-            // top-level-mounted leaf and not a subsystem-mounted one, so the
-            // same two documents sized the same axis differently depending only
-            // on which attachment point the assembler picked — and the
-            // subsystem form sized it at the leaf's placeholder default, so the
-            // ingested field came back ZERO-LENGTH with no diagnostic at all.
-            //
-            // The backfill reads `api_meta`, NOT `parent_meta`. `parent_meta`
-            // additionally carries the mounting document's OWN declared
-            // defaults, and forwarding those would let an assembler's unrelated
-            // metaparameter silently resize a leaf axis the edge never bound.
-            // Names the leaf does not declare are never forwarded, so they
-            // cannot raise `template_import_unknown_name` against it.
-            //
-            // The same edge also forwards a binding through an assembly (§4.7
-            // "Bindings reach through an assembly"); see [`close_mount_edge`].
-            let EdgeClose {
-                bindings,
-                forwarded: leaf_forwarded,
-                mount_declared: leaf_mount_declared_pre,
-            } = close_mount_edge(
-                &parsed,
-                &parent_dir,
-                obj,
-                parent_meta,
-                api_meta,
-                forwarded,
-                "subsystem ref",
-            )?;
-            // esm-spec §4.7: a `{ref}` resolves "before validation or any other
-            // processing", so the referenced document's OWN nested refs are
-            // inlined HERE, before the §9.6.3 fixpoint below — otherwise a
-            // rewrite-target inside a component the leaf itself mounts is
-            // unlowerable from this edge, while the same library declared in the
-            // leaf's own `expression_template_imports` does lower it (#311).
-            // §9.7.10 defines the injection as "as if the target had added those
-            // entries to the end of its own `expression_template_imports`", so
-            // the two MUST agree.
-            //
-            // `defer: true` is load-bearing, and it is the SAME split #317 made
-            // at the root: the content splices in early so the fixpoint can
-            // lower through it, but the `index_sets` it contributes are STAGED,
-            // not merged, because THIS leaf has not closed yet — its
-            // `resolve_template_machinery` call is still below. They land in
-            // `apply_staged_index_sets` after the close, folded against the
-            // leaf's own closed environment. Merging them here would put a §4.7
-            // contribution back before a §9.7.6 close, which is exactly what
-            // #317 removed.
-            let leaf_env = root_metaparameter_env(&parsed, &bindings);
-            let staged_nested = walk_top_level(
-                &mut parsed,
-                &parent_dir,
-                visited,
-                &leaf_env,
-                api_meta,
-                &leaf_forwarded,
-                true,
-                &bindings,
-                precision,
-            )?;
-            // esm-spec §9.7.10 form A: the edge's `expression_template_imports`
-            // inject a discretization into the referenced component's own
-            // scope, appended BEFORE resolution so the §9.6.3 fixpoint lowers
-            // its rewrite-targets at the mount. Consumed here (does not survive
-            // parse → emit; the mount round-trips as the lowered inline
-            // component). Refs resolve against the referenced file's directory.
-            let injected: Vec<Value> = obj
-                .get("expression_template_imports")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            crate::template_imports::apply_scope_injections(&mut parsed, &injected)?;
-            // As at the top-level mount form: the leaf's own nested mounts
-            // widen its §9.7.6 site-4 check, and `mounted_leaf` keeps an axis
-            // this scope cannot size symbolic for the merge below to close
-            // (§9.7.6 site 5).
-            let mut leaf_mount_declared =
-                crate::template_imports::collect_mount_declared_metaparameters(
-                    &parsed,
-                    &parent_dir,
-                );
-            leaf_mount_declared.extend(leaf_mount_declared_pre);
-            let mut resolved = crate::template_imports::resolve_template_machinery_scoped(
-                &parsed,
-                &parent_dir,
-                &bindings,
-                &leaf_mount_declared,
-                true,
-            )?
-            .unwrap_or_else(|| std::mem::take(&mut parsed));
-            // A referenced subsystem is a self-contained build boundary
-            // (mirrors Julia `_load_ref` → `_lower_and_coerce`): lower under
-            // Option B, then `expand` so the inlined component carries the
-            // fully-expanded Option-A image with no surviving references —
-            // the parent document's lowering must not resolve the
-            // subsystem's own template names against the parent registry. A
-            // leaf with no §9.7 machinery still expands, as at the top-level
-            // form (esm-spec §9.3).
-            crate::lower_expression_templates::lower_expression_templates(&mut resolved)?;
-            crate::lower_expression_templates::expand(&mut resolved)?;
-            parsed = resolved;
-            // esm-spec §9.3: the referenced document's `enum` ops resolve
-            // against ITS OWN `enums` block, here, as at the top-level form.
-            lower_mounted_enums_at_edge(&mut parsed, &format!("subsystem ref '{ref_str}'"))?;
-            // The leaf has now CLOSED, so the contributions its own nested
-            // mounts staged can land — folded against the leaf's own closed
-            // environment and compared deep-equal, the §4.7 merge rule run at
-            // the leaf rather than at the importer. A nested contribution that
-            // is deep-equal to an axis the leaf declares itself is idempotent
-            // and adds no key, which is what leaves it renameable below.
-            let before_nested = index_set_names(&parsed);
-            apply_staged_index_sets(&mut parsed, staged_nested, &leaf_env)?;
-            let nested_contributed: std::collections::BTreeSet<String> = index_set_names(&parsed)
-                .difference(&before_nested)
-                .cloned()
-                .collect();
-
-            // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2.
-            // The referenced document has now resolved in its OWN scope — its
-            // imports, this edge's `bindings` and injection, its metaparameter
-            // close and fold, the §9.6.3 fixpoint — so its `index_sets` are the
-            // post-resolution vocabulary the edge's `index_set_rename` speaks.
-            // Scoped to what THIS document declares and imports: an axis that
-            // reached the registry through a mount nested inside it is renamed
-            // (or not) at that nested edge, so `nested_contributed` is held out.
-            // Absent or empty ⇒ identity, so an edge that does not use the field
-            // resolves exactly as before.
-            crate::template_imports::apply_mount_index_set_rename(
-                &mut parsed,
-                obj,
-                &format!("subsystem ref '{ref_str}'"),
-                &nested_contributed,
-            )?;
-            // §4.7 "Binding a data source's location at the mount", at this
-            // form too: the two mount forms are one mechanism, so an edge that
-            // names a placeholder the leaf does not spell fails here exactly as
-            // it does at a top-level `models.<k>` edge.
-            crate::data_source_urls::apply_mount_url_substitutions(
-                &mut parsed,
-                obj,
-                base_path,
-                &format!("subsystem ref '{ref_str}'"),
-            )?;
-            Ok(())
-        })();
-        if let Err(e) = edge_result {
-            visited.remove(&canonical);
-            return Err(e);
-        }
-
-        // Recursively resolve any refs inside the loaded file, then merge its
-        // top-level `index_sets` into the importing document's registry
-        // (esm-spec §4.7, bottom-up; `registry` is `None` for reaction-system
-        // subsystem refs). Wrapped in a closure so `visited.remove` below runs
-        // on the error paths too — a load error aborts the whole resolution
-        // today, but a path left marked visited would silently skip the file
-        // if resolution ever becomes partially recoverable.
-        let nested_result = (|| -> Result<(), DiagnosticError> {
-            // The leaf's own nested refs were inlined inside the edge closure
-            // above, before the fixpoint (#311), and the `index_sets` they
-            // contributed were staged there and merged after the leaf's close;
-            // what remains here is the bottom-up merge into the IMPORTING
-            // document.
-            if let Some(reg) = registry
-                && let Some(loaded) = parsed.get("index_sets").and_then(|v| v.as_object())
-            {
-                merge_subsystem_index_sets(reg, &loaded.clone(), ref_str, merge_env)?;
-            }
-            Ok(())
-        })();
-
-        visited.remove(&canonical);
-        nested_result?;
-
-        // esm-spec §4.7 "A mounted document's data sources": at this form as
-        // at the top-level one, the leaf's `data_sources` — its own, and those
-        // its own mounts already merged into it, with this edge's
-        // `url_substitutions` applied above — resolve against the LEAF's
-        // directory (§8.2.1) and then merge into the MOUNTING document. They
-        // ride on the spliced component under a private key that
-        // [`hoist_subsystem_data_sources`] collects at the mounting document.
-        crate::data_source_urls::resolve_data_source_urls(&mut parsed, &parent_dir)?;
-        let leaf_sources = parsed
-            .as_object_mut()
-            .and_then(|o| o.remove("data_sources"))
-            .filter(|v| v.as_object().is_some_and(|m| !m.is_empty()));
-        let mut system = extract_single_system(parsed, &canonical)?;
-        if let (Some(src), Some(sys)) = (leaf_sources, system.as_object_mut()) {
-            sys.insert(
-                HOISTED_SOURCES_KEY.to_string(),
-                serde_json::json!({"edge": format!("subsystem ref '{ref_str}'"), "sources": src}),
-            );
-        }
-        // esm-spec §4.7 "Working precision crosses a mount", at this form too.
-        carry_mounted_element_type(
-            &mut system,
-            leaf_precision.as_deref(),
-            precision,
-            &format!("subsystem ref '{ref_str}'"),
+        let mount_noun = format!("subsystem ref '{ref_str}'");
+        let leaf = resolve_mount_edge(
+            obj,
+            ref_str,
+            &SUBSYSTEM_REF,
+            &EdgeNouns {
+                library: "Subsystem",
+                bindings: "subsystem ref",
+                edge: &mount_noun,
+            },
+            scope,
+            visited,
         )?;
+
+        let mut system = extract_single_system(&leaf.doc, &leaf.canonical)?;
+        finish_mounted_component(&mut system, &leaf, scope, mount_noun.clone(), &mount_noun)?;
+
+        // esm-spec §4.7 "Index-set merge", step 3: bottom-up into the
+        // importing document's registry.
+        if let Some(reg) = registry
+            && let Some(loaded) = leaf.doc.get("index_sets").and_then(|v| v.as_object())
+        {
+            merge_subsystem_index_sets(reg, loaded, ref_str, scope.merge_env)?;
+        }
         return Ok(system);
     }
 
     let mut value = value;
-    walk_subsystems(
-        &mut value,
-        base_path,
-        visited,
-        registry,
-        parent_meta,
-        api_meta,
-        forwarded,
-        merge_env,
-        precision,
-    )?;
+    walk_subsystems(&mut value, scope, visited, registry)?;
     Ok(value)
 }
 
@@ -1854,7 +1660,7 @@ fn stamp_element_type(
 /// system, or data loader. Extract that single entry as a JSON value to inline
 /// into the caller's subsystem slot. Precedence is models -> reaction_systems
 /// -> data_sources.
-fn extract_single_system(value: Value, source: &Path) -> Result<Value, DiagnosticError> {
+fn extract_single_system(value: &Value, source: &Path) -> Result<Value, DiagnosticError> {
     let obj = value.as_object().ok_or_else(|| {
         err(
             SUBSYSTEM_REF.code,
@@ -2093,6 +1899,57 @@ mod tests {
             .join("../../tests/invalid/version_gate_newer_mounts_older_solver.esm");
         let e = crate::load_path(&fixture).expect_err("the shared fixture is refused");
         assert!(e.to_string().contains(codes::SOLVER_VERSION_TOO_OLD), "{e}");
+    }
+
+    /// esm-spec §9.7.10 form A at both mount forms: a RELATIVE ref in an
+    /// edge's injected `expression_template_imports` is authored by the
+    /// document carrying the edge, so it resolves against THAT document's
+    /// directory, never the mounted leaf's. The leaf sits in a subdirectory
+    /// and the injected library beside the mounting document, so resolving
+    /// against the leaf's directory would not find the library.
+    #[test]
+    fn injected_template_imports_resolve_against_the_mounting_directory() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/expression_templates/inject_subsystem_ref");
+        let dir = TempDir::new().unwrap();
+        for f in [
+            "central_D_lon_interior.esm",
+            "central_D_lon_zero_grad_bc.esm",
+            "grid_latlon.esm",
+        ] {
+            std::fs::copy(src.join(f), dir.path().join(f)).unwrap();
+        }
+        std::fs::create_dir(dir.path().join("leaves")).unwrap();
+        std::fs::copy(src.join("leaf.esm"), dir.path().join("leaves/leaf.esm")).unwrap();
+        let edge = json!({
+            "ref": "./leaves/leaf.esm",
+            "expression_template_imports": [{
+                "ref": "./central_D_lon_zero_grad_bc.esm",
+                "only": ["central_D_lon_zero_grad_bc"],
+                "bindings": { "NLON": 288, "NLAT": 181 }
+            }]
+        });
+        let subsystem_form = json!({
+            "esm": "1.1.0",
+            "metadata": { "name": "subsystem_form" },
+            "models": { "Assembly": {
+                "variables": { "total": { "type": "unknown", "units": "kg/m^3", "default": 0.0 } },
+                "equations": [{ "lhs": { "op": "D", "args": ["total"], "wrt": "t" }, "rhs": 0.0 }],
+                "subsystems": { "Runoff": edge.clone() }
+            } }
+        });
+        let toplevel_form = json!({
+            "esm": "1.1.0",
+            "metadata": { "name": "toplevel_form" },
+            "models": { "Runoff": edge }
+        });
+        for (name, doc) in [("subsystem", subsystem_form), ("top-level", toplevel_form)] {
+            let path = dir.path().join(format!("{}.esm", name.replace('-', "_")));
+            std::fs::write(&path, doc.to_string()).unwrap();
+            crate::load_path(&path).unwrap_or_else(|e| {
+                panic!("{name} form: the injected library resolves beside the assembly: {e}")
+            });
+        }
     }
 
     #[test]
