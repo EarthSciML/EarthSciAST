@@ -2325,6 +2325,7 @@ reading that as a gap.
 | `substitute_in_reaction_system_with_context` | function | – | – | – | `substitute_in_reaction_system_with_context` | `SubstituteInReactionSystemWithContext` |
 | `substitute_with_context` | function | – | – | – | `substitute_with_context` | `SubstituteWithContext` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
+| `subsystem_ref` | type | `SubsystemRef` | – | – | `SubsystemRef` | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
 | `sweep_dimension` | type | – | – | – | `SweepDimension` | `SweepDimension` |
 | `sweep_range` | type | – | – | – | `SweepRange` | `SweepRange` |

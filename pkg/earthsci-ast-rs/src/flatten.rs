@@ -43,6 +43,7 @@
 //! (CONFORMANCE_SPEC §5.9). A consumer that needs a discretized system up front
 //! can demand one with [`reject_unlowered_operators`].
 
+use crate::types::HasSubsystems;
 use crate::types::{
     AffectEquation, ContinuousEvent, CouplingEntry, DiscreteEvent, DiscreteEventTrigger, Domain,
     Equation, EsmFile, Expr, ExpressionNode, IndexSet, InlineValue, JoinClause, Model,
@@ -3482,20 +3483,15 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // only TOP-LEVEL components' events (parse.py's `EsmFile.events`), so a
     // subsystem-owned event is not part of the flattened system in any
     // binding. Folding them in here would make Rust the outlier.
-    if let Some(subs) = &model.subsystems {
-        for (sub_name, sub_value) in subs {
-            // A `{ "ref": … }` entry (or any non-model mount) is not a
-            // subsystem to lower: reference resolution runs before flattening,
-            // so anything still unresolved here contributes nothing.
-            let Ok(sub_model) = serde_json::from_value::<Model>(sub_value.clone()) else {
-                continue;
-            };
-            let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), &sub_model)?;
-            block.state_vars.extend(sub_block.state_vars);
-            block.parameters.extend(sub_block.parameters);
-            block.observed_vars.extend(sub_block.observed_vars);
-            block.equations.extend(sub_block.equations);
-        }
+    //
+    // A `{ "ref": … }` entry is not a subsystem to lower: reference resolution
+    // runs before flattening, so one still unresolved contributes nothing.
+    for (sub_name, sub_model) in model.inline_subsystems() {
+        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model)?;
+        block.state_vars.extend(sub_block.state_vars);
+        block.parameters.extend(sub_block.parameters);
+        block.observed_vars.extend(sub_block.observed_vars);
+        block.equations.extend(sub_block.equations);
     }
 
     Ok(block)
@@ -3945,10 +3941,8 @@ pub(crate) fn namespaced_model_events(
             )),
         ));
     }
-    for (key, value) in model.subsystems.iter().flatten() {
-        if let Ok(sub) = serde_json::from_value::<Model>(value.clone()) {
-            namespaced_model_events(&format!("{path}.{key}"), &sub, out);
-        }
+    for (key, sub) in model.inline_subsystems() {
+        namespaced_model_events(&format!("{path}.{key}"), sub, out);
     }
 }
 
@@ -3995,10 +3989,8 @@ pub(crate) fn namespaced_reaction_events(
             )),
         ));
     }
-    for (key, value) in rs.subsystems.iter().flatten() {
-        if let Ok(sub) = serde_json::from_value::<ReactionSystem>(value.clone()) {
-            namespaced_reaction_events(&format!("{path}.{key}"), &sub, out);
-        }
+    for (key, sub) in rs.inline_subsystems() {
+        namespaced_reaction_events(&format!("{path}.{key}"), sub, out);
     }
 }
 
@@ -5608,11 +5600,9 @@ fn lookup_model_units(model: &Model, name: &str) -> Option<String> {
         return var.units.clone();
     }
     if let Some((head, rest)) = name.split_once('.')
-        && let Some(subs) = &model.subsystems
-        && let Some(sub_val) = subs.get(head)
-        && let Ok(sub_model) = serde_json::from_value::<Model>(sub_val.clone())
+        && let Some(sub_model) = model.inline_subsystem(head)
     {
-        return lookup_model_units(&sub_model, rest);
+        return lookup_model_units(sub_model, rest);
     }
     None
 }
@@ -5628,11 +5618,9 @@ fn lookup_rsys_units(rsys: &ReactionSystem, name: &str) -> Option<String> {
         return p.units.clone();
     }
     if let Some((head, rest)) = name.split_once('.')
-        && let Some(subs) = &rsys.subsystems
-        && let Some(sub_val) = subs.get(head)
-        && let Ok(sub_rsys) = serde_json::from_value::<ReactionSystem>(sub_val.clone())
+        && let Some(sub_rsys) = rsys.inline_subsystem(head)
     {
-        return lookup_rsys_units(&sub_rsys, rest);
+        return lookup_rsys_units(sub_rsys, rest);
     }
     None
 }
@@ -6853,10 +6841,7 @@ mod tests {
             vec![ddt("x", Expr::Variable("gain".to_string()))],
         );
         let mut subsystems = IndexMap::new();
-        subsystems.insert(
-            "inner".to_string(),
-            serde_json::to_value(&inner).expect("model serializes"),
-        );
+        subsystems.insert("inner".to_string(), crate::types::Subsystem::inline(inner));
         let wrap = Model {
             subsystems: Some(subsystems),
             ..Default::default()

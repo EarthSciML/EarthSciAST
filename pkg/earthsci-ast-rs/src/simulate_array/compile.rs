@@ -12,6 +12,7 @@ use crate::simulate::{CompileError, SimulateError};
 use crate::types::{
     EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
 };
+use crate::types::{Subsystem, TreeOrder, component_tree};
 use crate::value_invention::{ValueInventionResult, materialize_value_invention};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
@@ -49,17 +50,12 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
 /// variables are part of the model [`mount_subsystems`] builds, so a routing
 /// question about the model is a question about its whole mount tree: a
 /// document whose only array or derivative lives in a subsystem is otherwise
-/// routed as if it had none. An entry [`parse_subsystem_model`] cannot read
-/// contributes nothing here; the build reports it.
+/// routed as if it had none. An unresolved `{"ref": …}` contributes nothing
+/// here; the build reports it.
 pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bool {
-    if pred(model) {
-        return true;
-    }
-    model.subsystems.as_ref().is_some_and(|subs| {
-        subs.iter().any(|(name, value)| {
-            parse_subsystem_model(name, value).is_ok_and(|(sub, _)| model_tree_any(&sub, pred))
-        })
-    })
+    component_tree(model, "", "", TreeOrder::Declared)
+        .iter()
+        .any(|node| pred(node.component))
 }
 
 /// Return true if the file has spatial structure: any model with array-shaped
@@ -159,60 +155,6 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 // Subsystem mounting (esm-spec §4.6 dot notation).
 // ============================================================================
 
-/// Coerce one resolved `subsystems` entry into a typed [`Model`] plus the
-/// document `index_sets` registry it ships (empty for a bare model fragment).
-/// The loader ([`crate::ref_loading::resolve_subsystem_refs_raw`]) inlines each
-/// `{ "ref": … }` as the referenced file's full JSON, so the common shape is a
-/// whole ESM document carrying exactly one model (the MPAS mesh contract:
-/// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
-/// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
-/// programmatically without the loader — is a hard error, never a silent drop.
-pub(crate) fn parse_subsystem_model(
-    sub_name: &str,
-    value: &serde_json::Value,
-) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
-    let obj = value.as_object().ok_or_else(|| {
-        CompileError::build_err(format!("subsystem '{sub_name}' is not a JSON object"))
-    })?;
-    if obj.contains_key("models") {
-        let file: EsmFile = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::build_err(format!(
-                "subsystem '{sub_name}' does not parse as an ESM file: {e}"
-            ))
-        })?;
-        let models = file.models.unwrap_or_default();
-        if models.len() != 1 {
-            return Err(CompileError::build_err(format!(
-                "subsystem '{sub_name}' resolves to a file with {} models; exactly one is \
-                     required to mount it",
-                models.len()
-            )));
-        }
-        let model = models.into_values().next().expect("len checked above");
-        Ok((
-            model,
-            file.index_sets.unwrap_or_default().into_iter().collect(),
-        ))
-    } else if obj.contains_key("variables") || obj.contains_key("equations") {
-        let model: Model = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::build_err(format!(
-                "subsystem '{sub_name}' does not parse as a model: {e}"
-            ))
-        })?;
-        Ok((model, HashMap::new()))
-    } else if obj.contains_key("ref") {
-        Err(CompileError::build_err(format!(
-            "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
-                 through the official loader (crate::parse::load_path) so \
-                 resolve_subsystem_refs_raw inlines it first"
-        )))
-    } else {
-        Err(CompileError::build_err(format!(
-            "subsystem '{sub_name}' has neither 'models' nor 'variables'/'equations'"
-        )))
-    }
-}
-
 /// The flattened system as one synthetic [`Model`]: the typed variable maps
 /// re-merged into a single registry (each variable already carries its
 /// `var_type`) over the flattened equations, every name dot-namespaced.
@@ -253,30 +195,33 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
 /// dot-prefixed names (esm-spec §4.6): each subsystem variable `x` becomes
 /// `"<sub>.x"` (with sibling references inside its expression renamed to the
 /// mounted names), each subsystem equation is appended with its references
-/// renamed the same way, and the subsystem file's `index_sets` merge into the
-/// document registry (the parent's declaration wins on a name collision).
-/// Recursive, so a nested subsystem mounts as `"<sub>.<subsub>.x"`. This is the
+/// renamed the same way. Recursive, so a nested subsystem mounts as `"<sub>.<subsub>.x"`. This is the
 /// array-runtime analogue of the Julia flatten's subsystem namespacing — it is
 /// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
 /// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
 /// resolvable. A model without subsystems is untouched (byte-identical build).
-pub(crate) fn mount_subsystems(
-    model: &mut Model,
-    index_sets: &mut HashMap<String, IndexSet>,
-) -> Result<(), CompileError> {
+/// An unresolved `{"ref": …}` (a document built in code and not resolved) is
+/// a hard error, never a silent drop.
+pub(crate) fn mount_subsystems(model: &mut Model) -> Result<(), CompileError> {
     let Some(subs) = model.subsystems.take() else {
         return Ok(());
     };
-    let mut names: Vec<String> = subs.keys().cloned().collect();
-    names.sort();
-    for sub_name in names {
-        let (mut sub_model, mut sub_sets) = parse_subsystem_model(&sub_name, &subs[&sub_name])?;
+    let mut subs: Vec<(String, Subsystem<Model>)> = subs.into_iter().collect();
+    subs.sort_by(|a, b| a.0.cmp(&b.0));
+    for (sub_name, sub) in subs {
+        let mut sub_model = match sub {
+            Subsystem::Inline(sub_model) => *sub_model,
+            Subsystem::Reference(_) => {
+                return Err(CompileError::build_err(format!(
+                    "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
+                     through the official loader (crate::parse::load_path) so \
+                     resolve_subsystem_refs_raw inlines it first"
+                )));
+            }
+        };
         // Grandchildren first, so their variables are already dot-prefixed
         // within `sub_model` when this level's prefix is applied.
-        mount_subsystems(&mut sub_model, &mut sub_sets)?;
-        for (k, v) in sub_sets {
-            index_sets.entry(k).or_insert(v);
-        }
+        mount_subsystems(&mut sub_model)?;
         let siblings: Vec<String> = {
             let mut s: Vec<String> = sub_model.variables.keys().cloned().collect();
             s.sort();
@@ -942,7 +887,7 @@ impl ArrayCompiled {
             ));
         }
         let mut index_sets_owned = index_sets.clone();
-        mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        mount_subsystems(&mut model_owned)?;
         if let Some(name) = model_name {
             resolve_self_references(&mut model_owned, name);
         }
@@ -6331,8 +6276,7 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn mounting_carries_a_leafs_join_on_key_columns() {
         let mut m = host_mounting_a_join_leaf(json!([["left_key", "right_key"]]));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        mount_subsystems(&mut m).expect("mounts");
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -6357,14 +6301,21 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn mounting_leaves_a_shadowed_loop_symbol_alone() {
         let mut m = host_mounting_a_join_leaf(json!([["l", "right_key"]]));
-        m.subsystems.as_mut().expect("subsystems")["Leaf"]["variables"]["l"] =
-            json!({ "type": "unknown", "shape": ["leaf_left"] });
-        m.subsystems.as_mut().expect("subsystems")["Leaf"]["equations"]
-            .as_array_mut()
-            .expect("equations")
-            .push(json!({ "lhs": "l", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } }));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        let leaf = m.subsystems.as_mut().expect("subsystems")["Leaf"]
+            .as_inline_mut()
+            .expect("an inline leaf");
+        leaf.variables.insert(
+            "l".to_string(),
+            serde_json::from_value(json!({ "type": "unknown", "shape": ["leaf_left"] }))
+                .expect("variable"),
+        );
+        leaf.equations.push(
+            serde_json::from_value(
+                json!({ "lhs": "l", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } }),
+            )
+            .expect("equation"),
+        );
+        mount_subsystems(&mut m).expect("mounts");
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -6403,8 +6354,7 @@ mod subsystem_ragged_and_inspection_tests {
                 ]
             }}
         }));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        mount_subsystems(&mut m).expect("mounts");
 
         let node = agg_defining(&m, "Geo.hits");
         let ov = node.join.as_ref().expect("join survives")[0]
@@ -6446,19 +6396,15 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "2.0.0",
-                    "metadata": {"name": "mini_mesh"},
-                    "models": {"MiniMesh": {
-                        "variables": {
-                            "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
-                            "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
-                            "w": {"type": "unknown", "shape": ["edges"]}
-                        },
-                        "equations": [
+                    "variables": {
+                        "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
+                        "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
+                        "w": {"type": "unknown", "shape": ["edges"]}
+                    },
+                    "equations": [
                 {"lhs": "nEdgesOnCell", "rhs": {"op": "const", "value": [2, 3], "args": []}},
                 {"lhs": "edgesOnCell", "rhs": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
                 {"lhs": "w", "rhs": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}}]
-                    }}
                 }},
                 "variables": {
                     "u": {"type": "unknown", "units": "1", "shape": ["cells"]},

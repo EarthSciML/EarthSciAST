@@ -11,7 +11,7 @@ use crate::structural::{
     ObservedScope, document_observeds, for_each_model_node, referenced_names, resolve_observed_ref,
     resolve_scoped_ref,
 };
-use crate::types::VariableBound;
+use crate::types::{HasSubsystems, VariableBound};
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -67,35 +67,14 @@ fn reaction_parameter_shape(file: &EsmFile, system: &str, member: &str) -> Optio
     let mut segments = system.split('.');
     let head = segments.next()?;
     let rest: Vec<&str> = segments.collect();
-    if rest.is_empty() {
-        return file
-            .reaction_systems
-            .as_ref()?
-            .get(head)?
-            .parameters
-            .get(member)?
-            .shape
-            .clone();
-    }
-    let subsystems = file
-        .reaction_systems
+    file.reaction_systems
         .as_ref()?
         .get(head)?
-        .subsystems
-        .as_ref()?;
-    let mut node = subsystems.get(rest[0])?;
-    for segment in &rest[1..] {
-        node = node.get("subsystems")?.get(*segment)?;
-    }
-    let shape = node
-        .get("parameters")?
+        .inline_subsystem_at(&rest)?
+        .parameters
         .get(member)?
-        .get("shape")?
-        .as_array()?;
-    shape
-        .iter()
-        .map(|axis| axis.as_str().map(str::to_string))
-        .collect()
+        .shape
+        .clone()
 }
 
 /// What a bound reference resolved to.

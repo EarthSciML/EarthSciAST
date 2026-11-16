@@ -9,6 +9,7 @@
 //! - [`model`]: models, variables, parameter updates, and equations
 //! - [`events`]: discrete and continuous events
 //! - [`components`]: reaction systems, data sources, operators, and coupling
+//! - [`subsystem`]: `subsystems` entries and the walk over a component tree
 
 mod analysis;
 mod components;
@@ -16,6 +17,7 @@ mod document;
 mod events;
 mod expression;
 mod model;
+mod subsystem;
 
 pub use analysis::*;
 pub use components::*;
@@ -23,3 +25,4 @@ pub use document::*;
 pub use events::*;
 pub use expression::*;
 pub use model::*;
+pub use subsystem::*;

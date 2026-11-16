@@ -25,7 +25,7 @@
 
 use crate::simulate::SimulateError;
 use crate::simulate_array::data_feed_source;
-use crate::types::{EsmFile, ParameterUpdateSpec};
+use crate::types::{EsmFile, ParameterUpdateSpec, for_each_subsystem_mut};
 
 /// Does `key` — a `p` key — designate the flattened parameter `full`?
 ///
@@ -57,10 +57,10 @@ pub(crate) fn is_data_fed(spec: &ParameterUpdateSpec) -> bool {
 /// Strip the `update` of every data-fed parameter the caller pinned with `p`,
 /// and report their flattened names.
 ///
-/// Walks the three places a data-fed parameter can be declared — a model's
-/// `variables`, a model subsystem's (which the typed form keeps as raw JSON),
-/// and a reaction system's `parameters` — naming each the way flatten will:
-/// `Component.var`, with a subsystem's own name spliced in.
+/// Walks the places a data-fed parameter can be declared — a model's
+/// `variables` and a reaction system's `parameters`, at the top level and in
+/// every subsystem at any depth — naming each the way flatten will:
+/// `Component.var`, with each subsystem's own name spliced in.
 ///
 /// A pin is deliberately allowed to be ambiguous (see [`designates`]): binding
 /// one parameter too many turns a refusal into a build the caller asked for,
@@ -70,115 +70,54 @@ pub(crate) fn pin_data_fed_parameters<'a>(
     file: &mut EsmFile,
     p: impl IntoIterator<Item = &'a String> + Clone,
 ) -> Vec<String> {
+    fn strip<'a, 'v>(
+        prefix: &str,
+        updates: impl Iterator<Item = (&'v String, &'v mut Option<ParameterUpdateSpec>)>,
+        p: impl IntoIterator<Item = &'a String> + Clone,
+        out: &mut Vec<String>,
+    ) {
+        for (name, update) in updates {
+            let full = format!("{prefix}.{name}");
+            if update.as_ref().is_some_and(is_data_fed) && pinned(p.clone(), &full) {
+                *update = None;
+                out.push(full);
+            }
+        }
+    }
     let mut pinned_names = Vec::new();
-
-    if let Some(models) = file.models.as_mut() {
-        for (model_name, model) in models.iter_mut() {
-            for (var_name, var) in model.variables.iter_mut() {
-                let full = format!("{model_name}.{var_name}");
-                if var.update.as_ref().is_some_and(is_data_fed) && pinned(p.clone(), &full) {
-                    var.update = None;
-                    pinned_names.push(full);
-                }
-            }
-            if let Some(subs) = model.subsystems.as_mut() {
-                for (sub_name, sub) in subs.iter_mut() {
-                    pin_in_json(
-                        sub,
-                        &format!("{model_name}.{sub_name}"),
-                        p.clone(),
-                        &mut pinned_names,
-                    );
-                }
-            }
-        }
+    for (model_name, model) in file.models.iter_mut().flatten() {
+        strip(
+            model_name,
+            model.variables.iter_mut().map(|(n, v)| (n, &mut v.update)),
+            p.clone(),
+            &mut pinned_names,
+        );
+        for_each_subsystem_mut(model, model_name, &mut |path, sub| {
+            strip(
+                path,
+                sub.variables.iter_mut().map(|(n, v)| (n, &mut v.update)),
+                p.clone(),
+                &mut pinned_names,
+            );
+        });
     }
-
-    if let Some(systems) = file.reaction_systems.as_mut() {
-        for (sys_name, sys) in systems.iter_mut() {
-            for (par_name, par) in sys.parameters.iter_mut() {
-                let full = format!("{sys_name}.{par_name}");
-                if par.update.as_ref().is_some_and(is_data_fed) && pinned(p.clone(), &full) {
-                    par.update = None;
-                    pinned_names.push(full);
-                }
-            }
-            if let Some(subs) = sys.subsystems.as_mut() {
-                for (sub_name, sub) in subs.iter_mut() {
-                    pin_in_json(
-                        sub,
-                        &format!("{sys_name}.{sub_name}"),
-                        p.clone(),
-                        &mut pinned_names,
-                    );
-                }
-            }
-        }
+    for (sys_name, sys) in file.reaction_systems.iter_mut().flatten() {
+        strip(
+            sys_name,
+            sys.parameters.iter_mut().map(|(n, v)| (n, &mut v.update)),
+            p.clone(),
+            &mut pinned_names,
+        );
+        for_each_subsystem_mut(sys, sys_name, &mut |path, sub| {
+            strip(
+                path,
+                sub.parameters.iter_mut().map(|(n, v)| (n, &mut v.update)),
+                p.clone(),
+                &mut pinned_names,
+            );
+        });
     }
-
     pinned_names
-}
-
-/// The same strip, on a subsystem the typed form keeps as raw JSON.
-///
-/// Reads the update shape structurally (`kind == "data"` plus a `from` object)
-/// rather than round-tripping through the typed enum: a subsystem's JSON is
-/// whatever the document (or the §4.7 `ref` resolver) put there, and a shape
-/// this walk does not recognise is left alone — the parameter is then simply
-/// not pinned, which fails towards the refusal rather than towards a silent
-/// default.
-fn pin_in_json<'a>(
-    node: &mut serde_json::Value,
-    prefix: &str,
-    p: impl IntoIterator<Item = &'a String> + Clone,
-    out: &mut Vec<String>,
-) {
-    let Some(obj) = node.as_object_mut() else {
-        return;
-    };
-    if let Some(vars) = obj.get_mut("variables").and_then(|v| v.as_object_mut()) {
-        for (var_name, var) in vars.iter_mut() {
-            let full = format!("{prefix}.{var_name}");
-            let Some(var_obj) = var.as_object_mut() else {
-                continue;
-            };
-            if json_update_is_data_fed(var_obj.get("update")) && pinned(p.clone(), &full) {
-                var_obj.remove("update");
-                out.push(full);
-            }
-        }
-    }
-    // A reaction-system subsystem spells its parameters under `parameters`.
-    if let Some(pars) = obj.get_mut("parameters").and_then(|v| v.as_object_mut()) {
-        for (par_name, par) in pars.iter_mut() {
-            let full = format!("{prefix}.{par_name}");
-            let Some(par_obj) = par.as_object_mut() else {
-                continue;
-            };
-            if json_update_is_data_fed(par_obj.get("update")) && pinned(p.clone(), &full) {
-                par_obj.remove("update");
-                out.push(full);
-            }
-        }
-    }
-    if let Some(subs) = obj.get_mut("subsystems").and_then(|v| v.as_object_mut()) {
-        for (sub_name, sub) in subs.iter_mut() {
-            pin_in_json(sub, &format!("{prefix}.{sub_name}"), p.clone(), out);
-        }
-    }
-}
-
-/// The raw-JSON reading of [`is_data_fed`]: the object form, or any entry of
-/// the array form, with `kind == "data"` and a `from` object.
-fn json_update_is_data_fed(update: Option<&serde_json::Value>) -> bool {
-    fn one(rule: &serde_json::Value) -> bool {
-        rule.get("kind").and_then(|k| k.as_str()) == Some("data") && rule.get("from").is_some()
-    }
-    match update {
-        Some(serde_json::Value::Array(rules)) => rules.iter().any(one),
-        Some(rule) => one(rule),
-        None => false,
-    }
 }
 
 /// Refuse every data-fed parameter of `compiled` that nothing bound
@@ -261,24 +200,5 @@ mod tests {
         assert!(!designates("orcing.k", "Forcing.k"));
         assert!(!designates("kk", "Forcing.k"));
         assert!(!designates("Forcing", "Forcing.k"));
-    }
-
-    #[test]
-    fn the_json_reading_accepts_both_update_forms_and_rejects_a_non_data_rule() {
-        let data =
-            serde_json::json!({"kind": "data", "source": "S", "from": {"file_variable": "v"}});
-        assert!(json_update_is_data_fed(Some(&data)));
-        assert!(json_update_is_data_fed(Some(&serde_json::json!([
-            data.clone()
-        ]))));
-        // A `data` rule with no `from` binds nothing from a file, and a
-        // scheduled rule is not provider-fed at all.
-        assert!(!json_update_is_data_fed(Some(
-            &serde_json::json!({"kind": "data", "source": "S"})
-        )));
-        assert!(!json_update_is_data_fed(Some(
-            &serde_json::json!({"kind": "schedule", "interval": 1.0, "expression": "x"})
-        )));
-        assert!(!json_update_is_data_fed(None));
     }
 }

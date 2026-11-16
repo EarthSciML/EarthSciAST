@@ -15,6 +15,7 @@
 
 use crate::EsmFile;
 use crate::parse::LoadOptions;
+use crate::types::HasSubsystems;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -690,7 +691,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             // resolver (structural.rs) and the coupling system position
             // (coupling.rs) — without it, any reference more than two segments
             // deep is a spurious `unresolved_scoped_ref`/`undefined_system`.
-            register_subsystems(name, model.subsystems.as_ref(), &mut systems);
+            register_subsystems(name, model, &mut systems);
         }
     }
 
@@ -711,7 +712,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             );
 
             // Reaction systems nest too (esm-spec §4.9.2).
-            register_subsystems(name, rs.subsystems.as_ref(), &mut systems);
+            register_subsystems(name, rs, &mut systems);
         }
     }
 
@@ -740,66 +741,66 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     systems
 }
 
-/// Register a model's `subsystems` — recursively, at arbitrary depth — under
-/// their full dotted paths (`Parent.Child`, `Parent.Child.Grandchild`, …).
+/// Register every subsystem below `component` — at arbitrary depth — under
+/// its full dotted path (`Parent.Child`, `Parent.Child.Grandchild`, …).
 ///
-/// `Model::subsystems` is raw `serde_json::Value` (a subsystem may be an inline
-/// system object or an unresolved `{"ref": …}` edge), so this reads the nested
-/// shape structurally rather than through the typed `Model`. A `{"ref": …}` edge
-/// that has not been resolved contributes no variables — it is registered as an
-/// empty system so that the PATH resolves (the file may legitimately be inlined
-/// later) without claiming to know its contents.
-fn register_subsystems(
+/// A model subsystem's variables register as its `variables`, and those
+/// typed `parameter` as its `parameters` too; a reaction subsystem's species
+/// and parameters register as themselves. An unresolved `{"ref": …}` edge is
+/// registered as an empty system, so that the PATH resolves (the file may
+/// legitimately be inlined later) without claiming to know its contents.
+fn register_subsystems<C: RegisteredMembers>(
     prefix: &str,
-    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+    component: &C,
     systems: &mut HashMap<String, SystemInfo>,
 ) {
-    let Some(subsystems) = subsystems else {
-        return;
-    };
-    for (child_name, child) in subsystems {
+    for (child_name, child) in component.subsystems().into_iter().flatten() {
         let path = format!("{prefix}.{child_name}");
-
-        let variables: HashSet<String> = child
-            .get("variables")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        let species: HashSet<String> = child
-            .get("species")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        // Parameter-typed variables also resolve as scoped `<path>.<param>`
-        // refs, mirroring the top-level model case above.
-        let mut parameters: HashSet<String> = child
-            .get("variables")
-            .and_then(|v| v.as_object())
-            .map(|m| {
-                m.iter()
-                    .filter(|(_, v)| v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
-                    .map(|(k, _)| k.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(params) = child.get("parameters").and_then(|v| v.as_object()) {
-            parameters.extend(params.keys().cloned());
+        match child.as_inline() {
+            Some(child) => {
+                systems.insert(path.clone(), child.system_info());
+                register_subsystems(&path, child, systems);
+            }
+            None => {
+                systems.insert(
+                    path,
+                    SystemInfo {
+                        variables: HashSet::new(),
+                        species: HashSet::new(),
+                        parameters: HashSet::new(),
+                    },
+                );
+            }
         }
+    }
+}
 
-        systems.insert(
-            path.clone(),
-            SystemInfo {
-                variables,
-                species,
-                parameters,
-            },
-        );
+/// A subsystem's members as [`register_subsystems`] registers them.
+trait RegisteredMembers: HasSubsystems {
+    fn system_info(&self) -> SystemInfo;
+}
 
-        // Recurse into this subsystem's own `subsystems` map.
-        if let Some(nested) = child.get("subsystems").and_then(|v| v.as_object()) {
-            let nested: indexmap::IndexMap<String, serde_json::Value> =
-                nested.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            register_subsystems(&path, Some(&nested), systems);
+impl RegisteredMembers for crate::Model {
+    fn system_info(&self) -> SystemInfo {
+        SystemInfo {
+            variables: self.variables.keys().cloned().collect(),
+            species: HashSet::new(),
+            parameters: self
+                .variables
+                .iter()
+                .filter(|(_, v)| v.var_type == crate::VariableType::Parameter)
+                .map(|(k, _)| k.clone())
+                .collect(),
+        }
+    }
+}
+
+impl RegisteredMembers for crate::ReactionSystem {
+    fn system_info(&self) -> SystemInfo {
+        SystemInfo {
+            variables: HashSet::new(),
+            species: self.species.keys().cloned().collect(),
+            parameters: self.parameters.keys().cloned().collect(),
         }
     }
 }

@@ -18,7 +18,7 @@
 //! get_expression_dimensions`).
 
 use crate::inline_test_checks::pointer_token;
-use crate::types::{Equation, Expr, ExpressionNode};
+use crate::types::{Equation, Expr, ExpressionNode, HasSubsystems};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
@@ -1988,13 +1988,11 @@ impl<'d> ComponentUnitEnv<'d> {
     /// over the document's top-level scoped units.
     pub(crate) fn new(
         own: HashMap<String, Unit>,
-        subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+        component: &impl crate::structural::MemberUnits,
         document: &'d HashMap<String, Unit>,
     ) -> Self {
         let mut parsed: HashMap<String, Option<Unit>> = HashMap::new();
-        let relative = subsystems
-            .map(crate::structural::subsystem_reference_units)
-            .unwrap_or_default()
+        let relative = crate::structural::subsystem_reference_units(component)
             .into_iter()
             .filter(|(name, _)| !own.contains_key(name))
             .map(|(name, units)| {
@@ -2053,7 +2051,7 @@ pub fn model_unit_env(
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let document = document_scoped_units(esm_file);
     let (own, failures) = build_unit_env(&model.variables);
-    let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), &document).into_map();
+    let env = ComponentUnitEnv::new(own, model, &document).into_map();
     (env, failures)
 }
 
@@ -2341,7 +2339,7 @@ struct LiteralWalk<'d> {
 impl LiteralWalk<'_> {
     fn model(&mut self, pointer: &str, model: &crate::Model) {
         let (own, _) = build_unit_env(&model.variables);
-        let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), self.document_units);
+        let env = ComponentUnitEnv::new(own, model, self.document_units);
         for (i, eq) in model.equations.iter().enumerate() {
             self.site(
                 format!("{pointer}/equations/{i}"),
@@ -2356,13 +2354,11 @@ impl LiteralWalk<'_> {
                 &env,
             );
         }
-        for (name, sub) in inline_subsystems(model.subsystems.as_ref()) {
-            if let Ok(sub) = serde_json::from_value::<crate::Model>(sub.clone()) {
-                self.model(
-                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
-                    &sub,
-                );
-            }
+        for (name, sub) in model.inline_subsystems() {
+            self.model(
+                &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                sub,
+            );
         }
     }
 
@@ -2375,7 +2371,7 @@ impl LiteralWalk<'_> {
         let own: HashMap<String, Unit> = declared
             .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
             .collect();
-        let env = ComponentUnitEnv::new(own, rs.subsystems.as_ref(), self.document_units);
+        let env = ComponentUnitEnv::new(own, rs, self.document_units);
         for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
             self.site(
                 format!("{pointer}/constraint_equations/{i}"),
@@ -2390,13 +2386,11 @@ impl LiteralWalk<'_> {
                 &env,
             );
         }
-        for (name, sub) in inline_subsystems(rs.subsystems.as_ref()) {
-            if let Ok(sub) = serde_json::from_value::<crate::ReactionSystem>(sub.clone()) {
-                self.reaction_system(
-                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
-                    &sub,
-                );
-            }
+        for (name, sub) in rs.inline_subsystems() {
+            self.reaction_system(
+                &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                sub,
+            );
         }
     }
 
@@ -2423,27 +2417,6 @@ impl LiteralWalk<'_> {
         );
         self.out.push((pointer, message));
     }
-}
-
-/// The inline subsystems of a `subsystems` map: a resolved `{ref}` mount is
-/// already spliced in (and a mounted single-component document is unwrapped to
-/// its component); an unresolved `{ref}` has nothing to type and is skipped.
-fn inline_subsystems(
-    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
-) -> impl Iterator<Item = (&String, &serde_json::Value)> {
-    subsystems
-        .into_iter()
-        .flatten()
-        .filter_map(|(name, value)| {
-            let component = value
-                .get("models")
-                .or_else(|| value.get("reaction_systems"))
-                .and_then(|m| m.as_object())
-                .filter(|m| m.len() == 1)
-                .and_then(|m| m.values().next())
-                .unwrap_or(value);
-            (component.is_object() && component.get("ref").is_none()).then_some((name, component))
-        })
 }
 
 /// The dimensional analyser's verdict on one equation, in the form a report

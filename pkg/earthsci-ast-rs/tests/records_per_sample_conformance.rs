@@ -335,9 +335,12 @@ fn an_index_set_an_unmounted_ref_could_declare_is_not_judged() {
     file.index_sets.as_mut().unwrap().shift_remove("rec");
     let box_model = file.models.as_mut().unwrap().get_mut("Box").unwrap();
     box_model.subsystems = Some(
-        [("Grid".to_string(), serde_json::json!({"ref": "./grid.esm"}))]
-            .into_iter()
-            .collect(),
+        [(
+            "Grid".to_string(),
+            serde_json::from_value(serde_json::json!({"ref": "./grid.esm"})).unwrap(),
+        )]
+        .into_iter()
+        .collect(),
     );
     assert_eq!(record_findings(&m, &file), vec![]);
     // With nothing left to mount, the undeclared `rec` is an ordinary axis.

@@ -277,37 +277,26 @@ pub(crate) fn refuse_undeclared_observed(
     if observed.is_empty() {
         return Ok(());
     }
-    fn walk_subsystems(prefix: &str, subs: Option<&serde_json::Value>, out: &mut Vec<String>) {
-        let Some(subs) = subs.and_then(|s| s.as_object()) else {
-            return;
-        };
-        for (name, sub) in subs {
-            let p = format!("{prefix}.{name}");
-            for key in ["variables", "species", "parameters"] {
-                if let Some(vars) = sub.get(key).and_then(|v| v.as_object()) {
-                    out.extend(vars.keys().map(|v| format!("{p}.{v}")));
-                }
-            }
-            walk_subsystems(&p, sub.get("subsystems"), out);
+    use earthsci_ast::HasSubsystems;
+    fn model_names(prefix: &str, model: &earthsci_ast::Model, out: &mut Vec<String>) {
+        out.extend(model.variables.keys().map(|v| format!("{prefix}.{v}")));
+        for (name, sub) in model.inline_subsystems() {
+            model_names(&format!("{prefix}.{name}"), sub, out);
+        }
+    }
+    fn reaction_names(prefix: &str, rs: &earthsci_ast::ReactionSystem, out: &mut Vec<String>) {
+        out.extend(rs.species.keys().map(|v| format!("{prefix}.{v}")));
+        out.extend(rs.parameters.keys().map(|v| format!("{prefix}.{v}")));
+        for (name, sub) in rs.inline_subsystems() {
+            reaction_names(&format!("{prefix}.{name}"), sub, out);
         }
     }
     let mut declared: Vec<String> = Vec::new();
     for (m, model) in esm_file.models.iter().flatten() {
-        declared.extend(model.variables.keys().map(|v| format!("{m}.{v}")));
-        let subs = model
-            .subsystems
-            .as_ref()
-            .and_then(|s| serde_json::to_value(s).ok());
-        walk_subsystems(m, subs.as_ref(), &mut declared);
+        model_names(m, model, &mut declared);
     }
     for (r, rs) in esm_file.reaction_systems.iter().flatten() {
-        declared.extend(rs.species.keys().map(|v| format!("{r}.{v}")));
-        declared.extend(rs.parameters.keys().map(|v| format!("{r}.{v}")));
-        let subs = rs
-            .subsystems
-            .as_ref()
-            .and_then(|s| serde_json::to_value(s).ok());
-        walk_subsystems(r, subs.as_ref(), &mut declared);
+        reaction_names(r, rs, &mut declared);
     }
     let candidates: Vec<&str> = declared.iter().map(String::as_str).collect();
     let unknown: Vec<&str> = observed

@@ -324,12 +324,12 @@ pub use types::{
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelAnalysis,
-    ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep, ParameterUpdate,
-    ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
-    RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species, StoichiometricEntry,
-    SweepDimension, SweepRange, TimePoint, TimeSpan, Tolerance, UnitConversion, UpdateValue,
-    VariableBound, VariableMapTransform, VariableType,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, HasSubsystems, InlineValue, Metadata, Model,
+    ModelAnalysis, ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep,
+    ParameterUpdate, ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction,
+    ReactionSystem, RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species,
+    StoichiometricEntry, Subsystem, SubsystemRef, SweepDimension, SweepRange, TimePoint, TimeSpan,
+    Tolerance, UnitConversion, UpdateValue, VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,

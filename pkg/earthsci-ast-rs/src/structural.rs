@@ -13,6 +13,7 @@
 
 use crate::EsmFile;
 use crate::op_registry::is_builtin_function_name;
+use crate::types::{HasSubsystems, TreeOrder, component_tree, subsystem_tree};
 use crate::units::{
     ComponentUnitEnv, Unit, UnitEnv, build_unit_env, equation_findings, expression_findings,
     parse_unit,
@@ -52,14 +53,7 @@ pub(crate) fn validate_model(
     );
     // A subsystem is a model, so its `variables` map is a declaration map too —
     // and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
-    if let Some(subsystems) = &model.subsystems {
-        check_reserved_subsystem_names(
-            esm_file,
-            subsystems.iter(),
-            &format!("/models/{model_name}/subsystems"),
-            errors,
-        );
-    }
+    check_reserved_subsystem_names(esm_file, model, &format!("/models/{model_name}"), errors);
     // esm-spec §6.3: inline array data is a shaped variable's value, so on a
     // variable with no `shape` it has nothing to fill.
     check_array_defaults_have_shape(
@@ -382,8 +376,7 @@ impl<'a> ModelCtx<'a> {
     /// switch off every dimensional check that depends on it.
     fn check_unit_declarations(&self, errors: &mut Vec<StructuralError>) -> ComponentUnitEnv<'a> {
         let (own, unit_parse_failures) = build_unit_env(&self.model.variables);
-        let unit_env =
-            ComponentUnitEnv::new(own, self.model.subsystems.as_ref(), self.document_units);
+        let unit_env = ComponentUnitEnv::new(own, self.model, self.document_units);
         for failure in unit_parse_failures {
             errors.push(StructuralError {
                 path: format!("{}/variables/{}", self.model_path, failure.name),
@@ -947,23 +940,18 @@ pub(crate) fn validate_data_source_references(
 /// merges its file's `index_sets` into the document's (esm-spec §4.7), so an
 /// index set the document does not declare may still arrive.
 pub(crate) fn has_unmounted_refs(esm_file: &EsmFile) -> bool {
-    fn walk(node: &serde_json::Value) -> bool {
-        node.get("ref").is_some()
-            || node
-                .get("subsystems")
-                .and_then(|s| s.as_object())
-                .is_some_and(|subs| subs.values().any(walk))
+    fn any_ref<C: HasSubsystems>(root: &C) -> bool {
+        component_tree(root, "", "", TreeOrder::Declared)
+            .iter()
+            .flat_map(|node| node.component.subsystems().into_iter().flatten())
+            .any(|(_, sub)| sub.as_reference().is_some())
     }
-    let in_models = esm_file
-        .models
-        .iter()
-        .flatten()
-        .any(|(_, m)| m.subsystems.iter().flatten().any(|(_, s)| walk(s)));
+    let in_models = esm_file.models.iter().flatten().any(|(_, m)| any_ref(m));
     let in_reaction_systems = esm_file
         .reaction_systems
         .iter()
         .flatten()
-        .any(|(_, r)| r.subsystems.iter().flatten().any(|(_, s)| walk(s)));
+        .any(|(_, r)| any_ref(r));
     in_models || in_reaction_systems
 }
 
@@ -995,40 +983,20 @@ pub(crate) fn declared_variable_shape(
     let mut parts: Vec<&str> = scoped.split('.').collect();
     let var = parts.pop()?;
     let (first, rest) = parts.split_first()?;
-    let (subsystems, tables): (_, &[&str]) =
-        if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(*first)) {
-            if rest.is_empty() {
-                return Some(model.variables.get(var)?.shape.clone());
-            }
-            (model.subsystems.as_ref(), &["variables"])
-        } else {
-            let rs = esm_file.reaction_systems.as_ref()?.get(*first)?;
-            if rest.is_empty() {
-                if let Some(p) = rs.parameters.get(var) {
-                    return Some(p.shape.clone());
-                }
-                rs.species.get(var)?;
-                return Some(None);
-            }
-            (rs.subsystems.as_ref(), &["parameters", "species"])
-        };
-    let (sub, deeper) = rest.split_first()?;
-    let mut node = subsystems?.get(*sub)?;
-    for seg in deeper {
-        node = node.get("subsystems")?.get(*seg)?;
+    if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(*first)) {
+        let model = model.inline_subsystem_at(rest)?;
+        return Some(model.variables.get(var)?.shape.clone());
     }
-    let decl = tables
-        .iter()
-        .find_map(|t| node.get(*t).and_then(|vars| vars.get(var)))?;
-    match decl.get("shape") {
-        None | Some(serde_json::Value::Null) => Some(None),
-        Some(shape) => shape
-            .as_array()?
-            .iter()
-            .map(|d| d.as_str().map(str::to_string))
-            .collect::<Option<Vec<_>>>()
-            .map(Some),
+    let rs = esm_file
+        .reaction_systems
+        .as_ref()?
+        .get(*first)?
+        .inline_subsystem_at(rest)?;
+    if let Some(p) = rs.parameters.get(var) {
+        return Some(p.shape.clone());
     }
+    rs.species.get(var)?;
+    Some(None)
 }
 
 /// One parameter carrying an `update`, as [`for_each_updated_variable`] hands
@@ -1048,109 +1016,50 @@ struct UpdatedVariable<'a> {
 /// Calls `f` for every variable carrying an `update`: each model's
 /// `variables` and each reaction system's `parameters`, in every top-level
 /// component and every subsystem at any depth, in sorted name order within
-/// each component. Subsystems are read in place: only a declaration that
-/// carries an `update` is decoded, and only its `shape` and `update`; one that
-/// does not decode is the schema's finding and is skipped.
+/// each component.
 fn for_each_updated_variable(esm_file: &EsmFile, f: &mut impl FnMut(UpdatedVariable<'_>)) {
     fn sorted_updated<'v, V>(
         vars: impl Iterator<Item = (&'v String, &'v V)>,
-        has_update: impl Fn(&V) -> bool,
+        update: impl Fn(&V) -> Option<&crate::ParameterUpdateSpec>,
     ) -> Vec<(&'v String, &'v V)> {
-        let mut out: Vec<_> = vars.filter(|(_, v)| has_update(v)).collect();
+        let mut out: Vec<_> = vars.filter(|(_, v)| update(v).is_some()).collect();
         out.sort_by(|a, b| a.0.cmp(b.0));
         out
     }
-    fn subsystem(
-        sub: &serde_json::Value,
-        table: &str,
-        scope: &str,
-        path: &str,
-        f: &mut impl FnMut(UpdatedVariable<'_>),
-    ) {
-        if let Some(vars) = sub.get(table).and_then(|v| v.as_object()) {
-            for (name, decl) in sorted_updated(vars.iter(), |v| v.get("update").is_some()) {
-                let Ok(update) = <crate::ParameterUpdateSpec as serde::Deserialize>::deserialize(
-                    &decl["update"],
-                ) else {
+    for (model_name, model) in esm_file.models.iter().flatten() {
+        let root = format!("/models/{model_name}");
+        for node in component_tree(model, model_name, &root, TreeOrder::Declared) {
+            let vars = node.component.variables.iter();
+            for (name, var) in sorted_updated(vars, |v| v.update.as_ref()) {
+                let Some(update) = var.update.as_ref() else {
                     continue;
                 };
-                let shape: Option<Vec<String>> = match decl.get("shape") {
-                    None | Some(serde_json::Value::Null) => None,
-                    Some(s) => match <Vec<String> as serde::Deserialize>::deserialize(s) {
-                        Ok(s) => Some(s),
-                        Err(_) => continue,
-                    },
-                };
                 f(UpdatedVariable {
-                    scoped: &format!("{scope}.{name}"),
-                    pointer: &format!("{path}/{table}/{name}"),
+                    scoped: &format!("{}.{name}", node.path),
+                    pointer: &format!("{}/variables/{name}", node.pointer),
                     name,
-                    shape: shape.as_deref(),
-                    update: &update,
+                    shape: var.shape.as_deref(),
+                    update,
                 });
             }
         }
-        for (name, inner) in sub
-            .get("subsystems")
-            .and_then(|s| s.as_object())
-            .into_iter()
-            .flatten()
-        {
-            subsystem(
-                inner,
-                table,
-                &format!("{scope}.{name}"),
-                &format!("{path}/subsystems/{name}"),
-                f,
-            );
-        }
-    }
-    for (model_name, model) in esm_file.models.iter().flatten() {
-        let path = format!("/models/{model_name}");
-        for (name, var) in sorted_updated(model.variables.iter(), |v| v.update.is_some()) {
-            let Some(update) = var.update.as_ref() else {
-                continue;
-            };
-            f(UpdatedVariable {
-                scoped: &format!("{model_name}.{name}"),
-                pointer: &format!("{path}/variables/{name}"),
-                name,
-                shape: var.shape.as_deref(),
-                update,
-            });
-        }
-        for (name, sub) in model.subsystems.iter().flatten() {
-            subsystem(
-                sub,
-                "variables",
-                &format!("{model_name}.{name}"),
-                &format!("{path}/subsystems/{name}"),
-                f,
-            );
-        }
     }
     for (rs_name, rs) in esm_file.reaction_systems.iter().flatten() {
-        let path = format!("/reaction_systems/{rs_name}");
-        for (name, param) in sorted_updated(rs.parameters.iter(), |p| p.update.is_some()) {
-            let Some(update) = param.update.as_ref() else {
-                continue;
-            };
-            f(UpdatedVariable {
-                scoped: &format!("{rs_name}.{name}"),
-                pointer: &format!("{path}/parameters/{name}"),
-                name,
-                shape: param.shape.as_deref(),
-                update,
-            });
-        }
-        for (name, sub) in rs.subsystems.iter().flatten() {
-            subsystem(
-                sub,
-                "parameters",
-                &format!("{rs_name}.{name}"),
-                &format!("{path}/subsystems/{name}"),
-                f,
-            );
+        let root = format!("/reaction_systems/{rs_name}");
+        for node in component_tree(rs, rs_name, &root, TreeOrder::Declared) {
+            let params = node.component.parameters.iter();
+            for (name, param) in sorted_updated(params, |p| p.update.as_ref()) {
+                let Some(update) = param.update.as_ref() else {
+                    continue;
+                };
+                f(UpdatedVariable {
+                    scoped: &format!("{}.{name}", node.path),
+                    pointer: &format!("{}/parameters/{name}", node.pointer),
+                    name,
+                    shape: param.shape.as_deref(),
+                    update,
+                });
+            }
         }
     }
 }
@@ -1558,57 +1467,10 @@ pub(crate) fn check_record_axes_at_flatten(
 /// and
 /// `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
 /// (`/<i>` only for an array-form `update`). Loading a document for which
-/// this is non-empty warns once, `deprecated_records_per_sample`. Runs on
-/// every load, so a subsystem is scanned as raw JSON for the key, never
-/// decoded.
+/// this is non-empty warns once, `deprecated_records_per_sample`.
 pub fn deprecated_records_per_sample_sites(file: &EsmFile) -> Vec<String> {
-    /// The written sites among the rules of one raw `update` value.
-    fn raw_update(update: &serde_json::Value, var_pointer: &str, out: &mut Vec<String>) {
-        let written = |rule: &serde_json::Value| {
-            rule.get("from")
-                .and_then(|f| f.get("records_per_sample"))
-                .is_some()
-        };
-        match update {
-            serde_json::Value::Array(rules) => {
-                for (i, rule) in rules.iter().enumerate() {
-                    if written(rule) {
-                        out.push(format!(
-                            "{}/from/records_per_sample",
-                            update_rule_pointer(var_pointer, true, i)
-                        ));
-                    }
-                }
-            }
-            rule if written(rule) => out.push(format!(
-                "{}/from/records_per_sample",
-                update_rule_pointer(var_pointer, false, 0)
-            )),
-            _ => {}
-        }
-    }
-    fn raw_subsystem(sub: &serde_json::Value, table: &str, path: &str, out: &mut Vec<String>) {
-        for (name, decl) in sub
-            .get(table)
-            .and_then(|v| v.as_object())
-            .into_iter()
-            .flatten()
-        {
-            if let Some(update) = decl.get("update") {
-                raw_update(update, &format!("{path}/{table}/{name}"), out);
-            }
-        }
-        for (name, inner) in sub
-            .get("subsystems")
-            .and_then(|s| s.as_object())
-            .into_iter()
-            .flatten()
-        {
-            raw_subsystem(inner, table, &format!("{path}/subsystems/{name}"), out);
-        }
-    }
-    /// The written sites among the rules of one typed `update`.
-    fn typed_update(spec: &crate::ParameterUpdateSpec, var_pointer: &str, out: &mut Vec<String>) {
+    /// The written sites among the rules of one `update`.
+    fn update_sites(spec: &crate::ParameterUpdateSpec, var_pointer: &str, out: &mut Vec<String>) {
         let is_array = matches!(spec, crate::ParameterUpdateSpec::Several(_));
         for (i, rule) in spec.rules().iter().enumerate() {
             if rule
@@ -1635,35 +1497,31 @@ pub fn deprecated_records_per_sample_sites(file: &EsmFile) -> Vec<String> {
         }
     }
     for (model_name, model) in file.models.iter().flatten() {
-        let path = format!("/models/{model_name}");
-        for (name, var) in &model.variables {
-            if let Some(spec) = &var.update {
-                typed_update(spec, &format!("{path}/variables/{name}"), &mut out);
+        let root = format!("/models/{model_name}");
+        for node in component_tree(model, "", &root, TreeOrder::Declared) {
+            for (name, var) in &node.component.variables {
+                if let Some(spec) = &var.update {
+                    update_sites(
+                        spec,
+                        &format!("{}/variables/{name}", node.pointer),
+                        &mut out,
+                    );
+                }
             }
-        }
-        for (name, sub) in model.subsystems.iter().flatten() {
-            raw_subsystem(
-                sub,
-                "variables",
-                &format!("{path}/subsystems/{name}"),
-                &mut out,
-            );
         }
     }
     for (rs_name, rs) in file.reaction_systems.iter().flatten() {
-        let path = format!("/reaction_systems/{rs_name}");
-        for (name, param) in &rs.parameters {
-            if let Some(spec) = &param.update {
-                typed_update(spec, &format!("{path}/parameters/{name}"), &mut out);
+        let root = format!("/reaction_systems/{rs_name}");
+        for node in component_tree(rs, "", &root, TreeOrder::Declared) {
+            for (name, param) in &node.component.parameters {
+                if let Some(spec) = &param.update {
+                    update_sites(
+                        spec,
+                        &format!("{}/parameters/{name}", node.pointer),
+                        &mut out,
+                    );
+                }
             }
-        }
-        for (name, sub) in rs.subsystems.iter().flatten() {
-            raw_subsystem(
-                sub,
-                "parameters",
-                &format!("{path}/subsystems/{name}"),
-                &mut out,
-            );
         }
     }
     out.sort();
@@ -1882,14 +1740,12 @@ pub(crate) fn reserved_declaration_errors(esm_file: &EsmFile) -> Vec<StructuralE
                 "variable",
                 &mut errors,
             );
-            if let Some(subsystems) = &model.subsystems {
-                check_reserved_subsystem_names(
-                    esm_file,
-                    subsystems.iter(),
-                    &format!("/models/{model_name}/subsystems"),
-                    &mut errors,
-                );
-            }
+            check_reserved_subsystem_names(
+                esm_file,
+                model,
+                &format!("/models/{model_name}"),
+                &mut errors,
+            );
         }
     }
     if let Some(systems) = &esm_file.reaction_systems {
@@ -1916,47 +1772,28 @@ pub(crate) fn reserved_declaration_errors(esm_file: &EsmFile) -> Vec<StructuralE
     errors
 }
 
-/// [`check_reserved_declaration_names`] over every INLINE subsystem of a model,
-/// recursively (esm-spec §4.9.1.1).
+/// [`check_reserved_declaration_names`] over every inline subsystem of the
+/// model at `model_path`, at any depth (esm-spec §4.9.1.1).
 ///
 /// A subsystem is a model, so its `variables` map declares symbols of the
 /// assembled system exactly as the parent's does; the failure reported in issue
-/// #200 was a subsystem mount. `Model::subsystems` is untyped because an entry
-/// may be an unresolved `{"ref": …}`, which carries no `variables` key and
-/// contributes nothing — by the time validation runs the ref resolver has
-/// spliced a resolved mount into the same `{variables, equations}` shape, so
-/// one walk covers both. Keys are visited in sorted order, as the sibling
-/// declaration-map check is.
-fn check_reserved_subsystem_names<'a, I>(
+/// #200 was a subsystem mount. Keys are visited in sorted order, as the
+/// sibling declaration-map check is.
+fn check_reserved_subsystem_names(
     esm_file: &EsmFile,
-    subsystems: I,
-    base_path: &str,
+    model: &crate::Model,
+    model_path: &str,
     errors: &mut Vec<StructuralError>,
-) where
-    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
-{
-    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, value) in entries {
-        let sub_path = format!("{base_path}/{name}");
-        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
-            check_reserved_declaration_names(
-                esm_file,
-                vars.keys(),
-                &format!("{sub_path}/variables"),
-                &format!("Model '{name}'"),
-                "variable",
-                errors,
-            );
-        }
-        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
-            check_reserved_subsystem_names(
-                esm_file,
-                nested.iter(),
-                &format!("{sub_path}/subsystems"),
-                errors,
-            );
-        }
+) {
+    for sub in subsystem_tree(model, "", model_path, TreeOrder::Sorted) {
+        check_reserved_declaration_names(
+            esm_file,
+            sub.component.variables.keys(),
+            &format!("{}/variables", sub.pointer),
+            &format!("Model '{}'", sub.key),
+            "variable",
+            errors,
+        );
     }
 }
 
@@ -1993,75 +1830,34 @@ fn check_array_defaults_have_shape(
     owner: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    let mut unshaped: Vec<(&String, &crate::ModelVariable)> = model
-        .variables
-        .iter()
-        .filter(|(_, var)| {
-            let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
-            let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
-            is_array && !shaped
-        })
-        .collect();
-    unshaped.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, var) in unshaped {
-        let var_type = serde_json::to_value(var.var_type)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        errors.push(array_default_without_shape(
-            model_path, owner, name, &var_type,
-        ));
-    }
-    if let Some(subsystems) = &model.subsystems {
-        check_subsystem_array_defaults(
-            subsystems.iter(),
-            &format!("{model_path}/subsystems"),
-            errors,
-        );
-    }
-}
-
-/// [`check_array_defaults_have_shape`] over every INLINE subsystem, recursively.
-/// `Model::subsystems` is untyped (an entry may be an unresolved `{"ref": …}`,
-/// which has no `variables`), so the walk is over raw JSON.
-fn check_subsystem_array_defaults<'a, I>(
-    subsystems: I,
-    base_path: &str,
-    errors: &mut Vec<StructuralError>,
-) where
-    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
-{
-    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, value) in entries {
-        let sub_path = format!("{base_path}/{name}");
-        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
-            let mut keys: Vec<&String> = vars.keys().collect();
-            keys.sort();
-            for key in keys {
-                let var = &vars[key.as_str()];
-                let is_array = var.get("default").is_some_and(|d| d.is_array());
-                let shaped = var
-                    .get("shape")
-                    .and_then(|s| s.as_array())
-                    .is_some_and(|s| !s.is_empty());
-                if is_array && !shaped {
-                    let var_type = var.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    errors.push(array_default_without_shape(
-                        &sub_path,
-                        &format!("Model '{name}'"),
-                        key,
-                        var_type,
-                    ));
-                }
-            }
-        }
-        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
-            check_subsystem_array_defaults(
-                nested.iter(),
-                &format!("{sub_path}/subsystems"),
-                errors,
-            );
+    for node in component_tree(model, "", model_path, TreeOrder::Sorted) {
+        let owner = if node.depth == 0 {
+            owner.to_string()
+        } else {
+            format!("Model '{}'", node.key)
+        };
+        let mut unshaped: Vec<(&String, &crate::ModelVariable)> = node
+            .component
+            .variables
+            .iter()
+            .filter(|(_, var)| {
+                let is_array = matches!(var.default, Some(crate::types::InlineValue::Array(_)));
+                let shaped = var.shape.as_ref().is_some_and(|s| !s.is_empty());
+                is_array && !shaped
+            })
+            .collect();
+        unshaped.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, var) in unshaped {
+            let var_type = serde_json::to_value(var.var_type)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            errors.push(array_default_without_shape(
+                &node.pointer,
+                &owner,
+                name,
+                &var_type,
+            ));
         }
     }
 }
@@ -2088,185 +1884,11 @@ pub(crate) fn lhs_name_errors(
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
     scope.insert(independent_variable(esm_file));
-    lhs_name_errors_in(
-        esm_file,
-        &format!("/models/{model_name}"),
-        LhsModel::Typed(model),
-        &scope,
-        &mut out,
-    );
+    let root = format!("/models/{model_name}");
+    for node in component_tree(model, "", &root, TreeOrder::Sorted) {
+        lhs_name_errors_in(esm_file, &node.pointer, node.component, &scope, &mut out);
+    }
     out
-}
-
-/// A model as [`lhs_name_errors_in`] reads it: the typed top-level model, or
-/// an inline subsystem, which [`crate::Model`] keeps as JSON. Reading the
-/// typed model in place keeps the check linear in the equations' size (each
-/// equation's left-hand side is the only part turned into JSON).
-#[derive(Clone, Copy)]
-enum LhsModel<'a> {
-    Typed(&'a crate::Model),
-    Json(&'a serde_json::Value),
-}
-
-impl<'a> LhsModel<'a> {
-    fn declares(self, name: &str) -> bool {
-        match self {
-            LhsModel::Typed(m) => m.variables.contains_key(name),
-            LhsModel::Json(m) => m.get("variables").and_then(|v| v.get(name)).is_some(),
-        }
-    }
-
-    fn subsystem(self, name: &str) -> Option<&'a serde_json::Value> {
-        match self {
-            LhsModel::Typed(m) => m.subsystems.as_ref()?.get(name),
-            LhsModel::Json(m) => m.get("subsystems")?.get(name),
-        }
-    }
-
-    fn subsystem_names(self) -> Vec<&'a String> {
-        match self {
-            LhsModel::Typed(m) => m.subsystems.iter().flat_map(|s| s.keys()).collect(),
-            LhsModel::Json(m) => m
-                .get("subsystems")
-                .and_then(|v| v.as_object())
-                .map(|subs| subs.keys().collect())
-                .unwrap_or_default(),
-        }
-    }
-
-    /// Whether the variable at the scoped path `rest` (subsystem names, then
-    /// the variable) is a parameter; `None` when there is no such variable.
-    fn is_param(self, rest: &[&str]) -> Option<bool> {
-        let (last, subs) = rest.split_last()?;
-        let mut cur = self;
-        for p in subs {
-            cur = LhsModel::Json(cur.subsystem(p)?);
-        }
-        match cur {
-            LhsModel::Typed(m) => {
-                Some(m.variables.get(*last)?.var_type == crate::VariableType::Parameter)
-            }
-            LhsModel::Json(m) => {
-                let v = m.get("variables")?.get(*last)?;
-                Some(v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
-            }
-        }
-    }
-
-    /// Each equation's left-hand side and, when its right-hand side is a
-    /// `faq`, the right-hand side's `output_idx` names.
-    fn for_each_equation(self, mut f: impl FnMut(usize, LhsSide<'_>, Option<Vec<String>>)) {
-        match self {
-            LhsModel::Typed(m) => {
-                for (k, eq) in m.equations.iter().enumerate() {
-                    let faq_idx = match &eq.rhs {
-                        // An integer entry is written as a number, which
-                        // names no subscript (as `json_output_idx` reads it).
-                        crate::Expr::Operator(n) if n.op == "faq" => Some(
-                            n.output_idx
-                                .iter()
-                                .flatten()
-                                .filter(|s| !is_integer_literal(s))
-                                .cloned()
-                                .collect(),
-                        ),
-                        _ => None,
-                    };
-                    f(k, LhsSide::Typed(&eq.lhs), faq_idx);
-                }
-            }
-            LhsModel::Json(m) => {
-                for (k, eq) in m
-                    .get("equations")
-                    .and_then(|v| v.as_array())
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                {
-                    let Some(lhs) = eq.get("lhs") else { continue };
-                    let faq_idx = eq
-                        .get("rhs")
-                        .filter(|rhs| matches!(rhs.get("op").and_then(|o| o.as_str()), Some("faq")))
-                        .map(json_output_idx);
-                    f(k, LhsSide::Json(lhs), faq_idx);
-                }
-            }
-        }
-    }
-}
-
-/// An equation's left-hand side as [`lhs_name_errors_in`] reads it: typed, or
-/// JSON in an inline subsystem. The typed readings mirror the JSON ones.
-#[derive(Clone, Copy)]
-enum LhsSide<'a> {
-    Typed(&'a crate::Expr),
-    Json(&'a serde_json::Value),
-}
-
-impl<'a> LhsSide<'a> {
-    fn is_ic(self) -> bool {
-        match self {
-            LhsSide::Typed(e) => is_ic_equation(e),
-            LhsSide::Json(v) => v.get("op").and_then(|o| o.as_str()) == Some("ic"),
-        }
-    }
-
-    fn defined_name(self) -> Option<&'a str> {
-        match self {
-            LhsSide::Typed(lhs) => {
-                let mut e = lhs;
-                loop {
-                    let crate::Expr::Operator(n) = e else {
-                        return match e {
-                            crate::Expr::Variable(s) => Some(s),
-                            _ => None,
-                        };
-                    };
-                    e = match n.op.as_str() {
-                        "faq" => n.expr.as_deref()?,
-                        "index" => n.args.first()?,
-                        "D" if matches!(n.wrt.as_deref(), None | Some("t")) => n.args.first()?,
-                        _ => return None,
-                    };
-                }
-            }
-            LhsSide::Json(v) => lhs_defined_name(v),
-        }
-    }
-
-    fn subject_name(self) -> Option<&'a str> {
-        match self {
-            LhsSide::Typed(lhs) => {
-                let mut e = lhs;
-                loop {
-                    let crate::Expr::Operator(n) = e else {
-                        return match e {
-                            crate::Expr::Variable(s) => Some(s),
-                            _ => None,
-                        };
-                    };
-                    e = match n.op.as_str() {
-                        "faq" => n.expr.as_deref()?,
-                        "index" | "D" => n.args.first()?,
-                        _ => return None,
-                    };
-                }
-            }
-            LhsSide::Json(v) => lhs_subject_name(v),
-        }
-    }
-
-    fn free_subscripts(
-        self,
-        bound: &HashSet<String>,
-        names: &dyn Fn(&str) -> bool,
-        out: &mut Vec<String>,
-    ) {
-        match self {
-            LhsSide::Typed(e) => collect_free_lhs_subscripts_typed(e, bound, names, out),
-            LhsSide::Json(v) => collect_free_lhs_subscripts(v, bound, names, out),
-        }
-    }
 }
 
 /// The `equation_defines_parameter` findings of every model in `esm_file`,
@@ -2284,21 +1906,22 @@ pub(crate) fn parameter_definition_errors(esm_file: &EsmFile) -> Vec<StructuralE
         .collect()
 }
 
-/// One model's equations, then its inline subsystems.
+/// One model's equations (its subsystems are their own models).
 fn lhs_name_errors_in(
     esm_file: &EsmFile,
     path: &str,
-    model: LhsModel<'_>,
+    model: &crate::Model,
     doc_scope: &HashSet<String>,
     out: &mut Vec<StructuralError>,
 ) {
-    let names = |sym: &str| doc_scope.contains(sym) || model.declares(sym);
-    model.for_each_equation(|k, lhs, faq_idx| {
+    let names = |sym: &str| doc_scope.contains(sym) || model.variables.contains_key(sym);
+    for (k, eq) in model.equations.iter().enumerate() {
+        let lhs = &eq.lhs;
         let lhs_path = || format!("{path}/equations/{k}/lhs");
-        if lhs.is_ic() {
-            return;
+        if is_ic_equation(lhs) {
+            continue;
         }
-        if let Some(name) = lhs.defined_name()
+        if let Some(name) = lhs_defined_name(lhs)
             && lhs_names_parameter(esm_file, model, name)
         {
             out.push(StructuralError {
@@ -2312,11 +1935,21 @@ fn lhs_name_errors_in(
             });
         }
         // The bare-index definition `index(V, k) ~ faq{k}(…)` takes its
-        // subscripts from the right-hand side's `output_idx`.
-        let bound: HashSet<String> = faq_idx.into_iter().flatten().collect();
+        // subscripts from the right-hand side's `output_idx`. An integer
+        // entry is written as a number, which names no subscript.
+        let bound: HashSet<String> = match &eq.rhs {
+            crate::Expr::Operator(n) if n.op == "faq" => n
+                .output_idx
+                .iter()
+                .flatten()
+                .filter(|s| !is_integer_literal(s))
+                .cloned()
+                .collect(),
+            _ => HashSet::new(),
+        };
         let mut free: Vec<String> = Vec::new();
-        lhs.free_subscripts(&bound, &names, &mut free);
-        let subject = lhs.subject_name();
+        collect_free_lhs_subscripts(lhs, &bound, &names, &mut free);
+        let subject = lhs_subject_name(lhs);
         for symbol in free {
             let defining = subject.map_or(String::new(), |v| format!(" (defining '{v}')"));
             out.push(StructuralError {
@@ -2329,60 +1962,52 @@ fn lhs_name_errors_in(
                 details: serde_json::json!({ "symbol": symbol, "variable": subject }),
             });
         }
-    });
-    let mut sub_names = model.subsystem_names();
-    sub_names.sort();
-    for s in sub_names {
-        let Some(sub) = model.subsystem(s) else {
-            continue;
-        };
-        if sub.get("ref").is_some() {
-            continue; // an unresolved mount: nothing inline to check
-        }
-        lhs_name_errors_in(
-            esm_file,
-            &format!("{path}/subsystems/{s}"),
-            LhsModel::Json(sub),
-            doc_scope,
-            out,
-        );
     }
 }
 
 /// The variable a left-hand side names, read through its `faq` and `index`
 /// wrappers and a time derivative (`D(…)` with `wrt` absent or `t`: a parameter
 /// may have neither a definition nor dynamics. The axis is the LITERAL `t`,
-/// never `domain.independent_variable`, esm-spec §4.2); `None` for an `ic`, or an
+/// never `domain.independent_variable`, esm-spec §4.2); `None` for an
 /// expression that names no single variable.
-fn lhs_defined_name(lhs: &serde_json::Value) -> Option<&str> {
+fn lhs_defined_name(lhs: &crate::Expr) -> Option<&str> {
     let mut e = lhs;
     loop {
-        if let Some(s) = e.as_str() {
-            return Some(s);
-        }
-        match e.get("op").and_then(|o| o.as_str())? {
-            "faq" => e = e.get("expr")?,
-            "index" => e = e.get("args")?.as_array()?.first()?,
-            "D" if matches!(e.get("wrt").and_then(|w| w.as_str()), None | Some("t")) => {
-                e = e.get("args")?.as_array()?.first()?
-            }
+        let crate::Expr::Operator(n) = e else {
+            return match e {
+                crate::Expr::Variable(s) => Some(s),
+                _ => None,
+            };
+        };
+        e = match n.op.as_str() {
+            "faq" => n.expr.as_deref()?,
+            "index" => n.args.first()?,
+            "D" if matches!(n.wrt.as_deref(), None | Some("t")) => n.args.first()?,
             _ => return None,
-        }
+        };
     }
 }
 
 /// Whether `name`, written on a left-hand side in `model`, names a parameter:
 /// a local variable, a scoped path into `model`'s subsystems, or a path from a
 /// top-level model of the document (which may be `model` itself).
-fn lhs_names_parameter(esm_file: &EsmFile, model: LhsModel<'_>, name: &str) -> bool {
+fn lhs_names_parameter(esm_file: &EsmFile, model: &crate::Model, name: &str) -> bool {
+    /// Whether the variable at the scoped path `rest` (subsystem names, then
+    /// the variable) below `model` is a parameter; `None` when there is no
+    /// such variable.
+    fn is_param(model: &crate::Model, rest: &[&str]) -> Option<bool> {
+        let (last, subs) = rest.split_last()?;
+        let owner = model.inline_subsystem_at(subs)?;
+        Some(owner.variables.get(*last)?.var_type == crate::VariableType::Parameter)
+    }
     let parts: Vec<&str> = name.split('.').collect();
-    if let Some(found) = model.is_param(&parts) {
+    if let Some(found) = is_param(model, &parts) {
         return found;
     }
     if parts.len() > 1
         && let Some(models) = &esm_file.models
         && let Some(top) = models.get(parts[0])
-        && let Some(found) = LhsModel::Typed(top).is_param(&parts[1..])
+        && let Some(found) = is_param(top, &parts[1..])
     {
         return found;
     }
@@ -2391,17 +2016,20 @@ fn lhs_names_parameter(esm_file: &EsmFile, model: LhsModel<'_>, name: &str) -> b
 
 /// The variable a left-hand side is about, read through `faq`, `index` and
 /// `D` wrappers alike (for naming it in a diagnostic).
-fn lhs_subject_name(lhs: &serde_json::Value) -> Option<&str> {
+fn lhs_subject_name(lhs: &crate::Expr) -> Option<&str> {
     let mut e = lhs;
     loop {
-        if let Some(s) = e.as_str() {
-            return Some(s);
-        }
-        match e.get("op").and_then(|o| o.as_str())? {
-            "faq" => e = e.get("expr")?,
-            "index" | "D" => e = e.get("args")?.as_array()?.first()?,
+        let crate::Expr::Operator(n) = e else {
+            return match e {
+                crate::Expr::Variable(s) => Some(s),
+                _ => None,
+            };
+        };
+        e = match n.op.as_str() {
+            "faq" => n.expr.as_deref()?,
+            "index" | "D" => n.args.first()?,
             _ => return None,
-        }
+        };
     }
 }
 
@@ -2411,70 +2039,10 @@ fn is_integer_literal(s: &str) -> bool {
     matches!(s.parse::<i64>(), Ok(v) if v.to_string() == s)
 }
 
-fn json_output_idx(node: &serde_json::Value) -> Vec<String> {
-    node.get("output_idx")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|x| x.as_str().map(str::to_string))
-        .collect()
-}
-
 /// The string subscripts of `index` nodes in a left-hand side that name no
 /// variable or metaparameter in scope and no enclosing `faq` binds, in order,
 /// without repeats.
 fn collect_free_lhs_subscripts(
-    e: &serde_json::Value,
-    bound: &HashSet<String>,
-    names: &dyn Fn(&str) -> bool,
-    out: &mut Vec<String>,
-) {
-    let Some(obj) = e.as_object() else { return };
-    let op = obj.get("op").and_then(|o| o.as_str()).unwrap_or("");
-    let args: &[serde_json::Value] = obj
-        .get("args")
-        .and_then(|a| a.as_array())
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    match op {
-        "faq" => {
-            let mut inner = bound.clone();
-            inner.extend(json_output_idx(e));
-            if let Some(r) = obj.get("ranges").and_then(|r| r.as_object()) {
-                inner.extend(r.keys().cloned());
-            }
-            if let Some(x) = obj.get("expr") {
-                collect_free_lhs_subscripts(x, &inner, names, out);
-            }
-            for a in args {
-                collect_free_lhs_subscripts(a, &inner, names, out);
-            }
-        }
-        "index" => {
-            if let Some(base) = args.first() {
-                collect_free_lhs_subscripts(base, bound, names, out);
-            }
-            for s in args.iter().skip(1) {
-                match s.as_str() {
-                    Some(sym) => {
-                        if !bound.contains(sym) && !names(sym) && !out.iter().any(|o| o == sym) {
-                            out.push(sym.to_string());
-                        }
-                    }
-                    None => collect_free_lhs_subscripts(s, bound, names, out),
-                }
-            }
-        }
-        _ => {
-            for a in args {
-                collect_free_lhs_subscripts(a, bound, names, out);
-            }
-        }
-    }
-}
-
-/// [`collect_free_lhs_subscripts`] over a typed left-hand side.
-fn collect_free_lhs_subscripts_typed(
     e: &crate::Expr,
     bound: &HashSet<String>,
     names: &dyn Fn(&str) -> bool,
@@ -2497,15 +2065,15 @@ fn collect_free_lhs_subscripts_typed(
                 inner.extend(r.keys().cloned());
             }
             if let Some(x) = node.expr.as_deref() {
-                collect_free_lhs_subscripts_typed(x, &inner, names, out);
+                collect_free_lhs_subscripts(x, &inner, names, out);
             }
             for a in &node.args {
-                collect_free_lhs_subscripts_typed(a, &inner, names, out);
+                collect_free_lhs_subscripts(a, &inner, names, out);
             }
         }
         "index" => {
             if let Some(base) = node.args.first() {
-                collect_free_lhs_subscripts_typed(base, bound, names, out);
+                collect_free_lhs_subscripts(base, bound, names, out);
             }
             for s in node.args.iter().skip(1) {
                 match s {
@@ -2514,13 +2082,13 @@ fn collect_free_lhs_subscripts_typed(
                             out.push(sym.clone());
                         }
                     }
-                    _ => collect_free_lhs_subscripts_typed(s, bound, names, out),
+                    _ => collect_free_lhs_subscripts(s, bound, names, out),
                 }
             }
         }
         _ => {
             for a in &node.args {
-                collect_free_lhs_subscripts_typed(a, bound, names, out);
+                collect_free_lhs_subscripts(a, bound, names, out);
             }
         }
     }
@@ -2651,18 +2219,11 @@ fn validate_aggregate_constraints(
     }
     check_recurrence_group_frames(&groups, &frames, model_path, errors);
     // Each inline subsystem is a model whose equations take the same checks,
-    // against its own declarations. An unresolved `{ref}` mount carries none.
-    let mut subsystems: Vec<(&String, &serde_json::Value)> =
-        model.subsystems.iter().flatten().collect();
+    // against its own declarations.
+    let mut subsystems: Vec<(&String, &crate::Model)> = model.inline_subsystems().collect();
     subsystems.sort_by(|a, b| a.0.cmp(b.0));
-    for (name, value) in subsystems {
-        if value.get("ref").is_some() {
-            continue;
-        }
-        let Ok(sub) = serde_json::from_value::<crate::Model>(value.clone()) else {
-            continue;
-        };
-        let class = crate::classification::Classification::of(&sub);
+    for (name, sub) in subsystems {
+        let class = crate::classification::Classification::of(sub);
         let states: HashSet<&str> = class
             .ode_states
             .iter()
@@ -2673,7 +2234,7 @@ fn validate_aggregate_constraints(
         validate_aggregate_constraints(
             esm_file,
             &format!("{model_path}/subsystems/{name}"),
-            &sub,
+            sub,
             &|n: &str| states.contains(n),
             None,
             errors,
@@ -5132,7 +4693,7 @@ fn validate_reaction_rate_units(
         });
     }
 
-    let env = ComponentUnitEnv::new(env, rs.subsystems.as_ref(), document_units);
+    let env = ComponentUnitEnv::new(env, rs, document_units);
     let time = Unit::base(crate::units::Dimension::Time, 1, 1.0);
 
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
@@ -5547,60 +5108,19 @@ fn validate_rate_expression(
 /// the first level is the two-segment shortcut §4.9.2 rules out, and rejected
 /// an `ic` of a state five subsystems down.
 fn subsystem_scoped_refs(model: &crate::Model) -> HashSet<String> {
-    let mut refs = HashSet::new();
-    if let Some(subs) = &model.subsystems {
-        collect_subsystem_scoped_refs("", subs.iter(), &mut refs);
-    }
-    refs
-}
-
-/// [`subsystem_scoped_refs`] for one `subsystems` map, whose entries sit under
-/// the dotted `prefix` (empty at the owning model).
-fn collect_subsystem_scoped_refs<'a>(
-    prefix: &str,
-    subs: impl Iterator<Item = (&'a String, &'a serde_json::Value)>,
-    refs: &mut HashSet<String>,
-) {
-    for (sub_name, value) in subs {
-        let path = if prefix.is_empty() {
-            sub_name.clone()
-        } else {
-            format!("{prefix}.{sub_name}")
-        };
-        // ANY mounted subsystem exposes `<sub>.<var>` to the owning model — a
-        // DataSource (RFC pure-io-data-loaders §4.3) and equally a MODEL mounted
-        // by `ref` (§4.7 subsystem inclusion, e.g. `Solar` from lib/solar.esm,
-        // read as `Solar.solar_zenith_angle`). Matching only the DataSource
-        // SHAPE meant a ref-mounted model subsystem resolved to nothing, and
-        // every reference into it was reported `unresolved_scoped_ref` — which
-        // rejected both standard-library inclusion fixtures. The ref resolver
-        // has already flattened the mount to `{variables, equations}` by now, so
-        // one pass over `variables` (plus `species`, for a reaction subsystem)
-        // covers every mount kind.
-        //
-        // An inlined `ref` may also still carry the WHOLE referenced document —
-        // `{esm, metadata, models: {<one>: …}}`, the post-resolution shape the
-        // simulator's `parse_subsystem_model` accepts — so its single component
-        // is the one whose members are exposed.
-        let component = value
-            .get("models")
-            .or_else(|| value.get("reaction_systems"))
-            .and_then(|m| m.as_object())
-            .filter(|m| m.len() == 1)
-            .and_then(|m| m.values().next())
-            .unwrap_or(value);
-        for field in ["variables", "species"] {
-            let Some(members) = component.get(field).and_then(|v| v.as_object()) else {
-                continue;
-            };
-            for var in members.keys() {
-                refs.insert(format!("{path}.{var}"));
-            }
-        }
-        if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
-            collect_subsystem_scoped_refs(&path, nested.iter(), refs);
-        }
-    }
+    // ANY mounted subsystem exposes `<sub>.<var>` to the owning model, a model
+    // mounted by `ref` (§4.7 subsystem inclusion, e.g. `Solar` from
+    // lib/solar.esm, read as `Solar.solar_zenith_angle`) as much as one written
+    // inline: the loader has spliced every mount in by now.
+    subsystem_tree(model, "", "", TreeOrder::Declared)
+        .iter()
+        .flat_map(|node| {
+            node.component
+                .variables
+                .keys()
+                .map(|var| format!("{}.{var}", node.path))
+        })
+        .collect()
 }
 
 /// `<System>.<member>` → declared unit string for every member of the
@@ -5620,78 +5140,67 @@ pub(crate) fn toplevel_reference_units(esm_file: &EsmFile) -> HashMap<String, St
         }
     };
     for (name, model) in esm_file.models.iter().flatten() {
-        for (var, decl) in &model.variables {
-            insert(format!("{name}.{var}"), decl.units.as_deref());
-        }
-        if let Some(subs) = &model.subsystems {
-            collect_subsystem_units(name, subs.iter(), &mut insert);
+        for node in component_tree(model, name, "", TreeOrder::Declared) {
+            for (member, units) in node.component.member_units() {
+                insert(format!("{}.{member}", node.path), units);
+            }
         }
     }
     for (name, rs) in esm_file.reaction_systems.iter().flatten() {
-        for (member, units) in rs
-            .species
-            .iter()
-            .map(|(k, v)| (k, &v.units))
-            .chain(rs.parameters.iter().map(|(k, v)| (k, &v.units)))
-        {
-            insert(format!("{name}.{member}"), units.as_deref());
-        }
-        if let Some(subs) = &rs.subsystems {
-            collect_subsystem_units(name, subs.iter(), &mut insert);
-        }
-    }
-    out
-}
-
-/// `<sub>.<member>` → declared unit string, relative to a component whose
-/// `subsystems` map this is, at any depth. A member that declares NO units is
-/// still present (as `None`): the relative path is what the name resolves to,
-/// so it must shadow a top-level member with the same dotted name.
-pub(crate) fn subsystem_reference_units(
-    subsystems: &indexmap::IndexMap<String, serde_json::Value>,
-) -> HashMap<String, Option<String>> {
-    let mut out = HashMap::new();
-    collect_subsystem_units("", subsystems.iter(), &mut |name, units| {
-        out.insert(name, units.map(str::to_string));
-    });
-    out
-}
-
-/// Visit every member of one raw `subsystems` map whose entries sit under the
-/// dotted `prefix` (empty at the owning component), with its declared unit
-/// string if any. Mirrors [`collect_subsystem_scoped_refs`]: the same members,
-/// with their units.
-fn collect_subsystem_units<'a>(
-    prefix: &str,
-    subs: impl Iterator<Item = (&'a String, &'a serde_json::Value)>,
-    visit: &mut impl FnMut(String, Option<&str>),
-) {
-    for (sub_name, value) in subs {
-        let path = if prefix.is_empty() {
-            sub_name.clone()
-        } else {
-            format!("{prefix}.{sub_name}")
-        };
-        let component = value
-            .get("models")
-            .or_else(|| value.get("reaction_systems"))
-            .and_then(|m| m.as_object())
-            .filter(|m| m.len() == 1)
-            .and_then(|m| m.values().next())
-            .unwrap_or(value);
-        for field in ["variables", "species", "parameters"] {
-            let Some(members) = component.get(field).and_then(|v| v.as_object()) else {
-                continue;
-            };
-            for (member, decl) in members {
-                let units = decl.get("units").and_then(|u| u.as_str());
-                visit(format!("{path}.{member}"), units);
+        for node in component_tree(rs, name, "", TreeOrder::Declared) {
+            for (member, units) in node.component.member_units() {
+                insert(format!("{}.{member}", node.path), units);
             }
         }
-        if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
-            collect_subsystem_units(&path, nested.iter(), visit);
+    }
+    out
+}
+
+/// A component's members as a unit environment reads them: a model's
+/// `variables`; a reaction system's `species`, then its `parameters`.
+pub(crate) trait MemberUnits: HasSubsystems {
+    /// Each member with its declared unit string, if any.
+    fn member_units(&self) -> Vec<(&String, Option<&str>)>;
+}
+
+impl MemberUnits for crate::Model {
+    fn member_units(&self) -> Vec<(&String, Option<&str>)> {
+        self.variables
+            .iter()
+            .map(|(name, v)| (name, v.units.as_deref()))
+            .collect()
+    }
+}
+
+impl MemberUnits for crate::ReactionSystem {
+    fn member_units(&self) -> Vec<(&String, Option<&str>)> {
+        self.species
+            .iter()
+            .map(|(name, sp)| (name, sp.units.as_deref()))
+            .chain(
+                self.parameters
+                    .iter()
+                    .map(|(name, p)| (name, p.units.as_deref())),
+            )
+            .collect()
+    }
+}
+
+/// `<sub>.<member>` → declared unit string, relative to `component`, for
+/// every member of its subsystems at any depth. A member that declares NO
+/// units is still present (as `None`): the relative path is what the name
+/// resolves to, so it must shadow a top-level member with the same dotted
+/// name.
+pub(crate) fn subsystem_reference_units<C: MemberUnits>(
+    component: &C,
+) -> HashMap<String, Option<String>> {
+    let mut out = HashMap::new();
+    for node in subsystem_tree(component, "", "", TreeOrder::Declared) {
+        for (member, units) in node.component.member_units() {
+            out.insert(format!("{}.{member}", node.path), units.map(str::to_string));
         }
     }
+    out
 }
 
 pub(crate) fn validate_expression_references_with_systems<S: std::hash::BuildHasher>(
@@ -6256,16 +5765,6 @@ struct ObservedNode<'a> {
 /// document order (a model, then its subsystems depth-first), handed to `f`
 /// as its full scoped name (`ModelA`, `ModelN.Sub`), its JSON pointer
 /// (`/models/ModelN/subsystems/Sub`), its variables and its equations.
-///
-/// A top-level model is read from its typed form. A subsystem is held as raw
-/// JSON (`Model::subsystems` is untyped because an entry may be an unresolved
-/// `{"ref": …}` mount), so its `variables` and `equations` are deserialized
-/// THROUGH a borrow of that JSON — no clone of the subtree, and nothing else of
-/// it is read. The loader resolves every `{"ref": …}` mount before a document
-/// reaches a check, so a ref still standing here can only come from a caller
-/// that built the `EsmFile` by hand without resolving it; such a mount declares
-/// nothing. An equation that does not type is skipped, exactly as
-/// [`crate::classification::Classification::from_json`] skips it.
 #[allow(clippy::type_complexity)]
 pub(crate) fn for_each_model_node(
     models: &indexmap::IndexMap<String, crate::Model>,
@@ -6276,49 +5775,15 @@ pub(crate) fn for_each_model_node(
         &[crate::Equation],
     ),
 ) {
-    #[allow(clippy::type_complexity)]
-    fn subsystems(
-        prefix: &str,
-        pointer: &str,
-        entries: &mut dyn Iterator<Item = (&String, &serde_json::Value)>,
-        f: &mut dyn FnMut(
-            &str,
-            &str,
-            &indexmap::IndexMap<String, crate::ModelVariable>,
-            &[crate::Equation],
-        ),
-    ) {
-        use serde::Deserialize as _;
-        for (name, value) in entries {
-            let path = format!("{prefix}.{name}");
-            let sub_pointer = format!("{pointer}/subsystems/{name}");
-            let variables = value
-                .get("variables")
-                .and_then(|v| {
-                    indexmap::IndexMap::<String, crate::ModelVariable>::deserialize(v).ok()
-                })
-                .unwrap_or_default();
-            let equations: Vec<crate::Equation> = value
-                .get("equations")
-                .and_then(serde_json::Value::as_array)
-                .map(|eqs| {
-                    eqs.iter()
-                        .filter_map(|eq| crate::Equation::deserialize(eq).ok())
-                        .collect()
-                })
-                .unwrap_or_default();
-            f(&path, &sub_pointer, &variables, &equations);
-            if let Some(nested) = value.get("subsystems").and_then(|s| s.as_object()) {
-                subsystems(&path, &sub_pointer, &mut nested.iter(), f);
-            }
-        }
-    }
-
     for (name, model) in models {
-        let pointer = format!("/models/{name}");
-        f(name, &pointer, &model.variables, &model.equations);
-        if let Some(subs) = &model.subsystems {
-            subsystems(name, &pointer, &mut subs.iter(), f);
+        let root = format!("/models/{name}");
+        for node in component_tree(model, name, &root, TreeOrder::Declared) {
+            f(
+                &node.path,
+                &node.pointer,
+                &node.component.variables,
+                &node.component.equations,
+            );
         }
     }
 }

@@ -482,21 +482,14 @@ pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> Co
 
 /// The first event `model` or any of its inline subsystems declares, a
 /// continuous one before a discrete one: its construct ([`CONTINUOUS_EVENT`] or
-/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). The subsystems
-/// are searched in their raw JSON: mounting keeps only their variables and
-/// equations, and `flatten` does not lift a subsystem's events into the
-/// flattened system, so no check on the flattened event lists can see one.
+/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). Mounting keeps
+/// only a subsystem's variables and equations, and `flatten` does not lift a
+/// subsystem's events into the flattened system, so no check on the flattened
+/// event lists can see one.
 pub(crate) fn first_event(model: &crate::types::Model) -> Option<(&'static str, Option<String>)> {
-    if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
-        return Some((CONTINUOUS_EVENT, event.name.clone()));
-    }
-    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
-        return Some((DISCRETE_EVENT, event.name.clone()));
-    }
-    model
-        .subsystems
-        .as_ref()
-        .and_then(|subs| subs.values().find_map(first_event_in_json))
+    first_event_in_tree(model, |m| {
+        (m.continuous_events.as_deref(), m.discrete_events.as_deref())
+    })
 }
 
 /// [`first_event`] over every model and reaction system in `file`, subsystems
@@ -511,38 +504,37 @@ pub(crate) fn first_event_in_file(
     in_models.or_else(|| {
         file.reaction_systems.as_ref().and_then(|systems| {
             systems.values().find_map(|rs| {
-                if let Some(event) = rs.continuous_events.as_ref().and_then(|e| e.first()) {
-                    return Some((CONTINUOUS_EVENT, event.name.clone()));
-                }
-                if let Some(event) = rs.discrete_events.as_ref().and_then(|e| e.first()) {
-                    return Some((DISCRETE_EVENT, event.name.clone()));
-                }
-                rs.subsystems
-                    .as_ref()
-                    .and_then(|subs| subs.values().find_map(first_event_in_json))
+                first_event_in_tree(rs, |r| {
+                    (r.continuous_events.as_deref(), r.discrete_events.as_deref())
+                })
             })
         })
     })
 }
 
-fn first_event_in_json(value: &serde_json::Value) -> Option<(&'static str, Option<String>)> {
-    for (key, construct) in [
-        ("continuous_events", CONTINUOUS_EVENT),
-        ("discrete_events", DISCRETE_EVENT),
-    ] {
-        if let Some(event) = value
-            .get(key)
-            .and_then(|v| v.as_array())
-            .and_then(|events| events.first())
-        {
-            let name = event.get("name").and_then(|n| n.as_str());
-            return Some((construct, name.map(str::to_string)));
-        }
-    }
-    value
-        .get("subsystems")
-        .and_then(|s| s.as_object())
-        .and_then(|subs| subs.values().find_map(first_event_in_json))
+/// The first event of `root` or of any subsystem below it, depth first, read
+/// off each component by `events`.
+fn first_event_in_tree<C: crate::types::HasSubsystems>(
+    root: &C,
+    events: impl Fn(
+        &C,
+    ) -> (
+        Option<&[crate::types::ContinuousEvent]>,
+        Option<&[crate::types::DiscreteEvent]>,
+    ),
+) -> Option<(&'static str, Option<String>)> {
+    use crate::types::{TreeOrder, component_tree};
+    component_tree(root, "", "", TreeOrder::Declared)
+        .into_iter()
+        .find_map(|node| {
+            let (continuous, discrete) = events(node.component);
+            if let Some(event) = continuous.and_then(|e| e.first()) {
+                return Some((CONTINUOUS_EVENT, event.name.clone()));
+            }
+            discrete
+                .and_then(|e| e.first())
+                .map(|event| (DISCRETE_EVENT, event.name.clone()))
+        })
 }
 
 /// The first equation that constrains its operands only implicitly, including a

@@ -92,7 +92,7 @@ pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::resolve_declared_shape;
-pub(crate) use compile::{BuiltVariables, model_tree_any, parse_subsystem_model};
+pub(crate) use compile::{BuiltVariables, model_tree_any};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
