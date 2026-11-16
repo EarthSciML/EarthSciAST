@@ -485,22 +485,31 @@ pub fn lex_one(prev: Option<char>, cs: &[char]) -> Option<(Tok, &[char])> {
 /// character of the previous token's canonical spelling when no space came
 /// between.
 pub fn lex(cs: &[char]) -> Option<Vec<Tok>> {
+    lex_at(cs).ok().map(|(toks, _)| toks)
+}
+
+/// [`lex`], with the character offset in `cs` where each token starts; on a
+/// refusal, the offset where no token reads.
+pub fn lex_at(cs: &[char]) -> Result<(Vec<Tok>, Vec<usize>), usize> {
     let mut out = Vec::new();
+    let mut starts = Vec::new();
     let mut prev: Option<char> = None;
-    let mut cs = cs;
+    let mut rest = cs;
     loop {
-        let prev2 = if cs.first().is_some_and(|&c| is_ws_t(c)) {
+        let prev2 = if rest.first().is_some_and(|&c| is_ws_t(c)) {
             None
         } else {
             prev
         };
-        let cs2 = skip(cs);
+        let cs2 = skip(rest);
+        let at = cs.len() - cs2.len();
         if cs2.is_empty() {
-            return Some(out);
+            return Ok((out, starts));
         }
-        let (t, r) = lex_one(prev2, cs2)?;
+        let (t, r) = lex_one(prev2, cs2).ok_or(at)?;
         prev = tok_chars(&t).last().copied();
         out.push(t);
-        cs = r;
+        starts.push(at);
+        rest = r;
     }
 }
