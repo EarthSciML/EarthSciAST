@@ -53,8 +53,7 @@ const KW_CHARS = Dict{Kw, String}(
     KMin => "min", KMax => "max", KAbs => "abs", KFloor => "floor", KCeil => "ceil",
     KPdiff => "partial", KDif => "dif", KCases => "cases", KEsmnode => "esm.node",
     KVec => "vec", KMat => "mat", KSum => "sum", KProd => "product", KInn => "in",
-    KLimits => "limits", KLr => "lr", KNl => "\\", KTimesLbk => "times [",
-    KDelimK => "delim", KAugK => "augment", KLset => "{", KRset => "}",
+    KLimits => "limits", KLr => "lr", KNl => "\\", KLset => "{", KRset => "}",
 )
 
 """`Typst.kwChars`."""
@@ -156,7 +155,7 @@ pretty(p, t1::Tok, t2::Tok) =
     is_bin(t1) || is_bin(t2) || iskw(t1, KComma) || iskw(t1, KColon) || iskw(t1, KSemi) ||
     (iskw(t2, KMinus) && atom_end(t1)) ||
     (iskw(t1, KMinus) && p !== nothing && atom_end(p)) ||
-    (atom_end(t1) && atom_start(t2)) || t2 isa TUnits || iskw(t2, KTimesLbk)
+    (atom_end(t1) && atom_start(t2)) || t2 isa TUnits
 
 """`Typst.sp`: no space before a call parenthesis, nor before the `[` of an
 index."""
@@ -199,8 +198,7 @@ const IDENT_KW = Dict{String, Kw}(
     "sinh" => KSinh, "cosh" => KCosh, "tanh" => KTanh, "min" => KMin, "max" => KMax,
     "abs" => KAbs, "floor" => KFloor, "ceil" => KCeil, "partial" => KPdiff, "dif" => KDif,
     "cases" => KCases, "vec" => KVec, "mat" => KMat, "sum" => KSum, "product" => KProd,
-    "in" => KInn, "limits" => KLimits, "lr" => KLr, "delim" => KDelimK,
-    "augment" => KAugK,
+    "in" => KInn, "limits" => KLimits, "lr" => KLr,
 )
 
 """`Typst.quotedArg`: `("…")` after a function name."""
@@ -306,10 +304,6 @@ function lex_ident(cs::Chars)
     elseif ws == "esm"
         r = drop_p(".node", rest)
         return r === nothing ? nothing : (TKw(KEsmnode), r)
-    elseif ws == "times"
-        r = skip(rest)
-        at(r) == '[' && return TKw(KTimesLbk), drop(r)
-        return TKw(KTimes), rest
     end
     k = get(IDENT_KW, ws, nothing)
     k !== nothing && return TKw(k), rest

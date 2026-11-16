@@ -15,11 +15,12 @@ using ..MExpr: Sym
 using ..SEquation: eq_sides
 using ..SSkeleton: Eqn
 
-const OPENS = (KLp, KLpg, KLb, KLbk, KBcases, KBmat, KLbkg, KBarr, KTimesLbk)
+const OPENS = (KLp, KLpg, KLb, KLbk, KBcases, KBmat, KLbkg, KBarr)
 const CLOSES = (KRp, KRpg, KRb, KRbk, KEcases, KEmat, KRbkg, KEarr)
 
 """`Source.delta`: how a token changes the delimiter depth."""
 function delta(t::Tok)
+    t isa TArrCols && return 1
     t isa TKw || return 0
     t.k in OPENS && return 1
     t.k in CLOSES && return -1

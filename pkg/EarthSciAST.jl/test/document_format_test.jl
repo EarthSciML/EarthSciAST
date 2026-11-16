@@ -330,6 +330,147 @@ end
         @test_throws ArgumentError print_math(bad, String[], :markdown)
     end
 
+    # Array notation: each spelling reads back only as the printer writes it.
+    @testset "array notation: canonical-only reads" begin
+        DF = EarthSciAST.DocumentFormats
+        DJ = DF.DJson
+        DM = DF.DMath
+        NoT = Tuple{String, Vector{String}}[]
+        dj(x) = DJ.sort_keys(DJ.from_value(x))
+        sym(names, ts = NoT) = DF.MExpr.Sym(String.(names), ts)
+        function rd(sf, s, text)
+            j = DF.DLimits.reading() do
+                sf === :latex ? DM.parse_latex(s, text) : DM.parse_typst(s, text)
+            end[1]
+            return j === nothing ? nothing : DJ.to_value(j)
+        end
+        pr(sf, s, e) = sf === :latex ? DM.print_latex(s, dj(e)) : DM.print_typst(s, dj(e))
+        reads(sf, s, text, e) = (r = rd(sf, s, text); r !== nothing && _docfmt_jeq(r, e))
+        round_trips(s, e) = all(sf -> reads(sf, s, pr(sf, s, e), e), (:latex, :typst))
+        idx(a, is...) = Dict("op" => "index", "args" => Any[a, is...])
+        S = sym(["x", "f", "g", "i", "j", "a", "b", "delim", "augment", "t"])
+
+        # A `\limits` reduction's `args` are its body's arrays: a superscript
+        # set on it is refused, on the operator or on the output bracket.
+        withset = Dict(
+            "op" => "faq", "args" => Any["f"], "expr" => idx("x", "i"),
+            "output_idx" => Any[], "ranges" => Dict("i" => Any[1, 3]),
+        )
+        @test pr(:latex, S, withset) == "\\sum_{1 \\le i \\le 3}^{\\{f\\}} x_{i}"
+        @test round_trips(S, withset)
+        @test rd(:latex, S, "\\sum\\limits_{1 \\le i \\le 3}^{\\{f\\}} x_{i}") === nothing
+        @test rd(:typst, S, "limits(sum)_(1 <= i <= 3)^({f}) x_i") === nothing
+        @test rd(:latex, S, "\\left[\\sum\\limits_{j = 1}^{3} x_{i, j}\\right]^{\\{f\\}}_{i}") === nothing
+        @test rd(:typst, S, "lr([limits(sum)_(1 <= j <= 3) x_(i, j)])^({f})_(i)") === nothing
+
+        # A wrapped reduction carries its set on the bracket only.
+        out = Dict(
+            "op" => "faq", "args" => Any["f"], "expr" => idx("x", "i", "j"),
+            "output_idx" => Any["i"], "ranges" => Dict("j" => Any[1, 3]),
+        )
+        @test pr(:latex, S, out) == "\\left[\\sum_{1 \\le j \\le 3} x_{i, j}\\right]^{\\{f\\}}_{i}"
+        @test pr(:typst, S, out) == "lr([sum_(1 <= j <= 3) x_(i, j)])^({f})_(i)"
+        @test round_trips(S, out)
+        @test rd(:latex, S, "\\left[\\sum_{1 \\le j \\le 3}^{\\{f\\}} x_{i, j}\\right]_{i}") === nothing
+        @test rd(:latex, S, "\\left[\\sum_{1 \\le j \\le 3}^{\\{g\\}} x_{i, j}\\right]^{\\{f\\}}_{i}") === nothing
+        @test rd(:typst, S, "lr([sum_(1 <= j <= 3)^({f}) x_(i, j)])_(i)") === nothing
+        @test rd(:typst, S, "lr([sum_(1 <= j <= 3)^({g}) x_(i, j)])^({f})_(i)") === nothing
+
+        # `delim` and `augment` are words: names everywhere but the head of a
+        # makearray table.
+        @test reads(:typst, S, "delim + 1", Dict("op" => "+", "args" => Any["delim", 1]))
+        @test reads(:typst, S, "augment", "augment")
+        @test reads(
+            :typst, S, "(dif augment)/(dif t)",
+            Dict("op" => "D", "args" => Any["augment"], "wrt" => "t"),
+        )
+        mk = Dict(
+            "op" => "makearray", "args" => Any[], "regions" => Any[Any[Any[1, 2], Any[3, 4]]],
+            "values" => Any["a"],
+        )
+        @test pr(:latex, S, mk) ==
+            "\\left[\\begin{array}{l|l} a & [1, 2] \\times [3, 4] \\end{array}\\right]"
+        @test pr(:typst, S, mk) == "mat(delim: \"[\", augment: #1, a, [1, 2] times [3, 4])"
+        @test round_trips(S, mk)
+        mk3 = Dict(
+            "op" => "makearray", "args" => Any[],
+            "regions" => Any[Any[Any[1, 2], Any["a", "b"], Any[0, 5]]], "values" => Any["x"],
+        )
+        @test round_trips(S, mk3)
+
+        # `\times [` outside a region is a product with a bracketed operand.
+        for (sf, text) in ((:latex, "a \\times [1, 2] \\times b"), (:typst, "a times [1, 2] times b"))
+            r = rd(sf, S, text)
+            @test r !== nothing && r["op"] == "*" && r["args"][1] == "a"
+        end
+
+        # The `;` call form reads only a node the printer writes that way.
+        ann = Dict("op" => "myop", "args" => Any["x"], "id" => "n1", "shape" => Any[2])
+        for sf in (:latex, :typst)
+            text = pr(sf, S, ann)
+            # an open operator keeps its annotation fields in the call form
+            @test occursin(sf === :latex ? "\\operatorname{myop}(x;" : "op(\"myop\")(x;", text)
+            @test reads(sf, S, text, ann)
+            # a core operator with one is written in the escape form instead
+            @test rd(sf, S, replace(text, "myop" => "reshape")) === nothing
+        end
+        nat = Dict("op" => "myconst", "args" => Any[], "value" => Any[1, 2])
+        for sf in (:latex, :typst)
+            # a const with a native spelling is refused in the call form
+            @test rd(sf, S, replace(pr(sf, S, nat), "myconst" => "const")) === nothing
+        end
+        empty_const = Dict("op" => "const", "args" => Any[], "value" => Any[])
+        @test occursin("\\operatorname{const}", pr(:latex, S, empty_const))
+        @test round_trips(S, empty_const)
+        @test rd(:latex, S, "\\operatorname{myop}(x; \\mathrm{k} = 1, \\mathrm{k} = 2)") === nothing
+        @test rd(:latex, S, "\\operatorname{myop}(x; \\mathrm{op} = 1)") === nothing
+        @test rd(:latex, S, "\\operatorname{myop}(x; \\mathrm{args} = 1)") === nothing
+        @test reads(
+            :latex, S, "\\operatorname{myop}(x; \\mathrm{k} = 1)",
+            Dict("op" => "myop", "args" => Any["x"], "k" => 1),
+        )
+
+        # A bare `\operatorname{n}` is a template applied with no bindings,
+        # except for a template in scope with no parameters (printed `n()`).
+        tpl(n) = Dict("op" => "apply_expression_template", "args" => Any[], "name" => n, "bindings" => Dict())
+        T = sym(["x"], [("g0", String[]), ("h1", ["p"])])
+        @test pr(:latex, T, tpl("g0")) == "\\operatorname{g0}()"
+        @test round_trips(T, tpl("g0"))
+        @test rd(:latex, T, "\\operatorname{g0}") === nothing
+        @test rd(:latex, T, "\\operatorname{g0} + x") === nothing
+        @test rd(:typst, T, "op(\"g0\")") === nothing
+        @test pr(:latex, T, tpl("h1")) == "\\operatorname{h1}"
+        @test round_trips(T, tpl("h1"))
+        @test pr(:latex, T, tpl("out")) == "\\operatorname{out}"
+        @test round_trips(T, tpl("out"))
+        @test reads(:latex, T, "\\operatorname{out} + x", Dict("op" => "+", "args" => Any[tpl("out"), "x"]))
+
+        # A matrix wider than `bmatrix` allows is an `array` with one `c` per
+        # column; only that spelling reads it back.
+        wide = Dict("op" => "const", "args" => Any[], "value" => Any[collect(1:11), collect(12:22)])
+        @test pr(:latex, S, wide) ==
+            "\\left[\\begin{array}{ccccccccccc}1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 \\\\ " *
+            "12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 & 22 \\end{array}\\right]"
+        @test pr(:typst, S, wide) ==
+            "mat(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11; 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22)"
+        @test round_trips(S, wide)
+        narrow = Dict("op" => "const", "args" => Any[], "value" => Any[collect(1:10), collect(11:20)])
+        @test startswith(pr(:latex, S, narrow), "\\begin{bmatrix}")
+        @test round_trips(S, narrow)
+        col = Dict("op" => "const", "args" => Any[], "value" => collect(1:12))
+        @test startswith(pr(:latex, S, col), "\\begin{bmatrix}")
+        @test round_trips(S, col)
+        row11 = join(1:11, " & ")
+        row10 = join(1:10, " & ")
+        @test rd(:latex, S, "\\begin{bmatrix}$row11 \\\\ $row11\\end{bmatrix}") === nothing
+        @test rd(:latex, S, "\\left[\\begin{array}{ccccccccccc}$row10 \\\\ $row10 \\end{array}\\right]") === nothing
+        @test rd(:latex, S, "\\left[\\begin{array}{cccccccccc}$row10 \\\\ $row10 \\end{array}\\right]") === nothing
+        @test rd(:latex, S, "\\left[\\begin{array}{ccccccccccc}$row11 \\\\ $row11 \\end{array}\\right]") !== nothing
+
+        # One list of annotation fields, shared with metaparameter substitution.
+        @test DF.MPrint.ANNOT_KEYS === EarthSciAST.EXPRESSION_NODE_ANNOTATIONS
+    end
+
     corpus = _docfmt_corpus()
 
     @testset "whole-corpus round trip" begin

@@ -20,7 +20,7 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces, Sym
-using ..MPrint: CALL_OPS, CORE_OPS, FIELD_CALL_OPS, Ctx, FaqForm, MkForm, faq_json,
+using ..MPrint: BMAT_COLS, CALL_OPS, CORE_OPS, FIELD_CALL_OPS, MAT_HEAD, Ctx, call_form_node, FaqForm, MkForm, faq_json,
     formula_raw, ins_kv, mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k,
     unesc_t, spell_unit_factors
 using ..MSurface: neg_num
@@ -83,10 +83,6 @@ function atom_start(t::Tok)
     t isa TKw && return t.k in ATOM_KWS
     return false
 end
-
-"""`Math.isTimesLbk`: the region product with its bracket (`\\times [`); outside
-a `makearray` region it reads as `\\times` then `[`."""
-is_times_lbk(t) = iskw(t, KTimesLbk)
 
 """`Math.isLp`: `(` or `\\left(`."""
 is_lp(t) = iskw(t, KLp) || iskw(t, KLpg)
@@ -617,10 +613,10 @@ function with_out(f::FaqForm, outs::Vector{Any}, ors::Kvs)
     return FaqForm(f.red, f.marked, outs, sort_kv(rs), f.expr, f.filter, f.set)
 end
 
-"""`Math.withSup`: a superscript set read after the output entries replaces the
-reduction's own."""
+"""`Math.withSup`: the reduction with the superscript set read on its output
+bracket."""
 with_sup(f::FaqForm, st::Vector{String}) =
-    isempty(st) ? f : FaqForm(f.red, f.marked, f.out, f.ranges, f.expr, f.filter, st)
+    FaqForm(f.red, f.marked, f.out, f.ranges, f.expr, f.filter, st)
 
 """`Math.pSup`: the superscript set of a reduction or of an output form, if
 there is one: LaTeX `^{\\{f, g\\}}`, Typst `^({f, g})`."""
@@ -792,12 +788,7 @@ function mul_loop(c::Ctx, f::Int, acc::Vector{Any}, ts::Toks)
         f == 0 && return nothing
         f -= 1
         t = tk(ts)
-        if is_times_lbk(t)
-            y = p_not(c, f, vcat(Tok[TKw(KLbk)], tdrop(ts)))
-            y === nothing && return nothing
-            push!(acc, y[1])
-            ts = y[2]
-        elseif iskw(t, KCdot) || iskw(t, KTimes)
+        if iskw(t, KCdot) || iskw(t, KTimes)
             y = p_not(c, f, tdrop(ts))
             y === nothing && return nothing
             push!(acc, y[1])
@@ -1069,12 +1060,12 @@ end
 """`Math.pOpn`: `\\operatorname{n}(…)`: a call-form core operator, a deprecated
 one (rewritten), a template (by the symbol table, positional or named), or an
 open operator; a bare `\\operatorname{n}` (no `(` or `_` after it) is a template
-applied with no bindings."""
+applied with no bindings ([`bare_template`](@ref))."""
 function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
     f == 0 && return nothing
     f -= 1
     t0 = tk(ts)
-    t0 === nothing && return tname_ok(n) ? (t_node(n, Kvs()), ts) : nothing
+    t0 === nothing && return bare_template(c, n, ts)
     r = tdrop(ts)
     if is_lp(t0)
         x = p_call_args(c, f, r)
@@ -1118,13 +1109,30 @@ function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
             vs = all_pos(args)
             y = p_fields(c, f, r1)
             (vs !== nothing && y !== nothing && kat(y[2], 1, KRp)) || return nothing
-            return mk_node(n, vs, y[1]), tdrop(y[2])
+            # The fields are the node's own: no key twice, none `op` or `args`.
+            (nodup_keys(y[1]) && all(kv -> !(kv.first in ("op", "args")), y[1])) ||
+                return nothing
+            nd = mk_node(n, vs, y[1])
+            # Only a node the printer writes in this form reads back from it.
+            call_form_node(c, nd.kvs) || return nothing
+            return nd, tdrop(y[2])
         end
         return nothing
     elseif iskw(t0, KUs)
         return n == "D" ? p_d_call(c, f, r) : nothing
     end
-    return tname_ok(n) ? (t_node(n, Kvs()), ts) : nothing
+    return bare_template(c, n, ts)
+end
+
+"""`Math.bareTemplate`: a bare `\\operatorname{n}`: the template `n` applied
+with no bindings, as the printer writes it when no parameter list of `n` is
+known or the known one is not empty. A template in scope with no parameters
+prints as `\\operatorname{n}()`, so its bare name is refused."""
+function bare_template(c::Ctx, n::String, ts::Toks)
+    tname_ok(n) || return nothing
+    ps = tparams(c.s, n)
+    (ps !== nothing && isempty(ps)) && return nothing
+    return t_node(n, Kvs()), ts
 end
 
 """`Math.pDCall`: `\\operatorname{D}_{x}(u, a, b)` after the `_`."""
@@ -1199,17 +1207,23 @@ function p_prim(c::Ctx, f::Int, ts::Toks)
         return t1.n, r
     elseif k1 == KBmat
         x = p_grid(KAmp, KNl, KEmat, r)
-        x === nothing && return nothing
+        (x !== nothing && all(q -> length(q) <= BMAT_COLS, x[1])) || return nothing
         return const_tail(grid_json(x[1]), x[2])
+    elseif k1 == KLbkg && t2 isa TArrCols
+        # A matrix wider than `bmatrix` allows: `n` columns in every row.
+        n = t2.n
+        n > BMAT_COLS || return nothing
+        x = p_grid(KAmp, KNl, KEarr, tdrop(ts, 2))
+        (x !== nothing && kat(x[2], 1, KRbkg) && all(q -> length(q) == n, x[1])) ||
+            return nothing
+        return const_tail(JArr(Any[JArr(Any[v for v in q]) for q in x[1]]), tdrop(x[2]))
     elseif k1 == KVec && t2 !== nothing
         is_lp(t2) || return nothing
         x = p_cells(KComma, tdrop(ts, 2))
         (x !== nothing && kat(x[2], 1, KRp)) || return nothing
         return const_tail(JArr(Any[n for n in x[1]]), tdrop(x[2]))
-    elseif k1 == KMat && iskw(t2, KLp) && kat(ts, 3, KDelimK) && kat(ts, 4, KColon) &&
-            tk(ts, 5) == TTxt("[") && kat(ts, 6, KComma) && kat(ts, 7, KAugK) &&
-            kat(ts, 8, KColon) && tk(ts, 9) == TCode(JInt(1)) && kat(ts, 10, KComma)
-        x = p_mk_rows(c, f, KComma, KSemi, KRp, tdrop(ts, 10))
+    elseif mat_head(ts)
+        x = p_mk_rows(c, f, KComma, KSemi, KRp, tdrop(ts, length(MAT_HEAD)))
         x === nothing && return nothing
         return mk_tail(c.sf, x[1], x[2])
     elseif k1 == KMat && t2 !== nothing
@@ -1456,6 +1470,8 @@ function p_red_body(c::Ctx, f::Int, red::Symbol, marked::Bool, ts::Toks)
     pp = row_parts(Row[x for x in rs])
     sup = p_sup(c.sf, r)
     (pp !== nothing && sup !== nothing) || return nothing
+    # A `\\limits` head's `args` are the body's arrays: it carries no set.
+    (marked && !isempty(sup[1])) && return nothing
     body = p_mul(c, f, sup[2])
     body === nothing && return nothing
     rg, fl = pp
@@ -1484,11 +1500,14 @@ function p_red_wrapped(c::Ctx, f::Int, r::Toks, wclose::Vector{Tok}, sub::Vector
     b = p_red_body(c, f, red, marked, r1)
     b === nothing && return nothing
     form, r2 = b
+    # The set of a wrapped reduction is written on its bracket only.
+    isempty(form.set) || return nothing
     r3 = strip_toks(r2, wclose)
     r3 === nothing && return nothing
     sp = p_sup(c.sf, r3)
     sp === nothing && return nothing
     st, r4 = sp
+    (form.marked && !isempty(st)) && return nothing
     r5 = strip_toks(r4, sub)
     r5 === nothing && return nothing
     e = p_rows(c, f, KComma, close, r5)
@@ -1633,6 +1652,17 @@ function _p_cases(c::Ctx, f::Int, ts::Toks)
     return nothing
 end
 
+"""`Math.matHead`: the Typst `makearray` table head `mat(delim: "[", augment: #1,`
+([`MAT_HEAD`](@ref)); `delim` and `augment` are plain words, read as the head
+only at this position."""
+function mat_head(ts::Toks)
+    length(ts) >= length(MAT_HEAD) || return false
+    for i in eachindex(MAT_HEAD)
+        ts[i] == MAT_HEAD[i] || return false
+    end
+    return true
+end
+
 """`Math.pPair`: a bound pair after its `[`: `a, b]`."""
 function p_pair(c::Ctx, f::Int, ts::Toks)
     f == 0 && return nothing
@@ -1644,15 +1674,16 @@ function p_pair(c::Ctx, f::Int, ts::Toks)
     return (x[1], y[1]), tdrop(y[2])
 end
 
-"""`Math.pRegTail`: the further bound pairs of a region, each after
-`\\times [`."""
+"""`Math.pRegTail`: the further bound pairs of a region, each after `\\times`
+and its `[`. Inside a region `\\times [` after a pair is always the next pair:
+the pair is read by [`p_pair`](@ref), never as a product operand."""
 function p_reg_tail(c::Ctx, f::Int, ts::Toks)
     out = Tuple{Any, Any}[]
     while true
         f == 0 && return nothing
         f -= 1
-        is_times_lbk(tk(ts)) || return out, ts
-        x = p_pair(c, f, tdrop(ts))
+        (kat(ts, 1, KTimes) && kat(ts, 2, KLbk)) || return out, ts
+        x = p_pair(c, f, tdrop(ts, 2))
         x === nothing && return nothing
         push!(out, x[1])
         ts = x[2]

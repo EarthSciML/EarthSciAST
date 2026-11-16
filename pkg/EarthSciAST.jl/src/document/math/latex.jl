@@ -167,7 +167,7 @@ const KW_CHARS = Dict{Kw, String}(
     KEmat => "\\end{bmatrix}", KSum => "\\sum", KProd => "\\prod", KInn => "\\in",
     KSubstack => "\\substack", KLimitsL => "\\limits", KLbkg => "\\left[",
     KRbkg => "\\right]", KBarr => "\\begin{array}{l|l}", KEarr => "\\end{array}",
-    KTimesLbk => "\\times [", KLset => "\\{", KRset => "\\}",
+    KLset => "\\{", KRset => "\\}",
 )
 
 """`Latex.kwChars`."""
@@ -194,6 +194,7 @@ function tok_chars(t::Tok)
     t isa TEsc && return wrap_brace("\\esm{", esc_t(t.s))
     t isa TUnits && return wrap_brace("\\,\\mathrm{", MUnits.latex_body(t.fs))
     t isa TKw && return collect(Char, kw_chars(t.k))
+    t isa TArrCols && return vcat(collect(Char, "\\begin{array}{"), fill('c', t.n), Char['}'])
     return Char[]
 end
 
@@ -240,7 +241,7 @@ pretty(p, t1::Tok, t2::Tok) =
     (iskw(t2, KMinus) && atom_end(t1)) ||
     (iskw(t1, KMinus) && p !== nothing && atom_end(p)) ||
     (atom_end(t1) && atom_start(t2) && !(iskw(t2, KLp) || iskw(t2, KLbk))) ||
-    iskw(t2, KTimesLbk) || iskw(t1, KBarr) || iskw(t2, KEarr)
+    iskw(t1, KBarr) || iskw(t2, KEarr)
 
 """`Latex.sp`."""
 sp(p, t1::Tok, t2::Tok) = need_space(t1, t2) || pretty(p, t1, t2)
@@ -276,16 +277,17 @@ const CTRL_KW = Dict{String, Kw}(
     "prod" => KProd, "in" => KInn, "substack" => KSubstack, "limits" => KLimitsL,
 )
 
-"""`Latex.timesTok`: `\\times` followed (after white space) by `[`: the region
-product of a `makearray` with the bracket of the next bound pair, one token; any
-other `\\times` is a product."""
-function times_tok(r::Chars)
+"""`Latex.arrayCols`: after `\\begin`: `{array}{` and one or more `c`, then
+`}`: the opener of a wide constant matrix, with its column count."""
+function array_cols(r::Chars)
+    r2 = drop_p("{array}{", r)
+    r2 === nothing && return nothing
     n = 0
-    while is_ws_l(at(r, n + 1))
+    while at(r2, n + 1) == 'c'
         n += 1
     end
-    at(r, n + 1) == '[' && return TKw(KTimesLbk), drop(r, n + 1)
-    return TKw(KTimes), r
+    (n >= 1 && at(r2, n + 1) == '}') || return nothing
+    return TArrCols(n), drop(r2, n + 1)
 end
 
 """`Latex.ctrlTok`: after a control word: its token and the rest."""
@@ -327,7 +329,8 @@ function ctrl_tok(w::String, r::Chars)
         r2 = drop_p("{bmatrix}", r)
         r2 !== nothing && return TKw(KBmat), r2
         r2 = drop_p("{array}{l|l}", r)
-        return r2 === nothing ? nothing : (TKw(KBarr), r2)
+        r2 !== nothing && return TKw(KBarr), r2
+        return array_cols(r)
     elseif w == "end"
         r2 = drop_p("{cases}", r)
         r2 !== nothing && return TKw(KEcases), r2
@@ -335,8 +338,6 @@ function ctrl_tok(w::String, r::Chars)
         r2 !== nothing && return TKw(KEmat), r2
         r2 = drop_p("{array}", r)
         return r2 === nothing ? nothing : (TKw(KEarr), r2)
-    elseif w == "times"
-        return times_tok(r)
     elseif is_greek(w)
         return TGreek(w), r
     end
