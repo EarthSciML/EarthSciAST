@@ -660,10 +660,9 @@ run_pde_simulation_conformance_julia() {
             --output "$OUTPUT_DIR/pde_simulation/julia_report.json"
 }
 
-# Rust drives the vectorized faq evaluator (ArrayCompiled::debug_eval_rhs) +
-# diffsol. ess-fmw. (`cargo run` used to be required here to provision the
-# s2bindings shim lib path; the geometry kernel is pure Rust now, so the adapter
-# binary is self-contained.)
+# Rust evaluates the probes on the Problem's right-hand side under the named
+# compiler (the tape under `native`) and integrates with diffsol. The adapter
+# binary is self-contained.
 run_pde_simulation_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
         error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
