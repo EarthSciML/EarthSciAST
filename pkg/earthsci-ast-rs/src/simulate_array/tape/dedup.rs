@@ -15,8 +15,7 @@
 //! Each is a pure map of its operands that cannot fault, so the first computes
 //! the repeat's value bit for bit and the program's values do not change.
 //! Only straight-line CONST instructions take part (none inside a conditional
-//! region), each defining a slot nothing else defines; a repeat is dropped
-//! only when every instruction that reads it can be renamed.
+//! region), each defining a slot nothing else defines.
 
 use super::ir::*;
 use rustc_hash::FxHashMap;
@@ -150,77 +149,6 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
     Some(k)
 }
 
-/// Rename `ins`'s reads through `canon`; `false` (and nothing changed) for an
-/// instruction whose reads this pass cannot rename.
-fn rename(
-    ins: &mut Instr,
-    dg: &mut [DataGatherSpec],
-    dyw: &mut [DyWrite],
-    canon: &[SlotId],
-) -> bool {
-    let op = |o: &mut Operand| {
-        if let Operand::Slot(s) = o {
-            *s = canon[*s as usize];
-        }
-    };
-    let src = |s: &mut SrcRef| {
-        if let SrcRef::Slot(x) = s {
-            *x = canon[*x as usize];
-        }
-    };
-    match ins {
-        Instr::Bin { a, b, .. } => {
-            op(a);
-            op(b);
-        }
-        Instr::Un { a, .. }
-        | Instr::Neg { a, .. }
-        | Instr::Copy { a, .. }
-        | Instr::Fill { v: a, .. }
-        | Instr::JmpIfZero { cond: a, .. } => op(a),
-        Instr::Select { cond, a, b, .. } => {
-            op(cond);
-            op(a);
-            op(b);
-        }
-        Instr::Gather { src: s, .. }
-        | Instr::LoadElem { src: s, .. }
-        | Instr::Reduce { src: s, .. }
-        | Instr::Scan { src: s, .. }
-        | Instr::TableGather { src: s, .. }
-        | Instr::Reshape { src: s, .. } => src(s),
-        Instr::IndexGather { src: s, idx, .. } => {
-            src(s);
-            op(idx);
-        }
-        Instr::Count { axis, x, .. } => {
-            src(axis);
-            op(x);
-        }
-        Instr::Region { base, src: s, .. } => {
-            *base = canon[*base as usize];
-            op(s);
-        }
-        Instr::DataGather { src: s, spec, .. } => {
-            src(s);
-            for o in dg[*spec as usize].subs.iter_mut() {
-                op(o);
-            }
-        }
-        Instr::Export { slot, .. } => *slot = canon[*slot as usize],
-        Instr::DyWrite { write } => {
-            let w = &mut dyw[*write as usize];
-            w.slot = canon[w.slot as usize];
-        }
-        Instr::Ramp { .. }
-        | Instr::ConstArray { .. }
-        | Instr::LoadForcing { .. }
-        | Instr::Fault { .. } => {}
-        _ => return false,
-    }
-    true
-}
-
 /// Drop every repeated pure CONST instruction (module docs). Runs on the
 /// program as lowered, before any pass that reorders or fuses it.
 pub(super) fn dedup_const(prog: &mut TapeProgram) {
@@ -231,25 +159,17 @@ pub(super) fn dedup_const(prog: &mut TapeProgram) {
     let n_slots = prog.slots.len();
     let guarded = prog.guarded_positions();
     // Slots defined more than once (a branch join) never take part.
-    let mut defs = vec![0u8; n_slots];
-    {
-        let t = prog.tables();
-        for ins in &prog.instrs {
-            ins.for_each_def(&t, |s| {
-                defs[s as usize] = defs[s as usize].saturating_add(1)
-            });
-        }
-    }
+    let n_defs = DefUse::of(prog).n_defs;
     let mut canon: Vec<SlotId> = (0..n_slots as SlotId).collect();
     let mut seen: FxHashMap<String, SlotId> = FxHashMap::default();
-    let mut repeat = vec![false; nc];
+    let mut repeats: Vec<(std::ops::Range<usize>, Vec<(Instr, usize)>)> = Vec::new();
     for pc in 0..nc {
         if guarded[pc] {
             continue;
         }
         let ins = &prog.instrs[pc];
         let Some(out) = ins.out() else { continue };
-        if defs[out as usize] != 1 {
+        if n_defs[out as usize] != 1 {
             continue;
         }
         let Some(k) = key(prog, pc, ins, &canon) else {
@@ -258,69 +178,24 @@ pub(super) fn dedup_const(prog: &mut TapeProgram) {
         match seen.get(&k) {
             Some(&first) => {
                 canon[out as usize] = first;
-                repeat[pc] = true;
+                repeats.push((pc..pc + 1, Vec::new()));
             }
             None => {
                 seen.insert(k, out);
             }
         }
     }
-    if !repeat.iter().any(|&r| r) {
+    if repeats.is_empty() {
         return;
     }
-    // A repeat read by an instruction that cannot be renamed is kept (it
-    // holds the same value as its first); every other read is renamed.
-    let mut kept: Vec<bool> = vec![false; n_slots];
-    let mut renamable = vec![true; prog.instrs.len()];
-    {
-        let t = prog.tables();
-        let mut dg = prog.data_gathers.clone();
-        let mut dyw = prog.dy_writes.clone();
-        for (pc, ins) in prog.instrs.iter().enumerate() {
-            let mut probe = ins.clone();
-            if !rename(&mut probe, &mut dg, &mut dyw, &canon) {
-                renamable[pc] = false;
-                ins.for_each_read(&t, |s| {
-                    if canon[s as usize] != s {
-                        kept[s as usize] = true;
-                    }
-                });
-            }
-        }
+    // Every read of a repeat reads its first instead, which holds the same
+    // value; the repeat is then dropped.
+    let (instrs, mut tables) = prog.instrs_and_tables_mut();
+    for ins in instrs.iter_mut() {
+        ins.for_each_read_mut(&mut tables, |s| *s = canon[*s as usize]);
     }
-    let TapeProgram {
-        instrs,
-        data_gathers,
-        dy_writes,
-        exports,
-        ..
-    } = prog;
-    for (pc, ins) in instrs.iter_mut().enumerate() {
-        if renamable[pc] {
-            rename(ins, data_gathers, dy_writes, &canon);
-        }
-    }
-    for (_, s) in exports.iter_mut() {
+    for (_, s) in prog.exports.iter_mut() {
         *s = canon[*s as usize];
     }
-    let mut keep = vec![true; prog.instrs.len()];
-    for pc in 0..nc {
-        if repeat[pc] {
-            let out = prog.instrs[pc].out().expect("a repeat defines a slot");
-            keep[pc] = kept[out as usize];
-        }
-    }
-    let dropped = keep.iter().filter(|&&k| !k).count();
-    if dropped == 0 {
-        return;
-    }
-    let mut it = keep.iter();
-    prog.instrs.retain(|_| *it.next().unwrap());
-    if !prog.precision.is_empty() {
-        let mut it = keep.iter();
-        prog.precision.retain(|_| *it.next().unwrap());
-    }
-    let mut it = keep.iter();
-    prog.provenance.retain(|_| *it.next().unwrap());
-    prog.n_const -= dropped as u32;
+    prog.splice(repeats);
 }

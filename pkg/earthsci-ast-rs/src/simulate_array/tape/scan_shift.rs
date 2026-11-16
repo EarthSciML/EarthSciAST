@@ -39,7 +39,7 @@ pub(super) fn rewrite_scan_makearray_reads(prog: &mut TapeProgram) {
     if !prog.precision.is_empty() {
         return;
     }
-    let defs = single_defs(prog);
+    let defs = DefUse::of(prog);
     let guarded = prog.guarded_positions();
     // Reverse inclusive scans to split into the exclusive scan and the
     // combine with the term: scan position -> the exclusive scan's slot.
@@ -97,86 +97,47 @@ fn split_reverse_inclusive(
     prog: &mut TapeProgram,
     splits: &std::collections::BTreeMap<usize, SlotId>,
 ) {
-    let n = prog.instrs.len();
-    let mut instrs = Vec::with_capacity(n + splits.len());
-    let mut prov = Vec::with_capacity(n + splits.len());
-    let (mut n_const, mut n_segment) = (prog.n_const, prog.n_segment);
-    for k in 0..n {
-        let Some(&e) = splits.get(&k) else {
-            instrs.push(prog.instrs[k].clone());
-            prov.push(prog.provenance[k]);
-            continue;
-        };
-        let Instr::Scan {
-            op,
-            init,
-            src,
-            axis,
-            reverse,
-            ref src_shape,
-            out,
-            ..
-        } = prog.instrs[k]
-        else {
-            unreachable!("a split position holds a scan");
-        };
-        instrs.push(Instr::Scan {
-            op,
-            init,
-            src,
-            axis,
-            inclusive: false,
-            reverse,
-            src_shape: src_shape.clone(),
-            out: e,
-        });
-        instrs.push(Instr::Bin {
-            op,
-            a: Operand::Slot(e),
-            b: src.into(),
-            out,
-        });
-        prov.extend([prog.provenance[k]; 2]);
-        match prog.section_of(k) {
-            Cadence::Const => n_const += 1,
-            Cadence::Segment => n_segment += 1,
-            Cadence::Continuous => {}
-        }
-    }
-    prog.instrs = instrs;
-    prog.provenance = prov;
-    prog.n_const = n_const;
-    prog.n_segment = n_segment;
-}
-
-/// The defining instruction of every slot defined exactly once.
-fn single_defs(prog: &TapeProgram) -> Vec<Option<usize>> {
-    let mut defs: Vec<Option<usize>> = vec![None; prog.slots.len()];
-    let mut seen = vec![0u8; prog.slots.len()];
-    for (i, ins) in prog.instrs.iter().enumerate() {
-        if let Some(o) = ins.out() {
-            let o = o as usize;
-            seen[o] = seen[o].saturating_add(1);
-            defs[o] = Some(i);
-        }
-    }
-    for (d, &n) in defs.iter_mut().zip(&seen) {
-        if n != 1 {
-            *d = None;
-        }
-    }
-    defs
+    let edits: Vec<_> = splits
+        .iter()
+        .map(|(&k, &e)| {
+            let Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                reverse,
+                ref src_shape,
+                out,
+                ..
+            } = prog.instrs[k]
+            else {
+                unreachable!("a split position holds a scan");
+            };
+            let exclusive = Instr::Scan {
+                op,
+                init,
+                src,
+                axis,
+                inclusive: false,
+                reverse,
+                src_shape: src_shape.clone(),
+                out: e,
+            };
+            let combine = Instr::Bin {
+                op,
+                a: Operand::Slot(e),
+                b: src.into(),
+                out,
+            };
+            (k..k + 1, vec![(exclusive, k), (combine, k)])
+        })
+        .collect();
+    prog.splice(edits);
 }
 
 /// What replaces the gather `out = a[plan]`, when the scan answers it.
-fn answer(
-    prog: &TapeProgram,
-    defs: &[Option<usize>],
-    a: SlotId,
-    plan: u32,
-    out: SlotId,
-) -> Option<Answer> {
-    let Instr::Assemble { table, .. } = prog.instrs[defs[a as usize]?] else {
+fn answer(prog: &TapeProgram, defs: &DefUse, a: SlotId, plan: u32, out: SlotId) -> Option<Answer> {
+    let Instr::Assemble { table, .. } = prog.instrs[defs.single_def(a)?] else {
         return None;
     };
     let p = &prog.plans[plan as usize];
@@ -214,7 +175,7 @@ fn answer(
             reverse,
             ref src_shape,
             ..
-        } = prog.instrs[defs[s as usize]?]
+        } = prog.instrs[defs.single_def(s)?]
         else {
             continue;
         };
@@ -272,7 +233,7 @@ fn answer(
                 out,
             }));
         }
-        return defs[s as usize].map(Answer::ReverseExclusive);
+        return defs.single_def(s).map(Answer::ReverseExclusive);
     }
     None
 }
@@ -298,7 +259,7 @@ fn overwritten_after(
 /// that places the lower-rank total on its one-row region.
 fn is_total(
     prog: &TapeProgram,
-    defs: &[Option<usize>],
+    defs: &DefUse,
     v: Operand,
     op: BinCode,
     init: f64,
@@ -308,7 +269,7 @@ fn is_total(
     let Operand::Slot(g) = v else {
         return false;
     };
-    let Some(gi) = defs[g as usize] else {
+    let Some(gi) = defs.single_def(g) else {
         return false;
     };
     let t = match prog.instrs[gi] {
@@ -336,7 +297,7 @@ fn is_total(
         Instr::Reduce { .. } if prog.slots[g as usize].scalar => g,
         _ => return false,
     };
-    let Some(ti) = defs[t as usize] else {
+    let Some(ti) = defs.single_def(t) else {
         return false;
     };
     let Instr::Reduce {
@@ -358,7 +319,7 @@ fn is_total(
 
 /// Whether two sources hold the same values: the same source, or slots
 /// defined by the same elementwise kernels over sources that are.
-fn same_src(prog: &TapeProgram, defs: &[Option<usize>], a: SrcRef, b: SrcRef, depth: u32) -> bool {
+fn same_src(prog: &TapeProgram, defs: &DefUse, a: SrcRef, b: SrcRef, depth: u32) -> bool {
     match (a, b) {
         (SrcRef::State(x), SrcRef::State(y)) => x == y,
         (SrcRef::Slot(x), SrcRef::Slot(y)) => same_slot(prog, defs, x, y, depth),
@@ -366,7 +327,7 @@ fn same_src(prog: &TapeProgram, defs: &[Option<usize>], a: SrcRef, b: SrcRef, de
     }
 }
 
-fn same_slot(prog: &TapeProgram, defs: &[Option<usize>], x: SlotId, y: SlotId, depth: u32) -> bool {
+fn same_slot(prog: &TapeProgram, defs: &DefUse, x: SlotId, y: SlotId, depth: u32) -> bool {
     if x == y {
         return true;
     }
@@ -374,7 +335,7 @@ fn same_slot(prog: &TapeProgram, defs: &[Option<usize>], x: SlotId, y: SlotId, d
     if depth == 0 || sx.shape != sy.shape || sx.scalar != sy.scalar {
         return false;
     }
-    let (Some(ix), Some(iy)) = (defs[x as usize], defs[y as usize]) else {
+    let (Some(ix), Some(iy)) = (defs.single_def(x), defs.single_def(y)) else {
         return false;
     };
     if prog.precision.get(ix) != prog.precision.get(iy) {

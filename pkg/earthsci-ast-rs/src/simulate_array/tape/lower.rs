@@ -8818,24 +8818,21 @@ impl<'m> TapeBuilder<'m> {
 /// interval is exact.
 fn color_slab(prog: &mut TapeProgram) {
     let n_slots = prog.slots.len();
-    let mut def: Vec<usize> = vec![usize::MAX; n_slots];
-    let mut last_use: Vec<usize> = vec![0; n_slots];
-    let tables = prog.tables();
-    for (i, instr) in prog.instrs.iter().enumerate() {
-        instr.for_each_def(&tables, |out| {
-            let d = &mut def[out as usize];
-            if *d == usize::MAX {
-                *d = i;
+    let du = DefUse::of(prog);
+    let def = &du.first_def;
+    // A RE-definition (the phi slot's second branch `Copy`) keeps the
+    // storage reserved through it, so it counts as a use.
+    let mut last_use: Vec<usize> = (0..n_slots)
+        .map(|s| {
+            let read = du.last_read(s as SlotId).unwrap_or(0);
+            if du.n_defs[s] > 1 {
+                read.max(du.last_def[s])
             } else {
-                // A RE-definition (the phi slot's second branch `Copy`): the
-                // storage must stay reserved through it, so count it as a use.
-                last_use[out as usize] = last_use[out as usize].max(i);
+                read
             }
-        });
-        instr.for_each_read(&tables, |s| {
-            last_use[s as usize] = last_use[s as usize].max(i);
-        });
-    }
+        })
+        .collect();
+    let tables = prog.tables();
     for (pc, instr) in prog.instrs.iter().enumerate() {
         let Instr::Sweep { spec } = instr else {
             continue;

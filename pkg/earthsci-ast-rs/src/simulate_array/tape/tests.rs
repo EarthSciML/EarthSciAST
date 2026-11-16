@@ -3794,3 +3794,57 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
         "the short term stays in the box"
     );
 }
+
+/// Over every corpus document the tape lowers, fused and unfused: the
+/// mutable read visitor visits exactly the slots, in exactly the order, of
+/// the read visitor.
+#[test]
+fn read_visitors_agree_across_the_corpus() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+    let mut docs = Vec::new();
+    let mut stack = vec![root.join("conformance"), root.join("valid")];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).expect("the test corpus") {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "esm") {
+                docs.push(p);
+            }
+        }
+    }
+    docs.sort();
+    let mut checked = 0usize;
+    for path in &docs {
+        let build = |fuse: Option<super::fuse::SuperopCfg>| {
+            std::panic::catch_unwind(|| {
+                let file = crate::parse::load_path(path).ok()?;
+                let compiled = ArrayCompiled::from_file(&file).ok()?;
+                compiled.build_tape_opts(&HashSet::new(), fuse).0.ok()
+            })
+            .ok()
+            .flatten()
+        };
+        for fuse in [Some(superop_cfg()), None] {
+            let Some(mut prog) = build(fuse) else {
+                continue;
+            };
+            for pc in 0..prog.instrs.len() {
+                let mut reads = Vec::new();
+                prog.instrs[pc].for_each_read(&prog.tables(), |s| reads.push(s));
+                let mut seen = Vec::new();
+                let (instrs, mut t) = prog.instrs_and_tables_mut();
+                instrs[pc].for_each_read_mut(&mut t, |s| seen.push(*s));
+                assert_eq!(
+                    reads,
+                    seen,
+                    "{}: instruction {pc} ({})",
+                    path.display(),
+                    prog.instrs[pc].opcode()
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "only {checked} programs built");
+}

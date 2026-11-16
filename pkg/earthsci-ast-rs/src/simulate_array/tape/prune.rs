@@ -42,12 +42,16 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
     }
 
     // Backward closure over the units, from the roots.
-    let mut def_unit: Vec<u32> = vec![u32::MAX; prog.slots.len()];
+    let du = DefUse::of(prog);
+    let mut unit_of: Vec<u32> = vec![0; sec.len()];
     for (u, r) in units.iter().enumerate() {
-        for ins in &prog.instrs[r.clone()] {
-            ins.for_each_def(&tables, |s| def_unit[s as usize] = u as u32);
-        }
+        unit_of[r.start - sec.start..r.end - sec.start].fill(u as u32);
     }
+    // The unit defining `s` last, when it is in this section.
+    let def_unit = |s: SlotId| {
+        let d = du.last_def[s as usize];
+        (d != DefUse::NONE && sec.contains(&d)).then(|| unit_of[d - sec.start] as usize)
+    };
     // A root has an effect beyond its slots that a call must keep: a
     // fault, a `dy` write, or a recurrence sweep.
     let root = |ins: &Instr| match ins.effect() {
@@ -66,11 +70,12 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
         needed[u] = true;
         for ins in &prog.instrs[units[u].clone()] {
             ins.for_each_read(&tables, |s| {
-                let d = def_unit[s as usize];
                 // Defined in this section by an earlier unit (a unit's own
                 // definitions are inside it already).
-                if d != u32::MAX && (d as usize) < u {
-                    needed[d as usize] = true;
+                if let Some(d) = def_unit(s)
+                    && d < u
+                {
+                    needed[d] = true;
                 }
             });
         }
@@ -85,25 +90,15 @@ pub(super) fn split_output_only(prog: &mut TapeProgram) {
         return;
     }
 
-    let order: Vec<usize> = units
+    let body: Vec<(Instr, usize)> = units
         .iter()
         .zip(&needed)
         .filter(|(_, n)| **n)
         .chain(units.iter().zip(&needed).filter(|(_, n)| !**n))
         .flat_map(|(r, _)| r.clone())
+        .map(|i| (prog.instrs[i].clone(), i))
         .collect();
-    let tagged = !prog.precision.is_empty();
-    let instrs: Vec<Instr> = order.iter().map(|&i| prog.instrs[i].clone()).collect();
-    let prov: Vec<u32> = order.iter().map(|&i| prog.provenance[i]).collect();
-    let prec: Vec<_> = if tagged {
-        order.iter().map(|&i| prog.precision[i]).collect()
-    } else {
-        Vec::new()
-    };
-    prog.instrs.splice(sec.clone(), instrs);
-    prog.provenance.splice(sec.clone(), prov);
-    if tagged {
-        prog.precision.splice(sec, prec);
-    }
+    // The whole section is the derivative part while it is rewritten.
+    prog.splice([(sec, body)]);
     prog.n_rhs = n_needed as u32;
 }

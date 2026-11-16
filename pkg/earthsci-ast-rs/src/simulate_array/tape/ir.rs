@@ -706,6 +706,145 @@ impl Instr {
         }
     }
 
+    /// Visit every slot this instruction READS, mutably and in
+    /// [`Instr::for_each_read`]'s order, so a pass can rename what it reads.
+    /// A read held in a program table (a `dy` write's slot, a fused group's
+    /// inputs, a lane program's per-lane slots, …) is renamed in that table,
+    /// which belongs to this one instruction.
+    ///
+    /// The one exception is a causal self-read's coordinates: they are the
+    /// enclosing [`Instr::Sweep`]'s definitions, shared with it, so they are
+    /// visited as copies and must come back unchanged.
+    pub(crate) fn for_each_read_mut(
+        &mut self,
+        t: &mut SlotTablesMut,
+        mut f: impl FnMut(&mut SlotId),
+    ) {
+        fn op(o: &mut Operand, f: &mut impl FnMut(&mut SlotId)) {
+            if let Operand::Slot(s) = o {
+                f(s);
+            }
+        }
+        fn src(s: &mut SrcRef, f: &mut impl FnMut(&mut SlotId)) {
+            if let SrcRef::Slot(s) = s {
+                f(s);
+            }
+        }
+        let f = &mut f;
+        match self {
+            Instr::Bin { a, b, .. } => {
+                op(a, f);
+                op(b, f);
+            }
+            Instr::Un { a, .. } | Instr::Neg { a, .. } => op(a, f),
+            Instr::Select { cond, a, b, .. } => {
+                op(cond, f);
+                op(a, f);
+                op(b, f);
+            }
+            Instr::Gather { src: s, .. }
+            | Instr::LoadElem { src: s, .. }
+            | Instr::Reduce { src: s, .. }
+            | Instr::Scan { src: s, .. }
+            | Instr::TableGather { src: s, .. }
+            | Instr::Reshape { src: s, .. } => src(s, f),
+            Instr::IndexGather { src: s, idx, .. } => {
+                src(s, f);
+                op(idx, f);
+            }
+            Instr::SegReduce { src: s, mask, .. } => {
+                f(s);
+                if let Some(m) = mask {
+                    f(m);
+                }
+            }
+            Instr::Ramp { .. } | Instr::ConstArray { .. } | Instr::LoadForcing { .. } => {}
+            Instr::Lanes { spec } => {
+                let ls = &mut t.lanes[*spec as usize];
+                let lanes = ls.lanes as usize;
+                for inp in ls.inputs.iter_mut().filter(|i| i.kind == LaneKind::Slot) {
+                    let mut ix: Vec<u32> = (0..lanes).map(|l| inp.ix.at(l)).collect();
+                    let before = ix.clone();
+                    for s in &mut ix {
+                        f(s);
+                    }
+                    if ix != before {
+                        inp.ix = LaneIx::of(ix);
+                    }
+                }
+                for sc in &mut ls.scalars {
+                    op(sc, f);
+                }
+            }
+            Instr::Count { axis, x, .. } => {
+                src(axis, f);
+                op(x, f);
+            }
+            Instr::Fill { v, .. } => op(v, f),
+            Instr::Copy { a, .. } => op(a, f),
+            Instr::Region { base, src: s, .. } => {
+                op(s, f);
+                f(base);
+            }
+            Instr::Assemble { table, .. } => {
+                for (s, _) in &mut t.assemblies[*table as usize].parts {
+                    op(s, f);
+                }
+            }
+            Instr::DataGather { src: s, spec, .. } => {
+                src(s, f);
+                for o in &mut t.data_gathers[*spec as usize].subs {
+                    op(o, f);
+                }
+            }
+            Instr::ScalarRead { src: s, spec, .. } => {
+                src(s, f);
+                let sp = &mut t.scalar_reads[*spec as usize];
+                for o in &mut sp.subs {
+                    op(o, f);
+                }
+                if let ScalarReadKind::SelfRead { sweep } = sp.kind {
+                    for &c in &t.sweeps[sweep as usize].coords {
+                        let mut copy = c;
+                        f(&mut copy);
+                        debug_assert_eq!(copy, c, "a sweep's coordinates are its definitions");
+                    }
+                }
+            }
+            Instr::JmpIfZero { cond, .. } => op(cond, f),
+            Instr::Sweep { spec } => op(&mut t.sweeps[*spec as usize].result, f),
+            Instr::Fault { .. } => {}
+            Instr::FaultScan { spec } => {
+                for c in &mut t.fault_scans[*spec as usize].cands {
+                    for pc in &mut c.path {
+                        op(&mut pc.op, f);
+                    }
+                    if let FaultWhat::ConstOob { dims, .. } = &mut c.what {
+                        for od in dims {
+                            if let OobSub::Data { op: o, .. } = &mut od.sub {
+                                op(o, f);
+                            }
+                        }
+                    }
+                }
+            }
+            Instr::Export { slot, .. } => f(slot),
+            Instr::DyWrite { write } => f(&mut t.dy_writes[*write as usize].slot),
+            Instr::Fused { spec } => {
+                let fs = &mut t.fused[*spec as usize];
+                for inp in &mut fs.inputs {
+                    src(&mut inp.src, f);
+                }
+                for sc in &mut fs.scalars {
+                    op(sc, f);
+                }
+                if let Some(PreReduce { src: s, .. }) = &mut fs.pre {
+                    src(s, f);
+                }
+            }
+        }
+    }
+
     /// A short opcode name for diagnostics.
     pub(crate) fn opcode(&self) -> &'static str {
         match self {
@@ -2237,6 +2376,76 @@ pub(crate) struct SlotTables<'a> {
     pub fault_scans: &'a [FaultScanSpec],
 }
 
+/// [`SlotTables`], mutably ([`Instr::for_each_read_mut`]).
+pub(crate) struct SlotTablesMut<'a> {
+    pub dy_writes: &'a mut [DyWrite],
+    pub fused: &'a mut [FusedSpec],
+    pub assemblies: &'a mut [AssembleSpec],
+    pub sweeps: &'a mut [SweepSpec],
+    pub scalar_reads: &'a mut [ScalarReadSpec],
+    pub data_gathers: &'a mut [DataGatherSpec],
+    pub lanes: &'a mut [LaneSpec],
+    pub fault_scans: &'a mut [FaultScanSpec],
+}
+
+/// Where every slot of a program is defined and read: the one def/use index
+/// the passes over a [`TapeProgram`] share.
+pub(crate) struct DefUse {
+    /// Per slot: how many instructions define it (a branch join's phi slot
+    /// is defined once per branch).
+    pub n_defs: Vec<u32>,
+    /// Per slot: the first instruction that defines it, or [`DefUse::NONE`].
+    pub first_def: Vec<usize>,
+    /// Per slot: the last instruction that defines it, or [`DefUse::NONE`].
+    pub last_def: Vec<usize>,
+    /// Per slot: the instructions that read it, ascending, each once.
+    pub readers: Vec<SmallVec<[u32; 4]>>,
+}
+
+impl DefUse {
+    /// No instruction.
+    pub(crate) const NONE: usize = usize::MAX;
+
+    /// The index of `prog` as it stands.
+    pub(crate) fn of(prog: &TapeProgram) -> Self {
+        let n_slots = prog.slots.len();
+        let mut du = DefUse {
+            n_defs: vec![0; n_slots],
+            first_def: vec![Self::NONE; n_slots],
+            last_def: vec![Self::NONE; n_slots],
+            readers: vec![SmallVec::new(); n_slots],
+        };
+        let t = prog.tables();
+        for (pc, ins) in prog.instrs.iter().enumerate() {
+            ins.for_each_def(&t, |s| {
+                let s = s as usize;
+                du.n_defs[s] += 1;
+                if du.first_def[s] == Self::NONE {
+                    du.first_def[s] = pc;
+                }
+                du.last_def[s] = pc;
+            });
+            ins.for_each_read(&t, |s| {
+                let r = &mut du.readers[s as usize];
+                if r.last() != Some(&(pc as u32)) {
+                    r.push(pc as u32);
+                }
+            });
+        }
+        du
+    }
+
+    /// The instruction defining `s`, when exactly one does.
+    pub(crate) fn single_def(&self, s: SlotId) -> Option<usize> {
+        (self.n_defs[s as usize] == 1).then_some(self.first_def[s as usize])
+    }
+
+    /// The last instruction reading `s`, if any does.
+    pub(crate) fn last_read(&self, s: SlotId) -> Option<usize> {
+        self.readers[s as usize].last().map(|&r| r as usize)
+    }
+}
+
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
 #[derive(Clone, Debug)]
 pub(crate) struct ForcingRef {
@@ -2929,6 +3138,110 @@ impl TapeProgram {
             lanes: &self.lanes,
             fault_scans: &self.fault_scans,
         }
+    }
+
+    /// The instructions and, mutably beside them, the tables
+    /// [`Instr::for_each_read_mut`] renames through.
+    pub(crate) fn instrs_and_tables_mut(&mut self) -> (&mut [Instr], SlotTablesMut<'_>) {
+        (
+            &mut self.instrs,
+            SlotTablesMut {
+                dy_writes: &mut self.dy_writes,
+                fused: &mut self.fused,
+                assemblies: &mut self.assemblies,
+                sweeps: &mut self.sweeps,
+                scalar_reads: &mut self.scalar_reads,
+                data_gathers: &mut self.data_gathers,
+                lanes: &mut self.lanes,
+                fault_scans: &mut self.fault_scans,
+            },
+        )
+    }
+
+    /// The tables [`Instr::for_each_read_mut`] renames through.
+    pub(crate) fn tables_mut(&mut self) -> SlotTablesMut<'_> {
+        self.instrs_and_tables_mut().1
+    }
+
+    /// Which counted part of the program instruction `pc` lies in: the
+    /// CONST section, the SEGMENT section, the CONTINUOUS instructions a
+    /// derivative call runs ([`TapeProgram::n_rhs`]), or the rest.
+    fn part_of(&self, pc: usize) -> usize {
+        match self.section_of(pc) {
+            Cadence::Const => 0,
+            Cadence::Segment => 1,
+            Cadence::Continuous => {
+                let cont = (self.n_const + self.n_segment) as usize;
+                if pc < cont + self.n_rhs as usize {
+                    2
+                } else {
+                    3
+                }
+            }
+        }
+    }
+
+    /// Replace each instruction range of `edits` with its new instructions,
+    /// keeping `instrs`, `provenance`, the optional `precision` and the
+    /// counters `n_const`, `n_segment` and `n_rhs` in step. The ranges are
+    /// ascending, disjoint and non-empty, and none spans a section or the
+    /// end of the derivative part; a range's new instructions (any number,
+    /// none to delete it) land in the part the range stood in. Each new
+    /// instruction is tagged with the old position whose provenance and
+    /// precision it takes.
+    pub(crate) fn splice(
+        &mut self,
+        edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<(Instr, usize)>)>,
+    ) {
+        let old = std::mem::take(&mut self.instrs);
+        let old_prov = std::mem::take(&mut self.provenance);
+        let old_prec = std::mem::take(&mut self.precision);
+        let tagged = !old_prec.is_empty();
+        let n = old.len();
+        let mut instrs: Vec<Instr> = Vec::with_capacity(n);
+        let mut prov: Vec<u32> = Vec::with_capacity(n);
+        let mut prec = Vec::with_capacity(if tagged { n } else { 0 });
+        let mut counts = [0u32; 4];
+        let mut edits = edits.into_iter().peekable();
+        let mut old = old.into_iter().enumerate();
+        while let Some((pc, ins)) = old.next() {
+            // The old counters stay in place until the end.
+            let part = self.part_of(pc);
+            let body = match edits.peek() {
+                Some((range, _)) if range.start == pc => {
+                    let (range, body) = edits.next().expect("peeked");
+                    debug_assert!(
+                        !range.is_empty(),
+                        "an edit replaces at least one instruction"
+                    );
+                    debug_assert_eq!(
+                        self.part_of(range.end - 1),
+                        part,
+                        "an edit stays inside one part of the program"
+                    );
+                    for _ in pc + 1..range.end {
+                        old.next();
+                    }
+                    body
+                }
+                _ => vec![(ins, pc)],
+            };
+            for (ins, from) in body {
+                instrs.push(ins);
+                prov.push(old_prov[from]);
+                if tagged {
+                    prec.push(old_prec[from]);
+                }
+                counts[part] += 1;
+            }
+        }
+        debug_assert!(edits.next().is_none(), "every edit lies inside the program");
+        self.instrs = instrs;
+        self.provenance = prov;
+        self.precision = prec;
+        self.n_const = counts[0];
+        self.n_segment = counts[1];
+        self.n_rhs = counts[2];
     }
 
     /// The `[start, end)` instruction range of a section.

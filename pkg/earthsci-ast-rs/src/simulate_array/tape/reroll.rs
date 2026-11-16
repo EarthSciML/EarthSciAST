@@ -142,7 +142,7 @@ pub(super) fn reroll_program(prog: &mut TapeProgram) {
         .filter_map(|r| cse_run(prog, &a, r.clone()).map(|body| (r, body)))
         .collect();
     if !edits.is_empty() {
-        splice(prog, edits);
+        prog.splice(edits);
     }
 
     let a = Analysis::of(prog);
@@ -166,6 +166,7 @@ pub(super) fn reroll_program(prog: &mut TapeProgram) {
 struct Analysis {
     n_defs: Vec<u32>,
     def_pc: Vec<usize>,
+    /// Per slot: the last instruction reading it (0 when none does).
     last_read: Vec<usize>,
     exported: Vec<bool>,
     /// Instructions inside a conditional region or a recurrence body (or
@@ -178,20 +179,10 @@ impl Analysis {
         let n = prog.instrs.len();
         let n_slots = prog.slots.len();
         let tables = prog.tables();
-        let mut n_defs = vec![0u32; n_slots];
-        let mut def_pc = vec![usize::MAX; n_slots];
-        let mut last_read = vec![0usize; n_slots];
-        for (pc, ins) in prog.instrs.iter().enumerate() {
-            ins.for_each_def(&tables, |s| {
-                n_defs[s as usize] += 1;
-                if def_pc[s as usize] == usize::MAX {
-                    def_pc[s as usize] = pc;
-                }
-            });
-            ins.for_each_read(&tables, |s| {
-                last_read[s as usize] = last_read[s as usize].max(pc);
-            });
-        }
+        let du = DefUse::of(prog);
+        let last_read = (0..n_slots as SlotId)
+            .map(|s| du.last_read(s).unwrap_or(0))
+            .collect();
         let mut exported = vec![false; n_slots];
         for (_, s) in &prog.exports {
             exported[*s as usize] = true;
@@ -207,8 +198,8 @@ impl Analysis {
             }
         }
         Analysis {
-            n_defs,
-            def_pc,
+            n_defs: du.n_defs,
+            def_pc: du.first_def,
             last_read,
             exported,
             fixed,
@@ -283,51 +274,32 @@ fn cse_run(
     let mut seen: FxHashMap<[u64; 7], SlotId> =
         FxHashMap::with_capacity_and_hasher(run.len(), Default::default());
     let mut body: Vec<(Instr, usize)> = Vec::with_capacity(run.len());
-    let ren = |o: &mut Operand, rename: &FxHashMap<SlotId, SlotId>| {
-        if let Operand::Slot(s) = o
-            && let Some(&t) = rename.get(s)
-        {
-            *s = t;
-        }
-    };
     for pc in run.clone() {
         let mut ins = prog.instrs[pc].clone();
-        let key: Option<([u64; 7], SlotId)> = match &mut ins {
+        ins.for_each_read_mut(&mut prog.tables_mut(), |s| {
+            if let Some(&t) = rename.get(s) {
+                *s = t;
+            }
+        });
+        let key: Option<([u64; 7], SlotId)> = match &ins {
             Instr::Bin { op, a, b, out } => {
-                ren(a, &rename);
-                ren(b, &rename);
                 let (x, y) = (op_key(a), op_key(b));
                 Some(([1, *op as u64, x[0], x[1], y[0], y[1], 0], *out))
             }
             Instr::Un { op, a, out } => {
-                ren(a, &rename);
                 let x = op_key(a);
                 Some(([2, *op as u64, x[0], x[1], 0, 0, 0], *out))
             }
             Instr::Neg { a, out } => {
-                ren(a, &rename);
                 let x = op_key(a);
                 Some(([3, 0, x[0], x[1], 0, 0, 0], *out))
             }
             Instr::Select { cond, a, b, out } => {
-                ren(cond, &rename);
-                ren(a, &rename);
-                ren(b, &rename);
                 let (c, x, y) = (op_key(cond), op_key(a), op_key(b));
                 // `Select` has three operands; the op word carries the first.
                 Some(([4 | (c[0] << 8), c[1], x[0], x[1], y[0], y[1], 0], *out))
             }
-            Instr::Fill { v, .. } | Instr::Copy { a: v, .. } => {
-                ren(v, &rename);
-                None
-            }
-            Instr::DyWrite { write } => {
-                let w = &mut prog.dy_writes[*write as usize];
-                if let Some(&t) = rename.get(&w.slot) {
-                    w.slot = t;
-                }
-                None
-            }
+            Instr::Fill { .. } | Instr::Copy { .. } | Instr::DyWrite { .. } => None,
             _ => unreachable!("only batchable instructions reach a run"),
         };
         if let Some((k, out)) = key {
@@ -667,52 +639,7 @@ fn rewrite(prog: &mut TapeProgram, plans: Vec<(std::ops::Range<usize>, RunPlan)>
         edits.push((range, body));
     }
     prog.instrs = old;
-    splice(prog, edits);
-}
-
-/// Replace each (ascending, disjoint) instruction range with its new
-/// instructions, each tagged with the old position whose provenance and
-/// precision it takes, and recount the sections. A range never spans a
-/// section boundary.
-fn splice(prog: &mut TapeProgram, edits: Vec<(std::ops::Range<usize>, Vec<(Instr, usize)>)>) {
-    let old = std::mem::take(&mut prog.instrs);
-    let old_prov = std::mem::take(&mut prog.provenance);
-    let old_prec = std::mem::take(&mut prog.precision);
-    let tagged = !old_prec.is_empty();
-    let n = old.len();
-    let mut instrs: Vec<Instr> = Vec::with_capacity(n);
-    let mut prov: Vec<u32> = Vec::with_capacity(n);
-    let mut prec = Vec::with_capacity(if tagged { n } else { 0 });
-    let mut counts = [0u32; 3];
-    let mut edits = edits.into_iter().peekable();
-    let mut old = old.into_iter().enumerate();
-    while let Some((pc, ins)) = old.next() {
-        // The old section counts stay in place until the end.
-        let sec = prog.section_of(pc) as usize;
-        let body = match edits.peek() {
-            Some((range, _)) if range.start == pc => {
-                let (range, body) = edits.next().expect("peeked");
-                for _ in pc + 1..range.end {
-                    old.next();
-                }
-                body
-            }
-            _ => vec![(ins, pc)],
-        };
-        for (ins, from) in body {
-            instrs.push(ins);
-            prov.push(old_prov[from]);
-            if tagged {
-                prec.push(old_prec[from]);
-            }
-            counts[sec] += 1;
-        }
-    }
-    prog.instrs = instrs;
-    prog.provenance = prov;
-    prog.precision = prec;
-    prog.n_const = counts[Cadence::Const as usize];
-    prog.n_segment = counts[Cadence::Segment as usize];
+    prog.splice(edits);
 }
 
 /// Build one class's lane program and emit its instruction. Lane 0's
