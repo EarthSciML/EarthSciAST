@@ -620,10 +620,13 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
             // populate `structural_errors` from it. This never flips the verdict:
             // `is_valid` stays false; it only recovers the `(code, path)` records.
             // (Mirrors the conformance runner's recovery in the `esm` CLI, `cli/`.)
-            let structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
+            let mut structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
                 Ok(esm_file) => validate(&esm_file).structural_errors,
                 Err(_) => vec![],
             };
+            // The findings the refusal itself located: the document's own mount
+            // edges that do not resolve (`crate::mount_edge_errors`).
+            structural_errors.extend(e.findings().iter().cloned());
             ValidationResult {
                 schema_errors,
                 structural_errors,
