@@ -616,11 +616,87 @@ def operators(g):
         ),
     )
     E(
-        "faq_escape",
-        "A faq with a semiring other than sum_product prints in the escape form.",
+        "faq_call_semiring",
+        "A faq with a semiring other than sum_product prints in the call form, its fields "
+        "as named arguments.",
         faq(op("true"), {"i": {"from": "S"}}, output_idx=["i"], semiring="bool_and_or"),
         names=("w",),
         index_sets=SETS,
+    )
+    E(
+        "faq_call_join",
+        "A faq with join prints in the call form: its args positional, its fields named, "
+        "JSON-valued fields as JSON.",
+        faq(
+            "a",
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i", "j"],
+            args=["src", "tgt"],
+            join=[{"overlap": {"src_env": ["src"], "tgt_env": ["tgt"], "eps": 1e-09}}],
+        ),
+        names=("a", "src", "tgt"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_limits",
+        "args listing exactly the arrays the body indexes: the \\limits marker (Typst limits(sum)).",
+        faq(idx("w", "i"), {"i": {"from": "S"}}, args=["w"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_dense",
+        "Other args names: a superscript set on the operator; a lone dense range then "
+        "uses the one-row subscript.",
+        faq(idx("w", "i"), {"i": [1, op("-", "N", 1)]}, args=["f"]),
+        names=("w", "f", "N"),
+    )
+    E(
+        "faq_args_set_from",
+        "A superscript set of two names after a one-row set range.",
+        faq(op("*", idx("w", "i"), "x"), {"i": {"from": "S"}}, args=["f", "g"]),
+        names=("w", "f", "g", "x"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_substack",
+        "A superscript set after a stacked subscript (two ranges and a filter).",
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            filter=op(">", idx("w", "i", "j"), 0),
+            args=["f"],
+        ),
+        names=("w", "f"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_filter_eq",
+        "A superscript set after a lone equality filter, which never reads as a dense range.",
+        op("faq", "f", expr=idx("w", "k"), output_idx=[], filter=op("==", "k", 1)),
+        names=("w", "f", "k"),
+    )
+    E(
+        "faq_args_set_nosub",
+        "A superscript set on an operator with no subscript.",
+        op("faq", "f", expr=idx("w", "i"), output_idx=[]),
+        names=("w", "f", "i"),
+    )
+    E(
+        "faq_args_set_output",
+        "With output indices the superscript set goes on the bracket, before its subscript; "
+        "a power of it is parenthesized.",
+        op(
+            "^",
+            faq(
+                op("-", idx("f", op("+", "i", 1)), idx("f", "i")),
+                {"i": [2, op("-", "N", 1)]},
+                output_idx=["i"],
+                args=["f", "g"],
+            ),
+            2,
+        ),
+        names=("f", "g", "N"),
     )
 
     # index.
@@ -636,8 +712,18 @@ def operators(g):
     E("const_matrix_units", "A constant matrix with units.", const([[1, 2], [3, 4]], "m"))
     E(
         "const_large",
-        "An array of more than 16 entries prints in the escape form.",
+        "An array of any size prints natively: a column of 17 entries.",
         const(list(range(17))),
+    )
+    E(
+        "const_large_matrix",
+        "A matrix of more than 16 entries prints natively.",
+        const([[i * 5 + j for j in range(5)] for i in range(4)], "m"),
+    )
+    E(
+        "const_rank3",
+        "A rank-3 array prints in the call form, its value as JSON.",
+        const([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]),
     )
 
     # Function-call templates.
@@ -664,9 +750,24 @@ def operators(g):
         "A template whose parameter list is not in the document: named arguments.",
         tmpl("scale", f="x", n=2),
     )
+    E(
+        "template_bare",
+        "A template applied with no bindings and no known parameter list: its bare name.",
+        op("+", tmpl("duo_tile_map"), "x"),
+    )
+    E(
+        "template_bare_product",
+        "A bare template is parenthesized as a factor of a product and as an index base.",
+        op("*", "k", tmpl("dlon"), idx(tmpl("dlon"), 1)),
+    )
 
     # Open operators.
     E("open_op", "An open (rewrite-target) operator prints in the call form.", op("grad", "x"))
+    E(
+        "open_op_no_operands",
+        "An open operator with no operands keeps its parentheses, apart from a bare template.",
+        op("+", op("noise"), "x"),
+    )
     E(
         "open_op_fields",
         "Node fields of an open operator are named arguments after a semicolon.",
@@ -678,21 +779,70 @@ def operators(g):
         op("myop", "k", s="a{b}_c"),
     )
 
-    # The escape form.
+    # makearray.
     E(
-        "escape_broadcast",
-        "broadcast prints in the escape form; its arguments are ordinary math.",
+        "makearray_1d",
+        "makearray: a bracketed table of value and region, rows in order; region bounds "
+        "are ordinary math.",
+        op(
+            "makearray",
+            regions=[[[2, op("-", "N", 1)]], [[1, 1]], [["N", "N"]]],
+            values=[tmpl("interior", u="x"), op("*", 2, "a"), 0],
+        ),
+    )
+    E(
+        "makearray_2d",
+        "A two-dimensional region is its bound pairs joined by \\times.",
+        op(
+            "makearray",
+            regions=[[[1, "N"], [1, "N"]], [[1, 1], [2, op("-", "N", 1)]]],
+            values=["a", idx("x", 1)],
+        ),
+    )
+    E(
+        "makearray_lifted",
+        "A lifted makearray carries its output indices as the bracket's subscript.",
+        op(
+            "makearray",
+            output_idx=["i"],
+            regions=[[[1, 4]]],
+            values=[faq(op("*", "k", idx("x", "i")), {"i": [1, 4]}, output_idx=["i"])],
+        ),
+    )
+    E(
+        "makearray_call",
+        "A makearray with no native shape (operands, no values) prints in the call form.",
+        op("makearray", "a", "x", regions=[[[1, 1]], [[2, 2]]], output_idx=["i"]),
+    )
+
+    # The shape operators: the call form with named fields.
+    E(
+        "call_broadcast",
+        "broadcast prints in the call form; fn is a named JSON field.",
         op("broadcast", "a", "x", fn="+"),
     )
     E(
-        "escape_makearray",
-        "makearray in the escape form.",
-        op("makearray", "a", "x", regions=[[[1, 1]], [[2, 2]]], output_idx=["i"]),
+        "call_reshape",
+        "reshape in the call form, its shape a JSON list.",
+        op("reshape", "a", shape=[2, 3]),
     )
+    E("call_transpose", "transpose in the call form, with no fields.", op("transpose", "a"))
+    E(
+        "call_concat",
+        "concat in the call form; a field that is not expression-valued prints as JSON.",
+        op("concat", "a", "x", axis=1),
+    )
+
+    # The escape form.
     E(
         "escape_annotated",
         "A node carrying id prints in its notation wrapped in the escape form.",
         op("*", "a", idx("x", 1), id="tagged"),
+    )
+    E(
+        "escape_annotated_reshape",
+        "A shape operator carrying id keeps the escape form.",
+        op("reshape", "a", shape=[2, 3], id="tagged"),
     )
     return a
 
@@ -1822,14 +1972,14 @@ def refusals(g):
         "removed_op",
         [('op("sign")(x)', 'op("aggregate")(x)')],
     )
-    bc = expr_doc(op("broadcast", "a", "x", fn="+"), ("a", "x"))
+    bc = expr_doc(op("reshape", "a", shape=[2, 3], id="tagged"), ("a",))
     R(
         "removed_escape_latex",
         "A removed operator in the LaTeX escape form.",
         bc,
         md,
         "removed_op",
-        [(r"\esm{broadcast}", r"\esm{arrayop}")],
+        [(r"\esm{reshape}", r"\esm{arrayop}")],
     )
     R(
         "removed_escape_typst",
@@ -1837,7 +1987,7 @@ def refusals(g):
         bc,
         typ,
         "removed_op",
-        [('esm.node("broadcast"', 'esm.node("rank"')],
+        [('esm.node("reshape"', 'esm.node("rank"')],
     )
     # Malformed input. esm-lean reports every refusal the same way (exit status 1); the code a
     # binding reports for each is in README.md.

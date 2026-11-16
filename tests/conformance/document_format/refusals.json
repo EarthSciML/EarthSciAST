@@ -104,7 +104,7 @@
       "kind": "refusal",
       "description": "A removed operator in the LaTeX escape form.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{arrayop}{{\\text{\"fn\"}: \\text{\"+\"}}}{a, x}\n$$\n",
+      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\esm{arrayop}{{\\text{\"id\"}: \\text{\"tagged\"}, \\text{\"shape\"}: [2, 3]}}{a}\n$$\n",
       "error": "removed_op"
     },
     {
@@ -112,7 +112,7 @@
       "kind": "refusal",
       "description": "A removed operator in the Typst escape form.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = esm.node(\"rank\", #(\n  fn: \"+\",\n), a, x) $\n",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#var($y$)\n\n$ y = esm.node(\"rank\", #(\n  id: \"tagged\",\n  shape: (\n    2,\n    3,\n  ),\n), a) $\n",
       "error": "removed_op"
     },
     {

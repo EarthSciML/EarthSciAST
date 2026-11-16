@@ -23,7 +23,7 @@ text back.
 
 | File | Cases | What it pins |
 |---|---|---|
-| `operators.json` | print | Every operator tier: native arithmetic and functions, derivatives, `cases`, `faq` reductions, `index`, constant arrays, the call tier, function-call templates, open operators, the escape form |
+| `operators.json` | print | Every operator tier: native arithmetic and functions, derivatives, `cases`, `faq` reductions (unmarked, the `\limits` marker, and an `args` superscript set on the operator in each subscript shape and on the output bracket), `index`, constant arrays of any size, the `makearray` table (one- and two-dimensional regions, the lifted form with its output indices), the call tier, function-call templates (positional, named, the bare name of one with no bindings), open operators (with and without operands), the call form with named fields of the shape operators and of a `faq`, `makearray` or `const` with no native shape, and the escape form left for annotated nodes |
 | `names.json` | print | The name shapes (single letter, Greek, subscripted, chemical formula, word), the collisions that force `\mathit{…}` or the bracketed index `k[1]`, declared `e` and `d`, scoped references |
 | `variants.json` | variant | Every accepted hand-written math spelling (`Notation.variants`), with the canonical text it normalizes to |
 | `documents.json` | print, variant | Front matter, descriptions, declarations, equations and their comments, reactions (coefficients, empty sides, attributes), initialization and constraint containers, templates and rules, by-reference subsystems, path-keyed blocks, quoted flow-collection attributes, the plot shorthand next to the analyses block it stands for, the document-layer variants, and prose and label independence |
