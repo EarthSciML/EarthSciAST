@@ -219,8 +219,9 @@ pub(crate) fn conformance_validation_record(
             record.insert("phase".into(), json!("load"));
             record.insert("is_valid".into(), json!(false));
             // The load-phase rejection still yields its structured findings:
-            // `validate_text` reports the refusal's own findings (the mount
-            // edges that do not resolve, `earthsci_ast::mount_edge_errors`)
+            // `validate_text` reports the findings the refusal carries (the
+            // mount edges that do not resolve, an unresolvable coupling
+            // reference, an undeclared event variable, a cross-scope cycle)
             // with the schema errors of the document as written — what
             // `esm validate` prints for the same file.
             let raw = validate_text(&content, path.parent());
