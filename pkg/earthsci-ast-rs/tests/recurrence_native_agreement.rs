@@ -195,7 +195,7 @@ fn every_recurrence_fixture_passes_its_own_assertions_under_native() {
             base_dir: Some(tests_dir().join(rel).parent().unwrap().to_path_buf()),
             ..Default::default()
         };
-        let results = run_inline_tests_with_options(&file, &options, None);
+        let results = run_inline_tests_with_options(&file, &options);
         assert!(!results.is_empty(), "{rel}: asserts nothing");
         for r in results {
             assert!(
@@ -439,7 +439,7 @@ fn an_unguarded_self_read_faults_under_native_as_under_the_interpreter() {
             compiler: Some(compiler),
             ..Default::default()
         };
-        let results = run_inline_tests_with_options(&file, &options, None);
+        let results = run_inline_tests_with_options(&file, &options);
         assert_eq!(results.len(), 1, "{results:?}");
         let r = &results[0];
         assert!(
@@ -480,7 +480,7 @@ fn the_fault_fixtures_fault_under_both_compilers() {
                 base_dir: Some(tests_dir().join(rel).parent().unwrap().to_path_buf()),
                 ..Default::default()
             };
-            let results = run_inline_tests_with_options(&file, &options, None);
+            let results = run_inline_tests_with_options(&file, &options);
             assert!(!results.is_empty(), "{rel}: asserts nothing");
             for r in results {
                 assert!(

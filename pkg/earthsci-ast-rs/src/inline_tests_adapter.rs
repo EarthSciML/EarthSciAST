@@ -111,7 +111,7 @@ fn run_fixture(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<An
         compiler: Some(compiler),
         ..Default::default()
     };
-    let results = run_inline_tests_with_options(&file, &opts, None);
+    let results = run_inline_tests_with_options(&file, &opts);
     if results.is_empty() {
         return Err(format!(
             "the document declares no inline assertions for model {model:?}"

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::args::SolverAlg;
-use crate::data_sources::close_declared_extents;
+use crate::data_sources::cache_root;
 use crate::esm_impl::{fail, fail_silent};
 use crate::input::collect_esm_files;
 
@@ -248,22 +248,21 @@ pub(crate) fn run_test(
                 // from the file on disk so a §4.7 subsystem `ref` has already
                 // been resolved and a mounted component's data bindings are
                 // visible here.
-                let ready = close_declared_extents(esm_file, |mp| {
+                let ready = earthsci_ast::bind_data_sources(esm_file, &cache_root(), |mp| {
                     earthsci_ast::load_path_with_options(path, mp)
-                        .map_err(|e| format!("re-loading with the discovered source extents: {e}"))
                 });
                 let (esm_file, providers) = match ready {
-                    Ok(pair) => pair,
-                    Err(message) => {
+                    Ok(bound) => (bound.file, bound.providers),
+                    Err(e) => {
                         rows.push(TestRow {
                             file: path.clone(),
                             container: "<data_sources>".to_string(),
-                            test_id: "<extent>".to_string(),
+                            test_id: "<ingest>".to_string(),
                             assertion_idx: 0,
                             variable: String::new(),
                             time: f64::NAN,
                             verdict: Verdict::Error,
-                            message,
+                            message: e.0,
                         });
                         continue;
                     }
@@ -305,9 +304,9 @@ pub(crate) fn run_test(
                         base_dir: path.parent().map(std::path::Path::to_path_buf),
                         test_filter: filter.clone(),
                         compiler,
+                        providers,
                         ..Default::default()
                     },
-                    providers.as_deref(),
                 );
                 for r in results {
                     rows.push(TestRow {

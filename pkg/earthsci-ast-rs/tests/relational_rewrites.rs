@@ -496,7 +496,7 @@ fn inline(path: &Path, compiler: Compiler) -> Vec<(bool, Option<f64>, String)> {
         compiler: Some(compiler),
         ..Default::default()
     };
-    run_inline_tests_with_options(&file, &opts, None)
+    run_inline_tests_with_options(&file, &opts)
         .into_iter()
         .map(|r| (r.passed, r.actual, r.message))
         .collect()

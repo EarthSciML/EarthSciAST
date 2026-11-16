@@ -77,7 +77,6 @@ fn nonfinite_actuals_fail_every_finite_expectation() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let cases = fx["cases"].as_array().expect("cases");

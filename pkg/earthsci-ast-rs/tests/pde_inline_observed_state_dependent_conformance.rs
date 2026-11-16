@@ -72,7 +72,6 @@ fn state_dependent_array_observed_is_assertable() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let goldens = golden["assertions"].as_array().expect("golden assertions");

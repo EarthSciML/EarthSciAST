@@ -72,7 +72,6 @@ fn indexed_lhs_array_observed_runs() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let goldens = golden["assertions"].as_array().expect("golden assertions");
@@ -146,7 +145,6 @@ fn bare_index_definition_outside_the_runnable_form_is_refused() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(
             results.len() as u64,

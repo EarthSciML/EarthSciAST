@@ -37,7 +37,6 @@ fn run(name: &str) -> Vec<AssertionResult> {
             base_dir: path.parent().map(|p| p.to_path_buf()),
             ..Default::default()
         },
-        None,
     )
 }
 

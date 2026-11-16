@@ -58,7 +58,6 @@ fn scalar_rhs_broadcast_matches_golden() {
                 compiler: Some(earthsci_ast::Compiler::Interpreter),
                 ..Default::default()
             },
-            None,
         );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");

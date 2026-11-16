@@ -57,7 +57,6 @@ fn shaped_parameter_broadcast_matches_golden() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
@@ -132,7 +131,6 @@ fn bare_whole_array_derivative_over_a_broadcast_parameter() {
             solve: opts.clone(),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 1);
     let r = &results[0];

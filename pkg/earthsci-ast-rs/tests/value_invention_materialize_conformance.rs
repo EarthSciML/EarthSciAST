@@ -73,7 +73,6 @@ fn value_invention_materialize_outcomes_match_the_manifest() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let cases = fx["cases"].as_array().expect("cases");

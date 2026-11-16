@@ -60,7 +60,6 @@ fn dead_observed_matches_golden() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");

@@ -64,7 +64,6 @@ fn run_fixture(
             base_dir: Some(dir.to_path_buf()),
             ..Default::default()
         },
-        None,
     );
 
     let expected = golden["assertions"].as_array().expect("golden assertions");

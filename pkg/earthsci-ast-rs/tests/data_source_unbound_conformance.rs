@@ -170,7 +170,6 @@ fn the_controls_still_run() {
                 base_dir: Some(category_dir()),
                 ..Default::default()
             },
-            None,
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         for r in &results {
@@ -204,7 +203,6 @@ fn the_inline_test_runner_reports_the_refusal_rather_than_a_number() {
                 base_dir: Some(category_dir()),
                 ..Default::default()
             },
-            None,
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         for r in &results {

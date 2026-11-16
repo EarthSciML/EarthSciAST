@@ -73,7 +73,6 @@ fn reference_dimension_names_are_bound_per_cell() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let goldens = golden["assertions"].as_array().expect("golden assertions");

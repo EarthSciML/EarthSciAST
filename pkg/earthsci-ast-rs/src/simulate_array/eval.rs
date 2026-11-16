@@ -2701,15 +2701,16 @@ impl StandaloneScope<'_> {
             // NOT fall through to a wholesale evaluation, which is what laundered
             // it into a plausible number before.
             Ok(None) => {
-                return Some(Err(CompileError::InterpreterBuildError {
-                    details: format!(
+                return Some(Err(CompileError::coded_build_err(
+                    crate::diagnostic::codes::RECURRENCE_UNSUPPORTED_FORM,
+                    format!(
                         "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
                      own definition, but the build pipeline could not resolve a cell frame to \
                      sweep. Evaluating it wholesale would resolve the self-read to an unbound \
                      name, and a body containing `max(x, 0)` would turn the resulting NaN into \
                      a plausible zero (esm-spec §4.3.1.1; CONFORMANCE_SPEC §5.19.4)."
                     ),
-                }));
+                )));
             }
             Err(e) => return Some(Err(e)),
         };
@@ -6538,7 +6539,6 @@ mod gate_plan_tests {
             ProblemOptions {
                 model_name: Some("J".into()),
                 const_arrays: t.const_arrays(),
-                build_providers: Vec::new(),
                 // A gate-driven join is walked per cell by the pipeline, which
                 // a strict native refuses (#484); the gate planner is what is
                 // under test here, on the reference evaluator.

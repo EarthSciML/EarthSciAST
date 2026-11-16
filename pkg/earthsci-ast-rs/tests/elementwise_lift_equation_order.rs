@@ -182,7 +182,6 @@ fn a_lifted_rate_defined_after_its_reader_is_gathered() {
             base_dir: path.parent().map(|p| p.to_path_buf()),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 3, "{results:?}");
     for r in &results {

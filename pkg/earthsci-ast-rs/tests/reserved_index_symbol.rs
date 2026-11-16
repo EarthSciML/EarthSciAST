@@ -111,7 +111,6 @@ fn the_control_spelling_loads_and_answers_two() {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 1, "one inline assertion: {results:?}");
     let r = &results[0];

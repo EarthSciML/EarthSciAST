@@ -105,6 +105,7 @@ pub(crate) mod faq;
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
 // pinned symbol-by-symbol by api-surface.json) or a member of this module.
+mod data_binding;
 pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
@@ -357,7 +358,9 @@ pub use pushdown_rewrite::{
 // the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
 pub use prepare::{PreparePhase, PrepareProgress, PrepareProgressFn};
-pub use provider::{AxisSel, DataProvider, ProviderError};
+pub use provider::{AxisSel, BuildProviderFactory, DataProvider, ProviderError};
+// A document's `data_sources` bound to readers (esm-spec §8.9), for every host.
+pub use data_binding::{BoundDocument, bind_data_sources};
 
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,
@@ -381,9 +384,9 @@ pub use compile_error::CompileError;
 
 #[cfg(feature = "solve")]
 pub use inline_tests::{
-    AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
-    ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
-    run_inline_tests_paths, run_inline_tests_with_options, state_cells,
+    AssertionResult, InlineTestOptions, check_assertion, ephemeral_injected_file,
+    evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests, run_inline_tests_paths,
+    run_inline_tests_with_options, state_cells,
 };
 pub use simulate::{
     Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,

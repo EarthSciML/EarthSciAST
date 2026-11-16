@@ -63,7 +63,6 @@ fn static_evaluation_assertions_match_golden() {
                 base_dir: Some(dir.clone()),
                 ..Default::default()
             },
-            None,
         );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
@@ -129,7 +128,6 @@ fn an_algebraic_document_is_evaluated_at_every_asserted_time() {
             &InlineTestOptions {
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 1);
         let r = &results[0];
@@ -179,7 +177,6 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
             &InlineTestOptions {
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(results.len(), 1);
         (results[0].passed, results[0].actual)
@@ -229,7 +226,6 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
         &InlineTestOptions {
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 3);
     for id in ["past_end", "before_start"] {
@@ -291,7 +287,6 @@ fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
         &InlineTestOptions {
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 2);
     for r in &results {
@@ -345,7 +340,6 @@ fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
         &InlineTestOptions {
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 2);
     let away = results
@@ -412,7 +406,6 @@ fn a_reference_that_mentions_t_is_refused() {
         &InlineTestOptions {
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 1);
     let r = &results[0];
@@ -465,7 +458,6 @@ fn a_min_reduction_over_a_shaped_static_document_is_not_its_identity() {
             base_dir: path.parent().map(|p| p.to_path_buf()),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 7, "fixture assertion count");
     for r in &results {
