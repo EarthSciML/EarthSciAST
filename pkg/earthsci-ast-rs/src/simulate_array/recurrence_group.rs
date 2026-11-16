@@ -370,7 +370,8 @@ fn lower_one_group(
     }
 
     let names: Vec<&str> = members.iter().map(|m| m.var.as_str()).collect();
-    let mut w = format!("__esm_recurrence_group__{}", names.join("__"));
+    // No `.` in the stacked array's name: it belongs to no component.
+    let mut w = format!("__esm_recurrence_group__{}", names.join("__")).replace('.', "_");
     while model.variables.contains_key(&w) || index_sets.contains_key(&format!("{w}__members")) {
         w.push('_');
     }

@@ -2776,8 +2776,11 @@ fn observed_dependency_graph(
         .observed_definitions
         .iter()
         .map(|(name, rhs)| {
+            // Dotted names too: a flattened system's own observeds are
+            // qualified (`M.a`), and keeping only this model's observeds below
+            // leaves out a scoped reference to another component.
             let mut free = HashSet::new();
-            collect_bare_symbols(rhs, &mut free);
+            crate::binders::collect_symbols(rhs, &mut free);
             let mut bound = HashSet::new();
             collect_bound_symbols(rhs, &mut bound);
             let mut deps: std::collections::BTreeSet<String> = free

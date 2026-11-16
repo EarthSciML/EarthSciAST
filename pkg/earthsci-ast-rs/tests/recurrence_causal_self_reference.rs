@@ -819,7 +819,6 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
 
 /// Materialize a fixture through the BUILD PIPELINE and return its fields.
 fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
-    let file = load_path(fixture(name)).expect("fixture parses");
     let opts = earthsci_ast::ProblemOptions {
         // The pipeline's per-cell walk is refused by a strict native (#484), so
         // these semantics are checked on the reference evaluator.
@@ -832,8 +831,18 @@ fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::Arr
         rhs: earthsci_ast::Rhs::Auto,
         ..Default::default()
     };
+    problem_fields(name, opts)
+}
+
+/// Build a fixture through `esm_problem` with `opts` and return the fields its
+/// construction materialized.
+fn problem_fields(
+    name: &str,
+    opts: earthsci_ast::ProblemOptions,
+) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
+    let file = load_path(fixture(name)).expect("fixture parses");
     let prob = earthsci_ast::esm_problem(&file, (0.0, 0.0), opts)
-        .unwrap_or_else(|e| panic!("{name}: build pipeline failed: {e}"));
+        .unwrap_or_else(|e| panic!("{name}: esm_problem failed: {e}"));
     prob.observed_fields().clone()
 }
 
@@ -842,8 +851,16 @@ fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::Arr
 /// two paths must agree to the bit: they are the same construct, and §5.19.1
 /// says its value is fully determined.
 fn assert_pipeline_matches_assertions(name: &str) {
+    assert_fields_match_assertions(name, &pipeline_fields(name));
+}
+
+/// Every coords assertion of fixture `name`'s inline tests, checked to the bit
+/// against `fields`.
+fn assert_fields_match_assertions(
+    name: &str,
+    fields: &std::collections::HashMap<String, ndarray::ArrayD<f64>>,
+) {
     let file = load_path(fixture(name)).expect("fixture parses");
-    let fields = pipeline_fields(name);
     let models = file.models.as_ref().expect("fixture has models");
     let (model_name, model) = models.iter().next().expect("one model");
     let mut checked = 0usize;
@@ -858,7 +875,7 @@ fn assert_pipeline_matches_assertions(name: &str) {
                 .or_else(|| fields.get(&format!("{model_name}.{}", a.variable)))
                 .unwrap_or_else(|| {
                     panic!(
-                        "{name}: the build pipeline materialized NO field for '{}' — \
+                        "{name}: the build materialized NO field for '{}' — \
                          keys were {:?}. An absent field is how this defect first \
                          looked, so it is a failure, not a skip.",
                         a.variable,
@@ -880,7 +897,7 @@ fn assert_pipeline_matches_assertions(name: &str) {
             assert_eq!(
                 actual.to_bits(),
                 a.expected.to_bits(),
-                "{name}: {}[{}] on '{}' at {coords:?} — the BUILD PIPELINE gave {actual:?} \
+                "{name}: {}[{}] on '{}' at {coords:?} — the build gave {actual:?} \
                  where the document pins {:?}. The per-step path agrees with the pin, so a \
                  mismatch here means the two evaluation routes disagree about the same \
                  construct.",
@@ -949,6 +966,41 @@ pipeline_test!(
 );
 pipeline_test!(
     pipeline_recurrence_group_frame_spellings,
+    "17_recurrence_group_frame_spellings.esm"
+);
+
+/// A recurrence group built by `esm_problem` with default options. A document
+/// with no state is evaluated statically from the flattened system, so this is
+/// the group stacked on the flattened route rather than on the inline-test
+/// runner's; both must give the values the fixtures pin.
+macro_rules! default_problem_test {
+    ($fn_name:ident, $fixture:literal) => {
+        #[test]
+        fn $fn_name() {
+            let fields = problem_fields($fixture, earthsci_ast::ProblemOptions::default());
+            assert_fields_match_assertions($fixture, &fields);
+        }
+    };
+}
+
+default_problem_test!(
+    default_problem_recurrence_group,
+    "13_recurrence_group_two_variables.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_order_pin,
+    "14_recurrence_group_order_pin.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_same_cell_order,
+    "15_recurrence_group_same_cell_order.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_contracting_member,
+    "16_recurrence_group_contracting_member.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_frame_spellings,
     "17_recurrence_group_frame_spellings.esm"
 );
 
