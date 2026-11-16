@@ -297,6 +297,44 @@ fn a_pipeline_map_observed_is_reported_taped() {
     assert_eq!(values(&prob, "Rel.left"), vec![10.0, 20.0, 30.0]);
 }
 
+/// An ingesting document built through the pipeline without its data has
+/// zero-length tables: a join over one has no term, and native builds it to
+/// the semiring's identity, as the interpreter does, without reading the
+/// table's absent columns.
+#[test]
+fn a_join_over_a_table_with_no_rows_builds_to_the_identity() {
+    for (rel, names) in [
+        (
+            "tests/conformance/native_model_shapes/ingest/join_ingested_column_computed_key.esm",
+            &[
+                "JoinIngestedColumnComputedKey.count",
+                "JoinIngestedColumnComputedKey.total",
+            ][..],
+        ),
+        (
+            "tests/conformance/native_model_shapes/ingest/overlap_join_over_ingested_cells.esm",
+            &["OverlapJoinOverIngestedCells.out"][..],
+        ),
+    ] {
+        let path = fixture(rel);
+        let opts = |compiler| ProblemOptions {
+            base_path: path.parent().map(Path::to_path_buf),
+            ..with_pipeline(compiler)
+        };
+        let native = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Native))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let interp = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Interpreter))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        for name in names {
+            let bits = |p: &EsmProblem| -> Vec<u64> {
+                values(p, name).iter().map(|x| x.to_bits()).collect()
+            };
+            assert_eq!(values(&native, name), vec![0.0; 3], "{name}");
+            assert_eq!(bits(&native), bits(&interp), "{name}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // (c) Field initial conditions
 // ---------------------------------------------------------------------------
