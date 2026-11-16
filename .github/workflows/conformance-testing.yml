@@ -596,6 +596,18 @@ jobs:
             cargo test --verbose --workspace --features "$FEATURES,$FEATURES_ESIO"
           fi
 
+      # The narrative crate (pkg/earthsci-narrative) prints its equations with
+      # this library's document printers and runs its documents' tests with
+      # its inline-test runner, so a change here can break it. It is a
+      # workspace of its own, so it builds the library again under its own
+      # feature set; the shared target directory reuses the dependencies, and
+      # one leg is enough.
+      - name: Run narrative crate tests
+        if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/pkg/earthsci-ast-rs/target
+        run: cargo test --manifest-path ../earthsci-narrative/Cargo.toml
+
       # The scaling tier's gates at the PR sizes
       # (tests/conformance/scaling/README.md): each document builds, the tape
       # length is flat in N, a steady right-hand side allocates nothing, and
