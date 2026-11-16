@@ -2077,7 +2077,7 @@ impl<'o> BuildState<'o> {
             .get(name)
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
             .clone();
-        crate::simulate_array::mount_subsystems(&mut model, index_sets)
+        crate::simulate_array::mount_subsystems(&mut model)
             .map_err(|e| err(format!("model '{name}': {e}")))?;
         crate::simulate_array::resolve_model_self_references(&mut model, name);
         let (shapes, axes) = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)

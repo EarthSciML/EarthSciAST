@@ -94,18 +94,18 @@
     }
   },
   "counts": {
-    "symbols": 979,
+    "symbols": 981,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 353,
       "typescript": 239,
       "python": 270,
-      "rust": 389,
+      "rust": 392,
       "go": 457
     },
     "by_tier": {
-      "extension": 671,
-      "stable": 308
+      "extension": 672,
+      "stable": 309
     }
   },
   "planned": [
@@ -4510,6 +4510,14 @@
       }
     },
     {
+      "name": "has_subsystems",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "HasSubsystems"
+      }
+    },
+    {
       "name": "has_time_derivative",
       "kind": "function",
       "tier": "extension",
@@ -7695,11 +7703,20 @@
       }
     },
     {
-      "name": "subsystem_ref",
+      "name": "subsystem",
       "kind": "type",
       "tier": "extension",
       "bindings": {
-        "julia": "SubsystemRef"
+        "rust": "Subsystem"
+      }
+    },
+    {
+      "name": "subsystem_ref",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "SubsystemRef",
+        "rust": "SubsystemRef"
       }
     },
     {

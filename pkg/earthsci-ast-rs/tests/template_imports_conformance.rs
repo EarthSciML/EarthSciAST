@@ -713,7 +713,10 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         // Typed anchors through the full load.
         let f = load_path(&wrapper_path).expect("typed load");
         let sweep = &f.models.as_ref().expect("models")["Sweep"];
-        let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
+        let problem =
+            serde_json::to_value(&sweep.subsystems.as_ref().expect("subsystems")["Problem"])
+                .expect("subsystem serializes");
+        let problem = &problem;
         // Expression position: bare "N" substituted as an integer literal.
         assert_eq!(
             *earthsci_ast::observed_definition_json(problem, "npts")

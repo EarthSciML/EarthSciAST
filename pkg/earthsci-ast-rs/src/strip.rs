@@ -12,6 +12,7 @@
 use crate::compile_error::CompileError;
 use crate::flatten::{ComponentEvent, FlattenedSystem, TermOrigin};
 use crate::simulate::SimulateError;
+use crate::types::HasSubsystems;
 use crate::types::{
     ContinuousEvent, CouplingEntry, DiscreteEvent, DiscreteEventTrigger, EsmFile, Expr, Model,
     ModelVariable, ParameterUpdate, ParameterUpdateSpec,
@@ -677,15 +678,7 @@ pub(crate) fn strip_file(file: &EsmFile, set: StripSet) -> Result<Stripped, Simu
             remove_model_events(model, set);
         }
         for (_, rs) in out.reaction_systems.iter_mut().flatten() {
-            if set.contains(StripSet::CONTINUOUS_EVENTS) {
-                rs.continuous_events = None;
-            }
-            if set.contains(StripSet::DISCRETE_EVENTS) {
-                rs.discrete_events = None;
-            }
-            for v in rs.subsystems.iter_mut().flat_map(|s| s.values_mut()) {
-                remove_json_events(v, set);
-            }
+            remove_reaction_events(rs, set);
         }
     }
 
@@ -856,36 +849,10 @@ fn strip_model_updates(
             out.push(format!("{path}.{vname}"));
         }
     }
-    for (key, value) in model.subsystems.iter_mut().flatten() {
-        strip_json_updates(&format!("{path}.{key}"), value, set, out);
+    for (key, sub) in model.inline_subsystems_mut() {
+        strip_model_updates(&format!("{path}.{key}"), sub, set, out)?;
     }
     Ok(())
-}
-
-/// [`strip_model_updates`] for an inline subsystem, which the typed model
-/// holds as JSON: the `update` is removed in place, at any depth.
-fn strip_json_updates(path: &str, value: &mut Value, set: StripSet, out: &mut Vec<String>) {
-    let Some(obj) = value.as_object_mut() else {
-        return;
-    };
-    if obj.contains_key("ref") {
-        return;
-    }
-    if let Some(Value::Object(vars)) = obj.get_mut("variables") {
-        for (vname, v) in vars.iter_mut() {
-            let strips = serde_json::from_value::<ModelVariable>(v.clone())
-                .is_ok_and(|var| strips_var(&var, set));
-            if strips && let Some(o) = v.as_object_mut() {
-                o.remove("update");
-                out.push(format!("{path}.{vname}"));
-            }
-        }
-    }
-    if let Some(Value::Object(subs)) = obj.get_mut("subsystems") {
-        for (key, sub) in subs.iter_mut() {
-            strip_json_updates(&format!("{path}.{key}"), sub, set, out);
-        }
-    }
 }
 
 fn strips_var(var: &ModelVariable, set: StripSet) -> bool {
@@ -900,25 +867,20 @@ fn remove_model_events(model: &mut Model, set: StripSet) {
     if set.contains(StripSet::DISCRETE_EVENTS) {
         model.discrete_events = None;
     }
-    for v in model.subsystems.iter_mut().flat_map(|s| s.values_mut()) {
-        remove_json_events(v, set);
+    for (_, sub) in model.inline_subsystems_mut() {
+        remove_model_events(sub, set);
     }
 }
 
-fn remove_json_events(value: &mut Value, set: StripSet) {
-    let Some(obj) = value.as_object_mut() else {
-        return;
-    };
+fn remove_reaction_events(rs: &mut crate::types::ReactionSystem, set: StripSet) {
     if set.contains(StripSet::CONTINUOUS_EVENTS) {
-        obj.remove("continuous_events");
+        rs.continuous_events = None;
     }
     if set.contains(StripSet::DISCRETE_EVENTS) {
-        obj.remove("discrete_events");
+        rs.discrete_events = None;
     }
-    if let Some(Value::Object(subs)) = obj.get_mut("subsystems") {
-        for v in subs.values_mut() {
-            remove_json_events(v, set);
-        }
+    for (_, sub) in rs.inline_subsystems_mut() {
+        remove_reaction_events(sub, set);
     }
 }
 
@@ -928,24 +890,8 @@ fn remove_model_implicit(model: &mut Model) -> usize {
         .equations
         .retain(|eq| !is_strippable_implicit(&eq.lhs));
     let mut removed = before - model.equations.len();
-    for v in model.subsystems.iter_mut().flat_map(|s| s.values_mut()) {
-        let Ok(mut sub) = serde_json::from_value::<Model>(v.clone()) else {
-            continue;
-        };
-        let n = remove_model_implicit(&mut sub);
-        if n > 0
-            && let (Some(obj), Ok(eqs)) = (v.as_object_mut(), serde_json::to_value(&sub.equations))
-        {
-            obj.insert("equations".into(), eqs);
-            if let Some(Value::Object(subs_json)) = obj.get_mut("subsystems")
-                && let Some(subs) = sub.subsystems.as_ref()
-            {
-                for (k, sv) in subs {
-                    subs_json.insert(k.clone(), sv.clone());
-                }
-            }
-        }
-        removed += n;
+    for (_, sub) in model.inline_subsystems_mut() {
+        removed += remove_model_implicit(sub);
     }
     removed
 }

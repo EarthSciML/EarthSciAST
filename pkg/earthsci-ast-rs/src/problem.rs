@@ -47,6 +47,7 @@ use crate::precision::{self, Precision};
 use crate::simulate::Solution;
 use crate::simulate::{Flow, Progress, ProgressFn, SimulateError, SolveOptions};
 use crate::types::EsmFile;
+use crate::types::HasSubsystems;
 
 use crate::simulate_array::{ArrayCompiled, BuildInspection};
 
@@ -3784,14 +3785,10 @@ fn callback_reads_in(
             }
         }
     }
-    if let Some(subs) = model.subsystems.as_ref() {
-        let mut names: Vec<&String> = subs.keys().collect();
-        names.sort();
-        for name in names {
-            if let Ok((sub, _)) = crate::simulate_array::parse_subsystem_model(name, &subs[name]) {
-                callback_reads_in(&sub, &format!("{path}.{name}"), injected)?;
-            }
-        }
+    let mut subs: Vec<(&String, &crate::types::Model)> = model.inline_subsystems().collect();
+    subs.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, sub) in subs {
+        callback_reads_in(sub, &format!("{path}.{name}"), injected)?;
     }
     Ok(())
 }
@@ -3856,14 +3853,10 @@ fn static_unsupported_construct(
             detail: format!("parameter '{name}'"),
         });
     }
-    let subs = model.subsystems.as_ref()?;
-    let mut names: Vec<&String> = subs.keys().collect();
-    names.sort();
-    names.into_iter().find_map(|name| {
-        crate::simulate_array::parse_subsystem_model(name, &subs[name])
-            .ok()
-            .and_then(|(sub, _)| static_unsupported_construct(&sub))
-    })
+    let mut subs: Vec<(&String, &crate::types::Model)> = model.inline_subsystems().collect();
+    subs.sort_by(|a, b| a.0.cmp(b.0));
+    subs.into_iter()
+        .find_map(|(_, sub)| static_unsupported_construct(sub))
 }
 
 /// Whether the document (or the named model within it) declares at least one

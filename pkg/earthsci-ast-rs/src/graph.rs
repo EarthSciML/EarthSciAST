@@ -1,5 +1,6 @@
 //! Graph utilities for analyzing model structure and coupling
 
+use crate::types::{TreeOrder, subsystem_tree};
 use crate::{CouplingEntry, EsmFile};
 
 /// Return a map's keys sorted lexicographically.
@@ -725,95 +726,38 @@ impl ExpressionGraphInput for crate::Expr {
     }
 }
 
-/// Is this `subsystems` entry an unresolved include stub (`{"ref": …}`) rather
-/// than an inline component? A stub's contents are resolved elsewhere, so the
-/// graph treats it as an opaque leaf and contributes nothing for it.
-fn is_reference_stub(entry: &serde_json::Value) -> bool {
-    entry.get("ref").is_some()
-}
-
-/// Deserialize a `subsystems` entry as a [`crate::Model`], supplying the
-/// defaults a partial component omits (`variables` / `equations`) so a
-/// subsystem that declares only one of them still contributes its half.
-fn as_model(entry: &serde_json::Value) -> Option<crate::Model> {
-    let mut value = entry.clone();
-    let object = value.as_object_mut()?;
-    object
-        .entry("variables")
-        .or_insert_with(|| serde_json::json!({}));
-    object
-        .entry("equations")
-        .or_insert_with(|| serde_json::json!([]));
-    serde_json::from_value(value).ok()
-}
-
-/// Deserialize a `subsystems` entry as a [`crate::ReactionSystem`], supplying
-/// the defaults a partial component omits.
-fn as_reaction_system(entry: &serde_json::Value) -> Option<crate::ReactionSystem> {
-    let mut value = entry.clone();
-    let object = value.as_object_mut()?;
-    object
-        .entry("species")
-        .or_insert_with(|| serde_json::json!({}));
-    object
-        .entry("parameters")
-        .or_insert_with(|| serde_json::json!({}));
-    object
-        .entry("reactions")
-        .or_insert_with(|| serde_json::json!([]));
-    serde_json::from_value(value).ok()
-}
-
-/// The scoped name of a child component of `system_id`. A `default` parent —
-/// only reachable when a bare `Model`/`ReactionSystem` is handed straight to
-/// [`expression_graph`] — yields a bare child name.
-fn child_scope(system_id: &str, child_name: &str) -> String {
+/// The scope the subsystems of a component with scoped name `system_id` sit
+/// under. A `default` parent (only reachable when a bare
+/// `Model`/`ReactionSystem` is handed straight to [`expression_graph`]) gives
+/// its children bare names.
+fn subsystem_scope(system_id: &str) -> &str {
     if system_id == DEFAULT_SYSTEM {
-        child_name.to_string()
+        ""
     } else {
-        format!("{system_id}.{child_name}")
+        system_id
     }
 }
 
-/// Add a model's own variables and equations, then recurse into its inline
-/// `subsystems` (esm-libraries-spec §4.8.2). Reference stubs are skipped.
+/// Add a model's own variables and equations, then those of each inline
+/// subsystem below it (esm-libraries-spec §4.8.2). An unresolved reference is
+/// skipped.
 fn process_model_tree(b: &mut ExprGraphBuilder, model: &crate::Model, system_id: &str) {
     process_model(b, model, system_id);
-
-    let Some(ref subsystems) = model.subsystems else {
-        return;
-    };
-    for child_name in sorted_keys(subsystems) {
-        let entry = &subsystems[child_name];
-        if is_reference_stub(entry) {
-            continue;
-        }
-        if let Some(child) = as_model(entry) {
-            process_model_tree(b, &child, &child_scope(system_id, child_name));
-        }
+    for node in subsystem_tree(model, subsystem_scope(system_id), "", TreeOrder::Sorted) {
+        process_model(b, node.component, &node.path);
     }
 }
 
-/// Add a reaction system's own body, then recurse into its inline
-/// `subsystems`. Reference stubs are skipped.
+/// Add a reaction system's own body, then that of each inline subsystem
+/// below it. An unresolved reference is skipped.
 fn process_reaction_system_tree(
     b: &mut ExprGraphBuilder,
     rs: &crate::ReactionSystem,
     system_id: &str,
 ) {
     process_reaction_system(b, rs, system_id);
-
-    let Some(ref subsystems) = rs.subsystems else {
-        return;
-    };
-    for child_name in sorted_keys(subsystems) {
-        let entry = &subsystems[child_name];
-        if is_reference_stub(entry) {
-            continue;
-        }
-        if let Some(child) = as_reaction_system(entry) {
-            process_reaction_system_tree(b, &child, &child_scope(system_id, child_name));
-        }
+    for node in subsystem_tree(rs, subsystem_scope(system_id), "", TreeOrder::Sorted) {
+        process_reaction_system(b, node.component, &node.path);
     }
 }
 

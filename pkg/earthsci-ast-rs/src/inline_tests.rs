@@ -68,7 +68,6 @@
 //! so it is now `run_inline_tests`, with no deprecated alias (the old spelling
 //! is exactly the misunderstanding the rename exists to remove).
 
-use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -207,7 +206,8 @@ impl InlineTestSeeds {
 
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
-    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, InlineValue, Model, Tolerance,
+    AssertionReference, EsmFile, Expr, FromFileReference, HasSubsystems, IndexSet, InlineValue,
+    Model, Tolerance,
 };
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
@@ -1052,7 +1052,7 @@ fn declared_shape(file: &EsmFile, owner: &str, variable: &str) -> Option<Option<
 /// of one is a field the build carries.
 fn is_build_field(file: &EsmFile, owner: &str, variable: &str) -> bool {
     match component_at(file, owner) {
-        Some(ComponentAt::Model(m)) => is_build_field_variable(&m, variable),
+        Some(ComponentAt::Model(m)) => is_build_field_variable(m, variable),
         #[cfg(not(target_arch = "wasm32"))]
         Some(ComponentAt::ReactionSystem(r)) => r
             .parameters
@@ -1378,53 +1378,44 @@ fn from_file_reference(
 
 /// A component a dotted component path names (esm-spec §4.6).
 enum ComponentAt<'a> {
-    /// A top-level model (borrowed) or a mounted subsystem (read out of the
-    /// JSON the typed document keeps it as).
-    Model(Box<Cow<'a, Model>>),
+    Model(&'a Model),
     ReactionSystem(&'a crate::types::ReactionSystem),
 }
 
 impl ComponentAt<'_> {
     fn has_subsystem(&self, name: &str) -> bool {
-        let subs = match self {
-            Self::Model(m) => m.subsystems.as_ref(),
-            Self::ReactionSystem(r) => r.subsystems.as_ref(),
-        };
-        subs.is_some_and(|s| s.contains_key(name))
+        match self {
+            Self::Model(m) => m.subsystems.as_ref().is_some_and(|s| s.contains_key(name)),
+            Self::ReactionSystem(r) => r.subsystems.as_ref().is_some_and(|s| s.contains_key(name)),
+        }
     }
 }
 
 /// The component a dotted component PATH names, or `None` (esm-spec §4.6): the
 /// first segment is a top-level `models` / `reaction_systems` key and each later
-/// one a key of its parent's `subsystems`. A mounted entry is read by the array
-/// compiler's own [`crate::simulate_array::parse_subsystem_model`], so the two
-/// shapes a resolved mount takes (the referenced file's whole document, or a
-/// bare model) and an unresolved `{"ref": …}` (which ends the walk) are
-/// classified exactly as the build classifies them. Identical to the Julia and
-/// Python `_component_at`.
+/// one a key of its parent's `subsystems`. An unresolved `{"ref": …}` ends the
+/// walk. Identical to the Julia and Python `_component_at`.
 fn component_at<'a>(file: &'a EsmFile, path: &str) -> Option<ComponentAt<'a>> {
-    let mut segs = path.split('.');
-    let head = segs.next()?;
-    let mut cur = match file.models.as_ref().and_then(|ms| ms.get(head)) {
-        Some(m) => ComponentAt::Model(Box::new(Cow::Borrowed(m))),
-        None => ComponentAt::ReactionSystem(file.reaction_systems.as_ref()?.get(head)?),
-    };
-    for seg in segs {
-        let subs = match &cur {
-            ComponentAt::Model(m) => m.subsystems.as_ref(),
-            ComponentAt::ReactionSystem(r) => r.subsystems.as_ref(),
-        }?;
-        let (model, _) = crate::simulate_array::parse_subsystem_model(seg, subs.get(seg)?).ok()?;
-        cur = ComponentAt::Model(Box::new(Cow::Owned(model)));
+    let (head, rest) = path
+        .split_once('.')
+        .map_or((path, None), |(h, r)| (h, Some(r)));
+    let rest: Vec<&str> = rest.map(|r| r.split('.').collect()).unwrap_or_default();
+    match file.models.as_ref().and_then(|ms| ms.get(head)) {
+        Some(m) => Some(ComponentAt::Model(m.inline_subsystem_at(&rest)?)),
+        None => Some(ComponentAt::ReactionSystem(
+            file.reaction_systems
+                .as_ref()?
+                .get(head)?
+                .inline_subsystem_at(&rest)?,
+        )),
     }
-    Some(cur)
 }
 
 /// The MODEL a dotted component path names, or `None` for a reaction system or
 /// a path that names nothing.
-fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<Cow<'a, Model>> {
+fn model_at<'a>(file: &'a EsmFile, path: &str) -> Option<&'a Model> {
     match component_at(file, path)? {
-        ComponentAt::Model(m) => Some(*m),
+        ComponentAt::Model(m) => Some(m),
         ComponentAt::ReactionSystem(_) => None,
     }
 }
@@ -1792,9 +1783,7 @@ fn assertion_observed_requests(
                     continue;
                 }
                 let class = classes.entry(owner.clone()).or_insert_with(|| {
-                    model_at(file, &owner)
-                        .as_deref()
-                        .map(crate::classification::Classification::of)
+                    model_at(file, &owner).map(crate::classification::Classification::of)
                 });
                 if !class.as_ref().is_some_and(|c| c.is_observed(&local)) {
                     continue;
@@ -1961,7 +1950,7 @@ fn unevaluable_time_dependent_assertion(
         let (owner, variable) = resolve_asserted_name(file, model_name, &a.variable);
         let dependent = per_owner.entry(owner.clone()).or_insert_with(|| {
             model_at(file, &owner)
-                .map(|m| time_dependent_observeds(&m))
+                .map(time_dependent_observeds)
                 .unwrap_or_default()
         });
         if dependent.contains(variable) {

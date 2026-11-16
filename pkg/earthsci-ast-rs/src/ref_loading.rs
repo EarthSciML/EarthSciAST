@@ -2414,8 +2414,10 @@ mod tests {
             .subsystems
             .as_ref()
             .unwrap()["Inner"];
-        assert!(inner_resolved.get("variables").is_some());
-        assert!(inner_resolved.get("ref").is_none());
+        assert!(
+            inner_resolved.as_inline().is_some(),
+            "the mount is spliced in"
+        );
         assert_eq!(serde_json::to_value(&typed).unwrap(), raw);
     }
 }

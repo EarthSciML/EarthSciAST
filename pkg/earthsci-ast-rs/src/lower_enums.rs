@@ -565,8 +565,7 @@ mod tests {
 
     #[test]
     fn enum_op_in_subsystem_blob() {
-        // Subsystems land as raw JSON in the Rust types, so the JSON walk
-        // must descend through them too.
+        // The JSON walk must descend through subsystems too.
         let input = json!({
             "enums": {"season": {"summer": 3}},
             "models": {"Outer": {
