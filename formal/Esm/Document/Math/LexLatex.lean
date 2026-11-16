@@ -622,13 +622,13 @@ theorem rep_takeWhile (n : Nat) (X : List Char) :
     (List.replicate n 'c' ++ '}' :: X).takeWhile (· == 'c') = List.replicate n 'c' := by
   induction n with
   | zero => simp
-  | succ n ih => simp [List.replicate_succ, List.takeWhile_cons, ih]
+  | succ n ih => simp [List.replicate_succ, ih]
 
 theorem rep_dropWhile (n : Nat) (X : List Char) :
     (List.replicate n 'c' ++ '}' :: X).dropWhile (· == 'c') = '}' :: X := by
   induction n with
   | zero => simp
-  | succ n ih => simp [List.replicate_succ, List.dropWhile_cons, ih]
+  | succ n ih => simp [List.replicate_succ, ih]
 
 theorem lexOne_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     (hX : ∀ c ∈ X.head?, merges (.kw k) c = false) : lexOne (kwChars k ++ X) = some (.kw k, X) := by
@@ -892,7 +892,7 @@ theorem lexOne_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by simp [kwOK] at hk; omega⟩
     rw [kwChars_barrC, List.cons_append, List.append_assoc,
       lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
-    simp [ctrlTok, dropP, List.replicate_succ, rep_takeWhile, rep_dropWhile]
+    simp [ctrlTok, dropP, List.replicate_succ]
   case lset =>
     simp only [kwChars, List.cons_append, List.nil_append]
     simp [lexOne, isLetter]
@@ -1582,7 +1582,7 @@ theorem TN_tail {t : Tok} {r : List Tok} (h : TN (t :: r)) : TN r := by
 theorem TN_left : ∀ (a b : List Tok), TN (a ++ b) → TN a
   | [], _, _ => trivial
   | [_], _, _ => trivial
-  | t :: u :: a, b, h => ⟨h.1, TN_left (u :: a) b h.2⟩
+  | _ :: u :: a, b, h => ⟨h.1, TN_left (u :: a) b h.2⟩
 
 theorem TN_right : ∀ (a b : List Tok), TN (a ++ b) → TN b
   | [], _, h => h

@@ -754,7 +754,7 @@ theorem lexIdent_letter (c : Char) (hc : isLetter c = true) (X : List Char)
     have hm := List.contains_iff_mem.1 h
     have : ∀ g ∈ greek, 2 ≤ g.toList.length := by decide
     exact ofList_single_ne c _ (this _ hm) rfl
-  simp only [h1, h2, h3, h4, h5, h6, hk, hg, ↓reduceIte, Bool.false_eq_true]
+  simp only [h1, h2, h3, h4, h5, hk, hg, ↓reduceIte, Bool.false_eq_true]
 
 theorem greek_lex (g : String) (hg : isGreek g.toList = true) :
     (∀ c ∈ g.toList, isLetter c = true) ∧ (∃ c0 r, g.toList = c0 :: r) ∧
@@ -991,7 +991,7 @@ theorem lexOne_tok (prev : Option Char) (t : Tok) (ht : tokOK t) (hl : t ≠ .kw
   | word s =>
     have hX' : ∀ c ∈ X.head?, isIdC c = false := by
       intro d hd; have := hX.1 d hd
-      rcases ht with rfl | rfl <;> simp [merges, tokChars] at this <;> first | exact this | exact this (by decide)
+      rcases ht with rfl | rfl <;> simp [merges, tokChars] at this <;> exact this (by decide)
     exact lexOne_word prev s ht X hX'
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
@@ -1042,8 +1042,8 @@ theorem tok_head (t : Tok) (ht : tokOK t) :
   | kw k =>
     have hk : kwOK k = true := ht
     refine ⟨?_, ?_⟩
-    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | decide
-    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | (intro c hc; cases hc; decide)
+    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | decide
+    · simp only [tokChars]; cases k <;> first | (exfalso; simp [kwOK] at hk; done) | (intro c hc; cases hc; decide)
   | word s =>
     rcases ht with rfl | rfl <;>
       exact ⟨by simp [tokChars], fun c hc => by simp [tokChars] at hc; subst hc; decide⟩
@@ -1087,7 +1087,7 @@ theorem sciNone (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Cha
   | units l => simp [tokChars, unitChars, sciExp, isWsT, dropP]
   | kw k =>
     have hk : kwOK k = true := ht
-    cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) | simp [tokChars, kwChars, sciExp, isWsT, dropP]
+    cases k <;> first | (exfalso; simp [kwOK] at hk; done) | simp [tokChars, kwChars, sciExp, isWsT, dropP]
   | word s => rcases ht with rfl | rfl <;> simp [tokChars, sciExp, isWsT, dropP]
   | rm _ => exact absurd ht id
   | jstr _ => exact absurd ht id
@@ -1126,7 +1126,7 @@ theorem noGlue (t : Tok) (ht : tokOK t) (hlt : t ≠ .letter 't') (Y : List Char
   | units l => exact fun h => by simp [isUnits] at h
   | kw k =>
     have hk : kwOK k = true := ht
-    cases k <;> first | (exfalso; simp [kwOK] at hk; done) | exact absurd hk (by decide) |
+    cases k <;> first | (exfalso; simp [kwOK] at hk; done) |
       exact fun _ => by simp [tokChars, kwChars, Esm.Units.thinSep, List.dropPrefix?]
   | word s =>
     rcases ht with rfl | rfl <;> exact fun _ => by simp [tokChars, Esm.Units.thinSep, List.dropPrefix?]

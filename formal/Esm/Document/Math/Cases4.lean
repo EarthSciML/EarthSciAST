@@ -218,7 +218,7 @@ theorem M_times (c : Ctx) (o : String) (xs : List Json) (ho : kindOf o = .times)
           have hng : negTok t = false := by
             rw [he] at hsn; cases t <;> simp_all [negTok, startsNum]
           rw [List.cons_append, mulLoop.eq_5 _ _ _ _ _ hc1 hc2 hc3]
-          simp only [h1, hng, Bool.not_false, Bool.and_self, ↓reduceIte, Bool.false_eq_true]
+          simp only [h1, hng, Bool.not_false, Bool.and_self, ↓reduceIte]
           rw [← List.cons_append, this])
       [x1] g (fun p hp => by
         have := hbl p hp
