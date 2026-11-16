@@ -57,7 +57,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
         else {
             continue;
         };
-        let p = &prog.plans[plan as usize];
+        let p = &prog.tables.plans[plan as usize];
         let (o, s) = (out as usize, src as usize);
         let rs = &readers[o];
         if rs.is_empty()
@@ -67,7 +67,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
                 .any(|&r| (r as usize) < cont.start || guarded[r as usize])
             || exported.contains(&out)
             || p.mapped.iter().all(|&m| m)
-            || prog.slots[o].elems() < MIN_BROADCAST_RATIO * prog.slots[s].elems()
+            || prog.tables.slots[o].elems() < MIN_BROADCAST_RATIO * prog.tables.slots[s].elems()
             || !super::fuse::sunk_gather_fuses(prog, &chained, i, rs)
         {
             continue;
@@ -78,8 +78,8 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
         match (head.first(), tail.first()) {
             (Some(&h), Some(&t)) => {
                 place[h].push((i, out));
-                let o2 = prog.slots.len() as SlotId;
-                prog.slots.push(prog.slots[o].clone());
+                let o2 = prog.tables.slots.len() as SlotId;
+                prog.tables.slots.push(prog.tables.slots[o].clone());
                 place[t].push((i, o2));
                 renames.extend(tail.iter().map(|&r| (r, out, o2)));
             }
@@ -113,7 +113,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
                 *o = out;
             }
             body.push((g, i));
-            prog.slots[out as usize].cadence = Cadence::Continuous;
+            prog.tables.slots[out as usize].cadence = Cadence::Continuous;
         }
         if !moved[k] {
             body.push((prog.instrs[k].clone(), k));

@@ -356,7 +356,7 @@ pub(crate) enum Instr {
     /// a straight row-major store of the literal's elements, origin all-1s.
     ///
     /// One instruction regardless of the literal's size — the payload lives in
-    /// [`TapeProgram::const_data`], not in the instruction stream — and it is
+    /// [`ProgramTables::const_data`], not in the instruction stream — and it is
     /// classified CONST, so a solve stores each literal exactly once. (An
     /// XlaBuilder emitter lowers this to a `ConstantLiteral` of the same
     /// row-major buffer.)
@@ -2517,14 +2517,14 @@ impl DefUse {
 
     /// The index of `prog` as it stands.
     pub(crate) fn of(prog: &TapeProgram) -> Self {
-        let n_slots = prog.slots.len();
+        let n_slots = prog.tables.slots.len();
         let mut du = DefUse {
             n_defs: vec![0; n_slots],
             first_def: vec![Self::NONE; n_slots],
             last_def: vec![Self::NONE; n_slots],
             readers: vec![SmallVec::new(); n_slots],
         };
-        let t = prog.tables();
+        let t = prog.slot_tables();
         for (pc, ins) in prog.instrs.iter().enumerate() {
             ins.for_each_def(&t, |s| {
                 let s = s as usize;
@@ -3114,6 +3114,18 @@ impl Bail {
         }
     }
 
+    /// The more informative of two declines of one construct, `self` the
+    /// earlier form's and `later` the next form's: a coded decline (raised as
+    /// its own user-facing error) over an uncoded one, otherwise the earlier,
+    /// which names the form the construct was first meant for.
+    pub(crate) fn or_later(self, later: Bail) -> Bail {
+        if self.code.is_none() && later.code.is_some() {
+            later
+        } else {
+            self
+        }
+    }
+
     /// The decline as reports spell it: the reason, after its code when it
     /// has one.
     pub(crate) fn message(&self) -> String {
@@ -3153,26 +3165,11 @@ pub(crate) struct SlabLayout {
     pub recycled_elems: usize,
 }
 
-/// The compiled tape program.
-pub(crate) struct TapeProgram {
-    /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
-    pub instrs: Vec<Instr>,
-    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
-    /// the precision in force while it was lowered — its observed rule's
-    /// variable's, or a precision-boundary marker's inside it. Every executor
-    /// arms it around the instruction. EMPTY when every instruction runs at
-    /// the precision the program executes under, which is every document that
-    /// declares no per-variable element type.
-    pub precision: Vec<crate::precision::Precision>,
-    /// Instruction count of the CONST section.
-    pub n_const: u32,
-    /// Instruction count of the SEGMENT section.
-    pub n_segment: u32,
-    /// How many leading CONTINUOUS instructions a call whose exports are
-    /// off runs: the ones a derivative or a fault depends on. The rest
-    /// compute observeds only the observed and output passes read
-    /// (`prune`).
-    pub n_rhs: u32,
+/// The tables a program's instructions index, and the slots they define:
+/// one type for the builder that grows them and the program that holds them,
+/// so a rollback names every table by construction ([`ProgramTables::mark`]).
+#[derive(Default)]
+pub(crate) struct ProgramTables {
     pub slots: Vec<SlotDesc>,
     pub plans: Vec<GatherPlan>,
     pub regions: Vec<RegionSpec>,
@@ -3194,19 +3191,139 @@ pub(crate) struct TapeProgram {
     /// in that rule's evaluation order (see
     /// [`crate::simulate_array::eval::latch_ordered_fault`]).
     pub fault_order: Vec<(u32, SmallVec<[i64; 12]>)>,
-    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
-    pub data_gathers: Vec<DataGatherSpec>,
     /// Conditional fault scans (`Instr::FaultScan` indexes here).
     pub fault_scans: Vec<FaultScanSpec>,
     /// Recurrence sweeps (`Instr::Sweep` indexes here).
     pub sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
     pub scalar_reads: Vec<ScalarReadSpec>,
+    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
+    pub data_gathers: Vec<DataGatherSpec>,
+    pub dy_writes: Vec<DyWrite>,
+}
+
+/// How long each of a [`ProgramTables`]'s tables was ([`ProgramTables::mark`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TablesMark([usize; 14]);
+
+impl ProgramTables {
+    /// The tables' lengths now.
+    pub(crate) fn mark(&self) -> TablesMark {
+        let ProgramTables {
+            slots,
+            plans,
+            regions,
+            assemblies,
+            const_data,
+            index_gathers,
+            gather_tables,
+            seg_tables,
+            faults,
+            // Parallel to `faults`.
+            fault_order: _,
+            fault_scans,
+            sweeps,
+            scalar_reads,
+            data_gathers,
+            dy_writes,
+        } = self;
+        TablesMark([
+            slots.len(),
+            plans.len(),
+            regions.len(),
+            assemblies.len(),
+            const_data.len(),
+            index_gathers.len(),
+            gather_tables.len(),
+            seg_tables.len(),
+            faults.len(),
+            fault_scans.len(),
+            sweeps.len(),
+            scalar_reads.len(),
+            data_gathers.len(),
+            dy_writes.len(),
+        ])
+    }
+
+    /// Drop every entry added since `mark` was taken.
+    pub(crate) fn truncate_to(&mut self, mark: TablesMark) {
+        let ProgramTables {
+            slots,
+            plans,
+            regions,
+            assemblies,
+            const_data,
+            index_gathers,
+            gather_tables,
+            seg_tables,
+            faults,
+            fault_order,
+            fault_scans,
+            sweeps,
+            scalar_reads,
+            data_gathers,
+            dy_writes,
+        } = self;
+        let [
+            n_slots,
+            n_plans,
+            n_regions,
+            n_assemblies,
+            n_const_data,
+            n_index_gathers,
+            n_gather_tables,
+            n_seg_tables,
+            n_faults,
+            n_fault_scans,
+            n_sweeps,
+            n_scalar_reads,
+            n_data_gathers,
+            n_dy_writes,
+        ] = mark.0;
+        slots.truncate(n_slots);
+        plans.truncate(n_plans);
+        regions.truncate(n_regions);
+        assemblies.truncate(n_assemblies);
+        const_data.truncate(n_const_data);
+        index_gathers.truncate(n_index_gathers);
+        gather_tables.truncate(n_gather_tables);
+        seg_tables.truncate(n_seg_tables);
+        faults.truncate(n_faults);
+        fault_order.truncate(n_faults);
+        fault_scans.truncate(n_fault_scans);
+        sweeps.truncate(n_sweeps);
+        scalar_reads.truncate(n_scalar_reads);
+        data_gathers.truncate(n_data_gathers);
+        dy_writes.truncate(n_dy_writes);
+    }
+}
+
+/// The compiled tape program.
+pub(crate) struct TapeProgram {
+    /// All instructions: CONST section, then SEGMENT, then CONTINUOUS.
+    pub instrs: Vec<Instr>,
+    /// Per instruction, the precision its kernels run at (esm-spec §11.3.1):
+    /// the precision in force while it was lowered — its observed rule's
+    /// variable's, or a precision-boundary marker's inside it. Every executor
+    /// arms it around the instruction. EMPTY when every instruction runs at
+    /// the precision the program executes under, which is every document that
+    /// declares no per-variable element type.
+    pub precision: Vec<crate::precision::Precision>,
+    /// Instruction count of the CONST section.
+    pub n_const: u32,
+    /// Instruction count of the SEGMENT section.
+    pub n_segment: u32,
+    /// How many leading CONTINUOUS instructions a call whose exports are
+    /// off runs: the ones a derivative or a fault depends on. The rest
+    /// compute observeds only the observed and output passes read
+    /// (`prune`).
+    pub n_rhs: u32,
+    /// The tables instructions index ([`ProgramTables`]).
+    pub tables: ProgramTables,
     pub state_vars: Vec<StateRef>,
     /// Forcing-buffer entries the program loads (`Instr::LoadForcing`
     /// indexes here).
     pub forcings: Vec<ForcingRef>,
-    pub dy_writes: Vec<DyWrite>,
     /// Observed values published back into the runtime observed map: names
     /// the samples/observed-trajectory dependency cone reads, or every
     /// observed when the tape serves the observed passes.
@@ -3236,16 +3353,16 @@ pub(crate) struct TapeProgram {
 
 impl TapeProgram {
     /// The tables [`Instr::for_each_read`] and [`Instr::for_each_def`] read.
-    pub(crate) fn tables(&self) -> SlotTables<'_> {
+    pub(crate) fn slot_tables(&self) -> SlotTables<'_> {
         SlotTables {
-            dy_writes: &self.dy_writes,
+            dy_writes: &self.tables.dy_writes,
             fused: &self.fused,
-            assemblies: &self.assemblies,
-            sweeps: &self.sweeps,
-            scalar_reads: &self.scalar_reads,
-            data_gathers: &self.data_gathers,
+            assemblies: &self.tables.assemblies,
+            sweeps: &self.tables.sweeps,
+            scalar_reads: &self.tables.scalar_reads,
+            data_gathers: &self.tables.data_gathers,
             lanes: &self.lanes,
-            fault_scans: &self.fault_scans,
+            fault_scans: &self.tables.fault_scans,
         }
     }
 
@@ -3255,14 +3372,14 @@ impl TapeProgram {
         (
             &mut self.instrs,
             SlotTablesMut {
-                dy_writes: &mut self.dy_writes,
+                dy_writes: &mut self.tables.dy_writes,
                 fused: &mut self.fused,
-                assemblies: &mut self.assemblies,
-                sweeps: &mut self.sweeps,
-                scalar_reads: &mut self.scalar_reads,
-                data_gathers: &mut self.data_gathers,
+                assemblies: &mut self.tables.assemblies,
+                sweeps: &mut self.tables.sweeps,
+                scalar_reads: &mut self.tables.scalar_reads,
+                data_gathers: &mut self.tables.data_gathers,
                 lanes: &mut self.lanes,
-                fault_scans: &mut self.fault_scans,
+                fault_scans: &mut self.tables.fault_scans,
             },
         )
     }
@@ -3369,7 +3486,7 @@ impl TapeProgram {
     /// may skip or repeat. The region's header itself is not inside it.
     pub(crate) fn guarded_positions(&self) -> Vec<bool> {
         let mut guarded = vec![false; self.instrs.len()];
-        let tables = self.tables();
+        let tables = self.slot_tables();
         for (pc, ins) in self.instrs.iter().enumerate() {
             let len = ins.region_len(&tables);
             let end = (pc + 1 + len).min(guarded.len());

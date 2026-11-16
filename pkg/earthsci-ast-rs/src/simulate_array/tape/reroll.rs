@@ -99,7 +99,7 @@ impl Leaf {
 fn operands(ins: &Instr, prog: &TapeProgram) -> smallvec::SmallVec<[Operand; 3]> {
     match ins {
         Instr::DyWrite { write } => {
-            smallvec![Operand::Slot(prog.dy_writes[*write as usize].slot)]
+            smallvec![Operand::Slot(prog.tables.dy_writes[*write as usize].slot)]
         }
         other => other.as_elementwise().map(|ew| ew.ops).unwrap_or_default(),
     }
@@ -108,18 +108,20 @@ fn operands(ins: &Instr, prog: &TapeProgram) -> smallvec::SmallVec<[Operand; 3]>
 /// Whether `ins` is a scalar instruction this pass may move into a lane.
 fn batchable(ins: &Instr, prog: &TapeProgram, n_defs: &[u32]) -> bool {
     let scalar_out = |out: &SlotId| {
-        let d = &prog.slots[*out as usize];
+        let d = &prog.tables.slots[*out as usize];
         d.scalar && n_defs[*out as usize] == 1
     };
     let ok_operand = |o: &Operand| match o {
         Operand::State(i) => prog.state_vars[*i as usize].shape.is_empty(),
-        Operand::Slot(s) => prog.slots[*s as usize].scalar,
+        Operand::Slot(s) => prog.tables.slots[*s as usize].scalar,
         Operand::Lit(_) | Operand::Param(_) | Operand::Time => true,
     };
     let shape_ok = match ins {
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
-            w.scalar_flat.is_some() && w.scatter.is_none() && prog.slots[w.slot as usize].scalar
+            let w = &prog.tables.dy_writes[*write as usize];
+            w.scalar_flat.is_some()
+                && w.scatter.is_none()
+                && prog.tables.slots[w.slot as usize].scalar
         }
         other => other.as_elementwise().is_some_and(|ew| scalar_out(&ew.out)),
     };
@@ -171,8 +173,8 @@ struct Analysis {
 impl Analysis {
     fn of(prog: &TapeProgram) -> Self {
         let n = prog.instrs.len();
-        let n_slots = prog.slots.len();
-        let tables = prog.tables();
+        let n_slots = prog.tables.slots.len();
+        let tables = prog.slot_tables();
         let du = DefUse::of(prog);
         let last_read = (0..n_slots as SlotId)
             .map(|s| du.last_read(s).unwrap_or(0))
@@ -325,7 +327,7 @@ impl Ctx<'_> {
         for pc in run.clone() {
             if let Instr::DyWrite { write } = &prog.instrs[pc] {
                 targets.push(
-                    prog.dy_writes[*write as usize]
+                    prog.tables.dy_writes[*write as usize]
                         .scalar_flat
                         .expect("scalar write"),
                 );
@@ -424,7 +426,7 @@ impl Ctx<'_> {
             // (stored and walked without a table).
             lanes.sort_by_key(|p| {
                 p.instrs.iter().find_map(|&pc| match &prog.instrs[pc] {
-                    Instr::DyWrite { write } => prog.dy_writes[*write as usize].scalar_flat,
+                    Instr::DyWrite { write } => prog.tables.dy_writes[*write as usize].scalar_flat,
                     _ => None,
                 })
             });
@@ -464,7 +466,7 @@ impl Ctx<'_> {
         // reads it: the classes (emitted after it), or the program after the
         // run.
         let prog = self.prog;
-        let tables = prog.tables();
+        let tables = prog.slot_tables();
         let mut read_by_class = rustc_hash::FxHashSet::default();
         for p in classes.iter().flatten() {
             for &pc in &p.instrs {
@@ -665,13 +667,13 @@ fn emit_class(
         let k = micro.len() as GroupIx;
         if let Instr::DyWrite { write } = &old[pc] {
             let v = map(
-                Operand::Slot(prog.dy_writes[*write as usize].slot),
+                Operand::Slot(prog.tables.dy_writes[*write as usize].slot),
                 &mut scalars,
             );
             let pos: Vec<u32> = lanes
                 .iter()
                 .map(|p| match &old[p.instrs[i]] {
-                    Instr::DyWrite { write } => prog.dy_writes[*write as usize]
+                    Instr::DyWrite { write } => prog.tables.dy_writes[*write as usize]
                         .scalar_flat
                         .expect("scalar write")
                         as u32,
@@ -785,7 +787,7 @@ fn emit_block(
         };
         let k = micro.len() as GroupIx;
         if let Instr::DyWrite { write } = &old[pc] {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             let v = map(Operand::Slot(w.slot));
             let pos = w.scalar_flat.expect("scalar write") as u32;
             writes.push((v, LaneDst::Dy(LaneIx::Affine { base: pos, step: 0 })));

@@ -44,7 +44,7 @@ pub(super) fn run_reference(
         }
     }
     let mut obs: ArrMap = ArrMap::default();
-    let mut slots: Vec<Option<RefVal>> = vec![None; prog.slots.len()];
+    let mut slots: Vec<Option<RefVal>> = vec![None; prog.tables.slots.len()];
 
     // Pending skip regions from taken JmpIfZero branches:
     // (position at which to skip, how many instructions to skip).
@@ -65,7 +65,7 @@ pub(super) fn run_reference(
             let Instr::Sweep { spec } = &prog.instrs[spc] else {
                 unreachable!("an open sweep starts at a Sweep")
             };
-            let sw = &prog.sweeps[*spec as usize];
+            let sw = &prog.tables.sweeps[*spec as usize];
             if pc == spc + 1 + sw.body_len as usize {
                 let RefVal::Scalar(v) = resolve(prog, &slots, &state_arrays, params, t, &sw.result)
                 else {
@@ -142,7 +142,7 @@ pub(super) fn run_reference(
                 let cv = resolve(prog, &slots, &state_arrays, params, t, cond);
                 let av = resolve(prog, &slots, &state_arrays, params, t, a);
                 let bv = resolve(prog, &slots, &state_arrays, params, t, b);
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let v = if desc.scalar {
                     let (RefVal::Scalar(c), RefVal::Scalar(x), RefVal::Scalar(y)) = (&cv, &av, &bv)
                     else {
@@ -165,7 +165,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(v);
             }
             Instr::Gather { src, plan, out } => {
-                let plan = &prog.plans[*plan as usize];
+                let plan = &prog.tables.plans[*plan as usize];
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
                 let v = exec_gather(plan, sv.view());
                 slots[*out as usize] = Some(RefVal::Arr(v));
@@ -176,7 +176,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Scalar(v));
             }
             Instr::Ramp { axis, lo, out } => {
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let a = *axis as usize;
                 let lo = *lo;
                 let mut arr = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
@@ -189,7 +189,7 @@ pub(super) fn run_reference(
                 let RefVal::Scalar(s) = vv else {
                     panic!("Fill with an array operand");
                 };
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let val = if desc.scalar {
                     RefVal::Scalar(s)
                 } else {
@@ -207,7 +207,7 @@ pub(super) fn run_reference(
                 region,
                 out,
             } => {
-                let spec = &prog.regions[*region as usize];
+                let spec = &prog.tables.regions[*region as usize];
                 let Some(RefVal::Arr(basev)) = &slots[*base as usize] else {
                     panic!("Region base slot not an array");
                 };
@@ -229,10 +229,10 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
             Instr::Assemble { table, out } => {
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&desc.shape));
-                for (src, region) in &prog.assemblies[*table as usize].parts {
-                    let spec = &prog.regions[*region as usize];
+                for (src, region) in &prog.tables.assemblies[*table as usize].parts {
+                    let spec = &prog.tables.regions[*region as usize];
                     let sv = resolve(prog, &slots, &state_arrays, params, t, src);
                     let mut sub = o.slice_each_axis_mut(|ax| {
                         let d = ax.axis.index();
@@ -249,7 +249,7 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(o));
             }
             Instr::ConstArray { data, out } => {
-                let d = &prog.const_data[*data as usize];
+                let d = &prog.tables.const_data[*data as usize];
                 let arr = ArrayD::from_shape_vec(IxDyn(&d.shape[..]), d.values.to_vec())
                     .expect("ConstArray payload matches its shape");
                 slots[*out as usize] = Some(RefVal::Arr(arr));
@@ -299,7 +299,7 @@ pub(super) fn run_reference(
                 assert_eq!(win.len(), *n as usize, "Count window");
                 let count = |q: f64| win.iter().filter(|&&a| rel.holds(a, q)).count() as f64;
                 let xv = resolve(prog, &slots, &state_arrays, params, t, x);
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let v = if desc.scalar {
                     let RefVal::Scalar(q) = xv else {
                         panic!("scalar Count with an array query");
@@ -323,7 +323,7 @@ pub(super) fn run_reference(
                 let f = binary_kernel_of(*op);
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
                 assert_eq!(sv.shape(), &src_shape[..], "Reduce source box");
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let mut acc = ArrayD::<f64>::from_elem(IxDyn(&desc.shape[..]), *init);
                 let keep: Vec<usize> = (0..sv.ndim())
                     .filter(|d| !axes.contains(&(*d as u8)))
@@ -401,7 +401,7 @@ pub(super) fn run_reference(
                 spec,
                 out,
             } => {
-                let spec = &prog.index_gathers[*spec as usize];
+                let spec = &prog.tables.index_gathers[*spec as usize];
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
                 assert_eq!(sv.shape(), &spec.src_shape[..], "IndexGather source box");
                 let iv = resolve(prog, &slots, &state_arrays, params, t, idx);
@@ -434,7 +434,7 @@ pub(super) fn run_reference(
             }
             Instr::TableGather { src, table, out } => {
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
-                let tbl = &prog.gather_tables[*table as usize];
+                let tbl = &prog.tables.gather_tables[*table as usize];
                 assert_eq!(sv.shape(), &tbl.src_shape[..], "TableGather source box");
                 let flat: Vec<f64> = sv.iter().copied().collect();
                 let vals: Vec<f64> = tbl
@@ -469,7 +469,7 @@ pub(super) fn run_reference(
                     Some(RefVal::Arr(a)) => a.iter().copied().collect(),
                     other => panic!("SegReduce mask is not an array slot: {other:?}"),
                 });
-                let rows = &prog.seg_tables[*table as usize].rows;
+                let rows = &prog.tables.seg_tables[*table as usize].rows;
                 let mut cells = Vec::with_capacity(rows.len() - 1);
                 for c in 0..rows.len() - 1 {
                     let mut acc = *init;
@@ -480,7 +480,7 @@ pub(super) fn run_reference(
                     }
                     cells.push(acc);
                 }
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 let val = if desc.scalar {
                     RefVal::Scalar(cells[0])
                 } else {
@@ -493,7 +493,7 @@ pub(super) fn run_reference(
             }
             Instr::Reshape { src, out } => {
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
-                let desc = &prog.slots[*out as usize];
+                let desc = &prog.tables.slots[*out as usize];
                 // `iter()` is the logical row-major walk.
                 let flat: Vec<f64> = sv.iter().copied().collect();
                 let arr = ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), flat)
@@ -501,13 +501,13 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
             Instr::Fault { fault } => {
-                let (rule, key) = &prog.fault_order[*fault as usize];
+                let (rule, key) = &prog.tables.fault_order[*fault as usize];
                 crate::simulate_array::eval::latch_ordered_fault(*rule, key, || {
-                    prog.faults[*fault as usize].clone()
+                    prog.tables.faults[*fault as usize].clone()
                 });
             }
             Instr::DataGather { src, spec, out, .. } => {
-                let spec = &prog.data_gathers[*spec as usize];
+                let spec = &prog.tables.data_gathers[*spec as usize];
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
                 assert_eq!(sv.shape(), &spec.src_shape[..], "DataGather source box");
                 // Every subscript at the output box, row-major.
@@ -532,7 +532,7 @@ pub(super) fn run_reference(
                 {
                     crate::simulate_array::eval::latch_ordered_fault(order.rule, &key, || msg);
                 }
-                let val = if prog.slots[*out as usize].scalar {
+                let val = if prog.tables.slots[*out as usize].scalar {
                     RefVal::Scalar(vals[0])
                 } else {
                     RefVal::Arr(
@@ -543,8 +543,8 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(val);
             }
             Instr::FaultScan { spec } => {
-                let scan = &prog.fault_scans[*spec as usize];
-                let first = scan.first(&prog.faults, |op, at| match (op, at) {
+                let scan = &prog.tables.fault_scans[*spec as usize];
+                let first = scan.first(&prog.tables.faults, |op, at| match (op, at) {
                     (Operand::Slot(s), Some((shape, cell))) => {
                         let Some(RefVal::Arr(a)) = &slots[*s as usize] else {
                             panic!("an array condition reads an array slot");
@@ -576,7 +576,7 @@ pub(super) fn run_reference(
                 }
             }
             Instr::Sweep { spec } => {
-                let sw = &prog.sweeps[*spec as usize];
+                let sw = &prog.tables.sweeps[*spec as usize];
                 assert!(sweep.is_none(), "recurrence sweeps do not nest");
                 if sw.n_cells() == 0 {
                     pc += 1 + sw.body_len as usize;
@@ -593,7 +593,7 @@ pub(super) fn run_reference(
                 sweep = Some((pc, cell));
             }
             Instr::ScalarRead { src, spec, out } => {
-                let sp = &prog.scalar_reads[*spec as usize];
+                let sp = &prog.tables.scalar_reads[*spec as usize];
                 let sv = resolve_src(prog, &slots, &state_arrays, src);
                 let raw: Vec<i64> = sp
                     .subs
@@ -606,7 +606,7 @@ pub(super) fn run_reference(
                     )
                     .collect();
                 let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
-                let v = match sp.resolve(&raw, sv.shape(), &prog.sweeps, cur) {
+                let v = match sp.resolve(&raw, sv.shape(), &prog.tables.sweeps, cur) {
                     ScalarReadAt::Elem(ix) => {
                         let x = sv[IxDyn(&ix)];
                         if matches!(sp.kind, ScalarReadKind::SelfRead { .. }) {
@@ -670,7 +670,7 @@ pub(super) fn run_reference(
                     let cells: Vec<f64> = (0..p.n_inner)
                         .map(|c| (0..p.rows).fold(p.init, |acc, r| f(acc, flat[r * p.n_inner + c])))
                         .collect();
-                    let desc = &prog.slots[p.out as usize];
+                    let desc = &prog.tables.slots[p.out as usize];
                     slots[p.out as usize] = Some(RefVal::Arr(
                         ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
                             .expect("the pre-reduction's box"),
@@ -800,7 +800,7 @@ pub(super) fn run_reference(
                 }
                 assert_eq!(covered, n, "run schedule tiles the box");
                 if let Some(r) = &fs.reduce {
-                    let desc = &prog.slots[r.out as usize];
+                    let desc = &prog.tables.slots[r.out as usize];
                     slots[r.out as usize] = Some(if desc.scalar {
                         RefVal::Scalar(acc[0])
                     } else {
@@ -811,7 +811,7 @@ pub(super) fn run_reference(
                     });
                 }
                 for (ovals, &(_, slot)) in outs.into_iter().zip(fs.outputs.iter()) {
-                    let desc = &prog.slots[slot as usize];
+                    let desc = &prog.tables.slots[slot as usize];
                     let arr =
                         ArrayD::from_shape_vec(IxDyn(&desc.shape), ovals).expect("output shape");
                     slots[slot as usize] = Some(RefVal::Arr(arr));
@@ -880,7 +880,7 @@ pub(super) fn run_reference(
                 }
             }
             Instr::DyWrite { write } => {
-                let w = &prog.dy_writes[*write as usize];
+                let w = &prog.tables.dy_writes[*write as usize];
                 let v = slots[w.slot as usize]
                     .as_ref()
                     .expect("dy-write slot is defined");

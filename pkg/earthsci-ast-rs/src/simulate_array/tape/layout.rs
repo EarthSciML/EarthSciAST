@@ -83,7 +83,7 @@ fn transpose_values(values: &[f64], shape: &[usize]) -> Vec<f64> {
 
 fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
     match src {
-        SrcRef::Slot(s) => &prog.slots[*s as usize].shape,
+        SrcRef::Slot(s) => &prog.tables.slots[*s as usize].shape,
         SrcRef::State(ix) => &prog.state_vars[*ix as usize].shape,
     }
 }
@@ -91,7 +91,7 @@ fn src_shape<'a>(prog: &'a TapeProgram, src: &SrcRef) -> &'a [usize] {
 /// Whether every instruction means the same thing in reversed coordinates
 /// (see the module docs for what declines).
 fn reversible(prog: &TapeProgram) -> bool {
-    let slot_free = |s: SlotId| order_free(&prog.slots[s as usize].shape);
+    let slot_free = |s: SlotId| order_free(&prog.tables.slots[s as usize].shape);
     prog.instrs.iter().all(|i| match i {
         Instr::Bin { .. }
         | Instr::Un { .. }
@@ -120,7 +120,7 @@ fn reversible(prog: &TapeProgram) -> bool {
         Instr::SegReduce { out, .. } => slot_free(*out),
         Instr::Reshape { src, out } => order_free(src_shape(prog, src)) && slot_free(*out),
         Instr::ScalarRead { src, .. } => order_free(src_shape(prog, src)),
-        Instr::DyWrite { write } => match &prog.dy_writes[*write as usize].scatter {
+        Instr::DyWrite { write } => match &prog.tables.dy_writes[*write as usize].scatter {
             Some(pos) => {
                 let mut seen = pos.clone();
                 seen.sort_unstable();
@@ -145,28 +145,31 @@ fn reverse(prog: &mut TapeProgram) {
         n_const: _,
         n_segment: _,
         n_rhs: _,
-        slots,
-        plans,
-        regions,
-        assemblies: _,
-        const_data,
-        index_gathers,
-        gather_tables,
-        seg_tables: _,
-        faults: _,
-        fault_order: _,
-        data_gathers,
-        // In LOGICAL coordinates (`FaultCand`), which the reversal leaves.
-        fault_scans: _,
-        // Declined by `reversible`.
-        sweeps: _,
-        // Their sources are order-free (`reversible`), so a subscript tuple
-        // means the same element either way.
-        scalar_reads: _,
+        tables:
+            ProgramTables {
+                slots,
+                plans,
+                regions,
+                assemblies: _,
+                const_data,
+                index_gathers,
+                gather_tables,
+                seg_tables: _,
+                faults: _,
+                fault_order: _,
+                data_gathers,
+                // In LOGICAL coordinates (`FaultCand`), which the reversal leaves.
+                fault_scans: _,
+                // Declined by `reversible`.
+                sweeps: _,
+                // Their sources are order-free (`reversible`), so a subscript
+                // tuple means the same element either way.
+                scalar_reads: _,
+                dy_writes,
+            },
         state_vars,
         // The forcing load transposes at the boundary (module docs).
         forcings: _,
-        dy_writes,
         exports: _,
         rules: _,
         slab: _,

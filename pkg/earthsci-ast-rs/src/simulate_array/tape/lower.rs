@@ -1047,15 +1047,7 @@ pub(crate) struct TapeBuilder<'m> {
     folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, Arc<Vec<f64>>)>>>,
 
     // Program under construction -------------------------------------------
-    slots: Vec<SlotDesc>,
-    plans: Vec<GatherPlan>,
-    regions: Vec<RegionSpec>,
-    assemblies: Vec<AssembleSpec>,
-    /// Inline array-literal payloads, one per lowered array-valued `const`.
-    const_data: Vec<ConstArrayData>,
-    index_gathers: Vec<IndexGatherSpec>,
-    gather_tables: Vec<GatherTable>,
-    seg_tables: Vec<SegTable>,
+    tables: ProgramTables,
     /// Slots whose VALUES the build knows: array literals, and what the
     /// tuple-list lowering derives from them (`tuples`). Read only to resolve
     /// build-time data — a gather's subscripts, a join's key columns, a
@@ -1073,8 +1065,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// Slots an instruction has defined: a second definition (a branch
     /// join's phi) drops the slot from `ranges` for good.
     range_defs: HashSet<SlotId>,
-    /// Open tuple-list boxes, innermost last (`tuples`).
-    tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
     next_tuple: u32,
     /// The enclosing list and repeat count of the next tuple-list box, when
@@ -1083,20 +1073,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// Tuples this program's tuple lists hold so far, against
     /// `tuples::tuple_list_budget`.
     tuples_held: u64,
-    /// Fail-closed fault messages (`Instr::Fault` indexes here).
-    faults: Vec<String>,
-    /// Conditional fault scans (`Instr::FaultScan` indexes here).
-    fault_scans: Vec<FaultScanSpec>,
-    /// Recurrence sweeps (`Instr::Sweep` indexes here).
-    sweeps: Vec<SweepSpec>,
-    /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
-    scalar_reads: Vec<ScalarReadSpec>,
-    /// Parallel to `faults`: each one's rule and [`FaultKey`].
-    fault_order: Vec<(u32, FaultKey)>,
-    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
-    data_gathers: Vec<DataGatherSpec>,
-    /// The recurrence whose cell body is being lowered, if any.
-    sweep: Option<SweepCtx>,
     state_vars: Vec<StateRef>,
     /// Position in `state_vars`; narrowed to the IR's `u32` by [`tape_index`]
     /// where it is emitted.
@@ -1115,7 +1091,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// rule for rollback.
     forcing_loaded: FxHashMap<u32, LV>,
     forcing_journal: Vec<u32>,
-    dy_writes: Vec<DyWrite>,
     rules: Vec<RuleInfo>,
     /// Parallel to `rules`: the deepest decline reason of each rule that did
     /// not lower. Any `Some` means the build yields no program.
@@ -1126,14 +1101,12 @@ pub(crate) struct TapeBuilder<'m> {
     rule_home_chunk: Vec<Option<usize>>,
 
     // Lowering state ---------------------------------------------------------
+    /// What one rule's lowering holds open, reset when the rule rolls back.
+    rule: RuleState,
+    /// Where each fail-closed fault falls in the oracle's evaluation order.
+    fault: FaultTrack,
     cur_rule: u32,
     home: Cadence,
-    scope_frames: Vec<ScopeFrame>,
-    /// Nested conditional-branch buffers (top = innermost).
-    branch_bufs: Vec<Vec<Tagged>>,
-    /// Per open branch, the latest section any instruction buffered in it
-    /// asked for: the earliest section the whole block could run in.
-    branch_secs: Vec<Cadence>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
     /// Expressions the builder synthesized and lowered (the equality
     /// scatter's rewritten bodies and filters). Value numbering keys a node by
@@ -1148,46 +1121,6 @@ pub(crate) struct TapeBuilder<'m> {
     /// box: a node's axis mask over a box is scanned once, however many of
     /// the terms above it ask.
     sub_box_memo: Vec<(BoxKey, FxHashMap<usize, Option<u32>>)>,
-    /// The current rule's first fail-closed fault in the oracle's evaluation
-    /// order, with its message: emitted as one [`Instr::Fault`] when the rule
-    /// lowers ([`Self::flush_rule_fault`]).
-    fault_first: Option<(FaultKey, String)>,
-    /// Sequence number for the next fault site or nested box (lowering order).
-    fault_seq: i64,
-    /// The [`FaultKey`] prefix of the box being lowered: one entry per
-    /// enclosing box the oracle evaluates whole at each cell of its parent.
-    fault_prefix: FaultKey,
-    /// Depth of positions the oracle evaluates for only SOME cells or tuples:
-    /// the arms of an elementwise `ifelse`, a filtered term. A fault there
-    /// may not fire where the tape would place it, so it goes to the rule's
-    /// [`Instr::FaultScan`] ([`Self::note_fault`]).
-    lazy_depth: u32,
-    /// Faults noted so far ([`Self::note_fault`]), lazily evaluated ones
-    /// included: a lowering that cannot place a fault compares it.
-    fault_notes: u32,
-    /// The conditions that lead the oracle to the position being lowered,
-    /// outermost first: one per lazily evaluated position the lowering
-    /// can describe (an elementwise `ifelse` arm, a filtered term, a
-    /// runtime-scalar branch), with the polarity that admits it.
-    reach: Vec<(LV, bool)>,
-    /// The current rule's faults at lazily evaluated positions, each with
-    /// the key of the first cell it can fault at: one [`Instr::FaultScan`]
-    /// decides at run time which (if any) the oracle meets first
-    /// ([`Self::flush_rule_fault`]).
-    lazy_faults: Vec<(FaultKey, FaultCand)>,
-    /// Lazy faults noted so far: a value lowered while one was noted is not
-    /// value-numbered, so a read the oracle evaluates everywhere cannot
-    /// reuse it and lose its own fault.
-    lazy_fault_notes: u32,
-    /// The latest section an earlier rule latches a fault in at run time
-    /// (its [`Instr::FaultScan`], a faulting [`Instr::DataGather`]). Across
-    /// rules the first latched fault stays, so a later rule's faults run no
-    /// earlier than this: the oracle walks the rules in order, and a later
-    /// rule's fault in an earlier section would latch ahead of it.
-    fault_floor: Cadence,
-    /// The current rule's contribution to [`Self::fault_floor`], committed
-    /// when the rule lowers ([`Self::flush_rule_fault`]).
-    rule_fault_sec: Cadence,
 
     // Range restriction (API_SPEC §5.8) ----------------------------------------
     /// Set for a tile build: the domain of every state axis and the need box
@@ -1210,6 +1143,98 @@ pub(crate) struct TapeBuilder<'m> {
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
     vn_hoist_hits: usize,
+}
+
+/// The state one rule's lowering holds open: empty between rules, and reset
+/// to empty when a rule's lowering rolls back ([`TapeBuilder::rollback`]).
+#[derive(Default)]
+struct RuleState {
+    /// Value-numbering scopes, innermost last.
+    scope_frames: Vec<ScopeFrame>,
+    /// Nested conditional-branch buffers (top = innermost).
+    branch_bufs: Vec<Vec<Tagged>>,
+    /// Per open branch, the latest section any instruction buffered in it
+    /// asked for: the earliest section the whole block could run in.
+    branch_secs: Vec<Cadence>,
+    /// The recurrence whose cell body is being lowered, if any.
+    sweep: Option<SweepCtx>,
+    /// Open tuple-list boxes, innermost last (`tuples`).
+    tuple_frames: Vec<tuples::TupleFrame>,
+}
+
+/// Where each fail-closed fault the lowering meets falls in the per-cell
+/// oracle's evaluation order, and which of them the program latches
+/// ([`TapeBuilder::note_fault`], [`TapeBuilder::flush_rule_fault`]).
+struct FaultTrack {
+    /// The current rule's first fail-closed fault in the oracle's evaluation
+    /// order, with its message: emitted as one [`Instr::Fault`] when the rule
+    /// lowers ([`TapeBuilder::flush_rule_fault`]).
+    first: Option<(FaultKey, String)>,
+    /// Sequence number for the next fault site or nested box (lowering order).
+    seq: i64,
+    /// The [`FaultKey`] prefix of the box being lowered: one entry per
+    /// enclosing box the oracle evaluates whole at each cell of its parent.
+    prefix: FaultKey,
+    /// Depth of positions the oracle evaluates for only SOME cells or tuples:
+    /// the arms of an elementwise `ifelse`, a filtered term. A fault there
+    /// may not fire where the tape would place it, so it goes to the rule's
+    /// [`Instr::FaultScan`] ([`TapeBuilder::note_fault`]).
+    lazy_depth: u32,
+    /// Faults noted so far ([`TapeBuilder::note_fault`]), lazily evaluated ones
+    /// included: a lowering that cannot place a fault compares it.
+    notes: u32,
+    /// The conditions that lead the oracle to the position being lowered,
+    /// outermost first: one per lazily evaluated position the lowering
+    /// can describe (an elementwise `ifelse` arm, a filtered term, a
+    /// runtime-scalar branch), with the polarity that admits it.
+    reach: Vec<(LV, bool)>,
+    /// The current rule's faults at lazily evaluated positions, each with
+    /// the key of the first cell it can fault at: one [`Instr::FaultScan`]
+    /// decides at run time which (if any) the oracle meets first
+    /// ([`TapeBuilder::flush_rule_fault`]).
+    lazy: Vec<(FaultKey, FaultCand)>,
+    /// Lazy faults noted so far: a value lowered while one was noted is not
+    /// value-numbered, so a read the oracle evaluates everywhere cannot
+    /// reuse it and lose its own fault.
+    lazy_notes: u32,
+    /// The latest section an earlier rule latches a fault in at run time
+    /// (its [`Instr::FaultScan`], a faulting [`Instr::DataGather`]). Across
+    /// rules the first latched fault stays, so a later rule's faults run no
+    /// earlier than this: the oracle walks the rules in order, and a later
+    /// rule's fault in an earlier section would latch ahead of it.
+    floor: Cadence,
+    /// The current rule's contribution to [`FaultTrack::floor`], committed
+    /// when the rule lowers ([`TapeBuilder::flush_rule_fault`]).
+    rule_sec: Cadence,
+}
+
+impl Default for FaultTrack {
+    fn default() -> Self {
+        FaultTrack {
+            first: None,
+            seq: 0,
+            prefix: FaultKey::new(),
+            lazy_depth: 0,
+            notes: 0,
+            reach: Vec::new(),
+            lazy: Vec::new(),
+            lazy_notes: 0,
+            floor: Cadence::Const,
+            rule_sec: Cadence::Const,
+        }
+    }
+}
+
+impl FaultTrack {
+    /// Forget what the current rule's lowering noted (its rollback).
+    fn reset_rule(&mut self) {
+        self.first = None;
+        self.prefix.clear();
+        self.lazy_depth = 0;
+        self.reach.clear();
+        self.lazy.clear();
+        self.rule_sec = Cadence::Const;
+    }
 }
 
 /// What a tile build knows beyond the compiled rules (API_SPEC §5.8): each
@@ -1305,22 +1330,19 @@ struct SweepCtx {
     body: Vec<Tagged>,
 }
 
+/// `r`, the result of the form tried after an earlier attempt declined
+/// with `first`: a decline of both is the more informative one
+/// ([`Bail::or_later`]).
+fn after_decline<T>(first: Option<Bail>, r: LResult<T>) -> LResult<T> {
+    match (first, r) {
+        (Some(first), Err(later)) => Err(first.or_later(later)),
+        (_, r) => r,
+    }
+}
+
 /// Snapshot for transactional per-rule lowering.
 struct RuleTxn {
-    slots: usize,
-    plans: usize,
-    regions: usize,
-    assemblies: usize,
-    const_data: usize,
-    index_gathers: usize,
-    gather_tables: usize,
-    seg_tables: usize,
-    faults: usize,
-    fault_scans: usize,
-    sweeps: usize,
-    scalar_reads: usize,
-    data_gathers: usize,
-    dy_writes: usize,
+    tables: TablesMark,
     stream_lens: [usize; 3],
     hoist_journal: usize,
     forcing_journal: usize,
@@ -1334,26 +1356,16 @@ struct RuleTxn {
 /// value-numbering scopes balanced, so only emitted state is recorded: the
 /// tables, and how far each stream (or the open branch buffer) had grown.
 struct SubTxn {
-    slots: usize,
-    plans: usize,
-    regions: usize,
-    assemblies: usize,
-    const_data: usize,
-    index_gathers: usize,
-    gather_tables: usize,
-    seg_tables: usize,
+    tables: TablesMark,
     /// Per stream: `(chunk count, instructions in the last chunk)`.
     streams: [(usize, usize); 3],
     branch_len: Option<usize>,
     /// Length of the open recurrence body, if any.
     sweep_body: Option<usize>,
-    scalar_reads: usize,
-    data_gathers: usize,
     hoist_journal: usize,
     forcing_journal: usize,
     fault_first: Option<(FaultKey, String)>,
     fault_seq: i64,
-    faults: usize,
     lazy_faults: usize,
     /// [`TapeBuilder::tuples_held`]: a list charged by a failed attempt is
     /// not held.
@@ -1395,29 +1407,16 @@ impl<'m> TapeBuilder<'m> {
             array_bool_reductions: false,
             defer_consts: false,
             folded: std::cell::RefCell::new(FxHashMap::default()),
-            slots: Vec::new(),
-            plans: Vec::new(),
-            regions: Vec::new(),
-            assemblies: Vec::new(),
-            const_data: Vec::new(),
-            index_gathers: Vec::new(),
-            gather_tables: Vec::new(),
-            seg_tables: Vec::new(),
+            tables: ProgramTables::default(),
+            rule: RuleState::default(),
+            fault: FaultTrack::default(),
             known: FxHashMap::default(),
             count_fold: true,
             ranges: FxHashMap::default(),
             range_defs: HashSet::new(),
-            tuple_frames: Vec::new(),
             next_tuple: 1,
             next_tuple_parent: None,
             tuples_held: 0,
-            faults: Vec::new(),
-            fault_scans: Vec::new(),
-            sweeps: Vec::new(),
-            scalar_reads: Vec::new(),
-            fault_order: Vec::new(),
-            data_gathers: Vec::new(),
-            sweep: None,
             state_vars,
             state_ix,
             forcing_shapes: forcing.shapes.clone(),
@@ -1427,31 +1426,17 @@ impl<'m> TapeBuilder<'m> {
             forcing_ix: FxHashMap::default(),
             forcing_loaded: FxHashMap::default(),
             forcing_journal: Vec::new(),
-            dy_writes: Vec::new(),
             rules: Vec::new(),
             declined: Vec::new(),
             streams: [Vec::new(), Vec::new(), Vec::new()],
             rule_home_chunk: Vec::new(),
             cur_rule: 0,
             home: Cadence::Continuous,
-            scope_frames: Vec::new(),
-            branch_bufs: Vec::new(),
-            branch_secs: Vec::new(),
             hoist: FxHashMap::default(),
             held_exprs: Vec::new(),
             hoist_journal: Vec::new(),
             obs_defined: FxHashMap::default(),
             sub_box_memo: Vec::new(),
-            fault_first: None,
-            fault_seq: 0,
-            fault_prefix: FaultKey::new(),
-            lazy_depth: 0,
-            fault_notes: 0,
-            reach: Vec::new(),
-            lazy_faults: Vec::new(),
-            lazy_fault_notes: 0,
-            fault_floor: Cadence::Const,
-            rule_fault_sec: Cadence::Const,
             tile: None,
             tile_slots: FxHashMap::default(),
             tile_pending: None,
@@ -1465,7 +1450,7 @@ impl<'m> TapeBuilder<'m> {
     // -- emission ------------------------------------------------------------
 
     fn in_branch(&self) -> bool {
-        !self.branch_bufs.is_empty()
+        !self.rule.branch_bufs.is_empty()
     }
 
     /// Section an instruction with operand cadence `want` lands in.
@@ -1476,7 +1461,7 @@ impl<'m> TapeBuilder<'m> {
     /// and the block raises every slot it defines to the section it lands in.
     fn placement(&self, want: Cadence) -> Cadence {
         if self.in_branch() {
-            if self.sweep.is_some() {
+            if self.rule.sweep.is_some() {
                 self.home
             } else {
                 want.min(self.home)
@@ -1510,7 +1495,7 @@ impl<'m> TapeBuilder<'m> {
     fn emit_tagged(&mut self, instr: Instr, prec: Precision, section: Cadence) {
         self.track_known(&instr);
         self.track_range(&instr);
-        if self.sweep.is_some() {
+        if self.rule.sweep.is_some() {
             if self.reads_body(&instr) || (self.in_branch() && !Self::hoistable(&instr)) {
                 self.mark_body_defs(&instr);
                 self.push_body(instr, prec);
@@ -1533,12 +1518,12 @@ impl<'m> TapeBuilder<'m> {
             let mut defs: SmallVec<[SlotId; 2]> = SmallVec::new();
             instr.for_each_def(&self.slot_tables(), |s| defs.push(s));
             for s in defs {
-                self.slots[s as usize].cadence = self.home;
+                self.tables.slots[s as usize].cadence = self.home;
             }
-            if let Some(m) = self.branch_secs.last_mut() {
+            if let Some(m) = self.rule.branch_secs.last_mut() {
                 *m = (*m).max(section.min(self.home));
             }
-            if let Some(buf) = self.branch_bufs.last_mut() {
+            if let Some(buf) = self.rule.branch_bufs.last_mut() {
                 buf.push((instr, prec));
             }
             return;
@@ -1555,7 +1540,7 @@ impl<'m> TapeBuilder<'m> {
             Instr::Copy {
                 a: Operand::Slot(a),
                 out,
-            } if !self.slots[*out as usize].scalar => {
+            } if !self.tables.slots[*out as usize].scalar => {
                 if let Some(k) = self.known.get(a).cloned() {
                     // The copy has an instruction of its own: only its
                     // source's may still be deferred.
@@ -1607,7 +1592,7 @@ impl<'m> TapeBuilder<'m> {
                 plan,
                 ..
             } => {
-                let p = &self.plans[*plan as usize];
+                let p = &self.tables.plans[*plan as usize];
                 let covered = p
                     .segs
                     .iter()
@@ -1655,8 +1640,8 @@ impl<'m> TapeBuilder<'m> {
         scalar: bool,
         cadence: Cadence,
     ) -> SlotId {
-        let id = self.slots.len() as SlotId;
-        self.slots.push(SlotDesc {
+        let id = self.tables.slots.len() as SlotId;
+        self.tables.slots.push(SlotDesc {
             shape: shape.iter().copied().collect(),
             origin: origin.iter().copied().collect(),
             scalar,
@@ -1672,20 +1657,20 @@ impl<'m> TapeBuilder<'m> {
     /// as far as the program under construction has them.
     fn slot_tables(&self) -> SlotTables<'_> {
         SlotTables {
-            dy_writes: &self.dy_writes,
+            dy_writes: &self.tables.dy_writes,
             fused: &[],
-            assemblies: &self.assemblies,
-            sweeps: &self.sweeps,
-            scalar_reads: &self.scalar_reads,
-            data_gathers: &self.data_gathers,
+            assemblies: &self.tables.assemblies,
+            sweeps: &self.tables.sweeps,
+            scalar_reads: &self.tables.scalar_reads,
+            data_gathers: &self.tables.data_gathers,
             lanes: &[],
-            fault_scans: &self.fault_scans,
+            fault_scans: &self.tables.fault_scans,
         }
     }
 
     /// Does `instr` read a value defined in the open recurrence body?
     fn reads_body(&self, instr: &Instr) -> bool {
-        let Some(sw) = &self.sweep else {
+        let Some(sw) = &self.rule.sweep else {
             return false;
         };
         let mut hit = false;
@@ -1699,8 +1684,8 @@ impl<'m> TapeBuilder<'m> {
         instr.for_each_def(&self.slot_tables(), |s| defs.push(s));
         let home = self.home;
         for s in defs {
-            self.slots[s as usize].cadence = home;
-            if let Some(sw) = self.sweep.as_mut() {
+            self.tables.slots[s as usize].cadence = home;
+            if let Some(sw) = self.rule.sweep.as_mut() {
                 sw.body_slots.insert(s);
             }
         }
@@ -1708,9 +1693,9 @@ impl<'m> TapeBuilder<'m> {
 
     /// Append to the open branch, or else to the open recurrence body.
     fn push_body(&mut self, instr: Instr, prec: Precision) {
-        if let Some(buf) = self.branch_bufs.last_mut() {
+        if let Some(buf) = self.rule.branch_bufs.last_mut() {
             buf.push((instr, prec));
-        } else if let Some(sw) = self.sweep.as_mut() {
+        } else if let Some(sw) = self.rule.sweep.as_mut() {
             sw.body.push((instr, prec));
         }
     }
@@ -1729,7 +1714,7 @@ impl<'m> TapeBuilder<'m> {
         match lv {
             LV::Lit(_) | LV::Param(_) | LV::Time | LV::Scalar(_) => None,
             LV::Arr(s) => {
-                let d = &self.slots[*s as usize];
+                let d = &self.tables.slots[*s as usize];
                 Some((d.shape.clone(), d.origin.clone()))
             }
             LV::State(ix) => {
@@ -1750,7 +1735,7 @@ impl<'m> TapeBuilder<'m> {
         match lv {
             LV::Lit(_) | LV::Param(_) => Cadence::Const,
             LV::Time | LV::State(_) => Cadence::Continuous,
-            LV::Scalar(s) | LV::Arr(s) => self.slots[*s as usize].cadence,
+            LV::Scalar(s) | LV::Arr(s) => self.tables.slots[*s as usize].cadence,
         }
     }
 
@@ -2165,21 +2150,21 @@ impl<'m> TapeBuilder<'m> {
     // -- scopes / VN ----------------------------------------------------------
 
     fn push_scope(&mut self) {
-        self.scope_frames.push(ScopeFrame::default());
+        self.rule.scope_frames.push(ScopeFrame::default());
     }
 
     fn pop_scope(&mut self) {
-        self.scope_frames.pop();
+        self.rule.scope_frames.pop();
     }
 
     fn vn_get(&mut self, key: VnKey, bx: &LBox) -> Option<LV> {
         // A box lowering opens its own frame (`push_scope`); reaching one
         // with the whole-body frame innermost would number nothing.
         debug_assert!(
-            !self.scope_frames.last().is_some_and(|f| f.wholesale),
+            !self.rule.scope_frames.last().is_some_and(|f| f.wholesale),
             "box value numbering under a whole-body frame: the box lowering did not open a scope"
         );
-        if let Some(frame) = self.scope_frames.last().filter(|f| !f.wholesale) {
+        if let Some(frame) = self.rule.scope_frames.last().filter(|f| !f.wholesale) {
             if let Some(lv) = frame.map.get(&key) {
                 self.vn_scope_hits += 1;
                 return Some(lv.clone());
@@ -2193,14 +2178,14 @@ impl<'m> TapeBuilder<'m> {
     }
 
     fn vn_put(&mut self, key: VnKey, lv: &LV, bx: &LBox) {
-        if !self.scope_frames.last().is_some_and(|f| f.wholesale) {
+        if !self.rule.scope_frames.last().is_some_and(|f| f.wholesale) {
             self.frame_put(key, lv);
         }
         let in_branch = self.in_branch();
         // The cross-rule hoist (ess-lih analogue): only for values whose
         // cadence is ≤ SEGMENT — pure functions of (box, structure, constant
         // tier) — and only when computed UNCONDITIONALLY.
-        let in_body = match (lv, &self.sweep) {
+        let in_body = match (lv, &self.rule.sweep) {
             (LV::Scalar(s) | LV::Arr(s), Some(sw)) => sw.body_slots.contains(s),
             _ => false,
         };
@@ -2216,7 +2201,7 @@ impl<'m> TapeBuilder<'m> {
     /// conditional branch so the value does not escape it.
     fn frame_put(&mut self, key: VnKey, lv: &LV) {
         let in_branch = self.in_branch();
-        if let Some(frame) = self.scope_frames.last_mut() {
+        if let Some(frame) = self.rule.scope_frames.last_mut() {
             let prev = frame.map.insert(key, lv.clone());
             if in_branch {
                 frame.journal.push((key, prev));
@@ -2235,12 +2220,12 @@ impl<'m> TapeBuilder<'m> {
         &mut self,
         lower: impl FnOnce(&mut Self) -> LResult<T>,
     ) -> LResult<T> {
-        self.scope_frames.push(ScopeFrame {
+        self.rule.scope_frames.push(ScopeFrame {
             wholesale: true,
             ..ScopeFrame::default()
         });
         let out = lower(self);
-        self.scope_frames.pop();
+        self.rule.scope_frames.pop();
         out
     }
 
@@ -2255,6 +2240,7 @@ impl<'m> TapeBuilder<'m> {
     ) -> LResult<LV> {
         let key = VnKey::ConstLit(Arc::as_ptr(lit) as usize);
         if let Some(lv) = self
+            .rule
             .scope_frames
             .iter()
             .rev()
@@ -2271,7 +2257,7 @@ impl<'m> TapeBuilder<'m> {
         }
         let lv = self.emit_const_array(a)?;
         match bx {
-            Some(bx) if !self.scope_frames.last().is_some_and(|f| f.wholesale) => {
+            Some(bx) if !self.rule.scope_frames.last().is_some_and(|f| f.wholesale) => {
                 self.vn_put(key, &lv, bx)
             }
             _ => self.frame_put(key, &lv),
@@ -2282,9 +2268,10 @@ impl<'m> TapeBuilder<'m> {
     // -- conditional branches -------------------------------------------------
 
     fn push_branch(&mut self) -> usize {
-        self.branch_bufs.push(Vec::new());
-        self.branch_secs.push(Cadence::Const);
-        self.scope_frames
+        self.rule.branch_bufs.push(Vec::new());
+        self.rule.branch_secs.push(Cadence::Const);
+        self.rule
+            .scope_frames
             .last()
             .map(|f| f.journal.len())
             .unwrap_or(0)
@@ -2293,10 +2280,10 @@ impl<'m> TapeBuilder<'m> {
     /// Close the innermost branch: roll back VN insertions made inside it and
     /// return its instruction buffer.
     fn pop_branch(&mut self, journal_mark: usize) -> (Vec<Tagged>, Cadence) {
-        let buf = self.branch_bufs.pop().expect("branch buffer open");
-        let sec = self.branch_secs.pop().expect("branch section open");
-        let depth = self.branch_bufs.len();
-        if let Some(frame) = self.scope_frames.last_mut() {
+        let buf = self.rule.branch_bufs.pop().expect("branch buffer open");
+        let sec = self.rule.branch_secs.pop().expect("branch section open");
+        let depth = self.rule.branch_bufs.len();
+        if let Some(frame) = self.rule.scope_frames.last_mut() {
             frame.subs.retain(|(_, d), _| *d <= depth);
             while frame.journal.len() > journal_mark {
                 let (key, prev) = frame.journal.pop().expect("journal entry");
@@ -2348,30 +2335,30 @@ impl<'m> TapeBuilder<'m> {
     /// position) is dropped when an earlier certain fault makes it
     /// unobservable, and otherwise becomes a candidate of the rule's
     /// [`Instr::FaultScan`]: the run decides whether the oracle reaches a
-    /// faulting cell, from the conditions on the way to it ([`Self::reach`]).
+    /// faulting cell, from the conditions on the way to it ([`FaultTrack::reach`]).
     fn note_fault(
         &mut self,
         at: Option<(&LBox, &[i64])>,
         msg: String,
         what: Option<FaultWhat>,
     ) -> LResult<()> {
-        if self.sweep.is_some() {
+        if self.rule.sweep.is_some() {
             // The order of a build-time fault is placed by the box it sits in;
             // inside a recurrence body the cells come from the sweep instead,
             // which that ordering does not model.
             let head: String = msg.chars().take_while(|c| *c != ':').collect();
             bail_tape!("fault: `{head}` inside a recurrence body");
         }
-        self.fault_notes += 1;
-        let mut key = self.fault_prefix.clone();
+        self.fault.notes += 1;
+        let mut key = self.fault.prefix.clone();
         if let Some((bx, cell)) = at {
             key.extend(Self::fault_cell_key(bx, cell));
         }
-        key.push(self.fault_seq);
-        self.fault_seq += 1;
-        let preceded = self.fault_first.as_ref().is_some_and(|(k, _)| *k < key);
-        if self.in_branch() || self.lazy_depth > 0 {
-            self.lazy_fault_notes += 1;
+        key.push(self.fault.seq);
+        self.fault.seq += 1;
+        let preceded = self.fault.first.as_ref().is_some_and(|(k, _)| *k < key);
+        if self.in_branch() || self.fault.lazy_depth > 0 {
+            self.fault.lazy_notes += 1;
             if preceded {
                 return Ok(());
             }
@@ -2384,11 +2371,11 @@ impl<'m> TapeBuilder<'m> {
                      cannot read at the faulting cells"
                 );
             };
-            self.lazy_faults.push((key, cand));
+            self.fault.lazy.push((key, cand));
             return Ok(());
         }
         if !preceded {
-            self.fault_first = Some((key, msg));
+            self.fault.first = Some((key, msg));
         }
         Ok(())
     }
@@ -2396,7 +2383,7 @@ impl<'m> TapeBuilder<'m> {
     /// The [`FaultScan`](Instr::FaultScan) candidate for a fault at a lazily
     /// evaluated position over `bx` (`None`: a single evaluation) whose first
     /// possible key is `key`: `None` when some lazily evaluated position on
-    /// the way to it has no condition in [`Self::reach`] (a tuple-list
+    /// the way to it has no condition in [`FaultTrack::reach`] (a tuple-list
     /// body), or a condition over a box other than the read's own, which
     /// the scan cannot read cell by cell.
     fn lazy_fault_cand(
@@ -2407,12 +2394,13 @@ impl<'m> TapeBuilder<'m> {
         what: Option<FaultWhat>,
     ) -> Option<FaultCand> {
         if bx.is_some_and(|b| b.tuple != 0)
-            || self.reach.len() != self.lazy_depth as usize + self.branch_bufs.len()
+            || self.fault.reach.len()
+                != self.fault.lazy_depth as usize + self.rule.branch_bufs.len()
         {
             return None;
         }
-        let mut path = Vec::with_capacity(self.reach.len());
-        for (lv, want) in &self.reach {
+        let mut path = Vec::with_capacity(self.fault.reach.len());
+        for (lv, want) in &self.fault.reach {
             let array = match self.lv_box(lv) {
                 None => false,
                 Some((s, o)) => {
@@ -2432,11 +2420,11 @@ impl<'m> TapeBuilder<'m> {
         let what = match what {
             Some(w) => w,
             None => {
-                let m = tape_index(self.faults.len(), "faults").ok()?;
-                self.faults.push(msg);
+                let m = tape_index(self.tables.faults.len(), "faults").ok()?;
+                self.tables.faults.push(msg);
                 // `fault_order` stays parallel to `faults`: a later
                 // `Instr::Fault` reads both at its own index.
-                self.fault_order.push((self.cur_rule, key.clone()));
+                self.tables.fault_order.push((self.cur_rule, key.clone()));
                 FaultWhat::Every(m)
             }
         };
@@ -2455,7 +2443,7 @@ impl<'m> TapeBuilder<'m> {
             None => (DimU::new(), DimI::new(), SmallVec::new(), SmallVec::new()),
         };
         Some(FaultCand {
-            prefix: self.fault_prefix.iter().copied().collect(),
+            prefix: self.fault.prefix.iter().copied().collect(),
             cells,
             shape,
             lo,
@@ -2477,9 +2465,9 @@ impl<'m> TapeBuilder<'m> {
         want: bool,
         f: impl FnOnce(&mut Self) -> LResult<T>,
     ) -> LResult<T> {
-        self.reach.push((cond.clone(), want));
+        self.fault.reach.push((cond.clone(), want));
         let r = f(self);
-        self.reach.pop();
+        self.fault.reach.pop();
         r
     }
 
@@ -2488,19 +2476,19 @@ impl<'m> TapeBuilder<'m> {
     /// its faults sort at the parent's first cell, in expression order.
     /// Returns the prefix [`Self::leave_fault_level`] restores.
     fn enter_fault_level(&mut self, parent: Option<&LBox>) -> FaultKey {
-        let saved = self.fault_prefix.clone();
+        let saved = self.fault.prefix.clone();
         if let Some(p) = parent {
             let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, p.shape.len());
             let k = Self::fault_cell_key(p, &first);
-            self.fault_prefix.extend(k);
+            self.fault.prefix.extend(k);
         }
-        self.fault_prefix.push(self.fault_seq);
-        self.fault_seq += 1;
+        self.fault.prefix.push(self.fault.seq);
+        self.fault.seq += 1;
         saved
     }
 
     fn leave_fault_level(&mut self, saved: FaultKey) {
-        self.fault_prefix = saved;
+        self.fault.prefix = saved;
     }
 
     // -- expression lowering (the eval_vec mirror) ---------------------------
@@ -2522,9 +2510,9 @@ impl<'m> TapeBuilder<'m> {
                     self.vn_put(key, &lv, bx);
                     return Ok(lv);
                 }
-                let lazy_notes = self.lazy_fault_notes;
+                let lazy_notes = self.fault.lazy_notes;
                 let lv = self.lower_op(node, bx)?;
-                if self.lazy_fault_notes == lazy_notes {
+                if self.fault.lazy_notes == lazy_notes {
                     self.vn_put(key, &lv, bx);
                 }
                 Ok(lv)
@@ -2576,7 +2564,7 @@ impl<'m> TapeBuilder<'m> {
         }
         // A recurrence frame symbol is a loop bind of the cell being
         // evaluated, read from the coordinate slot the sweep writes.
-        if let Some(sw) = &self.sweep {
+        if let Some(sw) = &self.rule.sweep {
             if let Some((_, slot)) = sw.binds.iter().find(|(n, _)| n == name) {
                 return Ok(LV::Scalar(*slot));
             }
@@ -2839,7 +2827,7 @@ impl<'m> TapeBuilder<'m> {
         // A payload read inside a conditional branch is the same on every
         // call and cannot fault: it is materialized once, in the CONST
         // section, instead of on each call that takes the branch.
-        let direct = self.in_branch() && self.sweep.is_none() && !self.defer_consts;
+        let direct = self.in_branch() && self.rule.sweep.is_none() && !self.defer_consts;
         let sec = if direct {
             Cadence::Const
         } else {
@@ -2855,8 +2843,8 @@ impl<'m> TapeBuilder<'m> {
             self.known.insert(out, k);
             return Ok(out);
         }
-        let data = tape_index(self.const_data.len(), "array constants")?;
-        self.const_data.push(ConstArrayData {
+        let data = tape_index(self.tables.const_data.len(), "array constants")?;
+        self.tables.const_data.push(ConstArrayData {
             shape: shape.iter().copied().collect(),
             values,
         });
@@ -2866,9 +2854,9 @@ impl<'m> TapeBuilder<'m> {
             self.track_range(&instr);
             self.push_stream(instr, crate::precision::active(), Cadence::Const);
         } else if hoist {
-            let branches = std::mem::take(&mut self.branch_bufs);
+            let branches = std::mem::take(&mut self.rule.branch_bufs);
             self.emit(instr, sec);
-            self.branch_bufs = branches;
+            self.rule.branch_bufs = branches;
         } else {
             self.emit(instr, sec);
         }
@@ -2937,9 +2925,9 @@ impl<'m> TapeBuilder<'m> {
                 let lazy = !bx.syms.is_empty();
                 let arm = |s: &mut Self, e: &Expr, want: bool| {
                     if lazy {
-                        s.lazy_depth += 1;
+                        s.fault.lazy_depth += 1;
                         let v = s.reached_where(&cond, want, |s| s.lower_expr(e, bx));
-                        s.lazy_depth -= 1;
+                        s.fault.lazy_depth -= 1;
                         v
                     } else {
                         s.lower_expr(e, bx)
@@ -3040,9 +3028,9 @@ impl<'m> TapeBuilder<'m> {
             LV::Lit(0.0) => Ok(None),
             LV::Lit(_) => self.lower_expr(body, bx).map(Some),
             keep => {
-                self.lazy_depth += 1;
+                self.fault.lazy_depth += 1;
                 let term = self.reached_where(&keep, true, |s| s.lower_expr(body, bx));
-                self.lazy_depth -= 1;
+                self.fault.lazy_depth -= 1;
                 self.emit_select(keep, term?, excluded).map(Some)
             }
         }
@@ -3059,10 +3047,10 @@ impl<'m> TapeBuilder<'m> {
         if node.args.is_empty() {
             bail_tape!("index: no arguments");
         }
-        if self.sweep.is_some() && bx.shape.is_empty() {
+        if self.rule.sweep.is_some() && bx.shape.is_empty() {
             return self.lower_cell_index(node, bx);
         }
-        if let (Some(sw), Expr::Variable(v)) = (&self.sweep, &node.args[0])
+        if let (Some(sw), Expr::Variable(v)) = (&self.rule.sweep, &node.args[0])
             && *v == sw.var
         {
             bail_tape!(
@@ -3145,19 +3133,24 @@ impl<'m> TapeBuilder<'m> {
             // the attempt bails, everything it emitted (faults included) is
             // undone and the read goes to the routes below as if no attempt
             // had been made.
+            let mut bracket_decline = None;
             if n == 1 && src_origin[0] == 1 && self.tile.is_none() {
                 let txn = self.sub_txn();
                 match self.lower_clamped_bracket_read(node, bx, &arg0, src_shape[0]) {
                     Ok(Some(v)) => return Ok(v),
-                    Ok(None) | Err(_) => self.sub_rollback(txn),
+                    Ok(None) => self.sub_rollback(txn),
+                    Err(e) => {
+                        self.sub_rollback(txn);
+                        bracket_decline = Some(e);
+                    }
                 }
             }
-            if let Some(v) =
-                self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin)?
-            {
-                return Ok(v);
-            }
-            return self.lower_data_gather(node, bx, &arg0);
+            let r = match self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin) {
+                Ok(Some(v)) => Ok(v),
+                Ok(None) => self.lower_data_gather(node, bx, &arg0),
+                Err(e) => Err(e),
+            };
+            return after_decline(bracket_decline, r);
         }
         let mut mapped: SmallVec<[Option<(usize, AxisIndex)>; 4]> =
             (0..out_ndim).map(|_| None).collect();
@@ -3292,7 +3285,7 @@ impl<'m> TapeBuilder<'m> {
             || bx.syms.len() > 31
             || bx.shape.len() != bx.syms.len()
             || bx.tuple != 0
-            || self.sweep.is_some()
+            || self.rule.sweep.is_some()
         {
             return Ok(None);
         }
@@ -3405,7 +3398,7 @@ impl<'m> TapeBuilder<'m> {
         if !(2..=31).contains(&n)
             || bx.shape.len() != n
             || bx.tuple != 0
-            || self.sweep.is_some()
+            || self.rule.sweep.is_some()
             || !matches!(
                 vec_op_code(&node.op),
                 VecOp::Arith(_) | VecOp::Cmp(_) | VecOp::Unary(_) | VecOp::Neg | VecOp::Ifelse
@@ -3485,21 +3478,22 @@ impl<'m> TapeBuilder<'m> {
     /// branch depth, or a fresh one. A node lowered over the sub-box never
     /// answers for the same node over the box, nor the reverse.
     fn enter_sub_frame(&mut self, sub: &LBox) -> (BoxKey, usize) {
-        let key = (BoxKey::of(sub), self.branch_bufs.len());
+        let key = (BoxKey::of(sub), self.rule.branch_bufs.len());
         let frame = self
+            .rule
             .scope_frames
             .last_mut()
             .and_then(|f| f.subs.remove(&key))
             .unwrap_or_default();
-        self.scope_frames.push(frame);
+        self.rule.scope_frames.push(frame);
         key
     }
 
     /// Close the frame [`Self::enter_sub_frame`] opened, keeping it for the
     /// next term moved to the same sub-box.
     fn leave_sub_frame(&mut self, key: (BoxKey, usize)) {
-        let frame = self.scope_frames.pop().expect("sub-box frame open");
-        if let Some(parent) = self.scope_frames.last_mut() {
+        let frame = self.rule.scope_frames.pop().expect("sub-box frame open");
+        if let Some(parent) = self.rule.scope_frames.last_mut() {
             parent.subs.insert(key, frame);
         }
     }
@@ -3508,26 +3502,26 @@ impl<'m> TapeBuilder<'m> {
     /// noted faults (certain and lazy) and run-time-checked gathers.
     fn sub_box_guard(&self) -> (u32, u32, usize) {
         (
-            self.fault_notes,
-            self.lazy_fault_notes,
-            self.data_gathers.len(),
+            self.fault.notes,
+            self.fault.lazy_notes,
+            self.tables.data_gathers.len(),
         )
     }
 
     /// Whether nothing since `guard` can fault: a fault over the sub-box
     /// would be placed by the sub-box's cells, not the full box's.
     fn sub_box_clean(&self, guard: (u32, u32, usize)) -> bool {
-        self.fault_notes == guard.0
-            && self.lazy_fault_notes == guard.1
-            && self.data_gathers[guard.2..]
+        self.fault.notes == guard.0
+            && self.fault.lazy_notes == guard.1
+            && self.tables.data_gathers[guard.2..]
                 .iter()
                 .all(|d| d.order.is_none())
     }
 
     fn sub_box_undo(&mut self, txn: SubTxn, guard: (u32, u32, usize)) {
         self.sub_rollback(txn);
-        self.fault_notes = guard.0;
-        self.lazy_fault_notes = guard.1;
+        self.fault.notes = guard.0;
+        self.fault.lazy_notes = guard.1;
     }
 
     /// [`Self::sub_box_axes`] of `node` over `bx`, through the current
@@ -3728,8 +3722,8 @@ impl<'m> TapeBuilder<'m> {
             let out = self.emit_const_data(&bx.shape, &bx.lo, Arc::new(v), false)?;
             return Ok(Some(LV::Arr(out)));
         }
-        let table = tape_index(self.gather_tables.len(), "gather tables")?;
-        self.gather_tables.push(GatherTable {
+        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
+        self.tables.gather_tables.push(GatherTable {
             src_shape: src_shape.iter().copied().collect(),
             pos,
         });
@@ -3809,7 +3803,7 @@ impl<'m> TapeBuilder<'m> {
         bx: &LBox,
         base: &LV,
     ) -> LResult<Option<LV>> {
-        if bx.shape.len() != 1 || bx.tuple != 0 || self.sweep.is_some() {
+        if bx.shape.len() != 1 || bx.tuple != 0 || self.rule.sweep.is_some() {
             return Ok(None);
         }
         let Some((src_shape, src_origin)) = self.lv_box(base) else {
@@ -3843,8 +3837,8 @@ impl<'m> TapeBuilder<'m> {
             }
             pos.push(flat as u32);
         }
-        let table = tape_index(self.gather_tables.len(), "gather tables")?;
-        self.gather_tables.push(GatherTable {
+        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
+        self.tables.gather_tables.push(GatherTable {
             src_shape: src_shape.iter().copied().collect(),
             pos,
         });
@@ -3933,7 +3927,7 @@ impl<'m> TapeBuilder<'m> {
         let faults = !in_range
             && matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
             if policy.iter().any(|p| matches!(p, BoundaryKind::Error)));
-        let lazy = faults && self.lazy_depth > 0;
+        let lazy = faults && self.fault.lazy_depth > 0;
         let order = if lazy {
             // The oracle reads this gather only at the cells its conditions
             // admit: the rule's `FaultScan` checks those cells, and the
@@ -3971,7 +3965,7 @@ impl<'m> TapeBuilder<'m> {
             }
             None
         } else if faults {
-            if self.sweep.is_some() {
+            if self.rule.sweep.is_some() {
                 bail_tape!(
                     "fault: `E_TREEWALK_CONSTARRAY_OOB` of a computed-subscript gather inside \
                      a recurrence body"
@@ -3992,11 +3986,11 @@ impl<'m> TapeBuilder<'m> {
                 None => (SmallVec::new(), SmallVec::new()),
             };
             let mut tail = tail;
-            tail.push(self.fault_seq);
-            self.fault_seq += 1;
+            tail.push(self.fault.seq);
+            self.fault.seq += 1;
             Some(FaultOrder {
                 rule: self.cur_rule,
-                head: self.fault_prefix.clone(),
+                head: self.fault.prefix.clone(),
                 axes,
                 lo: lo.clone(),
                 tail,
@@ -4005,8 +3999,8 @@ impl<'m> TapeBuilder<'m> {
             None
         };
         let faults = order.is_some();
-        let spec = tape_index(self.data_gathers.len(), "computed-subscript gathers")?;
-        self.data_gathers.push(DataGatherSpec {
+        let spec = tape_index(self.tables.data_gathers.len(), "computed-subscript gathers")?;
+        self.tables.data_gathers.push(DataGatherSpec {
             subs: subs.iter().map(|s| self.op_of(s)).collect(),
             kind,
             src_shape,
@@ -4018,8 +4012,8 @@ impl<'m> TapeBuilder<'m> {
         if faults {
             // No earlier than an earlier rule's run-time faults; within the
             // home section, where the rule's readers of `out` run.
-            sec = sec.max(self.fault_floor.min(self.home));
-            self.rule_fault_sec = self.rule_fault_sec.max(sec);
+            sec = sec.max(self.fault.floor.min(self.home));
+            self.fault.rule_sec = self.fault.rule_sec.max(sec);
         }
         let out = self.new_slot(&shape, &lo, shape.is_empty(), sec);
         let instr = Instr::DataGather {
@@ -4145,12 +4139,13 @@ impl<'m> TapeBuilder<'m> {
         let base = &node.args[0];
         let n = node.args.len() - 1;
         let sweep = self
+            .rule
             .sweep
             .as_ref()
             .map(|sw| (sw.spec, sw.out, sw.var.clone()));
         let (src, src_shape, kind) = match (&sweep, base) {
             (Some((spec, out, var)), Expr::Variable(v)) if v == var => {
-                let shape = self.sweeps[*spec as usize].shape.clone();
+                let shape = self.tables.sweeps[*spec as usize].shape.clone();
                 (
                     LV::Arr(*out),
                     shape,
@@ -4215,8 +4210,8 @@ impl<'m> TapeBuilder<'m> {
         }
         let sec = self.placement(want);
         let out = self.new_slot(&[], &[], true, sec);
-        let spec = tape_index(self.scalar_reads.len(), "run-time-subscript reads")?;
-        self.scalar_reads.push(ScalarReadSpec { subs, kind });
+        let spec = tape_index(self.tables.scalar_reads.len(), "run-time-subscript reads")?;
+        self.tables.scalar_reads.push(ScalarReadSpec { subs, kind });
         let instr = Instr::ScalarRead {
             src: self.src_of(&src),
             spec,
@@ -4271,8 +4266,8 @@ impl<'m> TapeBuilder<'m> {
                     .expect("mapped source axis is in mapped_src")
             })
             .collect();
-        let plan_ix = self.plans.len() as u32;
-        self.plans.push(GatherPlan {
+        let plan_ix = self.tables.plans.len() as u32;
+        self.tables.plans.push(GatherPlan {
             fixed_desc,
             perm,
             mapped,
@@ -4420,7 +4415,7 @@ impl<'m> TapeBuilder<'m> {
             let cell = msg.0;
             // Which cells fault, for a read the oracle evaluates at only some
             // of them: per source dim, its subscript at each cell.
-            let what = (self.in_branch() || self.lazy_depth > 0).then(|| {
+            let what = (self.in_branch() || self.fault.lazy_depth > 0).then(|| {
                 let dims = (0..src_shape.len())
                     .map(|d| {
                         let sub = match fixed_raw.iter().find(|(fd, _)| *fd == d) {
@@ -4555,8 +4550,8 @@ impl<'m> TapeBuilder<'m> {
         }
         let mut spec_parts: Vec<(Operand, u32)> = Vec::with_capacity(parts.len() + 1);
         if any_oob {
-            let region = tape_index(self.regions.len(), "makearray regions")?;
-            self.regions.push(RegionSpec {
+            let region = tape_index(self.tables.regions.len(), "makearray regions")?;
+            self.tables.regions.push(RegionSpec {
                 dest_lo: DimU::from_elem(0, out_ndim),
                 shape: bx.shape.clone(),
             });
@@ -4565,15 +4560,17 @@ impl<'m> TapeBuilder<'m> {
         let mut want = Cadence::Const;
         for (v, dest, shape) in &parts {
             want = want.max(self.lv_cadence(v));
-            let region = tape_index(self.regions.len(), "makearray regions")?;
-            self.regions.push(RegionSpec {
+            let region = tape_index(self.tables.regions.len(), "makearray regions")?;
+            self.tables.regions.push(RegionSpec {
                 dest_lo: dest.clone(),
                 shape: shape.clone(),
             });
             spec_parts.push((self.op_of(v), region));
         }
-        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
-        self.assemblies.push(AssembleSpec { parts: spec_parts });
+        let table = tape_index(self.tables.assemblies.len(), "makearray assemblies")?;
+        self.tables
+            .assemblies
+            .push(AssembleSpec { parts: spec_parts });
         let sec = self.placement(want);
         let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
         self.emit(Instr::Assemble { table, out }, sec);
@@ -4662,8 +4659,8 @@ impl<'m> TapeBuilder<'m> {
         }
         let cad = self.lv_cadence(base).max(self.lv_cadence(&sub));
         let sec = self.placement(cad);
-        let spec = self.index_gathers.len() as u32;
-        self.index_gathers.push(IndexGatherSpec {
+        let spec = self.tables.index_gathers.len() as u32;
+        self.tables.index_gathers.push(IndexGatherSpec {
             axes,
             src_shape,
             shape: bx.shape.clone(),
@@ -4856,7 +4853,7 @@ impl<'m> TapeBuilder<'m> {
     /// rules were rewritten for it, with every makearray's regions clipped
     /// to what the tile reads in the makearray's own coordinates.
     fn per_cell_makearray_box(&self, bx: &LBox) -> bool {
-        bx.tuple == 0 && !bx.shape.is_empty() && self.sweep.is_none() && self.tile.is_none()
+        bx.tuple == 0 && !bx.shape.is_empty() && self.rule.sweep.is_none() && self.tile.is_none()
     }
 
     /// How each subscript of `index(base, s…)` reads the box: a unit shift
@@ -4921,8 +4918,8 @@ impl<'m> TapeBuilder<'m> {
             }
             let s_shape: DimU = (0..n).map(|a| (s_hi[a] - s_lo[a] + 1) as usize).collect();
             let v = self.lower_region_value_on(value, bx, &s_lo, &s_shape)?;
-            let region_ix = tape_index(self.regions.len(), "makearray regions")?;
-            self.regions.push(RegionSpec {
+            let region_ix = tape_index(self.tables.regions.len(), "makearray regions")?;
+            self.tables.regions.push(RegionSpec {
                 dest_lo: (0..n).map(|a| (s_lo[a] - bx.lo[a]) as usize).collect(),
                 shape: s_shape,
             });
@@ -4937,8 +4934,8 @@ impl<'m> TapeBuilder<'m> {
             .max()
             .unwrap_or(Cadence::Const);
         let sec = self.placement(want);
-        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
-        self.assemblies.push(AssembleSpec {
+        let table = tape_index(self.tables.assemblies.len(), "makearray assemblies")?;
+        self.tables.assemblies.push(AssembleSpec {
             parts: parts.iter().map(|(v, r)| (self.op_of(v), *r)).collect(),
         });
         let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
@@ -5326,9 +5323,9 @@ impl<'m> TapeBuilder<'m> {
                     None => true,
                     Some((s, _)) => s.is_empty() || region_value_axes(&s, &r_shape).is_some(),
                 };
-                let fault = (self.fault_first.take(), self.fault_seq);
+                let fault = (self.fault.first.take(), self.fault.seq);
                 self.sub_rollback(txn);
-                (self.fault_first, self.fault_seq) = fault;
+                (self.fault.first, self.fault.seq) = fault;
                 if !fits {
                     bail_tape!("makearray: an empty region's array value does not fit it");
                 }
@@ -5370,8 +5367,8 @@ impl<'m> TapeBuilder<'m> {
                     None => bail_tape!("makearray: region value box does not match the region"),
                 },
             };
-            let region_ix = tape_index(self.regions.len(), "makearray regions")?;
-            self.regions.push(RegionSpec {
+            let region_ix = tape_index(self.tables.regions.len(), "makearray regions")?;
+            self.tables.regions.push(RegionSpec {
                 dest_lo: (0..ndim).map(|d| (r_lo[d] - lo_bb[d]) as usize).collect(),
                 shape: r_shape,
             });
@@ -5382,7 +5379,7 @@ impl<'m> TapeBuilder<'m> {
             let mut values = ndarray::ArrayD::<f64>::zeros(ndarray::IxDyn(&bb_shape));
             for (v, region_ix) in &parts {
                 let LV::Lit(x) = v else { unreachable!() };
-                let spec = &self.regions[*region_ix as usize];
+                let spec = &self.tables.regions[*region_ix as usize];
                 let mut view = values.view_mut();
                 for d in 0..ndim {
                     view.slice_axis_inplace(
@@ -5403,11 +5400,11 @@ impl<'m> TapeBuilder<'m> {
             .max()
             .unwrap_or(Cadence::Const);
         let sec = self.placement(want);
-        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
+        let table = tape_index(self.tables.assemblies.len(), "makearray assemblies")?;
         let spec = AssembleSpec {
             parts: parts.iter().map(|(v, r)| (self.op_of(v), *r)).collect(),
         };
-        self.assemblies.push(spec);
+        self.tables.assemblies.push(spec);
         let out = self.new_slot(&bb_shape, lo_bb, false, sec);
         self.emit(Instr::Assemble { table, out }, sec);
         Ok(LV::Arr(out))
@@ -5426,7 +5423,11 @@ impl<'m> TapeBuilder<'m> {
         };
         // A rank-0 aggregate evaluated at one recurrence cell — the cell body
         // of a recurrence with a contraction is exactly this.
-        if self.sweep.is_some() && spec.ranges.is_empty() && bx.shape.is_empty() && bx.tuple == 0 {
+        if self.rule.sweep.is_some()
+            && spec.ranges.is_empty()
+            && bx.shape.is_empty()
+            && bx.tuple == 0
+        {
             if spec.join.is_some() || node.key.is_some() || node.distinct == Some(true) {
                 bail_tape!("aggregate: a gated or keyed contraction inside a recurrence body");
             }
@@ -5479,6 +5480,7 @@ impl<'m> TapeBuilder<'m> {
     ) -> LResult<LV> {
         if bx.tuple != 0 {
             let frame_names: Vec<String> = self
+                .rule
                 .tuple_frames
                 .iter()
                 .rev()
@@ -5567,10 +5569,10 @@ impl<'m> TapeBuilder<'m> {
         };
         // A fault here would sort by the promoted box's cells, which do not
         // place it among the enclosing box's own faults: refused instead.
-        let notes = self.fault_notes;
+        let notes = self.fault.notes;
         self.lower_promoted(plan, combine_op, identity, false, |s, ebx| {
             let term = s.lower_filtered(spec.body, spec.filter, ebx, LV::Lit(skip))?;
-            if s.fault_notes != notes {
+            if s.fault.notes != notes {
                 bail_tape!(
                     "fault: a fail-closed fault inside a rank-0 output that reads its enclosing box"
                 );
@@ -5587,7 +5589,7 @@ impl<'m> TapeBuilder<'m> {
         let LV::Arr(slot) = lv else {
             return None;
         };
-        let defs = self.branch_bufs.iter().flatten().chain(
+        let defs = self.rule.branch_bufs.iter().flatten().chain(
             self.streams
                 .iter()
                 .filter_map(|st| st.last().filter(|c| c.rule == self.cur_rule))
@@ -5605,7 +5607,7 @@ impl<'m> TapeBuilder<'m> {
             if out != slot {
                 continue;
             }
-            let p = &self.plans[*plan as usize];
+            let p = &self.tables.plans[*plan as usize];
             let whole = p.fixed_desc.is_empty()
                 && p.mapped.iter().all(|&m| m)
                 && p.perm.iter().enumerate().all(|(i, &d)| i == d)
@@ -5830,33 +5832,37 @@ impl<'m> TapeBuilder<'m> {
         // contracted box, each admitted term scattered into its cell
         // (esm-spec §4.3.1, [`scatter`]). A body the tuple-list form cannot
         // lower keeps the dense lowering below.
+        let mut scatter_decline = None;
         if !contract_names.is_empty() && filter.is_some() {
-            let txn = self.sub_txn();
-            match self.lower_equality_scatter(c, &lo, &shape) {
+            match self.attempt(|b| b.lower_equality_scatter(c, &lo, &shape)) {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
-                Err(_) => self.sub_rollback(txn),
+                Err(e) => scatter_decline = Some(e),
             }
         }
-        self.push_scope();
-        let v = if contract_names.is_empty() {
-            let bx = LBox::new(idx_names, lo.clone(), shape.clone());
-            let identity = LV::Lit(reduce.identity());
-            let r = self
-                .lower_filtered(body, filter, &bx, identity.clone())
-                .map(|v| {
-                    v.unwrap_or_else(|| self.emit_fill(&identity, &shape, &lo, Cadence::Const))
-                });
-            self.pop_scope();
-            r?
-        } else {
-            let r = self.lower_contracted(c, &lo, &shape);
-            self.pop_scope();
-            r?
+        let dense = |this: &mut Self| -> LResult<LV> {
+            this.push_scope();
+            let v = if contract_names.is_empty() {
+                let bx = LBox::new(idx_names, lo.clone(), shape.clone());
+                let identity = LV::Lit(reduce.identity());
+                let r = this
+                    .lower_filtered(body, filter, &bx, identity.clone())
+                    .map(|v| {
+                        v.unwrap_or_else(|| this.emit_fill(&identity, &shape, &lo, Cadence::Const))
+                    });
+                this.pop_scope();
+                r?
+            } else {
+                let r = this.lower_contracted(c, &lo, &shape);
+                this.pop_scope();
+                r?
+            };
+            // Mirror of the top-level bare-View bail: the oracle scalarizes a bare
+            // whole-array body, so the overlay refuses it — and so do we.
+            this.fit_term(v, &shape, &lo, "faq: body", "the output box")
         };
-        // Mirror of the top-level bare-View bail: the oracle scalarizes a bare
-        // whole-array body, so the overlay refuses it — and so do we.
-        self.fit_term(v, &shape, &lo, "faq: body", "the output box")
+        let r = dense(self);
+        after_decline(scatter_decline, r)
     }
 
     /// A static contraction: the body over the output box EXTENDED by the
@@ -5913,12 +5919,11 @@ impl<'m> TapeBuilder<'m> {
             lo: &clo[..nc],
             hi: &chi[..nc],
         };
-        let txn = self.sub_txn();
-        match self.lower_contracted_box(c, lo, shape, &window, combine_op) {
+        match self.attempt(|b| b.lower_contracted_box(c, lo, shape, &window, combine_op)) {
             Ok(v) => Ok(v),
-            Err(_) => {
-                self.sub_rollback(txn);
-                self.lower_contracted_unrolled(c, lo, shape, &window, combine_op)
+            Err(first) => {
+                let r = self.lower_contracted_unrolled(c, lo, shape, &window, combine_op);
+                after_decline(Some(first), r)
             }
         }
     }
@@ -6088,7 +6093,7 @@ impl<'m> TapeBuilder<'m> {
         body: &Expr,
         axis: usize,
     ) -> LResult<ObsVal> {
-        if self.sweep.is_some() {
+        if self.rule.sweep.is_some() {
             bail_tape!("observed: recurrence nested in another recurrence body");
         }
         // The interpreter publishes the frame `[lo, hi]` while every other
@@ -6108,8 +6113,8 @@ impl<'m> TapeBuilder<'m> {
         let coords: SmallVec<[SlotId; 4]> = (0..shape.len())
             .map(|_| self.new_slot(&[], &[], true, home))
             .collect();
-        let spec = tape_index(self.sweeps.len(), "recurrence sweeps")?;
-        self.sweeps.push(SweepSpec {
+        let spec = tape_index(self.tables.sweeps.len(), "recurrence sweeps")?;
+        self.tables.sweeps.push(SweepSpec {
             var: var.to_string(),
             out,
             coords: coords.clone(),
@@ -6122,7 +6127,7 @@ impl<'m> TapeBuilder<'m> {
         let mut body_slots = rustc_hash::FxHashSet::default();
         body_slots.insert(out);
         body_slots.extend(coords.iter().copied());
-        self.sweep = Some(SweepCtx {
+        self.rule.sweep = Some(SweepCtx {
             spec,
             var: var.to_string(),
             out,
@@ -6138,7 +6143,7 @@ impl<'m> TapeBuilder<'m> {
         self.push_scope();
         let v = self.lower_expr(body, &cell);
         self.pop_scope();
-        let sw = self.sweep.take().expect("recurrence body open");
+        let sw = self.rule.sweep.take().expect("recurrence body open");
         let v = v?;
         if self.lv_box(&v).is_some() {
             // The oracle reads an array-valued cell as `NaN`.
@@ -6146,7 +6151,7 @@ impl<'m> TapeBuilder<'m> {
         }
         let result = self.op_of(&v);
         let body_len = tape_index(sw.body.len(), "instructions in one recurrence body")?;
-        let entry = &mut self.sweeps[spec as usize];
+        let entry = &mut self.tables.sweeps[spec as usize];
         entry.body_len = body_len;
         entry.result = result;
         self.push_stream(Instr::Sweep { spec }, crate::precision::active(), home);
@@ -6295,20 +6300,20 @@ impl<'m> TapeBuilder<'m> {
             Expr::Integer(n) => Ok(LV::Lit(crate::precision::round(*n as f64))),
             Expr::Variable(name) => self.resolve_wholesale_var(name),
             Expr::Operator(node) => {
-                if !self.scope_frames.last().is_some_and(|f| f.wholesale) {
+                if !self.rule.scope_frames.last().is_some_and(|f| f.wholesale) {
                     return self.lower_wholesale_op(node);
                 }
                 let key = VnKey::Node(Arc::as_ptr(node) as usize);
-                if let Some(hit) = self.scope_frames.last().and_then(|f| f.map.get(&key)) {
+                if let Some(hit) = self.rule.scope_frames.last().and_then(|f| f.map.get(&key)) {
                     self.vn_scope_hits += 1;
                     return Ok(hit.clone());
                 }
                 // A node whose lowering notes a fault is not shared: where
                 // the fault sorts depends on the occurrence.
-                let notes = self.fault_notes;
+                let notes = self.fault.notes;
                 let lv = self.lower_wholesale_op(node)?;
-                if self.fault_notes == notes
-                    && self.scope_frames.last().is_some_and(|f| f.wholesale)
+                if self.fault.notes == notes
+                    && self.rule.scope_frames.last().is_some_and(|f| f.wholesale)
                 {
                     self.frame_put(key, &lv);
                 }
@@ -6792,15 +6797,17 @@ impl<'m> TapeBuilder<'m> {
             dest_lo[ax] = at;
             at += sh[ax];
             want = want.max(self.lv_cadence(v));
-            let region = tape_index(self.regions.len(), "makearray regions")?;
-            self.regions.push(RegionSpec {
+            let region = tape_index(self.tables.regions.len(), "makearray regions")?;
+            self.tables.regions.push(RegionSpec {
                 dest_lo,
                 shape: sh.clone(),
             });
             spec_parts.push((self.op_of(v), region));
         }
-        let table = tape_index(self.assemblies.len(), "makearray assemblies")?;
-        self.assemblies.push(AssembleSpec { parts: spec_parts });
+        let table = tape_index(self.tables.assemblies.len(), "makearray assemblies")?;
+        self.tables
+            .assemblies
+            .push(AssembleSpec { parts: spec_parts });
         let sec = self.placement(want);
         let ones = DimI::from_elem(1, nd);
         let out = self.new_slot(&out_shape, &ones, false, sec);
@@ -7050,9 +7057,9 @@ impl<'m> TapeBuilder<'m> {
             let v = match &keep {
                 None => s.lower_expr(spec.body, bx),
                 Some(fv) => {
-                    s.lazy_depth += 1;
+                    s.fault.lazy_depth += 1;
                     let v = s.reached_where(fv, true, |s| s.lower_expr(spec.body, bx));
-                    s.lazy_depth -= 1;
+                    s.fault.lazy_depth -= 1;
                     v
                 }
             };
@@ -7107,13 +7114,14 @@ impl<'m> TapeBuilder<'m> {
         nested: bool,
         query: Option<LV>,
     ) -> Option<LV> {
-        if !self.count_fold || bx.tuple != 0 || self.sweep.is_some() {
+        if !self.count_fold || bx.tuple != 0 || self.rule.sweep.is_some() {
             return None;
         }
         let ic = detect_indicator_count(spec)?;
         let txn = self.sub_txn();
         match self.lower_indicator_count(&ic, bx, nested, query) {
             Ok(Some(v)) => Some(v),
+            // The general reduction reports what it refuses itself.
             Ok(None) | Err(_) => {
                 self.sub_rollback(txn);
                 None
@@ -7130,16 +7138,16 @@ impl<'m> TapeBuilder<'m> {
     /// frame, or when the query notes a fault or is not a scalar.
     fn wholesale_count_query(&mut self, spec: &ArrayOpSpec) -> Option<LV> {
         if !self.count_fold
-            || self.sweep.is_some()
-            || !self.scope_frames.last().is_some_and(|f| f.wholesale)
+            || self.rule.sweep.is_some()
+            || !self.rule.scope_frames.last().is_some_and(|f| f.wholesale)
         {
             return None;
         }
         let ic = detect_indicator_count(spec)?;
         let txn = self.sub_txn();
-        let notes = self.fault_notes;
+        let notes = self.fault.notes;
         match self.lower_wholesale(ic.x) {
-            Ok(x) if self.fault_notes == notes && self.lv_box(&x).is_none() => Some(x),
+            Ok(x) if self.fault.notes == notes && self.lv_box(&x).is_none() => Some(x),
             _ => {
                 self.sub_rollback(txn);
                 None
@@ -7205,12 +7213,12 @@ impl<'m> TapeBuilder<'m> {
             return Ok(None);
         };
         // The query, as the oracle evaluates it at each cell.
-        let notes = self.fault_notes;
+        let notes = self.fault.notes;
         let x = match query {
             Some(x) => x,
             None => self.lower_expr(ic.x, bx)?,
         };
-        if nested && self.fault_notes != notes {
+        if nested && self.fault.notes != notes {
             return Ok(None);
         }
         let (shape, origin, scalar) = if nested {
@@ -7504,10 +7512,10 @@ impl<'m> TapeBuilder<'m> {
                 unreachable!("scan accumulator is always an array");
             };
             let acc_slot = *acc_slot;
-            let region_ix = self.regions.len() as u32;
+            let region_ix = self.tables.regions.len() as u32;
             let mut dest_lo: DimU = DimU::from_elem(0usize, full_shape.len());
             dest_lo[scan.axis] = (i - slo) as usize;
-            self.regions.push(RegionSpec {
+            self.tables.regions.push(RegionSpec {
                 dest_lo,
                 shape: step_shape.clone(),
             });
@@ -7560,9 +7568,9 @@ impl<'m> TapeBuilder<'m> {
         F: FnMut(&mut Self, bool) -> LResult<LV>,
     {
         let mark = self.push_branch();
-        self.reach.push((cond.clone(), true));
+        self.fault.reach.push((cond.clone(), true));
         let tv = arm(self, true);
-        self.reach.pop();
+        self.fault.reach.pop();
         let tv = match tv {
             Ok(v) => v,
             Err(e) => {
@@ -7572,9 +7580,9 @@ impl<'m> TapeBuilder<'m> {
         };
         let (mut tbuf, tsec) = self.pop_branch(mark);
         let mark = self.push_branch();
-        self.reach.push((cond.clone(), false));
+        self.fault.reach.push((cond.clone(), false));
         let fv = arm(self, false);
-        self.reach.pop();
+        self.fault.reach.pop();
         let fv = match fv {
             Ok(v) => v,
             Err(e) => {
@@ -7605,7 +7613,7 @@ impl<'m> TapeBuilder<'m> {
         // for less than the jump and the two copies into a join cost.
         const IF_CONVERT_MAX: usize = 2;
         if scalar
-            && self.sweep.is_none()
+            && self.rule.sweep.is_none()
             && tbuf.len() + fbuf.len() <= IF_CONVERT_MAX
             && tbuf
                 .iter()
@@ -7640,7 +7648,7 @@ impl<'m> TapeBuilder<'m> {
         // and cannot fault (a block of build-time data then runs once, not on
         // every call); otherwise at the rule's home, as before. Every slot it
         // defines takes that section.
-        let sec = if self.sweep.is_none() {
+        let sec = if self.rule.sweep.is_none() {
             let want = tsec
                 .max(fsec)
                 .max(self.lv_cadence(&cond))
@@ -7654,17 +7662,17 @@ impl<'m> TapeBuilder<'m> {
         } else {
             self.home
         };
-        if self.sweep.is_none() {
+        if self.rule.sweep.is_none() {
             let mut defs: SmallVec<[SlotId; 8]> = SmallVec::new();
             let tables = self.slot_tables();
             for (i, _) in tbuf.iter().chain(fbuf.iter()) {
                 i.for_each_def(&tables, |s| defs.push(s));
             }
             for s in defs {
-                self.slots[s as usize].cadence = sec;
+                self.tables.slots[s as usize].cadence = sec;
             }
         }
-        if self.sweep.is_some() {
+        if self.rule.sweep.is_some() {
             // Inside a recurrence body the block moves as one: its skip counts
             // must stay exact. It runs per cell when anything in it depends on
             // the cell or it sits in an enclosing branch; otherwise once,
@@ -7936,18 +7944,18 @@ impl<'m> TapeBuilder<'m> {
         self.rules.push(info);
         self.declined.push(None);
         self.rule_home_chunk.push(None);
-        self.scope_frames.clear();
-        self.branch_bufs.clear();
-        self.branch_secs.clear();
+        self.rule.scope_frames.clear();
+        self.rule.branch_bufs.clear();
+        self.rule.branch_secs.clear();
         self.hoist_journal.clear();
         self.sub_box_memo.clear();
-        self.fault_first = None;
-        self.fault_seq = 0;
-        self.fault_prefix.clear();
-        self.lazy_depth = 0;
-        self.reach.clear();
-        self.lazy_faults.clear();
-        self.rule_fault_sec = Cadence::Const;
+        self.fault.first = None;
+        self.fault.seq = 0;
+        self.fault.prefix.clear();
+        self.fault.lazy_depth = 0;
+        self.fault.reach.clear();
+        self.fault.lazy.clear();
+        self.fault.rule_sec = Cadence::Const;
     }
 
     /// Emit the lowered rule's first fault (if any) as one [`Instr::Fault`],
@@ -7955,7 +7963,7 @@ impl<'m> TapeBuilder<'m> {
     /// the CONST section runs first, so it latches before anything else of
     /// this rule — which is where the oracle, walking the rule cell by cell,
     /// latches its first fault — and after every earlier rule's. When an
-    /// earlier rule latches in a later section ([`Self::fault_floor`]), it
+    /// earlier rule latches in a later section ([`FaultTrack::floor`]), it
     /// goes at the end of the rule in that section instead.
     ///
     /// A rule with faults at lazily evaluated positions that the first
@@ -7964,15 +7972,15 @@ impl<'m> TapeBuilder<'m> {
     /// conditions read, at the end of the rule in the latest section any of
     /// them is computed in (or the floor, if later).
     fn flush_rule_fault(&mut self) -> LResult<()> {
-        let floor = self.fault_floor;
+        let floor = self.fault.floor;
         self.flush_rule_fault_at(floor)?;
-        self.fault_floor = floor.max(self.rule_fault_sec);
+        self.fault.floor = floor.max(self.fault.rule_sec);
         Ok(())
     }
 
     fn flush_rule_fault_at(&mut self, floor: Cadence) -> LResult<()> {
-        let lazy = std::mem::take(&mut self.lazy_faults);
-        let first = self.fault_first.take();
+        let lazy = std::mem::take(&mut self.fault.lazy);
+        let first = self.fault.first.take();
         let mut cands: Vec<FaultCand> = lazy
             .into_iter()
             .filter(|(k, _)| first.as_ref().is_none_or(|(fk, _)| k < fk))
@@ -7980,9 +7988,9 @@ impl<'m> TapeBuilder<'m> {
             .collect();
         if !cands.is_empty() {
             if let Some((key, msg)) = first {
-                let m = tape_index(self.faults.len(), "faults")?;
-                self.faults.push(msg);
-                self.fault_order.push((self.cur_rule, key.clone()));
+                let m = tape_index(self.tables.faults.len(), "faults")?;
+                self.tables.faults.push(msg);
+                self.tables.fault_order.push((self.cur_rule, key.clone()));
                 let (seq, prefix) = key
                     .split_last()
                     .expect("a fault key ends with its sequence");
@@ -8003,28 +8011,28 @@ impl<'m> TapeBuilder<'m> {
                 for pc in &c.path {
                     let cad = match pc.op {
                         Operand::Lit(_) | Operand::Param(_) => Cadence::Const,
-                        Operand::Slot(sl) => self.slots[sl as usize].cadence,
+                        Operand::Slot(sl) => self.tables.slots[sl as usize].cadence,
                         _ => Cadence::Continuous,
                     };
                     sec = sec.max(cad);
                 }
             }
-            let spec = tape_index(self.fault_scans.len(), "fault scans")?;
-            self.fault_scans.push(FaultScanSpec {
+            let spec = tape_index(self.tables.fault_scans.len(), "fault scans")?;
+            self.tables.fault_scans.push(FaultScanSpec {
                 rule: self.cur_rule,
                 cands,
             });
             let sec = sec.min(self.home).max(floor);
             self.push_stream(Instr::FaultScan { spec }, crate::precision::active(), sec);
-            self.rule_fault_sec = self.rule_fault_sec.max(sec);
+            self.fault.rule_sec = self.fault.rule_sec.max(sec);
             return Ok(());
         }
         let Some((key, msg)) = first else {
             return Ok(());
         };
-        let fault = tape_index(self.faults.len(), "faults")?;
-        self.faults.push(msg);
-        self.fault_order.push((self.cur_rule, key));
+        let fault = tape_index(self.tables.faults.len(), "faults")?;
+        self.tables.faults.push(msg);
+        self.tables.fault_order.push((self.cur_rule, key));
         if floor > Cadence::Const {
             self.push_stream(Instr::Fault { fault }, crate::precision::active(), floor);
             return Ok(());
@@ -8049,26 +8057,13 @@ impl<'m> TapeBuilder<'m> {
                 self.rule_home_chunk[self.cur_rule as usize] = Some(idx);
             }
         }
-        debug_assert!(self.scope_frames.is_empty());
-        debug_assert!(self.branch_bufs.is_empty());
+        debug_assert!(self.rule.scope_frames.is_empty());
+        debug_assert!(self.rule.branch_bufs.is_empty());
     }
 
     fn txn(&self) -> RuleTxn {
         RuleTxn {
-            slots: self.slots.len(),
-            plans: self.plans.len(),
-            regions: self.regions.len(),
-            assemblies: self.assemblies.len(),
-            const_data: self.const_data.len(),
-            index_gathers: self.index_gathers.len(),
-            gather_tables: self.gather_tables.len(),
-            seg_tables: self.seg_tables.len(),
-            faults: self.faults.len(),
-            fault_scans: self.fault_scans.len(),
-            sweeps: self.sweeps.len(),
-            scalar_reads: self.scalar_reads.len(),
-            data_gathers: self.data_gathers.len(),
-            dy_writes: self.dy_writes.len(),
+            tables: self.tables.mark(),
             stream_lens: [
                 self.streams[0].len(),
                 self.streams[1].len(),
@@ -8082,28 +8077,12 @@ impl<'m> TapeBuilder<'m> {
 
     /// Roll back everything the current rule's failed lowering emitted.
     fn rollback(&mut self, txn: RuleTxn) {
-        self.slots.truncate(txn.slots);
-        self.plans.truncate(txn.plans);
-        self.regions.truncate(txn.regions);
-        self.assemblies.truncate(txn.assemblies);
-        self.const_data.truncate(txn.const_data);
-        self.index_gathers.truncate(txn.index_gathers);
-        self.gather_tables.truncate(txn.gather_tables);
-        self.seg_tables.truncate(txn.seg_tables);
-        let n_slots = self.slots.len() as SlotId;
+        self.tables.truncate_to(txn.tables);
+        let n_slots = self.tables.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
-        self.tuple_frames.clear();
-        self.faults.truncate(txn.faults);
-        self.fault_order.truncate(txn.faults);
-        self.fault_scans.truncate(txn.fault_scans);
-        self.sweeps.truncate(txn.sweeps);
-        self.scalar_reads.truncate(txn.scalar_reads);
-        self.data_gathers.truncate(txn.data_gathers);
-        self.sweep = None;
-        self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
             let stream = &mut self.streams[s];
             stream.truncate(txn.stream_lens[s]);
@@ -8117,15 +8096,8 @@ impl<'m> TapeBuilder<'m> {
         }
         self.rollback_forcing_loads(txn.forcing_journal);
         self.tuples_held = txn.tuples_held;
-        self.scope_frames.clear();
-        self.branch_bufs.clear();
-        self.branch_secs.clear();
-        self.fault_first = None;
-        self.fault_prefix.clear();
-        self.lazy_depth = 0;
-        self.reach.clear();
-        self.lazy_faults.clear();
-        self.rule_fault_sec = Cadence::Const;
+        self.rule = RuleState::default();
+        self.fault.reset_rule();
     }
 
     /// Forget the forcing loads recorded since `mark`: their instructions were
@@ -8143,50 +8115,45 @@ impl<'m> TapeBuilder<'m> {
             (st.len(), st.last().map_or(0, |c| c.instrs.len()))
         };
         SubTxn {
-            slots: self.slots.len(),
-            plans: self.plans.len(),
-            regions: self.regions.len(),
-            assemblies: self.assemblies.len(),
-            const_data: self.const_data.len(),
-            index_gathers: self.index_gathers.len(),
-            gather_tables: self.gather_tables.len(),
-            seg_tables: self.seg_tables.len(),
+            tables: self.tables.mark(),
             streams: [stream(0), stream(1), stream(2)],
-            branch_len: self.branch_bufs.last().map(Vec::len),
-            sweep_body: self.sweep.as_ref().map(|sw| sw.body.len()),
-            scalar_reads: self.scalar_reads.len(),
-            data_gathers: self.data_gathers.len(),
+            branch_len: self.rule.branch_bufs.last().map(Vec::len),
+            sweep_body: self.rule.sweep.as_ref().map(|sw| sw.body.len()),
             hoist_journal: self.hoist_journal.len(),
             forcing_journal: self.forcing_journal.len(),
-            fault_first: self.fault_first.clone(),
-            fault_seq: self.fault_seq,
-            faults: self.faults.len(),
-            lazy_faults: self.lazy_faults.len(),
+            fault_first: self.fault.first.clone(),
+            fault_seq: self.fault.seq,
+            lazy_faults: self.fault.lazy.len(),
             tuples_held: self.tuples_held,
         }
     }
 
+    /// Run `f` as a trial lowering: when it declines, everything it emitted
+    /// is undone and its decline handed back, for the caller to try another
+    /// form (and to weigh the decline against that form's, [`after_decline`]).
+    fn attempt<T>(&mut self, f: impl FnOnce(&mut Self) -> LResult<T>) -> LResult<T> {
+        let txn = self.sub_txn();
+        let r = f(self);
+        if r.is_err() {
+            self.sub_rollback(txn);
+        }
+        r
+    }
+
     /// Undo everything emitted since `txn` was taken, within the current rule.
     fn sub_rollback(&mut self, txn: SubTxn) {
-        self.slots.truncate(txn.slots);
-        self.plans.truncate(txn.plans);
-        self.regions.truncate(txn.regions);
-        self.assemblies.truncate(txn.assemblies);
-        self.const_data.truncate(txn.const_data);
-        self.index_gathers.truncate(txn.index_gathers);
-        self.gather_tables.truncate(txn.gather_tables);
-        self.seg_tables.truncate(txn.seg_tables);
-        let n_slots = self.slots.len() as SlotId;
+        self.tables.truncate_to(txn.tables);
+        let n_slots = self.tables.slots.len() as SlotId;
         self.known.retain(|s, _| *s < n_slots);
         // A rolled-back slot's id is handed out again: its bounds go with it.
         self.ranges.retain(|s, _| *s < n_slots);
         self.range_defs.retain(|s| *s < n_slots);
         // The attempt's value numbers in the frame it ran in: one naming a
         // rolled-back slot goes (a value it shadowed is simply recomputed).
-        if let Some(frame) = self.scope_frames.last_mut() {
+        if let Some(frame) = self.rule.scope_frames.last_mut() {
             frame.retain_live(n_slots);
         }
-        for frame in &mut self.tuple_frames {
+        for frame in &mut self.rule.tuple_frames {
             frame.retain_live(n_slots);
         }
         for (s, &(n_chunks, last_len)) in txn.streams.iter().enumerate() {
@@ -8196,12 +8163,10 @@ impl<'m> TapeBuilder<'m> {
                 stream[n_chunks - 1].instrs.truncate(last_len);
             }
         }
-        if let (Some(buf), Some(n)) = (self.branch_bufs.last_mut(), txn.branch_len) {
+        if let (Some(buf), Some(n)) = (self.rule.branch_bufs.last_mut(), txn.branch_len) {
             buf.truncate(n);
         }
-        self.scalar_reads.truncate(txn.scalar_reads);
-        self.data_gathers.truncate(txn.data_gathers);
-        if let (Some(sw), Some(n)) = (self.sweep.as_mut(), txn.sweep_body) {
+        if let (Some(sw), Some(n)) = (self.rule.sweep.as_mut(), txn.sweep_body) {
             sw.body.truncate(n);
             sw.body_slots.retain(|s| *s < n_slots);
         }
@@ -8210,11 +8175,9 @@ impl<'m> TapeBuilder<'m> {
             self.hoist.remove(&key);
         }
         self.rollback_forcing_loads(txn.forcing_journal);
-        self.fault_first = txn.fault_first;
-        self.fault_seq = txn.fault_seq;
-        self.faults.truncate(txn.faults);
-        self.fault_order.truncate(txn.faults);
-        self.lazy_faults.truncate(txn.lazy_faults);
+        self.fault.first = txn.fault_first;
+        self.fault.seq = txn.fault_seq;
+        self.fault.lazy.truncate(txn.lazy_faults);
         self.tuples_held = txn.tuples_held;
     }
 
@@ -8273,8 +8236,8 @@ impl<'m> TapeBuilder<'m> {
                 for p in pieces {
                     let v =
                         self.lower_faq(&Contraction::map(output_idx_names, &p.body), &p.ranges)?;
-                    let region_ix = self.regions.len() as u32;
-                    self.regions.push(RegionSpec {
+                    let region_ix = self.tables.regions.len() as u32;
+                    self.tables.regions.push(RegionSpec {
                         dest_lo: p.dest_lo.iter().copied().collect(),
                         shape: p
                             .ranges
@@ -8363,8 +8326,8 @@ impl<'m> TapeBuilder<'m> {
                     return Ok(ObsVal::Taped(v));
                 }
                 // The ranges' box written over a zero fill of the padded box.
-                let region_ix = self.regions.len() as u32;
-                self.regions.push(RegionSpec {
+                let region_ix = self.tables.regions.len() as u32;
+                self.tables.regions.push(RegionSpec {
                     dest_lo: output_ranges
                         .iter()
                         .map(|(lo, _)| (*lo - 1) as usize)
@@ -8499,8 +8462,8 @@ impl<'m> TapeBuilder<'m> {
                     v
                 };
                 let s = self.ensure_slot(&v);
-                let w = self.dy_writes.len() as u32;
-                self.dy_writes.push(DyWrite {
+                let w = self.tables.dy_writes.len() as u32;
+                self.tables.dy_writes.push(DyWrite {
                     slot: s,
                     var: 0,
                     dest_lo: SmallVec::new(),
@@ -8556,8 +8519,8 @@ impl<'m> TapeBuilder<'m> {
                         .expect("state var known"),
                     "state variables",
                 )?;
-                let w = self.dy_writes.len() as u32;
-                self.dy_writes.push(DyWrite {
+                let w = self.tables.dy_writes.len() as u32;
+                self.tables.dy_writes.push(DyWrite {
                     slot: s,
                     var: var_ix,
                     dest_lo,
@@ -8799,8 +8762,8 @@ impl<'m> TapeBuilder<'m> {
             precision.clear();
         }
         debug_assert_eq!(
-            self.faults.len(),
-            self.fault_order.len(),
+            self.tables.faults.len(),
+            self.tables.fault_order.len(),
             "`fault_order` is parallel to `faults`"
         );
         let mut prog = TapeProgram {
@@ -8809,23 +8772,9 @@ impl<'m> TapeBuilder<'m> {
             n_const,
             n_segment,
             n_rhs: 0,
-            slots: std::mem::take(&mut self.slots),
-            plans: std::mem::take(&mut self.plans),
-            regions: std::mem::take(&mut self.regions),
-            assemblies: std::mem::take(&mut self.assemblies),
-            const_data: std::mem::take(&mut self.const_data),
-            index_gathers: std::mem::take(&mut self.index_gathers),
-            gather_tables: std::mem::take(&mut self.gather_tables),
-            seg_tables: std::mem::take(&mut self.seg_tables),
-            faults: std::mem::take(&mut self.faults),
-            fault_scans: std::mem::take(&mut self.fault_scans),
-            sweeps: std::mem::take(&mut self.sweeps),
-            scalar_reads: std::mem::take(&mut self.scalar_reads),
-            fault_order: std::mem::take(&mut self.fault_order),
-            data_gathers: std::mem::take(&mut self.data_gathers),
+            tables: std::mem::take(&mut self.tables),
             state_vars: std::mem::take(&mut self.state_vars),
             forcings: std::mem::take(&mut self.forcings),
-            dy_writes: std::mem::take(&mut self.dy_writes),
             exports,
             rules: std::mem::take(&mut self.rules),
             slab: SlabLayout::default(),
@@ -8880,7 +8829,7 @@ impl<'m> TapeBuilder<'m> {
 /// defines is written before it is read in every pass, so its straight-line
 /// interval is exact.
 fn color_slab(prog: &mut TapeProgram) {
-    let n_slots = prog.slots.len();
+    let n_slots = prog.tables.slots.len();
     let du = DefUse::of(prog);
     let def = &du.first_def;
     // A RE-definition (the phi slot's second branch `Copy`) keeps the
@@ -8895,12 +8844,12 @@ fn color_slab(prog: &mut TapeProgram) {
             }
         })
         .collect();
-    let tables = prog.tables();
+    let tables = prog.slot_tables();
     for (pc, instr) in prog.instrs.iter().enumerate() {
         let Instr::Sweep { spec } = instr else {
             continue;
         };
-        let sw = &prog.sweeps[*spec as usize];
+        let sw = &prog.tables.sweeps[*spec as usize];
         let body = pc + 1..pc + 1 + sw.body_len as usize;
         let last = body.end - 1;
         let mut keep: SmallVec<[SlotId; 8]> = SmallVec::new();
@@ -8955,14 +8904,14 @@ fn color_slab(prog: &mut TapeProgram) {
         // for alias-safe (index-aligned elementwise) instructions.
         let alias_safe = prog.instrs[i].may_overwrite_source();
         let mut defs_here: SmallVec<[SlotId; 2]> = SmallVec::new();
-        prog.instrs[i].for_each_def(&prog.tables(), |o| {
+        prog.instrs[i].for_each_def(&prog.slot_tables(), |o| {
             if def[o as usize] == i {
                 defs_here.push(o);
             }
         });
         if alias_safe {
             for &s in &dying_at[i] {
-                let st = prog.slots[s as usize].storage;
+                let st = prog.tables.slots[s as usize].storage;
                 if st != u32::MAX {
                     free.entry(storages[st as usize].elems)
                         .or_default()
@@ -8971,7 +8920,7 @@ fn color_slab(prog: &mut TapeProgram) {
             }
         }
         for &o in &defs_here {
-            let desc = &prog.slots[o as usize];
+            let desc = &prog.tables.slots[o as usize];
             let elems = desc.elems();
             let storage = if dedicated[o as usize] {
                 storages.push(StorageDesc {
@@ -8992,11 +8941,11 @@ fn color_slab(prog: &mut TapeProgram) {
                 });
                 (storages.len() - 1) as u32
             };
-            prog.slots[o as usize].storage = storage;
+            prog.tables.slots[o as usize].storage = storage;
         }
         if !alias_safe {
             for &s in &dying_at[i] {
-                let st = prog.slots[s as usize].storage;
+                let st = prog.tables.slots[s as usize].storage;
                 if st != u32::MAX {
                     free.entry(storages[st as usize].elems)
                         .or_default()

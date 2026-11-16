@@ -60,9 +60,9 @@ pub(super) fn rewrite_scan_makearray_reads(prog: &mut TapeProgram) {
                     Some(&e) => e,
                     None => {
                         let out = prog.instrs[pc].out().expect("a scan defines its slot");
-                        let desc = prog.slots[out as usize].clone();
-                        let e = prog.slots.len() as SlotId;
-                        prog.slots.push(desc);
+                        let desc = prog.tables.slots[out as usize].clone();
+                        let e = prog.tables.slots.len() as SlotId;
+                        prog.tables.slots.push(desc);
                         splits.insert(pc, e);
                         e
                     }
@@ -140,13 +140,13 @@ fn answer(prog: &TapeProgram, defs: &DefUse, a: SlotId, plan: u32, out: SlotId) 
     let Instr::Assemble { table, .. } = prog.instrs[defs.single_def(a)?] else {
         return None;
     };
-    let p = &prog.plans[plan as usize];
+    let p = &prog.tables.plans[plan as usize];
     let nd = p.shape.len();
     // A window of the assembled box, axis for axis.
     if !p.fixed_desc.is_empty()
         || p.mapped.iter().any(|&m| !m)
         || p.perm.iter().enumerate().any(|(k, &d)| k != d)
-        || p.src_shape[..] != prog.slots[a as usize].shape[..]
+        || p.src_shape[..] != prog.tables.slots[a as usize].shape[..]
         || p.segs.len() != nd
     {
         return None;
@@ -161,7 +161,7 @@ fn answer(prog: &TapeProgram, defs: &DefUse, a: SlotId, plan: u32, out: SlotId) 
         }
         win.push((from, len));
     }
-    let parts = &prog.assemblies[table as usize].parts;
+    let parts = &prog.tables.assemblies[table as usize].parts;
     for (k, &(op, region)) in parts.iter().enumerate() {
         let Operand::Slot(s) = op else {
             continue;
@@ -179,7 +179,7 @@ fn answer(prog: &TapeProgram, defs: &DefUse, a: SlotId, plan: u32, out: SlotId) 
         else {
             continue;
         };
-        let r = &prog.regions[region as usize];
+        let r = &prog.tables.regions[region as usize];
         let ax = axis as usize;
         if r.shape[..] != src_shape[..] || r.shape.len() != nd {
             continue;
@@ -204,10 +204,10 @@ fn answer(prog: &TapeProgram, defs: &DefUse, a: SlotId, plan: u32, out: SlotId) 
         }
         // The row past the scan: the part that writes it last.
         let (last, lr) = *parts.iter().rev().find(|&&(_, q)| {
-            let q = &prog.regions[q as usize];
+            let q = &prog.tables.regions[q as usize];
             q.dest_lo[ax] <= d0 + rows && d0 + rows < q.dest_lo[ax] + q.shape[ax]
         })?;
-        let lr = &prog.regions[lr as usize];
+        let lr = &prog.tables.regions[lr as usize];
         if lr.shape[ax] != 1
             || lr.dest_lo[ax] != d0 + rows
             || (0..nd).any(|d| d != ax && (lr.dest_lo[d], lr.shape[d]) != win[d])
@@ -246,7 +246,7 @@ fn overwritten_after(
     r: &RegionSpec,
 ) -> bool {
     parts[k + 1..].iter().any(|&(_, q)| {
-        let q = &prog.regions[q as usize];
+        let q = &prog.tables.regions[q as usize];
         (0..r.shape.len()).all(|d| {
             q.dest_lo[d] < r.dest_lo[d] + r.shape[d] && r.dest_lo[d] < q.dest_lo[d] + q.shape[d]
         })
@@ -278,7 +278,7 @@ fn is_total(
             plan,
             ..
         } => {
-            let p = &prog.plans[plan as usize];
+            let p = &prog.tables.plans[plan as usize];
             // The total's axes in order, the singleton scanned axis broadcast.
             let placed = p.fixed_desc.is_empty()
                 && p.mapped.len() == p.shape.len()
@@ -294,7 +294,7 @@ fn is_total(
             }
             t
         }
-        Instr::Reduce { .. } if prog.slots[g as usize].scalar => g,
+        Instr::Reduce { .. } if prog.tables.slots[g as usize].scalar => g,
         _ => return false,
     };
     let Some(ti) = defs.single_def(t) else {
@@ -331,7 +331,10 @@ fn same_slot(prog: &TapeProgram, defs: &DefUse, x: SlotId, y: SlotId, depth: u32
     if x == y {
         return true;
     }
-    let (sx, sy) = (&prog.slots[x as usize], &prog.slots[y as usize]);
+    let (sx, sy) = (
+        &prog.tables.slots[x as usize],
+        &prog.tables.slots[y as usize],
+    );
     if depth == 0 || sx.shape != sy.shape || sx.scalar != sy.scalar {
         return false;
     }
@@ -358,7 +361,10 @@ fn same_slot(prog: &TapeProgram, defs: &DefUse, x: SlotId, y: SlotId, depth: u32
                 src: s2, plan: p2, ..
             },
         ) => {
-            let (p1, p2) = (&prog.plans[*p1 as usize], &prog.plans[*p2 as usize]);
+            let (p1, p2) = (
+                &prog.tables.plans[*p1 as usize],
+                &prog.tables.plans[*p2 as usize],
+            );
             same_plan(p1, p2) && same_src(prog, defs, *s1, *s2, depth - 1)
         }
         _ => false,

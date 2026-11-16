@@ -29,7 +29,7 @@ use super::ir::*;
 pub(super) fn split_output_only(prog: &mut TapeProgram) {
     let sec = prog.section_range(Cadence::Continuous);
     prog.n_rhs = sec.len() as u32;
-    let tables = prog.tables();
+    let tables = prog.slot_tables();
 
     // Units: a region header with its body, or one instruction.
     let mut units: Vec<std::ops::Range<usize>> = Vec::new();

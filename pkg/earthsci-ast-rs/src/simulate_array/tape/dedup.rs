@@ -37,7 +37,7 @@ fn srck(k: &mut String, s: &SrcRef, canon: &[SlotId]) {
 /// take part.
 pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) -> Option<String> {
     let out = ins.out()?;
-    let d = &prog.slots[out as usize];
+    let d = &prog.tables.slots[out as usize];
     let mut k = format!(
         "{:?}|{:?}|{}|{:?}|",
         &d.shape[..],
@@ -58,7 +58,7 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
             srck(&mut k, src, canon);
         }
         Instr::Gather { src, plan, .. } => {
-            let _ = write!(k, "Gather{:?}:", prog.plans[*plan as usize]);
+            let _ = write!(k, "Gather{:?}:", prog.tables.plans[*plan as usize]);
             srck(&mut k, src, canon);
         }
         Instr::Reduce {
@@ -97,7 +97,7 @@ pub(super) fn key(prog: &TapeProgram, pc: usize, ins: &Instr, canon: &[SlotId]) 
             faults: false,
             ..
         } => {
-            let sp = &prog.data_gathers[*spec as usize];
+            let sp = &prog.tables.data_gathers[*spec as usize];
             let _ = write!(
                 k,
                 "DataGather{:?},{:?},{:?},{}:",
@@ -123,7 +123,7 @@ pub(super) fn dedup_const(prog: &mut TapeProgram) {
     if nc < 2 {
         return;
     }
-    let n_slots = prog.slots.len();
+    let n_slots = prog.tables.slots.len();
     let guarded = prog.guarded_positions();
     // Slots defined more than once (a branch join) never take part.
     let n_defs = DefUse::of(prog).n_defs;

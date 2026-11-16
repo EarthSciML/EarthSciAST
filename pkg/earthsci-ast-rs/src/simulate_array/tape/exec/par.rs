@@ -196,7 +196,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
                 .saturating_add(pre)
         }
         Instr::DyWrite { write } => {
-            prog.slots[prog.dy_writes[*write as usize].slot as usize].elems()
+            prog.tables.slots[prog.tables.dy_writes[*write as usize].slot as usize].elems()
         }
         Instr::Bin { out, .. }
         | Instr::Un { out, .. }
@@ -207,7 +207,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         | Instr::IndexGather { out, .. }
         | Instr::TableGather { out, .. }
         | Instr::DataGather { out, .. }
-        | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
+        | Instr::Scan { out, .. } => prog.tables.slots[*out as usize].elems(),
         Instr::Reduce { src_shape, .. } => src_shape.iter().product(),
         // Per element, a bisection of the window or a pass over it.
         Instr::Count { n, sorted, out, .. } => {
@@ -216,7 +216,9 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
             } else {
                 *n as usize
             };
-            prog.slots[*out as usize].elems().saturating_mul(per.max(1))
+            prog.tables.slots[*out as usize]
+                .elems()
+                .saturating_mul(per.max(1))
         }
         Instr::Lanes { spec } => {
             let ls = &prog.lanes[*spec as usize];

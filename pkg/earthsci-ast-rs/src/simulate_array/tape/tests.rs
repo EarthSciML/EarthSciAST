@@ -122,7 +122,8 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
     let prog = ab_check(doc, -3.0, 3.0);
     // The wrap must have become a Gather with a two-segment (rolled) axis.
     assert!(
-        prog.plans
+        prog.tables
+            .plans
             .iter()
             .any(|p| p.segs.iter().any(|s| s.len() == 2)),
         "expected a rolled (two-segment) gather axis for the periodic wrap"
@@ -234,7 +235,11 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
+    assert_eq!(
+        prog.tables.regions.len(),
+        3,
+        "three makearray regions lowered"
+    );
 }
 
 /// The soundness boundary of the shadow analysis: an enclosing symbol the
@@ -307,7 +312,11 @@ fn ab_makearray_regions() {
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
+    assert_eq!(
+        prog.tables.regions.len(),
+        3,
+        "three makearray regions lowered"
+    );
 }
 
 /// Static einsum contraction with the `ifelse(k==0,…)` weight idiom — the
@@ -590,7 +599,8 @@ fn ab_subblock_dy_scatter() {
     });
     let prog = ab_check(doc, -2.0, 2.0);
     assert!(
-        prog.dy_writes
+        prog.tables
+            .dy_writes
             .iter()
             .any(|w| w.dest_lo.iter().any(|&d| d > 0)),
         "expected a shifted sub-block dy write"
@@ -644,7 +654,10 @@ fn ab_observed_chain_and_broadcast() {
         "const-tier observed lowered to CONST section"
     );
     assert!(
-        prog.plans.iter().any(|p| p.mapped.iter().any(|m| !m)),
+        prog.tables
+            .plans
+            .iter()
+            .any(|p| p.mapped.iter().any(|m| !m)),
         "expected a broadcast axis in the c[j] gather over the [i,j] box"
     );
     // `s` reads state, so it is CONTINUOUS; it is 0-d ⇒ in the samples cone ⇒
@@ -987,23 +1000,23 @@ fn coloring_invariants() {
     assert!(report.fallbacks.is_empty());
 
     // def / last-use per slot (linear order, re-defs count as uses).
-    let mut def = vec![usize::MAX; prog.slots.len()];
-    let mut last = vec![0usize; prog.slots.len()];
+    let mut def = vec![usize::MAX; prog.tables.slots.len()];
+    let mut last = vec![0usize; prog.tables.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_def(&prog.tables(), |o| {
+        ins.for_each_def(&prog.slot_tables(), |o| {
             if def[o as usize] == usize::MAX {
                 def[o as usize] = i;
             } else {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.tables(), |s| {
+        ins.for_each_read(&prog.slot_tables(), |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
     // Group slots by storage.
     let mut by_storage: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (s, d) in prog.slots.iter().enumerate() {
+    for (s, d) in prog.tables.slots.iter().enumerate() {
         if def[s] != usize::MAX {
             assert_ne!(d.storage, u32::MAX, "defined slot {s} must be colored");
             by_storage.entry(d.storage).or_default().push(s);
@@ -1368,7 +1381,13 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
     for variant in ["from_bottom", "to_top", "shifted"] {
         let compiled = compile(makearray_scan_doc(n, 0, variant));
         let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg())));
-        let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);
+        let widest = prog
+            .tables
+            .slots
+            .iter()
+            .map(|s| s.elems())
+            .max()
+            .unwrap_or(0);
         assert!(
             widest <= n as usize + 1,
             "[{variant}] a slot of {widest} cells: the scan was lowered as a box"
@@ -2688,9 +2707,12 @@ fn ab_const_array_observed() {
         1,
         "the literal is stored once"
     );
-    assert_eq!(prog.const_data.len(), 1);
-    assert_eq!(&prog.const_data[0].shape[..], &[4]);
-    assert_eq!(&prog.const_data[0].values[..], &[0.25, -1.5, 2.0, 3.75]);
+    assert_eq!(prog.tables.const_data.len(), 1);
+    assert_eq!(&prog.tables.const_data[0].shape[..], &[4]);
+    assert_eq!(
+        &prog.tables.const_data[0].values[..],
+        &[0.25, -1.5, 2.0, 3.75]
+    );
     // CONST cadence: the literal is stored once per solve, not per RHS call.
     let store = prog
         .instrs
@@ -2740,7 +2762,7 @@ fn ab_rank0_scalar_reductions() {
     for (src_shape, n_axes, out) in folds {
         assert_eq!(n_axes, 1, "the single contracted axis");
         assert_eq!(&src_shape[..], &[n as usize]);
-        assert!(prog.slots[out as usize].scalar, "rank-0 output");
+        assert!(prog.tables.slots[out as usize].scalar, "rank-0 output");
     }
 }
 
@@ -3060,7 +3082,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
         }}
     });
     let prog = ab_check(doc.clone(), -2.0, 2.0);
-    let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
+    let payloads: Vec<&ConstArrayData> = prog.tables.const_data.iter().collect();
     // A column-major program stores the box axis-reversed (`layout`).
     let (shape, values): ([usize; 2], [f64; 6]) = if prog.col_major {
         ([2, 3], [0.5, 2.0, -0.75, -1.25, 3.5, 1e-3])
@@ -3136,7 +3158,7 @@ fn ab_index_gather_unstructured() {
     let prog = ab_check(doc, -1.0, 2.0);
     // Fusion folds the gather into the group that consumes it: a pre-loaded
     // input rather than a materialized [k, i] box.
-    assert_eq!(prog.index_gathers.len(), 1);
+    assert_eq!(prog.tables.index_gathers.len(), 1);
     assert_eq!(opcount(&prog, "IndexGather"), 0, "folded away");
     assert!(
         prog.fused.iter().any(|f| f
@@ -3145,7 +3167,7 @@ fn ab_index_gather_unstructured() {
             .any(|i| i.index.is_some_and(|fi| fi.n == n as usize))),
         "a fused group reads the source through the subscript"
     );
-    let spec = &prog.index_gathers[0];
+    let spec = &prog.tables.index_gathers[0];
     assert_eq!(spec.axes[..], [GatherAxis::Data]);
     assert_eq!(&spec.shape[..], &[3, n as usize], "the promoted (k, i) box");
 }
@@ -3312,7 +3334,7 @@ fn ab_recurrence_sweep() {
     assert!(opcount(&prog, "ScalarRead") > 0);
     // The body is lowered once: the program and the sweep's body do not grow
     // with the frame.
-    let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
+    let body_len = |p: &TapeProgram| p.tables.sweeps[0].body_len;
     let small = taped(compile(recurrence_doc(6)).build_tape_opts(&HashSet::new(), None)).0;
     let large = taped(compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None)).0;
     assert_eq!(body_len(&small), body_len(&large));
@@ -3589,7 +3611,7 @@ fn a_branch_fault_keeps_the_fault_tables_parallel() {
         ),
         &[0.0],
     );
-    assert_eq!(prog.faults.len(), prog.fault_order.len());
+    assert_eq!(prog.tables.faults.len(), prog.tables.fault_order.len());
     assert!(
         prog.instrs
             .iter()
@@ -3773,7 +3795,7 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
             .iter()
             .filter(|i| match i {
                 Instr::Bin { out, .. } | Instr::Un { out, .. } => {
-                    prog.slots[*out as usize].shape.as_slice() == [n as usize]
+                    prog.tables.slots[*out as usize].shape.as_slice() == [n as usize]
                 }
                 _ => false,
             })
@@ -3831,7 +3853,7 @@ fn read_visitors_agree_across_the_corpus() {
             };
             for pc in 0..prog.instrs.len() {
                 let mut reads = Vec::new();
-                prog.instrs[pc].for_each_read(&prog.tables(), |s| reads.push(s));
+                prog.instrs[pc].for_each_read(&prog.slot_tables(), |s| reads.push(s));
                 let mut seen = Vec::new();
                 let (instrs, mut t) = prog.instrs_and_tables_mut();
                 instrs[pc].for_each_read_mut(&mut t, |s| seen.push(*s));

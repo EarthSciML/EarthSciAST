@@ -357,7 +357,7 @@ impl GBuilder {
                 if let Some(m) = self.val_of.get(s) {
                     return Some(ResOp::Existing(*m));
                 }
-                let d = &prog.slots[*s as usize];
+                let d = &prog.tables.slots[*s as usize];
                 if d.scalar {
                     Some(self.scal(*op))
                 } else if d.shape == self.shape {
@@ -676,8 +676,8 @@ pub(super) fn sunk_gather_fuses(
     let Instr::Gather { plan, out, .. } = prog.instrs[ix] else {
         return false;
     };
-    let shape = &prog.slots[out as usize].shape;
-    if gather_fold(&prog.plans[plan as usize], shape).is_none() {
+    let shape = &prog.tables.slots[out as usize].shape;
+    if gather_fold(&prog.tables.plans[plan as usize], shape).is_none() {
         return false;
     }
     readers.iter().all(|&r| {
@@ -691,7 +691,8 @@ pub(super) fn sunk_gather_fuses(
             && !chained[r]
             && prec_at(prog, r) == prec_at(prog, ix)
             && ins.out().is_some_and(|o| {
-                !prog.slots[o as usize].scalar && prog.slots[o as usize].shape == *shape
+                !prog.tables.slots[o as usize].scalar
+                    && prog.tables.slots[o as usize].shape == *shape
             })
     })
 }
@@ -2001,8 +2002,8 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
         }
         let rows: usize = src_shape[..k].iter().product();
         let n_inner: usize = src_shape[k..].iter().product();
-        if prog.slots[*out as usize].scalar
-            || prog.slots[*out as usize].elems() != n_inner
+        if prog.tables.slots[*out as usize].scalar
+            || prog.tables.slots[*out as usize].elems() != n_inner
             || !reads_own_columns(fs, *out, k, n_inner)
         {
             continue;
@@ -2213,11 +2214,11 @@ pub(super) fn chained_tuple_instrs(prog: &TapeProgram) -> Vec<bool> {
         let Instr::SegReduce { table, .. } = &prog.instrs[seg] else {
             continue;
         };
-        let Some(&n_pairs) = prog.seg_tables[*table as usize].rows.last() else {
+        let Some(&n_pairs) = prog.tables.seg_tables[*table as usize].rows.last() else {
             continue;
         };
         let tuple = |s: &SlotId| {
-            let d = &prog.slots[*s as usize];
+            let d = &prog.tables.slots[*s as usize];
             !d.scalar && d.shape[..] == [n_pairs as usize]
         };
         let mut pc = seg;
@@ -2501,7 +2502,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(&fx.prog.tables(), |s| {
+        ins.for_each_read(&fx.prog.slot_tables(), |s| {
             for (gi, g) in open.iter().enumerate() {
                 if keep != Some((&g.shape, g.prec)) && g.defines(s) && !hazard.contains(&gi) {
                     hazard.push(gi);
@@ -2556,7 +2557,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         }
         let deferrable = match ins {
             Instr::Export { slot, .. } => Some(*slot),
-            Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
+            Instr::DyWrite { write } => Some(prog.tables.dy_writes[*write as usize].slot),
             _ => None,
         };
         if let Some(slot) = deferrable
@@ -2576,7 +2577,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             for g in open.drain(..) {
                 flush_one(g, fx);
             }
-            let body = prog.sweeps[*spec as usize].body_len as usize;
+            let body = prog.tables.sweeps[*spec as usize].body_len as usize;
             let zone_end = (i + 1 + body).min(range.end);
             for j in i..zone_end {
                 fx.sink.passthrough(prog, j);
@@ -2607,7 +2608,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             out,
         } = ins
             && let Some(gi) = open.iter().position(|g| {
-                g.shape == prog.slots[*out as usize].shape
+                g.shape == prog.tables.slots[*out as usize].shape
                     && g.prec == prec_at(prog, i)
                     && matches!(g.val_of.get(s), Some(MRef::Reg(_)))
             })
@@ -2619,8 +2620,8 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
 
         // Foldable gather: absorb as a shifted input of its box's group.
         if let Instr::Gather { src, plan, out } = ins {
-            let plan_ref = &prog.plans[*plan as usize];
-            let out_desc = &prog.slots[*out as usize];
+            let plan_ref = &prog.tables.plans[*plan as usize];
+            let out_desc = &prog.tables.slots[*out as usize];
             let fold = gather_fold(plan_ref, &out_desc.shape);
             if let Some(GatherFold::Shifted(geom)) = fold {
                 // An identity read of a value an open group of the same box
@@ -2689,8 +2690,8 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             out,
         } = ins
         {
-            let spec_ref = &prog.index_gathers[*spec as usize];
-            let out_desc = &prog.slots[*out as usize];
+            let spec_ref = &prog.tables.index_gathers[*spec as usize];
+            let out_desc = &prog.tables.slots[*out as usize];
             if let Some(fold) = folded_index_of(spec_ref)
                 && !out_desc.shape.is_empty()
             {
@@ -2729,7 +2730,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             | Instr::Select { out, .. }
             | Instr::Fill { out, .. }
             | Instr::Copy { out, .. } => {
-                let d = &prog.slots[*out as usize];
+                let d = &prog.tables.slots[*out as usize];
                 if !d.scalar && !d.shape.is_empty() && !d.shape.contains(&0) {
                     Some(d.shape.clone())
                 } else {

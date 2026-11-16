@@ -43,7 +43,7 @@
 //! * [`Instr::ConstArray`] materializes an inline array literal into a
 //!   CONST-section slot — one instruction and one store per solve, whatever
 //!   the literal's size, with the payload on
-//!   [`TapeProgram::const_data`]. Without it an array-valued `const` had no
+//!   [`ProgramTables::const_data`]. Without it an array-valued `const` had no
 //!   representation at all (`Operand::Lit` is one `f64`; `Fill` broadcasts
 //!   one scalar), so every reader of such a constant bailed.
 //! * [`Instr::Reduce`] folds a source box over a set of axes with a binary
@@ -273,11 +273,11 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         n_instr_segment: prog.n_segment as usize,
         n_instr_continuous: n_cont,
         opcode_counts,
-        n_slots: prog.slots.len(),
+        n_slots: prog.tables.slots.len(),
         n_storages: prog.slab.storages.len(),
-        n_gather_plans: prog.plans.len(),
+        n_gather_plans: prog.tables.plans.len(),
         n_exports: prog.exports.len(),
-        n_dy_writes: prog.dy_writes.len(),
+        n_dy_writes: prog.tables.dy_writes.len(),
         slab_bytes: prog.slab.total_elems * 8,
         slab_bytes_const: prog.slab.const_elems * 8,
         slab_bytes_segment: prog.slab.segment_elems * 8,
@@ -642,7 +642,7 @@ impl ArrayCompiled {
             let boxed = ins
                 .out()
                 .map(|o| {
-                    let d = &prog.slots[o as usize];
+                    let d = &prog.tables.slots[o as usize];
                     format!(" -> s{o}{:?}", &d.shape[..])
                 })
                 .unwrap_or_default();
