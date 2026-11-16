@@ -147,274 +147,33 @@ pub fn load_string_with_options(
 }
 
 /// The pipeline shared by every `load_*` entry point, over an
-/// already-decoded document. Split out so a path, a JSON string and a
-/// pre-parsed `Value` cannot drift apart: `load` used to be ONE function
-/// whose `&str` meant JSON text here and a FILE PATH in Julia and Go, with
-/// no type error anywhere to catch the difference.
+/// already-decoded document: the passes of [`LOAD_PASSES`] a root document
+/// takes, then typing and the checks that read the typed document.
 fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
-    let mut json_value = json_value;
     // Every document this load reaches by reference is read and parsed once
-    // (`crate::ref_reader`): the mount-tree scan below and the mount pipeline
-    // read the same files.
+    // (`crate::ref_reader`): the mount-tree scan and the mount pipeline read
+    // the same files.
     let _parse_cache = crate::ref_reader::ParseCacheScope::on();
 
-    // Removed ops (and `function_tables`) are refused by name at the wire
-    // boundary, ahead of every other pass (esm-spec §4.2).
-    let authored = prepare_document_ops_scanned(&mut json_value)?;
-
-    let base = options.base_path.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    });
-
-    // The metaparameter names every document this one MOUNTS declares (§4.7,
-    // either mount form, transitively). It widens the §9.7.6 site-4 check below:
-    // a loader-API binding — which is how a discovered §8.9.4 `extent` arrives —
-    // may name a metaparameter the LEAF declares and this document has no reason
-    // to restate. The edge forwards it into the leaf's own close, so the name is
-    // meaningful; only a name NO document in the assembly declares is the typo
-    // the check exists to catch.
-    //
-    // Collected HERE, not at the site-4 check itself: this binding resolves refs
-    // BEFORE the root's template machinery (Python is the other way round), so
-    // by the time `resolve_template_machinery` runs, the `{ref}` mount entries
-    // this walk reads have already been consumed and inlined.
-    //
-    // Guarded: the widening can only matter when the load carries loader-API
-    // bindings or the document declares an `extent`. A document with neither
-    // pays no extra ref reads — which also keeps a mounted file from being read
-    // twice on the ordinary path.
-    let mount_declared = if !options.metaparameters.is_empty()
-        || crate::template_imports::document_declares_an_extent(&json_value)
-    {
-        crate::template_imports::collect_mount_declared_metaparameters(&json_value, &base)
-    } else {
-        std::collections::BTreeSet::new()
-    };
-
-    // esm-spec §8.9.4, statically: an `extent` naming a metaparameter nobody
-    // declares is refused HERE rather than when the source is finally sampled at
-    // build, so `esm validate` catches the typo. It runs BEFORE ref resolution,
-    // on the AUTHORED tree: a mount CONSUMES the leaf's `metaparameters`
-    // (§9.7.6 site 3), so after inlining neither the declaration nor the `{ref}`
-    // stub that leads to it is still there to judge by.
-    crate::template_imports::check_data_source_extents(&json_value, &base, &mount_declared)
-        .map_err(EsmError::schema)?;
-
-    // Resolve any subsystem refs before schema validation, per spec section
-    // 2.1b. Callers that load from a known file path should use `load_path`,
-    // which uses the file's own directory as the base. The loader-API
-    // metaparameters are threaded so a §4.7 subsystem-edge binding EXPRESSION
-    // (`NTGT = NX*NY`, esm-spec §9.7.6 site 3) folds against the root document's
-    // closed metaparameter environment (defaults overlaid with the API
-    // bindings) at the mount.
-    // The §4.7 contributions are STAGED here, not merged: the content is spliced
-    // in now (the root's own §9.7 machinery has to lower through it), but its
-    // `index_sets` do not join the registry until the root has CLOSED — §9.7.6
-    // site 3, "subsystem refs resolve post-close". They are applied just below,
-    // immediately after `resolve_template_machinery_scoped`.
-    //
-    // A mounted leaf is expanded here, so its template expansions are marked
-    // here too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check
-    // below reads the document with those marks taken off.
-    //
-    // A refusal here carries, as its findings, the document's own mount edges
-    // that do not resolve, each at its pointer
-    // ([`crate::ref_loading::mount_edge_errors`]), read off the edges as
-    // authored: resolution consumes them in place.
-    let mount_edges = crate::ref_loading::mount_edge_skeleton(&json_value);
-    let marks_before = crate::lower_expression_templates::template_origins_placed();
-    let staged_index_sets = {
-        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
-        crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
-            &mut json_value,
-            &base,
-            &options.metaparameters,
-        )
-    }
-    .map_err(|e| EsmError::SchemaDiagnostic {
-        code: e.code,
-        message: e.to_string(),
-        findings: crate::ref_loading::mount_edge_errors(&mount_edges, &base),
-    })?;
-    let mounts_marked =
-        crate::lower_expression_templates::template_origins_placed() != marks_before;
-
-    // esm-spec §8.2.1: resolve every `data_sources[*].source` location against
-    // this document's own directory. AFTER ref resolution, because a referenced
-    // component file's `data_sources` block is hoisted into this document by the
-    // pass above — those entries were already anchored on THEIR file's directory
-    // there, and this pass is idempotent, so both anchors land correctly.
-    // Rewriting the raw document means the typed `DataSourceLocation`, the
-    // ingest providers and `emit` all see one resolved form and none of them
-    // needs a base directory.
-    crate::data_source_urls::resolve_data_source_urls(&mut json_value, &base)
-        .map_err(EsmError::schema)?;
-
-    // The version gates (`crate::version_gates::VERSIONED`) run in three
-    // groups at the root, each at its own place among the other passes. First
-    // the template-machinery constructs: v0.4.0 expression_templates /
-    // apply_expression_template, and the v0.8.0 §9.7 constructs
-    // (expression_template_imports, top-level expression_templates,
-    // metaparameters; esm-spec §9.6.5).
-    use crate::version_gates::{DocKind, Group, check_file_gates};
-    check_file_gates(
-        &json_value,
-        DocKind::Root,
-        Some(Group::Templates),
-        &authored,
-    )
-    .map_err(EsmError::schema)?;
-
-    // Top-level `expression_templates` beside a component payload is a
-    // template-library payload no component can see (esm-spec §9.7.1).
-    crate::template_imports::reject_impure_template_library(&json_value)
-        .map_err(EsmError::schema)?;
-
-    // The `solver` group: the top-level block arrives at esm 1.1.0 (esm-spec
-    // §2.2.4), `solver.external` and `solver.time_span` at 1.3.0. Only the
-    // ROOT's block is read for the two fields: a mounted leaf's `solver` block
-    // does not cross the mount edge (§4.7). Then a `${` in `external` is
-    // refused (it is never expanded, §2.2.6) and `time_span` must describe an
-    // interval (§2.2.7).
-    check_file_gates(&json_value, DocKind::Root, Some(Group::Solver), &authored)
-        .and_then(|()| crate::solver::reject_solver_external_unresolved(&json_value))
-        .and_then(|()| crate::solver::reject_solver_time_span_invalid(&json_value))
-        .map_err(EsmError::schema)?;
-
-    // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-    // The gate reads THIS file's own nodes — the authored walk, taken before
-    // ref resolution spliced anything in. A mounted file is held to its OWN
-    // declared version, when it is loaded (esm-spec §4.7 "Each file is held to
-    // its own declared `esm` version"), so a 1.0.0 document may mount a 1.2.0
-    // leaf that carries unit-bearing `const` nodes.
-    // Variable `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2), judged the
-    // same way: this file's own variables, before a mount spliced any in.
-    check_file_gates(&json_value, DocKind::Root, Some(Group::Content), &authored)
-        .map_err(EsmError::schema)?;
-
-    // Validate against schema
-    if mounts_marked {
-        let mut authored = json_value.clone();
-        crate::lower_expression_templates::strip_template_origins(&mut authored);
-        validate_schema(&authored)?;
-    } else {
-        validate_schema(&json_value)?;
-    }
-
-    // esm-spec §9.7.10 form B: fold any coupling-entry injection map into its
-    // target components' own `expression_template_imports` BEFORE resolution,
-    // so the ordinary import resolver + §9.6.3 fixpoint lower the named
-    // target under the assembler-chosen discretization. The injection map is
-    // consumed here (does not survive parse → emit); target diagnostics
-    // (`template_inject_target_*`) surface as load errors. (Form A is threaded
-    // through the subsystem-ref pass in `ref_loading::resolve_value` above.)
-    crate::template_imports::apply_scope_injections(&mut json_value, &[])
-        .map_err(EsmError::schema)?;
-
-    // Resolve esm-spec §9.7 machinery — template-library imports
-    // (depth-first post-order, per-edge metaparameter instantiation),
-    // index_sets merge, metaparameter close+fold — before structural
-    // validation and the §9.6.3 fixpoint, so validators run on the folded,
-    // expanded form (esm-spec §9.6.4 / §9.7.6).
-    crate::template_imports::resolve_template_machinery_scoped_owned(
-        &mut json_value,
-        &base,
-        &options.metaparameters,
-        &mount_declared,
-        false,
-    )
-    .map_err(EsmError::schema)?;
-
-    // esm-spec §4.7 "Index-set merge", the deferred half: the root has now
-    // closed and folded its own `index_sets`, so the staged mount contributions
-    // merge against a registry of concrete sizes, each folded against the same
-    // closed environment first. Before structural validation, which needs the
-    // complete registry.
-    let closed_env =
-        crate::ref_loading::root_metaparameter_env(&json_value, &options.metaparameters);
-    crate::ref_loading::apply_staged_index_sets(&mut json_value, staged_index_sets, &closed_env)
-        .map_err(EsmError::schema)?;
-
-    // The template passes below walk the whole document several times; an
-    // equation whose right-hand side is a `const` of numbers (a document's
-    // data) holds nothing any of them acts on, so its payload waits outside
-    // the document until it is deserialized.
-    let parked = park_const_data(&mut json_value);
-
-    // Post-schema structural + semantic checks (version compatibility,
-    // cross-field format rules, reference integrity, cyclic coupling) — the
-    // things JSON Schema cannot express. Mirrors Python / Julia so that
-    // cross-language conformance agrees.
-    validate_structural_json(&json_value)?;
-
-    // Lower `apply_expression_template` ops at load time (esm-spec §9.6.4
-    // Option B, RFC out-of-line-expression-templates). This pass now PRESERVES
-    // surviving (non-eager) references and each component's
-    // `expression_templates` block (they travel into emit, §9.6.4 rule 5).
-    // A document with no template machinery is left unchanged by this pass and
-    // the two after it (enum lowering finds nothing to lower without an `enum`
-    // node), so the template scan's walk also looks for `enum` nodes and
-    // reserved binders, which are then not walked for again.
-    let mut reserved = ReservedIndexScan::new(&json_value);
-    let mut has_enum_ops = false;
-    let (has_templates, scanned_whole) =
-        crate::lower_expression_templates::lower_expression_templates_visiting(
-            &mut json_value,
-            &mut |path, value| {
-                has_enum_ops |= crate::lower_enums::is_enum_node(value);
-                reserved.visit(path, value);
-            },
-        )
-        .map_err(EsmError::schema)?;
-    let reserved = (scanned_whole && !has_enum_ops).then_some(reserved);
-
-    // The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
-    // (RFC out-of-line-expression-templates §7.7): expand every surviving
-    // reference here so downstream consumers see the fully expanded Option-A
-    // image — numeric results stay bit-identical, and the typed structs never
-    // see an `apply_expression_template` node or an `expression_templates` block.
-    // Capture the per-component registries first: `expand` removes the blocks,
-    // and `flatten` needs them to build the step-4 merged `template_registry`.
-    // A document with no template machinery has nothing to expand; `expand`
-    // would walk it only to find that out.
-    let component_templates =
-        crate::lower_expression_templates::capture_component_templates(&json_value);
-    if has_templates {
-        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
-        crate::lower_expression_templates::expand(&mut json_value).map_err(EsmError::schema)?;
-    } else {
-        crate::lower_expression_templates::strip_component_template_blocks(&mut json_value);
-    }
-
-    // Lower `enum`-op nodes to `const` integers using the file's `enums`
-    // block (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time
-    // pass so that downstream consumers never see enum strings.
-    crate::lower_enums::lower_enums_raw_scanned(&mut json_value, has_enum_ops || !scanned_whole)
-        .map_err(EsmError::schema)?;
-
-    // Reject a `faq` binder that shadows a globally-scoped name (the
-    // independent variable, `_var`). Runs HERE, on the fully lowered form, so a
-    // binder a §9.6/§9.7 template body introduced is caught with the authored
-    // ones. See `reject_reserved_index_symbols` for why this is a rejection
-    // rather than a shadowing rule.
-    match reserved {
-        Some(scan) => scan.finish(),
-        None => reject_reserved_index_symbols(&json_value),
-    }
-    .map_err(EsmError::structural)?;
+    let mut doc = Doc::new(json_value, DocRole::Root, options);
+    doc.run_passes()?;
+    let Doc {
+        value: mut json_value,
+        base,
+        facts,
+        ..
+    } = doc;
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
     // built (see `crate::intern`): the §9.7-expanded document deserializes
-    // bottom-up, so duplicates are collapsed before they can accumulate —
-    // this is where the load-phase peak used to live (~978 MiB of typed AST
-    // for `simpleclimate.esm` at the production grid; ~6 MiB deduplicated).
-    unpark_const_data(&mut json_value, parked)?;
+    // bottom-up, so duplicates are collapsed before they can accumulate.
+    unpark_const_data(&mut json_value, facts.parked)?;
     let mut esm_file: EsmFile = {
         let _intern = crate::intern::InternScope::new();
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
     };
-    esm_file.component_templates = component_templates;
+    esm_file.component_templates = facts.component_templates;
 
     // The reference rules a load refuses on that read the typed document: a
     // coupling `from` that does not resolve, a cross-scope dependency cycle,
@@ -432,6 +191,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
             findings,
         });
     }
+
     // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
     esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
     // esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against
@@ -456,6 +216,524 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     }
 
     Ok(esm_file)
+}
+
+/// The kinds of document the load pass table ([`LOAD_PASSES`]) serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocRole {
+    /// A document handed to a `load_*` entry point.
+    Root,
+    /// The source document of
+    /// [`crate::lower_expression_templates::emit_document`].
+    EmitSource,
+}
+
+const ROOT: &[DocRole] = &[DocRole::Root];
+const ROOT_AND_EMIT: &[DocRole] = &[DocRole::Root, DocRole::EmitSource];
+
+/// One load pass: its name, the kinds of document it runs on, and its body.
+struct Pass {
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by the order test"))]
+    name: &'static str,
+    roles: &'static [DocRole],
+    run: fn(&mut Doc<'_>) -> Result<(), PassError>,
+}
+
+/// Every pass over a document's JSON, in the order it runs, with the kinds of
+/// document it runs on. A document with several defects is refused by the
+/// first pass that finds one, and which refusal that is is visible across
+/// bindings, so the order is part of the contract. The mounted-leaf,
+/// template-library and coupling-library documents open through
+/// [`crate::ref_reader::open`] instead, whose documentation lists their passes.
+const LOAD_PASSES: &[Pass] = &[
+    Pass {
+        name: "wire boundary ops",
+        roles: ROOT_AND_EMIT,
+        run: pass_wire_ops,
+    },
+    Pass {
+        name: "mount-declared metaparameters",
+        roles: ROOT,
+        run: pass_mount_declared,
+    },
+    Pass {
+        name: "data source extents",
+        roles: ROOT,
+        run: pass_data_source_extents,
+    },
+    Pass {
+        name: "mount resolution",
+        roles: ROOT,
+        run: pass_resolve_mounts,
+    },
+    Pass {
+        name: "data source urls",
+        roles: ROOT,
+        run: pass_data_source_urls,
+    },
+    Pass {
+        name: "template version gates",
+        roles: ROOT,
+        run: pass_template_gates,
+    },
+    Pass {
+        name: "impure template library",
+        roles: ROOT,
+        run: pass_impure_template_library,
+    },
+    Pass {
+        name: "solver gates",
+        roles: ROOT,
+        run: pass_solver_gates,
+    },
+    Pass {
+        name: "content version gates",
+        roles: ROOT,
+        run: pass_content_gates,
+    },
+    Pass {
+        name: "schema",
+        roles: ROOT,
+        run: pass_schema,
+    },
+    Pass {
+        name: "template scope injections",
+        roles: ROOT,
+        run: pass_scope_injections,
+    },
+    Pass {
+        name: "template machinery",
+        roles: ROOT_AND_EMIT,
+        run: pass_template_machinery,
+    },
+    Pass {
+        name: "staged index sets",
+        roles: ROOT,
+        run: pass_staged_index_sets,
+    },
+    Pass {
+        name: "park const data",
+        roles: ROOT,
+        run: pass_park_const_data,
+    },
+    Pass {
+        name: "structural json checks",
+        roles: ROOT,
+        run: pass_structural_json,
+    },
+    Pass {
+        name: "template lowering",
+        roles: ROOT_AND_EMIT,
+        run: pass_lower_templates,
+    },
+    Pass {
+        name: "template expansion",
+        roles: ROOT,
+        run: pass_expand_templates,
+    },
+    Pass {
+        name: "enum lowering",
+        roles: ROOT,
+        run: pass_lower_enums,
+    },
+    Pass {
+        name: "reserved index symbols",
+        roles: ROOT,
+        run: pass_reserved_index_symbols,
+    },
+];
+
+/// A document moving through [`LOAD_PASSES`]: its JSON, the directory its
+/// relative refs resolve against, and what earlier passes noted for later
+/// ones.
+pub(crate) struct Doc<'o> {
+    pub(crate) value: Value,
+    role: DocRole,
+    base: std::path::PathBuf,
+    options: &'o LoadOptions,
+    facts: LoadFacts,
+}
+
+/// What a pass notes about the document for a later pass.
+#[derive(Default)]
+struct LoadFacts {
+    /// What the wire-boundary walk noted about the authored document.
+    authored: AuthoredFacts,
+    /// The metaparameter names every document this one mounts declares.
+    mount_declared: std::collections::BTreeSet<String>,
+    /// The mounts' `index_sets`, merged once the root has closed.
+    staged_index_sets: serde_json::Map<String, Value>,
+    /// Whether mount resolution marked template expansions.
+    mounts_marked: bool,
+    /// The const equation payloads set aside until deserialization.
+    parked: Vec<ParkedConst>,
+    /// The reserved-binder scan template lowering's walk carried, when that
+    /// walk covered the whole document and found no `enum` node.
+    reserved: Option<ReservedIndexScan>,
+    /// Whether enum lowering must walk the document: template lowering's walk
+    /// found an `enum` node or did not cover the whole document.
+    enum_walk_needed: bool,
+    /// Whether the document has template machinery.
+    has_templates: bool,
+    /// Each component's `expression_templates` registry, captured before
+    /// expansion removes the blocks.
+    component_templates: Option<indexmap::IndexMap<String, Value>>,
+}
+
+/// A pass's refusal: a coded diagnostic of the schema or structural stage, or
+/// an [`EsmError`] the pass built itself.
+pub(crate) enum PassError {
+    Schema(crate::diagnostic::DiagnosticError),
+    Structural(crate::diagnostic::DiagnosticError),
+    Esm(EsmError),
+}
+
+impl From<PassError> for EsmError {
+    fn from(e: PassError) -> Self {
+        match e {
+            PassError::Schema(d) => EsmError::schema(d),
+            PassError::Structural(d) => EsmError::structural(d),
+            PassError::Esm(e) => e,
+        }
+    }
+}
+
+impl From<EsmError> for PassError {
+    fn from(e: EsmError) -> Self {
+        PassError::Esm(e)
+    }
+}
+
+impl<'o> Doc<'o> {
+    /// A document of `role`; relative refs resolve against
+    /// `options.base_path`, or the working directory when it has none.
+    pub(crate) fn new(value: Value, role: DocRole, options: &'o LoadOptions) -> Self {
+        let base = options.base_path.clone().unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+        Doc {
+            value,
+            role,
+            base,
+            options,
+            facts: LoadFacts::default(),
+        }
+    }
+
+    /// Run, in table order, every pass of [`LOAD_PASSES`] this document's role
+    /// takes.
+    pub(crate) fn run_passes(&mut self) -> Result<(), PassError> {
+        for pass in LOAD_PASSES {
+            if pass.roles.contains(&self.role) {
+                (pass.run)(self)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Removed ops (and `function_tables`) are refused by name at the wire
+/// boundary, ahead of every other pass (esm-spec §4.2).
+fn pass_wire_ops(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.authored = prepare_document_ops_scanned(&mut doc.value)?;
+    Ok(())
+}
+
+/// The metaparameter names every document this one MOUNTS declares (§4.7,
+/// either mount form, transitively). It widens the §9.7.6 site-4 check of the
+/// template machinery: a loader-API binding — which is how a discovered §8.9.4
+/// `extent` arrives — may name a metaparameter the LEAF declares and this
+/// document has no reason to restate. The edge forwards it into the leaf's own
+/// close, so the name is meaningful; only a name NO document in the assembly
+/// declares is the typo the check exists to catch.
+///
+/// Collected before mount resolution, not at the site-4 check itself: this
+/// binding resolves refs BEFORE the root's template machinery (Python is the
+/// other way round), so by the time `resolve_template_machinery` runs, the
+/// `{ref}` mount entries this walk reads have already been consumed and
+/// inlined.
+///
+/// Guarded: the widening can only matter when the load carries loader-API
+/// bindings or the document declares an `extent`. A document with neither pays
+/// no extra ref reads — which also keeps a mounted file from being read twice
+/// on the ordinary path.
+fn pass_mount_declared(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    if !doc.options.metaparameters.is_empty()
+        || crate::template_imports::document_declares_an_extent(&doc.value)
+    {
+        doc.facts.mount_declared =
+            crate::template_imports::collect_mount_declared_metaparameters(&doc.value, &doc.base);
+    }
+    Ok(())
+}
+
+/// esm-spec §8.9.4, statically: an `extent` naming a metaparameter nobody
+/// declares is refused HERE rather than when the source is finally sampled at
+/// build, so `esm validate` catches the typo. It runs BEFORE ref resolution, on
+/// the AUTHORED tree: a mount CONSUMES the leaf's `metaparameters` (§9.7.6 site
+/// 3), so after inlining neither the declaration nor the `{ref}` stub that
+/// leads to it is still there to judge by.
+fn pass_data_source_extents(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::template_imports::check_data_source_extents(
+        &doc.value,
+        &doc.base,
+        &doc.facts.mount_declared,
+    )
+    .map_err(PassError::Schema)
+}
+
+/// Resolve any subsystem refs before schema validation, per spec section 2.1b.
+/// Callers that load from a known file path should use `load_path`, which uses
+/// the file's own directory as the base. The loader-API metaparameters are
+/// threaded so a §4.7 subsystem-edge binding EXPRESSION (`NTGT = NX*NY`,
+/// esm-spec §9.7.6 site 3) folds against the root document's closed
+/// metaparameter environment (defaults overlaid with the API bindings) at the
+/// mount.
+///
+/// The §4.7 contributions are STAGED here, not merged: the content is spliced
+/// in now (the root's own §9.7 machinery has to lower through it), but its
+/// `index_sets` do not join the registry until the root has CLOSED — §9.7.6
+/// site 3, "subsystem refs resolve post-close" ([`pass_staged_index_sets`]).
+///
+/// A mounted leaf is expanded here, so its template expansions are marked here
+/// too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check reads
+/// the document with those marks taken off.
+///
+/// A refusal here carries, as its findings, the document's own mount edges
+/// that do not resolve, each at its pointer
+/// ([`crate::ref_loading::mount_edge_errors`]), read off the edges as authored:
+/// resolution consumes them in place.
+fn pass_resolve_mounts(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    let mount_edges = crate::ref_loading::mount_edge_skeleton(&doc.value);
+    let marks_before = crate::lower_expression_templates::template_origins_placed();
+    doc.facts.staged_index_sets = {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
+        crate::ref_loading::resolve_subsystem_refs_with_metaparameters(
+            &mut doc.value,
+            &doc.base,
+            &doc.options.metaparameters,
+        )
+    }
+    .map_err(|e| EsmError::SchemaDiagnostic {
+        code: e.code,
+        message: e.to_string(),
+        findings: crate::ref_loading::mount_edge_errors(&mount_edges, &doc.base),
+    })?;
+    doc.facts.mounts_marked =
+        crate::lower_expression_templates::template_origins_placed() != marks_before;
+    Ok(())
+}
+
+/// esm-spec §8.2.1: resolve every `data_sources[*].source` location against
+/// this document's own directory. AFTER ref resolution, because a referenced
+/// component file's `data_sources` block is hoisted into this document by mount
+/// resolution — those entries were already anchored on THEIR file's directory
+/// there, and this pass is idempotent, so both anchors land correctly.
+/// Rewriting the raw document means the typed `DataSourceLocation`, the ingest
+/// providers and `emit` all see one resolved form and none of them needs a
+/// base directory.
+fn pass_data_source_urls(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::data_source_urls::resolve_data_source_urls(&mut doc.value, &doc.base)
+        .map_err(PassError::Schema)
+}
+
+/// The version gates (`crate::version_gates::VERSIONED`) run in three groups
+/// at the root, each at its own place among the other passes. First the
+/// template-machinery constructs: v0.4.0 expression_templates /
+/// apply_expression_template, and the v0.8.0 §9.7 constructs
+/// (expression_template_imports, top-level expression_templates,
+/// metaparameters; esm-spec §9.6.5).
+fn pass_template_gates(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    use crate::version_gates::{DocKind, Group, check_file_gates};
+    check_file_gates(
+        &doc.value,
+        DocKind::Root,
+        Some(Group::Templates),
+        &doc.facts.authored,
+    )
+    .map_err(PassError::Schema)
+}
+
+/// Top-level `expression_templates` beside a component payload is a
+/// template-library payload no component can see (esm-spec §9.7.1).
+fn pass_impure_template_library(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::template_imports::reject_impure_template_library(&doc.value).map_err(PassError::Schema)
+}
+
+/// The `solver` group: the top-level block arrives at esm 1.1.0 (esm-spec
+/// §2.2.4), `solver.external` and `solver.time_span` at 1.3.0. Only the ROOT's
+/// block is read for the two fields: a mounted leaf's `solver` block does not
+/// cross the mount edge (§4.7). Then a `${` in `external` is refused (it is
+/// never expanded, §2.2.6) and `time_span` must describe an interval (§2.2.7).
+fn pass_solver_gates(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    use crate::version_gates::{DocKind, Group, check_file_gates};
+    check_file_gates(
+        &doc.value,
+        DocKind::Root,
+        Some(Group::Solver),
+        &doc.facts.authored,
+    )
+    .and_then(|()| crate::solver::reject_solver_external_unresolved(&doc.value))
+    .and_then(|()| crate::solver::reject_solver_time_span_invalid(&doc.value))
+    .map_err(PassError::Schema)
+}
+
+/// Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
+/// The gate reads THIS file's own nodes — the authored walk, taken before ref
+/// resolution spliced anything in. A mounted file is held to its OWN declared
+/// version, when it is loaded (esm-spec §4.7 "Each file is held to its own
+/// declared `esm` version"), so a 1.0.0 document may mount a 1.2.0 leaf that
+/// carries unit-bearing `const` nodes. Variable `lb` / `ub` arrive at esm
+/// 2.1.0 (esm-spec §6.3.2), judged the same way: this file's own variables,
+/// before a mount spliced any in.
+fn pass_content_gates(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    use crate::version_gates::{DocKind, Group, check_file_gates};
+    check_file_gates(
+        &doc.value,
+        DocKind::Root,
+        Some(Group::Content),
+        &doc.facts.authored,
+    )
+    .map_err(PassError::Schema)
+}
+
+/// Validate against the schema, with mount resolution's template-origin marks
+/// taken off.
+fn pass_schema(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    if doc.facts.mounts_marked {
+        let mut authored = doc.value.clone();
+        crate::lower_expression_templates::strip_template_origins(&mut authored);
+        validate_schema(&authored)?;
+    } else {
+        validate_schema(&doc.value)?;
+    }
+    Ok(())
+}
+
+/// esm-spec §9.7.10 form B: fold any coupling-entry injection map into its
+/// target components' own `expression_template_imports` BEFORE resolution, so
+/// the ordinary import resolver + §9.6.3 fixpoint lower the named target under
+/// the assembler-chosen discretization. The injection map is consumed here
+/// (does not survive parse → emit); target diagnostics
+/// (`template_inject_target_*`) surface as load errors. (Form A is threaded
+/// through mount resolution, `ref_loading::resolve_value`.)
+fn pass_scope_injections(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::template_imports::apply_scope_injections(&mut doc.value, &[]).map_err(PassError::Schema)
+}
+
+/// Resolve esm-spec §9.7 machinery — template-library imports (depth-first
+/// post-order, per-edge metaparameter instantiation), index_sets merge,
+/// metaparameter close+fold — before structural validation and the §9.6.3
+/// fixpoint, so validators run on the folded, expanded form (esm-spec §9.6.4 /
+/// §9.7.6). An emit source carries no loader-API bindings and mounts nothing
+/// declared.
+fn pass_template_machinery(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::template_imports::resolve_template_machinery_scoped_owned(
+        &mut doc.value,
+        &doc.base,
+        &doc.options.metaparameters,
+        &doc.facts.mount_declared,
+        false,
+    )
+    .map_err(PassError::Schema)
+}
+
+/// esm-spec §4.7 "Index-set merge", the deferred half: the root has now closed
+/// and folded its own `index_sets`, so the staged mount contributions merge
+/// against a registry of concrete sizes, each folded against the same closed
+/// environment first. Before structural validation, which needs the complete
+/// registry.
+fn pass_staged_index_sets(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    let closed_env =
+        crate::ref_loading::root_metaparameter_env(&doc.value, &doc.options.metaparameters);
+    let staged = std::mem::take(&mut doc.facts.staged_index_sets);
+    crate::ref_loading::apply_staged_index_sets(&mut doc.value, staged, &closed_env)
+        .map_err(PassError::Schema)
+}
+
+/// The template passes below walk the whole document several times; an
+/// equation whose right-hand side is a `const` of numbers (a document's data)
+/// holds nothing any of them acts on, so its payload waits outside the
+/// document until it is deserialized.
+fn pass_park_const_data(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.parked = park_const_data(&mut doc.value);
+    Ok(())
+}
+
+/// Post-schema checks of the JSON (version compatibility, cross-field format
+/// rules, a coupling library's role references) — the things JSON Schema
+/// cannot express and that need no typed document. Mirrors Python / Julia so
+/// that cross-language conformance agrees.
+fn pass_structural_json(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    Ok(validate_structural_json(&doc.value)?)
+}
+
+/// Lower `apply_expression_template` ops at load time (esm-spec §9.6.4 Option
+/// B, RFC out-of-line-expression-templates). This pass PRESERVES surviving
+/// (non-eager) references and each component's `expression_templates` block
+/// (they travel into emit, §9.6.4 rule 5). A document with no template
+/// machinery is left unchanged by this pass and the two after it (enum
+/// lowering finds nothing to lower without an `enum` node), so the template
+/// scan's walk also looks for `enum` nodes and reserved binders, which are then
+/// not walked for again.
+fn pass_lower_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    let mut reserved = ReservedIndexScan::new(&doc.value);
+    let mut has_enum_ops = false;
+    let (has_templates, scanned_whole) =
+        crate::lower_expression_templates::lower_expression_templates_visiting(
+            &mut doc.value,
+            &mut |path, value| {
+                has_enum_ops |= crate::lower_enums::is_enum_node(value);
+                reserved.visit(path, value);
+            },
+        )
+        .map_err(PassError::Schema)?;
+    doc.facts.has_templates = has_templates;
+    doc.facts.enum_walk_needed = has_enum_ops || !scanned_whole;
+    doc.facts.reserved = (scanned_whole && !has_enum_ops).then_some(reserved);
+    Ok(())
+}
+
+/// The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
+/// (RFC out-of-line-expression-templates §7.7): expand every surviving
+/// reference here so downstream consumers see the fully expanded Option-A
+/// image — numeric results stay bit-identical, and the typed structs never see
+/// an `apply_expression_template` node or an `expression_templates` block.
+/// Capture the per-component registries first: `expand` removes the blocks,
+/// and `flatten` needs them to build the step-4 merged `template_registry`. A
+/// document with no template machinery has nothing to expand; `expand` would
+/// walk it only to find that out.
+fn pass_expand_templates(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    doc.facts.component_templates =
+        crate::lower_expression_templates::capture_component_templates(&doc.value);
+    if doc.facts.has_templates {
+        let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
+        crate::lower_expression_templates::expand(&mut doc.value).map_err(PassError::Schema)?;
+    } else {
+        crate::lower_expression_templates::strip_component_template_blocks(&mut doc.value);
+    }
+    Ok(())
+}
+
+/// Lower `enum`-op nodes to `const` integers using the file's `enums` block
+/// (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time pass so that
+/// downstream consumers never see enum strings.
+fn pass_lower_enums(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    crate::lower_enums::lower_enums_raw_scanned(&mut doc.value, doc.facts.enum_walk_needed)
+        .map_err(PassError::Schema)
+}
+
+/// Reject a `faq` binder that shadows a globally-scoped name (the independent
+/// variable, `_var`). Runs HERE, on the fully lowered form, so a binder a
+/// §9.6/§9.7 template body introduced is caught with the authored ones. See
+/// [`reject_reserved_index_symbols`] for why this is a rejection rather than a
+/// shadowing rule.
+fn pass_reserved_index_symbols(doc: &mut Doc<'_>) -> Result<(), PassError> {
+    match doc.facts.reserved.take() {
+        Some(scan) => scan.finish(),
+        None => reject_reserved_index_symbols(&doc.value),
+    }
+    .map_err(PassError::Structural)
 }
 
 /// Load an ESM file from a filesystem path.
@@ -1521,6 +1799,7 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
 
 /// What [`prepare_document_ops_scanned`]'s walk also noted about the authored
 /// document, for a later pass that would otherwise walk it again.
+#[derive(Default)]
 pub(crate) struct AuthoredFacts {
     /// The path of the first object, in pre-order, with both an `op` and a
     /// `units` key (what the const-units version gate looks for).
@@ -1817,6 +2096,29 @@ fn scan_document_ops(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pass table answers what runs for each kind of document: an emit
+    /// source takes the wire boundary, the template machinery and template
+    /// lowering, in that order, and a root every pass.
+    #[test]
+    fn each_kind_of_document_takes_its_passes_in_table_order() {
+        let names = |role| {
+            LOAD_PASSES
+                .iter()
+                .filter(|p| p.roles.contains(&role))
+                .map(|p| p.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(DocRole::EmitSource),
+            [
+                "wire boundary ops",
+                "template machinery",
+                "template lowering"
+            ]
+        );
+        assert_eq!(names(DocRole::Root).len(), LOAD_PASSES.len());
+    }
 
     /// The deprecated spellings (esm-spec §4.2 "Deprecated ops") are
     /// rewritten in place by the wire-boundary walk — `neg` to unary `-`, `pow`

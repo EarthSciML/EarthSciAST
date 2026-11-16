@@ -74,30 +74,36 @@ fn authored_template_names(raw_source: &Value) -> std::collections::HashMap<Stri
 /// the Julia reference `emit_document`. `emit_esm_string ∘ emit_document` is a
 /// byte-wise fixed point under reload.
 ///
-/// `raw_source` passes the same wire boundary a load applies, on a copy: a
+/// A copy of `raw_source` runs the load passes an emit source takes
+/// (`crate::parse::DocRole::EmitSource`): the wire boundary a load applies (a
 /// removed op is refused, and a deprecated `neg` / `pow` is rewritten with the
 /// `deprecated_op` warning, so neither spelling survives into the emitted
-/// document (esm-spec §4.2).
+/// document, esm-spec §4.2), the §9.7 template machinery, and template
+/// lowering.
 pub fn emit_document(
     raw_source: &Value,
     base_path: &std::path::Path,
 ) -> Result<Value, ExpressionTemplateError> {
-    let mut prepared = raw_source.clone();
-    crate::parse::prepare_document_ops(&mut prepared).map_err(|e| match e {
-        crate::EsmError::SchemaDiagnostic { code, message, .. } => {
-            crate::diagnostic::err(code, message)
-        }
-        other => crate::diagnostic::err(codes::REMOVED_OP, other.to_string()),
-    })?;
-    let raw_source = &prepared;
     let authored = authored_template_names(raw_source);
-    let resolved = crate::template_imports::resolve_template_machinery(
-        raw_source,
-        base_path,
-        &std::collections::BTreeMap::new(),
-    )?;
-    let mut loaded = resolved.unwrap_or_else(|| raw_source.clone());
-    lower_expression_templates(&mut loaded)?;
+    let options = crate::parse::LoadOptions {
+        base_path: Some(base_path.to_path_buf()),
+        ..Default::default()
+    };
+    let mut source = crate::parse::Doc::new(
+        raw_source.clone(),
+        crate::parse::DocRole::EmitSource,
+        &options,
+    );
+    source.run_passes().map_err(|e| match e {
+        crate::parse::PassError::Schema(d) | crate::parse::PassError::Structural(d) => d,
+        crate::parse::PassError::Esm(crate::EsmError::SchemaDiagnostic {
+            code, message, ..
+        }) => crate::diagnostic::err(code, message),
+        crate::parse::PassError::Esm(other) => {
+            crate::diagnostic::err(codes::REMOVED_OP, other.to_string())
+        }
+    })?;
+    let mut loaded = source.value;
     let Some(root) = loaded.as_object_mut() else {
         return Ok(loaded);
     };
