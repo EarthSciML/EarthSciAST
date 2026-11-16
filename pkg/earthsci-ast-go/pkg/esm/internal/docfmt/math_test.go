@@ -149,6 +149,36 @@ func TestHandWrittenJsonStrings(t *testing.T) {
 	readsL(t, sy, "\\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")", strOp)
 }
 
+func TestHandWrittenArrayNotation(t *testing.T) {
+	sy := hw()
+	// A bare `\operatorname{n}` is a template applied with no bindings; with
+	// `()` it is an open operator with no operands.
+	readsL(t, sy, "\\operatorname{dlon}", psTNode("dlon", Obj{}))
+	readsL(t, sy, "\\operatorname{dlon}()", prNode("dlon", []Json{}))
+	readsT(t, sy, "op(\"dlon\")", psTNode("dlon", Obj{}))
+	readsT(t, sy, "op(\"dlon\")()", prNode("dlon", []Json{}))
+	// `\times [` outside a region is still a product with a bracket group.
+	prod := prNode("*", []Json{"a", prNode("+", []Json{"x", ji(1)})})
+	readsL(t, sy, "a \\times [x + 1]", prod)
+	readsL(t, sy, "a \\times[x + 1]", prod)
+	readsT(t, sy, "a times [x + 1]", prod)
+	// A makearray table, the region product spaced any way.
+	table := prMkJson(MkForm{
+		regions: [][]Pair{{{ji(1), "N"}}, {{ji(1), ji(1)}, {ji(2), ji(2)}}},
+		values:  []Json{"x", ji(0)},
+	})
+	readsL(t, sy, "\\left[\\begin{array}{l|l} x & [1, N] \\\\ 0 & [1, 1]\\times[2, 2] \\end{array}\\right]", table)
+	readsT(t, sy, "mat(delim: \"[\", augment: #1, x, [1, N]; 0, [1, 1] times [2, 2])", table)
+	readsL(t, sy, mathPrintLatex(sy, table), table)
+	readsT(t, sy, mathPrintTypst(sy, table), table)
+	// A lone equality filter followed by a superscript set is the filter,
+	// not a dense range.
+	filtSet := Obj{{"args", []Json{"a"}}, {"expr", "x"}, {"filter", prNode("==", []Json{"k", ji(1)})},
+		{"op", "faq"}, {"output_idx", []Json{}}}
+	readsL(t, sy, "\\sum_{k = 1}^{\\{a\\}} x", filtSet)
+	readsL(t, sy, mathPrintLatex(sy, filtSet), filtSet)
+}
+
 func TestUnitsLatexAndTypstRoundTrip(t *testing.T) {
 	f := func(s string, p, q int64) Factor { return Factor{Sym: s, Exp: big.NewRat(p, q)} }
 	l := []Factor{f("cm", 3, 1), f("short_ton", 1, 3), f("K", -1, 1), f("mol", -1, 2)}

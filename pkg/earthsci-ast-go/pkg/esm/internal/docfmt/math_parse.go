@@ -94,6 +94,10 @@ func psAtomStart(t Tok) bool {
 	return false
 }
 
+// psIsTimesLbk is `Math.isTimesLbk`: the region product with its bracket
+// (`\times [`); outside a `makearray` region it reads as `\times` then `[`.
+func psIsTimesLbk(t Tok) bool { return t.isKw(KwTimesLbk) }
+
 // psIsLp is `Math.isLp`: `(` or `\left(`.
 func psIsLp(t Tok) bool { return t.isKw(KwLp) || t.isKw(KwLpg) }
 
@@ -750,6 +754,58 @@ func psWithOut(f FaqForm, outs []Json, ors Obj) FaqForm {
 	return f
 }
 
+// psWithSup is `Math.withSup`: a superscript set read after the output
+// entries replaces the reduction's own.
+func psWithSup(f FaqForm, st []string) FaqForm {
+	if len(st) > 0 {
+		f.set = st
+	}
+	return f
+}
+
+// psPSup is `Math.pSup`: the superscript set of a reduction or of an output
+// form, if there is one: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`. ok is false
+// when the set starts but does not read.
+func psPSup(sf Sf, r []Tok) ([]string, []Tok, bool) {
+	open, closeK := KwLb, KwRb
+	if sf == SfTypst {
+		open, closeK = KwLpg, KwRp
+	}
+	if !atKws(r, KwCaret, open, KwLset) {
+		return nil, r, true
+	}
+	ns, r2, ok := psPNames(sf, r[3:])
+	if !ok || !atKws(r2, KwRset, closeK) {
+		return nil, nil, false
+	}
+	return ns, r2[2:], true
+}
+
+// psMkTail is `Math.mkTail`: the `makearray` node of a table read back, with
+// its subscript of output indices if one follows.
+func psMkTail(sf Sf, rows []mkRow, r []Tok) (Json, []Tok, bool) {
+	nodeOf := func(out []string) Json {
+		m := MkForm{out: out, regions: make([][]Pair, len(rows)), values: make([]Json, len(rows))}
+		for i, row := range rows {
+			m.values[i] = row.v
+			m.regions[i] = row.reg
+		}
+		return prMkJson(m)
+	}
+	open, closeK := KwLb, KwRb
+	if sf == SfTypst {
+		open, closeK = KwLpg, KwRp
+	}
+	if !atKws(r, KwUs, open) {
+		return nodeOf(nil), r, true
+	}
+	ns, r2, ok := psPNames(sf, r[2:])
+	if !ok || !at(r2, 0, closeK) {
+		return nil, nil, false
+	}
+	return nodeOf(ns), r2[1:], true
+}
+
 // ## The level parsers
 
 // psPOr is `Math.pOr`: level 1, an `or` chain.
@@ -947,6 +1003,19 @@ func psMulLoop(c Ctx, f int, acc []Json, ts []Tok) (Json, []Tok, bool) {
 			}
 			acc = append(acc, y)
 			ts = r2
+		case len(ts) > 0 && psIsTimesLbk(ts[0]):
+			// `\times [` outside a region: `\times`, then a bracket group.
+			// The rest is a suffix of the input's tail (the group reads its
+			// `[` at least), mapped back onto the input.
+			r1 := make([]Tok, 0, len(ts))
+			r1 = append(r1, tKw(KwLbk))
+			r1 = append(r1, ts[1:]...)
+			y, r2, ok := psPNot(c, f, r1)
+			if !ok {
+				return nil, nil, false
+			}
+			acc = append(acc, y)
+			ts = ts[len(ts)-len(r2):]
 		case at(ts, 0, KwSlash):
 			if c.sf != SfLatex {
 				return psClose("*", acc), ts, true
@@ -1295,7 +1364,13 @@ func psNodupKeys(xs Obj) bool {
 
 // psPOpn is `Math.pOpn`: `\operatorname{n}(…)`.
 func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 || len(ts) == 0 {
+	if f == 0 {
+		return nil, nil, false
+	}
+	if len(ts) == 0 {
+		if prTnameOk(n) {
+			return psTNode(n, Obj{}), ts, true
+		}
 		return nil, nil, false
 	}
 	f--
@@ -1353,7 +1428,7 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 			}
 			return nil, nil, false
 		case at(r1, 0, KwSemi):
-			if slices.Contains(exprRemovedOps, n) || prCoreOps[n] {
+			if slices.Contains(exprRemovedOps, n) || (prCoreOps[n] && !slices.Contains(prFieldCallOps, n)) {
 				return nil, nil, false
 			}
 			if _, ok := prTparams(c.s, n); ok {
@@ -1367,8 +1442,14 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 		}
 		return nil, nil, false
 	}
-	if t0.isKw(KwUs) && n == "D" {
-		return psPDCall(c, f, r)
+	if t0.isKw(KwUs) {
+		if n == "D" {
+			return psPDCall(c, f, r)
+		}
+		return nil, nil, false
+	}
+	if prTnameOk(n) {
+		return psTNode(n, Obj{}), ts, true
 	}
 	return nil, nil, false
 }
@@ -1484,6 +1565,13 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		}
 		return fail()
 	}
+	if t0.isKw(KwMat) && psMatHead(r) {
+		rows, r2, ok := psPMkRows(c, f, KwComma, KwSemi, KwRp, r[len(prMatHead())-1:])
+		if !ok {
+			return fail()
+		}
+		return psMkTail(c.sf, rows, r2)
+	}
 	if t0.isKw(KwMat) && len(r) >= 1 {
 		if !psIsLp(r[0]) {
 			return fail()
@@ -1576,6 +1664,13 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 			return prNode(o, xs), r2[1:], true
 		}
 		return fail()
+	}
+	if t0.isKw(KwLbkg) && at(r, 0, KwBarr) {
+		rows, r2, ok := psPMkRows(c, f, KwAmp, KwNl, KwEarr, r[1:])
+		if !ok || !at(r2, 0, KwRbkg) {
+			return fail()
+		}
+		return psMkTail(c.sf, rows, r2[1:])
 	}
 	if t0.isKw(KwSum) || t0.isKw(KwProd) || t0.isKw(KwLimits) || t0.isKw(KwLbkg) {
 		return psPRed(c, f, ts)
@@ -1787,6 +1882,9 @@ func psPRedBody(c Ctx, f int, red RedK, marked bool, ts []Tok) (FaqForm, []Tok, 
 			}
 			k, a, isEq := psLoneEq(row)
 			switch {
+			case isEq && atKws(r1, KwRb, KwCaret, KwLb, KwLset):
+				// a lone equality filter, then a superscript set
+				rs, r = []Row{row}, r1[1:]
 			case isEq && atKws(r1, KwRb, KwCaret, KwLb):
 				b, r3, ok := psPOr(c, f, r1[3:])
 				if !ok || !at(r3, 0, KwRb) {
@@ -1813,11 +1911,15 @@ func psPRedBody(c Ctx, f int, red RedK, marked bool, ts []Tok) (FaqForm, []Tok, 
 		}
 	}
 	rg, fl, hasFl, ok1 := psRowParts(rs)
-	body, r2, ok2 := psPMul(c, f, r)
+	st, r1, ok2 := psPSup(c.sf, r)
 	if !ok1 || !ok2 {
 		return FaqForm{}, nil, false
 	}
-	return FaqForm{red: red, marked: marked, out: []Json{}, ranges: rg, expr: body, filter: fl, hasFlt: hasFl}, r2, true
+	body, r2, ok := psPMul(c, f, r1)
+	if !ok {
+		return FaqForm{}, nil, false
+	}
+	return FaqForm{red: red, marked: marked, out: []Json{}, ranges: rg, expr: body, filter: fl, hasFlt: hasFl, set: st}, r2, true
 }
 
 // psLoneEq is the `.obj [("args", .arr [.str k, a]), ("op", .str "==")]`
@@ -1849,16 +1951,20 @@ func psPRed(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return nil, nil, false
 	}
 	f--
-	wrapped := func(r []Tok, tail []Kw, closeK Kw) (Json, []Tok, bool) {
+	wrapped := func(r []Tok, bracket []Kw, open, closeK Kw) (Json, []Tok, bool) {
 		red, marked, r1, ok := psPRedHead(c.sf, r)
 		if !ok {
 			return nil, nil, false
 		}
 		form, r2, ok := psPRedBody(c, f, red, marked, r1)
-		if !ok || !atKws(r2, tail...) {
+		if !ok || !atKws(r2, bracket...) {
 			return nil, nil, false
 		}
-		es, r4, ok := psPRows(c, f, KwComma, closeK, r2[len(tail):])
+		st, r3, ok := psPSup(c.sf, r2[len(bracket):])
+		if !ok || !atKws(r3, KwUs, open) {
+			return nil, nil, false
+		}
+		es, r4, ok := psPRows(c, f, KwComma, closeK, r3[2:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -1866,13 +1972,13 @@ func psPRed(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return nil, nil, false
 		}
-		return prFaqJson(psWithOut(form, outs, ors)), r4, true
+		return prFaqJson(psWithSup(psWithOut(form, outs, ors), st)), r4, true
 	}
 	if at(ts, 0, KwLbkg) {
-		return wrapped(ts[1:], []Kw{KwRbkg, KwUs, KwLb}, KwRb)
+		return wrapped(ts[1:], []Kw{KwRbkg}, KwLb, KwRb)
 	}
 	if atKws(ts, KwLr, KwLp, KwLbk) {
-		return wrapped(ts[3:], []Kw{KwRbk, KwRp, KwUs, KwLpg}, KwRp)
+		return wrapped(ts[3:], []Kw{KwRbk, KwRp}, KwLpg, KwRp)
 	}
 	red, marked, r1, ok := psPRedHead(c.sf, ts)
 	if !ok {
@@ -2030,6 +2136,103 @@ func psPCases(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return prNode("ifelse", []Json{cnd, v, e}), r3, true
 	}
 	return nil, nil, false
+}
+
+// psMatHead reports whether r, after `mat`, is the rest of the Typst table
+// head `(delim: "[", augment: #1,` (prMatHead).
+func psMatHead(r []Tok) bool {
+	h := prMatHead()[1:]
+	if len(r) < len(h) {
+		return false
+	}
+	for i, t := range h {
+		if t.K == TCode {
+			if n, ok := r[i].J.(JNum); r[i].K != TCode || !ok || !n.IsInt(1) {
+				return false
+			}
+		} else if !r[i].Equal(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// mkRow is a row of a `makearray` table read back: the value and its region.
+type mkRow struct {
+	v   Json
+	reg []Pair
+}
+
+// psPPair is `Math.pPair`: a bound pair after its `[`: `a, b]`.
+func psPPair(c Ctx, f int, ts []Tok) (Pair, []Tok, bool) {
+	if f == 0 {
+		return Pair{}, nil, false
+	}
+	f--
+	a, r, ok := psPOr(c, f, ts)
+	if !ok || !at(r, 0, KwComma) {
+		return Pair{}, nil, false
+	}
+	b, r2, ok := psPOr(c, f, r[1:])
+	if !ok || !at(r2, 0, KwRbk) {
+		return Pair{}, nil, false
+	}
+	return Pair{a, b}, r2[1:], true
+}
+
+// psPRegTail is `Math.pRegTail`: the further bound pairs of a region, each
+// after `\times [`.
+func psPRegTail(c Ctx, f int, ts []Tok) ([]Pair, []Tok, bool) {
+	var out []Pair
+	for {
+		if f == 0 {
+			return nil, nil, false
+		}
+		f--
+		if !at(ts, 0, KwTimesLbk) {
+			return out, ts, true
+		}
+		p, r, ok := psPPair(c, f, ts[1:])
+		if !ok {
+			return nil, nil, false
+		}
+		out = append(out, p)
+		ts = r
+	}
+}
+
+// psPMkRows is `Math.pMkRows`: the rows of a `makearray` table: a value, the
+// cell separator csep, a region; rows separated by rsep, up to closeK
+// (consumed).
+func psPMkRows(c Ctx, f int, csep, rsep, closeK Kw, ts []Tok) ([]mkRow, []Tok, bool) {
+	var out []mkRow
+	for {
+		if f == 0 {
+			return nil, nil, false
+		}
+		f--
+		v, r, ok := psPOr(c, f, ts)
+		if !ok || !atKws(r, csep, KwLbk) {
+			return nil, nil, false
+		}
+		p, r1, ok := psPPair(c, f, r[2:])
+		if !ok {
+			return nil, nil, false
+		}
+		ps, r2, ok := psPRegTail(c, f, r1)
+		if !ok || len(r2) == 0 || r2[0].K != TKw {
+			return nil, nil, false
+		}
+		out = append(out, mkRow{v: v, reg: append([]Pair{p}, ps...)})
+		switch r2[0].W {
+		case rsep:
+			ts = r2[1:]
+		case closeK:
+			return out, r2[1:], true
+		default:
+			return nil, nil, false
+		}
+	}
 }
 
 // psPEscArgs is `Math.pEscArgs`: Typst escape arguments: `, a` repeated, then

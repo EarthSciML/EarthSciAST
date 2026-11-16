@@ -156,6 +156,8 @@ var latexKwTable = map[Kw]string{
 	KwBcases: "\\begin{cases}", KwEcases: "\\end{cases}", KwBmat: "\\begin{bmatrix}",
 	KwEmat: "\\end{bmatrix}", KwSum: "\\sum", KwProd: "\\prod", KwInn: "\\in",
 	KwSubstack: "\\substack", KwLimitsL: "\\limits", KwLbkg: "\\left[", KwRbkg: "\\right]",
+	KwBarr: "\\begin{array}{l|l}", KwEarr: "\\end{array}", KwTimesLbk: "\\times [",
+	KwLset: "\\{", KwRset: "\\}",
 }
 
 // latexKwChars is `Latex.kwChars` (empty for the Typst-only keywords).
@@ -275,7 +277,8 @@ func latexPretty(p *Tok, t1, t2 Tok) bool {
 		t1.isKw(KwComma) || t1.isKw(KwColon) || t1.isKw(KwSemi) ||
 		(t2.isKw(KwMinus) && latexAtomEnd(t1)) ||
 		(t1.isKw(KwMinus) && p != nil && latexAtomEnd(*p)) ||
-		(latexAtomEnd(t1) && psAtomStart(t2) && !t2.isKw(KwLp) && !t2.isKw(KwLbk))
+		(latexAtomEnd(t1) && psAtomStart(t2) && !t2.isKw(KwLp) && !t2.isKw(KwLbk)) ||
+		t2.isKw(KwTimesLbk) || t1.isKw(KwBarr) || t2.isKw(KwEarr)
 }
 
 // latexSp is `Latex.sp`.
@@ -313,6 +316,20 @@ var latexCtrlKw = map[string]Kw{
 	"max": KwMax, "lfloor": KwLfloor, "rfloor": KwRfloor, "lceil": KwLceil,
 	"rceil": KwRceil, "partial": KwPdiff, "dot": KwDotacc, "sum": KwSum,
 	"prod": KwProd, "in": KwInn, "substack": KwSubstack, "limits": KwLimitsL,
+}
+
+// latexTimesTok is `Latex.timesTok`: `\times` followed (after white space)
+// by `[`: the region product of a `makearray` with the bracket of the next
+// bound pair, one token; any other `\times` is a product.
+func latexTimesTok(r []rune) (Tok, []rune) {
+	n := 0
+	for n < len(r) && latexIsWsL(r[n]) {
+		n++
+	}
+	if n < len(r) && r[n] == '[' {
+		return tKw(KwTimesLbk), r[n+1:]
+	}
+	return tKw(KwTimes), r
 }
 
 // latexCtrlTok is `Latex.ctrlTok`: after a control word: its token.
@@ -380,6 +397,9 @@ func latexCtrlTok(w string, r []rune) (Tok, []rune, bool) {
 		if r2, ok := surfDropP("{bmatrix}", r); ok {
 			return tKw(KwBmat), r2, true
 		}
+		if r2, ok := surfDropP("{array}{l|l}", r); ok {
+			return tKw(KwBarr), r2, true
+		}
 		return Tok{}, nil, false
 	case "end":
 		if r2, ok := surfDropP("{cases}", r); ok {
@@ -388,7 +408,13 @@ func latexCtrlTok(w string, r []rune) (Tok, []rune, bool) {
 		if r2, ok := surfDropP("{bmatrix}", r); ok {
 			return tKw(KwEmat), r2, true
 		}
+		if r2, ok := surfDropP("{array}", r); ok {
+			return tKw(KwEarr), r2, true
+		}
 		return Tok{}, nil, false
+	case "times":
+		t, r2 := latexTimesTok(r)
+		return t, r2, true
 	}
 	if slices.Contains(exprGreek, w) {
 		return tGreek(w), r, true
@@ -534,6 +560,10 @@ func latexLexOne(cs []rune) (Tok, []rune, bool) {
 			return tUnits(l), r2, true
 		case d == '\\':
 			return tKw(KwNl), r, true
+		case d == '{':
+			return tKw(KwLset), r, true
+		case d == '}':
+			return tKw(KwRset), r, true
 		}
 		return Tok{}, nil, false
 	}
