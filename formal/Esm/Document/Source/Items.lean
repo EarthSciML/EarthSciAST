@@ -404,7 +404,7 @@ def prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String) (S : Sym
   | .eq r e => .eq r (prE S e)
   | .rxn x => .rxn { x with rate := prR S x.rate }
   | .plot a => .plot a
-  | .tm t => .tm { t with lhs := t.lhs.map (prR (t.scope S)), body := prR (t.scope S) t.body }
+  | .tm t => .tm { t with lhs := t.lhs.map (prR (t.mscope S)), body := prR (t.scope S) t.body }
 
 theorem prMx_heads (prE : Sym → Eqn → String) (prR : Sym → Json → String) (S : Sym) :
     HeadsKept (prMx prE prR S) := by
@@ -423,7 +423,7 @@ def ckMx (ckE : Sym → String → Option (List Eqn)) (ckR : Sym → String → 
     match t.lhs with
     | none => (ckR (t.scope S) t.body).map (fun b => [.tm { t with lhs := none, body := b }])
     | some l =>
-      match ckR (t.scope S) l, ckR (t.scope S) t.body with
+      match ckR (t.mscope S) l, ckR (t.scope S) t.body with
       | some l', some b => some [.tm { t with lhs := some l', body := b }]
       | _, _ => none
 
@@ -432,7 +432,7 @@ theorem ckMx_prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String)
     (m : MC) (hE : ∀ r e, m = .eq r e → ckE S (prE S e) = some [e])
     (hR : ∀ x, m = .rxn x → ckR S (prR S x.rate) = some x.rate)
     (hT : ∀ t, m = .tm t → ckR (t.scope S) (prR (t.scope S) t.body) = some t.body ∧
-      ∀ l, t.lhs = some l → ckR (t.scope S) (prR (t.scope S) l) = some l) :
+      ∀ l, t.lhs = some l → ckR (t.mscope S) (prR (t.mscope S) l) = some l) :
     ckMx ckE ckR S (prMx prE prR S m) = some [m] := by
   cases m with
   | eq r e => simp [prMx, ckMx, hE r e rfl]
@@ -449,10 +449,13 @@ theorem ckMx_prMx (prE : Sym → Eqn → String) (prR : Sym → Json → String)
       simp only at hb
       rw [hb]; rfl
     | some l =>
-      have e : Tm.scope S (⟨n, ps, some (prR (Tm.scope S ⟨n, ps, some l, body, as⟩) l),
+      have e : Tm.scope S (⟨n, ps, some (prR (Tm.mscope S ⟨n, ps, some l, body, as⟩) l),
           prR (Tm.scope S ⟨n, ps, some l, body, as⟩) body, as⟩ : Tm String) =
           Tm.scope S (⟨n, ps, some l, body, as⟩ : Tm Json) := rfl
-      simp only [prMx, ckMx, Option.map_some, e]
+      have e2 : Tm.mscope S (⟨n, ps, some (prR (Tm.mscope S ⟨n, ps, some l, body, as⟩) l),
+          prR (Tm.scope S ⟨n, ps, some l, body, as⟩) body, as⟩ : Tm String) =
+          Tm.mscope S (⟨n, ps, some l, body, as⟩ : Tm Json) := rfl
+      simp only [prMx, ckMx, Option.map_some, e, e2]
       simp only at hb hl
       rw [hl l rfl, hb]
 

@@ -56,9 +56,11 @@ def kwChars : Kw → List Char
   | .vec => "vec".toList | .mat => "mat".toList
   | .sum => "sum".toList | .prod => "product".toList | .inn => "in".toList
   | .limits => "limits".toList | .lr => "lr".toList | .nl => ['\\']
+  | .timesLbk => "times [".toList | .delimK => "delim".toList | .augK => "augment".toList
+  | .lset => ['{'] | .rset => ['}']
   | .rpg | .lb | .rb | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .substack | .lbkg | .rbkg | .limitsL => []
+  | .substack | .lbkg | .rbkg | .limitsL | .barr | .earr => []
 
 def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
@@ -135,7 +137,7 @@ def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   (t1 matches .kw .semi) ||
   ((t2 matches .kw .minus) && atomEnd t1) ||
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
-  (atomEnd t1 && atomStart t2) || ((t2 matches .units _))
+  (atomEnd t1 && atomStart t2) || ((t2 matches .units _)) || (t2 matches .kw .timesLbk)
 
 /-- No space before a call parenthesis, nor before the `[` of an index (`k[1]`). -/
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool :=
@@ -162,7 +164,7 @@ def identKw : List (String × Kw) :=
     ("cosh", .cosh), ("tanh", .tanh), ("min", .min), ("max", .max), ("abs", .abs),
     ("floor", .floor), ("ceil", .ceil), ("partial", .pdiff), ("dif", .dif), ("cases", .cases),
     ("vec", .vec), ("mat", .mat), ("sum", .sum), ("product", .prod), ("in", .inn),
-    ("limits", .limits), ("lr", .lr)]
+    ("limits", .limits), ("lr", .lr), ("delim", .delimK), ("augment", .augK)]
 
 /-- `("…")` after a function name. -/
 def quotedArg (r : List Char) : Option (String × List Char) :=
@@ -221,7 +223,7 @@ def punct : Char → Option Kw
   | '>' => some .gt | '/' => some .slash | '^' => some .caret | '_' => some .us
   | ')' => some .rp | '[' => some .lbk | ']' => some .rbk
   | ',' => some .comma | ';' => some .semi | ':' => some .colon | '&' => some .amp
-  | '.' => some .sdot | '\\' => some .nl
+  | '.' => some .sdot | '\\' => some .nl | '{' => some .lset | '}' => some .rset
   | _ => none
 
 /-- `upright(e)`, Euler's number written without quotes (an accepted variant, read as
@@ -251,6 +253,10 @@ def lexIdent (cs : List Char) : Option (Tok × List Char) :=
       | none => none
     | _ => none
   else if w = "esm" then (dropP ".node".toList p.2).map (.kw .esmnode, ·)
+  else if w = "times" then
+    match p.2.dropWhile isWsT with
+    | '[' :: r => some (.kw .timesLbk, r)
+    | _ => some (.kw .times, p.2)
   else
     match identKw.lookup w with
     | some k => some (.kw k, p.2)

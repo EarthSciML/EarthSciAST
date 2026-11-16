@@ -67,6 +67,12 @@ def atomStart : Tok → Bool
     | _ => false
   | _ => false
 
+/-- The region product with its bracket (`\times [`); outside a `makearray` region it
+reads as `\times` then `[`. -/
+def isTimesLbk : Tok → Bool
+  | .kw .timesLbk => true
+  | _ => false
+
 /-- An opening parenthesis: `(` or `\left(`; the parser reads them alike. -/
 def isLp : Tok → Bool
   | .kw .lp | .kw .lpg => true
@@ -396,6 +402,39 @@ def entryParts : List Row → Option (List Json × List (String × Json))
 def withOut (F : FaqForm) (outs : List Json) (ors : List (String × Json)) : FaqForm :=
   { F with out := outs, ranges := sortKV (ors ++ F.ranges) }
 
+/-- A superscript set read after the output entries replaces the reduction's own. -/
+def withSup (F : FaqForm) (st : List String) : FaqForm :=
+  if st.isEmpty then F else { F with set := st }
+
+/-- The superscript set of a reduction or of an output form, if there is one: LaTeX
+`^{\{f, g\}}`, Typst `^({f, g})`. -/
+def pSup (sf : Sf) (r : List Tok) : Option (List String × List Tok) :=
+  match sf, r with
+  | .latex, .kw .caret :: .kw .lb :: .kw .lset :: r1 =>
+    match pNames sf (r1.length + 1) r1 with
+    | some (ns, .kw .rset :: .kw .rb :: r2) => some (ns, r2)
+    | _ => none
+  | .typst, .kw .caret :: .kw .lpg :: .kw .lset :: r1 =>
+    match pNames sf (r1.length + 1) r1 with
+    | some (ns, .kw .rset :: .kw .rp :: r2) => some (ns, r2)
+    | _ => none
+  | _, _ => some ([], r)
+
+/-- The `makearray` node of a table read back, with its subscript of output indices if
+one follows. -/
+def mkTail (sf : Sf) (rows : List (Json × List (Json × Json))) (r : List Tok) : Option (Json × List Tok) :=
+  let nodeOf := fun (out : List String) => mkJson ⟨out, rows.map Prod.snd, rows.map Prod.fst⟩
+  match sf, r with
+  | .latex, .kw .us :: .kw .lb :: r1 =>
+    match pNames sf (r1.length + 1) r1 with
+    | some (ns, .kw .rb :: r2) => some (nodeOf ns, r2)
+    | _ => none
+  | .typst, .kw .us :: .kw .lpg :: r1 =>
+    match pNames sf (r1.length + 1) r1 with
+    | some (ns, .kw .rp :: r2) => some (nodeOf ns, r2)
+    | _ => none
+  | _, _ => some (nodeOf [], r)
+
 mutual
 /-- Level 1: an `or` chain. -/
 def pOr (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
@@ -507,7 +546,11 @@ def mulLoop (c : Ctx) : Nat → List Json → List Tok → Option (Json × List 
       | none => none
     else some (close "*" acc, .kw .slash :: r)
   | f + 1, acc, t :: r =>
-    if atomStart t && !negTok t then
+    if isTimesLbk t then
+      match pNot c f (.kw .lbk :: r) with
+      | some (y, r') => mulLoop c f (acc ++ [y]) r'
+      | none => none
+    else if atomStart t && !negTok t then
       match pNot c f (t :: r) with
       | some (y, r') => mulLoop c f (acc ++ [y]) r'
       | none => none
@@ -697,7 +740,8 @@ def pOpn (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)
           | none, some vs, _ => some (mkNode n vs [], r')
           | _, _, _ => none
       | some (args, .kw .semi :: r1) =>
-        if removedOps.contains n || coreOps.contains n || (tparams c.S n).isSome then none
+        if removedOps.contains n || (coreOps.contains n && !(fieldCallOps.contains n)) ||
+            (tparams c.S n).isSome then none
         else
           match allPos args, pFields c f r1 with
           | some vs, some (fs, .kw .rp :: r2) => some (mkNode n vs fs, r2)
@@ -705,8 +749,9 @@ def pOpn (c : Ctx) : Nat → String → List Tok → Option (Json × List Tok)
       | _ => none
     else if t0 matches .kw .us then
       if n = "D" then pDCall c f r else none
+    else if tnameOK n then some (tNode n [], t0 :: r)
     else none
-  | _ + 1, _, [] => none
+  | _ + 1, n, [] => if tnameOK n then some (tNode n [], []) else none
 
 /-- `\operatorname{D}_{x}(u, a, b)` after the `_`. -/
 def pDCall (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
@@ -751,6 +796,11 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
         | some (ns, .kw .rp :: r') => constTail (.arr (ns.map .num)) r'
         | _ => none
       else none
+    | .kw .mat :: .kw .lp :: .kw .delimK :: .kw .colon :: .txt "[" :: .kw .comma :: .kw .augK ::
+        .kw .colon :: .code (.num (.int 1)) :: .kw .comma :: r =>
+      match pMkRows c f .comma .semi .rp r with
+      | some (rows, r') => mkTail c.sf rows r'
+      | none => none
     | .kw .mat :: t :: r =>
       if isLp t then
         match pGrid .comma .semi .rp (r.length + 1) r with
@@ -817,6 +867,10 @@ def pPrim (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
         | some (xs, .kw .rp :: r') => if 2 ≤ xs.length then some (node "max" xs, r') else none
         | _ => none
       else pRed c f ts
+    | .kw .lbkg :: .kw .barr :: r =>
+      match pMkRows c f .amp .nl .earr r with
+      | some (rows, .kw .rbkg :: r') => mkTail c.sf rows r'
+      | _ => none
     | .kw .sum :: _ | .kw .prod :: _ | .kw .limits :: _ | .kw .lbkg :: _ => pRed c f ts
     | .kw .lr :: .kw .lp :: .kw .lbk :: _ => pRed c f ts
     | .opn n :: r => pOpn c f n r
@@ -930,9 +984,14 @@ def pRedBody (c : Ctx) : Nat → RedK → Bool → List Tok → Option (FaqForm 
         | .kw .us :: .kw .lb :: r =>
           match pRow c f (isKw .rb) r with
           | some (.filt (.obj [("args", .arr [.str k, a]), ("op", .str "==")]), .kw .rb :: .kw .caret :: .kw .lb :: r2) =>
-            match pOr c f r2 with
-            | some (b, .kw .rb :: r3) => some ([.rng k (.arr [a, b])], r3)
-            | _ => none
+            match r2 with
+            | .kw .lset :: r3 =>
+              some ([.filt (.obj [("args", .arr [.str k, a]), ("op", .str "==")])],
+                .kw .caret :: .kw .lb :: .kw .lset :: r3)
+            | _ =>
+              match pOr c f r2 with
+              | some (b, .kw .rb :: r3) => some ([.rng k (.arr [a, b])], r3)
+              | _ => none
           | some (row, .kw .rb :: r2) => some ([row], r2)
           | _ => none
         | r => some ([], r)
@@ -942,8 +1001,11 @@ def pRedBody (c : Ctx) : Nat → RedK → Bool → List Tok → Option (FaqForm 
         | r => some ([], r)
     match rows with
     | some (rs, r) =>
-      match rowParts rs, pMul c f r with
-      | some (rg, fl), some (body, r') => some (⟨red, marked, [], rg, body, fl⟩, r')
+      match rowParts rs, pSup c.sf r with
+      | some (rg, fl), some (st, r1) =>
+        match pMul c f r1 with
+        | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
+        | none => none
       | _, _ => none
     | none => none
 
@@ -956,22 +1018,26 @@ def pRed (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
       match pRedHead c.sf r with
       | some (red, marked, r1) =>
         match pRedBody c f red marked r1 with
-        | some (F, .kw .rbkg :: .kw .us :: .kw .lb :: r2) =>
-          match pRows c f .comma .rb r2 with
-          | some (es, r3) =>
-            (entryParts es).map fun p => (faqJson (withOut F p.1 p.2), r3)
-          | none => none
+        | some (F, .kw .rbkg :: r1) =>
+          match pSup c.sf r1 with
+          | some (st, .kw .us :: .kw .lb :: r2) =>
+            match pRows c f .comma .rb r2 with
+            | some (es, r3) => (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+            | none => none
+          | _ => none
         | _ => none
       | none => none
     | .kw .lr :: .kw .lp :: .kw .lbk :: r =>
       match pRedHead c.sf r with
       | some (red, marked, r1) =>
         match pRedBody c f red marked r1 with
-        | some (F, .kw .rbk :: .kw .rp :: .kw .us :: .kw .lpg :: r2) =>
-          match pRows c f .comma .rp r2 with
-          | some (es, r3) =>
-            (entryParts es).map fun p => (faqJson (withOut F p.1 p.2), r3)
-          | none => none
+        | some (F, .kw .rbk :: .kw .rp :: r1) =>
+          match pSup c.sf r1 with
+          | some (st, .kw .us :: .kw .lpg :: r2) =>
+            match pRows c f .comma .rp r2 with
+            | some (es, r3) => (entryParts es).map fun p => (faqJson (withSup (withOut F p.1 p.2) st), r3)
+            | none => none
+          | _ => none
         | _ => none
       | none => none
     | _ =>
@@ -1065,6 +1131,45 @@ def pCases (c : Ctx) : Nat → List Tok → Option (Json × List Tok)
           (pCases c f r').map fun p => (node "ifelse" [cnd, v, p.1], p.2)
         else none
       | _ => none
+    | _ => none
+
+/-- A bound pair after its `[`: `a, b]`. -/
+def pPair (c : Ctx) : Nat → List Tok → Option ((Json × Json) × List Tok)
+  | 0, _ => none
+  | f + 1, ts =>
+    match pOr c f ts with
+    | some (a, .kw .comma :: r) =>
+      match pOr c f r with
+      | some (b, .kw .rbk :: r') => some ((a, b), r')
+      | _ => none
+    | _ => none
+
+/-- The further bound pairs of a region, each after `\times [`. -/
+def pRegTail (c : Ctx) : Nat → List Tok → Option (List (Json × Json) × List Tok)
+  | 0, _ => none
+  | f + 1, .kw .timesLbk :: r =>
+    match pPair c f r with
+    | some (p, r') => (pRegTail c f r').map fun q => (p :: q.1, q.2)
+    | none => none
+  | _ + 1, r => some ([], r)
+
+/-- The rows of a `makearray` table: a value, the cell separator `csep`, a region; rows
+separated by `rsep`, up to `close` (consumed). -/
+def pMkRows (c : Ctx) : Nat → Kw → Kw → Kw → List Tok → Option (List (Json × List (Json × Json)) × List Tok)
+  | 0, _, _, _, _ => none
+  | f + 1, csep, rsep, close, ts =>
+    match pOr c f ts with
+    | some (v, .kw k :: .kw .lbk :: r) =>
+      if k = csep then
+        match pPair c f r with
+        | some (p, r1) =>
+          match pRegTail c f r1 with
+          | some (ps, .kw k2 :: r2) =>
+            if k2 = rsep then (pMkRows c f csep rsep close r2).map fun q => ((v, p :: ps) :: q.1, q.2)
+            else if k2 = close then some ([(v, p :: ps)], r2) else none
+          | _ => none
+        | none => none
+      else none
     | _ => none
 
 /-- Typst escape arguments: `, a` repeated, then `)`. -/

@@ -445,7 +445,35 @@ theorem faqOut_crow (c : Ctx) (P : Json → Out) (F : FaqForm) :
     (faqOut c P F).crow = (faqOut c P F).toks ++ [.kw .amp, .txt "otherwise"] := by
   unfold faqOut; split
   · rfl
-  · split <;> rfl
+  · simp only; generalize c.sf = sf; cases sf <;> rfl
+
+theorem nice_app {A B : List Tok} (hA : Nice A) (hB : Nice B) : Nice (A ++ B) := by
+  by_cases he : A = []
+  · rw [he]; exact hB
+  · exact nice_append _ hA he
+
+/-- The list `toks ++ [closer]` for a list that is good and nice. -/
+theorem good_close {A : List Tok} {k : Kw} (hk : kwOK k = true) (hl : k ≠ .lp) (hA : Good A) (hn : Nice A) :
+    Good (A ++ [.kw k]) ∧ Nice (A ++ [.kw k]) :=
+  ⟨good_append hA (good_single hk) (nice_cons _ (by simp [hl]) rfl),
+    nice_app hn (nice_cons _ (by simp [hl]) rfl)⟩
+
+theorem good_names (c : Ctx) (hc : c.sf = .typst) (ns : List String) :
+    Good (sepBy [.kw .comma] (ns.map (nameToks c))) ∧ Nice (sepBy [.kw .comma] (ns.map (nameToks c))) :=
+  good_sepBy .comma rfl (by simp) _ (fun y hy => by
+    obtain ⟨n, -, rfl⟩ := List.mem_map.1 hy
+    exact ⟨(good_nameToks c hc n).1, (good_nameToks c hc n).2.1⟩)
+
+theorem good_supT (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) : Good (supT c F) ∧ Nice (supT c F) := by
+  unfold supT; split
+  · exact ⟨good_nil, fun _ h => by cases h⟩
+  · obtain ⟨hL1, hL2⟩ := good_names c hc F.sup
+    obtain ⟨hA1, hA2⟩ := good_close (k := .rset) rfl (by simp) hL1 hL2
+    obtain ⟨hR1, hR2⟩ := good_close (k := .rp) rfl (by simp) hA1 hA2
+    unfold supToks; rw [hc]
+    simp only [List.cons_append, List.nil_append, List.append_assoc] at hR1 hR2 ⊢
+    exact ⟨good_cons rfl (good_cons rfl (good_cons rfl hR1 hR2) (nice_cons _ (by simp) rfl))
+      (nice_cons _ (by simp) rfl), nice_cons _ (by simp) rfl⟩
 
 theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → Out)
     (hQ : ∀ x ∈ faqSubs F, ∀ L, Good ((P x).at .typst L) ∧ Nice ((P x).at .typst L) ∧ (P x).at .typst L ≠ []) :
@@ -507,7 +535,7 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
         rw [hc]; exact ⟨(hQ y (by simp [faqSubs, hy]) 1).1, (hQ y (by simp [faqSubs, hy]) 1).2.1⟩
       · cases hx
   have hSub : Good (subToks c P F) ∧ Nice (subToks c P F) := by
-    rw [subToks_eq, iteF (by rw [hc]; decide)]; unfold subToksT
+    rw [Latex.subToks_split, iteF (by rw [hc]; decide)]; unfold subToksT
     split
     · exact ⟨good_nil, fun _ h => by cases h⟩
     · have hS := good_sepBy .nl rfl (by simp) _ hRows
@@ -520,10 +548,16 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
       simp only [List.cons_append, List.nil_append]
       exact ⟨good_cons rfl (good_cons rfl hR.1 hR.2) (nice_cons _ (by simp) rfl), nice_cons _ (by simp) rfl⟩
   obtain ⟨hB1, hB2, hB3⟩ := hQ F.expr (by simp [faqSubs]) 5
+  obtain ⟨hU1, hU2⟩ := good_supT c hc F
+  have hIf : Good (if F.out = [] then supT c F else []) ∧ Nice (if F.out = [] then supT c F else []) := by
+    split
+    · exact ⟨hU1, hU2⟩
+    · exact ⟨good_nil, fun _ h => by cases h⟩
   have hRed : Good (redToks c P F) ∧ Nice (redToks c P F) ∧ redToks c P F ≠ [] := by
     unfold redToks; rw [hc]
-    refine ⟨good_append (good_append hH.1 hSub.1 hSub.2) hB1 hB2, nice_append _ (nice_append _ hH.2.1 hH.2.2)
-      (by simp [hH.2.2]), by simp [hH.2.2]⟩
+    refine ⟨good_append (good_append (good_append hH.1 hSub.1 hSub.2) hIf.1 hIf.2) hB1 hB2,
+      nice_append _ (nice_append _ (nice_append _ hH.2.1 hH.2.2) (by simp [hH.2.2])) (by simp [hH.2.2]),
+      by simp [hH.2.2]⟩
   have hEnt : ∀ x ∈ F.out.map (entryToks c P F), Good x ∧ Nice x := by
     intro x hx
     obtain ⟨j, -, rfl⟩ := List.mem_map.1 hx
@@ -545,12 +579,84 @@ theorem good_faqOut (c : Ctx) (hc : c.sf = .typst) (F : FaqForm) (P : Json → O
   split
   · exact hRed.1
   · simp only [mkOut, List.cons_append, List.nil_append, List.append_assoc]
-    have hTail : Good (.kw .rbk :: .kw .rp :: .kw .us :: .kw .lpg ::
-        (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp])) :=
-      good_cons rfl (good_cons rfl (good_cons rfl (good_cons rfl hE'.1 hE'.2) (nice_cons _ (by simp) rfl))
-        (nice_cons _ (by simp) rfl)) (nice_cons _ (by simp) rfl)
+    have hUs : Good (.kw .us :: .kw .lpg :: (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp])) :=
+      good_cons rfl (good_cons rfl hE'.1 hE'.2) (nice_cons _ (by simp) rfl)
+    have hTail : Good (.kw .rbk :: .kw .rp :: (supT c F ++ .kw .us :: .kw .lpg ::
+        (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp]))) :=
+      good_cons rfl (good_cons rfl (good_append hU1 hUs (nice_cons _ (by simp) rfl))
+        (nice_app hU2 (nice_cons _ (by simp) rfl))) (nice_cons _ (by simp) rfl)
     exact good_cons_lp rfl rfl (good_cons rfl (good_append hRed.1 hTail (nice_cons _ (by simp) rfl))
       (nice_append _ hRed.2.1 hRed.2.2)) (nice_cons _ (by simp) rfl)
+
+/-! ## Block assembly -/
+
+def GN (A : List Tok) : Prop := Good A ∧ Nice A
+
+theorem gn_nil : GN [] := ⟨good_nil, fun _ h => by cases h⟩
+
+theorem gn_cat {A B : List Tok} (hA : GN A) (hB : GN B) : GN (A ++ B) :=
+  ⟨good_append hA.1 hB.1 hB.2, nice_app hA.2 hB.2⟩
+
+theorem gn_kw {k : Kw} {B : List Tok} (hk : kwOK k = true) (hl : k ≠ .lp) (hB : GN B) : GN (.kw k :: B) :=
+  ⟨good_cons hk hB.1 hB.2, nice_cons _ (by simp [hl]) rfl⟩
+
+theorem gn_flatMap {α : Type} (f : α → List Tok) : ∀ (xs : List α), (∀ x ∈ xs, GN (f x)) → GN (xs.flatMap f)
+  | [], _ => gn_nil
+  | x :: xs, h => by
+    rw [List.flatMap_cons]
+    exact gn_cat (h x (by simp)) (gn_flatMap f xs (fun y hy => h y (by simp [hy])))
+
+theorem mkOutT_crow (c : Ctx) (P : Json → Out) (M : MkForm) :
+    (mkOutT c P M).crow = (mkOutT c P M).toks ++ [.kw .amp, .txt "otherwise"] := by
+  unfold mkOutT; simp only; generalize c.sf = sf; cases sf <;> rfl
+
+theorem good_mkOutT (c : Ctx) (hc : c.sf = .typst) (M : MkForm) (P : Json → Out)
+    (hQ : ∀ x ∈ mkSubs M, ∀ L, Good ((P x).at .typst L) ∧ Nice ((P x).at .typst L) ∧ (P x).at .typst L ≠ []) :
+    Good (mkOutT c P M).toks := by
+  have hAt : ∀ x ∈ mkSubs M, GN ((P x).at c.sf 1) := fun x hx => by
+    rw [hc]; exact ⟨(hQ x hx 1).1, (hQ x hx 1).2.1⟩
+  have hPair : ∀ r ∈ M.regions, ∀ p ∈ r, GN (pairToks c P p) := by
+    intro r hr p hp
+    obtain ⟨h1, h2⟩ := Latex.mem_mkSubs_bound hr hp
+    exact gn_cat (hAt _ h1) (gn_kw rfl (by simp) (hAt _ h2))
+  have hReg : ∀ r ∈ M.regions, GN (regToks c P r) := by
+    intro r hr
+    cases r with
+    | nil => exact gn_nil
+    | cons p ps =>
+      have hps := gn_flatMap (fun q => .kw .timesLbk :: pairToks c P q ++ [.kw .rbk]) ps (fun q hq =>
+        gn_kw rfl (by simp) (gn_cat (hPair _ hr q (by simp [hq])) (gn_kw rfl (by simp) gn_nil)))
+      simp only [regToks]
+      exact gn_kw rfl (by simp) (gn_cat (hPair _ hr p (by simp)) (gn_kw rfl (by simp) hps))
+  have hRows := good_sepBy .semi rfl (by simp) ((M.values.zip M.regions).map (mkRow c P)) (by
+    refine fun y hy => ?_
+    obtain ⟨vr, hvr, rfl⟩ := List.mem_map.1 hy
+    have hv := hAt vr.1 (Latex.mem_mkSubs_value (List.of_mem_zip hvr).1)
+    have hr := hReg vr.2 (List.of_mem_zip hvr).2
+    simp only [mkRow]; rw [show cellSep c.sf = .comma by rw [hc]; rfl]
+    exact gn_cat hv (gn_kw rfl (by simp) hr))
+  have hSub : GN (mkSub c M.out) := by
+    unfold mkSub; split
+    · exact gn_nil
+    · rw [hc]
+      obtain ⟨hL1, hL2⟩ := good_names c hc M.out
+      simp only [List.cons_append, List.nil_append]
+      exact gn_kw rfl (by simp) (gn_kw rfl (by simp) (gn_cat ⟨hL1, hL2⟩ (gn_kw rfl (by simp) gn_nil)))
+  have hTail : GN (List.drop 2 matHead) := by
+    simp only [matHead, List.drop]
+    refine gn_kw rfl (by simp) (gn_kw rfl (by simp) ?_)
+    refine ⟨good_cons (tokOK_txt _ (by decide)) ?_ ?_, nice_cons _ (by simp) rfl⟩
+    · exact (gn_kw rfl (by simp) (gn_kw rfl (by simp) (gn_kw rfl (by simp)
+        ⟨good_cons (t := .code (.num (.int 1))) (jwf_sound (.num (.int 1)) rfl) (gn_kw rfl (by simp) gn_nil).1 (gn_kw rfl (by simp) gn_nil).2,
+          nice_cons _ (by simp) rfl⟩))).1
+    · exact nice_cons _ (by simp) rfl
+  have hHead : GN matHead :=
+    ⟨good_cons_lp (t := .kw .mat) rfl rfl hTail.1 hTail.2, nice_cons _ (by simp) rfl⟩
+  unfold mkOutT
+  simp only
+  rw [hc]
+  simp only [mkOut, rowSep]
+  exact (gn_cat (gn_cat (gn_cat hHead hRows) (gn_kw rfl (by simp) gn_nil)) hSub).1
 
 /-! ## The induction -/
 
@@ -857,6 +963,17 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
       have hm := mk_ok hT hselfN.1 hselfN.2
       rw [faqOut_crow]
       exact ⟨hT, hm.2.1, hm.2.2⟩
+    | mk kvs M hM hok P hP hpr =>
+      have hT := good_mkOutT c hc M P (fun x hx L => by
+        rw [hP x hx]; exact CH x (mkSubs_lt hM hx) (Math.mkSubs_isE hok x hx) L)
+      rw [hpr] at hselfN ⊢
+      have hm := mk_ok hT hselfN.1 hselfN.2
+      rw [mkOutT_crow]
+      exact ⟨hT, hm.2.1, hm.2.2⟩
+    | tbare m hm hpr =>
+      simp only [hc] at hpr
+      rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢
+      exact mk_ok (good_single trivial) hselfN.1 hselfN.2
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr
       have hS := good_callToks [.opn m] (good_single trivial) ⟨by simp, fun u hu => by simp at hu; subst hu; exact callEnd_opn m⟩
@@ -888,40 +1005,41 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         obtain ⟨x, hm, rfl⟩ := List.mem_map.1 hy
         exact ⟨(CH x (hsz x hm) (hx x hm) 4).1, (CH x (hsz x hm) (hx x hm) 4).2.1⟩)
       have hFl := good_sepBy .comma rfl (by simp) ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-          (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) (fun y hy => by
+          (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) (fun y hy => by
         obtain ⟨kv, hkv, rfl⟩ := List.mem_map.1 hy
-        have hV : Good (if isE kv.2 = true then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2) ∧
-            Nice (if isE kv.2 = true then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2) := by
+        have hV : Good (if mathField o kv = true then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2) ∧
+            Nice (if mathField o kv = true then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2) := by
           split
-          · rename_i hv; exact ⟨(CH kv.2 (hszf kv hkv) hv 4).1, (CH kv.2 (hszf kv hkv) hv 4).2.1⟩
+          · rename_i hv; exact ⟨(CH kv.2 (hszf kv hkv) (mathField_isE hv) 4).1,
+              (CH kv.2 (hszf kv hkv) (mathField_isE hv) 4).2.1⟩
           · exact ⟨good_single (jwf_sound _ (hf kv hkv)), nice_cons _ (by simp) rfl⟩
         have hK : tokOK (.ups [(kv.1, "")]) := ⟨by simp, fun p hp => by simp at hp; subst hp; left; rfl⟩
         simp only [keyToks]
         exact ⟨good_cons hK (good_cons rfl hV.1 hV.2) (nice_cons _ (by simp) rfl), nice_cons _ (by simp) rfl⟩)
       have hTail : Good (sepBy [.kw .comma] (as.map fun x => (pr c x).at .typst 4) ++
           ((if (fieldsOf kvs).map (fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
            else .kw .semi :: sepBy [.kw .comma] ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp])) ∧
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp])) ∧
           Nice (sepBy [.kw .comma] (as.map fun x => (pr c x).at .typst 4) ++
           ((if (fieldsOf kvs).map (fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
            else .kw .semi :: sepBy [.kw .comma] ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp])) := by
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp])) := by
         have hR : Good ((if (fieldsOf kvs).map (fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
            else .kw .semi :: sepBy [.kw .comma] ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp]) ∧
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp]) ∧
             Nice ((if (fieldsOf kvs).map (fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = [] then []
            else .kw .semi :: sepBy [.kw .comma] ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp]) := by
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) ++ [.kw .rp]) := by
           split
           · exact ⟨good_single rfl, nice_cons _ (by simp) rfl⟩
           · exact ⟨good_cons rfl (good_append hFl.1 (good_single rfl) (nice_cons _ (by simp) rfl))
               (by
                 by_cases he : sepBy [.kw .comma] ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-                    (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = []
+                    (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2)) = []
                 · rw [he]; exact nice_cons _ (by simp) rfl
                 · exact nice_append _ hFl.2 he), nice_cons _ (by simp) rfl⟩
         refine ⟨good_append hA.1 hR.1 hR.2, ?_⟩
@@ -930,7 +1048,7 @@ theorem TP_all (c : Ctx) (hc : c.sf = .typst) : ∀ n e, sizeOf e < n → isE e 
         · exact nice_append _ hA.2 he
       have hT : Good (openToks .typst o (as.map fun x => (pr c x).at .typst 4)
           ((fieldsOf kvs).map fun kv => keyToks .typst kv.1 ++ .kw .eq ::
-            (if isE kv.2 then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) := by
+            (if mathField o kv then (pr c kv.2).at .typst 4 else jsonVal .typst kv.2))) := by
         simp only [openToks, lpC, List.cons_append, List.nil_append, List.append_assoc]
         exact good_cons_lp trivial (callEnd_opn o) hTail.1 hTail.2
       rw [hpr] at hselfN ⊢; simp only [mkOut] at hselfN ⊢

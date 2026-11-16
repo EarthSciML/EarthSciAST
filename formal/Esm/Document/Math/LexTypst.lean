@@ -23,7 +23,7 @@ never writes it; it would run into the `times 10^…` of a scientific number). -
 def kwOK : Kw → Bool
   | .times | .rpg | .lb | .rb | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .substack | .lbkg | .rbkg | .limitsL => false
+  | .substack | .lbkg | .rbkg | .limitsL | .barr | .earr => false
   | _ => true
 
 /-- The Typst tokens: what the Typst printer writes. -/
@@ -554,6 +554,38 @@ theorem lexOne_kw (prev : Option Char) (k : Kw) (hk : kwOK k = true) (hlp : k �
     rw [idRun_append _ _ (by decide) hX']
     rfl
   case limitsL => exact absurd hk (by decide)
+  case delimK =>
+    have hc : kwChars .delimK = "delim".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "delim".toList ++ X = 'd' :: ("elim".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case augK =>
+    have hc : kwChars .augK = "augment".toList := by decide
+    have hX' : ∀ c ∈ X.head?, isIdC c = false := by
+      intro d hd; have := hX d hd; simp [merges, tokChars, kwChars] at this; exact this (by decide)
+    rw [hc, show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp,
+      lexOne_letter _ _ _ (by decide), ← show "augment".toList ++ X = 'a' :: ("ugment".toList ++ X) by simp]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) hX']
+    rfl
+  case timesLbk =>
+    have hc : kwChars .timesLbk ++ X = 't' :: ("imes".toList ++ (' ' :: '[' :: X)) := by simp [kwChars]
+    rw [hc, lexOne_letter _ _ _ (by decide), ← List.cons_append]
+    unfold lexIdent
+    rw [idRun_append _ _ (by decide) (by simp; decide)]
+    simp [isWsT]
+  case lset =>
+    exact lexOne_punct prev '{' .lset X rfl (by decide) (by decide) (by decide) (by intro h; cases h) (by intro h; cases h)
+      (by decide) (by decide) (by decide) (by intro h; cases h)
+  case rset =>
+    exact lexOne_punct prev '}' .rset X rfl (by decide) (by decide) (by decide) (by intro h; cases h) (by intro h; cases h)
+      (by decide) (by decide) (by decide) (by intro h; cases h)
+  case barr => exact absurd hk (by decide)
+  case earr => exact absurd hk (by decide)
 
 /-! ## Numbers -/
 
@@ -704,6 +736,7 @@ theorem lexIdent_letter (c : Char) (hc : isLetter c = true) (X : List Char)
   have h3 := ofList_single_ne c "op" (by decide)
   have h4 := ofList_single_ne c "thin" (by decide)
   have h5 := ofList_single_ne c "esm" (by decide)
+  have h6 := ofList_single_ne c "times" (by decide)
   have hk : identKw.lookup (String.ofList [c]) = none :=
     lookup_none _ _ (fun p hp => ofList_single_ne c p.1 (by
       have : ∀ q ∈ identKw, 2 ≤ q.1.toList.length := by decide
@@ -715,7 +748,7 @@ theorem lexIdent_letter (c : Char) (hc : isLetter c = true) (X : List Char)
     have hm := List.contains_iff_mem.1 h
     have : ∀ g ∈ greek, 2 ≤ g.toList.length := by decide
     exact ofList_single_ne c _ (this _ hm) rfl
-  simp only [h1, h2, h3, h4, h5, hk, hg, ↓reduceIte, Bool.false_eq_true]
+  simp only [h1, h2, h3, h4, h5, h6, hk, hg, ↓reduceIte, Bool.false_eq_true]
 
 theorem greek_lex (g : String) (hg : isGreek g.toList = true) :
     (∀ c ∈ g.toList, isLetter c = true) ∧ (∃ c0 r, g.toList = c0 :: r) ∧

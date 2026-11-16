@@ -342,10 +342,13 @@ theorem refuse_removed_call (c : Ctx) (n : String) (hn : removedOps.contains n =
   have hneg : n ≠ "neg" := by rintro rfl; exact absurd hn (by decide)
   have hpow : n ≠ "pow" := by rintro rfl; exact absurd hn (by decide)
   have hD : n ≠ "D" := by rintro rfl; exact absurd hn (by decide)
+  have hr : reservedOpn.contains n = true := by
+    simp only [reservedOpn, List.contains_append, hn, Bool.or_true]
+  have ht : tnameOK n = false := by unfold tnameOK; rw [hr]; simp
   intro f ts
   match f, ts with
   | 0, _ => rfl
-  | f + 1, [] => rfl
+  | f + 1, [] => rw [pOpn.eq_def]; simp [ht]
   | f + 1, t0 :: r =>
     rw [pOpn.eq_def]; simp only
     split
@@ -355,7 +358,7 @@ theorem refuse_removed_call (c : Ctx) (n : String) (hn : removedOps.contains n =
       · rfl
     · split
       · simp [hD]
-      · rfl
+      · simp [ht]
 
 /-- A removed operator is refused by name in the LaTeX escape form. -/
 theorem refuse_removed_esc (c : Ctx) (o : String) (hn : removedOps.contains o = true) (f : Nat) (r : List Tok) :

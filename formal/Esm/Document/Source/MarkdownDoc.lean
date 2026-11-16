@@ -113,7 +113,7 @@ def capsMd : Caps where
     (tmLex (prMd S e).toList).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
   plot a := a.all attrOK && a.all (fun kv => dqOK kv.2)
-  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body }) &&
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex (Esm.Document.Math.Sym.mk S.names []) j), body := printLatex S t.body }) &&
     t.attrs.all (fun kv => dqOK kv.2)
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x

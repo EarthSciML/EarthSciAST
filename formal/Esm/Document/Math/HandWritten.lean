@@ -147,4 +147,40 @@ reads. -/
 example : reads (parseLatex S "\\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")") strOp = true := by
   decide +kernel
 
+/-! ## Array notation (2026-11-15) -/
+
+/-- A bare `\operatorname{n}` is a template applied with no bindings; with `()` it is an
+open operator with no operands. -/
+example : reads (parseLatex S "\\operatorname{dlon}") (tNode "dlon" []) = true := by decide +kernel
+example : reads (parseLatex S "\\operatorname{dlon}()") (node "dlon" []) = true := by decide +kernel
+example : reads (parseTypst S "op(\"dlon\")") (tNode "dlon" []) = true := by decide +kernel
+example : reads (parseTypst S "op(\"dlon\")()") (node "dlon" []) = true := by decide +kernel
+
+/-- `\times [` outside a region is still a product with a bracket group. -/
+example : reads (parseLatex S "a \\times [x + 1]") (node "*" [a, node "+" [x, int 1]]) = true := by
+  decide +kernel
+example : reads (parseLatex S "a \\times[x + 1]") (node "*" [a, node "+" [x, int 1]]) = true := by
+  decide +kernel
+example : reads (parseTypst S "a times [x + 1]") (node "*" [a, node "+" [x, int 1]]) = true := by
+  decide +kernel
+
+/-- A `makearray` table, the region product spaced any way. -/
+def table : Json :=
+  mkJson ⟨[], [[(int 1, .str "N")], [(int 1, int 1), (int 2, int 2)]], [x, int 0]⟩
+
+example : reads (parseLatex S "\\left[\\begin{array}{l|l} x & [1, N] \\\\ 0 & [1, 1]\\times[2, 2] \\end{array}\\right]")
+    table = true := by decide +kernel
+example : reads (parseTypst S "mat(delim: \"[\", augment: #1, x, [1, N]; 0, [1, 1] times [2, 2])")
+    table = true := by decide +kernel
+example : reads (parseLatex S (printLatex S table)) table = true := by decide +kernel
+example : reads (parseTypst S (printTypst S table)) table = true := by decide +kernel
+
+/-- A lone equality filter followed by a superscript set is the filter, not a dense range. -/
+def filtSet : Json :=
+  .obj [("args", .arr [.str "a"]), ("expr", x), ("filter", node "==" [k, int 1]), ("op", .str "faq"),
+    ("output_idx", .arr [])]
+
+example : reads (parseLatex S "\\sum_{k = 1}^{\\{a\\}} x") filtSet = true := by decide +kernel
+example : reads (parseLatex S (printLatex S filtSet)) filtSet = true := by decide +kernel
+
 end Esm.Document.Math.HandWritten

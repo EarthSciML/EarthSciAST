@@ -224,6 +224,10 @@ def cmpKw : List (String × Kw) :=
 /-- Core operators in the call form. -/
 def callOps : List String := ["sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum"]
 
+/-- Core operators with no notation of their own that print in the call form, their
+fields as named arguments after `;` (when no field annotates the node). -/
+def fieldCallOps : List String := ["broadcast", "reshape", "transpose", "concat", "faq", "makearray", "const"]
+
 /-- Names `\operatorname{…}` never means a template or an open operator by. -/
 def reservedOpn : List String := callOps ++ ["D", "neg", "pow"] ++ removedOps
 
@@ -243,6 +247,27 @@ def opnOK (s : String) : Bool :=
   match s.toList with
   | [] => false
   | c :: cs => isIdStart c && cs.all (fun d => isIdChar d || d == '.')
+
+/-- The fields that annotate a node (`Notation.annotatedNodeFields`). -/
+def annotKeys : List String := ["id", "expect_cadence"]
+
+/-- An operator prints in the call form: an open operator, or a core operator of
+`fieldCallOps` none of whose fields annotates it. -/
+def callFormOK (o : String) (fs : List (String × Json)) : Bool :=
+  !(coreOps.contains o) || (fieldCallOps.contains o && fs.all (fun kv => !(annotKeys.contains kv.1)))
+
+/-- The fields of a core operator in the call form that hold an expression; the others
+print as JSON, even a string that is a name. -/
+def mathKeys : List String := ["expr", "filter", "key"]
+
+/-- A field of a call-form node prints as math: its value is an expression and, for a
+core operator, the field holds one. An open operator's fields are all read as math when
+they can be. -/
+def mathField (o : String) (kv : String × Json) : Bool :=
+  isE kv.2 && (!(coreOps.contains o) || mathKeys.contains kv.1)
+
+theorem mathField_isE {o : String} {kv : String × Json} (h : mathField o kv = true) : isE kv.2 = true := by
+  unfold mathField at h; simp only [Bool.and_eq_true] at h; exact h.1
 
 /-- A field key printed upright in a call: an identifier. -/
 def keyOK (s : String) : Bool := segOK s.toList
@@ -581,16 +606,16 @@ inductive AForm where
   | mat (rs : List (List JNum))
 
 /-- A constant array printed natively: a column for rank 1, or a matrix of at least
-two columns (a single-column matrix would print like a column), at most 16 entries,
-every entry a well-formed number. -/
+two columns (a single-column matrix would print like a column), of any size, every entry
+a well-formed number. -/
 def arrForm : Json → Option AForm
   | .arr xs =>
     match numsOf xs with
-    | some ns => if ns ≠ [] ∧ ns.length ≤ 16 then some (.col ns) else none
+    | some ns => if ns ≠ [] then some (.col ns) else none
     | none =>
       match rowsOf xs with
       | some (r :: rs) =>
-        if 2 ≤ r.length ∧ rs.all (fun q => q.length == r.length) ∧ (rs.length + 1) * r.length ≤ 16 then
+        if 2 ≤ r.length ∧ rs.all (fun q => q.length == r.length) then
           some (.mat (r :: rs))
         else none
       | _ => none
@@ -683,7 +708,8 @@ def RedK.field : RedK → List (String × Json)
   | .min => [("reduce", .str "min")]
 
 /-- A `faq` node with a native spelling, by its parts. `marked`: `args` lists the arrays
-the body indexes (otherwise it is empty). -/
+the body indexes; otherwise `args` is `set` (empty, or names printed as a superscript
+set). -/
 structure FaqForm where
   red : RedK
   marked : Bool
@@ -691,12 +717,26 @@ structure FaqForm where
   ranges : List (String × Json)
   expr : Json
   filter : Option Json
+  set : List String
+
+/-- The `args` of a native `faq`. -/
+def FaqForm.args (F : FaqForm) : List Json :=
+  if F.marked then (bases F.expr).map .str else F.set.map .str
+
+/-- The names a superscript set shows: `set` when `args` is not the body's arrays. -/
+def FaqForm.sup (F : FaqForm) : List String := if F.marked then [] else F.set
 
 def faqJson (F : FaqForm) : Json :=
-  .obj ([("args", .arr (if F.marked then (bases F.expr).map .str else [])), ("expr", F.expr)] ++
+  .obj ([("args", .arr F.args), ("expr", F.expr)] ++
     (match F.filter with | some x => [("filter", x)] | none => []) ++
     [("op", .str "faq"), ("output_idx", .arr F.out)] ++
     (if F.ranges = [] then [] else [("ranges", .obj F.ranges)]) ++ F.red.field)
+
+/-- The strings of a list of JSON values, when they are all strings. -/
+def strsOf : List Json → Option (List String)
+  | [] => some []
+  | .str s :: r => (strsOf r).map (s :: ·)
+  | _ :: _ => none
 
 /-- The parts a `faq` node would have. -/
 def faqCand (kvs : List (String × Json)) : Option FaqForm :=
@@ -712,14 +752,18 @@ def faqCand (kvs : List (String × Json)) : Option FaqForm :=
       | some (.obj rs) => some rs
       | none => some []
       | _ => none
-    match red, rs with
-    | some red, some rs => some ⟨red, !as.isEmpty, out, rs, e, look "filter" kvs⟩
-    | _, _ => none
+    let ak : Option (Bool × List String) :=
+      if as.isEmpty then some (false, [])
+      else if jbeqL as ((bases e).map .str) then some (true, [])
+      else (strsOf as).map ((false, ·))
+    match red, rs, ak with
+    | some red, some rs, some (m, st) => some ⟨red, m, out, rs, e, look "filter" kvs, st⟩
+    | _, _, _ => none
   | _, _, _ => none
 
 /-- The parts of a `faq` node, when it is exactly the node they rebuild: no semiring,
 join, distinct or key, `reduce` absent or `*`, `max`, `min`, `ranges` absent or not
-empty, `args` empty or the arrays the body indexes. -/
+empty, `args` empty, the arrays the body indexes, or other names. -/
 def faqForm (kvs : List (String × Json)) : Option FaqForm :=
   match faqCand kvs with
   | some F => if jbeq (faqJson F) (.obj kvs) then some F else none
@@ -764,6 +808,7 @@ end
 def faqOK (F : FaqForm) : Bool :=
   isE F.expr && (match F.filter with | some x => isE x | none => true) &&
   F.out.all outOK && decide (outNames F.out).Nodup &&
+  F.set.all nameOK &&
   keysSorted F.ranges && F.ranges.all (fun kv => nameOK kv.1 && rangeOK kv.2 &&
     ((outNames F.out).contains kv.1 || occursJ kv.1 F.expr ||
       (match F.filter with | some x => occursJ kv.1 x | none => false)))
@@ -792,13 +837,14 @@ def headToks (sf : Sf) (F : FaqForm) : List Tok :=
   | .latex => .kw F.red.kw :: (if F.marked then [.kw .limitsL] else [])
   | .typst => if F.marked then [.kw .limits, .kw .lp, .kw F.red.kw, .kw .rp] else [.kw F.red.kw]
 
-/-- The LaTeX subscript: none, one row, a lone dense range `_{k=a}^{b}`, or `\substack`. -/
+/-- The LaTeX subscript: none, one row, a lone dense range `_{k=a}^{b}` (not when `args`
+is a superscript set), or `\substack`. -/
 def subToksL (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok :=
-  match redRanges F, F.filter with
-  | [(k, .arr [a, b])], none =>
+  match redRanges F, F.filter, F.sup with
+  | [(k, .arr [a, b])], none, [] =>
     [.kw .us, .kw .lb] ++ nameToks c k ++ .kw .eq :: (P a).at c.sf 4 ++
       [.kw .rb, .kw .caret, .kw .lb] ++ (P b).at c.sf 1 ++ [.kw .rb]
-  | _, _ =>
+  | _, _, _ =>
     match subRows c P F with
     | [] => []
     | [r] => [.kw .us, .kw .lb] ++ r ++ [.kw .rb]
@@ -815,9 +861,20 @@ def subToks (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok :=
   | .latex => subToksL c P F
   | .typst => subToksT c P F
 
-/-- The reduction: operator, subscript, body at level 5. -/
+/-- The superscript set of names: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`. -/
+def supToks (c : Ctx) (ns : List String) : List Tok :=
+  match c.sf with
+  | .latex => [.kw .caret, .kw .lb, .kw .lset] ++ sepBy [.kw .comma] (ns.map (nameToks c)) ++ [.kw .rset, .kw .rb]
+  | .typst => [.kw .caret, .kw .lpg, .kw .lset] ++ sepBy [.kw .comma] (ns.map (nameToks c)) ++ [.kw .rset, .kw .rp]
+
+/-- The `args` set of a `faq`, as a superscript, when it is one. -/
+def supT (c : Ctx) (F : FaqForm) : List Tok :=
+  if F.sup.isEmpty then [] else supToks c F.sup
+
+/-- The reduction: operator, subscript, the superscript set (on the operator only when
+there are no output indices), body at level 5. -/
 def redToks (c : Ctx) (P : Json → Out) (F : FaqForm) : List Tok :=
-  headToks c.sf F ++ subToks c P F ++ (P F.expr).at c.sf 5
+  headToks c.sf F ++ subToks c P F ++ (if F.out = [] then supT c F else []) ++ (P F.expr).at c.sf 5
 
 /-- An output entry: its range row when it has one. -/
 def entryToks (c : Ctx) (P : Json → Out) (F : FaqForm) (j : Json) : List Tok :=
@@ -828,15 +885,20 @@ def entryToks (c : Ctx) (P : Json → Out) (F : FaqForm) (j : Json) : List Tok :
     | none => nameToks c k
   | _ => [.num (.int 1)]
 
-/-- The native `faq`: the reduction, wrapped with its output indices when it has some. -/
+/-- The native `faq`: the reduction, wrapped with its output indices when it has some.
+A superscript set goes on the bracket, before its subscript (it renders the same either
+way; written first, a reader meets it right after the bracket); the form is then a power's
+level (a power of it, or an index into it, is parenthesized: no double superscript). -/
 def faqOut (c : Ctx) (P : Json → Out) (F : FaqForm) : Out :=
   if F.out = [] then mkOut c.sf 5 (redToks c P F)
   else
     let es := sepBy [.kw .comma] (F.out.map (entryToks c P F))
+    let l := if supT c F = [] then 10 else 8
     match c.sf with
-    | .latex => mkOut c.sf 10 ([.kw .lbkg] ++ redToks c P F ++ [.kw .rbkg, .kw .us, .kw .lb] ++ es ++ [.kw .rb])
-    | .typst => mkOut c.sf 10 ([.kw .lr, .kw .lp, .kw .lbk] ++ redToks c P F ++
-        [.kw .rbk, .kw .rp, .kw .us, .kw .lpg] ++ es ++ [.kw .rp])
+    | .latex => mkOut c.sf l ([.kw .lbkg] ++ redToks c P F ++ [.kw .rbkg] ++ supT c F ++ [.kw .us, .kw .lb] ++
+        es ++ [.kw .rb])
+    | .typst => mkOut c.sf l ([.kw .lr, .kw .lp, .kw .lbk] ++ redToks c P F ++
+        [.kw .rbk, .kw .rp] ++ supT c F ++ [.kw .us, .kw .lpg] ++ es ++ [.kw .rp])
 
 /-- The sub-expressions a native `faq` prints. -/
 def faqSubs (F : FaqForm) : List Json :=
@@ -912,7 +974,7 @@ theorem faqForm_json {kvs : List (String × Json)} {F : FaqForm} (h : faqForm kv
 
 theorem faqSubs_lt_json (F : FaqForm) : ∀ x ∈ faqSubs F, sizeOf x < sizeOf (faqJson F) := by
   intro x hx
-  have key : ∀ (kv : String × Json), kv ∈ ([("args", Json.arr (if F.marked then (bases F.expr).map .str else [])),
+  have key : ∀ (kv : String × Json), kv ∈ ([("args", Json.arr F.args),
       ("expr", F.expr)] ++ (match F.filter with | some x => [("filter", x)] | none => []) ++
       [("op", .str "faq"), ("output_idx", .arr F.out)] ++
       (if F.ranges = [] then [] else [("ranges", .obj F.ranges)]) ++ F.red.field) →
@@ -946,6 +1008,159 @@ theorem faqSubs_lt {kvs : List (String × Json)} {F : FaqForm} (h : faqForm kvs 
     (hx : x ∈ faqSubs F) : sizeOf x < sizeOf (Json.obj kvs) := by
   rw [← faqForm_json h]; exact faqSubs_lt_json F x hx
 
+/-! ## Block assembly (`makearray`) -/
+
+/-- A `makearray` node with a native spelling, by its parts: the output indices (empty
+when the node has no `output_idx`), and the regions with their values. -/
+structure MkForm where
+  out : List String
+  regions : List (List (Json × Json))
+  values : List Json
+
+def pairJson (p : Json × Json) : Json := .arr [p.1, p.2]
+
+def regionJson (r : List (Json × Json)) : Json := .arr (r.map pairJson)
+
+def mkJson (M : MkForm) : Json :=
+  .obj ([("args", .arr []), ("op", .str "makearray")] ++
+    (if M.out = [] then [] else [("output_idx", .arr (M.out.map .str))]) ++
+    [("regions", .arr (M.regions.map regionJson)), ("values", .arr M.values)])
+
+/-- The bound pairs of a region. -/
+def pairsOf : List Json → Option (List (Json × Json))
+  | [] => some []
+  | .arr [a, b] :: r => (pairsOf r).map ((a, b) :: ·)
+  | _ :: _ => none
+
+/-- The regions of a `regions` list. -/
+def regionsOf : List Json → Option (List (List (Json × Json)))
+  | [] => some []
+  | .arr ps :: r =>
+    match pairsOf ps, regionsOf r with
+    | some q, some qs => some (q :: qs)
+    | _, _ => none
+  | _ :: _ => none
+
+/-- The parts a `makearray` node would have. -/
+def mkCand (kvs : List (String × Json)) : Option MkForm :=
+  match look "regions" kvs, look "values" kvs with
+  | some (.arr rs), some (.arr vs) =>
+    let out : Option (List String) :=
+      match look "output_idx" kvs with
+      | none => some []
+      | some (.arr os) => strsOf os
+      | some _ => none
+    match out, regionsOf rs with
+    | some o, some regs => some ⟨o, regs, vs⟩
+    | _, _ => none
+  | _, _ => none
+
+/-- The parts of a `makearray` node, when it is exactly the node they rebuild: `args`
+empty, `regions` and `values`, and an `output_idx` of names or none. -/
+def mkForm (kvs : List (String × Json)) : Option MkForm :=
+  match mkCand kvs with
+  | some M => if jbeq (mkJson M) (.obj kvs) then some M else none
+  | none => none
+
+/-- The conditions under which the native spelling reads back: one value per region, at
+least one region, each region a nonempty list of bound pairs, values and bounds
+expressions, output indices names. -/
+def mkOK (M : MkForm) : Bool :=
+  !M.values.isEmpty && M.regions.length == M.values.length && M.values.all isE &&
+    M.regions.all (fun r => !r.isEmpty && r.all (fun p => isE p.1 && isE p.2)) &&
+    M.out.all nameOK
+
+/-- The sub-expressions a native `makearray` prints. -/
+def mkSubs (M : MkForm) : List Json :=
+  M.values ++ M.regions.flatMap (fun r => r.flatMap (fun p => [p.1, p.2]))
+
+/-- The cell separator, the row separator and the closing token of the table. -/
+def cellSep : Sf → Kw
+  | .latex => .amp
+  | .typst => .comma
+def rowSep : Sf → Kw
+  | .latex => .nl
+  | .typst => .semi
+
+/-- A bound pair: `a, b` (its brackets are written around it). -/
+def pairToks (c : Ctx) (P : Json → Out) (p : Json × Json) : List Tok :=
+  (P p.1).at c.sf 1 ++ .kw .comma :: (P p.2).at c.sf 1
+
+/-- A region: `[a, b] \times [c, d]`, one bound pair per dimension. -/
+def regToks (c : Ctx) (P : Json → Out) : List (Json × Json) → List Tok
+  | [] => []
+  | p :: ps => .kw .lbk :: pairToks c P p ++ .kw .rbk ::
+      ps.flatMap (fun q => .kw .timesLbk :: pairToks c P q ++ [.kw .rbk])
+
+/-- A row of the table: the value, then the region it fills. -/
+def mkRow (c : Ctx) (P : Json → Out) (vr : Json × List (Json × Json)) : List Tok :=
+  (P vr.1).at c.sf 1 ++ .kw (cellSep c.sf) :: regToks c P vr.2
+
+/-- The Typst table head: `mat(delim: "[", augment: #1,`. -/
+def matHead : List Tok :=
+  [.kw .mat, .kw .lp, .kw .delimK, .kw .colon, .txt "[", .kw .comma, .kw .augK, .kw .colon,
+    .code (.num (.int 1)), .kw .comma]
+
+/-- The output indices as the bracket's subscript. -/
+def mkSub (c : Ctx) (out : List String) : List Tok :=
+  if out = [] then []
+  else match c.sf with
+    | .latex => [.kw .us, .kw .lb] ++ sepBy [.kw .comma] (out.map (nameToks c)) ++ [.kw .rb]
+    | .typst => [.kw .us, .kw .lpg] ++ sepBy [.kw .comma] (out.map (nameToks c)) ++ [.kw .rp]
+
+/-- The native `makearray`: a bracketed two-column table, value then region, one row per
+region in order; LaTeX `\left[\begin{array}{l|l} v & [a, b] \\ … \end{array}\right]`, Typst
+`mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its subscript. -/
+def mkOutT (c : Ctx) (P : Json → Out) (M : MkForm) : Out :=
+  let rows := sepBy [.kw (rowSep c.sf)] ((M.values.zip M.regions).map (mkRow c P))
+  match c.sf with
+  | .latex => mkOut c.sf 10 ([.kw .lbkg, .kw .barr] ++ rows ++ [.kw .earr, .kw .rbkg] ++ mkSub c M.out)
+  | .typst => mkOut c.sf 10 (matHead ++ rows ++ [.kw .rp] ++ mkSub c M.out)
+
+theorem mkForm_json {kvs : List (String × Json)} {M : MkForm} (h : mkForm kvs = some M) :
+    mkJson M = .obj kvs := by
+  unfold mkForm at h
+  split at h
+  · split at h
+    · rename_i hj; cases h; exact jbeq_sound _ _ hj
+    · cases h
+  · cases h
+
+theorem mkSubs_lt_json (M : MkForm) : ∀ x ∈ mkSubs M, sizeOf x < sizeOf (mkJson M) := by
+  intro x hx
+  have key : ∀ (kv : String × Json), kv ∈ ([("args", Json.arr []), ("op", .str "makearray")] ++
+      (if M.out = [] then [] else [("output_idx", .arr (M.out.map .str))]) ++
+      [("regions", .arr (M.regions.map regionJson)), ("values", .arr M.values)]) →
+      sizeOf kv.2 < sizeOf (mkJson M) := by
+    intro kv hkv
+    have := List.sizeOf_lt_of_mem hkv
+    obtain ⟨k, v⟩ := kv
+    unfold mkJson
+    simp only [Json.obj.sizeOf_spec, Prod.mk.sizeOf_spec] at this ⊢
+    omega
+  simp only [mkSubs, List.mem_append, List.mem_flatMap] at hx
+  rcases hx with hx | ⟨r, hr, p, hp, hx⟩
+  · have h1 := key ("values", .arr M.values) (by simp)
+    have h2 := List.sizeOf_lt_of_mem hx
+    simp only [Json.arr.sizeOf_spec] at h1
+    omega
+  · have h1 := key ("regions", .arr (M.regions.map regionJson)) (by simp)
+    have h2 := List.sizeOf_lt_of_mem (List.mem_map_of_mem (f := regionJson) hr)
+    have h3 := List.sizeOf_lt_of_mem (List.mem_map_of_mem (f := pairJson) hp)
+    have h4 : sizeOf x < sizeOf (pairJson p) := by
+      obtain ⟨a, b⟩ := p
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+      simp only [pairJson, Json.arr.sizeOf_spec, List.cons.sizeOf_spec, List.nil.sizeOf_spec]
+      rcases hx with rfl | rfl <;> omega
+    have h5 : sizeOf (r.map pairJson) < sizeOf (regionJson r) := by
+      simp only [regionJson, Json.arr.sizeOf_spec]; omega
+    simp only [Json.arr.sizeOf_spec] at h1
+    omega
+
+theorem mkSubs_lt {kvs : List (String × Json)} {M : MkForm} (h : mkForm kvs = some M) {x : Json}
+    (hx : x ∈ mkSubs M) : sizeOf x < sizeOf (Json.obj kvs) := by
+  rw [← mkForm_json h]; exact mkSubs_lt_json M x hx
+
 /-- A template the call form can name: an identifier that is not a reserved operator
 name. -/
 def tnameOK (n : String) : Bool := opnOK n && !(reservedOpn.contains n)
@@ -968,14 +1183,20 @@ def pr (c : Ctx) (e : Json) : Out :=
         if faqOK F then some (faqOut c (tableP ((faqSubs F).attach.map fun ⟨x, _⟩ => (x, pr c x))) F)
         else none
       | none => none
+    let mk : Unit → Option Out := fun _ =>
+      match _hM : mkForm kvs with
+      | some M =>
+        if mkOK M then some (mkOutT c (tableP ((mkSubs M).attach.map fun ⟨x, _⟩ => (x, pr c x))) M)
+        else none
+      | none => none
     let opn : Unit → Out := fun _ =>
       match look "op" kvs, _hk : look "args" kvs with
       | some (.str o), some (.arr as) =>
-        if !(coreOps.contains o) && opnOK o && (tparams c.S o).isNone &&
+        if callFormOK o (fieldsOf kvs) && opnOK o && (tparams c.S o).isNone &&
             (fieldsOf kvs).all (fun kv => keyOK kv.1) then
           mkOut sf 10 (openToks sf o (as.attach.map fun ⟨a, _⟩ => (pr c a).at sf 4)
             ((fieldsOf kvs).attach.map fun ⟨kv, _⟩ =>
-              keyToks sf kv.1 ++ .kw .eq :: (if isE kv.2 then (pr c kv.2).at sf 4 else jsonVal sf kv.2)))
+              keyToks sf kv.1 ++ .kw .eq :: (if mathField o kv then (pr c kv.2).at sf 4 else jsonVal sf kv.2)))
         else esc ()
       | _, _ => esc ()
     match kvs with
@@ -1047,11 +1268,11 @@ def pr (c : Ctx) (e : Json) : Out :=
         else esc ()
       | [] => esc ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .num n)] =>
-      if unitsOK sf u then mkOut sf 7 (qtyToks n (factorsOf u)) else esc ()
+      if unitsOK sf u then mkOut sf 7 (qtyToks n (factorsOf u)) else opn ()
     | [("args", .arr []), ("op", .str "const"), ("units", .str u), ("value", .arr xs)] =>
       match arrForm (.arr xs) with
-      | some af => if unitsOK sf u then mkOut sf 7 (arrToks sf af ++ unitToks (factorsOf u)) else esc ()
-      | none => esc ()
+      | some af => if unitsOK sf u then mkOut sf 7 (arrToks sf af ++ unitToks (factorsOf u)) else opn ()
+      | none => opn ()
     | [("args", .arr []), ("op", .str "const"), ("value", .arr xs)] =>
       match arrForm (.arr xs) with
       | some af => mkOut sf 10 (arrToks sf af)
@@ -1064,12 +1285,16 @@ def pr (c : Ctx) (e : Json) : Out :=
         | none =>
           if bs ≠ [] && bs.all (fun kv => nameOK kv.1) then
             mkOut sf 10 (callToks sf [.opn n] (vals.map fun kv => nameToks c kv.1 ++ .kw .eq :: kv.2))
+          else if bs = [] then mkOut sf 5 [.opn n]
           else esc ()
       else esc ()
     | _ =>
       match fq () with
       | some o => o
-      | none => opn ()
+      | none =>
+        match mk () with
+        | some o => o
+        | none => opn ()
   | _ => mkOut c.sf 10 []
 termination_by sizeOf e
 decreasing_by
@@ -1082,6 +1307,7 @@ decreasing_by
     | (have := List.sizeOf_lt_of_mem ‹_ ∈ _›; simp only [List.cons.sizeOf_spec] at this; omega)
     | (have := List.sizeOf_lt_of_mem ‹_ ∈ _›; have := snd_lt ‹String × Json›; omega)
     | (have := faqSubs_lt ‹_› ‹_›; simp only [Json.obj.sizeOf_spec] at this; omega)
+    | (have := mkSubs_lt ‹_› ‹_›; simp only [Json.obj.sizeOf_spec] at this; omega)
 
 /-- The tokens of an expression for a position needing level `L`. -/
 def pa (c : Ctx) (L : Nat) (e : Json) : List Tok := (pr c e).at c.sf L

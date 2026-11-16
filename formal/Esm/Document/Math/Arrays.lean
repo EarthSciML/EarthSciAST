@@ -69,7 +69,7 @@ theorem arrForm_spec {v : Json} {af : AForm} (h : arrForm v = some af) : af.json
       · rename_i hc
         cases h
         obtain ⟨e, hn⟩ := numsOf_spec xs ns hns
-        exact ⟨by simp [AForm.json, e], hc.1, hn⟩
+        exact ⟨by simp [AForm.json, e], hc, hn⟩
       · cases h
     · split at h
       · rename_i r rs hrs
@@ -77,7 +77,7 @@ theorem arrForm_spec {v : Json} {af : AForm} (h : arrForm v = some af) : af.json
         · rename_i hc
           cases h
           obtain ⟨e, hn⟩ := rowsOf_spec xs (r :: rs) hrs
-          obtain ⟨h2, hall, -⟩ := hc
+          obtain ⟨h2, hall⟩ := hc
           refine ⟨by simp [AForm.json, e], by simp, fun q hq => ?_, hn⟩
           simp only [List.mem_cons] at hq
           rcases hq with rfl | hq
@@ -199,8 +199,13 @@ theorem pPrim_arr (c : Ctx) (af : AForm) (haf : AOK af) (rest : List Tok) (f : N
         obtain ⟨n, r', rfl⟩ := List.exists_cons_of_ne_nil (hrne r hr)
         cases r' <;> simp [numToks, sepBy])
       simp only [arrToks, hsf, List.cons_append, List.append_assoc, List.nil_append]
-      rw [pPrim.eq_def]; simp only [isLp, ↓reduceIte]
-      rw [pGrid_read .comma .semi .rp (by decide) (by decide) (by decide) rest _ hne hrne _
+      obtain ⟨n0, Y, hY⟩ : ∃ n0 Y, sepBy [.kw .semi] (rs.map fun r => sepBy [.kw .comma] (numToks r)) ++
+          .kw .rp :: rest = .num n0 :: Y := by
+        obtain ⟨r, rs', rfl⟩ := List.exists_cons_of_ne_nil hne
+        obtain ⟨n, r', rfl⟩ := List.exists_cons_of_ne_nil (hrne r (by simp))
+        cases rs' <;> cases r' <;> simp [numToks, sepBy]
+      rw [pPrim.eq_def, hY]; simp only [isLp, ↓reduceIte]
+      rw [← hY, pGrid_read .comma .semi .rp (by decide) (by decide) (by decide) rest _ hne hrne _
         (by simp at hS ⊢; omega)]
       rfl
 

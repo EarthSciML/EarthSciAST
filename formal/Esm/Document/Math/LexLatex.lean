@@ -570,7 +570,7 @@ theorem greek_facts (g : String) (hg : isGreek g.toList = true) :
 never writes (it would run into the `\times 10^{…}` of a scientific number). -/
 def kwOK : Kw → Bool
   | .abs | .floor | .ceil | .dif | .cases | .esmnode | .times | .vec | .mat
-  | .limits | .lr => false
+  | .limits | .lr | .delimK | .augK => false
   | _ => true
 
 /-- The LaTeX tokens: what the LaTeX printer writes. -/
@@ -862,6 +862,26 @@ theorem lexOne_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     simp [ctrlTok]
   case limits => exact absurd hk (by decide)
   case lr => exact absurd hk (by decide)
+  case barr =>
+    have hc : kwChars .barr = '\\' :: ("begin".toList ++ "{array}{l|l}".toList) := by decide
+    rw [hc, List.cons_append, List.append_assoc, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok]; rfl
+  case earr =>
+    have hc : kwChars .earr = '\\' :: ("end".toList ++ "{array}".toList) := by decide
+    rw [hc, List.cons_append, List.append_assoc, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok]; rfl
+  case timesLbk =>
+    have hc : kwChars .timesLbk = '\\' :: ("times".toList ++ [' ', '[']) := by decide
+    rw [hc, List.cons_append, List.append_assoc, lexOne_ctrl _ (by decide) (by decide) _ (by simp; decide)]
+    simp [ctrlTok, timesTok]
+  case lset =>
+    simp only [kwChars, List.cons_append, List.nil_append]
+    simp [lexOne, isLetter]
+  case rset =>
+    simp only [kwChars, List.cons_append, List.nil_append]
+    simp [lexOne, isLetter]
+  case delimK => exact absurd hk (by decide)
+  case augK => exact absurd hk (by decide)
 
 
 /-! ## Spaces -/
@@ -1157,11 +1177,43 @@ theorem skipWs_kw (k : Kw) (hk : kwOK k = true) (X : List Char)
     exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
   case limits => exact absurd hk (by decide)
   case lr => exact absurd hk (by decide)
+  case barr =>
+    have hc : kwChars .barr = '\\' :: ("begin".toList ++ "{array}{l|l}".toList) := by decide
+    rw [hc, List.cons_append, List.append_assoc]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
+  case earr =>
+    have hc : kwChars .earr = '\\' :: ("end".toList ++ "{array}".toList) := by decide
+    rw [hc, List.cons_append, List.append_assoc]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
+  case timesLbk =>
+    have hc : kwChars .timesLbk = '\\' :: ("times".toList ++ [' ', '[']) := by decide
+    rw [hc, List.cons_append, List.append_assoc]
+    exact skipWs_ctrl _ (by decide) (by decide) (by decide) (by decide) _ (by simp; decide) n
+  case lset =>
+    simp only [kwChars, List.cons_append, List.nil_append]
+    exact skipWs_bs '{' X (by decide) (by decide) (by decide) (by decide) (by decide)
+      (by simp [letRun, isLetter]) (by simp [letRun, isLetter]) n
+  case rset =>
+    simp only [kwChars, List.cons_append, List.nil_append]
+    exact skipWs_bs '}' X (by decide) (by decide) (by decide) (by decide) (by decide)
+      (by simp [letRun, isLetter]) (by simp [letRun, isLetter]) n
+  case delimK => exact absurd hk (by decide)
+  case augK => exact absurd hk (by decide)
+
+/-- `\times [`: the bracket after `\times` is no `10`, so no scientific tail. -/
+theorem sciExp_timesLbk (Y : List Char) : sciExp (kwChars .timesLbk ++ Y) = none := by
+  have hc : kwChars .timesLbk ++ Y = "\\times".toList ++ (' ' :: '[' :: Y) := by simp [kwChars]
+  unfold sciExp
+  rw [hc, skipSp_spOK _ _ (by decide)]
+  simp [dropP, skipSp_space, skipSp_plain '[' Y (by decide) (by decide), isLetter]
 
 theorem sciExp_kw (k : Kw) (hk : kwOK k = true) (Y : List Char) :
-    sciExp (kwChars k ++ Y) = none :=
-  sciExp_pre _ Y (by cases k <;> first | exact absurd hk (by decide) | decide)
-    (by cases k <;> first | exact absurd hk (by decide) | decide)
+    sciExp (kwChars k ++ Y) = none := by
+  cases k
+  case timesLbk => exact sciExp_timesLbk Y
+  all_goals first
+    | exact absurd hk (by decide)
+    | exact sciExp_pre (kwChars _) Y (by decide) (by decide)
 
 
 /-! ## One token -/

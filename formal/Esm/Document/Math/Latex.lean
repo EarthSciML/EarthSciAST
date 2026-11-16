@@ -133,7 +133,10 @@ def kwChars : Kw → List Char
   | .sum => "\\sum".toList | .prod => "\\prod".toList | .inn => "\\in".toList
   | .substack => "\\substack".toList | .limitsL => "\\limits".toList
   | .lbkg => "\\left[".toList | .rbkg => "\\right]".toList
-  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat | .lr | .limits => []
+  | .barr => "\\begin{array}{l|l}".toList | .earr => "\\end{array}".toList
+  | .timesLbk => "\\times [".toList | .lset => ['\\', '{'] | .rset => ['\\', '}']
+  | .abs | .floor | .ceil | .dif | .cases | .esmnode | .vec | .mat | .lr | .limits
+  | .delimK | .augK => []
 
 def tokChars : Tok → List Char
   | .num n => numChars n
@@ -189,7 +192,8 @@ def pretty (p : Option Tok) (t1 t2 : Tok) : Bool :=
   (t1 matches .kw .semi) ||
   ((t2 matches .kw .minus) && atomEnd t1) ||
   ((t1 matches .kw .minus) && (match p with | some q => atomEnd q | none => false)) ||
-  (atomEnd t1 && atomStart t2 && !(t2 matches .kw .lp) && !(t2 matches .kw .lbk))
+  (atomEnd t1 && atomStart t2 && !(t2 matches .kw .lp) && !(t2 matches .kw .lbk)) ||
+  (t2 matches .kw .timesLbk) || (t1 matches .kw .barr) || (t2 matches .kw .earr)
 
 def sp (p : Option Tok) (t1 t2 : Tok) : Bool := needSpace t1 t2 || pretty p t1 t2
 
@@ -213,6 +217,13 @@ def ctrlKw : List (String × Kw) :=
     ("max", .max), ("lfloor", .lfloor), ("rfloor", .rfloor), ("lceil", .lceil),
     ("rceil", .rceil), ("partial", .pdiff), ("dot", .dotacc),
     ("sum", .sum), ("prod", .prod), ("in", .inn), ("substack", .substack), ("limits", .limitsL)]
+
+/-- `\times` followed (after white space) by `[`: the region product of a `makearray`
+with the bracket of the next bound pair, one token; any other `\times` is a product. -/
+def timesTok (r : List Char) : Tok × List Char :=
+  match r.dropWhile (fun c => c == ' ' || c == '\n' || c == '\t' || c == '\r') with
+  | '[' :: r' => (.kw .timesLbk, r')
+  | _ => (.kw .times, r)
 
 /-- After a control word: its token. -/
 def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
@@ -240,11 +251,18 @@ def ctrlTok (w : String) (r : List Char) : Option (Tok × List Char) :=
   else if w = "begin" then
     match dropP "{cases}".toList r with
     | some r' => some (.kw .bcases, r')
-    | none => (dropP "{bmatrix}".toList r).map (.kw .bmat, ·)
+    | none =>
+      match dropP "{bmatrix}".toList r with
+      | some r' => some (.kw .bmat, r')
+      | none => (dropP "{array}{l|l}".toList r).map (.kw .barr, ·)
   else if w = "end" then
     match dropP "{cases}".toList r with
     | some r' => some (.kw .ecases, r')
-    | none => (dropP "{bmatrix}".toList r).map (.kw .emat, ·)
+    | none =>
+      match dropP "{bmatrix}".toList r with
+      | some r' => some (.kw .emat, r')
+      | none => (dropP "{array}".toList r).map (.kw .earr, ·)
+  else if w = "times" then some (timesTok r)
   else if isGreek w.toList then some (.greek w, r)
   else (ctrlKw.lookup w).map (.kw ·, r)
 
@@ -312,6 +330,8 @@ def lexOne (cs : List Char) : Option (Tok × List Char) :=
       ctrlTok (String.ofList p.1) p.2
     else if c = ',' then (unitTok r).map fun p => (.units p.1, p.2)
     else if c = '\\' then some (.kw .nl, r)
+    else if c = '{' then some (.kw .lset, r)
+    else if c = '}' then some (.kw .rset, r)
     else none
   | '"' :: r => (Strings.unquoteBody false (fixUs r)).map fun p => (.jstr (String.ofList p.1), p.2)
   | c :: r =>

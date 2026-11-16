@@ -29,6 +29,20 @@ Decisions of record (2026-11-13):
 * Expression-valued fields inside blocks are math strings; an equation's `_comment`
   is a comment line inside its math.
 * Models and reaction systems keep separate directives.
+
+Decisions of record (2026-11-15), array notation:
+
+* `makearray` prints as a bracketed two-column table, value then region, rows in JSON
+  order; a region is its bound pairs joined by `\times`; a lifted `makearray` carries its
+  `output_idx` as the bracket's subscript.
+* A `faq` whose `args` are names other than the arrays its body indexes carries them as a
+  superscript set; with it a lone dense range uses the one-row subscript.
+* An array `const` of any size prints as a matrix (rank 1 or 2); the named reference into
+  a data block is no longer planned for printing.
+* A template applied with no bindings and no known parameter list is its bare name.
+* `broadcast`, `reshape`, `transpose`, `concat` and every `faq`, `makearray` or `const`
+  without a native shape use the call form with named fields; the escape form is left for
+  annotated nodes, non-identifier field keys and shapes no notation covers.
 -/
 
 namespace Esm.Document.Notation
@@ -40,9 +54,23 @@ namespace Esm.Document.Notation
 * `native`: conventional notation.
 * `call`: `\operatorname{name}(…)` in LaTeX, `op("name")(…)` in Typst. Every open
   (rewrite-target) operator and every template application also uses this form,
-  with node fields such as `dim` as named arguments after a semicolon.
+  with node fields such as `dim` as named arguments after a semicolon. The core
+  operators of `fieldCallOps` (`broadcast`, `reshape`, `transpose`, `concat`, and a
+  `faq`, `makearray` or `const` with no native shape) use it too when no field annotates
+  the node: `\operatorname{reshape}(A; \mathrm{shape} = [2, 3])`. Their expression-valued
+  fields (`expr`, `filter`, `key`) print as math, every other field as JSON, a string as
+  `\text{"…"}` even when it is a name (decided 2026-11-15); an open operator's fields print
+  as math whenever they are expressions. Core operator names are
+  never template or open-operator names in this form, so it reads back as the core node.
+  A template applied with no bindings and no known parameter list is its bare name,
+  `\operatorname{n}` / `op("n")`, at the level of a product (so a product with it, a
+  power or an index of it, parenthesizes it); `\operatorname{n}()` is an open operator
+  with no operands.
 * `escape`: the generic node form, `\esm{op}{fields}{args}` / `esm.node("op", fields)[args]`,
-  whose arguments are still ordinary math.
+  whose arguments are still ordinary math. Since 2026-11-15 it is left for what has no
+  other notation: a node annotated with `id` or `expect_cadence` (outside the open
+  operators), a field key that is not an identifier, and shapes no notation covers (an
+  `index` with one argument, a `D` with no `wrt`, an `ic` of a non-name, …).
 
 A JSON string among a node's fields prints in LaTeX as `\text{"…"}` (decided 2026-11-13, so
 that KaTeX in strict mode renders it): printable ASCII as itself, `_`, `{`, `}` as `\_`,
@@ -131,29 +159,39 @@ def coreOps : List OpRow := [
     typst := r#"op("enum")(italic("Land"), italic("urban"))"# },
   { op := "const", shape := "scalar", tier := native,
     latex := r"the number; with units 3\,\mathrm{m/s}", typst := r#"3 thin upright("m") thin upright("s")^(-1)"# },
-  { op := "const", shape := "array of at most 16 entries", tier := native,
+  { op := "const", shape := "array of rank 1 or 2, any size, every entry a number", tier := native,
     latex := r"bmatrix (a column for rank 1); with units, a thin space and the unit after it, as for a scalar: \begin{bmatrix}1\\2\end{bmatrix}\,\mathrm{m}",
     typst := r#"vec(…), mat(…); with units vec(1, 2) thin upright("m")"# },
-  { op := "const", shape := "array of more than 16 entries", tier := escape,
-    latex := "a named reference into a data block keyed by the JSON path; the block holds the values and the units (decided 2026-11-13 over a native matrix of any size, which stops being readable; until the reference lands the printer writes the escape node with the values inline, which round-trips and renders)",
-    typst := "same" },
+  { op := "const", shape := "any other const: rank 3 or more, non-number entries, units without a typeset form",
+    tier := call,
+    latex := r"\operatorname{const}(; \mathrm{value} = [[[1, 2], [3, 4]], …]) with the value as JSON (decided 2026-11-15: an array of any size prints as a matrix; the named reference into a data block decided 2026-11-13 is no longer planned for printing)",
+    typst := r#"op("const")(; upright("value") = #(…))"# },
   { op := "index", tier := native, latex := "A_{i, j}; A[i, j] on a subscript collision",
     typst := "A_(i, j)" },
   { op := "faq",
     shape := r#"no semiring (or "sum_product"), reduce "+", "*", "max" or "min"; no join, distinct or key"#,
     tier := native,
-    latex := r"one \sum, \prod, \max or \min over all reduced indices. A range prints as k \in S (from), k \in S(i) (from with of) or a \le k \le b (dense [a, b]); a lone dense range as \sum_{k=a}^{b}. Several ranges, then the filter, stack in \substack; a range row is never an expression, so the filter row is unambiguous. Output indices as \left[ … \right] with the same range forms in its subscript",
-    typst := r#"sum_(…), product_(…), max_(…), min_(…) with the same range forms (k in S, k in S(i), a <= k <= b), rows stacked with \ and the filter last; output indices as lr([…])_(…)"# },
-  { op := "faq", shape := r#"join, distinct, key, or a semiring other than "sum_product""#, tier := escape,
-    latex := r"\esm", typst := "esm.node" },
-  { op := "makearray", tier := escape, latex := r"\esm", typst := "esm.node" },
-  { op := "broadcast", tier := escape, latex := r"\esm", typst := "esm.node" },
-  { op := "reshape", tier := escape, latex := r"\esm", typst := "esm.node" },
-  { op := "transpose", tier := escape, latex := r"\esm", typst := "esm.node" },
-  { op := "concat", tier := escape, latex := r"\esm", typst := "esm.node" },
+    latex := r"one \sum, \prod, \max or \min over all reduced indices. A range prints as k \in S (from), k \in S(i) (from with of) or a \le k \le b (dense [a, b]); a lone dense range as \sum_{k=a}^{b}. Several ranges, then the filter, stack in \substack; a range row is never an expression, so the filter row is unambiguous. Output indices as \left[ … \right] with the same range forms in its subscript. args: empty is unmarked; exactly the arrays the body indexes is \sum\limits; any other list of names is a superscript set, on the operator for rank 0 (\sum_{…}^{\{f, g\}} …, the lone dense range then in the one-row form _{a \le k \le b}) and on the output bracket, before its subscript, otherwise (\left[ … \right]^{\{f\}}_{2 \le i \le N - 1}; decided 2026-11-15)",
+    typst := r#"sum_(…), product_(…), max_(…), min_(…) with the same range forms (k in S, k in S(i), a <= k <= b), rows stacked with \ and the filter last; output indices as lr([…])_(…); the args marker limits(sum); a superscript set sum_(…)^({f, g}) and lr([…])^({f})_(…)"# },
+  { op := "faq", shape := r#"join, distinct, key, a semiring other than "sum_product", or args that are not names"#,
+    tier := call, latex := r"\operatorname{faq}(f; \mathrm{expr} = …, \mathrm{join} = …, …)",
+    typst := r#"op("faq")(f; upright("expr") = …, …)"# },
+  { op := "makearray", shape := "args [], regions and values of one nonzero length, each region a nonempty list of bound pairs [a, b] of expressions, every value an expression, output_idx absent or a nonempty list of names",
+    tier := native,
+    latex := r"\left[\begin{array}{l|l} v_{1} & [2, N - 1] \\ v_{2} & [1, 1] \times [2, N] \end{array}\right], rows in JSON order; output_idx as the bracket's subscript \left[…\right]_{i, j} (decided 2026-11-15)",
+    typst := r#"mat(delim: "[", augment: #1, v_1, [2, N - 1]; v_2, [1, 1] times [2, N]); output_idx as mat(…)_(i, j)"# },
+  { op := "makearray", shape := "any other makearray", tier := call,
+    latex := r"\operatorname{makearray}(; \mathrm{regions} = …, \mathrm{values} = …)", typst := r#"op("makearray")(; …)"# },
+  { op := "broadcast", tier := call, latex := r#"\operatorname{broadcast}(a, x; \mathrm{fn} = \text{"+"})"#,
+    typst := r#"op("broadcast")(a, x; upright("fn") = #"+")"# },
+  { op := "reshape", tier := call, latex := r"\operatorname{reshape}(A; \mathrm{shape} = [2, 3])",
+    typst := r#"op("reshape")(A; upright("shape") = #(2, 3))"# },
+  { op := "transpose", tier := call, latex := r"\operatorname{transpose}(A)", typst := r#"op("transpose")(A)"# },
+  { op := "concat", tier := call, latex := r"\operatorname{concat}(a, b; \mathrm{axis} = 0)",
+    typst := r#"op("concat")(a, b; upright("axis") = 0)"# },
   { op := "apply_expression_template", tier := call,
-    latex := r"\operatorname{name}(args), positional when the parameters are known, named otherwise",
-    typst := r#"op("name")(args)"# }
+    latex := r"\operatorname{name}(args), positional when the parameters are known, named otherwise; with no bindings and no known parameters the bare \operatorname{name}",
+    typst := r#"op("name")(args); bare op("name")"# }
 ]
 
 /-- The evaluable-core operator names (spec §4.2). `scripts/formal-audit.py notation`
@@ -413,7 +451,11 @@ def skeleton : List SkeletonRow := [
 * The lexer reads the header (and splits a rule at its first ` \Rightarrow `); only the body
   and the left-hand side are math, read under the component's symbol table (or, at the top
   level of a library file, the document's index sets and templates) with the parameters
-  declared. The symbol table takes each template's parameter list from its header, never
+  declared. A rule's left-hand side (its `match`) is read with no templates in the
+  table: a pattern never applies a template (spec §9.7.3), and an operator in it named like
+  a template in scope (the rule itself is in scope under its own name) is then the
+  operator, in the call form `\operatorname{r}(f)`, not the escape form (decided
+  2026-11-15). The symbol table takes each template's parameter list from its header, never
   from its math.
 * Every other field is an attribute. Markdown: the display sits in a container directive,
   `:::template{description="…"}` or `:::rule{params='["u"]' priority=1}`, then the display,

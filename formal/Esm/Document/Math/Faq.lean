@@ -226,9 +226,14 @@ def rowsL (c : Ctx) (f : Nat) (ts : List Tok) : Option (List Row × List Tok) :=
   | .kw .us :: .kw .lb :: r =>
     match pRow c f (isKw .rb) r with
     | some (.filt (.obj [("args", .arr [.str k, a]), ("op", .str "==")]), .kw .rb :: .kw .caret :: .kw .lb :: r2) =>
-      match pOr c f r2 with
-      | some (b, .kw .rb :: r3) => some ([.rng k (.arr [a, b])], r3)
-      | _ => none
+      match r2 with
+      | .kw .lset :: r3 =>
+        some ([.filt (.obj [("args", .arr [.str k, a]), ("op", .str "==")])],
+          .kw .caret :: .kw .lb :: .kw .lset :: r3)
+      | _ =>
+        match pOr c f r2 with
+        | some (b, .kw .rb :: r3) => some ([.rng k (.arr [a, b])], r3)
+        | _ => none
     | some (row, .kw .rb :: r2) => some ([row], r2)
     | _ => none
   | r => some ([], r)
@@ -243,18 +248,21 @@ def bodyOf (c : Ctx) (f : Nat) (red : RedK) (marked : Bool) (rows : Option (List
     Option (FaqForm × List Tok) :=
   match rows with
   | some (rs, r) =>
-    match rowParts rs, pMul c f r with
-    | some (rg, fl), some (body, r') => some (⟨red, marked, [], rg, body, fl⟩, r')
+    match rowParts rs, pSup c.sf r with
+    | some (rg, fl), some (st, r1) =>
+      match pMul c f r1 with
+      | some (body, r') => some (⟨red, marked, [], rg, body, fl, st⟩, r')
+      | none => none
     | _, _ => none
   | none => none
 
 theorem pRedBody_latex {c : Ctx} (h : c.sf = .latex) (f : Nat) (red : RedK) (marked : Bool) (ts : List Tok) :
     pRedBody c (f + 1) red marked ts = bodyOf c f red marked (rowsL c f ts) := by
-  rw [pRedBody.eq_def]; simp only; rw [h]; rfl
+  rw [pRedBody.eq_def]; simp only [bodyOf]; rw [h]; rfl
 
 theorem pRedBody_typst {c : Ctx} (h : c.sf = .typst) (f : Nat) (red : RedK) (marked : Bool) (ts : List Tok) :
     pRedBody c (f + 1) red marked ts = bodyOf c f red marked (rowsT c f ts) := by
-  rw [pRedBody.eq_def]; simp only; rw [h]; rfl
+  rw [pRedBody.eq_def]; simp only [bodyOf]; rw [h]; rfl
 
 /-! ## The subscript -/
 
@@ -349,11 +357,11 @@ theorem faqRows_ne {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) :
   rw [e] at he; cases he
 
 theorem head_ne_kw {t : Tok} (h : startA t = true ∨ t = .kw .minus) (k : Kw)
-    (hk : k = .us ∨ k = .caret ∨ k = .substack ∨ k = .limitsL ∨ k = .lp) : t ≠ .kw k := by
+    (hk : k = .us ∨ k = .caret ∨ k = .substack ∨ k = .limitsL ∨ k = .lp ∨ k = .lset) : t ≠ .kw k := by
   rintro rfl
   rcases h with h | h
-  · rcases hk with rfl | rfl | rfl | rfl | rfl <;> simp [startA, atomStart] at h
-  · rcases hk with rfl | rfl | rfl | rfl | rfl <;> cases h
+  · rcases hk with rfl | rfl | rfl | rfl | rfl | rfl <;> simp [startA, atomStart] at h
+  · rcases hk with rfl | rfl | rfl | rfl | rfl | rfl <;> cases h
 
 theorem body_head {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) :
     ∃ t r, (P F.expr).at c.sf 5 = t :: r ∧ (startA t = true ∨ t = .kw .minus) := by
@@ -386,20 +394,45 @@ theorem faqRows_single {c : Ctx} {P : Json → Out} {F : FaqForm} {r : List Tok}
 theorem len_ge {l : List Tok} {n : Nat} (h : n ≤ l.length) (X : List Tok) : n ≤ (l ++ X).length := by
   simp; omega
 
-/-- The LaTeX subscript and body read back. -/
-theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (hsf : c.sf = .latex)
-    (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
-    (hf : 30 * (subToksL c P F ++ (P F.expr).at c.sf 5).length + 20 ≤ f) :
-    pRedBody c (f + 1) F.red F.marked (subToksL c P F ++ ((P F.expr).at c.sf 5 ++ rest)) =
-      some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩, rest) := by
+/-- What follows a reduction's subscript: its superscript set, or its body. -/
+def AfterSub (Z : List Tok) : Prop :=
+  (∃ t r, Z = t :: r ∧ (startA t = true ∨ t = .kw .minus)) ∨
+    (∃ r, Z = .kw .caret :: .kw .lb :: .kw .lset :: r) ∨ (∃ r, Z = .kw .caret :: .kw .lpg :: .kw .lset :: r)
+
+theorem afterSub_us {Z : List Tok} (h : AfterSub Z) : ∀ r, Z ≠ .kw .us :: r := by
+  intro r e; subst e
+  rcases h with ⟨t, r', e, ht⟩ | ⟨r', e⟩ | ⟨r', e⟩
+  · simp only [List.cons.injEq] at e; obtain ⟨rfl, -⟩ := e
+    rcases ht with ht | ht
+    · simp [startA, atomStart] at ht
+    · cases ht
+  · cases e
+  · cases e
+
+theorem afterSub_caret {Z : List Tok} (h : AfterSub Z) (r2 : List Tok) (e : Z = .kw .caret :: .kw .lb :: r2) :
+    ∃ r3, r2 = .kw .lset :: r3 := by
+  subst e
+  rcases h with ⟨t, r', e, ht⟩ | ⟨r', e⟩ | ⟨r', e⟩
+  · simp only [List.cons.injEq] at e; obtain ⟨rfl, -⟩ := e
+    rcases ht with ht | ht
+    · simp [startA, atomStart] at ht
+    · cases ht
+  · simp only [List.cons.injEq] at e; exact ⟨r', e.2.2⟩
+  · simp at e
+
+theorem afterSub_of_head {Z : List Tok} {t : Tok} {r : List Tok} (e : Z = t :: r)
+    (ht : startA t = true ∨ t = .kw .minus) : AfterSub Z := Or.inl ⟨t, r, e, ht⟩
+
+/-- The LaTeX subscript reads back as its rows. -/
+theorem rowsL_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (Z : List Tok)
+    (hZ : AfterSub Z) (f : Nat) (hf : 30 * (subToksL c P F).length + 25 ≤ f) :
+    rowsL c f (subToksL c P F ++ Z) = some ((faqRows c P F).map Prod.fst, Z) := by
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 5 := ⟨f - 5, by omega⟩
-  obtain ⟨tb, rb', hbe, hbh⟩ := body_head h
-  have hB := pMul_body h rest hr (g + 5)
-  rw [pRedBody_latex hsf]
+  have hZus := afterSub_us hZ
   revert hf
   unfold subToksL
   split
-  · rename_i k a b hred hfil
+  · rename_i k a b hred hfil hsup
     intro hf
     have hmem : (k, Json.arr [a, b]) ∈ F.ranges := redRanges_mem (by rw [hred]; simp)
     obtain ⟨hk, -, hM⟩ := h.hR _ hmem
@@ -408,6 +441,10 @@ theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
     simp only [List.length_append, List.length_cons, List.length_nil] at hf
     obtain ⟨t, tr, he, hh⟩ := nameToks_head c k
     have ht : t ≠ .kw .substack := head_ne_kw (nameHead_ok c k t tr hh).2.2.2.2.2 _ (Or.inr (Or.inr (Or.inl rfl)))
+    obtain ⟨tb, rbb, hbe, hbh⟩ : ∃ tb rbb, (pr c b).at c.sf 1 = tb :: rbb ∧ (startA tb = true ∨ tb = .kw .minus) := by
+      match hh2 : (pr c b).at c.sf 1, headOK_at hb 1 with
+      | t :: r, ⟨_, _, _, _, _, h6⟩ => exact ⟨t, r, rfl, h6⟩
+    have hbl : tb ≠ .kw .lset := head_ne_kw hbh _ (by simp)
     simp only [List.append_assoc, List.cons_append, List.nil_append]
     unfold rowsL
     split
@@ -416,23 +453,25 @@ theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
     · rename_i r heq
       simp only [List.cons.injEq, true_and] at heq; subst heq
       have hK := pAdd_name c k hk (.kw .eq :: ((pr c a).at c.sf 4 ++ .kw .rb :: .kw .caret :: .kw .lb ::
-        ((pr c b).at c.sf 1 ++ .kw .rb :: ((P F.expr).at c.sf 5 ++ rest)))) (fol4_kw _ .eq (Or.inr (Or.inr rfl)) _)
+        ((pr c b).at c.sf 1 ++ .kw .rb :: Z))) (fol4_kw _ .eq (Or.inr (Or.inr rfl)) _)
         (g + 1) (by unfold need; omega)
       have hA := pAdd_at ha (.kw .rb :: .kw .caret :: .kw .lb ::
-        ((pr c b).at c.sf 1 ++ .kw .rb :: ((P F.expr).at c.sf 5 ++ rest))) (fol_kw _ 4 .rb _ (by simp [conts, atomStart]))
+        ((pr c b).at c.sf 1 ++ .kw .rb :: Z)) (fol_kw _ 4 .rb _ (by simp [conts, atomStart]))
         g (by unfold need; omega)
       have hor := pOr_cmp c g _ _ _ (.str k) a .eq "==" hK rfl hA (fun _ e => by cases e) (fun _ e => by cases e)
       rw [pRow.eq_def]; simp only
       rw [show g + 4 = g + 4 from rfl, hor]
       simp only [isKw, beq_self_eq_true, ↓reduceIte, node]
-      have hBb := PL_at hb 1 (le_refl _) (by omega) (.kw .rb :: ((P F.expr).at c.sf 5 ++ rest))
+      have hBb := PL_at hb 1 (le_refl _) (by omega) (.kw .rb :: Z)
         (fol1_kw _ .rb (by simp) _) (g + 5) (by unfold need; omega)
       rw [pLvl1] at hBb
-      rw [hBb]
-      unfold bodyOf
-      simp only [rowParts, Option.map_some]
-      rw [hB (by unfold need; omega)]
-      simp [hred, hfil]
+      rw [hbe]
+      simp only [List.cons_append]
+      split
+      · rename_i r3 heq3; simp only [List.cons.injEq] at heq3; exact absurd heq3.1 hbl
+      · rw [← List.cons_append, ← hbe, hBb]
+        unfold faqRows
+        simp [hred, hfil]
     · rename_i hn1 hn2
       exfalso; exact hn2 _ rfl
   · rename_i hnl
@@ -441,16 +480,9 @@ theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
       intro hf
       obtain ⟨h1, h2⟩ := subRows_nil hrows
       simp only [List.nil_append]
-      unfold rowsL
-      split
-      · rename_i r heq; rw [hbe] at heq; simp at heq
-        exact absurd heq.1 (head_ne_kw hbh _ (Or.inl rfl))
-      · rename_i r heq; rw [hbe] at heq; simp at heq
-        exact absurd heq.1 (head_ne_kw hbh _ (Or.inl rfl))
-      · unfold bodyOf
-        simp only [rowParts]
-        rw [hB (by simp at hf; unfold need; omega)]
-        simp [h1, h2]
+      have : rowsL c (g + 5) Z = some ([], Z) := by
+        unfold rowsL; split <;> first | (exfalso; simp_all; done) | rfl
+      rw [this]; unfold faqRows; simp [h1, h2]
     · rename_i r hrows
       intro hf
       obtain ⟨row, hrow⟩ := faqRows_single hrows
@@ -466,22 +498,19 @@ theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
       · rename_i r1 heq
         simp only [List.cons.injEq, true_and] at heq; subst heq
         rw [faqRows_ok h (isKw .rb) rfl rfl (row, r) hmem .rb (Or.inr (Or.inl rfl)) rfl
-          ((P F.expr).at c.sf 5 ++ rest) (g + 4) (by simp only; omega)]
+          Z (g + 4) (by simp only; omega)]
         simp only
+        rw [hrow]
         split
-        · rename_i k a heq2
-          exfalso
-          rw [hbe] at heq2
-          simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq, List.cons_append] at heq2
-          exact head_ne_kw hbh _ (Or.inr (Or.inl rfl)) heq2.2.2.1
+        · rename_i k a r2 heq2
+          simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq, true_and] at heq2
+          obtain ⟨rfl, rfl⟩ := heq2
+          obtain ⟨r3, rfl⟩ := afterSub_caret hZ _ rfl
+          rfl
         · rename_i row' r2 _ heq2
           simp only [Option.some.injEq, Prod.mk.injEq, List.cons.injEq, true_and] at heq2
           obtain ⟨rfl, rfl⟩ := heq2
-          unfold bodyOf
-          simp only
-          have := faqRows_fst c P F
-          rw [hrow] at this; simp only [List.map_cons, List.map_nil] at this
-          rw [this, hB (by unfold need; omega)]
+          rfl
         · rename_i heq2; simp at heq2
       · rename_i hn1 hn2; exfalso; exact hn2 _ rfl
     · rename_i rs hne1 hne2
@@ -497,26 +526,17 @@ theorem pRedBody_readL {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
         have := length_le_sepBy [.kw .nl] (by simp) ((faqRows c P F).map Prod.snd)
           (fun x hx => by obtain ⟨p, hp, rfl⟩ := List.mem_map.1 hx; exact faqRows_ne h p hp)
         simpa using this
-      rw [← hrs, pRows_read c .nl .rb (by decide) (.kw .rb :: ((P F.expr).at c.sf 5 ++ rest)) (faqRows c P F) hne
+      rw [← hrs, pRows_read c .nl .rb (by decide) (.kw .rb :: Z) (faqRows c P F) hne
         (fun p hp E hE R' f' hf' => faqRows_ok h _ rfl rfl p hp E
           (by rcases hE with rfl | rfl; exact Or.inl rfl; exact Or.inr (Or.inl rfl))
           (by rcases hE with rfl | rfl <;> rfl) R' f' hf') (g + 4)
         (by rw [hrs]; omega)]
-      simp only
-      unfold bodyOf
-      simp only
-      rw [faqRows_fst, hB (by unfold need; omega)]
 
-/-- The Typst subscript and body read back. -/
-theorem pRedBody_readT {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (hsf : c.sf = .typst)
-    (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
-    (hf : 30 * (subToksT c P F ++ (P F.expr).at c.sf 5).length + 20 ≤ f) :
-    pRedBody c (f + 1) F.red F.marked (subToksT c P F ++ ((P F.expr).at c.sf 5 ++ rest)) =
-      some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩, rest) := by
+/-- The Typst subscript reads back as its rows. -/
+theorem rowsT_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (Z : List Tok)
+    (hZus : ∀ r, Z ≠ .kw .us :: r) (f : Nat) (hf : 30 * (subToksT c P F).length + 25 ≤ f) :
+    rowsT c f (subToksT c P F ++ Z) = some ((faqRows c P F).map Prod.fst, Z) := by
   obtain ⟨g, rfl⟩ : ∃ g, f = g + 5 := ⟨f - 5, by omega⟩
-  obtain ⟨tb, rb', hbe, hbh⟩ := body_head h
-  have hB := pMul_body h rest hr (g + 5)
-  rw [pRedBody_typst hsf]
   revert hf
   unfold subToksT
   split
@@ -524,14 +544,9 @@ theorem pRedBody_readT {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
     intro hf
     obtain ⟨h1, h2⟩ := subRows_nil hrows
     simp only [List.nil_append]
-    unfold rowsT
-    split
-    · rename_i r heq; rw [hbe] at heq; simp at heq
-      exact absurd heq.1 (head_ne_kw hbh _ (Or.inl rfl))
-    · unfold bodyOf
-      simp only [rowParts]
-      rw [hB (by simp at hf; unfold need; omega)]
-      simp [h1, h2]
+    have : rowsT c (g + 5) Z = some ([], Z) := by
+      unfold rowsT; split <;> first | (exfalso; simp_all; done) | rfl
+    rw [this]; unfold faqRows; simp [h1, h2]
   · rename_i rs hne1
     intro hf
     have hrs : (faqRows c P F).map Prod.snd = subRows c P F := faqRows_snd c P F
@@ -545,14 +560,101 @@ theorem pRedBody_readT {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F 
       have := length_le_sepBy [.kw .nl] (by simp) ((faqRows c P F).map Prod.snd)
         (fun x hx => by obtain ⟨p, hp, rfl⟩ := List.mem_map.1 hx; exact faqRows_ne h p hp)
       simpa using this
-    rw [← hrs, pRows_read c .nl .rp (by decide) ((P F.expr).at c.sf 5 ++ rest) (faqRows c P F) hne
+    rw [← hrs, pRows_read c .nl .rp (by decide) Z (faqRows c P F) hne
       (fun p hp E hE R' f' hf' => faqRows_ok h _ rfl rfl p hp E
         (by rcases hE with rfl | rfl; exact Or.inl rfl; exact Or.inr (Or.inr (Or.inl rfl)))
         (by rcases hE with rfl | rfl <;> rfl) R' f' hf') (g + 4)
       (by rw [hrs]; omega)]
-    unfold bodyOf
-    simp only
-    rw [faqRows_fst, hB (by unfold need; omega)]
+
+/-- The superscript set a reduction or an output form carries, as printed: none, or the
+set of names `st`. -/
+def SupOK (c : Ctx) (S : List Tok) (st : List String) : Prop :=
+  (S = [] ∧ st = []) ∨ (S = supToks c st ∧ st ≠ [] ∧ ∀ n ∈ st, nameOK n = true)
+
+theorem pSup_nil (sf : Sf) (Y : List Tok) (hY : ∀ r, Y ≠ .kw .caret :: r) : pSup sf Y = some ([], Y) := by
+  unfold pSup
+  split <;> first | (exfalso; simp_all; done) | rfl
+
+theorem names_len (c : Ctx) (st : List String) : st.length ≤ (sepBy [.kw .comma] (st.map (nameToks c))).length := by
+  have := length_le_sepBy [.kw .comma] (by simp) (st.map (nameToks c)) (by
+    intro x hx; obtain ⟨q, _, rfl⟩ := List.mem_map.1 hx
+    obtain ⟨t, tr, he, -⟩ := nameToks_head c q; rw [he]; simp)
+  simpa using this
+
+theorem pSup_read (c : Ctx) (S : List Tok) (st : List String) (hS : SupOK c S st) (Y : List Tok)
+    (hY : ∀ r, Y ≠ .kw .caret :: r) : pSup c.sf (S ++ Y) = some (st, Y) := by
+  rcases hS with ⟨rfl, rfl⟩ | ⟨rfl, hne, hn⟩
+  · exact pSup_nil c.sf Y hY
+  · have hl := names_len c st
+    obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
+    · simp only [supToks, hsf, List.cons_append, List.append_assoc, List.nil_append]
+      unfold pSup
+      simp only
+      rw [← hsf, pNames_read c (.kw .rset :: .kw .rb :: Y) (nameStop_kw _ _ (by decide) (by decide) _)
+        (fun _ e => by cases e) st hne hn _ (by simp; omega)]
+    · simp only [supToks, hsf, List.cons_append, List.append_assoc, List.nil_append]
+      unfold pSup
+      simp only
+      rw [← hsf, pNames_read c (.kw .rset :: .kw .rp :: Y) (nameStop_kw _ _ (by decide) (by decide) _)
+        (fun _ e => by cases e) st hne hn _ (by simp; omega)]
+
+theorem supOK_supT (c : Ctx) (F : FaqForm) (hn : ∀ n ∈ F.set, nameOK n = true) : SupOK c (supT c F) F.sup := by
+  unfold supT
+  split
+  · rename_i he; left; exact ⟨rfl, List.isEmpty_iff.1 he⟩
+  · rename_i he
+    right
+    refine ⟨rfl, fun e => he (by rw [e]; rfl), fun n hm => hn n ?_⟩
+    unfold FaqForm.sup at hm; split at hm
+    · simp at hm
+    · exact hm
+
+theorem supOK_nil (c : Ctx) : SupOK c [] [] := Or.inl ⟨rfl, rfl⟩
+
+theorem afterSub_sup {c : Ctx} {S : List Tok} {st : List String} (hS : SupOK c S st) (Y : List Tok)
+    (hY : AfterSub Y) : AfterSub (S ++ Y) := by
+  rcases hS with ⟨rfl, -⟩ | ⟨rfl, -, -⟩
+  · exact hY
+  · unfold supToks
+    cases c.sf
+    · exact Or.inr (Or.inl ⟨_, rfl⟩)
+    · exact Or.inr (Or.inr ⟨_, rfl⟩)
+
+theorem bodyOf_eq {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S : List Tok) (st : List String)
+    (hS : SupOK c S st) (red : RedK) (marked : Bool) (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
+    (hf : need 5 ((P F.expr).at c.sf 5).length ≤ f) :
+    bodyOf c f red marked (some ((faqRows c P F).map Prod.fst, S ++ ((P F.expr).at c.sf 5 ++ rest))) =
+      some (⟨red, marked, [], redRanges F, F.expr, F.filter, st⟩, rest) := by
+  obtain ⟨tb, rb', hbe, hbh⟩ := body_head h
+  have hY : ∀ r, (P F.expr).at c.sf 5 ++ rest ≠ .kw .caret :: r := by
+    rw [hbe]; intro r e
+    simp only [List.cons_append, List.cons.injEq] at e
+    exact head_ne_kw hbh _ (by simp) e.1
+  unfold bodyOf
+  simp only
+  rw [faqRows_fst, pSup_read c S st hS _ hY]
+  simp only
+  rw [pMul_body h rest hr f hf]
+
+/-- The subscript, the superscript set and the body read back. -/
+theorem pRedBody_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S : List Tok)
+    (st : List String) (hS : SupOK c S st) (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
+    (hf : 30 * (subToks c P F ++ (P F.expr).at c.sf 5).length + 25 ≤ f) :
+    pRedBody c (f + 1) F.red F.marked (subToks c P F ++ (S ++ ((P F.expr).at c.sf 5 ++ rest))) =
+      some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, st⟩, rest) := by
+  obtain ⟨tb, rb', hbe, hbh⟩ := body_head h
+  have hZ : AfterSub (S ++ ((P F.expr).at c.sf 5 ++ rest)) :=
+    afterSub_sup hS _ (afterSub_of_head (by rw [hbe]; rfl) hbh)
+  simp only [List.length_append] at hf
+  obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
+  · have e : subToks c P F = subToksL c P F := by unfold subToks; rw [hsf]
+    rw [e] at hf ⊢
+    rw [pRedBody_latex hsf, rowsL_read h _ hZ f (by omega)]
+    exact bodyOf_eq h S st hS F.red F.marked rest hr f (by unfold need; omega)
+  · have e : subToks c P F = subToksT c P F := by unfold subToks; rw [hsf]
+    rw [e] at hf ⊢
+    rw [pRedBody_typst hsf, rowsT_read h _ (afterSub_us hZ) f (by omega)]
+    exact bodyOf_eq h S st hS F.red F.marked rest hr f (by unfold need; omega)
 
 /-! ## Operator, entries, ranges -/
 
@@ -724,7 +826,7 @@ theorem faqH_of (c : Ctx) (F : FaqForm) (hok : faqOK F = true) (P : Json → Out
     (hP : ∀ x ∈ faqSubs F, P x = pr c x) (hM : ∀ x ∈ faqSubs F, M c x) : FaqH c F P := by
   have hok' := hok
   simp only [faqOK, Bool.and_eq_true, List.all_eq_true] at hok'
-  obtain ⟨⟨⟨⟨⟨-, -⟩, -⟩, -⟩, -⟩, hR⟩ := hok'
+  obtain ⟨⟨⟨⟨⟨⟨-, -⟩, -⟩, -⟩, -⟩, -⟩, hR⟩ := hok'
   have hsub_e : F.expr ∈ faqSubs F := by simp [faqSubs]
   refine ⟨hM _ hsub_e, hP _ hsub_e, fun x hx => ?_, fun kv hkv => ?_⟩
   · have : x ∈ faqSubs F := by simp [faqSubs, hx]
@@ -741,16 +843,28 @@ theorem faqH_of (c : Ctx) (F : FaqForm) (hok : faqOK F = true) (P : Json → Out
 theorem redRanges_nil_out (F : FaqForm) (h : F.out = []) : redRanges F = F.ranges := by
   unfold redRanges outNames; rw [h]; simp
 
+/-- Only `args` depends on `set`, and through `sup` alone. -/
+theorem faqJson_sup (F : FaqForm) : faqJson { F with set := F.sup } = faqJson F := by
+  cases F with
+  | mk red marked out ranges expr filter set =>
+    cases marked <;> rfl
+
 theorem faqJson_eta (F : FaqForm) (h : F.out = []) :
-    faqJson ⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩ = faqJson F := by
-  rw [redRanges_nil_out F h]
+    faqJson ⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, F.sup⟩ = faqJson F := by
+  rw [redRanges_nil_out F h, ← faqJson_sup F]
   cases F; simp only at h; subst h; rfl
 
 theorem withOut_eta (F : FaqForm) (hS : keysSorted F.ranges = true) (hNd : (outNames F.out).Nodup) :
-    withOut ⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩ F.out (outRanges F) = F := by
-  unfold withOut
+    faqJson (withSup (withOut ⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, []⟩ F.out (outRanges F)) F.sup) =
+      faqJson F := by
+  unfold withOut withSup
   simp only
-  rw [ranges_rebuild F hS hNd]
+  rw [ranges_rebuild F hS hNd, ← faqJson_sup F]
+  split
+  · rename_i he
+    have : F.sup = [] := List.isEmpty_iff.1 he
+    rw [this]
+  · rfl
 
 theorem addAcc_faq (F : FaqForm) : addAcc (faqJson F) = [faqJson F] := by
   unfold addAcc faqJson
@@ -761,22 +875,30 @@ theorem addAcc_faq (F : FaqForm) : addAcc (faqJson F) = [faqJson F] := by
     simp at h2
   · rfl
 
+theorem headToks_cons (sf : Sf) (F : FaqForm) :
+    ∃ k r, headToks sf F = .kw k :: r ∧ k ≠ .lbkg ∧ k ≠ .lr ∧ k ≠ .lp ∧ k ≠ .barr ∧ k ≠ .mat := by
+  unfold headToks
+  cases sf <;> cases F.marked <;> cases F.red <;> exact ⟨_, _, rfl, by decide, by decide, by decide, by decide, by decide⟩
+
 theorem pPrim_red (c : Ctx) (F : FaqForm) (f : Nat) (t : Tok) (r : List Tok) (ht : t ≠ .kw .lp) :
     pPrim c (f + 1) (headToks c.sf F ++ t :: r) = pRed c f (headToks c.sf F ++ t :: r) := by
   unfold headToks
   cases c.sf <;> cases F.marked <;> cases F.red <;> simp only [Bool.false_eq_true, ↓reduceIte,
     List.cons_append, List.nil_append, RedK.kw] <;> rw [pPrim.eq_def] <;> simp only <;> rfl
 
+theorem pPrim_lbkg (c : Ctx) (F : FaqForm) (f : Nat) (X : List Tok) :
+    pPrim c (f + 1) (.kw .lbkg :: (headToks c.sf F ++ X)) = pRed c f (.kw .lbkg :: (headToks c.sf F ++ X)) := by
+  unfold headToks
+  cases c.sf <;> cases F.marked <;> cases F.red <;> simp only [Bool.false_eq_true, ↓reduceIte,
+    List.cons_append, List.nil_append, RedK.kw] <;> rw [pPrim.eq_def]
+
 theorem pRed_head (c : Ctx) (F : FaqForm) (f : Nat) (X : List Tok) :
     pRed c (f + 1) (headToks c.sf F ++ X) =
       match pRedHead c.sf (headToks c.sf F ++ X) with
       | some (red, marked, r1) => (pRedBody c f red marked r1).map fun p => (faqJson p.1, p.2)
       | none => none := by
-  generalize hH : headToks c.sf F = H
-  have hH' : (∃ k r, H = .kw k :: r ∧ k ≠ .lbkg ∧ k ≠ .lr) := by
-    rw [← hH]; unfold headToks
-    cases c.sf <;> cases F.marked <;> cases F.red <;> exact ⟨_, _, rfl, by decide, by decide⟩
-  obtain ⟨k, r, rfl, hk1, hk2⟩ := hH'
+  obtain ⟨k, r, hH, hk1, hk2, -⟩ := headToks_cons c.sf F
+  rw [hH]
   rw [pRed.eq_def]
   simp only [List.cons_append]
   split
@@ -784,42 +906,32 @@ theorem pRed_head (c : Ctx) (F : FaqForm) (f : Nat) (X : List Tok) :
   · rename_i r' heq; simp only [List.cons.injEq, Tok.kw.injEq] at heq; exact absurd heq.1 hk2
   · rfl
 
-theorem subToks_eq (c : Ctx) (P : Json → Out) (F : FaqForm) :
-    subToks c P F = (if c.sf = .latex then subToksL c P F else subToksT c P F) := by
-  unfold subToks; cases c.sf <;> rfl
-
-theorem pRedBody_read {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P)
-    (rest : List Tok) (hr : Fol c.sf 5 rest) (f : Nat)
-    (hf : 30 * (subToks c P F ++ (P F.expr).at c.sf 5).length + 20 ≤ f) :
-    pRedBody c (f + 1) F.red F.marked (subToks c P F ++ ((P F.expr).at c.sf 5 ++ rest)) =
-      some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩, rest) := by
-  rw [subToks_eq] at hf ⊢
-  obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-  · rw [iteT hsf] at hf ⊢; exact pRedBody_readL h hsf rest hr f hf
-  · have hn : ¬ c.sf = .latex := by rw [hsf]; decide
-    rw [iteF hn] at hf ⊢; exact pRedBody_readT h hsf rest hr f hf
-
-theorem sub_body_head {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (rest : List Tok) :
-    ∃ t r, subToks c P F ++ ((P F.expr).at c.sf 5 ++ rest) = t :: r ∧ t ≠ .kw .lp ∧ t ≠ .kw .limitsL := by
+theorem sub_body_head {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P) (S : List Tok) (st : List String)
+    (hS : SupOK c S st) (rest : List Tok) :
+    ∃ t r, subToks c P F ++ (S ++ ((P F.expr).at c.sf 5 ++ rest)) = t :: r ∧ t ≠ .kw .lp ∧ t ≠ .kw .limitsL := by
   obtain ⟨tb, rb', hbe, hbh⟩ := body_head h
-  rw [subToks_eq]
+  have hS' : ∃ t r, S ++ ((P F.expr).at c.sf 5 ++ rest) = t :: r ∧ t ≠ .kw .lp ∧ t ≠ .kw .limitsL := by
+    rcases hS with ⟨rfl, -⟩ | ⟨rfl, -, -⟩
+    · rw [List.nil_append, hbe]
+      exact ⟨tb, _, rfl, head_ne_kw hbh _ (by simp), head_ne_kw hbh _ (by simp)⟩
+    · unfold supToks; cases c.sf <;> exact ⟨.kw .caret, _, rfl, by simp, by simp⟩
   obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-  · rw [iteT hsf]
+  · have e : subToks c P F = subToksL c P F := by unfold subToks; rw [hsf]
+    rw [e]
     unfold subToksL
     split
     · exact ⟨.kw .us, _, rfl, by simp, by simp⟩
     · split
-      · rw [List.nil_append, hbe]
-        exact ⟨tb, _, rfl, head_ne_kw hbh _ (by simp), head_ne_kw hbh _ (by simp)⟩
+      · rw [List.nil_append]; exact hS'
       · exact ⟨.kw .us, _, rfl, by simp, by simp⟩
       · exact ⟨.kw .us, _, rfl, by simp, by simp⟩
-  · have hn : ¬ c.sf = .latex := by rw [hsf]; decide
-    rw [iteF hn]
+  · have e : subToks c P F = subToksT c P F := by unfold subToks; rw [hsf]
+    rw [e]
     unfold subToksT
     split
-    · rw [List.nil_append, hbe]
-      exact ⟨tb, _, rfl, head_ne_kw hbh _ (by simp), head_ne_kw hbh _ (by simp)⟩
+    · rw [List.nil_append]; exact hS'
     · exact ⟨.kw .us, _, rfl, by simp, by simp⟩
+
 theorem headToks_len (sf : Sf) (F : FaqForm) : 1 ≤ (headToks sf F).length := by
   unfold headToks; cases sf <;> cases F.marked <;> simp
 
@@ -847,9 +959,18 @@ theorem pRows_entries {c : Ctx} {F : FaqForm} {P : Json → Out} (h : FaqH c F P
       f (by simpa [List.map_map, Function.comp_def] using hf)
   simpa [List.map_map, Function.comp_def] using this
 
+theorem faqOK_parts {F : FaqForm} (hok : faqOK F = true) :
+    isE F.expr = true ∧ (match F.filter with | some x => isE x | none => true) = true ∧
+      (∀ j ∈ F.out, outOK j = true) ∧ (outNames F.out).Nodup ∧ (∀ n ∈ F.set, nameOK n = true) ∧
+      keysSorted F.ranges = true ∧ ∀ kv ∈ F.ranges, (nameOK kv.1 = true ∧ rangeOK kv.2 = true) ∧
+        ((outNames F.out).contains kv.1 || occursJ kv.1 F.expr ||
+          (match F.filter with | some x => occursJ kv.1 x | none => false)) = true := by
+  simp only [faqOK, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hok
+  obtain ⟨⟨⟨⟨⟨⟨he, hf⟩, hO⟩, hNd⟩, hset⟩, hS⟩, hR⟩ := hok
+  exact ⟨he, hf, hO, hNd, hset, hS, hR⟩
+
 theorem faqSubs_isE {F : FaqForm} (hok : faqOK F = true) : ∀ x ∈ faqSubs F, isE x = true := by
-  simp only [faqOK, Bool.and_eq_true, List.all_eq_true] at hok
-  obtain ⟨⟨⟨⟨⟨he, hf⟩, -⟩, -⟩, -⟩, hR⟩ := hok
+  obtain ⟨he, hf, -, -, -, -, hR⟩ := faqOK_parts hok
   intro x hx
   simp only [faqSubs, List.mem_append, List.mem_flatMap] at hx
   rcases hx with (hx | hx) | ⟨kv, hkv, hx⟩
@@ -868,76 +989,89 @@ theorem M_faq (c : Ctx) (kvs : List (String × Json)) (F : FaqForm) (hF : faqFor
     (hpr : pr c (.obj kvs) = faqOut c P F) (hM : ∀ x ∈ faqSubs F, M c x) : M c (.obj kvs) := by
   have h := faqH_of c F hok P hP hM
   have hj := faqForm_json hF
-  have hok' := hok
-  simp only [faqOK, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hok'
-  obtain ⟨⟨⟨⟨⟨-, -⟩, hO⟩, hNd⟩, hS⟩, -⟩ := hok'
+  obtain ⟨-, -, hO, hNd, hset, hS, -⟩ := faqOK_parts hok
+  have hSup := supOK_supT c F hset
   have hacc : addAcc (.obj kvs) = [.obj kvs] := by rw [← hj]; exact addAcc_faq F
   have hhl := headToks_len c.sf F
   by_cases hout : F.out = []
   · -- the reduction alone, level 5
     have hpr' : pr c (.obj kvs) = mkOut c.sf 5 (redToks c P F) := by rw [hpr]; unfold faqOut; simp [hout]
     refine M_of_toksL c _ 5 _ hpr' (by omega) (by omega) (by omega) hacc
-      (by unfold redToks; rw [List.append_assoc]; exact headOK_faq c F _) ?_
+      (by unfold redToks; simp only [List.append_assoc]; exact headOK_faq c F _) ?_
     intro rest hr f hf
     unfold redToks at hf ⊢
-    simp only [List.length_append] at hf
+    simp only [hout, ↓reduceIte, List.length_append] at hf ⊢
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by unfold need at hf; omega⟩
-    obtain ⟨t, r, he, ht1, ht2⟩ := sub_body_head h rest
-    rw [List.append_assoc, List.append_assoc, he, pPrim_red c F _ t r ht1, ← he, pRed_head,
+    obtain ⟨t, r, he, ht1, ht2⟩ := sub_body_head h _ _ hSup rest
+    rw [List.append_assoc, List.append_assoc, List.append_assoc, he, pPrim_red c F _ t r ht1, ← he, pRed_head,
       pRedHead_read c.sf F _ (by rw [he]; intro r' e; cases e; exact ht2 rfl)]
     simp only
-    rw [pRedBody_read h rest hr g (by simp only [List.length_append]; unfold need at hf; omega)]
+    rw [pRedBody_read h _ _ hSup rest hr g (by simp only [List.length_append]; unfold need at hf; omega)]
     simp only [Option.map_some]
     rw [faqJson_eta F hout, hj]
   · have hbody : ∀ (Y : List Tok) (k : Kw), conts c.sf 5 (.kw k) = false → ∀ g,
-        30 * (subToks c P F ++ (P F.expr).at c.sf 5).length + 20 ≤ g →
-        pRedHead c.sf (headToks c.sf F ++ (subToks c P F ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y))) =
-          some (F.red, F.marked, subToks c P F ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y)) ∧
-        pRedBody c (g + 1) F.red F.marked (subToks c P F ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y)) =
-          some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter⟩, .kw k :: Y) := by
+        30 * (subToks c P F ++ (P F.expr).at c.sf 5).length + 25 ≤ g →
+        pRedHead c.sf (headToks c.sf F ++ (subToks c P F ++ ([] ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y)))) =
+          some (F.red, F.marked, subToks c P F ++ ([] ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y))) ∧
+        pRedBody c (g + 1) F.red F.marked (subToks c P F ++ ([] ++ ((P F.expr).at c.sf 5 ++ .kw k :: Y))) =
+          some (⟨F.red, F.marked, [], redRanges F, F.expr, F.filter, []⟩, .kw k :: Y) := by
       intro Y k hk g hg
-      refine ⟨pRedHead_read c.sf F _ ?_, pRedBody_read h _ (fol_kw _ 5 k _ hk) g hg⟩
-      obtain ⟨t, r, he, -, ht2⟩ := sub_body_head h (.kw k :: Y)
+      refine ⟨pRedHead_read c.sf F _ ?_, pRedBody_read h [] [] (supOK_nil c) _ (fol_kw _ 5 k _ hk) g hg⟩
+      obtain ⟨t, r, he, -, ht2⟩ := sub_body_head h [] [] (supOK_nil c) (.kw k :: Y)
       rw [he]; intro r' e; cases e; exact ht2 rfl
+    have hsupN : ∀ Y, pSup c.sf (supT c F ++ .kw .us :: Y) = some (F.sup, .kw .us :: Y) :=
+      fun Y => pSup_read c _ _ hSup _ (fun _ e => by cases e)
+    have hlen : ∀ L, (if supT c F = [] then 10 else 8) = L → 8 ≤ L ∧ L ≤ 10 := by
+      intro L e; split at e <;> omega
     obtain hsf | hsf : c.sf = .latex ∨ c.sf = .typst := by cases c.sf <;> simp
-    · have hpr' : pr c (.obj kvs) = mkOut c.sf 10 ([.kw .lbkg] ++ redToks c P F ++ [.kw .rbkg, .kw .us, .kw .lb] ++
+    · have hpr' : pr c (.obj kvs) = mkOut c.sf (if supT c F = [] then 10 else 8)
+          ([.kw .lbkg] ++ redToks c P F ++ [.kw .rbkg] ++ supT c F ++ [.kw .us, .kw .lb] ++
           sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rb]) := by
         rw [hpr]; unfold faqOut; simp only [hout, ↓reduceIte]; rw [hsf]
-      refine M_of_toks c _ 10 _ hpr' (by omega) (by omega) (by omega) hacc
+      obtain ⟨hl8, hl10⟩ := hlen _ rfl
+      refine M_of_toksL c _ _ _ hpr' (by omega) hl10 (by omega) hacc
         (hOK_kw c .lbkg _ (by decide) (by decide) (by decide)) ?_
       intro rest hr f hf
       unfold redToks at hf ⊢
-      simp only [List.length_append, List.length_cons, List.length_nil] at hf
+      simp only [hout, ↓reduceIte, List.length_append, List.length_cons, List.length_nil] at hf ⊢
       obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by unfold need at hf; omega⟩
-      obtain ⟨h1, h2⟩ := hbody (.kw .us :: .kw .lb :: (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ .kw .rb :: rest))
+      obtain ⟨h1, h2⟩ := hbody (supT c F ++ .kw .us :: .kw .lb ::
+          (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ .kw .rb :: rest))
         .rbkg (by simp [conts, atomStart]) g (by simp only [List.length_append]; unfold need at hf; omega)
       have h3 := pRows_entries h hO hout .rb (Or.inr (Or.inl rfl)) (by decide) rest g (by unfold need at hf; omega)
-      simp only [List.append_assoc, List.cons_append, List.nil_append]
-      rw [pPrim.eq_def]; simp only
+      simp only [List.nil_append] at h1 h2
+      simp only [List.append_assoc, List.cons_append, List.nil_append, List.append_nil] at h1 h2 ⊢
+      rw [pPrim_lbkg]
       rw [pRed.eq_def]; simp only
       rw [h1]; simp only
       rw [h2]; simp only
+      rw [hsupN]; simp only
       rw [h3]; simp only
       rw [entryParts_out F hO]; simp only [Option.map_some]; rw [withOut_eta F hS hNd, hj]
-    · have hpr' : pr c (.obj kvs) = mkOut c.sf 10 ([.kw .lr, .kw .lp, .kw .lbk] ++ redToks c P F ++
-          [.kw .rbk, .kw .rp, .kw .us, .kw .lpg] ++ sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp]) := by
+    · have hpr' : pr c (.obj kvs) = mkOut c.sf (if supT c F = [] then 10 else 8)
+          ([.kw .lr, .kw .lp, .kw .lbk] ++ redToks c P F ++ [.kw .rbk, .kw .rp] ++ supT c F ++
+          [.kw .us, .kw .lpg] ++ sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ [.kw .rp]) := by
         rw [hpr]; unfold faqOut; simp only [hout, ↓reduceIte]; rw [hsf]
-      refine M_of_toks c _ 10 _ hpr' (by omega) (by omega) (by omega) hacc
+      obtain ⟨hl8, hl10⟩ := hlen _ rfl
+      refine M_of_toksL c _ _ _ hpr' (by omega) hl10 (by omega) hacc
         (hOK_kw c .lr _ (by decide) (by decide) (by decide)) ?_
       intro rest hr f hf
       unfold redToks at hf ⊢
-      simp only [List.length_append, List.length_cons, List.length_nil] at hf
+      simp only [hout, ↓reduceIte, List.length_append, List.length_cons, List.length_nil] at hf ⊢
       obtain ⟨g, rfl⟩ : ∃ g, f = g + 3 := ⟨f - 3, by unfold need at hf; omega⟩
-      obtain ⟨h1, h2⟩ := hbody (.kw .rp :: .kw .us :: .kw .lpg ::
-          (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ .kw .rp :: rest))
+      obtain ⟨h1, h2⟩ := hbody (.kw .rp :: (supT c F ++ .kw .us :: .kw .lpg ::
+          (sepBy [.kw .comma] (F.out.map (entryToks c P F)) ++ .kw .rp :: rest)))
         .rbk (by simp [conts, atomStart]) g (by simp only [List.length_append]; unfold need at hf; omega)
       have h3 := pRows_entries h hO hout .rp (Or.inr (Or.inr (Or.inl rfl))) (by decide) rest g
         (by unfold need at hf; omega)
-      simp only [List.append_assoc, List.cons_append, List.nil_append]
+      have hsupT : ∀ Y, pSup c.sf (supT c F ++ .kw .us :: Y) = some (F.sup, .kw .us :: Y) := hsupN
+      simp only [List.nil_append] at h1 h2
+      simp only [List.append_assoc, List.cons_append, List.nil_append, List.append_nil] at h1 h2 ⊢
       rw [pPrim.eq_def]; simp only
       rw [pRed.eq_def]; simp only
       rw [h1]; simp only
       rw [h2]; simp only
+      rw [hsupT]; simp only
       rw [h3]; simp only
       rw [entryParts_out F hO]; simp only [Option.map_some]; rw [withOut_eta F hS hNd, hj]
 
