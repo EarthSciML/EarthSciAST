@@ -27,6 +27,7 @@
 //! any instruction that would split but cannot run share by share.
 
 use super::interp::{Cx, exec_share, exec_straight, shares};
+use super::resolve::Slab;
 use super::*;
 
 /// Estimated element-operations a phase must have before it forks: below
@@ -481,8 +482,7 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
         } = exec;
         let cx = Cx {
             env,
-            slab_ptr: slab.as_mut_ptr(),
-            slot_off,
+            slab: Slab::new(slab, slot_off, &prog.tables.slots),
             idx_tables,
             simd: *simd,
             dy_home: &env.prep.dy.home_quiet,

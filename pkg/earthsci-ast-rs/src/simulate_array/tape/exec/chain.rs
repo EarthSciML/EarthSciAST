@@ -23,7 +23,7 @@ use super::fused::{
 use super::interp::Cx;
 use super::kernels::{ew1, ew2, seg_reduce, table_gather};
 use super::par::FusedWorkers;
-use super::resolve::{Rv, SrcView};
+use super::resolve::{Rv, Slab, SrcView};
 use super::*;
 
 /// Element-operations each worker of a split chain must get.
@@ -228,14 +228,13 @@ struct Compacted {
 /// the CONST and SEGMENT sections just wrote. Allocates only the first time.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out, with the CONST and
-/// SEGMENT sections of this program run.
+/// The CONST and SEGMENT sections of this program must have run, and
+/// nothing may be writing the slab.
 pub(super) unsafe fn refill_compact(
     chains: &[SegChain],
     scratch: &mut ChainScratch,
     prog: &TapeProgram,
-    slab_ptr: *const f64,
-    slot_off: &[usize],
+    slab: Slab,
 ) {
     if scratch.compact.len() != chains.len() {
         scratch.compact.clear();
@@ -248,9 +247,7 @@ pub(super) unsafe fn refill_compact(
         };
         let rows = &prog.tables.seg_tables[*table as usize].rows;
         let n_pairs = *rows.last().expect("a planned chain has cells") as usize;
-        let read = |s: SlotId| unsafe {
-            std::slice::from_raw_parts(slab_ptr.add(slot_off[s as usize]), n_pairs)
-        };
+        let read = |s: SlotId| unsafe { std::slice::from_raw_parts(slab.slot(s), n_pairs) };
         let mask = read(plan.mask);
         let w = plan.w.map(read);
         let pos = &prog.tables.gather_tables[plan.table as usize].pos;
@@ -318,14 +315,16 @@ unsafe impl Sync for Job<'_> {}
 /// [`resolve_rv`](super::resolve::resolve_rv) resolves
 /// it against the tuple box (`seg_chains` admitted no other kind): a scalar,
 /// or the start of a contiguous tuple-box array.
-fn tuple_arg(o: &Operand, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> Option<Arg> {
+fn tuple_arg(o: &Operand, env: &Env, slab: Slab) -> Option<Arg> {
     Some(match o {
         Operand::Lit(v) => Arg::S(*v),
         Operand::Param(p) => Arg::S(env.params[*p as usize]),
         Operand::Time => Arg::S(env.t),
         Operand::Slot(s) => {
-            let p = unsafe { slab_ptr.add(slot_off[*s as usize]) };
+            let p = slab.slot(*s);
             if env.prog.tables.slots[*s as usize].scalar {
+                // SAFETY: a tuple instruction's operand is not written while
+                // the chain runs.
                 Arg::S(unsafe { *p })
             } else {
                 Arg::P(p)
@@ -377,12 +376,7 @@ pub(super) unsafe fn run_chain(
     scratch: &mut ChainScratch,
     fscratch: &mut FusedScratch,
 ) -> bool {
-    let Cx {
-        env,
-        slab_ptr,
-        slot_off,
-        ..
-    } = *cx;
+    let Cx { env, slab, .. } = *cx;
     // A serial call runs the chain too (its one share on this thread): the
     // single pass below is quicker than the instructions one by one.
     let ways = chain_ways(ch, fscratch.workers.threads);
@@ -401,8 +395,8 @@ pub(super) unsafe fn run_chain(
     let rows = &prog.tables.seg_tables[*table as usize].rows[..];
     scratch.ops.clear();
     for ins in &prog.instrs[ch.start..ch.seg] {
-        let at = |o: SlotId| unsafe { slab_ptr.add(slot_off[o as usize]) };
-        let rvs = |o: &Operand| tuple_arg(o, env, slab_ptr, slot_off);
+        let at = |o: SlotId| slab.slot(o);
+        let rvs = |o: &Operand| tuple_arg(o, env, slab);
         let op = match ins {
             Instr::TableGather { src, table, out } => Op::Table {
                 dst: at(*out),
@@ -437,9 +431,9 @@ pub(super) unsafe fn run_chain(
         };
         scratch.ops.push(op);
     }
-    let seg_src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
-    let seg_mask = mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
-    let seg_dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+    let seg_src = slab.slot(*src) as *const f64;
+    let seg_mask = mask.map(|m| slab.slot(m) as *const f64);
+    let seg_dst = slab.slot(*out);
     let (group, workers) = match ch.fused {
         Some(spec) => {
             let (g, _cursor, w) = unsafe { resolve_fused(spec as usize, cx, fscratch) };

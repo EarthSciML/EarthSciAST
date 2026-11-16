@@ -10,7 +10,7 @@
 //! other.
 
 use super::interp::Cx;
-use super::resolve::resolve_scalar;
+use super::resolve::{Slab, resolve_scalar};
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -919,17 +919,12 @@ pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>
 /// resolve per call.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out, with every table's
-/// subscript slot holding the table's element count.
-pub(super) unsafe fn refill_index_tables(
-    tables: &mut [Vec<Option<IndexTable>>],
-    slab_ptr: *const f64,
-    slot_off: &[usize],
-) {
+/// Every table's subscript slot must hold the table's element count, and
+/// nothing may be writing it.
+pub(super) unsafe fn refill_index_tables(tables: &mut [Vec<Option<IndexTable>>], slab: Slab) {
     for t in tables.iter_mut().flatten().flatten() {
-        let sub = unsafe {
-            std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
-        };
+        // SAFETY: the caller's contract.
+        let sub = unsafe { slab.slot_slice(t.subscript, t.pos.len()) };
         let mut all_in = true;
         for (k, (p, &v)) in t.pos.iter_mut().zip(sub).enumerate() {
             *p = match data_subscript(v, t.fi.n) {
@@ -1086,8 +1081,7 @@ pub(super) unsafe fn resolve_fused<'a>(
 ) -> (Group<'a>, &'a mut RunCursor, &'a mut Workers) {
     let Cx {
         env,
-        slab_ptr,
-        slot_off,
+        slab,
         idx_tables,
         simd,
         dy_home,
@@ -1109,7 +1103,7 @@ pub(super) unsafe fn resolve_fused<'a>(
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
+        svals.push(resolve_scalar(op, env, slab));
     }
     // Resolve array input base pointers once.
     bases.clear();
@@ -1117,7 +1111,7 @@ pub(super) unsafe fn resolve_fused<'a>(
         let p: *const f64 = match &inp.src {
             SrcRef::Slot(s) => {
                 debug_assert_eq!(&env.prog.tables.slots[*s as usize].shape, &inp.src_shape);
-                unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
+                slab.slot(*s) as *const f64
             }
             SrcRef::State(ix) => {
                 debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
@@ -1149,7 +1143,7 @@ pub(super) unsafe fn resolve_fused<'a>(
         let p = match dy_home.get(slot as usize) {
             Some(&super::UNSTORED) => std::ptr::null_mut(),
             Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
-            _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
+            _ => slab.slot(slot),
         };
         outs.push((reg, p));
     }
@@ -1158,15 +1152,15 @@ pub(super) unsafe fn resolve_fused<'a>(
     let red: *mut f64 = match &fs.reduce {
         Some(r) => match dy_home.get(r.out as usize) {
             Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
-            _ => unsafe { slab_ptr.add(slot_off[r.out as usize]) },
+            _ => slab.slot(r.out),
         },
         None => std::ptr::null_mut(),
     };
     // The pre-reduction, range by range from a contiguous source; else now,
     // whole, by the instruction's own walk.
     let pre = fs.pre.as_ref().and_then(|p| {
-        let sv = super::resolve::resolve_src(&p.src, env, slab_ptr, slot_off);
-        let out = unsafe { slab_ptr.add(slot_off[p.out as usize]) };
+        let sv = super::resolve::resolve_src(&p.src, env, slab);
+        let out = slab.slot(p.out);
         if sv.strides[..] == super::resolve::rm_strides(&sv.shape)[..] {
             return Some(PreTile { src: sv.ptr, out });
         }

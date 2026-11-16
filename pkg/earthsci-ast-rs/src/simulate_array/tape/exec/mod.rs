@@ -634,6 +634,26 @@ fn same_params(last: &[f64], params: &[f64]) -> bool {
             .all(|(a, b)| a.to_bits() == b.to_bits())
 }
 
+/// Rebuild what the CONST and SEGMENT sections feed and later calls read
+/// from tables of their own (the folded gathers' positions, the compacted
+/// chains' tuples), after those sections ran.
+fn refill_primed(prog: &TapeProgram, exec: &mut TapeExec) {
+    let slab = resolve::Slab::new(&mut exec.slab, &exec.slot_off, &prog.tables.slots);
+    // SAFETY: the sections ran on this thread, and nothing else touches the
+    // slab between calls.
+    unsafe { fused::refill_index_tables(&mut exec.idx_tables, slab) };
+    #[cfg(not(target_arch = "wasm32"))]
+    // SAFETY: as above.
+    unsafe {
+        chain::refill_compact(
+            &prog.prepared().seg_chains,
+            &mut exec.chain_scratch,
+            prog,
+            slab,
+        )
+    };
+}
+
 /// Execute one RHS call through the tape: prime the CONST + SEGMENT sections
 /// if needed (first call of the scratch, or a changed parameter vector), then
 /// run the CONTINUOUS section. Writes every element of `dy` (zero where no
@@ -789,37 +809,13 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
         run_range(&env, 0..prime_end, exec, dy);
-        unsafe {
-            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        unsafe {
-            chain::refill_compact(
-                &prep.seg_chains,
-                &mut exec.chain_scratch,
-                prog,
-                exec.slab.as_ptr(),
-                &exec.slot_off,
-            )
-        };
+        refill_primed(prog, exec);
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy);
-        unsafe {
-            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        unsafe {
-            chain::refill_compact(
-                &prep.seg_chains,
-                &mut exec.chain_scratch,
-                prog,
-                exec.slab.as_ptr(),
-                &exec.slot_off,
-            )
-        };
+        refill_primed(prog, exec);
     }
     // With nothing reading the published observeds, the output-only tail of
     // the section is not run.

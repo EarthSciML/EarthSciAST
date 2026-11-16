@@ -13,7 +13,7 @@ use super::kernels::{
     ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis, reduce_rows, scan_axis,
     seg_reduce, table_gather,
 };
-use super::resolve::{Rv, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
+use super::resolve::{Rv, Slab, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -22,10 +22,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// slots, 1-based, as the interpreter binds the frame symbols.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out.
-unsafe fn write_coords(sw: &SweepSpec, cell: &[usize], slab_ptr: *mut f64, slot_off: &[usize]) {
+/// No other thread may be touching the coordinate slots.
+unsafe fn write_coords(sw: &SweepSpec, cell: &[usize], slab: Slab) {
     for (&slot, &c) in sw.coords.iter().zip(cell) {
-        unsafe { *slab_ptr.add(slot_off[slot as usize]) = (c + 1) as f64 };
+        // SAFETY: the caller's contract.
+        unsafe { slab.write(slot, (c + 1) as f64) };
     }
 }
 
@@ -44,7 +45,7 @@ pub(super) fn run_range(
     // The call's split width (see `par`), for the copies and lanes below.
     let call_split = call_ways(exec);
     let TapeExec {
-        slab,
+        slab: slab_vec,
         slot_off,
         obs,
         parked,
@@ -70,8 +71,8 @@ pub(super) fn run_range(
     let seg_chains = &env.prep.seg_chains;
     let simd = *simd;
     let prog = env.prog;
-    let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
+    let slab = Slab::new(slab_vec, slot_off, &prog.tables.slots);
     pending.clear();
 
     // The open recurrence sweep, if any: the `Sweep` instruction's position
@@ -105,16 +106,16 @@ pub(super) fn run_range(
             let sw = &prog.tables.sweeps[*spec as usize];
             let body = *spc + 1;
             if pc == body + sw.body_len as usize {
-                let v = resolve_scalar(&sw.result, env, slab_ptr, slot_off);
+                let v = resolve_scalar(&sw.result, env, slab);
                 let prec = prog
                     .precision
                     .get(*spc)
                     .copied()
                     .unwrap_or_else(crate::precision::active);
-                let out = unsafe { slab_ptr.add(slot_off[sw.out as usize]) };
+                let out = slab.slot(sw.out);
                 unsafe { *out.add(sw.flat(cell)) = prec.round(v) };
                 if sw.advance(cell) {
-                    unsafe { write_coords(sw, cell, slab_ptr, slot_off) };
+                    unsafe { write_coords(sw, cell, slab) };
                     pc = body;
                     continue;
                 }
@@ -163,7 +164,7 @@ pub(super) fn run_range(
                     // SAFETY: decoded against this call's layout (`ensure`
                     // above), every instruction before it has run, and the
                     // instruction loop runs on the calling thread alone.
-                    match unsafe { b.run(env, slab_ptr, dy, regs) } {
+                    match unsafe { b.run(env, slab, dy, regs) } {
                         Some(end) => pc = end,
                         // A gather faulted: the general path latches it.
                         None => break,
@@ -176,7 +177,7 @@ pub(super) fn run_range(
                 } => {
                     // `Instr::JmpIfZero`'s arm below.
                     // SAFETY: as for the block above.
-                    if unsafe { scalar_get(&cond, env, slab_ptr) } != 0.0 {
+                    if unsafe { scalar_get(&cond, env, slab) } != 0.0 {
                         pending.push(((pc + 1 + n_true as usize) as u32, n_false));
                     } else {
                         pc += n_true as usize;
@@ -201,8 +202,7 @@ pub(super) fn run_range(
                 next_chain += 1;
                 let cx = Cx {
                     env,
-                    slab_ptr,
-                    slot_off,
+                    slab,
                     idx_tables,
                     simd,
                     dy_home,
@@ -228,9 +228,8 @@ pub(super) fn run_range(
         match &prog.instrs[pc] {
             Instr::LoadForcing { forcing, out } => {
                 let fr = &prog.forcings[*forcing as usize];
-                let off = slot_off[*out as usize];
-                let dst =
-                    unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
+                let off = slab.off(*out);
+                let dst = unsafe { std::slice::from_raw_parts_mut(slab.at(off), forcing_len(fr)) };
                 match env.forcing {
                     super::ForcingView::Map(buffer) => {
                         load_forcing(fr, buffer, env.declared, prog.col_major, dst)
@@ -249,9 +248,9 @@ pub(super) fn run_range(
                 let scan = &prog.tables.fault_scans[*spec as usize];
                 let first = scan.first(&prog.tables.faults, |op, cell| match (op, cell) {
                     (Operand::Slot(s), Some((shape, c))) => unsafe {
-                        *slab_ptr.add(slot_off[*s as usize] + slab_flat(shape, c, prog.col_major))
+                        *slab.at(slab.off(*s) + slab_flat(shape, c, prog.col_major))
                     },
-                    _ => resolve_scalar(op, env, slab_ptr, slot_off),
+                    _ => resolve_scalar(op, env, slab),
                 });
                 if let Some((key, msg)) = first {
                     latch_ordered_fault(scan.rule, &key, || msg);
@@ -265,16 +264,16 @@ pub(super) fn run_range(
                     continue;
                 }
                 let cell: SmallVec<[usize; 4]> = SmallVec::from_elem(0, sw.shape.len());
-                unsafe { write_coords(sw, &cell, slab_ptr, slot_off) };
+                unsafe { write_coords(sw, &cell, slab) };
                 sweep = Some((pc, cell));
             }
             Instr::ScalarRead { src, spec, out } => {
                 let sp = &prog.tables.scalar_reads[*spec as usize];
-                let sv = resolve_src(src, env, slab_ptr, slot_off);
+                let sv = resolve_src(src, env, slab);
                 let raw: SmallVec<[i64; 4]> = sp
                     .subs
                     .iter()
-                    .map(|o| subscript_of(resolve_scalar(o, env, slab_ptr, slot_off)))
+                    .map(|o| subscript_of(resolve_scalar(o, env, slab)))
                     .collect();
                 let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
                 let v = match sp.resolve(&raw, &sv.shape, &prog.tables.sweeps, cur) {
@@ -297,14 +296,14 @@ pub(super) fn run_range(
                         f64::NAN
                     }
                 };
-                unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
+                unsafe { *slab.slot(*out) = v };
             }
             Instr::JmpIfZero {
                 cond,
                 n_true,
                 n_false,
             } => {
-                let c = resolve_scalar(cond, env, slab_ptr, slot_off);
+                let c = resolve_scalar(cond, env, slab);
                 if c != 0.0 {
                     // Execute the true region, then skip the false one.
                     pending.push(((pc + 1 + *n_true as usize) as u32, *n_false));
@@ -327,15 +326,15 @@ pub(super) fn run_range(
                     .get_mut(&prog.exports[e].0)
                     .expect("export array published");
                 let desc = &prog.tables.slots[*slot as usize];
-                let off = slot_off[*slot as usize];
+                let off = slab.off(*slot);
                 if desc.scalar {
-                    a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
+                    a[IxDyn(&[])] = unsafe { *slab.at(off) };
                 } else {
                     // `a.len()`, not `desc.elems()`: an empty box keeps a
                     // one-element storage but publishes an empty array.
                     debug_assert_eq!(a.len(), desc.shape.iter().product::<usize>());
                     let n = a.len();
-                    let src = unsafe { std::slice::from_raw_parts(slab_ptr.add(off), n) };
+                    let src = unsafe { std::slice::from_raw_parts(slab.at(off), n) };
                     if prog.col_major && !super::super::layout::order_free(&desc.shape) {
                         // The slot is the logical array axis-reversed; the
                         // reversed view of the export walks in slot order.
@@ -352,8 +351,7 @@ pub(super) fn run_range(
             ins => {
                 let cx = Cx {
                     env,
-                    slab_ptr,
-                    slot_off,
+                    slab,
                     idx_tables,
                     simd,
                     dy_home,
@@ -617,13 +615,13 @@ fn scalar_src(prog: &TapeProgram, o: &Operand, slot_off: &[usize]) -> Option<Sca
 /// The value of a decoded scalar operand.
 ///
 /// # Safety
-/// A [`ScalarSrc::Slot`] offset must lie in the slab, and no other thread
-/// may be writing it.
+/// A [`ScalarSrc::Slot`] offset must be one of `slab`'s layout, and no other
+/// thread may be writing it.
 #[inline(always)]
-unsafe fn scalar_get(s: &ScalarSrc, env: &Env, slab_ptr: *const f64) -> f64 {
+unsafe fn scalar_get(s: &ScalarSrc, env: &Env, slab: Slab) -> f64 {
     match *s {
         // SAFETY: the caller's contract.
-        ScalarSrc::Slot(o) => unsafe { *slab_ptr.add(o) },
+        ScalarSrc::Slot(o) => unsafe { *slab.at(o) },
         ScalarSrc::Lit(v) => v,
         ScalarSrc::Param(p) => env.params[p as usize],
         ScalarSrc::Time => env.t,
@@ -728,22 +726,16 @@ impl Block {
     /// `n_regs` registers.
     ///
     /// # Safety
-    /// The block was decoded against `slab_ptr`'s slot layout, every
+    /// The block was decoded against `slab`'s slot layout, every
     /// instruction before it has run, and no other thread touches the slab
     /// slots it reads or writes.
     #[inline(never)]
-    unsafe fn run(
-        &self,
-        env: &Env,
-        slab_ptr: *mut f64,
-        dy: &mut [f64],
-        regs: &mut [f64],
-    ) -> Option<usize> {
+    unsafe fn run(&self, env: &Env, slab: Slab, dy: &mut [f64], regs: &mut [f64]) -> Option<usize> {
         debug_assert!(regs.len() >= self.n_regs);
         let r = regs.as_mut_ptr();
         let base_ptr = |b: &ScalarBase| -> *const f64 {
             match *b {
-                ScalarBase::Slab(o) => slab_ptr.wrapping_add(o),
+                ScalarBase::Slab(o) => slab.at(o),
                 ScalarBase::State(ix) => super::resolve::state_ptr(env, ix),
             }
         };
@@ -754,7 +746,7 @@ impl Block {
         // contract), and a decoded window or position lies in its source.
         unsafe {
             for &(s, i) in &self.inputs {
-                *r.add(i as usize) = scalar_get(&s, env, slab_ptr);
+                *r.add(i as usize) = scalar_get(&s, env, slab);
             }
             let g = |i: u16| *r.add(i as usize);
             let put = |i: u16, v: f64| *r.add(i as usize) = v;
@@ -844,7 +836,7 @@ impl Block {
             }
             for &(i, o) in &self.outs {
                 match o {
-                    BlockOut::Slab(off) => *slab_ptr.add(off) = g(i),
+                    BlockOut::Slab(off) => *slab.at(off) = g(i),
                     BlockOut::Dy(p) => dy[p] = g(i),
                 }
             }
@@ -1148,8 +1140,7 @@ impl Builder {
 #[derive(Clone, Copy)]
 pub(super) struct Cx<'a> {
     pub(super) env: &'a Env<'a>,
-    pub(super) slab_ptr: *mut f64,
-    pub(super) slot_off: &'a [usize],
+    pub(super) slab: Slab<'a>,
     pub(super) idx_tables: &'a [Vec<Option<super::fused::IndexTable>>],
     pub(super) simd: SimdLevel,
     pub(super) dy_home: &'a [usize],
@@ -1164,10 +1155,15 @@ pub(super) struct Cx<'a> {
 /// `cx` must describe the current call, and every instruction this one
 /// depends on must have run.
 pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, call_split: usize) {
+    // SAFETY (every slab, state and `dy` access below): each pointer comes
+    // from the call's slab handle, its state or its `dy` at a slot,
+    // variable or position the program defines over the box the access
+    // walks; `out` never shares storage with an operand the slab coloring
+    // keeps live; and nothing another thread runs meanwhile touches what
+    // this instruction writes (the caller's contract).
     let Cx {
         env,
-        slab_ptr,
-        slot_off,
+        slab,
         dy_home,
         dy,
         dy_len,
@@ -1202,16 +1198,16 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
     match ins {
         Instr::Bin { op, a, b, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
                 let f = binary_kernel_of(*op);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                let y = resolve_scalar(b, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = f(x, y) };
+                let x = resolve_scalar(a, env, slab);
+                let y = resolve_scalar(b, env, slab);
+                unsafe { *slab.at(off) = f(x, y) };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let bv = resolve_rv(b, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 let sh = &desc.shape;
                 // Monomorphized over the shared table
                 // (`dispatch_bin_kernel`) — one indirect call per NODE
@@ -1226,14 +1222,14 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         }
         Instr::Un { op, a, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
                 let f = unary_kernel_of(*op);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = f(x) };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = f(x) };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 let sh = &desc.shape;
                 // Step 4: monomorphized arms for the common unaries via
                 // the shared table (`dispatch_un_kernel`) — one
@@ -1248,56 +1244,56 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         }
         Instr::Neg { a, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = -x };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = -x };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                unsafe { ew1(slab_ptr.add(off), &desc.shape, &av, |x| -x) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                unsafe { ew1(slab.at(off), &desc.shape, &av, |x| -x) };
             }
         }
         Instr::Select { cond, a, b, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let c = resolve_scalar(cond, env, slab_ptr, slot_off);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                let y = resolve_scalar(b, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = if c != 0.0 { x } else { y } };
+                let c = resolve_scalar(cond, env, slab);
+                let x = resolve_scalar(a, env, slab);
+                let y = resolve_scalar(b, env, slab);
+                unsafe { *slab.at(off) = if c != 0.0 { x } else { y } };
             } else {
-                let cv = resolve_rv(cond, &desc.shape, env, slab_ptr, slot_off);
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off);
-                unsafe { ew_select(slab_ptr.add(off), &desc.shape, &cv, &av, &bv) };
+                let cv = resolve_rv(cond, &desc.shape, env, slab);
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let bv = resolve_rv(b, &desc.shape, env, slab);
+                unsafe { ew_select(slab.at(off), &desc.shape, &cv, &av, &bv) };
             }
         }
         Instr::Gather { src, plan, out } => {
             let full = env.prep.plan_full[*plan as usize];
             let plan = &prog.tables.plans[*plan as usize];
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let off = slot_off[*out as usize];
-            unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full) };
+            let sv = resolve_src(src, env, slab);
+            let off = slab.off(*out);
+            unsafe { exec_gather(plan, &sv, slab.at(off), full) };
         }
         Instr::LoadElem { src, idx, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(idx.len(), sv.shape.len());
             let mut soff = 0i64;
             for (d, &i0) in idx.iter().enumerate() {
                 debug_assert!(i0 < sv.shape[d], "LoadElem index out of bounds");
                 soff += sv.strides[d] * i0 as i64;
             }
-            let off = slot_off[*out as usize];
-            unsafe { *slab_ptr.add(off) = *sv.ptr.offset(soff as isize) };
+            let off = slab.off(*out);
+            unsafe { *slab.at(off) = *sv.ptr.offset(soff as isize) };
         }
         Instr::Ramp { axis, lo, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             let a = *axis as usize;
             let pre: usize = desc.shape[..a].iter().product();
             let ax = desc.shape[a];
             let post: usize = desc.shape[a + 1..].iter().product();
-            let mut p = unsafe { slab_ptr.add(off) };
+            let mut p = slab.at(off);
             for _ in 0..pre.max(1) {
                 for q in 0..ax {
                     let v = (*lo + q as i64) as f64;
@@ -1312,14 +1308,14 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         }
         Instr::Fill { v, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let s = resolve_scalar(v, env, slab_ptr, slot_off);
+            let off = slab.off(*out);
+            let s = resolve_scalar(v, env, slab);
             if desc.scalar {
-                unsafe { *slab_ptr.add(off) = s };
+                unsafe { *slab.at(off) = s };
             } else {
                 let n = desc.elems();
                 unsafe {
-                    let p = slab_ptr.add(off);
+                    let p = slab.at(off);
                     for k in 0..n {
                         *p.add(k) = s;
                     }
@@ -1328,17 +1324,17 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         }
         Instr::Copy { a, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = x };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = x };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
+                let av = resolve_rv(a, &desc.shape, env, slab);
                 match av {
                     Rv::S(_) => panic!("array Copy from a scalar operand"),
                     Rv::V { ptr, strides } => unsafe {
                         copy_strided(
-                            slab_ptr.add(off),
+                            slab.at(off),
                             &rm_strides(&desc.shape),
                             ptr,
                             &strides,
@@ -1356,18 +1352,14 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         } => {
             let spec = &prog.tables.regions[*region as usize];
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let base_off = slot_off[*base as usize];
+            let off = slab.off(*out);
+            let base_off = slab.off(*base);
             let n = desc.elems();
             unsafe {
                 // `out = base` (skip when the coloring aliased them, which
                 // it can only do at identical offsets).
                 if base_off != off {
-                    std::ptr::copy_nonoverlapping(
-                        slab_ptr.add(base_off) as *const f64,
-                        slab_ptr.add(off),
-                        n,
-                    );
+                    std::ptr::copy_nonoverlapping(slab.at(base_off) as *const f64, slab.at(off), n);
                 }
             }
             // Overwrite the region sub-block.
@@ -1376,8 +1368,8 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             for d in 0..desc.shape.len() {
                 dbase += out_rm[d] * spec.dest_lo[d] as i64;
             }
-            let sub_dst = unsafe { slab_ptr.add(off).offset(dbase as isize) };
-            let sv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
+            let sub_dst = unsafe { slab.at(off).offset(dbase as isize) };
+            let sv = resolve_rv(src, &spec.shape, env, slab);
             match sv {
                 Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
                 Rv::V { ptr, strides } => unsafe {
@@ -1387,8 +1379,8 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         }
         Instr::Assemble { table, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let dst = unsafe { slab_ptr.add(off) };
+            let off = slab.off(*out);
+            let dst = slab.at(off);
             let parts = &prog.tables.assemblies[*table as usize].parts;
             let covered = env.prep.asm_covered[*table as usize];
             let out_rm = rm_strides(&desc.shape);
@@ -1402,7 +1394,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                     dbase += out_rm[d] * spec.dest_lo[d] as i64;
                 }
                 let sub_dst = unsafe { dst.offset(dbase as isize) };
-                match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off) {
+                match resolve_rv(src, &spec.shape, env, slab) {
                     Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
                     Rv::V { ptr, strides } => unsafe {
                         copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
@@ -1419,7 +1411,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             x,
             out,
         } => {
-            let (aptr, ashape) = src_base(axis, env, slab_ptr, slot_off);
+            let (aptr, ashape) = src_base(axis, env, slab);
             // The window is read unchecked below, so it is checked here, once
             // per execution, in every build: an axis whose run-time box no
             // longer holds the window the lowering saw is refused, as the
@@ -1435,23 +1427,23 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             // storage with the axis (the slab coloring keeps them apart).
             let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
             let desc = &prog.tables.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let xv = resolve_scalar(x, env, slab_ptr, slot_off);
+                let xv = resolve_scalar(x, env, slab);
                 let bisect = count_bisects(win, *sorted);
-                unsafe { *slab_ptr.add(off) = count_one(*rel, win, bisect, xv) };
+                unsafe { *slab.at(off) = count_one(*rel, win, bisect, xv) };
             } else {
-                let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let xv = resolve_rv(x, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 unsafe { count_many(dst, &desc.shape, &xv, *rel, win, *sorted) };
             }
         }
         Instr::ConstArray { data, out } => {
             let d = &prog.tables.const_data[*data as usize];
-            let off = slot_off[*out as usize];
+            let off = slab.off(*out);
             debug_assert_eq!(d.values.len(), prog.tables.slots[*out as usize].elems());
             unsafe {
-                std::ptr::copy_nonoverlapping(d.values.as_ptr(), slab_ptr.add(off), d.values.len());
+                std::ptr::copy_nonoverlapping(d.values.as_ptr(), slab.at(off), d.values.len());
             }
         }
         Instr::Reduce {
@@ -1464,11 +1456,11 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
         } => {
             let f = binary_kernel_of(*op);
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Reduce source box");
             let desc = &prog.tables.slots[*out as usize];
-            let ooff = slot_off[*out as usize];
-            let dst = unsafe { slab_ptr.add(ooff) };
+            let ooff = slab.off(*out);
+            let dst = slab.at(ooff);
             // Seed every output position with the identity, then fold.
             let n_out = desc.elems();
             unsafe {
@@ -1564,9 +1556,9 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             src_shape,
             out,
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Scan source box");
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             let (a, init, inclusive, reverse) = (*axis as usize, *init, *inclusive, *reverse);
             macro_rules! scan {
                 ($f:expr) => {
@@ -1582,9 +1574,9 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
         } => {
             let spec = &prog.tables.index_gathers[*spec as usize];
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let iv = resolve_rv(idx, &spec.shape, env, slab_ptr, slot_off);
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let sv = resolve_src(src, env, slab);
+            let iv = resolve_rv(idx, &spec.shape, env, slab);
+            let dst = slab.slot(*out);
             unsafe { index_gather(dst, spec, &sv, &iv) };
         }
         Instr::DataGather {
@@ -1601,22 +1593,22 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             if spec.shape.is_empty() && spec.subs.len() <= 4 {
                 let mut v = [0.0f64; 4];
                 for (d, o) in spec.subs.iter().enumerate() {
-                    v[d] = resolve_scalar(o, env, slab_ptr, slot_off);
+                    v[d] = resolve_scalar(o, env, slab);
                 }
-                let (base, _) = src_base(src, env, slab_ptr, slot_off);
+                let (base, _) = src_base(src, env, slab);
                 // SAFETY: `base` addresses the gather's source box.
                 if let Some(x) = unsafe { gather_one(spec, base, &v[..spec.subs.len()]) } {
-                    unsafe { *slab_ptr.add(slot_off[*out as usize]) = x };
+                    unsafe { *slab.slot(*out) = x };
                     return;
                 }
             }
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             let subs: SmallVec<[Rv; 4]> = spec
                 .subs
                 .iter()
-                .map(|o| resolve_rv(o, &spec.shape, env, slab_ptr, slot_off))
+                .map(|o| resolve_rv(o, &spec.shape, env, slab))
                 .collect();
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             let faulted = unsafe { data_gather(dst, spec, &sv, &subs) };
             // A gather in a lazily evaluated position reads `NaN` at a fault
             // and leaves the latching to its rule's `FaultScan`.
@@ -1629,10 +1621,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::TableGather { src, table, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             let tbl = &prog.tables.gather_tables[*table as usize];
             debug_assert_eq!(&sv.shape[..], &tbl.src_shape[..], "TableGather source box");
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             unsafe { table_gather(dst, &sv, &tbl.pos) };
         }
         Instr::SegReduce {
@@ -1644,9 +1636,9 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
         } => {
             let rows = &prog.tables.seg_tables[*table as usize].rows;
-            let src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
-            let mask = mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let src = slab.slot(*src) as *const f64;
+            let mask = mask.map(|m| slab.slot(m) as *const f64);
+            let dst = slab.slot(*out);
             let init = *init;
             macro_rules! fold {
                 ($f:expr) => {
@@ -1656,7 +1648,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             dispatch_bin_kernel!(op, fold);
         }
         Instr::Reshape { src, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(
                 sv.shape.iter().product::<usize>(),
                 prog.tables.slots[*out as usize]
@@ -1667,7 +1659,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             );
             // The source walked in its own row-major order, written
             // contiguously: `out`'s row-major layout over its own box.
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             unsafe { copy_strided(dst, &rm_strides(&sv.shape), sv.ptr, &sv.strides, &sv.shape) };
         }
         Instr::Fused { spec } => unsafe { exec_fused(*spec as usize, cx, fregs, fscratch) },
@@ -1678,19 +1670,19 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 return;
             }
             let desc = &prog.tables.slots[w.slot as usize];
-            let off = slot_off[w.slot as usize];
+            let off = slab.off(w.slot);
             if let Some(pos) = &w.scatter {
                 // The slot is contiguous row-major, the order `pos` lists.
                 debug_assert_eq!(pos.len(), desc.elems());
                 for (k, &p) in pos.iter().enumerate() {
-                    unsafe { *dy.add(p) = *slab_ptr.add(off + k) };
+                    unsafe { *dy.add(p) = *slab.at(off + k) };
                 }
                 return;
             }
             match w.scalar_flat {
                 Some(flat) => {
                     debug_assert!(desc.scalar);
-                    unsafe { *dy.add(flat) = *slab_ptr.add(off) };
+                    unsafe { *dy.add(flat) = *slab.at(off) };
                 }
                 None => {
                     // A column-major program's slot has the state block's
@@ -1708,7 +1700,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                         copy_strided(
                             dy.offset(dbase as isize),
                             &cm,
-                            slab_ptr.add(off) as *const f64,
+                            slab.at(off) as *const f64,
                             &rm_strides(&desc.shape),
                             &desc.shape,
                         );
@@ -1844,14 +1836,13 @@ unsafe fn resolve_split<'a>(
 ) -> Option<SplitOp<'a>> {
     let Cx {
         env,
-        slab_ptr,
-        slot_off,
+        slab,
         dy_home,
         dy,
         ..
     } = *cx;
     let prog = env.prog;
-    let slot = |s: SlotId| slab_ptr.wrapping_add(slot_off[s as usize]);
+    let slot = |s: SlotId| slab.slot(s);
     Some(match ins {
         Instr::Assemble { table, out } => {
             let desc = &prog.tables.slots[*out as usize];
@@ -1866,7 +1857,7 @@ unsafe fn resolve_split<'a>(
                 for d in 0..desc.shape.len() {
                     dbase += out_rm[d] * spec.dest_lo[d] as i64;
                 }
-                let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
+                let rv = resolve_rv(src, &spec.shape, env, slab);
                 parts.push(super::par::AsmPart::new(*region, dbase, rv));
             }
             SplitOp::Assemble {
@@ -1879,7 +1870,7 @@ unsafe fn resolve_split<'a>(
         }
         Instr::Copy { a, out } => {
             let desc = &prog.tables.slots[*out as usize];
-            match resolve_rv(a, &desc.shape, env, slab_ptr, slot_off) {
+            match resolve_rv(a, &desc.shape, env, slab) {
                 Rv::S(_) => panic!("array Copy from a scalar operand"),
                 Rv::V { ptr, strides } => SplitOp::Copy {
                     dst: slot(*out),
@@ -1923,7 +1914,7 @@ unsafe fn resolve_split<'a>(
             out,
             ..
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             if sv.strides[..] != rm_strides(&sv.shape)[..] {
                 return None;
             }
@@ -1947,7 +1938,7 @@ unsafe fn resolve_split<'a>(
             src_shape,
             out,
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             if sv.strides[..] != rm_strides(&sv.shape)[..] || src_shape.is_empty() {
                 return None;
             }
@@ -1964,7 +1955,7 @@ unsafe fn resolve_split<'a>(
         }
         Instr::Gather { src, plan, out } => SplitOp::Gather {
             plan: &prog.tables.plans[*plan as usize],
-            src: resolve_src(src, env, slab_ptr, slot_off),
+            src: resolve_src(src, env, slab),
             out: slot(*out),
             full: env.prep.plan_full[*plan as usize],
         },
