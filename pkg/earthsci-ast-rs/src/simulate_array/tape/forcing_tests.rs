@@ -7,11 +7,11 @@
 //! the whole-array overlay, through the fast executor (fused and unfused) and
 //! the reference executor.
 
-use super::super::{ArrayCompiled, RhsScratch, RhsStats};
+use super::super::ArrayCompiled;
 use super::ir::*;
 use super::refexec::run_reference;
 use super::taped;
-use super::test_support::{assert_bits_eq, opcount};
+use super::test_support::{assert_bits_eq, compile, fast_dy, opcount, scratch_with};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -62,11 +62,6 @@ fn forced_doc(n: i64) -> serde_json::Value {
     })
 }
 
-fn compile(n: i64) -> ArrayCompiled {
-    let file = crate::parse::load_string(&forced_doc(n).to_string()).expect("fixture loads");
-    ArrayCompiled::from_file(&file).expect("fixture compiles")
-}
-
 fn bc_values(n: usize, scale: f64) -> ArrayD<f64> {
     ArrayD::from_shape_vec(
         IxDyn(&[n]),
@@ -88,35 +83,10 @@ fn state_of(n: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
-fn taped_scratch(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
-    let mut s = compiled.new_scratch();
-    s.install_tape(std::sync::Arc::new(prog));
-    s
-}
-
-fn fast(
-    compiled: &ArrayCompiled,
-    scratch: &mut RhsScratch,
-    state: &[f64],
-    t: f64,
-    param_vec: &[f64],
-) -> Vec<f64> {
-    let mut dy = vec![0.0; state.len()];
-    compiled.debug_eval_rhs_into(
-        state,
-        t,
-        param_vec,
-        &mut dy,
-        scratch,
-        &mut RhsStats::default(),
-    );
-    dy
-}
-
 #[test]
 fn forcing_reads_tape_bit_identically_through_every_executor() {
     let n = 7usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
@@ -128,11 +98,11 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
     assert_eq!(opcount(&prog, "LoadForcing"), 2, "{report}");
     let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let cfg = Some(super::fuse::SuperopCfg::from_env());
-    let mut fused = taped_scratch(
+    let mut fused = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
     );
-    let mut unfused = taped_scratch(
+    let mut unfused = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
     );
@@ -146,12 +116,12 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
                 assert_bits_eq(&dy, &oracle, &format!("reference executor, {label}"));
             }
             assert_bits_eq(
-                &fast(&compiled, &mut fused, &state, t, &param_vec),
+                &fast_dy(&compiled, &mut fused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, fused",
             );
             assert_bits_eq(
-                &fast(&compiled, &mut unfused, &state, t, &param_vec),
+                &fast_dy(&compiled, &mut unfused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, unfused",
             );
@@ -163,7 +133,7 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
 #[test]
 fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
     let n = 5usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     let sections = |discrete: &HashSet<String>| -> Vec<(String, Cadence)> {
         let (prog, _) = taped(compiled.build_tape_opts(discrete, None));
         prog.instrs
@@ -202,7 +172,7 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
 #[test]
 fn the_forcing_program_does_not_grow_with_the_grid() {
     let shape = |n: i64| {
-        let compiled = compile(n);
+        let compiled = compile(forced_doc(n));
         let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), None));
         assert!(report.fallbacks.is_empty(), "{report}");
         (prog.instrs.len(), report.opcode_counts)
@@ -213,7 +183,7 @@ fn the_forcing_program_does_not_grow_with_the_grid() {
 #[test]
 fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
     let n = 4usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = state_of(n, 1);
@@ -221,11 +191,11 @@ fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
     compiled.debug_eval_rhs(&state, 0.0, &params);
     let want = crate::simulate_array::take_const_array_oob().expect("the oracle faults");
     assert!(want.starts_with("E_TREEWALK_UNBOUND_NAME: '"), "{want}");
-    let mut scratch = taped_scratch(
+    let mut scratch = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
     );
-    let dy = fast(&compiled, &mut scratch, &state, 0.0, &param_vec);
+    let dy = fast_dy(&compiled, &mut scratch, &state, 0.0, &param_vec);
     let got = crate::simulate_array::take_const_array_oob().expect("the tape faults");
     assert_eq!(got, want);
     assert!(
@@ -237,7 +207,7 @@ fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
 #[test]
 fn a_forcing_entry_of_another_shape_faults() {
     let n = 4usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
     let prog = Arc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
@@ -247,7 +217,7 @@ fn a_forcing_entry_of_another_shape_faults() {
         s
     };
     crate::simulate_array::take_const_array_oob();
-    fast(
+    fast_dy(
         &compiled,
         &mut scratch_for(&prog),
         &state_of(n, 0),
@@ -260,7 +230,7 @@ fn a_forcing_entry_of_another_shape_faults() {
         .forcing_handle()
         .borrow_mut()
         .insert("bc".into(), bc_values(n + 1, 1.0));
-    let dy = fast(
+    let dy = fast_dy(
         &compiled,
         &mut scratch_for(&prog),
         &state_of(n, 0),
@@ -278,7 +248,7 @@ fn a_forcing_entry_of_another_shape_faults() {
 #[test]
 fn the_forcing_epoch_reruns_the_segment_section_only() {
     let n = 6usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
@@ -286,10 +256,10 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     let (prog, report) =
         taped(compiled.build_tape_opts(&discrete, Some(super::fuse::SuperopCfg::from_env())));
     assert!(report.fallbacks.is_empty(), "{report}");
-    let mut scratch = taped_scratch(&compiled, prog);
+    let mut scratch = scratch_with(&compiled, prog);
     let state = state_of(n, 2);
     let t = 2.0;
-    let first = fast(&compiled, &mut scratch, &state, t, &param_vec);
+    let first = fast_dy(&compiled, &mut scratch, &state, t, &param_vec);
     assert_bits_eq(
         &first,
         &compiled.debug_eval_rhs(&state, t, &params).0,
@@ -300,12 +270,12 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     // and after it exactly as the interpreter reads the refreshed buffer.
     feed(&compiled, n, 3.0, 0.7);
     assert_bits_eq(
-        &fast(&compiled, &mut scratch, &state, t, &param_vec),
+        &fast_dy(&compiled, &mut scratch, &state, t, &param_vec),
         &first,
         "before the epoch moves",
     );
     scratch.bump_forcing_epoch();
-    let refreshed = fast(&compiled, &mut scratch, &state, t, &param_vec);
+    let refreshed = fast_dy(&compiled, &mut scratch, &state, t, &param_vec);
     assert_bits_eq(
         &refreshed,
         &compiled.debug_eval_rhs(&state, t, &params).0,
@@ -318,7 +288,7 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     feed(&compiled, n, 3.0, -1.5);
     scratch.bump_forcing_epoch();
     assert_bits_eq(
-        &fast(&compiled, &mut scratch, &state, t, &param_vec),
+        &fast_dy(&compiled, &mut scratch, &state, t, &param_vec),
         &refreshed,
         "a CONST forcing is loaded once per scratch",
     );
@@ -332,7 +302,7 @@ fn segmented_solve(
     boundaries: &[f64],
 ) -> (crate::simulate::Solution, (u64, u64)) {
     let n = 5usize;
-    let mut compiled = compile(n as i64);
+    let mut compiled = compile(forced_doc(n as i64));
     compiled.runtime_mode = mode;
     let buf = compiled.forcing_handle();
     let discrete: HashSet<String> = ["bc".to_string()].into();
@@ -461,7 +431,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         assert!(report.fallbacks.is_empty(), "{report}");
         assert_eq!(opcount(&prog, "LoadForcing"), 1, "{report}");
         let prog_uf = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
-        let mut fused = taped_scratch(
+        let mut fused = scratch_with(
             &compiled,
             taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
         );
@@ -475,7 +445,7 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
             assert_bits_eq(&dy, &oracle, &label(&format!("reference executor, {l}")));
         }
         assert_bits_eq(
-            &fast(&compiled, &mut fused, &state, 0.0, &param_vec),
+            &fast_dy(&compiled, &mut fused, &state, 0.0, &param_vec),
             &oracle,
             &label("fast executor"),
         );

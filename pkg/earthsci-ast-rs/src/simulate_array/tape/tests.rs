@@ -15,42 +15,6 @@ use super::test_support::*;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-/// The periodic-wrap index idiom the lat-lon discretization emits:
-/// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
-fn wrap(inner: serde_json::Value, lo: i64, hi: i64) -> serde_json::Value {
-    let p = hi - lo + 1;
-    json!({"op": "ifelse", "args": [
-        {"op": "<", "args": [inner, lo]},
-        {"op": "+", "args": [inner, p]},
-        {"op": "ifelse", "args": [
-            {"op": ">", "args": [inner, hi]},
-            {"op": "-", "args": [inner, p]},
-            inner
-        ]}
-    ]})
-}
-
-/// `D(u[i]) = rhs` over `i ∈ [1, n]` (the standard method-of-lines equation).
-fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
-    json!({
-        "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
-                "ranges": {"i": [1, n]}},
-        "rhs": rhs
-    })
-}
-
-fn agg(n: i64, body: serde_json::Value) -> serde_json::Value {
-    json!({"op": "faq", "args": [], "output_idx": ["i"],
-           "ranges": {"i": [1, n]}, "expr": body})
-}
-
-fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
-    json!({"op": "index", "args": [var, e]})
-}
-
-/// Evaluate through the Step 3b FAST executor (warm taped scratch) and assert
-/// bitwise `dy` equality against `dy_ref`.
 /// A causal self-read of `var` at `pos` that the tape does NOT lower, so the
 /// recurrence around it is declined: the read sits inside an
 /// array-valued part of the cell body (`(j ↦ var[pos])[1]`, a one-element
@@ -59,31 +23,8 @@ fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
 fn untaped_self_read(var: &str, pos: serde_json::Value) -> serde_json::Value {
     json!({"op": "index", "args": [
         {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": [1, 1]},
-         "expr": idx(var, pos)},
+         "expr": ix(var, vec![pos])},
         1]})
-}
-
-fn assert_fast_matches(
-    compiled: &ArrayCompiled,
-    scratch: &mut super::super::RhsScratch,
-    param_vec: &[f64],
-    state: &[f64],
-    t: f64,
-    dy_ref: &[f64],
-    label: &str,
-) {
-    let mut dy = vec![0.0f64; dy_ref.len()];
-    let mut stats = RhsStats::default();
-    compiled.debug_eval_rhs_into(state, t, param_vec, &mut dy, scratch, &mut stats);
-    for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "{label}: dy[{k}] diverged: FAST exec {a:?} ({:016x}) vs interpreter {b:?} ({:016x})",
-            a.to_bits(),
-            b.to_bits()
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,14 +37,14 @@ fn assert_fast_matches(
 fn ab_multi_rule_stencil_wrap_and_ghost() {
     let n = 8;
     let lap_wrap = json!({"op": "+", "args": [
-        idx("u", wrap(json!({"op": "-", "args": ["i", 1]}), 1, n)),
-        {"op": "*", "args": [-2.0, idx("u", json!("i"))]},
-        idx("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
+        ix("u", vec![wrap(json!({"op": "-", "args": ["i", 1]}), 1, n)]),
+        {"op": "*", "args": [-2.0, ix("u", vec![json!("i")])]},
+        ix("u", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
     ]});
     let lap_ghost = json!({"op": "+", "args": [
-        idx("v", json!({"op": "-", "args": ["i", 1]})),
-        {"op": "*", "args": [-2.0, idx("v", json!("i"))]},
-        idx("v", json!({"op": "+", "args": ["i", 1]}))
+        ix("v", vec![json!({"op": "-", "args": ["i", 1]})]),
+        {"op": "*", "args": [-2.0, ix("v", vec![json!("i")])]},
+        ix("v", vec![json!({"op": "+", "args": ["i", 1]})])
     ]});
     let doc = json!({
         "esm": "2.0.0",
@@ -114,8 +55,8 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, lap_wrap)),
-                d_eq("v", n, agg(n, lap_ghost))
+                d_eq("u", n, lap_wrap),
+                d_eq("v", n, lap_ghost)
             ]
         }}
     });
@@ -137,8 +78,8 @@ fn ab_nested_aggregate() {
     let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["j", 1]})),
-        idx("u", json!("j"))
+        ix("u", vec![json!({"op": "+", "args": ["j", 1]})]),
+        ix("u", vec![json!("j")])
     ]}});
     let doc = json!({
         "esm": "2.0.0",
@@ -146,7 +87,7 @@ fn ab_nested_aggregate() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]}))
             ]
         }}
     });
@@ -170,8 +111,8 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
     let inner = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [1, n]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["i", 1]})),
-        idx("u", json!("i"))
+        ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+        ix("u", vec![json!("i")])
     ]}});
     let doc = json!({
         "esm": "2.0.0",
@@ -179,7 +120,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]}))
             ]
         }}
     });
@@ -205,8 +146,8 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         n - 1,
         json!({"op": "/", "args": [
             {"op": "-", "args": [
-                idx("u", json!({"op": "+", "args": ["i", 1]})),
-                idx("u", json!({"op": "-", "args": ["i", 1]}))
+                ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+                ix("u", vec![json!({"op": "-", "args": ["i", 1]})])
             ]},
             2.0
         ]}),
@@ -214,12 +155,12 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
     let left = region_agg(
         1,
         1,
-        json!({"op": "-", "args": [idx("u", json!(2)), idx("u", json!(1))]}),
+        json!({"op": "-", "args": [ix("u", vec![json!(2)]), ix("u", vec![json!(1)])]}),
     );
     let right = region_agg(
         n,
         n,
-        json!({"op": "-", "args": [idx("u", json!(n)), idx("u", json!(n - 1))]}),
+        json!({"op": "-", "args": [ix("u", vec![json!(n)]), ix("u", vec![json!(n - 1)])]}),
     );
     let ma = json!({"op": "makearray", "args": [],
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
@@ -230,7 +171,7 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [ma, "i"]}))
             ]
         }}
     });
@@ -259,7 +200,7 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
     let n = 6;
     let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
-    "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
+    "expr": {"op": "*", "args": [ix("u", vec![json!("j")]), "i"]}});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_nested_capture"},
@@ -269,8 +210,8 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]}))),
-                d_eq("v", n, agg(n, json!({"op": "*", "args": [-0.5, idx("v", json!("i"))]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]})),
+                d_eq("v", n, json!({"op": "*", "args": [-0.5, ix("v", vec![json!("i")])]}))
             ]
         }}
     });
@@ -292,22 +233,22 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
 #[test]
 fn ab_makearray_regions() {
     let n = 8;
-    let d = json!({"op": "-", "args": [idx("u", json!("i")),
-                                       idx("u", json!({"op": "-", "args": ["i", 1]}))]});
+    let d = json!({"op": "-", "args": [ix("u", vec![json!("i")]),
+                                       ix("u", vec![json!({"op": "-", "args": ["i", 1]})])]});
     let interior = json!({"op": "+", "args": [
         {"op": "*", "args": [d, d]},
         {"op": "*", "args": ["i", d]}
     ]});
     let ma = json!({"op": "makearray", "args": [],
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
-        "values": [interior, 0.5, {"op": "*", "args": [2.0, idx("u", json!("i"))]}]});
+        "values": [interior, 0.5, {"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_makearray"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [ma, "i"]}))
             ]
         }}
     });
@@ -330,13 +271,13 @@ fn ab_contraction_weights() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
                         25,
                         {"op": "ifelse", "args": [{"op": "==", "args": ["k", 0]}, -2, 1]},
-                        idx("u", json!({"op": "+", "args": ["i", "k"]}))
+                        ix("u", vec![json!({"op": "+", "args": ["i", "k"]})])
                     ]}}))
             ]
         }}
@@ -355,11 +296,11 @@ fn ab_contraction_with_filter_mask() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "filter": {"op": "<=", "args": ["j", {"op": "*", "args": [1, "i"]}]},
-                    "expr": idx("u", json!("j"))}))
+                    "expr": ix("u", vec![json!("j")])}))
             ]
         }}
     });
@@ -387,10 +328,10 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     // cond `p > 1000` is false for the default p = 2, so the TRUE branch
     // (the trapping division u[i]/(p-p) → ±inf) must never run.
     let trap = json!({"op": "/", "args": [
-        idx("u", json!("i")),
+        ix("u", vec![json!("i")]),
         {"op": "-", "args": ["p", "p"]}
     ]});
-    let safe = json!({"op": "*", "args": [3.0, idx("u", json!("i"))]});
+    let safe = json!({"op": "*", "args": [3.0, ix("u", vec![json!("i")])]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_shortcircuit"},
@@ -400,8 +341,8 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
                 "p": {"type": "parameter", "default": 2.0}
             },
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "ifelse", "args": [
-                    {"op": ">", "args": ["p", 1000.0]}, trap, safe]})))
+                d_eq("u", n, json!({"op": "ifelse", "args": [
+                    {"op": ">", "args": ["p", 1000.0]}, trap, safe]}))
             ]
         }}
     });
@@ -479,10 +420,10 @@ fn ab_select_nan_semantics() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "ifelse", "args": [
-                    {"op": ">=", "args": [idx("u", json!("i")), 0.0]},
-                    {"op": "sqrt", "args": [idx("u", json!("i"))]},
-                    0.25]})))
+                d_eq("u", n, json!({"op": "ifelse", "args": [
+                    {"op": ">=", "args": [ix("u", vec![json!("i")]), 0.0]},
+                    {"op": "sqrt", "args": [ix("u", vec![json!("i")])]},
+                    0.25]}))
             ]
         }}
     });
@@ -531,10 +472,10 @@ fn ab_signed_zero() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "+", "args": [
-                    {"op": "*", "args": [-0.0, idx("u", json!("i"))]},
+                d_eq("u", n, json!({"op": "+", "args": [
+                    {"op": "*", "args": [-0.0, ix("u", vec![json!("i")])]},
                     {"op": "neg", "args": [0.0]}
-                ]})))
+                ]}))
             ]
         }}
     });
@@ -555,15 +496,15 @@ fn ab_nary_fold_order() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "+", "args": [
+                d_eq("u", n, json!({"op": "+", "args": [
                     0.1, 0.2, 0.3,
-                    idx("u", json!("i")),
+                    ix("u", vec![json!("i")]),
                     {"op": "min", "args": [
-                        idx("u", json!("i")),
-                        {"op": "*", "args": [0.1, idx("u", json!("i"))]},
+                        ix("u", vec![json!("i")]),
+                        {"op": "*", "args": [0.1, ix("u", vec![json!("i")])]},
                         0.7
                     ]}
-                ]})))
+                ]}))
             ]
         }}
     });
@@ -588,7 +529,7 @@ fn ab_subblock_dy_scatter() {
                             "ranges": {"i": [1, 7]}},
                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                             "ranges": {"i": [1, 7]},
-                            "expr": idx("u", json!("i"))}
+                            "expr": ix("u", vec![json!("i")])}
                 },
                 // The shifted LHS covers u[2..8]; u[1] needs its own
                 // (indexed-scalar) defining equation.
@@ -982,12 +923,12 @@ fn coloring_invariants() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
                         {"op": "ifelse", "args": [{"op": "==", "args": ["k", 0]}, -2, 1]},
-                        {"op": "sin", "args": [idx("u", json!({"op": "+", "args": ["i", "k"]}))]}
+                        {"op": "sin", "args": [ix("u", vec![json!({"op": "+", "args": ["i", "k"]})])]}
                     ]}}))
             ]
         }}
@@ -1059,15 +1000,15 @@ fn coloring_invariants() {
 fn value_numbering_scope_behaviour() {
     let n = 6;
     // d(u) repeated twice in one map body: lowered once.
-    let d = json!({"op": "-", "args": [idx("u", json!("i")),
-                                       idx("u", json!({"op": "-", "args": ["i", 1]}))]});
+    let d = json!({"op": "-", "args": [ix("u", vec![json!("i")]),
+                                       ix("u", vec![json!({"op": "-", "args": ["i", 1]})])]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_vn"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [d, d]})))
+                d_eq("u", n, json!({"op": "*", "args": [d, d]}))
             ]
         }}
     });
@@ -1080,17 +1021,15 @@ fn value_numbering_scope_behaviour() {
     );
     // Exactly one subtraction of the two gathers (plus none duplicated): count
     // Bin(Sub) instructions (plain or fused) — 1 for d (shared), not 2.
-    let subs = prog
-        .instrs
+    let subs = count_where(
+        &prog,
+        |i| matches!(i, Instr::Bin { op, .. } if *op == super::super::BinCode::Sub),
+    ) + prog
+        .fused
         .iter()
-        .filter(|i| matches!(i, Instr::Bin { op, .. } if *op == super::super::BinCode::Sub))
-        .count()
-        + prog
-            .fused
-            .iter()
-            .flat_map(|fs| fs.micro.iter())
-            .filter(|m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub))
-            .count();
+        .flat_map(|fs| fs.micro.iter())
+        .filter(|m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub))
+        .count();
     assert_eq!(subs, 1, "repeated subtree must be lowered once");
 }
 
@@ -1105,7 +1044,7 @@ fn tape_build_is_side_effect_free() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [2.0, idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}))
             ]
         }}
     });
@@ -1500,17 +1439,14 @@ fn a_reverse_window_that_is_not_a_scan_folds_from_the_top() {
                         "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
                         "filter": {"op": cmp, "args": ["m", "i"]},
                         "expr": body}},
-                    d_eq("u", n, agg(n, json!({"op": "neg", "args": [
-                        {"op": "index", "args": ["R", "i"]}]})))
+                    d_eq("u", n, json!({"op": "neg", "args": [
+                        {"op": "index", "args": ["R", "i"]}]}))
                 ]
             }}
         });
         let prog = ab_check(doc, -3.0, 3.0);
-        let reverse_reduces = prog
-            .instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Reduce { reverse: true, .. }))
-            .count();
+        let reverse_reduces =
+            count_where(&prog, |i| matches!(i, Instr::Reduce { reverse: true, .. }));
         assert!(reverse_reduces > 0, "{cmp} {body}");
     }
 }
@@ -1937,12 +1873,12 @@ fn ab_dense_contraction_folds_its_product() {
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "expr": {"op": "*", "args": [0.001, {"op": "+", "args": [1,
                         {"op": "sin", "args": [{"op": "*", "args": ["i", "j"]}]}]}]}}},
-                d_eq("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "expr": {"op": "*", "args": [
-                        {"op": "index", "args": ["K", "i", "j"]}, idx("e", json!("j"))]}})),
-                d_eq("e", n, json!({"op": "*", "args": [-0.1, idx("e", json!("i"))]}))
+                        {"op": "index", "args": ["K", "i", "j"]}, ix("e", vec![json!("j")])]}})),
+                d_eq_with_rhs("e", n, json!({"op": "*", "args": [-0.1, ix("e", vec![json!("i")])]}))
             ]
         }}
     });
@@ -1969,12 +1905,12 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
     let interior = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [2, n - 1]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["i", 1]})),
-        idx("u", json!({"op": "-", "args": ["i", 1]}))
+        ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+        ix("u", vec![json!({"op": "-", "args": ["i", 1]})])
     ]}});
     let top = json!({"op": "faq", "args": [], "output_idx": ["i"],
         "ranges": {"i": [n, n]},
-        "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
+        "expr": {"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_wholesale"},
@@ -1994,8 +1930,8 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
                           "values": [interior, 1.5, top]}},
                 {"lhs": "h", "rhs": {"op": "+", "args": [
                           {"op": "*", "args": [2.0, "u"]}, "g", "q"]}},
-                d_eq("u", n, agg(n, json!({"op": "neg", "args": [
-                    {"op": "index", "args": ["h", "i"]}]})))
+                d_eq("u", n, json!({"op": "neg", "args": [
+                    {"op": "index", "args": ["h", "i"]}]}))
             ]
         }}
     });
@@ -2426,8 +2362,8 @@ fn export_demotion_skips_unread_publishes() {
 #[test]
 fn ab_superop_extended_pairs() {
     let n = 9;
-    let u = idx("u", json!("i"));
-    let v = idx("v", json!("i"));
+    let u = ix("u", vec![json!("i")]);
+    let v = ix("v", vec![json!("i")]);
     // ((u * 2.5 + v) * u - 1.5) / (v + 3.0): a four-op arith chain plus a
     // divisor.
     let chain = json!({"op": "/", "args": [
@@ -2456,8 +2392,8 @@ fn ab_superop_extended_pairs() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, chain)),
-                d_eq("v", n, agg(n, limiter))
+                d_eq("u", n, chain),
+                d_eq("v", n, limiter)
             ]
         }}
     });
@@ -2497,8 +2433,8 @@ fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
             },
             "equations": [
                 {"lhs": "s",
-                 "rhs": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))},
-                d_eq("u", n, agg(n, rhs))
+                 "rhs": agg(n, json!({"op": "*", "args": [0.5, ix("u", vec![json!("i")])]}))},
+                d_eq("u", n, rhs)
             ]
         }}
     })
@@ -2540,7 +2476,7 @@ fn unary_broadcast_matches_the_bare_node_on_both_paths() {
     for f in [
         "-", "neg", "log", "exp", "sqrt", "sin", "cos", "tanh", "floor", "not",
     ] {
-        let operand = idx("s", json!("i"));
+        let operand = ix("s", vec![json!("i")]);
         let bare = json!({"op": f, "args": [operand]});
         let bcast = json!({"op": "broadcast", "fn": f, "args": [operand]});
 
@@ -2555,7 +2491,7 @@ fn unary_broadcast_matches_the_bare_node_on_both_paths() {
 
         // Guard against a vacuous pass: `F` must actually CHANGE the operand,
         // otherwise "broadcast == bare" would hold even with the bug present.
-        let [o_id, _] = dy_two_ways(bcast_doc("id", n, idx("s", json!("i"))), &state);
+        let [o_id, _] = dy_two_ways(bcast_doc("id", n, ix("s", vec![json!("i")])), &state);
         assert!(
             o_bare
                 .iter()
@@ -2574,7 +2510,7 @@ fn unary_broadcast_matches_the_bare_node_on_both_paths() {
 fn n_ary_broadcast_folds_are_unchanged() {
     let n = 6i64;
     let state = seeded_state(n as usize, 7, 0.25, 3.0);
-    let s = || idx("s", json!("i"));
+    let s = || ix("s", vec![json!("i")]);
     let cases: Vec<(&str, serde_json::Value, serde_json::Value)> = vec![
         // (label, broadcast spelling, equivalent bare spelling)
         (
@@ -2625,7 +2561,7 @@ fn n_ary_broadcast_folds_are_unchanged() {
 fn unary_broadcast_minus_negates() {
     let n = 3i64;
     let state = vec![1.0, 2.0, 4.0];
-    let rhs = json!({"op": "broadcast", "fn": "-", "args": [idx("s", json!("i"))]});
+    let rhs = json!({"op": "broadcast", "fn": "-", "args": [ix("s", vec![json!("i")])]});
     for dy in dy_two_ways(bcast_doc("neg_check", n, rhs), &state) {
         assert_bits_eq(&dy, &[-0.5, -1.0, -2.0], "broadcast(fn=\"-\") must negate");
     }
@@ -2694,10 +2630,10 @@ fn ab_const_array_observed() {
                                       "value": [0.25, -1.5, 2.0, 3.75]}},
                 {"lhs": "f", "rhs": {"op": "+", "args": [
                     1, {"op": "cos", "args": [{"op": "*", "args": [3.5, "zc"]}]}]}},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [
-                    idx("f", json!("i")),
-                    idx("zc", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
-                ]})))
+                d_eq("u", n, json!({"op": "*", "args": [
+                    ix("f", vec![json!("i")]),
+                    ix("zc", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
+                ]}))
             ]
         }}
     });
@@ -2731,7 +2667,7 @@ fn ab_rank0_scalar_reductions() {
     let red = |kind: &str| {
         json!({"op": "faq", "args": [], "output_idx": [], "reduce": kind,
                "ranges": {"j": [1, n]},
-               "expr": {"op": "*", "args": [idx("u", json!("j")), 1.5]}})
+               "expr": {"op": "*", "args": [ix("u", vec![json!("j")]), 1.5]}})
     };
     let doc = json!({
         "esm": "2.0.0",
@@ -2752,7 +2688,7 @@ fn ab_rank0_scalar_reductions() {
                 {"lhs": "lo", "rhs": red("min")},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"},
                  "rhs": {"op": "+", "args": ["tot", "prod", "hi", "lo"]}},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": ["tot", ix("u", vec![json!("i")])]}))
             ]
         }}
     });
@@ -2787,9 +2723,9 @@ fn ab_rank0_reduction_two_contracted_axes() {
                     "ranges": {"j": [1, n], "k": [1, n]},
                     "expr": {"op": "*", "args": [
                         {"op": "^", "args": [10.0, "k"]},
-                        idx("u", json!("j"))]}}},
+                        ix("u", vec![json!("j")])]}}},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": ["tot", ix("u", vec![json!("i")])]}))
             ]
         }}
     });
@@ -2819,9 +2755,9 @@ fn ab_rank0_reduction_with_a_filter() {
                 {"lhs": "tot", "rhs": {"op": "faq", "args": [], "output_idx": [],
                     "ranges": {"j": [1, n]},
                     "filter": {"op": "<=", "args": ["j", 2]},
-                    "expr": idx("u", json!("j"))}},
+                    "expr": ix("u", vec![json!("j")])}},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
-                d_eq("u", n, agg(n, idx("u", json!("i"))))
+                d_eq("u", n, ix("u", vec![json!("i")]))
             ]
         }}
     });
@@ -2854,9 +2790,9 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
                     // zero (CONFORMANCE_SPEC §5.19.4).
                     "expr": {"op": "ifelse", "args": [
                         {"op": "<=", "args": ["i", 1]},
-                        idx("u", json!("i")),
+                        ix("u", vec![json!("i")]),
                         {"op": "+", "args": [
-                            idx("u", json!("i")),
+                            ix("u", vec![json!("i")]),
                             {"op": "*", "args": [
                                 0.5,
                                 untaped_self_read("r", json!({"op": "-", "args": ["i", 1]}))]}
@@ -2864,10 +2800,10 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
                     ]}}},
                 // …read elementwise, and through a shifted gather.
                 {"lhs": "g", "rhs": {"op": "*", "args": [2.0, "r"]}},
-                d_eq("u", n, agg(n, json!({"op": "-", "args": [
-                    idx("g", json!("i")),
-                    idx("r", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
-                ]})))
+                d_eq("u", n, json!({"op": "-", "args": [
+                    ix("g", vec![json!("i")]),
+                    ix("r", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
+                ]}))
             ]
         }}
     });
@@ -3021,14 +2957,14 @@ fn ab_state_and_parameter_indices_past_u16() {
 fn ab_fused_box_past_u16_splits_into_groups() {
     let n = 8;
     let terms: Vec<serde_json::Value> = (1..=PAST_U16)
-        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
+        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, ix("u", vec![json!("i")])]}))
         .collect();
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_wide_fused_box"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
-            "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
+            "equations": [d_eq("u", n, json!({"op": "+", "args": terms}))]
         }}
     });
     let prog = ab_check(doc, -1.0, 1.0);
@@ -3144,14 +3080,14 @@ fn ab_index_gather_unstructured() {
                 {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": [
                     [2, 6, 3], [1, 3, 0], [2.5, 4, 7], [3, 5, -1], [2.49, 6, 1], [5, 1, 4]]}},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                         "expr": {"op": "D", "args": [idx("u", json!("i"))], "wrt": "t"},
+                         "expr": {"op": "D", "args": [ix("u", vec![json!("i")])], "wrt": "t"},
                          "ranges": {"i": {"from": "cells"}}},
                  "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                          "ranges": {"i": {"from": "cells"}, "k": {"from": "nb"}},
                          "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
                              {"op": "index", "args": ["u",
                                  {"op": "index", "args": ["nbr", "i", "k"]}]},
-                             idx("u", json!("i"))]}]}}}
+                             ix("u", vec![json!("i")])]}]}}}
             ]
         }}
     });
@@ -3778,10 +3714,10 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
                     {"lhs": "P", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
                         "ranges": {"i": [1, n], "j": [1, n]},
                         "expr": {"op": "*", "args": [term, "j"]}}},
-                    d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                    d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                         "ranges": {"i": [1, n], "j": [1, n]},
                         "expr": {"op": "+", "args": [
-                            {"op": "*", "args": [-0.1, idx("u", json!("i"))]},
+                            {"op": "*", "args": [-0.1, ix("u", vec![json!("i")])]},
                             {"op": "*", "args": [0.01,
                                 {"op": "index", "args": ["P", "i", "j"]}]}]}}))
                 ]
@@ -3803,10 +3739,11 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
     };
     let long = json!({"op": "-", "args": [
         {"op": "+", "args": [
-            {"op": "*", "args": [idx("u", json!("i")), idx("u", json!("i"))]},
-            {"op": "sin", "args": [idx("u", json!("i"))]}]},
-        {"op": "*", "args": [0.5, idx("u", json!("i"))]}]});
-    let short = json!({"op": "+", "args": [{"op": "*", "args": [2.0, idx("u", json!("i"))]}, 1.0]});
+            {"op": "*", "args": [ix("u", vec![json!("i")]), ix("u", vec![json!("i")])]},
+            {"op": "sin", "args": [ix("u", vec![json!("i")])]}]},
+        {"op": "*", "args": [0.5, ix("u", vec![json!("i")])]}]});
+    let short =
+        json!({"op": "+", "args": [{"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}, 1.0]});
     ab_check(doc(long.clone()), -2.0, 2.0);
     ab_check(doc(short.clone()), -2.0, 2.0);
     assert!(sub_box_ops(doc(long)) >= 4, "the long term runs over [n]");

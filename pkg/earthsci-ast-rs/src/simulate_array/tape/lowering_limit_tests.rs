@@ -13,62 +13,6 @@ use super::test_support::*;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
-fn op(o: &str, args: Vec<Value>) -> Value {
-    json!({"op": o, "args": args})
-}
-
-fn ix(v: &str, subs: Vec<Value>) -> Value {
-    let mut args = vec![json!(v)];
-    args.extend(subs);
-    json!({"op": "index", "args": args})
-}
-
-fn faq(out: &[&str], ranges: Value, expr: Value) -> Value {
-    json!({"op": "faq", "args": [], "output_idx": out, "ranges": ranges, "expr": expr})
-}
-
-/// `D(var[out…]) = rhs` over `ranges`.
-fn d_eq(var: &str, out: &[&str], ranges: Value, rhs: Value) -> Value {
-    let subs = out.iter().map(|s| json!(s)).collect();
-    json!({
-        "lhs": faq(out, ranges.clone(),
-                   json!({"op": "D", "args": [ix(var, subs)], "wrt": "t"})),
-        "rhs": faq(out, ranges, rhs)
-    })
-}
-
-/// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
-fn wrap(inner: Value, lo: i64, hi: i64) -> Value {
-    let p = hi - lo + 1;
-    op(
-        "ifelse",
-        vec![
-            op("<", vec![inner.clone(), json!(lo)]),
-            op("+", vec![inner.clone(), json!(p)]),
-            op(
-                "ifelse",
-                vec![
-                    op(">", vec![inner.clone(), json!(hi)]),
-                    op("-", vec![inner.clone(), json!(p)]),
-                    inner,
-                ],
-            ),
-        ],
-    )
-}
-
-fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value>) -> Value {
-    let mut d = json!({
-        "esm": "2.0.0",
-        "metadata": {"name": name},
-        "models": {"M": {"variables": variables, "equations": equations}}
-    });
-    if let Some(dom) = domain {
-        d["domain"] = dom;
-    }
-    d
-}
-
 /// More than four contracted indices: five at once, over a rank-1 output (the
 /// promoted box is rank 6) and in a rank-0 observed.
 #[test]
@@ -88,7 +32,7 @@ fn five_contracted_indices() {
                 op("*", vec![json!(7), json!("e")]),
             ],
         );
-        doc(
+        named_doc(
             "five_contracted",
             json!({
                 "u": {"type": "unknown", "shape": ["i"], "default": 1.0},
@@ -97,13 +41,13 @@ fn five_contracted_indices() {
                 "s": {"type": "unknown"}
             }),
             vec![
-                d_eq(
+                d_eq_over(
                     "w",
                     &["a", "b", "c", "d", "e"],
                     r5.clone(),
                     op("*", vec![json!(-0.05), w5.clone()]),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     r_out,
@@ -147,7 +91,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
         let i = || json!("i");
         let plus = |k: i64| op("+", vec![json!("i"), json!(k)]);
         let table: Vec<f64> = (0..n).map(|k| 0.25 * k as f64 - 1.5).collect();
-        doc(
+        named_doc(
             "partial_wrap",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -157,7 +101,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
             }),
             vec![
                 json!({"lhs": "c", "rhs": {"op": "const", "args": [], "value": table}}),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [2, n - 1]}),
@@ -171,25 +115,25 @@ fn periodic_wraps_that_are_not_a_full_roll() {
                         ],
                     ),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, 1]}),
                     op("*", vec![json!(-0.2), ix("u", vec![i()])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [n, n]}),
                     op("*", vec![json!(-0.3), ix("u", vec![i()])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "v",
                     &["i"],
                     json!({"i": [1, n + 2]}),
                     op("*", vec![json!(-0.1), ix("v", vec![wrap(plus(2), 1, n)])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "r",
                     &["i"],
                     json!({"i": [1, n - 2]}),
@@ -216,7 +160,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
 #[test]
 fn derivative_lhs_that_is_not_a_constant_shift() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "permuted_lhs",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -258,7 +202,7 @@ fn derivative_lhs_that_is_not_a_constant_shift() {
 #[test]
 fn array_observed_over_a_range_that_starts_past_one() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "offset_observed",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -270,7 +214,7 @@ fn array_observed_over_a_range_that_starts_past_one() {
                     "rhs": faq(&["i"], json!({"i": [3, n]}), op("*", vec![
                         op("+", vec![json!(1), json!("i")]), ix("u", vec![json!("i")])]))
                 }),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -296,7 +240,7 @@ fn array_observed_over_a_range_that_starts_past_one() {
 #[test]
 fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "boolean_reduction",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -312,7 +256,7 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
                     "filter": op("!=", vec![json!("k"), json!("m")]),
                     "expr": op(">", vec![op("-", vec![ix("u", vec![json!("k")]),
                         ix("u", vec![json!("m")])]), json!(0.5)])}}),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -330,7 +274,7 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
     };
     flat_in_n(make, 4, 40);
 
-    let array_valued = doc(
+    let array_valued = named_doc(
         "array_boolean_reduction",
         json!({"v": {"type": "unknown", "shape": ["x"], "default": 1.0}}),
         vec![json!({
@@ -359,8 +303,8 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
 #[test]
 fn shape_op_bases_under_loop_symbol_subscripts() {
     let make = |n: i64| {
-        let zero = |v: &str, out: &[&str], r: Value| d_eq(v, out, r, json!(0.0));
-        doc(
+        let zero = |v: &str, out: &[&str], r: Value| d_eq_over(v, out, r, json!(0.0));
+        named_doc(
             "shape_op_bases",
             json!({
                 "u": {"type": "unknown", "shape": ["x", "y"], "default": 1.0},
@@ -374,20 +318,20 @@ fn shape_op_bases_under_loop_symbol_subscripts() {
                 zero("u", &["i", "j"], json!({"i": [1, 2], "j": [1, n]})),
                 zero("a", &["i"], json!({"i": [1, n]})),
                 zero("b", &["i"], json!({"i": [1, 2]})),
-                d_eq(
+                d_eq_over(
                     "v",
                     &["i"],
                     json!({"i": [1, n]}),
                     json!({"op": "index", "args": [op("transpose", vec![json!("u")]), "i", 2]}),
                 ),
-                d_eq(
+                d_eq_over(
                     "w",
                     &["j"],
                     json!({"j": [1, n]}),
                     json!({"op": "index", "args": [
                         {"op": "reshape", "args": ["a"], "shape": [1, n]}, 1, "j"]}),
                 ),
-                d_eq(
+                d_eq_over(
                     "z",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -419,7 +363,7 @@ fn indicator(cmp: Value) -> Value {
 /// `k`; `u[l]` is the query.
 fn count_doc(n: i64, body: Value) -> Value {
     let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
-    doc(
+    named_doc(
         "counted_bracket",
         json!({
             "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
@@ -437,7 +381,7 @@ fn count_doc(n: i64, body: Value) -> Value {
                 "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
                 "expr": body
             }))}),
-            d_eq(
+            d_eq_over(
                 "u",
                 &["l"],
                 json!({"l": [1, n]}),
@@ -449,7 +393,7 @@ fn count_doc(n: i64, body: Value) -> Value {
                     ],
                 ),
             ),
-            d_eq(
+            d_eq_over(
                 "w",
                 &["l"],
                 json!({"l": [1, n]}),
@@ -579,7 +523,7 @@ fn counted_bracket_nan_query() {
 fn counted_bracket_standalone_scalar() {
     let make = |n: i64| {
         let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
-        doc(
+        named_doc(
             "counted_scalar",
             json!({
                 "s": {"type": "unknown", "default": 1.0},
@@ -1120,7 +1064,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
     let table = json!({"op": "const", "args": [], "value": [1.5, 2.5, 4.0]});
     let sin_s = op("sin", vec![json!("s")]);
     let d = |rhs: Value| {
-        doc(
+        named_doc(
             "wholesale_sharing",
             json!({"s": {"type": "unknown", "default": 1.0}}),
             vec![json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": rhs})],
@@ -1133,12 +1077,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
         let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0
     };
-    let un = |p: &TapeProgram| {
-        p.instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Un { .. }))
-            .count()
-    };
+    let un = |p: &TapeProgram| opcount(p, "Un");
     // Repeated outside any branch: once.
     let doc_ = d(op(
         "+",
@@ -1212,19 +1151,14 @@ fn pointwise_gated_faq_numbers_its_box() {
                         "filter": op(">", vec![sin_u.clone(), json!(0.25)]),
                         "expr": op("*", vec![sin_u.clone(), sin_u.clone()])
                     }},
-                    d_eq("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
+                    d_eq_over("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
                          op("-", vec![ix("w", vec![json!("i"), json!("j")]),
                                       ix("u", vec![json!("i"), json!("j")])]))
                 ]
             }}
         })
     };
-    let un = |p: &TapeProgram| {
-        p.instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Un { .. }))
-            .count()
-    };
+    let un = |p: &TapeProgram| opcount(p, "Un");
     for (label, bg) in [
         ("every pair admitted", json!([1.0, 1.0, 1.0, 1.0])),
         ("a partial gate", json!([1.0, 2.0, 1.0, 2.0])),

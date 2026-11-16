@@ -8,7 +8,9 @@
 //! must refuse rather than answer differently.
 
 use super::super::ArrayCompiled;
-use super::test_support::{ab, compare_tape_at, compile, idx, lit, no_params, opcount, plus};
+use super::test_support::{
+    ab, compare_tape_at, compile, idx, lit, minus, no_params, opcount, plus,
+};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
@@ -46,10 +48,6 @@ fn ma(regions: Value, values: Vec<Value>) -> Value {
 
 fn u(k: Value, i: Value) -> Value {
     idx(json!("u"), &[k, i])
-}
-
-fn minus(a: Value, b: Value) -> Value {
-    json!({"op": "-", "args": [a, b]})
 }
 
 fn times(a: Value, b: Value) -> Value {

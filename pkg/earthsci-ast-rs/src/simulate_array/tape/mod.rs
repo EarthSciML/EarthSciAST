@@ -88,6 +88,8 @@ mod scatter_tests;
 mod sink;
 mod slab;
 #[cfg(test)]
+mod template_fixtures;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
