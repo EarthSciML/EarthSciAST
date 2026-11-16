@@ -1326,7 +1326,12 @@ def variants(g):
         "A variable named augment as a bare word inside a derivative.",
         dwa,
         typ,
-        [('(dif italic("augment"))/(dif t) = k italic("augment")', "(dif augment)/(dif t) = k augment")],
+        [
+            (
+                '(dif italic("augment"))/(dif t) = k italic("augment")',
+                "(dif augment)/(dif t) = k augment",
+            )
+        ],
     )
     # \times then a bracket: a region's next bound pair inside makearray, a product outside.
     mk2 = expr_doc(op("makearray", regions=[[[1, "N"], [1, "N"]]], values=["a"]), ("a", "N"))
@@ -2248,7 +2253,12 @@ def refusals(g):
         [("limits(sum)_(i in S) w_i", "limits(sum)_(i in S)^({f}) w_i")],
     )
     bset = expr_doc(
-        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["i"], args=["f"]),
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i"],
+            args=["f"],
+        ),
         ("w", "f"),
         index_sets=SETS,
     )
@@ -2259,7 +2269,12 @@ def refusals(g):
         bset,
         md,
         "parse_error",
-        [(r"\sum_{j \in C} w_{i, j}\right]^{\{f\}}", r"\sum_{j \in C}^{\{f\}} w_{i, j}\right]^{\{f\}}")],
+        [
+            (
+                r"\sum_{j \in C} w_{i, j}\right]^{\{f\}}",
+                r"\sum_{j \in C}^{\{f\}} w_{i, j}\right]^{\{f\}}",
+            )
+        ],
     )
     R(
         "bracket_inner_set_only",
@@ -2286,7 +2301,12 @@ def refusals(g):
         [("[sum_(j in C) w_(i, j)])^({f})", "[sum_(j in C)^({f}) w_(i, j)])")],
     )
     limo = expr_doc(
-        faq(idx("w", "i", "j"), {"i": {"from": "S"}, "j": {"from": "C"}}, output_idx=["i"], args=["w"]),
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i"],
+            args=["w"],
+        ),
         ("w",),
         index_sets=SETS,
     )
@@ -2322,7 +2342,12 @@ def refusals(g):
         rs,
         typ,
         "parse_error",
-        [('op("reshape")(a; upright("shape")', 'op("reshape")(a; upright("id") = #"r", upright("shape")')],
+        [
+            (
+                'op("reshape")(a; upright("shape")',
+                'op("reshape")(a; upright("id") = #"r", upright("shape")',
+            )
+        ],
     )
     R(
         "call_form_native",
@@ -2330,7 +2355,12 @@ def refusals(g):
         rs,
         md,
         "parse_error",
-        [(r"\operatorname{reshape}(a; \mathrm{shape} = [2, 3])", r"\operatorname{const}(; \mathrm{value} = [1, 2, 3])")],
+        [
+            (
+                r"\operatorname{reshape}(a; \mathrm{shape} = [2, 3])",
+                r"\operatorname{const}(; \mathrm{value} = [1, 2, 3])",
+            )
+        ],
     )
     of = expr_doc(op("myop", "x", dim="x"), ("x",))
     R(
@@ -2361,7 +2391,7 @@ def refusals(g):
     )
     R(
         "bare_template_zero_params_typst",
-        "A bare op(\"n\") where a template n with no parameters is in scope.",
+        'A bare op("n") where a template n with no parameters is in scope.',
         tz,
         typ,
         "parse_error",
