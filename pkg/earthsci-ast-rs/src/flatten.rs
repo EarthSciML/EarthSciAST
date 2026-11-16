@@ -43,11 +43,12 @@
 //! (CONFORMANCE_SPEC §5.9). A consumer that needs a discretized system up front
 //! can demand one with [`reject_unlowered_operators`].
 
+use crate::binders::Binders;
 use crate::types::HasSubsystems;
 use crate::types::{
     AffectEquation, ContinuousEvent, CouplingEntry, DiscreteEvent, DiscreteEventTrigger, Domain,
     Equation, EsmFile, Expr, ExpressionNode, IndexSet, InlineValue, JoinClause, Model,
-    ModelVariable, OverlapClause, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
+    ModelVariable, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -1871,25 +1872,13 @@ fn scope_template_body(
         }
         Expr::Operator(node) => {
             let mut child_bound = bound.clone();
-            if let Some(output_idx) = &node.output_idx {
-                child_bound.extend(output_idx.iter().cloned());
-            }
-            if let Some(ranges) = &node.ranges {
-                child_bound.extend(ranges.keys().cloned());
-            }
-            if let Some(int_var) = &node.int_var {
-                child_bound.insert(int_var.clone());
-            }
+            node.for_each_binder(Binders::SCOPE, |n| {
+                child_bound.insert(n.to_string());
+            });
             let mut out =
                 node.map_children(&mut |c| scope_template_body(c, prefix, locals, &child_bound));
             if let Some(join) = &node.join {
-                let mut binders: HashSet<&str> = HashSet::new();
-                if let Some(output_idx) = &node.output_idx {
-                    binders.extend(output_idx.iter().map(String::as_str));
-                }
-                if let Some(ranges) = &node.ranges {
-                    binders.extend(ranges.keys().map(String::as_str));
-                }
+                let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
                 if let Some(ns) = namespace_join_names(join, &binders, prefix, locals) {
                     out.join = Some(ns);
                 }
@@ -3690,30 +3679,11 @@ fn namespace_join_names(
             n.clone()
         }
     };
-    let out: Vec<JoinClause> = join
-        .iter()
-        .map(|c| JoinClause {
-            on: c.on.iter().map(|[l, r]| [ns(l), ns(r)]).collect(),
-            // Range symbols the node itself binds, not variable references —
-            // namespacing must leave them alone, exactly as for an overlap
-            // clause's `sym_src` / `sym_tgt`.
-            syms: c.syms.clone(),
-            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                src_env: ov.src_env.iter().map(&ns).collect(),
-                tgt_env: ov.tgt_env.iter().map(&ns).collect(),
-                eps: ov.eps,
-                // Range symbols the node itself binds, not variable references
-                // — namespacing must leave them alone.
-                sym_src: ov.sym_src.clone(),
-                sym_tgt: ov.sym_tgt.clone(),
-            }),
-            // A resolved `on` gate's DATA-COLUMN names are references too, and
-            // are namespaced by the same rule; its loop symbols are binders and
-            // are not. (Resolution runs after flattening, so this is normally
-            // `None` — it exists so the two orders agree.)
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ns)),
-        })
-        .collect();
+    // The clause's loop symbols are binders, not references, and are left
+    // alone. A resolved `on` gate's data columns are namespaced by the same
+    // rule (resolution runs after flattening, so the gate is normally `None` —
+    // it is covered so the two orders agree).
+    let out: Vec<JoinClause> = join.iter().map(|c| c.map_reference_names(ns)).collect();
     (out != join).then_some(out)
 }
 
@@ -3753,15 +3723,9 @@ fn namespace_expr_scoped(
             // `faq`; `output_idx` is added defensively; an
             // `integral` binds its `int_var`.
             let mut child_bound = bound.clone();
-            if let Some(output_idx) = &node.output_idx {
-                child_bound.extend(output_idx.iter().cloned());
-            }
-            if let Some(ranges) = &node.ranges {
-                child_bound.extend(ranges.keys().cloned());
-            }
-            if let Some(int_var) = &node.int_var {
-                child_bound.insert(int_var.clone());
-            }
+            node.for_each_binder(Binders::SCOPE, |n| {
+                child_bound.insert(n.to_string());
+            });
 
             // Re-namespace every expression-bearing child through the crate's
             // ONE canonical child-walker (`ExpressionNode::map_children`) rather
@@ -3810,13 +3774,7 @@ fn namespace_expr_scoped(
             // shadowing set — and keeping the set node-local is what lets every
             // binding implement the identical rule without threading a scope.
             if let Some(join) = &node.join {
-                let mut binders: HashSet<&str> = HashSet::new();
-                if let Some(output_idx) = &node.output_idx {
-                    binders.extend(output_idx.iter().map(String::as_str));
-                }
-                if let Some(ranges) = &node.ranges {
-                    binders.extend(ranges.keys().map(String::as_str));
-                }
+                let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
                 if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
                     out.join = Some(ns);
                 }
@@ -5448,25 +5406,7 @@ fn rename_join_names_in(expr: &Expr, renames: &IndexMap<String, String>) -> Expr
     let mut out = node.map_children(&mut |c| rename_join_names_in(c, renames));
     if let Some(join) = &node.join {
         let ren = |n: &String| -> String { renames.get(n).unwrap_or(n).clone() };
-        out.join = Some(
-            join.iter()
-                .map(|c| JoinClause {
-                    on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
-                    // Binders, not references — renaming leaves them alone.
-                    syms: c.syms.clone(),
-                    overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                        src_env: ov.src_env.iter().map(&ren).collect(),
-                        tgt_env: ov.tgt_env.iter().map(&ren).collect(),
-                        eps: ov.eps,
-                        // Range symbols the node itself binds, not variable
-                        // references — renaming must leave them alone.
-                        sym_src: ov.sym_src.clone(),
-                        sym_tgt: ov.sym_tgt.clone(),
-                    }),
-                    on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
-                })
-                .collect(),
-        );
+        out.join = Some(join.iter().map(|c| c.map_reference_names(ren)).collect());
     }
     Expr::operator(out)
 }
@@ -6561,12 +6501,9 @@ fn fresh_lift_loops(exprs: &[&Expr], n: usize) -> Vec<String> {
             }
             Expr::Number(_) | Expr::Integer(_) => {}
             Expr::Operator(node) => {
-                if let Some(r) = &node.ranges {
-                    out.extend(r.keys().cloned());
-                }
-                if let Some(idx) = &node.output_idx {
-                    out.extend(idx.iter().cloned());
-                }
+                node.for_each_binder(Binders::LOOP, |n| {
+                    out.insert(n.to_string());
+                });
                 node.for_each_child(&mut |c| names(c, out));
             }
         }
