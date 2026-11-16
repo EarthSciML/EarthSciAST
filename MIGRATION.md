@@ -1650,6 +1650,8 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | `Compile` (deprecated alias since 0.2.0) | `Rhs` | `deleted` |
 | `ArrayCompiled::debug_eval_rhs(state, t, params, force_scalar)` | `debug_eval_rhs(state, t, params)`, always the per-cell oracle | `deleted` |
 | `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
+| a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
+| — | `mount_edge_errors(document, base_dir)`: a document's own mount edges that do not resolve, as `(code, path)` findings | `added` |
 
 `compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
 right-hand-side seams build the `native` compiler, the default of

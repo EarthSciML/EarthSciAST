@@ -46,6 +46,71 @@ pub enum EsmError {
     /// Generic error with message
     #[error("{0}")]
     Other(String),
+
+    /// A schema-stage load refusal that carries its stable diagnostic code
+    /// (`ERROR_CODES`). Renders exactly as [`EsmError::SchemaValidation`]
+    /// does with the same message.
+    #[error("Schema validation error: {message}")]
+    SchemaDiagnostic {
+        /// Stable cross-binding diagnostic code (snake_case).
+        code: &'static str,
+        /// The rendered message.
+        message: String,
+        /// The structured `(code, path)` findings the refusal located, if any
+        /// (a mount edge that does not resolve, at its pointer).
+        findings: Vec<crate::validate::StructuralError>,
+    },
+
+    /// A structural-stage load refusal that carries its stable diagnostic
+    /// code. Renders exactly as [`EsmError::StructuralValidation`] does with
+    /// the same message.
+    #[error("Structural validation error: {message}")]
+    StructuralDiagnostic {
+        /// Stable cross-binding diagnostic code (snake_case).
+        code: &'static str,
+        /// The rendered message.
+        message: String,
+    },
+}
+
+impl EsmError {
+    /// A schema-stage refusal from a coded diagnostic, rendered as
+    /// `[code] message`.
+    pub(crate) fn schema(e: crate::diagnostic::DiagnosticError) -> Self {
+        EsmError::SchemaDiagnostic {
+            code: e.code,
+            message: e.to_string(),
+            findings: Vec::new(),
+        }
+    }
+
+    /// A structural-stage refusal from a coded diagnostic, rendered as
+    /// `[code] message`.
+    pub(crate) fn structural(e: crate::diagnostic::DiagnosticError) -> Self {
+        EsmError::StructuralDiagnostic {
+            code: e.code,
+            message: e.to_string(),
+        }
+    }
+
+    /// The stable diagnostic code of a coded refusal, or `None` for an error
+    /// that carries none.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            EsmError::SchemaDiagnostic { code, .. }
+            | EsmError::StructuralDiagnostic { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    /// The structured `(code, path)` findings a load refusal located; empty
+    /// when it located none.
+    pub fn findings(&self) -> &[crate::validate::StructuralError] {
+        match self {
+            EsmError::SchemaDiagnostic { findings, .. } => findings,
+            _ => &[],
+        }
+    }
 }
 
 /// A single-field, string-wrapped error whose [`Display`](std::fmt::Display) is

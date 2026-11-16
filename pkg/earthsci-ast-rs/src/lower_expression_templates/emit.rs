@@ -83,17 +83,11 @@ pub fn emit_document(
     base_path: &std::path::Path,
 ) -> Result<Value, ExpressionTemplateError> {
     let mut prepared = raw_source.clone();
-    crate::parse::prepare_document_ops(&mut prepared).map_err(|e| {
-        let message = match e {
-            crate::EsmError::SchemaValidation(m) => m,
-            other => other.to_string(),
-        };
-        let code = if message.starts_with(codes::FAQ_VERSION_TOO_OLD) {
-            codes::FAQ_VERSION_TOO_OLD
-        } else {
-            codes::REMOVED_OP
-        };
-        crate::diagnostic::err(code, message)
+    crate::parse::prepare_document_ops(&mut prepared).map_err(|e| match e {
+        crate::EsmError::SchemaDiagnostic { code, message, .. } => {
+            crate::diagnostic::err(code, message)
+        }
+        other => crate::diagnostic::err(codes::REMOVED_OP, other.to_string()),
     })?;
     let raw_source = &prepared;
     let authored = authored_template_names(raw_source);

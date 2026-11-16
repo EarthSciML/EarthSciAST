@@ -364,6 +364,41 @@ const REACTION_SYSTEM_MOUNT: TopLevelMountForm = TopLevelMountForm {
     ref_noun: &TOPLEVEL_REACTION_SYSTEM_REF,
 };
 
+/// A mount edge's diagnostic for a ref [`crate::ref_reader`] could not read.
+fn ref_read_error(
+    e: crate::ref_reader::RefError,
+    ref_str: &str,
+    noun: &RefNoun,
+) -> DiagnosticError {
+    use crate::ref_reader::RefError;
+    match e {
+        RefError::Bundled(why) => err(
+            noun.code,
+            format!("failed to resolve {} {ref_str:?}: {why}", noun.item),
+        ),
+        RefError::Remote => err(
+            noun.code,
+            format!(
+                "Remote {} are not supported in the Rust loader; \
+             download {ref_str:?} to a local file first",
+                noun.remote_plural
+            ),
+        ),
+        RefError::Missing { err: e, .. } => err(
+            noun.code,
+            format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
+        ),
+        RefError::Read { path, err: e } => err(
+            noun.code,
+            format!("failed to read {} {}: {e}", noun.item, path.display()),
+        ),
+        RefError::Parse { path, err: e } => err(
+            noun.code,
+            format!("failed to parse {} {}: {e}", noun.item, path.display()),
+        ),
+    }
+}
+
 /// Load a document a §4.7 mount edge references: locate and read it through
 /// [`crate::ref_reader`] (which owns `${VAR}` expansion, the bundled standard
 /// library, the remote refusal and file identity), guard against a cycle, mark
@@ -382,35 +417,9 @@ fn load_ref_document(
     visited: &mut HashSet<PathBuf>,
     noun: &RefNoun,
 ) -> Result<(PathBuf, Value), DiagnosticError> {
-    use crate::ref_reader::RefError;
     let expanded = crate::ref_reader::expand(ref_str);
     let ref_str: &str = &expanded;
-    let read_error = |e: RefError| match e {
-        RefError::Bundled(why) => err(
-            noun.code,
-            format!("failed to resolve {} {ref_str:?}: {why}", noun.item),
-        ),
-        RefError::Remote => err(
-            noun.code,
-            format!(
-                "Remote {} are not supported in the Rust loader; \
-                 download {ref_str:?} to a local file first",
-                noun.remote_plural
-            ),
-        ),
-        RefError::Missing { err: e, .. } => err(
-            noun.code,
-            format!("failed to resolve {} {ref_str:?}: {e}", noun.item),
-        ),
-        RefError::Read { path, err: e } => err(
-            noun.code,
-            format!("failed to read {} {}: {e}", noun.item, path.display()),
-        ),
-        RefError::Parse { path, err: e } => err(
-            noun.code,
-            format!("failed to parse {} {}: {e}", noun.item, path.display()),
-        ),
-    };
+    let read_error = |e| ref_read_error(e, ref_str, noun);
     let located = crate::ref_reader::locate(ref_str, base).map_err(read_error)?;
     let canonical = located.identity.clone();
 
@@ -1520,6 +1529,133 @@ fn resolve_value(
     Ok(value)
 }
 
+/// The document's own §4.7 mount edges that do not resolve, as structured
+/// `(code, path)` findings: every `subsystems.<k>` `{ref}` of a top-level
+/// model or reaction system, at `/<block>/<system>/subsystems/<k>`, then every
+/// top-level `models.<k>` / `reaction_systems.<k>` `{ref}` stub, at
+/// `/<block>/<k>`.
+///
+/// Each edge is judged on its own, by the rules the loader applies at that
+/// edge before resolving the leaf: the ref must locate, read and parse
+/// (`unresolved_subsystem_ref` otherwise), and the leaf must yield the
+/// component — exactly one system for a subsystem mount
+/// (`ambiguous_subsystem_ref` otherwise), and for a top-level mount one
+/// component of the form's kind, or the one its selector names
+/// (`unresolved_subsystem_ref` otherwise). An edge that passes contributes
+/// nothing, even when something deeper in the leaf fails; nested edges are
+/// the leaf's own to report. Relative refs resolve against `base_dir`, the
+/// document's directory.
+///
+/// A load that refuses the document while resolving its mounts carries these
+/// as its [`crate::EsmError::findings`].
+pub fn mount_edge_errors(document: &Value, base_dir: &Path) -> Vec<crate::StructuralError> {
+    use crate::{StructuralError, StructuralErrorCode};
+    let read = |ref_str: &str, noun: &RefNoun| {
+        let expanded = crate::ref_reader::expand(ref_str);
+        crate::ref_reader::locate(&expanded, base_dir)
+            .and_then(|located| crate::ref_reader::read(&located).map(|doc| (located, doc)))
+            .map_err(|e| ref_read_error(e, &expanded, noun))
+    };
+    let finding = |path: String, e: DiagnosticError, details: Value| StructuralError {
+        path,
+        code: if e.code == codes::AMBIGUOUS_SUBSYSTEM_REF {
+            StructuralErrorCode::AmbiguousSubsystemRef
+        } else {
+            StructuralErrorCode::UnresolvedSubsystemRef
+        },
+        message: e.message,
+        details,
+    };
+    let mut out = Vec::new();
+    for container in ["models", "reaction_systems"] {
+        let Some(systems) = document.get(container).and_then(Value::as_object) else {
+            continue;
+        };
+        for (sys_name, system) in systems {
+            let Some(subs) = system.get("subsystems").and_then(Value::as_object) else {
+                continue;
+            };
+            for (sub_name, sub) in subs {
+                let Some(ref_str) = sub.get("ref").and_then(Value::as_str) else {
+                    continue;
+                };
+                let outcome = read(ref_str, &SUBSYSTEM_REF)
+                    .and_then(|(located, doc)| extract_single_system(&doc, &located.identity));
+                if let Err(e) = outcome {
+                    out.push(finding(
+                        format!("/{container}/{sys_name}/subsystems/{sub_name}"),
+                        e,
+                        serde_json::json!({
+                            "ref": ref_str,
+                            "subsystem": sub_name,
+                            "parent_model": sys_name,
+                        }),
+                    ));
+                }
+            }
+        }
+    }
+    for form in [&MODEL_MOUNT, &REACTION_SYSTEM_MOUNT] {
+        let Some(entries) = document.get(form.block).and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, entry) in entries {
+            let Some(ref_str) = entry.get("ref").and_then(Value::as_str) else {
+                continue;
+            };
+            if entry.get(form.inline_key).is_some() {
+                continue;
+            }
+            let sel = entry.get(form.selector).and_then(Value::as_str);
+            let outcome = read(ref_str, form.ref_noun).and_then(|(located, doc)| {
+                extract_toplevel_component(form, &doc, sel, ref_str, &located.identity)
+            });
+            if let Err(e) = outcome {
+                let mut details = serde_json::json!({ "ref": ref_str });
+                if let Some(sel) = sel {
+                    details[form.selector] = Value::from(sel);
+                }
+                out.push(finding(format!("/{}/{name}", form.block), e, details));
+            }
+        }
+    }
+    out
+}
+
+/// The part of a document [`mount_edge_errors`] reads — its top-level
+/// `{ref}` stubs and its top-level systems' `subsystems` refs — copied out, so
+/// the edges can still be judged after resolution consumed them in place.
+pub(crate) fn mount_edge_skeleton(document: &Value) -> Value {
+    let mut out = Map::new();
+    for block in ["models", "reaction_systems"] {
+        let Some(systems) = document.get(block).and_then(Value::as_object) else {
+            continue;
+        };
+        let mut kept = Map::new();
+        for (name, system) in systems {
+            if system.get("ref").is_some() {
+                kept.insert(name.clone(), system.clone());
+            } else if let Some(subs) = system.get("subsystems").and_then(Value::as_object) {
+                let refs: Map<String, Value> = subs
+                    .iter()
+                    .filter(|(_, sub)| sub.get("ref").is_some())
+                    .map(|(k, sub)| (k.clone(), sub.clone()))
+                    .collect();
+                if !refs.is_empty() {
+                    kept.insert(
+                        name.clone(),
+                        serde_json::json!({ "subsystems": Value::Object(refs) }),
+                    );
+                }
+            }
+        }
+        if !kept.is_empty() {
+            out.insert(block.to_string(), Value::Object(kept));
+        }
+    }
+    Value::Object(out)
+}
+
 /// The working precision a document that declares none evaluates in
 /// (esm-spec §11.3: `domain.element_type` defaults to `"Float64"`).
 const DEFAULT_ELEMENT_TYPE: &str = "Float64";
@@ -1913,6 +2049,71 @@ mod tests {
                 panic!("{name} form: the injected library resolves beside the assembly: {e}")
             });
         }
+    }
+
+    /// A load refused at a mount edge keeps its diagnostic code and carries
+    /// the edge that does not resolve, at its pointer; the display text is
+    /// the one the uncoded error rendered.
+    #[test]
+    fn a_mount_refusal_carries_its_code_and_the_failing_edge() {
+        let dir = TempDir::new().unwrap();
+        let two = json!({
+            "esm": "2.0.0",
+            "metadata": { "name": "two" },
+            "models": {
+                "A": { "variables": {}, "equations": [] },
+                "B": { "variables": {}, "equations": [] }
+            }
+        });
+        std::fs::write(dir.path().join("two.esm"), two.to_string()).unwrap();
+        let root = json!({
+            "esm": "2.0.0",
+            "metadata": { "name": "root" },
+            "models": {
+                "Outer": {
+                    "variables": {},
+                    "equations": [],
+                    "subsystems": {
+                        "Missing": { "ref": "missing.esm" },
+                        "Two": { "ref": "two.esm" }
+                    }
+                },
+                "Top": { "ref": "two.esm" }
+            }
+        });
+        let path = dir.path().join("root.esm");
+        std::fs::write(&path, root.to_string()).unwrap();
+        let e = crate::load_path(&path).expect_err("a missing ref is refused");
+        assert_eq!(e.code(), Some(codes::UNRESOLVED_SUBSYSTEM_REF));
+        assert!(
+            e.to_string()
+                .starts_with("Schema validation error: [unresolved_subsystem_ref] "),
+            "{e}"
+        );
+        let found: Vec<(&str, String)> = e
+            .findings()
+            .iter()
+            .map(|f| (f.path.as_str(), f.code.to_string()))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (
+                    "/models/Outer/subsystems/Missing",
+                    "unresolved_subsystem_ref".to_string()
+                ),
+                (
+                    "/models/Outer/subsystems/Two",
+                    "ambiguous_subsystem_ref".to_string()
+                ),
+                ("/models/Top", "unresolved_subsystem_ref".to_string()),
+            ]
+        );
+        assert_eq!(
+            mount_edge_errors(&root, dir.path()).len(),
+            3,
+            "the entry point reports what the refusal carries"
+        );
     }
 
     #[test]

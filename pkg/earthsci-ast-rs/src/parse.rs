@@ -199,7 +199,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // (§9.7.6 site 3), so after inlining neither the declaration nor the `{ref}`
     // stub that leads to it is still there to judge by.
     crate::template_imports::check_data_source_extents(&json_value, &base, &mount_declared)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // Resolve any subsystem refs before schema validation, per spec section
     // 2.1b. Callers that load from a known file path should use `load_path`,
@@ -217,6 +217,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // A mounted leaf is expanded here, so its template expansions are marked
     // here too (esm-spec §9.6.11; `MarkTemplateOrigins`), and the schema check
     // below reads the document with those marks taken off.
+    //
+    // A refusal here carries, as its findings, the document's own mount edges
+    // that do not resolve, each at its pointer
+    // ([`crate::ref_loading::mount_edge_errors`]), read off the edges as
+    // authored: resolution consumes them in place.
+    let mount_edges = crate::ref_loading::mount_edge_skeleton(&json_value);
     let marks_before = crate::lower_expression_templates::template_origins_placed();
     let staged_index_sets = {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
@@ -226,7 +232,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
             &options.metaparameters,
         )
     }
-    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    .map_err(|e| EsmError::SchemaDiagnostic {
+        code: e.code,
+        message: e.to_string(),
+        findings: crate::ref_loading::mount_edge_errors(&mount_edges, &base),
+    })?;
     let mounts_marked =
         crate::lower_expression_templates::template_origins_placed() != marks_before;
 
@@ -239,7 +249,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // ingest providers and `emit` all see one resolved form and none of them
     // needs a base directory.
     crate::data_source_urls::resolve_data_source_urls(&mut json_value, &base)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // The version gates (`crate::version_gates::VERSIONED`) run in three
     // groups at the root, each at its own place among the other passes. First
@@ -254,12 +264,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         Some(Group::Templates),
         &authored,
     )
-    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    .map_err(EsmError::schema)?;
 
     // Top-level `expression_templates` beside a component payload is a
     // template-library payload no component can see (esm-spec §9.7.1).
     crate::template_imports::reject_impure_template_library(&json_value)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // The `solver` group: the top-level block arrives at esm 1.1.0 (esm-spec
     // §2.2.4), `solver.external` and `solver.time_span` at 1.3.0. Only the
@@ -270,9 +280,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     check_file_gates(&json_value, DocKind::Root, Some(Group::Solver), &authored)
         .and_then(|()| crate::solver::reject_solver_external_unresolved(&json_value))
         .and_then(|()| crate::solver::reject_solver_time_span_invalid(&json_value))
-        .map_err(|e: crate::diagnostic::DiagnosticError| {
-            EsmError::SchemaValidation(e.to_string())
-        })?;
+        .map_err(EsmError::schema)?;
 
     // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     // The gate reads THIS file's own nodes — the authored walk, taken before
@@ -283,7 +291,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Variable `lb` / `ub` arrive at esm 2.1.0 (esm-spec §6.3.2), judged the
     // same way: this file's own variables, before a mount spliced any in.
     check_file_gates(&json_value, DocKind::Root, Some(Group::Content), &authored)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // Validate against schema
     if mounts_marked {
@@ -302,7 +310,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // (`template_inject_target_*`) surface as load errors. (Form A is threaded
     // through the subsystem-ref pass in `ref_loading::resolve_value` above.)
     crate::template_imports::apply_scope_injections(&mut json_value, &[])
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // Resolve esm-spec §9.7 machinery — template-library imports
     // (depth-first post-order, per-edge metaparameter instantiation),
@@ -316,7 +324,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         &mount_declared,
         false,
     )
-    .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+    .map_err(EsmError::schema)?;
 
     // esm-spec §4.7 "Index-set merge", the deferred half: the root has now
     // closed and folded its own `index_sets`, so the staged mount contributions
@@ -326,7 +334,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     let closed_env =
         crate::ref_loading::root_metaparameter_env(&json_value, &options.metaparameters);
     crate::ref_loading::apply_staged_index_sets(&mut json_value, staged_index_sets, &closed_env)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // The template passes below walk the whole document several times; an
     // equation whose right-hand side is a `const` of numbers (a document's
@@ -358,7 +366,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
                 reserved.visit(path, value);
             },
         )
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
     let reserved = (scanned_whole && !has_enum_ops).then_some(reserved);
 
     // The typed IR / build path (simulate, flatten, graph, …) is Expand-at-build
@@ -374,8 +382,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         crate::lower_expression_templates::capture_component_templates(&json_value);
     if has_templates {
         let _mark = crate::lower_expression_templates::MarkTemplateOrigins::on();
-        crate::lower_expression_templates::expand(&mut json_value)
-            .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        crate::lower_expression_templates::expand(&mut json_value).map_err(EsmError::schema)?;
     } else {
         crate::lower_expression_templates::strip_component_template_blocks(&mut json_value);
     }
@@ -384,7 +391,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // block (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time
     // pass so that downstream consumers never see enum strings.
     crate::lower_enums::lower_enums_raw_scanned(&mut json_value, has_enum_ops || !scanned_whole)
-        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+        .map_err(EsmError::schema)?;
 
     // Reject a `faq` binder that shadows a globally-scoped name (the
     // independent variable, `_var`). Runs HERE, on the fully lowered form, so a
@@ -395,7 +402,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         Some(scan) => scan.finish(),
         None => reject_reserved_index_symbols(&json_value),
     }
-    .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
+    .map_err(EsmError::structural)?;
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
@@ -1959,7 +1966,11 @@ pub(crate) fn prepare_document_ops_scanned(
     };
     // 1. A removed op or block — rejected by name, before anything else.
     if let Some(removed) = scan.removed {
-        return Err(EsmError::SchemaValidation(removed.message()));
+        return Err(EsmError::SchemaDiagnostic {
+            code: crate::diagnostic::codes::REMOVED_OP,
+            message: removed.message(),
+            findings: Vec::new(),
+        });
     }
     // 2. Version gate. `faq` arrives at esm 1.1.0, so a document that spells
     //    it while declaring less is rejected — the same rule the top-level
@@ -1967,9 +1978,11 @@ pub(crate) fn prepare_document_ops_scanned(
     if let Some(path) = scan.faq
         && let Some(esm) = esm_declared
     {
-        return Err(EsmError::SchemaValidation(
-            VERSIONED[FAQ].message(&esm, &path),
-        ));
+        return Err(EsmError::SchemaDiagnostic {
+            code: VERSIONED[FAQ].code,
+            message: VERSIONED[FAQ].message(&esm, &path),
+            findings: Vec::new(),
+        });
     }
     // 3. Deprecated spellings (esm-spec §4.2 "Deprecated ops"): the walk
     //    already rewrote them; the document loads with ONE warning naming
