@@ -541,10 +541,7 @@ fn observed_order(
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
     crate::classification::observed_definitions(model)
         .into_iter()
-        .filter(|(_, def)| {
-            serde_json::to_value(def)
-                .is_ok_and(|raw| !crate::value_invention::is_value_invention_assignment(&raw))
-        })
+        .filter(|(_, def)| !crate::value_invention::is_value_invention_expr(def))
         .collect()
 }
 
