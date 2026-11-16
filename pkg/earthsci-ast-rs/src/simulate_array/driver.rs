@@ -768,12 +768,12 @@ impl ArrayCompiled {
     }
 
     /// Cadence partition of the observed rules given the discrete-forcing names,
-    /// as `(const, discrete, continuous)` sorted name lists. Exposed for the
+    /// as `(const, discrete, continuous)` sorted name lists, for the
     /// cadence-tier test: a forcing-derived but state-free / `t`-free observed
     /// must land in the DISCRETE tier (materialized once per segment), not
     /// CONTINUOUS (recomputed every step). Mirrors the split in `run_segmented`.
-    #[doc(hidden)]
-    pub fn debug_cadence_partition(
+    #[cfg(test)]
+    pub(super) fn cadence_partition(
         &self,
         discrete_forcing: &[String],
     ) -> (Vec<String>, Vec<String>, Vec<String>) {
@@ -895,15 +895,6 @@ impl ArrayCompiled {
         seed
     }
 
-    /// Build a persistent per-cell-oracle [`RhsScratch`] sized to this model,
-    /// for [`Self::debug_eval_rhs_into`].
-    #[doc(hidden)]
-    pub fn debug_new_scratch(&self) -> RhsScratch {
-        let mut s = RhsScratch::new(&self.var_shapes);
-        s.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
-        s
-    }
-
     /// Build a scratch with the compiled tape installed, for the tape-versus-
     /// oracle, allocation-steady-state and invalidation tests, driven through
     /// [`Self::debug_eval_rhs_into`].
@@ -944,9 +935,9 @@ impl ArrayCompiled {
 
     /// Evaluate the RHS into a caller-owned `dy` using a caller-owned scratch:
     /// the tape when the scratch carries one
-    /// ([`Self::debug_new_scratch_taped`]), else the per-cell oracle
-    /// ([`Self::debug_new_scratch`]). With a warmed taped scratch and a
-    /// pre-resolved `param_vec`, this performs no heap allocation.
+    /// ([`Self::debug_new_scratch_taped`]), else the per-cell oracle. With a
+    /// warmed taped scratch and a pre-resolved `param_vec`, this performs no
+    /// heap allocation.
     #[doc(hidden)]
     pub fn debug_eval_rhs_into(
         &self,

@@ -816,7 +816,7 @@ fn data_fed_ifelse_observed_takes_the_datas_shape() {
     for (lev, want) in [(1.0, vec![3.0, -4.0, 1.5]), (3.0, vec![0.25; 3])] {
         let params = HashMap::from([("lev".to_string(), lev)]);
         let pv = compiled.debug_resolve_params(&params);
-        let mut oracle = compiled.debug_new_scratch();
+        let mut oracle = compiled.new_scratch();
         let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0;
         let mut tape = scratch_with(&compiled, prog);
         tape.set_exports_active(true);

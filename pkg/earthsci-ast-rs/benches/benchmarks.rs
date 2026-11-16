@@ -253,7 +253,8 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
 /// (or the per-cell oracle), with what it cost to get there.
 struct TemplateRhs {
     prob: earthsci_ast::EsmProblem,
-    scratch: earthsci_ast::simulate_array::RhsScratch,
+    /// The taped scratch, or `None` for the per-cell oracle.
+    scratch: Option<earthsci_ast::simulate_array::RhsScratch>,
     params: Vec<f64>,
     state: Vec<f64>,
     /// Problem construction plus tape installation, and the first call.
@@ -278,11 +279,7 @@ impl TemplateRhs {
         )
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let compiled = prob.debug_array_compiled().expect("a right-hand side");
-        let mut scratch = if oracle {
-            compiled.debug_new_scratch()
-        } else {
-            compiled.debug_new_scratch_taped().expect("taped")
-        };
+        let scratch = (!oracle).then(|| compiled.debug_new_scratch_taped().expect("taped"));
         let params = compiled.debug_resolve_params(prob.p());
         // A state that differs from cell to cell, the same per name in every
         // spelling, so a regrid's derivative depends on every weight.
@@ -299,37 +296,34 @@ impl TemplateRhs {
             .map(|n| prob.u0().get(n).copied().unwrap_or(0.0) + rank[n] as f64 / 64.0)
             .collect();
         let build_s = t0.elapsed().as_secs_f64();
-        let mut dy = vec![0.0; state.len()];
-        let t1 = std::time::Instant::now();
-        compiled.debug_eval_rhs_into(
-            &state,
-            0.0,
-            &params,
-            &mut dy,
-            &mut scratch,
-            &mut earthsci_ast::simulate_array::RhsStats::default(),
-        );
-        let first_call_s = t1.elapsed().as_secs_f64();
-        TemplateRhs {
+        let mut rhs = TemplateRhs {
             prob,
             scratch,
             params,
             state,
             build_s,
-            first_call_s,
-        }
+            first_call_s: 0.0,
+        };
+        let mut dy = vec![0.0; rhs.state.len()];
+        let t1 = std::time::Instant::now();
+        rhs.call(0.0, &mut dy);
+        rhs.first_call_s = t1.elapsed().as_secs_f64();
+        rhs
     }
 
     fn call(&mut self, t: f64, dy: &mut [f64]) {
         let compiled = self.prob.debug_array_compiled().expect("a right-hand side");
-        compiled.debug_eval_rhs_into(
-            &self.state,
-            t,
-            &self.params,
-            dy,
-            &mut self.scratch,
-            &mut earthsci_ast::simulate_array::RhsStats::default(),
-        );
+        match &mut self.scratch {
+            Some(scratch) => compiled.debug_eval_rhs_into(
+                &self.state,
+                t,
+                &self.params,
+                dy,
+                scratch,
+                &mut earthsci_ast::simulate_array::RhsStats::default(),
+            ),
+            None => dy.copy_from_slice(&compiled.debug_eval_rhs(&self.state, t, self.prob.p()).0),
+        }
     }
 
     /// `dy` at a few times, as bits.
