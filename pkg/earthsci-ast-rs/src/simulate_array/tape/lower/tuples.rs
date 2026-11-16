@@ -417,7 +417,7 @@ impl TapeBuilder<'_> {
         names.extend(contract_names.iter().cloned());
         let id = self.next_tuple;
         self.next_tuple += 1;
-        self.tuple_frames.push(TupleFrame {
+        self.rule.tuple_frames.push(TupleFrame {
             id,
             names,
             cols: list.cols,
@@ -450,13 +450,13 @@ impl TapeBuilder<'_> {
                 Some(LV::Lit(_)) => false,
                 Some(_) => true,
             };
-            self.lazy_depth += u32::from(lazy);
+            self.fault.lazy_depth += u32::from(lazy);
             let term = self.lower_expr(body, &bx);
-            self.lazy_depth -= u32::from(lazy);
+            self.fault.lazy_depth -= u32::from(lazy);
             Ok((Some(term?), mask))
         })();
         self.pop_scope();
-        self.tuple_frames.pop();
+        self.rule.tuple_frames.pop();
         let (term, mask) = lowered?;
         let Some(term) = term else {
             // The filter excludes every tuple.
@@ -494,11 +494,11 @@ impl TapeBuilder<'_> {
             },
         };
 
-        let table = tape_index(self.seg_tables.len(), "segmented reductions")?;
-        self.seg_tables.push(SegTable { rows: list.rows });
-        let mut want = self.slots[src as usize].cadence;
+        let table = tape_index(self.tables.seg_tables.len(), "segmented reductions")?;
+        self.tables.seg_tables.push(SegTable { rows: list.rows });
+        let mut want = self.tables.slots[src as usize].cadence;
         if let Some(mk) = mask {
-            want = want.max(self.slots[mk as usize].cadence);
+            want = want.max(self.tables.slots[mk as usize].cadence);
         }
         let sec = self.placement(want);
         let out = if rank0 {
@@ -539,7 +539,12 @@ impl TapeBuilder<'_> {
         spec: &ArrayOpSpec<'_>,
         bx: &LBox,
     ) -> LResult<LV> {
-        let Some(fi) = self.tuple_frames.iter().rposition(|f| f.id == bx.tuple) else {
+        let Some(fi) = self
+            .rule
+            .tuple_frames
+            .iter()
+            .rposition(|f| f.id == bx.tuple)
+        else {
             bail_tape!("aggregate: a rank-0 output nested in a tuple list with no open frame");
         };
         // A reduction that reads only the loop symbols of an enclosing list
@@ -555,12 +560,12 @@ impl TapeBuilder<'_> {
         };
         let mut target = fi;
         let mut repeat = 1usize;
-        while let Some((pid, per)) = self.tuple_frames[target].parent {
-            let Some(pi) = self.tuple_frames.iter().rposition(|f| f.id == pid) else {
+        while let Some((pid, per)) = self.rule.tuple_frames[target].parent {
+            let Some(pi) = self.rule.tuple_frames.iter().rposition(|f| f.id == pid) else {
                 break;
             };
-            let frame = &self.tuple_frames[target];
-            let parent = &self.tuple_frames[pi];
+            let frame = &self.rule.tuple_frames[target];
+            let parent = &self.rule.tuple_frames[pi];
             if !frame
                 .names
                 .iter()
@@ -589,12 +594,12 @@ impl TapeBuilder<'_> {
         repeat: usize,
     ) -> LResult<LV> {
         let key = Arc::as_ptr(node) as usize;
-        let m_t = self.tuple_frames[target].len;
-        let m = self.tuple_frames[fi].len;
+        let m_t = self.rule.tuple_frames[target].len;
+        let m = self.rule.tuple_frames[fi].len;
         if m != m_t * repeat {
             bail_tape!("aggregate: a nested tuple list that is not its enclosing list repeated");
         }
-        let base = match self.tuple_frames[target].hoisted.get(&key) {
+        let base = match self.rule.tuple_frames[target].hoisted.get(&key) {
             Some(&s) => LV::Arr(s),
             None => {
                 let v = self.lower_nested_scalar_here(spec, target)?;
@@ -612,7 +617,7 @@ impl TapeBuilder<'_> {
                 if let LV::Arr(s) = v
                     && !self.in_branch()
                 {
-                    self.tuple_frames[target].hoisted.insert(key, s);
+                    self.rule.tuple_frames[target].hoisted.insert(key, s);
                 }
                 v
             }
@@ -635,8 +640,8 @@ impl TapeBuilder<'_> {
                 false,
             )?));
         }
-        let table = tape_index(self.gather_tables.len(), "gather tables")?;
-        self.gather_tables.push(GatherTable {
+        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
+        self.tables.gather_tables.push(GatherTable {
             src_shape: DimU::from_elem(m_t, 1),
             pos,
         });
@@ -656,12 +661,12 @@ impl TapeBuilder<'_> {
 
     /// [`Self::lower_nested_scalar_in_tuples`] over the open list `fi`.
     fn lower_nested_scalar_here(&mut self, spec: &ArrayOpSpec<'_>, fi: usize) -> LResult<LV> {
-        let m = self.tuple_frames[fi].len;
+        let m = self.rule.tuple_frames[fi].len;
         // The enclosing loop symbols the nested contraction does not shadow
         // (the oracle rebinds a shadowed name around the nested body).
-        let outer: Vec<usize> = (0..self.tuple_frames[fi].names.len())
+        let outer: Vec<usize> = (0..self.rule.tuple_frames[fi].names.len())
             .filter(|&ci| {
-                let n = &self.tuple_frames[fi].names[ci];
+                let n = &self.rule.tuple_frames[fi].names[ci];
                 !spec.contract_names.iter().any(|c| c == n)
             })
             .collect();
@@ -688,7 +693,7 @@ impl TapeBuilder<'_> {
         // The enclosing columns' values, wherever they live by now.
         let mut outer_vals: Vec<Arc<Vec<f64>>> = Vec::with_capacity(outer.len());
         for &ci in &outer {
-            let frame = &self.tuple_frames[fi];
+            let frame = &self.rule.tuple_frames[fi];
             let vals = match frame.slots[ci] {
                 Some(slot) => self.known_values(slot),
                 None => Some(Arc::new(frame.cols[ci].clone())),
@@ -700,7 +705,7 @@ impl TapeBuilder<'_> {
         }
         let mut names: Vec<String> = outer
             .iter()
-            .map(|&ci| self.tuple_frames[fi].names[ci].clone())
+            .map(|&ci| self.rule.tuple_frames[fi].names[ci].clone())
             .collect();
         names.extend(spec.contract_names.iter().cloned());
         let mut cols: Vec<Vec<f64>> = vec![Vec::with_capacity(total); names.len()];
@@ -753,8 +758,8 @@ impl TapeBuilder<'_> {
             filter: spec.filter,
             init: spec.reduce.identity(),
         };
-        let notes = self.fault_notes;
-        self.next_tuple_parent = Some((self.tuple_frames[fi].id, per));
+        let notes = self.fault.notes;
+        self.next_tuple_parent = Some((self.rule.tuple_frames[fi].id, per));
         let lowered = self.lower_tuple_list(
             &tspec,
             TupleList { rows, cols },
@@ -766,7 +771,7 @@ impl TapeBuilder<'_> {
         let v = lowered?;
         // A fault here would sort by the nested list's tuples, which do not
         // place it among the enclosing list's own faults: refused instead.
-        if self.fault_notes != notes {
+        if self.fault.notes != notes {
             bail_tape!("fault: a fail-closed fault inside a rank-0 output nested in a tuple list");
         }
         Ok(v)
@@ -921,8 +926,8 @@ impl TapeBuilder<'_> {
                 let v = b
                     .lower_tuple_list(chunk, list, &lo, &shape, combine_op)
                     .ok()?;
-                if b.fault_notes != 0
-                    || b.fault_first.is_some()
+                if b.fault.notes != 0
+                    || b.fault.first.is_some()
                     || b.lv_cadence(&v) != Cadence::Const
                 {
                     return None;
@@ -948,7 +953,7 @@ impl TapeBuilder<'_> {
                         .iter()
                         .filter(|i| {
                             let n = i.vals.len();
-                            prog.const_data.iter().any(|d| {
+                            prog.tables.const_data.iter().any(|d| {
                                 Arc::ptr_eq(&d.values, &i.vals)
                                     || (n > 1 && d.values.len() == n && d.values[..] == i.vals[..])
                             })
@@ -993,57 +998,53 @@ impl TapeBuilder<'_> {
         // Few candidate cells (the pairs a join matches, of a source x target
         // box): the body runs over those only (`lower_pointwise_compacted`),
         // when that lowers.
+        let mut compact_decline = None;
         if !ranges.is_empty()
             && let Some(cand) = pointwise_keep(idx_names, ranges, &gates, true)?
         {
             let kept = cand.iter().filter(|&&k| k != 0.0).count();
             if kept > 0 && kept * COMPACT_KEEP_DENOM <= cand.len() {
-                let txn = self.sub_txn();
-                match self
-                    .lower_pointwise_compacted(idx_names, ranges, cand, body, filter, identity)
-                {
+                match self.attempt(|b| {
+                    b.lower_pointwise_compacted(idx_names, ranges, cand, body, filter, identity)
+                }) {
                     Ok(v) => return Ok(v),
-                    Err(_) => self.sub_rollback(txn),
+                    Err(e) => compact_decline = Some(e),
                 }
             }
         }
-        let keep = pointwise_keep(idx_names, ranges, &gates, false)?;
-        if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
-            return Ok(if ranges.is_empty() {
-                LV::Lit(identity)
-            } else {
-                self.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
-            });
-        }
-        let bx = LBox {
-            syms: idx_names,
-            lo: lo.clone(),
-            shape: shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
+        let dense = |this: &mut Self| -> LResult<LV> {
+            let keep = pointwise_keep(idx_names, ranges, &gates, false)?;
+            if keep.as_ref().is_some_and(|k| k.iter().all(|&k| k == 0.0)) {
+                return Ok(if ranges.is_empty() {
+                    LV::Lit(identity)
+                } else {
+                    this.emit_fill(&LV::Lit(identity), &shape, &lo, Cadence::Const)
+                });
+            }
+            let bx = LBox::new(idx_names, lo.clone(), shape.clone());
+            let Some(keep) = keep.filter(|k| !k.iter().all(|&k| k != 0.0)) else {
+                // The output box is its own value-numbering scope, as every box
+                // lowering's is: the enclosing frame is a whole-body rule's (which
+                // numbers whole values, not this box's) or another box's.
+                this.push_scope();
+                let term = this.lower_filtered(body, filter, &bx, LV::Lit(identity));
+                this.pop_scope();
+                return term.map(|t| t.unwrap_or(LV::Lit(identity)));
+            };
+            if ranges.is_empty() {
+                bail_tape!("aggregate: a rank-0 join gate");
+            }
+            let mask_slot = this.emit_const_data(&shape, &lo, Arc::new(keep), false)?;
+            this.fault.lazy_depth += 1;
+            this.push_scope();
+            let term = this.lower_filtered(body, filter, &bx, LV::Lit(identity));
+            this.pop_scope();
+            this.fault.lazy_depth -= 1;
+            let term = term?.unwrap_or(LV::Lit(identity));
+            this.emit_select(LV::Arr(mask_slot), term, LV::Lit(identity))
         };
-        let Some(keep) = keep.filter(|k| !k.iter().all(|&k| k != 0.0)) else {
-            // The output box is its own value-numbering scope, as every box
-            // lowering's is: the enclosing frame is a whole-body rule's (which
-            // numbers whole values, not this box's) or another box's.
-            self.push_scope();
-            let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
-            self.pop_scope();
-            return term.map(|t| t.unwrap_or(LV::Lit(identity)));
-        };
-        if ranges.is_empty() {
-            bail_tape!("aggregate: a rank-0 join gate");
-        }
-        let mask_slot = self.emit_const_data(&shape, &lo, Arc::new(keep), false)?;
-        self.lazy_depth += 1;
-        self.push_scope();
-        let term = self.lower_filtered(body, filter, &bx, LV::Lit(identity));
-        self.pop_scope();
-        self.lazy_depth -= 1;
-        let term = term?.unwrap_or(LV::Lit(identity));
-        self.emit_select(LV::Arr(mask_slot), term, LV::Lit(identity))
+        let r = dense(self);
+        super::after_decline(compact_decline, r)
     }
 
     /// A join-gated pointwise `faq` whose gate keeps few cells, with the body
@@ -1123,15 +1124,7 @@ impl TapeBuilder<'_> {
         let cbody = subst_shared(body, &subs, &mut memo);
         let cfilter = filter.map(|f| subst_shared(f, &subs, &mut memo));
         let syms = [PW_SYM.to_string()];
-        let cbx = LBox {
-            syms: &syms,
-            lo: DimI::from_elem(1, 1),
-            shape: DimU::from_elem(m, 1),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let cbx = LBox::new(&syms, DimI::from_elem(1, 1), DimU::from_elem(m, 1));
         self.push_scope();
         let term = self.lower_filtered(&cbody, cfilter.as_ref(), &cbx, LV::Lit(identity));
         self.pop_scope();
@@ -1147,8 +1140,8 @@ impl TapeBuilder<'_> {
         // one table gather into the box's cells in row-major order, then the
         // box's own shape.
         let n = pos.len();
-        let table = tape_index(self.gather_tables.len(), "gather tables")?;
-        self.gather_tables.push(GatherTable {
+        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
+        self.tables.gather_tables.push(GatherTable {
             src_shape: DimU::from_elem(m, 1),
             pos,
         });
@@ -1237,7 +1230,7 @@ impl TapeBuilder<'_> {
         match self.obs_defined.get(name)? {
             ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Arc::new(vec![*x]))),
             ObsVal::Taped(LV::Arr(s)) => {
-                let shape = self.slots[*s as usize].shape.clone();
+                let shape = self.tables.slots[*s as usize].shape.clone();
                 match self.known_values(*s) {
                     Some(v) => Some((shape, v)),
                     None => self.fold_const_observed(name),
@@ -1267,7 +1260,7 @@ impl TapeBuilder<'_> {
     /// A slot's build-time values, if the build knows them.
     pub(super) fn known_values(&self, s: SlotId) -> Option<Arc<Vec<f64>>> {
         match self.known.get(&s)? {
-            Known::Data(d) => Some(Arc::clone(&self.const_data[*d as usize].values)),
+            Known::Data(d) => Some(Arc::clone(&self.tables.const_data[*d as usize].values)),
             Known::Vals(v) | Known::Deferred { vals: v, .. } => Some(Arc::clone(v)),
         }
     }
@@ -1276,7 +1269,7 @@ impl TapeBuilder<'_> {
     /// or looks up its elements.
     pub(super) fn known_slice(&self, s: SlotId) -> Option<&[f64]> {
         match self.known.get(&s)? {
-            Known::Data(d) => Some(&self.const_data[*d as usize].values),
+            Known::Data(d) => Some(&self.tables.const_data[*d as usize].values),
             Known::Vals(v) | Known::Deferred { vals: v, .. } => Some(v),
         }
     }
@@ -1493,23 +1486,27 @@ impl TapeBuilder<'_> {
     /// The column slot of loop symbol `name` in tuple frame `id`, created on
     /// first read. `None` when `name` is not one of the frame's symbols.
     pub(super) fn tuple_column(&mut self, id: u32, name: &str) -> LResult<Option<LV>> {
-        let Some(fi) = self.tuple_frames.iter().rposition(|f| f.id == id) else {
+        let Some(fi) = self.rule.tuple_frames.iter().rposition(|f| f.id == id) else {
             return Ok(None);
         };
-        let Some(ci) = self.tuple_frames[fi].names.iter().position(|n| n == name) else {
+        let Some(ci) = self.rule.tuple_frames[fi]
+            .names
+            .iter()
+            .position(|n| n == name)
+        else {
             return Ok(None);
         };
-        if let Some(s) = self.tuple_frames[fi].slots[ci] {
+        if let Some(s) = self.rule.tuple_frames[fi].slots[ci] {
             return Ok(Some(LV::Arr(s)));
         }
-        let frame = &mut self.tuple_frames[fi];
+        let frame = &mut self.rule.tuple_frames[fi];
         let len = frame.len;
         let values = std::mem::take(&mut frame.cols[ci]);
         // Every later read shares this slot, so it is defined unconditionally:
         // a first read inside a conditional branch still places the column
         // ahead of the branch, not in it.
         let out = self.emit_const_data(&[len], &[1], Arc::new(values), true)?;
-        self.tuple_frames[fi].slots[ci] = Some(out);
+        self.rule.tuple_frames[fi].slots[ci] = Some(out);
         Ok(Some(LV::Arr(out)))
     }
 
@@ -1721,8 +1718,10 @@ impl TapeBuilder<'_> {
                 false,
             )?));
         }
-        let table = tape_index(self.gather_tables.len(), "gather tables")?;
-        self.gather_tables.push(GatherTable { src_shape, pos });
+        let table = tape_index(self.tables.gather_tables.len(), "gather tables")?;
+        self.tables
+            .gather_tables
+            .push(GatherTable { src_shape, pos });
         let sec = self.placement(self.lv_cadence(&base));
         let out = self.new_slot(&[m], &[1], false, sec);
         let instr = Instr::TableGather {

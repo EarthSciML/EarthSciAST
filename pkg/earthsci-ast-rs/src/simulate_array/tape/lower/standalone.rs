@@ -185,9 +185,9 @@ impl TapeBuilder<'_> {
             let Some(Known::Deferred { vals, rule, prec }) = self.known.remove(&out) else {
                 unreachable!("a deferred slot");
             };
-            let data = self.const_data.len() as u32;
-            self.const_data.push(ConstArrayData {
-                shape: self.slots[out as usize].shape.clone(),
+            let data = self.tables.const_data.len() as u32;
+            self.tables.const_data.push(ConstArrayData {
+                shape: self.tables.slots[out as usize].shape.clone(),
                 values: vals,
             });
             self.known.insert(out, Known::Data(data));

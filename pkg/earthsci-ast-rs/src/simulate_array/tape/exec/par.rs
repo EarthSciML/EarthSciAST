@@ -196,7 +196,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
                 .saturating_add(pre)
         }
         Instr::DyWrite { write } => {
-            prog.slots[prog.dy_writes[*write as usize].slot as usize].elems()
+            prog.tables.slots[prog.tables.dy_writes[*write as usize].slot as usize].elems()
         }
         Instr::Bin { out, .. }
         | Instr::Un { out, .. }
@@ -207,7 +207,7 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         | Instr::IndexGather { out, .. }
         | Instr::TableGather { out, .. }
         | Instr::DataGather { out, .. }
-        | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
+        | Instr::Scan { out, .. } => prog.tables.slots[*out as usize].elems(),
         Instr::Reduce { src_shape, .. } => src_shape.iter().product(),
         // Per element, a bisection of the window or a pass over it.
         Instr::Count { n, sorted, out, .. } => {
@@ -216,7 +216,9 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
             } else {
                 *n as usize
             };
-            prog.slots[*out as usize].elems().saturating_mul(per.max(1))
+            prog.tables.slots[*out as usize]
+                .elems()
+                .saturating_mul(per.max(1))
         }
         Instr::Lanes { spec } => {
             let ls = &prog.lanes[*spec as usize];
@@ -235,6 +237,61 @@ fn fused_cost(fs: &FusedSpec) -> usize {
         .filter(|i| i.load_reg != GroupIx::MAX)
         .count();
     fs.micro.len() + fs.outputs.len() + loads + 1
+}
+
+/// How many workers `ins` (an instruction `interp::shares` admits) splits
+/// across under call width `ways` (1: it runs whole). The one choice both
+/// the instruction loop and a call plan make.
+pub(super) fn split_width(prog: &TapeProgram, ins: &Instr, ways: usize) -> usize {
+    match ins {
+        Instr::Fused { spec } => split_ways(&prog.fused[*spec as usize], ways),
+        Instr::Assemble { out, .. } => {
+            let d = &prog.tables.slots[*out as usize];
+            if d.shape.is_empty() {
+                1
+            } else {
+                ways_for(d.elems(), ways)
+            }
+        }
+        // A scan along the leading axis splits by its lanes.
+        Instr::Scan {
+            axis: 0, src_shape, ..
+        } => {
+            let lanes: usize = src_shape.iter().skip(1).product();
+            if src_shape.len() < 2 {
+                1
+            } else {
+                lane_split_ways(lanes, src_shape.iter().product(), ways)
+            }
+        }
+        Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
+            let d = &prog.tables.slots[*out as usize];
+            if d.scalar {
+                1
+            } else {
+                ways_for(d.elems(), ways)
+            }
+        }
+        Instr::Copy { out, .. } => {
+            let d = &prog.tables.slots[*out as usize];
+            if d.scalar {
+                1
+            } else {
+                copy_ways(ways, &rm_strides(&d.shape), &d.shape)
+            }
+        }
+        Instr::DyWrite { write } => {
+            let w = &prog.tables.dy_writes[*write as usize];
+            if w.scatter.is_some() || w.scalar_flat.is_some() {
+                1
+            } else {
+                let sv = &prog.state_vars[w.var as usize];
+                let shape = &prog.tables.slots[w.slot as usize].shape;
+                copy_ways(ways, &dy_strides(prog, &sv.shape), shape)
+            }
+        }
+        _ => 1,
+    }
 }
 
 /// How many workers a fused group splits across under call width `ways`:
@@ -470,34 +527,15 @@ impl AsmPart {
     }
 }
 
-/// `Instr::Assemble` split across the pool under width `ways`: worker `w`
-/// writes the flat positions [`share`]`(n, w, ways)` of the row-major output
-/// box -- zeroed unless `covered`, then each part's elements that fall there,
-/// in part order, so a later region still overwrites an earlier one. Pure
-/// data movement, so the result is the serial assembly's, bit for bit.
+/// Share `w` of `Instr::Assemble` split `ways` wide: the flat positions
+/// [`share_at`]`(n, w, ways, dst)` of the row-major output box -- zeroed
+/// unless `covered`, then each part's elements that fall there, in part
+/// order, so a later region still overwrites an earlier one. Pure data
+/// movement, so the shares together are the serial assembly, bit for bit.
 ///
 /// # Safety
 /// `dst` must address the whole output box `shape`, and every part's source
 /// must be valid over its region.
-pub(super) unsafe fn assemble(
-    ways: usize,
-    dst: *mut f64,
-    shape: &[usize],
-    regions: &[RegionSpec],
-    parts: &[AsmPart],
-    covered: bool,
-) {
-    let dp = SendPtr(dst);
-    pool::run(ways, &move |w| {
-        let dp = dp;
-        unsafe { assemble_share(w, ways, dp.0, shape, regions, parts, covered) };
-    });
-}
-
-/// Share `w` of [`assemble`] under width `ways`.
-///
-/// # Safety
-/// As for `assemble`.
 pub(super) unsafe fn assemble_share(
     w: usize,
     ways: usize,

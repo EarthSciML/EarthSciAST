@@ -94,7 +94,7 @@ fn a_self_join_materializes_its_matches_and_its_tape_is_flat_in_n() {
     for n in [16usize, 300] {
         let prog = ab_check(self_join_doc(n), -2.0, 2.0);
         assert_eq!(opcount(&prog, "SegReduce"), 2);
-        for t in &prog.seg_tables {
+        for t in &prog.tables.seg_tables {
             assert_eq!(
                 t.rows,
                 vec![0, (n - 1) as u32],
@@ -152,8 +152,8 @@ fn a_many_to_many_data_column_join_folds_in_the_interpreters_order() {
     let matches = (0..nl)
         .map(|a| (0..nr).filter(|&b| kl[a] == kr[b]).count())
         .sum::<usize>();
-    assert_eq!(prog.seg_tables.len(), 1);
-    assert_eq!(prog.seg_tables[0].rows, vec![0, matches as u32]);
+    assert_eq!(prog.tables.seg_tables.len(), 1);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, matches as u32]);
 }
 
 /// A gate with one side an OUTPUT index: each output cell's run lists the
@@ -205,7 +205,7 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
     for c in 1..=ncell {
         rows.push(rows.last().unwrap() + per_cell(c as f64));
     }
-    assert_eq!(prog.seg_tables[0].rows, rows);
+    assert_eq!(prog.tables.seg_tables[0].rows, rows);
 }
 
 /// A ragged contraction whose body gathers a 2-D STATE through a column of
@@ -255,11 +255,12 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
     });
     let prog = ab_check(doc, -2.0, 2.0);
     assert_eq!(opcount(&prog, "SegReduce"), 1);
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 2, 5, 6]);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 2, 5, 6]);
     // The gather of `u` sees one ghost: row 2's member 5 lies past node 4.
     // A column-major program stores `u`'s box axis-reversed (`layout`).
     let u_box: [usize; 2] = if prog.col_major { [2, 4] } else { [4, 2] };
     let ghosts: usize = prog
+        .tables
         .gather_tables
         .iter()
         .filter(|t| t.src_shape[..] == u_box)
@@ -505,16 +506,23 @@ fn star_join_doc(
 /// constant payloads, its gather position tables, its segment tables and its
 /// slab.
 fn materialized_elems(prog: &TapeProgram) -> usize {
-    prog.const_data
+    prog.tables
+        .const_data
         .iter()
         .map(|c| c.values.len())
         .sum::<usize>()
         + prog
+            .tables
             .gather_tables
             .iter()
             .map(|g| g.pos.len())
             .sum::<usize>()
-        + prog.seg_tables.iter().map(|s| s.rows.len()).sum::<usize>()
+        + prog
+            .tables
+            .seg_tables
+            .iter()
+            .map(|s| s.rows.len())
+            .sum::<usize>()
         + prog.slab.total_elems
 }
 
@@ -541,7 +549,10 @@ fn a_join_over_the_tuple_list_budget_folds_and_stops_growing_with_its_pairs() {
             1,
             "n_key = {n_key}: under budget"
         );
-        assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+        assert_eq!(
+            prog.tables.seg_tables[0].rows.last().copied(),
+            Some(tuples as u32)
+        );
         whole.push(materialized_elems(&prog));
 
         // A budget of two cells' runs (chunks that split the free axis
@@ -557,7 +568,7 @@ fn a_join_over_the_tuple_list_budget_folds_and_stops_growing_with_its_pairs() {
                 0,
                 "n_key = {n_key}, budget {b}"
             );
-            assert!(prog.gather_tables.is_empty() && prog.seg_tables.is_empty());
+            assert!(prog.tables.gather_tables.is_empty() && prog.tables.seg_tables.is_empty());
             sizes.push(materialized_elems(&prog));
         }
         assert_eq!(sizes[0], sizes[1]);
@@ -653,7 +664,7 @@ fn a_rank_zero_join_over_the_tuple_list_budget_folds_in_windows() {
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
         assert_eq!(opcount(&prog, "SegReduce"), 0, "budget {budget}");
-        assert!(prog.seg_tables.is_empty(), "budget {budget}");
+        assert!(prog.tables.seg_tables.is_empty(), "budget {budget}");
     }
 }
 
@@ -753,6 +764,7 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
 /// program holds: the largest `ConstArray` payload over its output box.
 fn folded_payload(prog: &TapeProgram, n_cells: usize) -> Vec<u64> {
     let mut found: Vec<&ConstArrayData> = prog
+        .tables
         .const_data
         .iter()
         .filter(|c| c.values.len() == n_cells)
@@ -779,7 +791,10 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
         1,
         "under budget, the whole list"
     );
-    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    assert_eq!(
+        prog.tables.seg_tables[0].rows.last().copied(),
+        Some(tuples as u32)
+    );
     let run = n_i / n_v * n_s; // one output cell's tuples
     let mut payloads = Vec::new();
     take_chunk_inputs_held();
@@ -790,7 +805,7 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
         assert_eq!(opcount(&prog, "SegReduce"), 0, "budget {budget}: folded");
-        assert!(prog.gather_tables.is_empty(), "budget {budget}");
+        assert!(prog.tables.gather_tables.is_empty(), "budget {budget}");
         payloads.push(folded_payload(&prog, n_g * n_v * n_h));
         // No chunk's program holds the large input: each gather of it is
         // resolved at build, and only the gathered values are stored.
@@ -904,6 +919,7 @@ fn assert_unmatched_rows_keep_the_identity(
     budget: usize,
 ) {
     let found: Vec<&ConstArrayData> = prog
+        .tables
         .const_data
         .iter()
         .filter(|c| c.values.len() == n_out * n_free)
@@ -948,7 +964,10 @@ fn a_fold_with_empty_output_cells_keeps_them_at_the_identity() {
     let (prog, (_, chunks, _)) = build_recording(&doc, usize::MAX);
     assert_eq!(opcount(&prog, "SegReduce"), 1, "under budget");
     assert!(chunks.is_empty());
-    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    assert_eq!(
+        prog.tables.seg_tables[0].rows.last().copied(),
+        Some(tuples as u32)
+    );
     for budget in [5 * run + 7, 2 * run, run + 1, run, run - 1, 7, 1] {
         let prev = set_tuple_list_budget(budget);
         ab_check(doc.clone(), -2.0, 2.0);
@@ -1075,7 +1094,7 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     let before = declines();
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     assert_eq!(declines(), before, "under the floor nothing is declined");
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 20]);
     let prev = crate::broad_phase::set_gate_plan(4, 0);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     // One tape build on its own, so no interpreter evaluation is counted.
@@ -1087,7 +1106,7 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     assert!(built.0.is_ok());
     assert_eq!(declined, 1, "the constant-key gate was built");
     assert_eq!(
-        prog.seg_tables[0].rows,
+        prog.tables.seg_tables[0].rows,
         vec![0, 20],
         "the selective gate still drives"
     );
@@ -1144,7 +1163,7 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
     let before = declines();
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     assert_eq!(declines(), before, "under the floor nothing is declined");
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 20]);
     let prev = crate::broad_phase::set_gate_plan(4, 0);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     // One tape build on its own, so no interpreter evaluation is counted.
@@ -1156,7 +1175,7 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
     assert!(built.0.is_ok());
     assert_eq!(declined, 0, "a merged clause is not priced on its own");
     assert_eq!(
-        prog.seg_tables[0].rows,
+        prog.tables.seg_tables[0].rows,
         vec![0, 20],
         "the composite gate drives"
     );

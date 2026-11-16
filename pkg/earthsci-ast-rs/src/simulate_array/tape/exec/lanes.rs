@@ -22,7 +22,7 @@ use super::lane_fold::{
     B_DY, B_PARAM, B_REG, B_SPLAT, B_STATE, LOp, LaneCode, N_BASES, R_OTHER, ROp, RTerm, SSTRIDE,
     STRIP, strip_fold,
 };
-use super::resolve::resolve_scalar;
+use super::resolve::{Slab, resolve_scalar};
 use super::*;
 use crate::simulate_array::tape::fuse::micro_out;
 
@@ -33,9 +33,6 @@ pub(super) const LCHUNK: usize = 256;
 /// The per-executor buffers of the lane programs, sized for the largest
 /// program so a call never allocates.
 pub(super) struct LaneScratch {
-    /// Per lane program, its folded form (`None` for a one-lane block or a
-    /// program too large to decode).
-    codes: Vec<Option<LaneCode>>,
     /// The calling thread's register file.
     own: LaneWorker,
     svals: Vec<f64>,
@@ -80,19 +77,11 @@ impl LaneWorker {
 
 impl LaneScratch {
     pub(super) fn for_program(prog: &TapeProgram) -> Self {
-        let codes: Vec<Option<LaneCode>> = prog
-            .lanes
-            .iter()
-            .map(|ls| {
-                (ls.lanes > 1 || !ls.inputs.is_empty())
-                    .then(|| super::lane_fold::decode(ls))
-                    .flatten()
-            })
-            .collect();
+        let codes = &prog.prepared().lane_codes;
         let regs = prog
             .lanes
             .iter()
-            .zip(&codes)
+            .zip(codes)
             .map(|(ls, c)| {
                 let chunked = (ls.n_regs as usize + ls.inputs.len()) * LCHUNK;
                 chunked.max(c.as_ref().map_or(0, |c| c.strips.reg_elems))
@@ -108,7 +97,7 @@ impl LaneScratch {
         let splats = prog
             .lanes
             .iter()
-            .zip(&codes)
+            .zip(codes)
             .map(|(ls, c)| match c {
                 Some(_) => (
                     vec![0.0; ls.scalars.len() * STRIP],
@@ -121,7 +110,6 @@ impl LaneScratch {
         let max_sops = codes.iter().flatten().map(|c| c.strips.sops.len()).max();
         let (max_terms, max_sops) = (max_terms.unwrap_or(0), max_sops.unwrap_or(0));
         LaneScratch {
-            codes,
             own: LaneWorker::new(vec![0.0; regs], max_terms, max_sops),
             svals: Vec::with_capacity(svals),
             splats,
@@ -143,20 +131,15 @@ pub(super) unsafe fn exec_lanes(spec: usize, cx: &Cx, scratch: &mut LaneScratch,
     #[cfg(target_arch = "wasm32")]
     let _ = ways;
     let Cx {
-        env,
-        slab_ptr,
-        slot_off,
-        simd,
-        ..
+        env, slab, simd, ..
     } = *cx;
     let ls = &env.prog.lanes[spec];
     if ls.lanes == 1 && ls.inputs.is_empty() {
         let dy = unsafe { std::slice::from_raw_parts_mut(cx.dy, cx.dy_len) };
-        unsafe { exec_one_lane(ls, env, slab_ptr, slot_off, scratch, dy) };
+        unsafe { exec_one_lane(ls, env, slab, scratch, dy) };
         return;
     }
     let LaneScratch {
-        codes,
         own,
         svals,
         splats,
@@ -169,10 +152,12 @@ pub(super) unsafe fn exec_lanes(spec: usize, cx: &Cx, scratch: &mut LaneScratch,
     let _ = (max_terms, max_sops);
     svals.clear();
     for op in &ls.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
+        svals.push(resolve_scalar(op, env, slab));
     }
     // The folds are the `f64` kernels; Float32 runs the micro-ops.
-    let code = codes[spec].as_ref().filter(|_| !crate::precision::is_f32());
+    let code = env.prep.lane_codes[spec]
+        .as_ref()
+        .filter(|_| !crate::precision::is_f32());
     let (splat, filled) = &mut splats[spec];
     // Compared by bits: a scalar going from 0.0 to -0.0 must be refilled.
     let same = filled.len() == svals.len()
@@ -201,8 +186,7 @@ pub(super) unsafe fn exec_lanes(spec: usize, cx: &Cx, scratch: &mut LaneScratch,
     let src = Sources {
         state: env.state,
         params: env.params,
-        slab: slab_ptr,
-        slot_off,
+        slab,
     };
     let out = Out {
         ptr: cx.dy,
@@ -332,8 +316,7 @@ unsafe fn run_lanes(
 pub(super) unsafe fn exec_one_lane(
     ls: &LaneSpec,
     env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
+    slab: Slab,
     scratch: &mut LaneScratch,
     dy: &mut [f64],
 ) {
@@ -341,22 +324,19 @@ pub(super) unsafe fn exec_one_lane(
     let LaneScratch { own, svals, .. } = scratch;
     svals.clear();
     for op in &ls.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
+        svals.push(resolve_scalar(op, env, slab));
     }
-    exec_block(ls, svals, &mut own.regs, slab_ptr, slot_off, dy);
+    // SAFETY: the caller's contract (no other thread touches the slots).
+    unsafe { exec_block(ls, svals, &mut own.regs, slab, dy) };
 }
 
 /// A one-lane program: the micro-ops one after another over scalar
 /// registers, each through the same kernel definitions the chunk loops
 /// expand (`dispatch_bin_kernel` / `dispatch_un_kernel`).
-fn exec_block(
-    ls: &LaneSpec,
-    svals: &[f64],
-    regs: &mut [f64],
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
-    dy: &mut [f64],
-) {
+///
+/// # Safety
+/// No other thread may be touching the slots it writes.
+unsafe fn exec_block(ls: &LaneSpec, svals: &[f64], regs: &mut [f64], slab: Slab, dy: &mut [f64]) {
     let regs = &mut regs[..ls.n_regs as usize];
     let get = |m: &MRef, regs: &[f64]| match m {
         MRef::Reg(r) => regs[*r as usize],
@@ -398,7 +378,7 @@ fn exec_block(
         let v = get(&w.src, regs);
         match &w.dst {
             LaneDst::Dy(pos) => dy[pos.at(0) as usize] = v,
-            LaneDst::Slot(s) => unsafe { *slab_ptr.add(slot_off[*s as usize]) = v },
+            LaneDst::Slot(s) => unsafe { *slab.slot(*s) = v },
         }
     }
 }
@@ -407,8 +387,7 @@ fn exec_block(
 struct Sources<'a> {
     state: &'a [f64],
     params: &'a [f64],
-    slab: *const f64,
-    slot_off: &'a [usize],
+    slab: Slab<'a>,
 }
 
 impl Sources<'_> {
@@ -459,7 +438,8 @@ impl Sources<'_> {
                     *x = match kind {
                         LaneKind::State => self.state[i],
                         LaneKind::Param => self.params[i],
-                        LaneKind::Slot => unsafe { *self.slab.add(self.slot_off[i]) },
+                        // SAFETY: a lane input is not written while its program runs.
+                        LaneKind::Slot => unsafe { self.slab.read(i as SlotId) },
                     };
                 }
             }

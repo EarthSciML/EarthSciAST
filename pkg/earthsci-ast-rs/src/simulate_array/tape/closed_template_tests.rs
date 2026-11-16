@@ -384,7 +384,10 @@ fn widest(prog: &super::ir::TapeProgram) -> usize {
         .map(|ins| match ins {
             Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
             _ => ins.out().map_or(0, |o| {
-                prog.slots[o as usize].shape.iter().product::<usize>()
+                prog.tables.slots[o as usize]
+                    .shape
+                    .iter()
+                    .product::<usize>()
             }),
         })
         .max()
@@ -872,7 +875,7 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
 #[test]
 fn repeated_build_time_instructions_are_computed_once() {
     let (prog, _) = oracle_ab(overlap_doc(false));
-    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
     let guarded = prog.guarded_positions();
     let mut seen = HashSet::new();
     for pc in 0..prog.n_const as usize {
@@ -891,12 +894,12 @@ fn repeated_build_time_instructions_are_computed_once() {
 #[test]
 fn different_build_time_instructions_stay_apart() {
     let (prog, _) = oracle_ab(scalar_select_doc(op("+", vec![json!("x"), json!(1)])));
-    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
-    let out = (0..prog.slots.len() as u32)
-        .find(|&s| prog.slots[s as usize].scalar)
+    let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
+    let out = (0..prog.tables.slots.len() as u32)
+        .find(|&s| prog.tables.slots[s as usize].scalar)
         .expect("a scalar slot");
-    let other = (out + 1..prog.slots.len() as u32)
-        .find(|&s| prog.slots[s as usize].scalar)
+    let other = (out + 1..prog.tables.slots.len() as u32)
+        .find(|&s| prog.tables.slots[s as usize].scalar)
         .expect("another scalar slot");
     use super::ir::Operand;
     use crate::simulate_array::BinCode;

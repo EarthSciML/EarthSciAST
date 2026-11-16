@@ -106,9 +106,9 @@ fn the_regrid_apply_is_one_split_chain() {
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
     let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
-    assert_eq!(exec.seg_chains.len(), 1, "one chain");
-    let ch = &exec.seg_chains[0];
+    let chains = &prog.prepared().seg_chains;
+    assert_eq!(chains.len(), 1, "one chain");
+    let ch = &chains[0];
     assert!(ch.fused.is_some(), "the target cells' fused group joins it");
     assert!(ch.start < ch.seg, "the pair gather and product join it");
 
@@ -155,9 +155,10 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
     let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
     assert!(
-        exec.seg_chains[0].compact.is_some_and(|p| p.w.is_some()),
+        prog.prepared().seg_chains[0]
+            .compact
+            .is_some_and(|p| p.w.is_some()),
         "the regrid chain compacts its pairs and weights"
     );
 
@@ -217,9 +218,9 @@ fn the_ragged_chain_runs_its_tuples_through_block_buffers() {
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
     let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
-    assert_eq!(exec.seg_chains.len(), 1, "one chain");
-    let ch = &exec.seg_chains[0];
+    let chains = &prog.prepared().seg_chains;
+    assert_eq!(chains.len(), 1, "one chain");
+    let ch = &chains[0];
     assert!(ch.private, "nothing else reads the chain's tuples");
     assert!(
         ch.seg - ch.start >= 3,

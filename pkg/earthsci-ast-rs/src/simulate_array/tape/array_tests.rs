@@ -40,11 +40,11 @@ fn const_gather_out_of_range_faults_at_the_oracles_first_cell() {
     ));
     let prog = ab(&compiled, &no_params());
     assert_eq!(opcount(&prog, "Fault"), 1, "one fault per rule");
-    assert_eq!(prog.faults.len(), 1);
+    assert_eq!(prog.tables.faults.len(), 1);
     assert!(
-        prog.faults[0].contains("index 0 out of range 1..4 in dim 0"),
+        prog.tables.faults[0].contains("index 0 out of range 1..4 in dim 0"),
         "{}",
-        prog.faults[0]
+        prog.tables.faults[0]
     );
 }
 
@@ -191,7 +191,7 @@ fn index_on_a_scalar_parameter_faults() {
     ));
     let prog = ab(&compiled, &no_params());
     assert_eq!(opcount(&prog, "Fault"), 1);
-    assert!(prog.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'rate'"));
+    assert!(prog.tables.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'rate'"));
 }
 
 // ---------------------------------------------------------------------------

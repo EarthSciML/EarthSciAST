@@ -353,8 +353,8 @@ const HOIST_MIN_ELEMENTS: usize = 4096;
 /// branch, by an instruction of a pure kind whose every input is a literal or
 /// another constant slot. No state, parameter, time or forcing reaches one.
 fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
-    let n = prog.slots.len();
-    let tables = prog.tables();
+    let n = prog.tables.slots.len();
+    let tables = prog.slot_tables();
     let mut defs = vec![0u32; n];
     for ins in &prog.instrs {
         ins.for_each_def(&tables, |s| defs[s as usize] += 1);
@@ -399,7 +399,7 @@ fn constant_slots(prog: &TapeProgram) -> Vec<bool> {
                 Instr::Count { axis, x, .. } => src(axis) && op(x),
                 Instr::IndexGather { src: s, idx, .. } => src(s) && op(idx),
                 Instr::DataGather { src: s, spec, .. } => {
-                    src(s) && prog.data_gathers[*spec as usize].subs.iter().all(op)
+                    src(s) && prog.tables.data_gathers[*spec as usize].subs.iter().all(op)
                 }
                 Instr::SegReduce { src: s, mask, .. } => {
                     k[*s as usize] && mask.is_none_or(|m| k[m as usize])
@@ -453,14 +453,17 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
             Instr::DataGather { faults: true, .. } => faulting.push(pc),
             _ => {
                 let o = ins.out().expect("a constant instruction defines a slot");
-                work += prog.slots[o as usize].shape.iter().product::<usize>();
+                work += prog.tables.slots[o as usize]
+                    .shape
+                    .iter()
+                    .product::<usize>();
             }
         }
     }
     if faulting.is_empty() && work < HOIST_MIN_ELEMENTS {
         return Ok(None);
     }
-    let tables = prog.tables();
+    let tables = prog.slot_tables();
     let mut frontier: Vec<SlotId> = Vec::new();
     for ins in &prog.instrs {
         if !is_const(ins) {
@@ -516,7 +519,7 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
             unreachable!("collected as a DataGather");
         };
         let dims = em.out_dims(*out);
-        for sub in &prog.data_gathers[*spec as usize].subs {
+        for sub in &prog.tables.data_gathers[*spec as usize].subs {
             let v = em.operand(sub)?;
             let v = em.to_shape(&v, &dims)?;
             flat(&em, &v)?;
@@ -572,7 +575,7 @@ fn hoist(prog: &TapeProgram, compiled: &ArrayCompiled) -> R<Option<Hoisted>> {
         let Instr::DataGather { spec, .. } = &prog.instrs[pc] else {
             unreachable!("collected as a DataGather");
         };
-        let spec = &prog.data_gathers[*spec as usize];
+        let spec = &prog.tables.data_gathers[*spec as usize];
         let mut subs: Vec<&[f64]> = Vec::with_capacity(spec.subs.len());
         for _ in &spec.subs {
             subs.push(&host[at..at + lens[li]]);
@@ -717,7 +720,7 @@ impl<'a> Emitter<'a> {
             u,
             p,
             t,
-            slots: vec![None; prog.slots.len()],
+            slots: vec![None; prog.tables.slots.len()],
             state: Vec::new(),
             blocks: vec![None; var_order.len()],
             var_order,
@@ -727,7 +730,7 @@ impl<'a> Emitter<'a> {
             forcing_offsets,
             forcing_layout,
             forcing_len,
-            hoisted: vec![false; prog.slots.len()],
+            hoisted: vec![false; prog.tables.slots.len()],
         };
         em.state = em.build_state_views()?;
         Ok(em)
@@ -876,7 +879,7 @@ impl<'a> Emitter<'a> {
 
     /// The output box of a slot, as a `dims` slice (empty for a scalar).
     fn out_dims(&self, slot: SlotId) -> Vec<usize> {
-        let d = &self.prog.slots[slot as usize];
+        let d = &self.prog.tables.slots[slot as usize];
         if d.scalar {
             Vec::new()
         } else {
@@ -1251,7 +1254,7 @@ impl<'a> Emitter<'a> {
             }
             Instr::Gather { src, plan, out } => {
                 let s = self.src(src)?;
-                let plan = &self.prog.plans[*plan as usize];
+                let plan = &self.prog.tables.plans[*plan as usize];
                 let have = self.dims(&s)?;
                 if have != plan.src_shape.as_slice() {
                     return Err(self.err(format!(
@@ -1315,7 +1318,7 @@ impl<'a> Emitter<'a> {
                 region,
                 out,
             } => {
-                let spec = &self.prog.regions[*region as usize];
+                let spec = &self.prog.tables.regions[*region as usize];
                 let basev = self.slots[*base as usize]
                     .clone()
                     .ok_or_else(|| self.err("Region base slot is undefined"))?;
@@ -1335,8 +1338,8 @@ impl<'a> Emitter<'a> {
             Instr::Assemble { table, out } => {
                 let dims = self.out_dims(*out);
                 let mut cur = self.zeros(&dims)?;
-                for (src, region) in &self.prog.assemblies[*table as usize].parts {
-                    let spec = &self.prog.regions[*region as usize];
+                for (src, region) in &self.prog.tables.assemblies[*table as usize].parts {
+                    let spec = &self.prog.tables.regions[*region as usize];
                     let sv = self.operand(src)?;
                     let upd = self.to_shape(&sv, &spec.shape)?;
                     let starts: Vec<XlaOp> = spec
@@ -1356,11 +1359,11 @@ impl<'a> Emitter<'a> {
             // is `du`, and every in-program read is by slot.
             Instr::Export { .. } => {}
             Instr::DyWrite { write } => {
-                let w = self.prog.dy_writes[*write as usize].clone();
+                let w = self.prog.tables.dy_writes[*write as usize].clone();
                 self.emit_dy_write(&w)?;
             }
             Instr::ConstArray { data, out } => {
-                let payload = &self.prog.const_data[*data as usize];
+                let payload = &self.prog.tables.const_data[*data as usize];
                 let dims = self.out_dims(*out);
                 if payload.shape.as_slice() != dims.as_slice() {
                     return Err(self.err(format!(
@@ -1465,7 +1468,7 @@ impl<'a> Emitter<'a> {
             }
             Instr::TableGather { src, table, out } => {
                 let s = self.src(src)?;
-                let tbl = &self.prog.gather_tables[*table as usize];
+                let tbl = &self.prog.tables.gather_tables[*table as usize];
                 let have = self.dims(&s)?;
                 if have != tbl.src_shape.as_slice() {
                     return Err(self.err(format!(
@@ -1489,7 +1492,7 @@ impl<'a> Emitter<'a> {
                     Some(m) => Some(self.operand(&Operand::Slot(*m))?),
                     None => None,
                 };
-                let rows = &self.prog.seg_tables[*table as usize].rows;
+                let rows = &self.prog.tables.seg_tables[*table as usize].rows;
                 let v = self.emit_seg_reduce(*op, *init, &terms, mask.as_ref(), rows)?;
                 let want = self.out_dims(*out);
                 let d: Vec<i64> = want.iter().map(|&x| x as i64).collect();
@@ -1583,7 +1586,7 @@ impl<'a> Emitter<'a> {
                 return Err(self.err(format!(
                     "the program raises a fail-closed evaluation fault, which a compiled \
                      program cannot report: {}",
-                    self.prog.faults[*fault as usize]
+                    self.prog.tables.faults[*fault as usize]
                 )));
             }
             Instr::FaultScan { .. } => {
@@ -1741,7 +1744,7 @@ impl<'a> Emitter<'a> {
     /// row-major source offset is built in `s64`, and one `take` over the
     /// flattened source reads them.
     fn emit_index_gather(&self, src: &SrcRef, idx: &Operand, spec: u32) -> R<XlaOp> {
-        let spec = &self.prog.index_gathers[spec as usize];
+        let spec = &self.prog.tables.index_gathers[spec as usize];
         let s = self.src(src)?;
         let have = self.dims(&s)?;
         if have != spec.src_shape.as_slice() {
@@ -1828,7 +1831,7 @@ impl<'a> Emitter<'a> {
     /// step is integer selection, so the element read is the oracle's.
     fn emit_data_gather(&self, src: &SrcRef, spec: u32, out: SlotId) -> R<XlaOp> {
         use crate::value_invention::BoundaryKind;
-        let spec = &self.prog.data_gathers[spec as usize];
+        let spec = &self.prog.tables.data_gathers[spec as usize];
         let s = self.src(src)?;
         let have = self.dims(&s)?;
         if have != spec.src_shape.as_slice() {
