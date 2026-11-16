@@ -962,7 +962,7 @@ impl TapeBuilder<'_> {
                         .collect();
                     c.borrow_mut().push(held);
                 });
-                let a = standalone::run_standalone_export(prog, name, &[], &[]).ok()?;
+                let a = standalone::run_standalone_export(prog, name, &[], &[], 0.0).ok()?;
                 Some(a.iter().copied().collect())
             },
         )

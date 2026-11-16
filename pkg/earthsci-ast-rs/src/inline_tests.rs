@@ -166,7 +166,7 @@ fn lay_under(
     Some(out)
 }
 
-use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
+use crate::simulate_array::{BuildEval, BuildInspection, Value, eval_buildtime_field_routed};
 use crate::types::{
     AssertionReference, EsmFile, Expr, FromFileReference, HasSubsystems, IndexSet, InlineValue,
     Model, Tolerance,
@@ -229,7 +229,7 @@ pub struct AssertionResult {
 ///
 /// This is the public entry to the same build-time machinery the simulator
 /// uses to seed coordinate-expression `ic` fields
-/// ([`crate::simulate_array::eval_buildtime_field`]).
+/// ([`crate::simulate_array::eval_buildtime_field_routed`]).
 ///
 /// STATE references are not in scope. Model PARAMETERS (load-time constants)
 /// ARE: pass their resolved values as `params` (name → value, e.g. a build's
@@ -249,7 +249,16 @@ pub fn evaluate_cellwise(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
 ) -> Result<Vec<f64>, String> {
-    let value = eval_buildtime_field(expr, index_sets, params).map_err(|e| e.to_string())?;
+    let value = eval_buildtime_field_routed(
+        None,
+        expr,
+        index_sets,
+        params,
+        &HashMap::new(),
+        BuildEval::PerCell,
+    )
+    .map_err(|e| e.to_string())?
+    .into_value();
     match value {
         Value::Scalar(s) => Ok(vec![s; cells.len()]),
         Value::Array(arr) => {

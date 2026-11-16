@@ -3554,19 +3554,13 @@ fn check_state_slots_covered(
     }
 }
 
-/// Evaluate a state-free build-time expression (grid geometry, §11.4.1
-/// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
-/// official array evaluator.
-///
-/// **The reference evaluator, under every compiler.** No compiler tier has a
-/// form for initial-state assembly, so a field `ic` is evaluated here whatever
-/// the Problem names. What keeps that honest is that construction EXERCISES
-/// every such evaluation ([`ArrayCompiled::field_ic_records`]): one the
-/// whole-array overlay serves is reported as vectorized, and one that walks a
-/// `faq` per cell is refused by a strict compiler, naming the target
-/// (esm-libraries-spec §2.5.10). An inline test's analytic `reference` also
-/// comes here, and stays here under every compiler: it is the test's oracle,
-/// not the model (`crate::inline_tests::evaluate_cellwise`).
+/// Evaluate a state-free build-time expression (grid geometry, strip and
+/// expose's starting values, a value-invention factor) over whole arrays
+/// where it can be: the reference evaluator, and a standalone tape for a
+/// `faq` it would walk per cell
+/// ([`super::eval::StandaloneScope::eval_routed`], non-strict). A field `ic`,
+/// an initialization equation and an inline test's analytic `reference` take
+/// [`super::eval::eval_buildtime_field_routed`] with their own route.
 /// Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
@@ -3597,15 +3591,15 @@ pub(crate) fn eval_buildtime_field_in_scope(
     params: &HashMap<String, f64>,
     scope: &HashMap<String, ArrayD<f64>>,
 ) -> Result<Value, CompileError> {
-    let mut resolved = expr.clone();
-    crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
-    let param_names: Vec<String> = params.keys().cloned().collect();
-    let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
-    // The independent variable, where the scope binds it: the start of the
-    // run for an `ic` right-hand side (esm-spec §11.4.2). Nothing else binds
-    // it, and the evaluator reads `t` as its time argument, not as a name.
-    let t = params.get("t").copied().unwrap_or(0.0);
-    eval_expression(&resolved, scope, &param_vec, &param_names, t)
+    super::eval::eval_buildtime_field_routed(
+        None,
+        expr,
+        index_sets,
+        params,
+        scope,
+        super::eval::BuildEval::Fast { strict: false },
+    )
+    .map(super::eval::Routed::into_value)
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -3621,7 +3615,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
 ///    `faq`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
 ///    is a grid-geometry aggregate expanded from a §9.7 template import),
 ///    evaluated through the official array evaluator
-///    ([`eval_buildtime_field_in_scope`]) in a state-free context, with the
+///    ([`super::eval::eval_buildtime_field_routed`]) in a state-free context, with the
 ///    build-time array scope (`forcing`) bound by name, and indexed at this
 ///    cell. A per-cell `faq` over the target's index sets, the form flatten
 ///    writes for an elementwise template application (esm-spec §9.6.11), is
@@ -3637,11 +3631,16 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
+    // How a case-(3) expression is evaluated.
+    mode: super::eval::BuildEval,
     // Per-target memo of the case-(2) constant and the case-(3) whole-field
     // evaluation (both cell-independent), so the expression is evaluated once
     // per target rather than once per cell. `None` on entry for the first cell;
     // filled on first use.
     cached_field: &mut Option<Value>,
+    // The evaluator that served the case-(3) evaluation, or the tape's
+    // refusal under a strict `mode` (the cell's value is then meaningless).
+    route: &mut Option<Result<super::eval::BuildRoute, String>>,
 ) -> Result<f64, SimulateError> {
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
@@ -3691,8 +3690,18 @@ pub(super) fn resolve_field_ic_cell(
             // On a `CompileError` the memo stays empty and we fall through to
             // the case-(4) hard error below (byte-identical to the old
             // `match … { _ => {} }` arm, which likewise dropped the error).
-            if let Ok(v) = eval_buildtime_field_in_scope(rhs, index_sets, params, forcing) {
-                *cached_field = Some(v);
+            match super::eval::eval_buildtime_field_routed(
+                None, rhs, index_sets, params, forcing, mode,
+            ) {
+                Ok(super::eval::Routed::Value(v, r)) => {
+                    *cached_field = Some(v);
+                    *route = Some(Ok(r));
+                }
+                Ok(super::eval::Routed::Refused(why)) => {
+                    *route = Some(Err(why));
+                    return Ok(f64::NAN);
+                }
+                Err(_) => {}
             }
         }
         match cached_field.as_ref() {

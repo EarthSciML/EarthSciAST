@@ -2,7 +2,7 @@
 //! expression node (arithmetic, transcendentals, array ops, `faq`
 //! contractions with ragged/derived bounds) plus the
 //! standalone [`eval_expression`] entry point. This path is the correctness
-//! reference the vectorized overlay is verified against.
+//! reference the tape is verified against.
 
 use super::gate_walk::{CellBufs, GatePlan, TupleSink};
 use super::*;
@@ -1288,7 +1288,7 @@ pub(crate) fn unary_kernel_f32_of(op: UnCode) -> fn(f64) -> f64 {
 
 #[cfg(test)]
 mod kernel_equivalence_tests {
-    //! The whole-array overlay resolves an operator name to a kernel ONCE per
+    //! The tape resolves an operator name to a kernel ONCE per
     //! AST node ([`binary_kernel`]/[`unary_kernel`]) where the per-cell oracle
     //! re-matches it per element ([`apply_binary`]/[`apply_unary`]). The two
     //! paths must stay bit-identical, so pin them here rather than trusting two
@@ -2339,13 +2339,6 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
     Value::Scalar(scalar.unwrap_or(f64::NAN))
 }
 
-/// Whether this `const` node's payload is an array: the literals an `index`
-/// reads whole as its gather source. A scalar payload takes the untouched path.
-#[inline]
-pub(super) fn is_inline_const_array(node: &ExpressionNode) -> bool {
-    node.value.as_ref().is_some_and(crate::ConstValue::is_array)
-}
-
 /// Evaluate a standalone expression against a set of named array inputs, reusing
 /// the array evaluator — in particular the M1 `faq` machinery in
 /// [`eval_faq`]: supply the arrays the expression reads in `inputs`, with
@@ -2379,7 +2372,7 @@ pub fn eval_expression(
         derived_extents: crate::faq::empty_derived_extents(),
         const_arrays: ConstArrayScope::empty(),
     }
-    .eval(expr)
+    .eval_fast(expr)
 }
 
 /// [`eval_expression`] with the build-time **value-invention derived extents**
@@ -2433,7 +2426,7 @@ pub fn eval_expression_with_extents(
         derived_extents,
         const_arrays: ConstArrayScope::empty(),
     }
-    .eval(expr)
+    .eval_fast(expr)
 }
 
 /// [`eval_expression_with_extents`] with an explicit CONST-ARRAY registry
@@ -2473,7 +2466,42 @@ pub fn eval_expression_with_extents_and_consts(
         derived_extents,
         const_arrays,
     }
-    .eval(expr)
+    .eval_fast(expr)
+}
+
+/// A state-free build-time expression (a field `ic`'s right-hand side, a
+/// definition of its scope, an initialization equation) evaluated by the
+/// route `mode` names, over the build-time ARRAY scope `scope` bound by name
+/// (where state arrays would bind) and the parameters `params` (name →
+/// value). Ranges are resolved against `index_sets` first. `name` is the
+/// variable the expression defines, if any.
+///
+/// The independent variable is `params["t"]` where the scope binds it — the
+/// start of the run for an `ic` right-hand side (esm-spec §11.4.2) — and `0`
+/// otherwise.
+pub(crate) fn eval_buildtime_field_routed(
+    name: Option<&str>,
+    expr: &Expr,
+    index_sets: &HashMap<String, crate::types::IndexSet>,
+    params: &HashMap<String, f64>,
+    scope: &HashMap<String, ArrayD<f64>>,
+    mode: BuildEval,
+) -> Result<Routed, CompileError> {
+    let mut resolved = expr.clone();
+    crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
+    let param_names: Vec<String> = params.keys().cloned().collect();
+    let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
+    let t = params.get("t").copied().unwrap_or(0.0);
+    let inputs: ArrMap = scope.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    StandaloneScope {
+        inputs: &inputs,
+        params: &param_vec,
+        param_names: &param_names,
+        t,
+        derived_extents: crate::faq::empty_derived_extents(),
+        const_arrays: ConstArrayScope::empty(),
+    }
+    .eval_routed(name.unwrap_or(STANDALONE_EXPRESSION), &resolved, None, mode)
 }
 
 /// The scope a standalone expression is evaluated in, outside any compiled
@@ -2534,6 +2562,92 @@ impl StandaloneScope<'_> {
                 None => Ok(v),
             }
         })
+    }
+
+    /// Evaluate `expr` (ranges resolved) over whole arrays where it can be:
+    /// [`Self::eval_routed`]'s non-strict [`BuildEval::Fast`] route, for an
+    /// expression that defines no variable.
+    pub(crate) fn eval_fast(&self, expr: &Expr) -> Result<Value, CompileError> {
+        self.eval_routed(
+            STANDALONE_EXPRESSION,
+            expr,
+            None,
+            BuildEval::Fast { strict: false },
+        )
+        .map(Routed::into_value)
+    }
+
+    /// Evaluate the build-time value `name := expr` (ranges resolved) by the
+    /// route `mode` names, and say which evaluator served it.
+    ///
+    /// Under [`BuildEval::Fast`] the reference evaluator is tried first with
+    /// a [`StopAtFirstCell`] armed: what it evaluates over whole arrays, with
+    /// no `faq` walked cell by cell, is its value. Once a walk would go cell
+    /// by cell the whole expression is lowered on a standalone tape instead
+    /// ([`eval_observed_taped`]), from the same inputs. A tape decline is a
+    /// refusal when `strict`, and otherwise the reference evaluator's full
+    /// per-cell walk. [`BuildEval::PerCell`] is the reference evaluator alone.
+    pub(crate) fn eval_routed(
+        &self,
+        name: &str,
+        expr: &Expr,
+        fill_shape: Option<&[usize]>,
+        mode: BuildEval,
+    ) -> Result<Routed, CompileError> {
+        let walked = |scope: &Self| {
+            let before = per_cell_walks();
+            let v = scope.eval(expr)?;
+            let route = if per_cell_walks() == before {
+                BuildRoute::Whole
+            } else {
+                BuildRoute::PerCell
+            };
+            Ok(Routed::Value(v, route))
+        };
+        let BuildEval::Fast { strict } = mode else {
+            return walked(self);
+        };
+        let stop = StopAtFirstCell::arm();
+        let v = self.eval(expr);
+        let refused = per_cell_walk_refused();
+        let stopped = stop.stopped();
+        drop(stop);
+        if !refused {
+            // A stopped walk here latched a document error in its first
+            // cell, which `v` reports.
+            return v.map(|v| {
+                let route = if stopped {
+                    BuildRoute::PerCell
+                } else {
+                    BuildRoute::Whole
+                };
+                Routed::Value(v, route)
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use super::tape::StandaloneError;
+            match eval_observed_taped(name, expr, self, fill_shape, false)
+                .expect("a non-recurrence always reaches the tape")
+            {
+                Ok(a) => Ok(Routed::Value(value_of_taped(a), BuildRoute::Tape)),
+                Err(StandaloneError::Fault(details)) => {
+                    Err(CompileError::InterpreterBuildError { details })
+                }
+                Err(StandaloneError::Declined(why)) if strict => Ok(Routed::Refused(why)),
+                Err(StandaloneError::Declined(_)) => walked(self),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (name, fill_shape);
+            if strict {
+                return Ok(Routed::Refused(
+                    "this build has no tape to lower it on".to_string(),
+                ));
+            }
+            walked(self)
+        }
     }
 
     /// Evaluate the observed `name := expr` in this scope if it is a CAUSAL
@@ -2606,10 +2720,80 @@ impl StandaloneScope<'_> {
     }
 }
 
+/// The name a standalone expression is lowered under on the tape: no
+/// document variable can spell it, so no input is mistaken for a self-read.
+const STANDALONE_EXPRESSION: &str = "\u{0}expression";
+
+/// How [`StandaloneScope::eval_routed`] evaluates a build-time value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildEval {
+    /// The reference evaluator, walking every `faq` cell by cell: what the
+    /// `interpreter` does, and an inline test's reference.
+    PerCell,
+    /// Whole arrays: the reference evaluator where it walks no cell, the tape
+    /// where it would. `strict` refuses what the tape declines rather than
+    /// walking it per cell.
+    Fast { strict: bool },
+}
+
+impl BuildEval {
+    /// The route a compiler takes: per cell under the `interpreter`, and
+    /// strict everywhere else.
+    pub(crate) fn of_compiler(interpreter: bool) -> BuildEval {
+        if interpreter {
+            BuildEval::PerCell
+        } else {
+            BuildEval::Fast { strict: true }
+        }
+    }
+}
+
+/// Which evaluator served a build-time value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildRoute {
+    /// The reference evaluator over whole arrays, no `faq` walked per cell.
+    Whole,
+    /// A standalone tape program.
+    Tape,
+    /// The reference evaluator, with a `faq` walked cell by cell.
+    PerCell,
+}
+
+/// What [`StandaloneScope::eval_routed`] produced.
+#[derive(Debug)]
+pub(crate) enum Routed {
+    /// The value, and the evaluator that served it.
+    Value(Value, BuildRoute),
+    /// Strict, and the tape declined what would have been walked per cell:
+    /// the tape's reason.
+    Refused(String),
+}
+
+impl Routed {
+    /// The value of a non-strict route, which refuses nothing.
+    pub(crate) fn into_value(self) -> Value {
+        match self {
+            Routed::Value(v, _) => v,
+            Routed::Refused(_) => unreachable!("a non-strict route refuses nothing"),
+        }
+    }
+}
+
+/// A standalone tape's value as the reference evaluator gives it: a 0-d array
+/// is a scalar.
+#[cfg(not(target_arch = "wasm32"))]
+fn value_of_taped(a: ArrayD<f64>) -> Value {
+    if a.ndim() == 0 {
+        Value::Scalar(a[IxDyn(&[])])
+    } else {
+        Value::Array(Box::new(a))
+    }
+}
+
 /// Evaluate the build-time observed `name := expr` on a standalone tape
 /// (`tape::eval_standalone_rule`) rather than through the reference
-/// evaluator: what a strict compiler does with an observed the whole-array
-/// overlay declines, in place of walking it per cell.
+/// evaluator: what [`StandaloneScope::eval_routed`] does with a value the
+/// reference evaluator would walk per cell.
 ///
 /// `expr` has its ranges resolved, as for
 /// [`StandaloneScope::eval`]. Every name in `scope.inputs`
@@ -2678,6 +2862,7 @@ pub(crate) fn eval_observed_taped(
         &seeded,
         scope.param_names,
         scope.params,
+        scope.t,
         scope.const_arrays,
         true,
     ))
@@ -4618,42 +4803,10 @@ pub(super) fn ragged_upper_bound(offsets: &str, of: &[String], ctx: &EvalCtx) ->
     arr.get(IxDyn(&idx)).map(|v| v.round() as i64).unwrap_or(0)
 }
 
-thread_local! {
-    /// Kernel-buffer pool for the vectorized overlay reached OUTSIDE the
-    /// compiled-rule driver: a standalone `faq` materialized by
-    /// [`eval_faq`], and an `AlgebraicRule::ArrayLoop` observed. Both used
-    /// to build a `Pool::default()` per call, so their pool was empty every
-    /// time and every kernel intermediate hit the allocator — the RHS-rule path
-    /// has recycled through [`RhsScratch`]'s pool since ess-mro, but the
-    /// observed path (where a stencil-heavy model does most of its work) never
-    /// did.
-    ///
-    /// Thread-local rather than a field on `EvalCtx`: the overlay takes the
-    /// pool by `&mut` while `EvalCtx` is borrowed shared, and the observed and
-    /// aggregate call sites construct their contexts independently.
-    static ARRAYOP_POOL: RefCell<Pool> = RefCell::new(Pool::default());
-}
-
-/// Run `f` with this thread's persistent kernel-buffer pool.
-///
-/// Re-entrancy is possible in principle — an outer aggregate whose vectorized
-/// attempt FAILED falls back to the per-cell oracle, which may evaluate an
-/// inner aggregate — but only after the outer borrow has been released, since
-/// the borrow spans just the overlay attempt. The `try_borrow_mut` fallback to
-/// a private pool makes that structural claim unnecessary: a nested use loses
-/// the recycling, never correctness, and never panics.
-pub(super) fn with_faq_pool<R>(f: impl FnOnce(&mut Pool) -> R) -> R {
-    ARRAYOP_POOL.with(|p| match p.try_borrow_mut() {
-        Ok(mut pool) => f(&mut pool),
-        Err(_) => f(&mut Pool::default()),
-    })
-}
-
 /// The evaluation parameters of a standalone `faq` node.
 ///
-/// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the
-/// vectorized overlay's nested-aggregate arm ([`eval_vec_nested_aggregate`])
-/// derive them from the same code. A divergence here (a different contracted-
+/// Extracted in ONE place so the per-cell oracle ([`eval_faq`]) and the tape
+/// lowering derive them from the same code. A divergence here (a different contracted-
 /// index order, a different `reduce` default) would silently make the fast path
 /// compute a *different* array while both look correct in isolation.
 pub(super) struct ArrayOpSpec<'n> {
@@ -4681,8 +4834,7 @@ impl ArrayOpSpec<'_> {
     /// at build time — an OVERLAP gate (§5.5.6) or a value-equality `on` gate
     /// (§5.5.8) — i.e. one the driver can act on?
     ///
-    /// The whole-array overlay and the tape lowering both consult this and
-    /// decline: they evaluate the FULL product as shifted whole-array slices,
+    /// The tape lowering consults this and declines: they evaluate the FULL product as shifted whole-array slices,
     /// which is bit-identical but reinstates exactly the `O(∏ranges)` cost the
     /// gate exists to remove.
     pub(super) fn has_drivable_overlap(&self) -> bool {
@@ -4814,14 +4966,6 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // the previous cell already summed. Recognized, it becomes one sweep with a
     // running accumulator — bit-identical, because both fold the window ascending
     // in the same association (see [`PrefixScan`]).
-    //
-    // Detected BEFORE the whole-array overlay is tried, because the two race and
-    // the scan must win: the overlay would evaluate a cumulative aggregate as an
-    // N-tuple fold of N-element arrays — correct, and bit-identical, but O(N²)
-    // where the scan is O(N). (A widening of the overlay's index coverage made it
-    // start accepting these, which regressed
-    // `forward_scan_work_grows_linearly_not_quadratically`.) A non-cumulative
-    // aggregate returns `None` here and goes to the overlay as before.
     let cells = FaqCells::new(
         idx_names,
         &ranges,
@@ -4833,107 +4977,7 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         None,
         &gates,
     );
-    let scan = cells.scan;
 
-    // ---- Vectorized fast path (whole-array) --------------------------------
-    // Evaluate the aggregate with the whole-array `eval_vec` overlay (off
-    // under the per-cell oracle), instead of walking the body once per cell:
-    //   * a pure MAP (out == ranges — e.g. a level-set Godunov `|∇φ|` stencil, a
-    //     pointwise behaviour-stack field),
-    //   * a static einsum CONTRACTION (`eval_vec_contracted` folds the window as
-    //     shifted whole-array slices — e.g. a conservative-regrid `sum_product`
-    //     over the source cells),
-    //   * a §5.3 `filter` (a per-cell fuel gate, a `overlap > 0` regrid sparsity),
-    //     carried by masking each term with the reduction identity.
-    // The kernels reuse the identical `apply_binary`/`apply_unary` kernels
-    // functions and ghost-0 convention, so the result is bit-identical to the
-    // per-cell oracle below; any op / ragged-bound the overlay does not handle
-    // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    // `ctx.recur.is_none()`: CONFORMANCE_SPEC §5.19.2 forbids evaluating anything
-    // inside a recurrence sweep through the whole-array overlay. The overlay
-    // resolves names through the state/observed tables, which do not hold the
-    // array being swept, and it batches cells the sweep must order — so it would
-    // be both wrong and unordered. Declining is conservative: a nested aggregate
-    // that does NOT read the swept array would also be correct vectorized, but
-    // telling the two apart per node buys nothing on an inherently sequential
-    // rule.
-    if !shape.is_empty() && scan.is_none() && gates.is_empty() && ctx.recur.is_none() {
-        // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
-        // model materializes dozens of standalone aggregates per RHS evaluation
-        // and a per-call `Pool::default()` started empty every time, so every
-        // kernel intermediate went to the allocator.
-        let materialized = with_faq_pool(|pool| {
-            try_eval_faq_vectorized(
-                idx_names,
-                &ranges,
-                body,
-                &contract_names,
-                &contract_dims,
-                reduce,
-                filter,
-                &*ctx,
-                pool,
-            )
-            .map(|(vv, _ops)| {
-                // `try_eval_faq_vectorized` already verified the value covers
-                // the output box exactly (bailing to `None` otherwise) and lifted
-                // a bare scalar into an owned box buffer, so a plain view→owned
-                // suffices.
-                let out = vv.view().expect("vectorized faq has a view").to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(out) = materialized {
-            return Value::Array(Box::new(out));
-        }
-    }
-
-    // ---- Rank-0 contraction as a whole-array map, then one fold -----------
-    // A fully contracted node (`total = Σ_r x[r]`) has no output box for the
-    // overlay above to evaluate over, so it used to be folded term by term,
-    // one tree walk per term. Its body is a pure map over the CONTRACTION box
-    // instead: evaluate that once through the overlay, with the contracted
-    // symbols bound as the box's axes, and fold the resulting array. The fold
-    // visits the terms in row-major order — the order `CartesianTuples` walks
-    // the contraction odometer, last index fastest — starting from the
-    // identity with the same `combine`, so the result is bit-identical to the
-    // loop below. Declined (to that loop) for a filter, which the loop SKIPS
-    // rather than folding the identity (not bit-identical for signed zeros),
-    // for bounds that vary, and wherever the overlay above is declined.
-    if shape.is_empty()
-        && !contract_names.is_empty()
-        && filter.is_none()
-        && scan.is_none()
-        && gates.is_empty()
-        && ctx.recur.is_none()
-        && let Some(box_ranges) = cells.static_ranges.as_deref()
-    {
-        let terms = with_faq_pool(|pool| {
-            try_eval_faq_vectorized(
-                &contract_names,
-                box_ranges,
-                body,
-                &[],
-                &[],
-                reduce,
-                None,
-                &*ctx,
-                pool,
-            )
-            .map(|(vv, _ops)| {
-                let out = vv.view().expect("vectorized faq has a view").to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(terms) = terms {
-            let acc = terms
-                .iter()
-                .fold(reduce.identity(), |acc, &t| reduce.combine(acc, t));
-            return Value::Scalar(acc);
-        }
-    }
     // An EMPTY output box (a size-0 index set) has no cell to evaluate: the
     // result is the empty array of that box. The buffer below is sized
     // `max(1)` for the rank-0 case, and reshaping its one element into a box
@@ -4945,16 +4989,6 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contract is a single scalar evaluation, not a walk.
     let is_walk = !shape.is_empty() || !contract_names.is_empty();
     if is_walk {
-        if !gates.is_empty() {
-            super::vectorized::note_overlay_decline(
-                "faq: a join gate (the overlay takes no gated `faq`; the gate drives a \
-                 per-cell enumeration)",
-            );
-        } else if ctx.recur.is_some() {
-            super::vectorized::note_overlay_decline(
-                "faq: inside a recurrence sweep (CONFORMANCE_SPEC §5.19.2)",
-            );
-        }
         note_per_cell_walk();
         // A strict caller has already been told to refuse (see
         // [`StopAtFirstCell`]): this walk's value is never read.
@@ -5205,45 +5239,6 @@ impl<'s> FaqCells<'s> {
     }
 }
 
-/// Would the per-cell [`eval_faq`] path recognize this `makearray` region
-/// value as a forward prefix scan (esm-spec §4.3.1)?
-///
-/// The whole-array overlay evaluates a region value through
-/// `eval_vec_nested_aggregate` → `try_eval_faq_vectorized`, which does NOT
-/// consult [`detect_prefix_scan`]: a cumulative aggregate would come out
-/// bit-identical but as an O(N²) triangular fold where the scan is O(N) — the
-/// exact regression `forward_scan_work_grows_linearly_not_quadratically` pins.
-/// So the overlay is declined for a `makearray` whose region value the scan
-/// would have claimed. Only the region values themselves need this test: an
-/// aggregate nested DEEPER already reaches the overlay's nested arm on the
-/// existing paths, scan-detection included or not, and this change does not
-/// alter that.
-///
-/// The check is one field test (`detect_prefix_scan` needs a `filter`) for the
-/// unfiltered region values that make up every stencil template, so the
-/// expensive spec build never runs on the hot path.
-pub(super) fn region_value_is_prefix_scan(value: &Expr) -> bool {
-    let Expr::Operator(n) = value else {
-        return false;
-    };
-    if n.filter.is_none() {
-        return false;
-    }
-    let Some(spec) = faq_spec(n) else {
-        return false;
-    };
-    let static_ranges = static_contract_ranges(&spec.contract_dims);
-    detect_prefix_scan(
-        spec.idx_names,
-        &spec.ranges,
-        &spec.contract_names,
-        static_ranges.as_deref(),
-        spec.body,
-        spec.filter,
-    )
-    .is_some()
-}
-
 pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // Borrow (don't clone) the region boxes and their value exprs — a boundary
     // `makearray` is rebuilt on every observed materialization, and its `values`
@@ -5285,77 +5280,6 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         .map(|d| (hi[d] - lo[d] + 1).max(0) as usize)
         .collect();
     let origin = lo.clone();
-
-    // ---- Vectorized fast path (whole-array region writes) ------------------
-    // A `makearray` used as an observed's whole body — every boundary-dispatch
-    // stencil a discretization template expands to — reaches the evaluator HERE,
-    // not through `eval_faq`, so it had no overlay entry at all: its region
-    // values vectorized (they are `faq`s, which try the overlay
-    // themselves) but the assembly around them stayed a per-cell
-    // `CartesianTuples` walk writing through bounds-checked dynamic-stride
-    // `ArrayD` indexing.
-    //
-    // `eval_vec_makearray` is the same region-sub-range-write assembly the
-    // compiled-rule path already uses (pinned bit-identical by
-    // `covered_makearray_region_dispatch`), so routing to it keeps the answer
-    // identical while making the work N-independent and pool-backed.
-    //
-    // Gated on `loop_binds` being empty. That gate USED to be pure
-    // cost-avoidance — "inside a per-cell loop the nested aggregates depend on
-    // the enclosing bindings and the overlay would bail anyway, once per cell,
-    // which is pure loss". Since `nested_aggregate_capture` learned to see
-    // through shadowing, the bail is no longer certain, so the gate now earns
-    // its keep on CORRECTNESS instead, and must stay:
-    //
-    // nothing below tests the region values against `ctx.loop_binds`. A nested
-    // aggregate is still guarded (`eval_vec_nested_aggregate` scans those keys
-    // itself), but a region value that names an enclosing per-cell index
-    // DIRECTLY is not: the box carries no symbols, so `eval_vec_variable` walks
-    // past `cbind` and `syms` straight into the state/observed/parameter
-    // tables, and a loop index sharing a name with one of those would silently
-    // resolve to the wrong value. Admitting non-empty `loop_binds` therefore
-    // requires an `expr_mentions` scan of every region value against every
-    // bound name — which is exactly the per-axis, per-region body walk costed
-    // below, now paid once per cell — to buy a speed-up that only applies
-    // inside a loop something else already fell back to.
-    //
-    // The box carries NO output-index symbols, because a `makearray` reached
-    // here is not a cell of an enclosing `faq`: nothing is bound around it,
-    // and each region value is evaluated exactly once (not once per cell), so
-    // `eval_vec_nested_aggregate`'s hoisting precondition — "the nested body
-    // must not depend on an enclosing bound index" — is vacuously satisfied and
-    // its `expr_mentions` scan has nothing to test. That is not cosmetic:
-    // placeholder names cost one full walk of the region body PER AXIS PER
-    // REGION, and on a 7-region PPM template that scan alone was 43% of the run.
-    if !overlay_off()
-        && ctx.loop_binds.is_empty()
-        && !shape.contains(&0)
-        && !values.iter().any(region_value_is_prefix_scan)
-        // See the same gate in `eval_faq`: CONFORMANCE_SPEC §5.19.2.
-        && ctx.recur.is_none()
-    {
-        let bx = VecBox {
-            syms: &[],
-            lo: &lo,
-            shape: &shape,
-            cnames: &[],
-            cvals: &[],
-        };
-        let materialized = with_faq_pool(|pool| {
-            let mut ops = 0usize;
-            eval_vec_makearray(node, &bx, &*ctx, pool, &mut ops).map(|vv| {
-                let out = vv
-                    .view()
-                    .expect("vectorized makearray has a view")
-                    .to_owned();
-                vv.release(pool);
-                out
-            })
-        });
-        if let Some(out) = materialized {
-            return Value::Array(Box::new(out));
-        }
-    }
 
     let mut arr = ArrayD::<f64>::zeros(IxDyn(&shape));
     for (region, value_expr) in regions.iter().zip(values.iter()) {

@@ -706,8 +706,6 @@ impl<'a> LBox<'a> {
     fn as_vecbox(&self) -> VecBox<'_> {
         VecBox {
             syms: self.syms,
-            lo: &self.lo,
-            shape: &self.shape,
             cnames: self.cnames,
             cvals: &self.cvals,
         }
