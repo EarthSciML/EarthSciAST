@@ -32,9 +32,9 @@ result[output_idx] = ⊕ over (indices in expr but not in output_idx) of expr
 Any index appearing in `expr` but not in `output_idx` is **contracted** —
 summed over, by default. That single rule gives you matrix multiplication:
 
-**Text**
-```text
-sum[i, j] (A[i, k] * B[k, j]) where {i in rows, j in cols, k in inner}
+**LaTeX**
+```latex
+\left[\sum\limits_{k \in \mathit{inner}} A_{i, k} B_{k, j}\right]_{i \in \mathit{rows}, j \in \mathit{cols}}
 ```
 **JSON**
 ```json
@@ -58,9 +58,9 @@ sum[i, j] (A[i, k] * B[k, j]) where {i in rows, j in cols, k in inner}
 
 A full reduction is the same node with an empty `output_idx`:
 
-**Text**
-```text
-sum[] (w[i]) where {i in cells}
+**LaTeX**
+```latex
+\sum\limits_{i \in \mathit{cells}} w_{i}
 ```
 **JSON**
 ```json
@@ -79,9 +79,9 @@ which is `Σᵢ w[i]` — a scalar.
 
 `reduce` names ⊕ alone and leaves ⊗ as `*`. A column-wise maximum:
 
-**Text**
-```text
-max[j] (A[i, j]) where {i in rows, j in cols}
+**LaTeX**
+```latex
+\left[\max\limits_{i \in \mathit{rows}} A_{i, j}\right]_{j \in \mathit{cols}}
 ```
 **JSON**
 ```json
@@ -105,10 +105,6 @@ registry is closed:
 | `max_sum`, `min_sum` | `max` / `min` | `+` | shortest and longest paths |
 | `bool_and_or` | `or` | `and` | relational queries; the semiring of `distinct` |
 
-**Text**
-```text
-max[j] (A[i, j]) where {i in rows, j in cols} [semiring=max_product]
-```
 **JSON**
 ```json
 {
@@ -127,9 +123,9 @@ A dense `ranges` tuple iterates integers directly, which is how an explicit
 stencil is written. The 1-D second difference, with the stencil offset as a
 contracted index `k`:
 
-**Text**
-```text
-sum[i] (ifelse(k == 0, -2, 1) * u[i + k]) where {i in 2:9, k in -1:1}
+**LaTeX**
+```latex
+\left[\sum\limits_{k = -1}^{1} \begin{cases}-2 & \text{if } k = 0 \\ 1 & \text{otherwise}\end{cases} u_{i + k}\right]_{2 \le i \le 9}
 ```
 **JSON**
 ```json
@@ -157,9 +153,9 @@ sum[i] (ifelse(k == 0, -2, 1) * u[i + k]) where {i in 2:9, k in -1:1}
 index — the edges of a cell, the vertices of a face. This is how unstructured
 connectivity is expressed without a special block:
 
-**Text**
-```text
-sum[i] (flux[i, k]) where {i in cells, k in edges_of_cell(i)}
+**LaTeX**
+```latex
+\left[\sum\limits_{k \in \mathit{edges\_of\_cell}(i)} \mathit{flux}_{i, k}\right]_{i \in \mathit{cells}}
 ```
 **JSON**
 ```json
@@ -187,9 +183,9 @@ same as gating a `+` reduction.
 
 ### `filter` — a predicate gate
 
-**Text**
-```text
-sum[j] (A[i, j]) where {i in src, j in tgt} if A[i, j] > atol
+**LaTeX**
+```latex
+\left[\sum\limits_{\substack{i \in \mathit{src} \\ A_{i, j} > \mathit{atol}}} A_{i, j}\right]_{j \in \mathit{tgt}}
 ```
 **JSON**
 ```json
@@ -206,9 +202,9 @@ sum[j] (A[i, j]) where {i in src, j in tgt} if A[i, j] > atol
 A **monotone** filter turns a reduction into a prefix scan. This is the discrete
 cumulative sum — reach for it rather than `integral`, which has no evaluator:
 
-**Text**
-```text
-sum[i] (q[k]) where {i in lev, k in lev} if k <= i
+**LaTeX**
+```latex
+\left[\sum\limits_{\substack{k \in \mathit{lev} \\ k \le i}} q_{k}\right]_{i \in \mathit{lev}}
 ```
 **JSON**
 ```json
@@ -228,10 +224,6 @@ sum[i] (q[k]) where {i in lev, k in lev} if k <= i
 equal. It is an inner equi-join: an unmatched row contributes the ⊕ identity, so
 it adds nothing under any semiring. Many-to-many is defined, not an error.
 
-**Text**
-```text
-sum[j] (w[i, j] * q[i]) where {i in src, j in tgt} join(src_bin=tgt_bin)
-```
 **JSON**
 ```json
 {
@@ -280,8 +272,9 @@ arity 2 for points — and `eps` inflates both outward before the test.
 
 The gate is **only** the conservative broad phase — the exact test stays in
 `filter` — so the materialized result is identical to the full-product path;
-only the number of tuples visited changes. There is no text form for an
-`overlap` join.
+only the number of tuples visited changes. Document math has no notation of
+its own for an `overlap` join: a document writes the node in the generic
+`\esm{faq}{…}{…}` form, its fields as JSON.
 
 ### `distinct` and `key` — producing an index set
 

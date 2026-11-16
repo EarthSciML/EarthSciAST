@@ -12,9 +12,9 @@ description: "D, ic, and the rewrite-target sugar grad / div / laplacian / integ
 `wrt: "t"` (or `wrt` absent, which means `t`) is the structural time derivative.
 It is **strictly unary**: `args` holds exactly the differentiated variable.
 
-**Text**
-```text
-D(N)/Dt
+**LaTeX**
+```latex
+\frac{\mathrm{d} N}{\mathrm{d} t}
 ```
 **JSON**
 ```json
@@ -24,9 +24,9 @@ D(N)/Dt
 This is what makes a variable an ODE state, and it belongs on an equation's
 **left-hand side**, where system assembly consumes it:
 
-**Text**
-```text
-D(N)/Dt = (-lambda) * N
+**LaTeX**
+```latex
+\frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N
 ```
 **JSON**
 ```json
@@ -46,9 +46,9 @@ Any other `wrt` — or *any* `D` appearing on a right-hand side — has **no
 evaluator**. It must be lowered to a stencil by a
 [rewrite rule](../../templates/) before the document can run.
 
-**Text**
-```text
-D(C)/Dx
+**LaTeX**
+```latex
+\frac{\partial C}{\partial x}
 ```
 **JSON**
 ```json
@@ -82,9 +82,9 @@ that does not consume the boundary data cannot silently discard it.
 Used as an equation LHS. `args[0]` is the ODE state; the RHS is its initial
 field.
 
-**Text**
-```text
-ic(N) = 100
+**LaTeX**
+```latex
+N(t_{0}) = 100
 ```
 **JSON**
 ```json
@@ -97,9 +97,9 @@ ic(N) = 100
 An initial condition may be an expression, not just a literal — which is how a
 spatially varying initial field is written:
 
-**Text**
-```text
-ic(C) = exp(-x^2)
+**LaTeX**
+```latex
+C(t_{0}) = \exp(-x^{2})
 ```
 **JSON**
 ```json
@@ -123,9 +123,9 @@ and they mean exactly what their `D` expansions mean:
 | `div(F)` | `Σᵢ D(Fᵢ, wrt: xᵢ)` |
 | `laplacian(u)` | `Σᵢ D(D(u, wrt: xᵢ), wrt: xᵢ)` |
 
-**Text**
-```text
-laplacian(u)
+**LaTeX**
+```latex
+\operatorname{laplacian}(u)
 ```
 **JSON**
 ```json
@@ -159,9 +159,9 @@ A spatial partial integral, for partial integro-differential equations.
 Whole-domain — both bounds constant, giving a spatially uniform value, consumed
 through an auxiliary variable plus boundary extraction:
 
-**Text**
-```text
-integral(f, x, 0, 1)
+**LaTeX**
+```latex
+\operatorname{integral}(f; \mathrm{lower} = 0, \mathrm{upper} = 1, \mathrm{var} = x)
 ```
 **JSON**
 ```json
@@ -171,9 +171,9 @@ integral(f, x, 0, 1)
 Cumulative — `upper` is the spatial variable itself, giving a field cumulative
 up to the current grid point:
 
-**Text**
-```text
-integral(u, x, x_min, x)
+**LaTeX**
+```latex
+\operatorname{integral}(u; \mathrm{lower} = x_{\mathrm{min}}, \mathrm{upper} = x, \mathrm{var} = x)
 ```
 **JSON**
 ```json
