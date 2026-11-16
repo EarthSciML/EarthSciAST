@@ -80,7 +80,7 @@ the trajectory at each declared output time, keyed by the **bare** element name
 |---------|----------|-----------------|---------|
 | Julia (reference) | `build_evaluator` → `f!(du,u,p,t)` (tree-walk) | `ODEProblem` + `Tsit5` | `pkg/EarthSciAST.jl/scripts/pde_simulation_adapter.jl` |
 | Python | `earthsci_ast.evaluate_rhs` (NumPy interpreter) | `simulate` (SciPy `solve_ivp`) | `pkg/earthsci-ast-py/.../cli/pde_simulation_adapter.py` |
-| Rust | `ArrayCompiled::debug_eval_rhs` (vectorized) | `simulate` (diffsol) | `pkg/earthsci-ast-rs/src/bin/earthsci-pde-sim-adapter-rust.rs` |
+| Rust | `rhs_program` on the Problem built under `--compiler` | `solve` (diffsol) | `pkg/earthsci-ast-rs/src/bin/earthsci-pde-sim-adapter-rust.rs` |
 
 ## Tolerances (manifest `tolerances`)
 

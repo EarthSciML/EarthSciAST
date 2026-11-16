@@ -12,9 +12,8 @@
 //!     the declared output times via dense output.
 //!
 //! A fixture marked `"pipeline": "full"` (the `pde_simulation_pipeline` tier)
-//! is built through the whole lowering pipeline with the manifest's inputs in
-//! its forcing buffer instead; that route builds no Problem, so it names no
-//! compiler.
+//! is built the same way, under the same compiler, through the whole lowering
+//! pipeline with the manifest's inputs served by static data providers.
 //!
 //! Discovered by the runner via `$EARTHSCI_PDE_SIM_ADAPTER_RUST` or on PATH as
 //! `earthsci-pde-sim-adapter-rust`. Emits, to `--output`:
@@ -31,8 +30,7 @@ use std::process::ExitCode;
 use earthsci_ast::adapter_support::{
     Answer, Manifest, Tier, adapter_main, bare, nearest_index, number, time_key,
 };
-use earthsci_ast::flatten;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{
     Alg, Compiler, EsmProblem, ProblemOptions, Rhs, SolveOptions, esm_problem, load_string,
     rhs_program, solve,
@@ -94,7 +92,7 @@ impl Tier for PdeSimulation {
 
     fn run_fixture(&self, fx: &Value, manifest: &Manifest) -> Result<Answer, String> {
         if fx.get("pipeline").and_then(Value::as_str) == Some("full") {
-            run_fixture_full(fx, manifest)
+            run_fixture_full(fx, manifest, self.0)
         } else {
             run_fixture(fx, manifest, self.0)
         }
@@ -284,55 +282,38 @@ fn json_to_field(v: &Value) -> Result<ArrayD<f64>, String> {
     }
 }
 
-/// Full-pipeline path (DESIGN pde_simulation_pipeline §7): load the fixture, run
-/// the whole Rust lowering pipeline (reaction-gen → template `match` →
-/// `operator_compose` → pointwise-lift → scoped-`ic`), install a static stub
-/// provider serving the manifest `inputs` into the forcing buffer (keyed
-/// `<ModelPath>.<param>`, DESIGN §2), and emit the RHS at each probe state plus the
-/// trajectory at each checkpoint. Reuses the Phase-1 machinery of
-/// `tests/loaded_ic_bc_simulation.rs`.
-fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
+/// A CONST provider serving one manifest `inputs` field unchanged.
+struct StaticField(ArrayD<f64>);
+
+impl DataProvider for StaticField {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Full-pipeline path (DESIGN pde_simulation_pipeline §7): build one Problem
+/// over the whole lowering pipeline (reaction-gen → template `match` →
+/// `operator_compose` → pointwise-lift → scoped-`ic`) under `compiler`, with a
+/// static provider per manifest `inputs` field keyed by the consuming
+/// parameter's flattened name (`<ModelPath>.<param>`, DESIGN §2), then emit
+/// the RHS at each probe state through the Problem's public program and the
+/// trajectory at each checkpoint.
+///
+/// Every loaded field arrives through the provider seam (R1): construction
+/// materializes it into the Problem's forcing, where the scoped-`ic` fold
+/// reads `ChemistryICs.*_init` into u0 (R2) and the lifted gather reads the
+/// wind and inflow fields.
+fn run_fixture_full(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<Value, String> {
     let integ = manifest.integrator();
     let path = manifest.fixture_path(fx)?;
     let json_str = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
-    let flat = flatten(&file).map_err(|e| format!("flatten: {e:?}"))?;
-    let compiled = ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
 
-    // Install the static stub provider: materialize every manifest input into the
-    // forcing buffer under the CONSUMING PARAMETER's flattened name — from esm
-    // 1.0.0 the only name a loaded field has, and exactly what the compiled RHS
-    // looks up. Everything arrives through this seam, nothing around it (R1);
-    // the scoped-`ic` fold reads `ChemistryICs.*_init` into u0 (R2) and the
-    // lifted gather resolves the wind / inflow forcing the same way.
-    let inputs = fx["inputs"].as_object().ok_or("fixture.inputs missing")?;
-    {
-        let forcing = compiled.forcing_handle();
-        let mut buf = forcing.borrow_mut();
-        for (k, v) in inputs {
-            buf.insert(k.clone(), json_to_field(v)?);
-        }
+    let mut providers: HashMap<String, Box<dyn DataProvider>> = HashMap::new();
+    for (k, v) in fx["inputs"].as_object().ok_or("fixture.inputs missing")? {
+        providers.insert(k.clone(), Box::new(StaticField(json_to_field(v)?)));
     }
 
-    let params: HashMap<String, f64> = HashMap::new();
-    let names: Vec<String> = compiled.state_variable_names().to_vec();
-
-    // --- RHS at each probe via the vectorized faq evaluator ---------------
-    let mut rhs = Map::new();
-    for probe in fx["rhs_probes"].as_array().ok_or("rhs_probes not array")? {
-        let pid = probe["id"].as_str().ok_or("probe.id missing")?;
-        let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
-        let t = probe["t"].as_f64().unwrap_or(0.0);
-        let sv = state_vec(&names, state_obj);
-        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params);
-        let mut m = Map::new();
-        for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), number(dy[i]));
-        }
-        rhs.insert(pid.to_string(), Value::Object(m));
-    }
-
-    // --- Trajectory via the SAME compiled instance (provider forcing in place)-
     let checkpoints: Vec<f64> = fx["trajectory"]["checkpoints"]
         .as_array()
         .ok_or("trajectory.checkpoints missing")?
@@ -341,6 +322,25 @@ fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
         .collect();
     let t0 = *checkpoints.first().ok_or("empty checkpoints")?;
     let t1 = *checkpoints.last().ok_or("empty checkpoints")?;
+    let prob = esm_problem(
+        &file,
+        (t0, t1),
+        ProblemOptions {
+            rhs: Rhs::Always,
+            compiler: Some(compiler),
+            providers,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("esm_problem: {e:?}"))?;
+    if !prob.is_dynamic() {
+        return Err("the Problem built no array right-hand side".into());
+    }
+
+    // --- RHS through the Problem's public program ---------------------------
+    let rhs = rhs_at_probes(&prob, fx)?;
+
+    // --- Trajectory via the pinned diffsol solver ----------------------------
     let opts = SolveOptions {
         alg: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
         abstol: Some(integ["abstol"].as_f64().unwrap_or(1e-12)),
@@ -349,9 +349,7 @@ fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
         saveat: Some(checkpoints.clone()),
         ..Default::default()
     };
-    let sol = compiled
-        .solve((t0, t1), &params, &HashMap::new(), &opts)
-        .map_err(|e| format!("solve: {e:?}"))?;
+    let sol = solve(&prob, &opts).map_err(|e| format!("solve: {e:?}"))?;
 
     let mut traj = Map::new();
     for &t in &checkpoints {
@@ -363,7 +361,7 @@ fn run_fixture_full(fx: &Value, manifest: &Manifest) -> Result<Value, String> {
         traj.insert(time_key(t), Value::Object(m));
     }
 
-    Ok(json!({ "rhs": Value::Object(rhs), "trajectory": Value::Object(traj) }))
+    Ok(json!({ "rhs": rhs, "trajectory": Value::Object(traj) }))
 }
 
 fn main() -> ExitCode {

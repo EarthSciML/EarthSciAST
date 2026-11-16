@@ -732,10 +732,10 @@ run_pde_pipeline_conformance_julia() {
             --output "$OUTPUT_DIR/pde_simulation_pipeline/julia_report.json"
 }
 
-# Rust drives the vectorized faq evaluator (ArrayCompiled::from_flattened +
-# debug_eval_rhs) + diffsol, with the provider forcing installed into the
-# compiled instance. (No shim lib path to provision any more — the geometry
-# kernel is pure Rust, so the adapter binary is self-contained.)
+# Rust builds one Problem under the named compiler with the manifest inputs
+# served by static data providers, evaluates the RHS on its public program
+# (`rhs_program`) and integrates with diffsol. The geometry kernel is pure
+# Rust, so the adapter binary is self-contained.
 run_pde_pipeline_conformance_rust() {
     if ! check_language_availability "rust" "$RUST_DIR"; then
         error "A REQUIRED binding\'s toolchain is missing — this gate cannot run, so it FAILS (it must never silently pass)"
