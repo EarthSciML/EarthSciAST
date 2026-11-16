@@ -4291,7 +4291,7 @@ impl SuppliedData {
             Some(ns) if !name.starts_with(&format!("{ns}.")) => format!("{ns}.{name}"),
             _ => name.to_string(),
         };
-        let forcing = c.forcing_buffer();
+        let forcing = c.forcing_handle();
         for name in c.forcing_names() {
             if forcing.borrow().contains_key(name) {
                 continue;
@@ -4695,7 +4695,7 @@ fn bind_providers(
     let declared = provider_declared_shapes(compiled, providers.keys());
     let mut exec =
         crate::provider::RefreshExecutor::from_providers_with_shapes(providers, &declared, &given);
-    let forcing = compiled.forcing_buffer();
+    let forcing = compiled.forcing_handle();
     exec.materialize_const_named(&forcing)
         .map_err(|e| loader_error(&given, e))?;
 
@@ -4844,7 +4844,7 @@ fn sample_discrete_providers(
     if discrete.is_empty() {
         return Ok(());
     }
-    let forcing = compiled.forcing_buffer();
+    let forcing = compiled.forcing_handle();
     let mut written = Vec::new();
     let mut vacant = exec
         .borrow_mut()
@@ -4886,7 +4886,7 @@ fn discrete_at_start(
 ) -> Result<HashMap<String, ndarray::ArrayD<f64>>, SimulateError> {
     let (mut out, vacant) = exec
         .borrow_mut()
-        .sample_detached(t0, read, &compiled.forcing_buffer())
+        .sample_detached(t0, read, &compiled.forcing_handle())
         .map_err(|e| loader_error(given, e))?;
     seed_vacant_discrete(
         compiled,
@@ -4990,79 +4990,118 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
         Backend::Array(compiled) => {
             let mut insp = BuildInspection::default();
             let sink = prob.inspect.then_some(&mut insp);
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let sol = {
-                match (&prob.refresh, prob.discrete_forcing.is_empty()) {
-                    (Some(exec), false) => {
-                        let forcing = compiled.forcing_buffer();
-                        let mut exec = exec.borrow_mut();
-                        // The first call is the solve's start, `tspan.0`: the
-                        // record in effect there, whatever an earlier solve
-                        // of this Problem (or of one remade from it) left in
-                        // the buffer, and the declared default where no
-                        // record is in effect yet. Every later call is a
-                        // refresh time.
-                        let mut started = false;
-                        let refresh_fn = |t: f64| -> Result<(), SimulateError> {
-                            let given = &prob.provider_keys;
-                            if std::mem::replace(&mut started, true) {
-                                return exec
-                                    .refresh_named(t, &forcing)
-                                    .map(|_| ())
-                                    .map_err(|e| loader_error(given, e));
-                            }
-                            let vacant = exec
-                                .sample_in_effect(t, &forcing, &mut Vec::new())
-                                .map_err(|e| loader_error(given, e))?;
-                            seed_vacant_discrete(
-                                compiled,
-                                &vacant,
-                                given,
-                                "the solve's start",
-                                t,
-                                &mut forcing.borrow_mut(),
-                            )
-                        };
-                        compiled.solve_with_refresh_inspect(
-                            prob.tspan,
-                            &prob.p,
-                            &prob.u0,
-                            &effective,
-                            sink,
-                            &prob.discrete_forcing,
-                            &prob.refresh_boundaries,
-                            refresh_fn,
-                        )?
-                    }
-                    _ => compiled.solve_inspect(prob.tspan, &prob.p, &prob.u0, &effective, sink)?,
-                }
-            };
-            #[cfg(target_arch = "wasm32")]
-            let sol = compiled.solve_inspect(prob.tspan, &prob.p, &prob.u0, &effective, sink)?;
-
+            let mut forcing = ProviderRefresh::new(prob, compiled);
+            let run = forcing.run_spec();
+            let sol = compiled.solve_run(&run, &effective, sink, &mut |t| forcing.at(t))?;
             if prob.inspect {
                 *prob.inspection.borrow_mut() = insp;
             }
-            // One spelling per document, whichever route it took: the
-            // single-model array build names its rows bare, the flattened one
-            // qualifies them. See `qualify_array_names`.
-            let mut sol = sol;
-            if compiled.namespace().is_some() {
-                // The state rows' names are the model's (kept, already
-                // qualified); only the observed rows after them are spelled here.
-                let states = compiled.qualified_state_names();
-                let observed = sol
-                    .state_variable_names
-                    .split_off(states.len().min(sol.state_variable_names.len()));
-                let mut names = states.to_vec();
-                names.extend(qualify_array_names(compiled, &observed));
-                sol.state_variable_names = names;
-            }
-            // Every row now carries the namespace, so none is reached through it.
-            sol.metadata.namespace = None;
-            Ok(sol)
+            Ok(spell_rows(compiled, sol))
         }
+    }
+}
+
+/// One spelling per document, whichever route it took: the single-model array
+/// build names its rows bare, the flattened one qualifies them (see
+/// `qualify_array_names`). Every row then carries the namespace, so none is
+/// reached through it.
+#[cfg(feature = "solve")]
+fn spell_rows(compiled: &ArrayCompiled, mut sol: Solution) -> Solution {
+    if compiled.namespace().is_some() {
+        // The state rows' names are the model's (kept, already qualified);
+        // only the observed rows after them are spelled here.
+        let states = compiled.qualified_state_names();
+        let observed = sol
+            .state_variable_names
+            .split_off(states.len().min(sol.state_variable_names.len()));
+        let mut names = states.to_vec();
+        names.extend(qualify_array_names(compiled, &observed));
+        sol.state_variable_names = names;
+    }
+    sol.metadata.namespace = None;
+    sol
+}
+
+/// The provider refresh a run of a Problem drives
+/// (`simulate_array::session::Refresh`): at the run's start, the record in
+/// effect there, whatever an earlier run of this Problem (or of one remade
+/// from it) left in the forcing buffer, and the declared default where no
+/// record is in effect yet; at every later call, a refresh time. A Problem
+/// with no discrete-cadence provider refreshes nothing.
+#[cfg(feature = "solve")]
+struct ProviderRefresh<'p> {
+    prob: &'p EsmProblem,
+    #[cfg(not(target_arch = "wasm32"))]
+    exec: Option<(&'p SharedRefresh, &'p ArrayCompiled)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    started: bool,
+}
+
+#[cfg(feature = "solve")]
+impl<'p> ProviderRefresh<'p> {
+    fn new(prob: &'p EsmProblem, compiled: &'p ArrayCompiled) -> Self {
+        let _ = compiled;
+        ProviderRefresh {
+            prob,
+            #[cfg(not(target_arch = "wasm32"))]
+            exec: prob
+                .refresh
+                .as_ref()
+                .filter(|_| !prob.discrete_forcing.is_empty())
+                .map(|exec| (exec, compiled)),
+            #[cfg(not(target_arch = "wasm32"))]
+            started: false,
+        }
+    }
+
+    /// The run over the Problem's span and bindings, with the refresh
+    /// boundaries and the discrete-cadence forcing this refresh serves.
+    fn run_spec(&self) -> crate::simulate_array::RunSpec<'p> {
+        static NONE: std::sync::OnceLock<std::collections::HashSet<String>> =
+            std::sync::OnceLock::new();
+        let prob = self.prob;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (discrete_forcing, boundaries): (_, &[f64]) = match self.exec {
+            Some(_) => (&prob.discrete_forcing, &prob.refresh_boundaries),
+            None => (NONE.get_or_init(Default::default), &[]),
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (discrete_forcing, boundaries): (_, &[f64]) = (NONE.get_or_init(Default::default), &[]);
+        crate::simulate_array::RunSpec {
+            tspan: prob.tspan,
+            params: &prob.p,
+            initial_conditions: &prob.u0,
+            discrete_forcing,
+            boundaries,
+        }
+    }
+
+    fn at(&mut self, t: f64) -> Result<(), SimulateError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((exec, compiled)) = self.exec {
+            let given = &self.prob.provider_keys;
+            let forcing = compiled.forcing_handle();
+            let mut exec = exec.borrow_mut();
+            if std::mem::replace(&mut self.started, true) {
+                return exec
+                    .refresh_named(t, &forcing)
+                    .map(|_| ())
+                    .map_err(|e| loader_error(given, e));
+            }
+            let vacant = exec
+                .sample_in_effect(t, &forcing, &mut Vec::new())
+                .map_err(|e| loader_error(given, e))?;
+            return seed_vacant_discrete(
+                compiled,
+                &vacant,
+                given,
+                "the solve's start",
+                t,
+                &mut forcing.borrow_mut(),
+            );
+        }
+        let _ = t;
+        Ok(())
     }
 }
 
@@ -5154,21 +5193,12 @@ pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
 /// return `opts` with both tolerances made CONCRETE.
 ///
 /// Caller > the document's `solver` block > binding default, per field. The
-/// chain belongs to "a document is being integrated", not to one entry point,
-/// so it is applied at BOTH doors a document can be integrated through: `solve`
-/// (via [`effective_options`]) and `init` (§2.5.6's stepping lifecycle). A
-/// stepping caller who names no tolerance must get the document's, exactly as a
-/// `solve` caller does.
+/// chain belongs to "a document is being integrated", not to one entry point:
+/// [`effective_options`] applies it, and both doors a document is integrated
+/// through, `solve` and `init` (§2.5.6's stepping lifecycle), go through that.
 ///
-/// **Idempotent**, which is what makes applying it at both doors safe: the
-/// result has `Some` in both slots, so a second pass resolves at level 1 to the
-/// same values. `init` relies on this — its `step` runs each segment through
-/// `solve`, which resolves again.
-///
-/// Deliberately does NOT touch callbacks. Callback folding is `solve`-only for
-/// the same reason: [`effective_options`] is *not* idempotent in that field
-/// (a second pass would wrap the already-wrapped observer and invoke every
-/// callback twice per step), so `init` must resolve tolerances without it.
+/// **Idempotent**: the result has `Some` in both slots, so a second pass
+/// resolves at level 1 to the same values.
 fn with_resolved_tolerances(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     let (abstol, reltol) =
         crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
@@ -5180,8 +5210,10 @@ fn with_resolved_tolerances(prob: &EsmProblem, opts: &SolveOptions) -> SolveOpti
 }
 
 /// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
-/// extension-seam progress observer into the one per-step hook `run_solver`
-/// already drives, on top of the §2.2.2 tolerance chain.
+/// extension-seam progress observer into the one per-step hook the solver
+/// loop drives, on top of the §2.2.2 tolerance chain. Applied once per run:
+/// it is not idempotent in the callbacks (a second pass would wrap the
+/// already-wrapped observer and invoke every callback twice per step).
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // An OUTPUT REQUEST is keyed by name, so it addresses a state an
     // `operator_compose` renaming match may have DELETED (issue #230). Resolve
@@ -5303,38 +5335,44 @@ fn wrap_observer(set: CallbackSet, user: Option<ProgressFn>) -> ProgressFn {
 /// the integration: the coupling driver in a host model, an interactive
 /// session, a progress UI.
 ///
+/// [`init`] pays for what a run sets up once — the parameter vector, the
+/// initial state, the tape, the cadence partition of the observeds and the
+/// right-hand side's workspaces — and the integrator keeps them, with the
+/// state vector, across every step.
+///
 /// # What a "step" is here
 ///
 /// [`Integrator::step`] advances to the next entry of the **output grid**, not
 /// to the next internal solver step. Each advance runs the configured
-/// algorithm over `[t_now, t_next]` from the current state, exactly the way the
-/// array runtime's segmented provider-refresh driver already advances across a
-/// refresh boundary. That means the adaptive controller restarts at every
-/// interleave point, so a run stepped in N pieces is not step-for-step
-/// identical to the same run solved in one call — it is the same trajectory to
-/// tolerance, at some extra cost per boundary. Choose the grid accordingly:
-/// coarse when you only need to interleave, fine when you need control.
+/// algorithm over `[t_now, t_next]` from the current state, split on the
+/// provider refresh boundaries in between exactly as [`solve`] splits its run.
+/// That means the adaptive controller restarts at every interleave point, so
+/// a run stepped in N pieces is not step-for-step identical to the same run
+/// solved in one call — it is the same trajectory to tolerance, at some extra
+/// cost per boundary. Choose the grid accordingly: coarse when you only need
+/// to interleave, fine when you need control.
 ///
-/// (`diffsol`'s solver borrows its `OdeSolverProblem`, so a EsmProblem-owning
-/// integrator that also owns a live solver would be self-referential. Restarting
-/// per grid interval is the safe-Rust way to expose the lifecycle, and it is
-/// the mechanism already in production here for segmented refresh.)
+/// (`diffsol`'s solver borrows its `OdeSolverProblem`, so an integrator that
+/// also owned a live solver would be self-referential. Restarting per grid
+/// interval is the safe-Rust way to expose the lifecycle, and it is the
+/// mechanism a solve already uses at a refresh boundary.)
+///
+/// A progress observer or callback sees the whole run: `t0` and `t_end` are
+/// the Problem's span and `step` counts accepted steps from the start of the
+/// run, as in one [`solve`].
 #[cfg(feature = "solve")]
 pub struct Integrator<'a> {
     prob: &'a EsmProblem,
-    opts: SolveOptions,
+    session: crate::simulate_array::SolveSession<'a>,
+    forcing: ProviderRefresh<'a>,
     grid: Vec<f64>,
     next: usize,
     t: f64,
+    /// The state by name, refreshed from the session after every step.
     u: HashMap<String, f64>,
-    /// How many leading solution rows are state. The rows after them are the
-    /// observeds a solve appends, which are output and never fed back.
-    n_state_rows: usize,
     time: Vec<f64>,
     state: Vec<Vec<f64>>,
     names: Vec<String>,
-    retcode: crate::simulate::ReturnCode,
-    metadata: crate::simulate::SolutionMetadata,
 }
 
 #[cfg(feature = "solve")]
@@ -5343,7 +5381,7 @@ impl std::fmt::Debug for Integrator<'_> {
         f.debug_struct("Integrator")
             .field("t", &self.t)
             .field("remaining", &(self.grid.len().saturating_sub(self.next)))
-            .field("retcode", &self.retcode)
+            .field("retcode", &self.session.retcode())
             .finish()
     }
 }
@@ -5364,10 +5402,14 @@ pub enum StepStatus {
 /// The step grid is `opts.saveat` when the caller supplied one, else 100 evenly
 /// spaced points across `tspan`.
 ///
-/// The esm-spec §2.2.2 tolerance chain runs HERE, not only at `solve`: the
-/// integrator this returns carries the document's `solver.abstol` / `reltol`
-/// whenever the caller named none, so stepping a document honours its declared
-/// numerics exactly as solving it does.
+/// The esm-spec §2.2.2 tolerance chain and the callback folding run HERE, as
+/// at `solve`: the integrator carries the document's `solver.abstol` /
+/// `reltol` whenever the caller named none, so stepping a document honours its
+/// declared numerics exactly as solving it does.
+///
+/// The initial state is built here, so an error building it (an element no
+/// source values, an initial condition that cannot be evaluated) is reported
+/// by `init`.
 #[cfg(feature = "solve")]
 pub fn init<'a>(
     prob: &'a EsmProblem,
@@ -5378,11 +5420,14 @@ pub fn init<'a>(
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
     reject_f32_integration(prob)?;
-    if let Backend::Static(reason) = &*prob.backend {
-        return Err(SimulateError::NotDynamic {
-            details: reason.clone(),
-        });
-    }
+    let compiled = match &*prob.backend {
+        Backend::Static(reason) => {
+            return Err(SimulateError::NotDynamic {
+                details: reason.clone(),
+            });
+        }
+        Backend::Array(compiled) => compiled,
+    };
     let (t0, t_end) = prob.tspan;
     let grid = match &opts.saveat {
         Some(g) if g.len() >= 2 => g.clone(),
@@ -5393,25 +5438,27 @@ pub fn init<'a>(
                 .collect()
         }
     };
+    let mut forcing = ProviderRefresh::new(prob, compiled);
+    let run = forcing.run_spec();
+    let session =
+        compiled.open_session(&run, effective_options(prob, opts), &mut |t| forcing.at(t))?;
     let names = prob.state_variable_names();
+    let u = names
+        .iter()
+        .cloned()
+        .zip(session.state().iter().copied())
+        .collect();
     Ok(Integrator {
         prob,
-        // esm-spec §2.2.2: caller > the document's `solver` block > binding
-        // default. Resolved once, at construction, so the integrator HOLDS the
-        // effective tolerances rather than leaving them to be rediscovered —
-        // and so `step`'s per-segment `solve` sees them as explicit call-site
-        // values (level 1) that resolve to themselves.
-        opts: with_resolved_tolerances(prob, opts),
+        session,
+        forcing,
         grid,
         next: 0,
         t: t0,
-        u: prob.u0.clone(),
-        n_state_rows: names.len(),
+        u,
         time: Vec::new(),
         state: Vec::new(),
         names,
-        retcode: crate::simulate::ReturnCode::Success,
-        metadata: crate::simulate::SolutionMetadata::default(),
     })
 }
 
@@ -5424,10 +5471,10 @@ impl Integrator<'_> {
 
     /// Why the integration stopped, once it has.
     pub fn retcode(&self) -> crate::simulate::ReturnCode {
-        self.retcode
+        self.session.retcode()
     }
 
-    /// The current state, keyed by variable name.
+    /// The current state, keyed by state-variable name.
     pub fn u(&self) -> &HashMap<String, f64> {
         &self.u
     }
@@ -5438,7 +5485,7 @@ impl Integrator<'_> {
         // Re-arm the document's working precision (esm-spec §11.3); a stepping
         // caller reaches the RHS without passing back through `solve`.
         let _precision_guard = self.prob.precision.enter();
-        if !self.retcode.is_success() {
+        if !self.retcode().is_success() {
             return Ok(StepStatus::Done);
         }
         // Skip grid points at or behind where we already are.
@@ -5449,50 +5496,35 @@ impl Integrator<'_> {
             return Ok(StepStatus::Done);
         }
         let t_next = self.grid[self.next];
-
-        let seg = remake(
-            self.prob,
-            &Remake {
-                u0: self.u.clone(),
-                tspan: Some((self.t, t_next)),
-                ..Default::default()
-            },
-        )?;
-        let seg_opts = SolveOptions {
-            saveat: Some(vec![t_next]),
-            ..self.opts.clone()
+        let forcing = &mut self.forcing;
+        let sol = self
+            .session
+            .advance(t_next, Some(&[t_next]), &mut |t| forcing.at(t))?;
+        let sol = match &*self.prob.backend {
+            Backend::Array(compiled) => spell_rows(compiled, sol),
+            Backend::Static(_) => sol,
         };
-        let sol = solve(&seg, &seg_opts)?;
-
-        self.retcode = sol.retcode;
-        self.metadata.alg = sol.metadata.alg.clone();
-        self.metadata.n_rhs_calls += sol.metadata.n_rhs_calls;
-        self.metadata.n_jacobian_calls += sol.metadata.n_jacobian_calls;
-        self.metadata.n_accepted_steps += sol.metadata.n_accepted_steps;
-        self.metadata.n_rejected_steps += sol.metadata.n_rejected_steps;
 
         if self.state.is_empty() {
+            // The state rows, then the observed rows the first step reported.
             self.names = sol.state_variable_names.clone();
             self.state = vec![Vec::new(); self.names.len()];
         }
         if let Some(k) = sol.time.len().checked_sub(1) {
             self.time.push(sol.time[k]);
-            for (r, row) in sol.state.iter().enumerate() {
-                if let Some(v) = row.get(k) {
-                    if r < self.state.len() {
-                        self.state[r].push(*v);
-                    }
-                    if r < self.n_state_rows
-                        && let Some(name) = self.names.get(r)
-                    {
-                        self.u.insert(name.clone(), *v);
-                    }
+            for (row, sol_row) in self.state.iter_mut().zip(&sol.state) {
+                if let Some(v) = sol_row.get(k) {
+                    row.push(*v);
                 }
             }
             self.t = sol.time[k];
         }
+        // The leading names are the state's, in state-vector order.
+        for (name, v) in self.names.iter().zip(self.session.state()) {
+            self.u.insert(name.clone(), *v);
+        }
         self.next += 1;
-        if self.next >= self.grid.len() || !self.retcode.is_success() {
+        if self.next >= self.grid.len() || !self.retcode().is_success() {
             Ok(StepStatus::Done)
         } else {
             Ok(StepStatus::Advanced)
@@ -5504,12 +5536,15 @@ impl Integrator<'_> {
     /// legal suffix in Rust.
     pub fn solve_to_completion(&mut self) -> Result<Solution, SimulateError> {
         while matches!(self.step()?, StepStatus::Advanced) {}
+        let mut metadata = self.session.metadata();
+        // Every row carries the namespace, as in `solve`.
+        metadata.namespace = None;
         Ok(Solution {
             time: std::mem::take(&mut self.time),
             state: std::mem::take(&mut self.state),
             state_variable_names: self.names.clone(),
-            retcode: self.retcode,
-            metadata: self.metadata.clone(),
+            retcode: self.retcode(),
+            metadata,
         })
     }
 }
@@ -5563,22 +5598,13 @@ mod stepping_tolerance_tests {
     }
 
     /// A stepping caller who names no tolerance gets the DOCUMENT's, not the
-    /// binding default.
-    ///
-    /// `init` used to store the caller's `SolveOptions` verbatim. The effect was
-    /// MASKED in this binding — `step` remakes each segment and re-enters
-    /// `solve`, and `remake` carries `solver` across, so the chain still ran, one
-    /// layer down and once per segment. That is a coincidence of the current
-    /// segment-per-step implementation, not the contract: the integrator did not
-    /// hold the tolerances it was running at, and a step path that does not
-    /// re-enter `solve` would silently drop the document. §2.2.2 puts the
-    /// resolution at the DOOR, so this pins it at the door.
+    /// binding default, and the integrator holds the tolerances it runs at.
     #[test]
     fn init_resolves_the_documents_tolerances() {
         let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
         let integ = init(&prob, &SolveOptions::default()).expect("init");
-        assert_eq!(integ.opts.abstol, Some(1e-8));
-        assert_eq!(integ.opts.reltol, Some(1e-6));
+        assert_eq!(integ.session.options().abstol, Some(1e-8));
+        assert_eq!(integ.session.options().reltol, Some(1e-6));
     }
 
     /// Level 1 still wins: an explicitly-passed option beats the document.
@@ -5591,8 +5617,8 @@ mod stepping_tolerance_tests {
             ..SolveOptions::default()
         };
         let integ = init(&prob, &opts).expect("init");
-        assert_eq!(integ.opts.abstol, Some(1e-12));
-        assert_eq!(integ.opts.reltol, Some(1e-11));
+        assert_eq!(integ.session.options().abstol, Some(1e-12));
+        assert_eq!(integ.session.options().reltol, Some(1e-11));
     }
 
     /// Per FIELD, and level 3 for whatever the document leaves unsaid.
@@ -5600,18 +5626,17 @@ mod stepping_tolerance_tests {
     fn each_tolerance_falls_through_on_its_own() {
         let only_reltol = problem(r#""solver":{"reltol":1e-9},"#);
         let integ = init(&only_reltol, &SolveOptions::default()).expect("init");
-        assert_eq!(integ.opts.reltol, Some(1e-9));
-        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
+        assert_eq!(integ.session.options().reltol, Some(1e-9));
+        assert_eq!(integ.session.options().abstol, Some(DEFAULT_ABSTOL));
 
         let no_block = problem("");
         let integ = init(&no_block, &SolveOptions::default()).expect("init");
-        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
-        assert_eq!(integ.opts.reltol, Some(DEFAULT_RELTOL));
+        assert_eq!(integ.session.options().abstol, Some(DEFAULT_ABSTOL));
+        assert_eq!(integ.session.options().reltol, Some(DEFAULT_RELTOL));
     }
 
-    /// The chain is idempotent, which is what lets `init` and the per-segment
-    /// `solve` inside `step` both run it without the second pass changing the
-    /// answer or displacing the document.
+    /// The chain is idempotent: a second pass neither changes the answer nor
+    /// displaces the document.
     #[test]
     fn resolving_twice_is_resolving_once() {
         let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);

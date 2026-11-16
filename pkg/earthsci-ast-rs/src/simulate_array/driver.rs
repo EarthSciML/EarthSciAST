@@ -1,7 +1,9 @@
-//! Solver plumbing on [`ArrayCompiled`]: `solve` / `solve_inspect`
-//! (diffsol problem build, RHS/Jacobian closures, observed trajectory
-//! exposure), the `debug_*` RHS entry points, and the external forcing-channel
-//! handle ([`ArrayCompiled::forcing_handle`]).
+//! Solver plumbing on [`ArrayCompiled`]: `solve` / `solve_inspect`, what a
+//! solve session sets up once (parameter vector, initial state, tape, cadence
+//! partition, static hoist), the right-hand-side evaluators its segments run,
+//! the observed trajectory exposure, the `debug_*` RHS entry points, and the
+//! external forcing-channel handle ([`ArrayCompiled::forcing_handle`]). The
+//! segment loop itself is in `session`.
 
 #[cfg(feature = "solve")]
 use super::tape::TapeProgram;
@@ -9,15 +11,12 @@ use super::*;
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::SimulateError;
 #[cfg(feature = "solve")]
-use crate::simulate::{
-    Alg, Progress, ProgressFn, ReturnCode, Solution, SolutionMetadata, SolveOptions, SolveStats,
-};
+use crate::simulate::{ReturnCode, Solution, SolutionMetadata, SolveOptions};
 // The solver is optional (esm-libraries-spec §2.5.9). Everything below that
 // touches `diffsol` is gated on the `solve` feature; the `debug_*` RHS entry
 // points and the forcing-channel handle are not, because a caller that only
 // BUILDS a EsmProblem still reaches them.
 #[cfg(feature = "solve")]
-use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
 
 /// A taped read-out of every observed, at one state and one time.
@@ -158,7 +157,7 @@ impl ArrayCompiled {
 /// about the DOCUMENT is wrong: the build either never got as far as emitting
 /// (no `xla` feature) or handed the integrator a model it had not finished.
 #[cfg(feature = "solve")]
-fn xla_not_installed() -> SimulateError {
+pub(super) fn xla_not_installed() -> SimulateError {
     SimulateError::CompilerUnavailable {
         compiler: "xla",
         details: "this Problem names `xla` but carries no compiled program; the build did not \
@@ -214,7 +213,7 @@ fn run_xla_rhs(
 /// lives in, so the product is bit-identical to recomputing both evaluations
 /// every call.
 #[cfg(feature = "solve")]
-struct FdJvp {
+pub(super) struct FdJvp {
     base_y: Vec<f64>,
     base_p: Vec<f64>,
     base_t: f64,
@@ -227,7 +226,7 @@ struct FdJvp {
 
 #[cfg(feature = "solve")]
 impl FdJvp {
-    fn new(n_states: usize) -> Self {
+    pub(super) fn new(n_states: usize) -> Self {
         FdJvp {
             base_y: vec![0.0; n_states],
             base_p: Vec::new(),
@@ -242,7 +241,7 @@ impl FdJvp {
     /// Write `J(y, p, t) v` into `jv`. `eval(state, params, t, out)` fills
     /// `out` with the right-hand side and reports whether it succeeded; a
     /// failed evaluation of `f(y)` is not kept, so the next call tries again.
-    fn apply(
+    pub(super) fn apply(
         &mut self,
         y: &[f64],
         p: &[f64],
@@ -292,7 +291,7 @@ fn same_bits(a: &[f64], b: &[f64]) -> bool {
 }
 
 /// The error a latched fault reports.
-fn fault_error(fault: Fault) -> SimulateError {
+pub(super) fn fault_error(fault: Fault) -> SimulateError {
     crate::compile_error::CompileError::InterpreterBuildError {
         details: fault.message,
     }
@@ -304,7 +303,7 @@ fn fault_error(fault: Fault) -> SimulateError {
 /// or error-test failure is the symptom. Report the latched fault instead, as
 /// `assemble_solution` does on success.
 #[cfg(feature = "solve")]
-fn fault_first(faults: &FaultScope, err: SimulateError) -> SimulateError {
+pub(super) fn fault_first(faults: &FaultScope, err: SimulateError) -> SimulateError {
     faults.take().map_or(err, fault_error)
 }
 
@@ -312,7 +311,7 @@ fn fault_first(faults: &FaultScope, err: SimulateError) -> SimulateError {
 /// side's or the finite-difference Jacobian's, so the two never alias.
 #[cfg(feature = "solve")]
 #[derive(Clone, Copy)]
-enum Use {
+pub(super) enum Use {
     Rhs,
     Jacobian,
 }
@@ -320,7 +319,7 @@ enum Use {
 /// What evaluates one integration segment's right-hand side: one variant per
 /// compiler, and the only place the solve branches on it.
 #[cfg(feature = "solve")]
-enum SolveRhs<'a> {
+pub(super) enum SolveRhs<'a> {
     /// `native`: the solve's taped program.
     Program {
         program: &'a SolveProgram,
@@ -341,20 +340,27 @@ enum SolveRhs<'a> {
 /// over the CONTINUOUS observeds and the state rules, on scratches seeded
 /// once with the CONST and DISCRETE observeds.
 #[cfg(feature = "solve")]
-struct PerCellRhs<'a> {
-    compiled: &'a ArrayCompiled,
-    continuous_rules: &'a [AlgebraicRule],
-    rule_set: u64,
-    seed: ArrMap,
-    rhs: RefCell<Option<RhsScratch>>,
-    jac: RefCell<Option<RhsScratch>>,
+pub(super) struct PerCellRhs<'a> {
+    pub(super) compiled: &'a ArrayCompiled,
+    pub(super) continuous_rules: &'a [AlgebraicRule],
+    pub(super) rule_set: u64,
+    pub(super) seed: ArrMap,
+    pub(super) rhs: RefCell<Option<RhsScratch>>,
+    pub(super) jac: RefCell<Option<RhsScratch>>,
 }
 
 #[cfg(feature = "solve")]
 impl SolveRhs<'_> {
     /// Write the right-hand side at `(state, params, t)` into `out`, reporting
     /// whether the evaluation succeeded.
-    fn eval(&self, slot: Use, state: &[f64], params: &[f64], t: f64, out: &mut [f64]) -> bool {
+    pub(super) fn eval(
+        &self,
+        slot: Use,
+        state: &[f64],
+        params: &[f64],
+        t: f64,
+        out: &mut [f64],
+    ) -> bool {
         match self {
             SolveRhs::Program { program, forcing } => {
                 let ws = match slot {
@@ -429,30 +435,25 @@ pub(crate) struct FieldIcRecord {
 /// * the parameters, checked here bit for bit against the positional vector
 ///   the solve resolved (a [`crate::remake`] with new `p` shares this model and
 ///   misses);
-/// * the provider forcing buffer, which the crate's own drivers leave as
-///   construction had it until the initial state is built (the CONST providers
-///   are bound before the compiler gate runs, and a discrete refresh comes
-///   after `u0`). A host can write it in between through
-///   [`ArrayCompiled::forcing_handle`], so the memo records the buffer's
-///   handle generation, which every call to that accessor bumps, and answers
-///   only while it is unchanged.
+/// * the forcing fields the resolution read (every name
+///   [`ArrayCompiled::ic_read_names`] gives, as the forcing buffer holds it),
+///   recorded as a fingerprint of their names, shapes and values
+///   ([`ArrayCompiled::ic_forcing_fingerprint`]) and compared when the memo
+///   is read, so a write to one of them by anyone, between construction and
+///   the solve, retires the memo, and a write to any other field does not.
 ///
-/// The crate's discrete-cadence refresh writes the buffer through
-/// [`ArrayCompiled::forcing_buffer`], which leaves the generation alone, but
-/// the fields it writes are never in a field initial condition's scope
-/// ([`ArrayCompiled::resolve_field_ics`] reads the buffer without them), so a
-/// refresh cannot move what the memo holds. A write through `forcing_buffer`
-/// to any OTHER field after construction would, and is what the generation
-/// cannot see: the crate's drivers make none, and a new one has to take
-/// [`ArrayCompiled::forcing_handle`] instead. Every read but the first solve's
-/// leaves the memo in place; the first solve takes it, and every later one
-/// resolves from the buffer as it stands.
+/// A resolution that read a discrete-cadence field is never kept (the field
+/// is not sampled yet at construction), so the refresh a solve makes at its
+/// start, before the initial state, cannot move what the memo holds. Every
+/// read but the first solve's leaves the memo in place; the first solve takes
+/// it, and every later one resolves from the buffer as it stands.
 ///
 /// Initial-condition overrides are applied over the result, not read by it.
 #[cfg(feature = "solve")]
 pub(crate) struct FieldIcMemo {
     params: Vec<u64>,
-    forcing_generation: u64,
+    /// [`ArrayCompiled::ic_forcing_fingerprint`] when the resolution ran.
+    forcing: u64,
     /// The start of the run the `ic` right-hand sides were evaluated at
     /// (esm-spec §11.4.2), as bits.
     t0: u64,
@@ -652,21 +653,10 @@ impl ArrayCompiled {
     /// `Rc`); mutate it only *between* segments, never inside a solver step, to
     /// keep the RHS pure within a segment.
     ///
-    /// Whoever holds the handle may write the buffer at any later point, so
-    /// taking one also retires the field initial conditions construction
-    /// resolved from it ([`FieldIcMemo`]): the next solve resolves them from
-    /// the buffer as it then stands.
+    /// A write to a field the model's field initial conditions read retires
+    /// what construction resolved from it ([`FieldIcMemo`]): the next solve
+    /// resolves them from the buffer as it then stands.
     pub fn forcing_handle(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
-        self.forcing_generation
-            .set(self.forcing_generation.get().wrapping_add(1));
-        Rc::clone(&self.forcing)
-    }
-
-    /// The forcing buffer, for the crate's own drivers, which write it only
-    /// where [`FieldIcMemo`] allows: before construction records the memo, or
-    /// after the initial state is built. Unlike [`Self::forcing_handle`] it
-    /// leaves the memo standing.
-    pub(crate) fn forcing_buffer(&self) -> Rc<RefCell<HashMap<String, ArrayD<f64>>>> {
         Rc::clone(&self.forcing)
     }
 
@@ -771,7 +761,7 @@ impl ArrayCompiled {
     /// as `(const, discrete, continuous)` sorted name lists. Exposed for the
     /// cadence-tier test: a forcing-derived but state-free / `t`-free observed
     /// must land in the DISCRETE tier (materialized once per segment), not
-    /// CONTINUOUS (recomputed every step). Mirrors the split in `run_segmented`.
+    /// CONTINUOUS (recomputed every step). Mirrors the split a solve session makes.
     #[doc(hidden)]
     pub fn debug_cadence_partition(
         &self,
@@ -873,7 +863,7 @@ impl ArrayCompiled {
     /// constant there. Under the strict compilers the tape's SEGMENT section
     /// computes them itself, on the same schedule.
     #[cfg(feature = "solve")]
-    fn segment_seed(
+    pub(super) fn segment_seed(
         &self,
         static_obs: &ArrMap,
         segment_static_rules: &[AlgebraicRule],
@@ -1571,7 +1561,7 @@ impl ArrayCompiled {
         {
             *self.field_ic_memo.borrow_mut() = Some(FieldIcMemo {
                 params: param_bits(&param_vec),
-                forcing_generation: self.forcing_generation.get(),
+                forcing: self.ic_forcing_fingerprint(),
                 t0: t0.to_bits(),
                 slots,
             });
@@ -1602,6 +1592,33 @@ impl ArrayCompiled {
         let mut names = self.ic_read_names();
         names.retain(|n| self.serves_forcing(n));
         names
+    }
+
+    /// A fingerprint of the forcing fields an evaluation of the `ic`
+    /// right-hand sides reads ([`Self::ic_read_names`]) as the buffer holds
+    /// them: each name, in byte order, with its entry's shape and value bits,
+    /// or its absence. What [`FieldIcMemo`] compares to tell whether the
+    /// buffer moved under a resolution.
+    #[cfg(feature = "solve")]
+    fn ic_forcing_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut names: Vec<String> = self.ic_read_names().into_iter().collect();
+        names.sort();
+        let buffer = self.forcing.borrow();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for name in &names {
+            name.hash(&mut h);
+            match buffer.get(name) {
+                Some(a) => {
+                    a.shape().hash(&mut h);
+                    for v in a.iter() {
+                        v.to_bits().hash(&mut h);
+                    }
+                }
+                None => u8::MAX.hash(&mut h),
+            }
+        }
+        h.finish()
     }
 
     /// Refuse an `ic` right-hand side that reads a state, directly or through
@@ -1823,7 +1840,10 @@ impl ArrayCompiled {
     /// vector (override > variable default; a parameter with neither is an
     /// [`SimulateError::InvalidParameter`]). The strict simulate-time
     /// counterpart of the lenient [`Self::debug_resolve_params`].
-    fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
+    pub(super) fn build_param_vec(
+        &self,
+        params: &HashMap<String, f64>,
+    ) -> Result<Vec<f64>, SimulateError> {
         // esm-spec §6.6.2 caller-key canonicalization (see
         // `crate::simulate::canonicalize_override_keys`). This subsumes the
         // former `normalize_override_keys`, which only stripped this model's
@@ -1858,7 +1878,7 @@ impl ArrayCompiled {
     /// slot with none of the three is an
     /// [`SimulateError::InvalidInitialCondition`]).
     #[cfg(feature = "solve")]
-    fn build_initial_state(
+    pub(super) fn build_initial_state(
         &self,
         initial_conditions: &HashMap<String, f64>,
         param_vec: &[f64],
@@ -1918,8 +1938,8 @@ impl ArrayCompiled {
         let bits = param_bits(param_vec);
         let fresh = |m: &FieldIcMemo| {
             m.params == bits
-                && m.forcing_generation == self.forcing_generation.get()
                 && m.t0 == start.t0.to_bits()
+                && m.forcing == self.ic_forcing_fingerprint()
         };
         let taken = consume_memo
             .then(|| self.field_ic_memo.borrow_mut().take())
@@ -2008,201 +2028,19 @@ impl ArrayCompiled {
         // Re-arm the precision this model was compiled under
         // (`crate::precision`); a no-op for a Float64 model.
         let _precision_guard = self.precision.enter();
-        // CONST / single-segment: no discrete forcing, no refresh boundaries.
-        self.solve_core(
-            tspan,
-            params,
-            initial_conditions,
-            opts,
-            inspect,
-            &HashSet::new(),
-            &[],
-            |_t| Ok(()),
-        )
-    }
-
-    /// [`Self::solve_inspect`] with a DISCRETE-cadence forcing refresh. The
-    /// integration is SEGMENTED on `boundaries` (solver-second refresh anchors);
-    /// at each boundary `refresh_fn(t)` re-slices the live forcing buffer to that
-    /// record. Observeds transitively reaching a `discrete_forcing` name are
-    /// excluded from the build-once static hoist, so they recompute over the
-    /// refreshed buffer per segment while the CONST terrain regrid stays hoisted.
-    /// This is the Rust analog of the ESS-Julia live-field taint + segmented driver.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
-    pub(crate) fn solve_with_refresh_inspect(
-        &self,
-        tspan: (f64, f64),
-        params: &HashMap<String, f64>,
-        initial_conditions: &HashMap<String, f64>,
-        opts: &SolveOptions,
-        inspect: Option<&mut BuildInspection>,
-        discrete_forcing: &HashSet<String>,
-        boundaries: &[f64],
-        refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
-    ) -> Result<Solution, SimulateError> {
-        self.solve_core(
-            tspan,
-            params,
-            initial_conditions,
-            opts,
-            inspect,
-            discrete_forcing,
-            boundaries,
-            refresh_fn,
-        )
-    }
-
-    /// Shared setup + segmented integration (see the two entry points above).
-    /// `boundaries` are the sorted solver-second refresh anchors strictly inside
-    /// `(t0, t_end)`; an empty `boundaries` (the CONST path) runs one segment,
-    /// byte-identical to the un-segmented driver.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "solve")]
-    fn solve_core(
-        &self,
-        tspan: (f64, f64),
-        params: &HashMap<String, f64>,
-        initial_conditions: &HashMap<String, f64>,
-        opts: &SolveOptions,
-        inspect: Option<&mut BuildInspection>,
-        discrete_forcing: &HashSet<String>,
-        boundaries: &[f64],
-        mut refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
-    ) -> Result<Solution, SimulateError> {
-        let params_owned = params;
-        let ics_owned = initial_conditions;
-        let (t0, t_end) = tspan;
-        // Validated here, at the entry point every array solve shares, so the
-        // non-advancing shortcut in `run_one_segment` and the solver path below
-        // it are never handed a span they would read differently.
-        crate::simulate::reject_nonfinite_span(t0, t_end)?;
-
-        // Validate the override names and build the positional param vector
-        // and the initial state vector `u0` (loaded-field / coordinate
-        // `ic`s folded in — see [`Self::build_initial_state`]).
-        // §5.5.5: the evaluators LATCH a fail-closed fault (an out-of-range
-        // const-array gather, say) rather than raising, since the right-hand
-        // side has no error channel. The solve owns the latch for its whole
-        // run; `assemble_solution` drains it at every exit, so a trajectory
-        // built on such a fault fails loudly instead of carrying the `NaN` it
-        // substituted.
-        let faults = FaultScope::enter();
-        let param_vec = self.build_param_vec(params_owned)?;
-
-        // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
-        // no-op for the CONST/single-segment path; for DISCRETE it primes the
-        // first record so the static regrid geometry sees a populated buffer —
-        // and before the initial state, whose `ic` right-hand sides read the
-        // data-fed fields at t0 (esm-spec §11.4.2).
-        refresh_fn(t0)?;
-        let no_exclusions = HashSet::new();
-        let ic_vec = self.build_initial_state(
-            ics_owned,
-            &param_vec,
-            &IcStart {
-                t0,
-                at_t0: None,
-                exclude: &no_exclusions,
+        // No discrete forcing, so no refresh boundaries.
+        let none = HashSet::new();
+        self.solve_run(
+            &super::RunSpec {
+                tspan,
+                params,
+                initial_conditions,
+                discrete_forcing: &none,
+                boundaries: &[],
             },
-        )?;
-
-        // The tape is built before the static hoist: under the strict
-        // compilers the hoist is served from it ([`Self::hoist_static_observeds`]).
-        let tape = self.build_solve_tape(discrete_forcing)?;
-
-        let cadence = self.partition_observed_cadence(discrete_forcing);
-        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0, tape.as_ref());
-        let program = match (&tape, self.runtime_mode) {
-            (Some(prog), RuntimeMode::Native) => Some(SolveProgram::new(self, prog)),
-            _ => None,
-        };
-
-        if let Some(insp) = inspect {
-            self.fill_solve_inspection(
-                insp,
-                &setup,
-                &ic_vec,
-                &param_vec,
-                t0,
-                boundaries,
-                tape.as_ref(),
-            );
-        }
-
-        let solver_name = match opts.alg {
-            Alg::Bdf => "Bdf",
-            Alg::Sdirk => "Sdirk",
-            Alg::Erk => "Erk",
-        };
-
-        // CONST / single-segment: the original un-segmented run — byte-identical
-        // to the pre-segmentation driver (one `run_one_segment` over the whole
-        // span with `opts` verbatim). A refresh boundary segments the run
-        // whether or not the caller gave an output grid.
-        if boundaries.is_empty() {
-            let (time, state, stats, retcode) = self
-                .run_one_segment(
-                    t0,
-                    t_end,
-                    &ic_vec,
-                    &param_vec,
-                    &setup,
-                    opts,
-                    program.as_ref(),
-                )
-                .map_err(|e| fault_first(&faults, e))?;
-            return self.assemble_solution(
-                &faults,
-                time,
-                state,
-                retcode,
-                solution_metadata(
-                    solver_name,
-                    &stats,
-                    self.merged_renames.clone(),
-                    self.namespace.clone(),
-                ),
-                &param_vec,
-                &setup,
-                &opts.output_observed,
-                tape.as_ref(),
-            );
-        }
-
-        let run = SegmentedRun {
-            t0,
-            t_end,
-            boundaries,
-            ic_vec: &ic_vec,
-            param_vec: &param_vec,
-            setup: &setup,
             opts,
-            program: program.as_ref(),
-            faults: &faults,
-        };
-        let (time, state, stats, retcode) = self.run_segmented(&run, &mut refresh_fn)?;
-
-        // Note: `assemble_solution` re-evaluates the varying observeds against
-        // the CURRENT (last-segment) forcing buffer, so an appended scalar
-        // observed reading a discrete forcing reflects the final hour — the
-        // array STATE trajectory (the fire front) is per-segment correct, which
-        // is what the runner reads.
-        self.assemble_solution(
-            &faults,
-            time,
-            state,
-            retcode,
-            solution_metadata(
-                solver_name,
-                &stats,
-                self.merged_renames.clone(),
-                self.namespace.clone(),
-            ),
-            &param_vec,
-            &setup,
-            &opts.output_observed,
-            tape.as_ref(),
+            inspect,
+            &mut |_t| Ok(()),
         )
     }
 
@@ -2225,7 +2063,10 @@ impl ArrayCompiled {
     /// coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
     /// for the non-hot observed-trajectory output pass.
     #[cfg(feature = "solve")]
-    fn partition_observed_cadence(&self, discrete_forcing: &HashSet<String>) -> ObservedCadence {
+    pub(super) fn partition_observed_cadence(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> ObservedCadence {
         let static_names = self.classify_static_observeds(discrete_forcing);
         let seg_invariant_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let static_rules: Vec<AlgebraicRule> = self
@@ -2276,7 +2117,7 @@ impl ArrayCompiled {
     /// (expensive) regrid on every step. A model with no such observeds hoists
     /// nothing and stays byte-identical to the un-hoisted path.
     #[cfg(feature = "solve")]
-    fn hoist_static_observeds(
+    pub(super) fn hoist_static_observeds(
         &self,
         cadence: ObservedCadence,
         ic_vec: &[f64],
@@ -2313,24 +2154,24 @@ impl ArrayCompiled {
     /// integration is unchanged.
     #[cfg(feature = "solve")]
     #[allow(clippy::too_many_arguments)]
-    fn fill_solve_inspection(
+    pub(super) fn fill_solve_inspection(
         &self,
         insp: &mut BuildInspection,
         setup: &SolveSetup,
         ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
-        boundaries: &[f64],
+        segmented: bool,
         tape: Option<&std::sync::Arc<TapeProgram>>,
     ) {
         // One read-out at t0 answers both halves of this sink: the static
-        // observeds and, on a segmented run, the varying ones — the
-        // time-varying forcing-derived fields at their first record, which a
-        // caller reading the build-time per-cell forcing expects to see.
-        let varying: &[AlgebraicRule] = if boundaries.is_empty() {
-            &[]
-        } else {
+        // observeds and, on a run with refresh boundaries, the varying ones —
+        // the time-varying forcing-derived fields at their first record, which
+        // a caller reading the build-time per-cell forcing expects to see.
+        let varying: &[AlgebraicRule] = if segmented {
             &setup.cadence.varying_rules
+        } else {
+            &[]
         };
         let mut readout = self.observed_readout(tape, &setup.static_obs, varying.to_vec());
         let obs = readout.at(self, ic_vec, param_vec, t0);
@@ -2351,7 +2192,7 @@ impl ArrayCompiled {
     /// a rule is a refusal ([`Self::strict_tape`], naming the rule and the
     /// reason), never a solve of the whole model on another evaluator.
     #[cfg(feature = "solve")]
-    fn build_solve_tape(
+    pub(super) fn build_solve_tape(
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> Result<SolveTape, SimulateError> {
@@ -2363,133 +2204,6 @@ impl ArrayCompiled {
         Ok(Some(self.strict_tape(discrete_forcing)?))
     }
 
-    /// DISCRETE: integrate in segments split on the refresh boundaries. Segment
-    /// endpoints = t0, each boundary strictly inside (t0, t_end) ascending, t_end.
-    #[cfg(feature = "solve")]
-    fn run_segmented(
-        &self,
-        run: &SegmentedRun<'_>,
-        refresh_fn: &mut impl FnMut(f64) -> Result<(), SimulateError>,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
-        let &SegmentedRun {
-            t0,
-            t_end,
-            boundaries,
-            ic_vec,
-            param_vec,
-            setup,
-            opts,
-            program,
-            faults,
-        } = run;
-        let n_states = self.n_states;
-
-        let mut endpoints: Vec<f64> = vec![t0];
-        for &b in boundaries {
-            if b > t0 && b < t_end && *endpoints.last().unwrap() < b {
-                endpoints.push(b);
-            }
-        }
-        if *endpoints.last().unwrap() < t_end {
-            endpoints.push(t_end);
-        }
-
-        // `None`: no output grid, so each segment reports the solver's own
-        // steps (its start only for the first segment, since every later
-        // segment starts where the one before it ended).
-        let global_out = opts.saveat.clone();
-        let mut u0 = ic_vec.to_vec();
-        let mut time: Vec<f64> = Vec::new();
-        let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
-        // Each segment integrates with its own fresh diffsol solver, so the
-        // reported step/eval counts are the sum across all segments.
-        let mut stats = SolveStats::default();
-        let mut retcode = ReturnCode::Success;
-
-        for w in endpoints.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            // Refresh the live buffer at the START of every segment after the
-            // first (t0 was already primed by `refresh_fn(t0)` in `solve_core`).
-            if a != t0 {
-                refresh_fn(a)?;
-                if let Some(p) = program {
-                    p.forcing_refreshed();
-                }
-            }
-            // Requested outputs falling in this segment: (a, b] — or [a, b] for
-            // the first. Always run the solver's grid up to `b` (append if
-            // absent) so the state at `b` seeds the next segment.
-            let in_segment = |g: f64| (if a == t0 { g >= a } else { g > a }) && g <= b;
-            let requested: Option<Vec<f64>> = global_out
-                .as_ref()
-                .map(|out| out.iter().copied().filter(|&g| in_segment(g)).collect());
-            let grid = requested.as_ref().map(|requested| {
-                let mut grid = requested.clone();
-                if grid.last() != Some(&b) {
-                    grid.push(b);
-                }
-                grid
-            });
-            // Report progress against the GLOBAL interval, not the segment's.
-            // Each segment runs a fresh solver over [a, b] with its own step
-            // counter, so handing the caller's observer through unwrapped would
-            // restart the bar from 0% at every refresh boundary.
-            let seg_progress: Option<ProgressFn> = opts.progress.as_ref().map(|user| {
-                let user = user.clone();
-                let steps_before = stats.n_accepted_steps;
-                let wrapped: ProgressFn = std::sync::Arc::new(move |p: &Progress<'_>| {
-                    user(&Progress {
-                        t0,
-                        t: p.t,
-                        t_end,
-                        step: steps_before + p.step,
-                        maxiters: p.maxiters,
-                        u: p.u,
-                    })
-                });
-                wrapped
-            });
-            let seg_opts = SolveOptions {
-                saveat: grid,
-                progress: seg_progress,
-                ..opts.clone()
-            };
-            let (seg_time, seg_state, seg_stats, seg_retcode) = self
-                .run_one_segment(a, b, &u0, param_vec, setup, &seg_opts, program)
-                .map_err(|e| fault_first(faults, e))?;
-            stats += seg_stats;
-            // A segment that stopped early ends the whole run: the state at its
-            // right endpoint never materialised, so there is nothing to seed the
-            // next segment with. Its reason becomes the run's `retcode`.
-            if !seg_retcode.is_success() {
-                retcode = seg_retcode;
-            }
-            // `run_solver` pushes the REQUESTED grid time verbatim, and stops
-            // its own step grid exactly at `b`, so a float equality against
-            // `requested`/`b` is exact.
-            for (i, &t) in seg_time.iter().enumerate() {
-                if t == b {
-                    u0 = (0..n_states).map(|r| seg_state[r][i]).collect();
-                }
-                let keep = match &requested {
-                    Some(requested) => requested.contains(&t),
-                    None => in_segment(t),
-                };
-                if keep {
-                    time.push(t);
-                    for r in 0..n_states {
-                        state[r].push(seg_state[r][i]);
-                    }
-                }
-            }
-            if !retcode.is_success() {
-                break;
-            }
-        }
-
-        Ok((time, state, stats, retcode))
-    }
-
     /// Solution assembly, shared by the single-segment and segmented exits:
     /// expose observed trajectories alongside the states (see
     /// [`Self::append_observed_trajectories`]), then drain the §5.5.5
@@ -2497,7 +2211,7 @@ impl ArrayCompiled {
     /// loudly instead of carrying the `NaN` the gather substituted.
     #[cfg(feature = "solve")]
     #[allow(clippy::too_many_arguments)]
-    fn assemble_solution(
+    pub(super) fn assemble_solution(
         &self,
         faults: &FaultScope,
         time: Vec<f64>,
@@ -2529,206 +2243,6 @@ impl ArrayCompiled {
             retcode,
             metadata,
         })
-    }
-
-    /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the
-    /// live forcing buffer (`self.forcing`) — which a segmented driver refreshes
-    /// between segments. Builds a fresh RHS/Jacobian closure pair (each scratch
-    /// pre-seeded with the already-materialized `static_obs`) and a fresh diffsol
-    /// problem, returning the states at `opts.saveat`.
-    #[cfg(feature = "solve")]
-    #[allow(clippy::too_many_arguments)]
-    fn run_one_segment(
-        &self,
-        t0: f64,
-        t_end: f64,
-        u0: &[f64],
-        param_vec: &[f64],
-        setup: &SolveSetup,
-        opts: &SolveOptions,
-        // The solve's taped program under `native`, kept across segments.
-        program: Option<&SolveProgram>,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
-        // A segment that never advances is answered from its own initial state,
-        // before any closure, scratch buffer or diffsol problem is built
-        // (issue #438): building the solver materializes a dense Jacobian,
-        // which the matrix-free finite-difference Jacobian below pays for in
-        // full right-hand-side evaluations, one per state column, each one
-        // materializing every varying observed — recurrence sweeps included —
-        // for a trajectory that is the untouched initial state. See
-        // [`crate::simulate::nonadvancing_trajectory`], which also makes the
-        // step-0 progress report. [`crate::simulate::run_solver`] keeps the same
-        // check as a backstop and produces the identical trajectory, so this is
-        // a cost-only shortcut.
-        if let Some((time, state, retcode)) =
-            crate::simulate::nonadvancing_trajectory(t0, t_end, u0, opts)
-        {
-            return Ok((time, state, SolveStats::default(), retcode));
-        }
-        let n_states = self.n_states;
-        // `xla` (API_SPEC §5.8): the right-hand side is the XLA executable the
-        // build installed, and the Jacobian differences it too. A missing
-        // executable is a refusal, never the tape answering under the name
-        // `xla` (esm-libraries-spec §2.5.10).
-        #[cfg(feature = "xla")]
-        let xla_fault: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-        let evaluator = match self.runtime_mode {
-            RuntimeMode::Native => SolveRhs::Program {
-                program: program.expect("a native solve builds its program"),
-                forcing: &self.forcing,
-            },
-            RuntimeMode::Interpreter => SolveRhs::PerCell(Box::new(PerCellRhs {
-                compiled: self,
-                continuous_rules: &setup.cadence.continuous_rules,
-                rule_set: next_rule_set_id(),
-                seed: self.segment_seed(
-                    &setup.static_obs,
-                    &setup.cadence.segment_static_rules,
-                    u0,
-                    param_vec,
-                    t0,
-                ),
-                rhs: RefCell::new(None),
-                jac: RefCell::new(None),
-            })),
-            #[cfg(feature = "xla")]
-            RuntimeMode::Xla => SolveRhs::Xla {
-                program: self.xla_program().ok_or_else(xla_not_installed)?,
-                fault: Rc::clone(&xla_fault),
-            },
-            // A build without the feature answers `compiler_unavailable` for
-            // `xla` before a backend exists; kept so the no-fallback property
-            // holds by code rather than by that argument.
-            #[cfg(not(feature = "xla"))]
-            RuntimeMode::Xla => return Err(xla_not_installed()),
-        };
-        // diffsol's `rhs_implicit` builder demands a Jacobian closure even for
-        // the explicit solver, which never calls it, so its buffers are built
-        // on the first call.
-        let jvp: RefCell<Option<FdJvp>> = RefCell::new(None);
-        let rhs_closure = |y: &diffsol::FaerVec<f64>,
-                           p: &diffsol::FaerVec<f64>,
-                           t: f64,
-                           dy: &mut diffsol::FaerVec<f64>| {
-            evaluator.eval(Use::Rhs, y.as_slice(), p.as_slice(), t, dy.as_mut_slice());
-        };
-        let jac_closure = |y: &diffsol::FaerVec<f64>,
-                           p: &diffsol::FaerVec<f64>,
-                           t: f64,
-                           v: &diffsol::FaerVec<f64>,
-                           jv: &mut diffsol::FaerVec<f64>| {
-            let mut jvp = jvp.borrow_mut();
-            jvp.get_or_insert_with(|| FdJvp::new(n_states)).apply(
-                y.as_slice(),
-                p.as_slice(),
-                t,
-                v.as_slice(),
-                jv.as_mut_slice(),
-                |state, params, t, out| evaluator.eval(Use::Jacobian, state, params, t, out),
-            );
-        };
-
-        // Concrete values: `solve` has already resolved the esm-spec §2.2.2
-        // chain into `opts`. The fallback covers a direct call that bypasses
-        // `solve` and therefore has no document to consult.
-        let abstol = opts.abstol_or_default();
-        let reltol = opts.reltol_or_default();
-        let ic_for_init = u0.to_vec();
-
-        let builder = OdeBuilder::<FaerMat<f64>>::new()
-            .t0(t0)
-            .rtol(reltol)
-            .atol(vec![abstol; n_states])
-            .p(param_vec.to_vec())
-            .rhs_implicit(rhs_closure, jac_closure)
-            .init(
-                move |_p: &diffsol::FaerVec<f64>, _t: f64, y: &mut diffsol::FaerVec<f64>| {
-                    let y_s = y.as_mut_slice();
-                    for (i, &v) in ic_for_init.iter().enumerate() {
-                        y_s[i] = v;
-                    }
-                },
-                n_states,
-            );
-
-        let problem = builder.build().map_err(|e| SimulateError::DiffsolError {
-            details: e.to_string(),
-        })?;
-
-        // Run the solver, then read the real step/eval counters out of diffsol
-        // before the concrete solver is dropped (see [`SolveStats::from_solver`]).
-        //
-        // Wrapped in an immediately-invoked closure so a solver failure does
-        // not leave the function before the XLA fault channel below is read: a
-        // device that stopped working reaches the solver as a NaN derivative,
-        // and reporting "tolerance not met" for it would name the wrong thing.
-        type SolvedSegment = (Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode);
-        let solved = (|| -> Result<SolvedSegment, SimulateError> {
-            let out = match opts.alg {
-                Alg::Bdf => {
-                    let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
-                        .bdf::<FaerLU<f64>>()
-                        .map_err(|e| SimulateError::DiffsolError {
-                            details: e.to_string(),
-                        })?;
-                    let (time, state, retcode) =
-                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-                Alg::Sdirk => {
-                    let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
-                        .tr_bdf2::<FaerLU<f64>>()
-                        .map_err(|e| SimulateError::DiffsolError {
-                            details: e.to_string(),
-                        })?;
-                    let (time, state, retcode) =
-                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-                Alg::Erk => {
-                    let _seq = crate::simulate::SequentialFaer::enter();
-                    let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
-                        details: e.to_string(),
-                    })?;
-                    let (time, state, retcode) =
-                        crate::simulate::run_solver(&mut solver, t_end, opts)?;
-                    let bs = solver.get_statistics();
-                    let stats = SolveStats::from_solver(
-                        &solver,
-                        bs.number_of_steps,
-                        bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
-                    );
-                    (time, state, stats, retcode)
-                }
-            };
-            Ok(out)
-        })();
-        // §9.6.6 `compiler_unavailable`: the caller named `xla`, and the XLA
-        // runtime stopped being able to provide it mid-solve. It is reported
-        // in preference to whatever the solver made of the NaN derivative,
-        // because that is the fact — and the first failure is reported, since
-        // every one after it ran on the same broken device.
-        #[cfg(feature = "xla")]
-        if let Some(details) = xla_fault.borrow().clone() {
-            return Err(SimulateError::CompilerUnavailable {
-                compiler: "xla",
-                details: format!("the compiled right-hand side failed during the solve: {details}"),
-            });
-        }
-        let (time, state, stats, retcode) = solved?;
-        Ok((time, state, stats, retcode))
     }
 
     /// Expose observed trajectories (e.g. an `area` FAQ) alongside the states
@@ -3184,13 +2698,13 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
 /// The solve-wide tape program (`None` only under the `interpreter`
 /// compiler, which builds no tape).
 #[cfg(feature = "solve")]
-type SolveTape = Option<std::sync::Arc<TapeProgram>>;
+pub(super) type SolveTape = Option<std::sync::Arc<TapeProgram>>;
 
 /// The run's [`SolutionMetadata`] — one construction for both driver exits.
 #[cfg(feature = "solve")]
-fn solution_metadata(
+pub(super) fn solution_metadata(
     solver_name: &str,
-    stats: &SolveStats,
+    stats: &super::session::SolveStats,
     merged_variable_renames: HashMap<String, String>,
     namespace: Option<String>,
 ) -> SolutionMetadata {
@@ -3210,42 +2724,26 @@ fn solution_metadata(
 /// The three-tier cadence partition of one solve's observed rules (see
 /// [`ArrayCompiled::partition_observed_cadence`]).
 #[cfg(feature = "solve")]
-struct ObservedCadence {
+pub(super) struct ObservedCadence {
     /// The CONST tier's names — consulted by the build inspection.
     static_names: HashSet<String>,
     /// CONST: materialized once at setup (the hoisted `static_obs`).
     static_rules: Vec<AlgebraicRule>,
     /// DISCRETE remainder: materialized once per segment.
-    segment_static_rules: Vec<AlgebraicRule>,
+    pub(super) segment_static_rules: Vec<AlgebraicRule>,
     /// CONTINUOUS: re-evaluated every RHS step.
-    continuous_rules: Vec<AlgebraicRule>,
+    pub(super) continuous_rules: Vec<AlgebraicRule>,
     /// DISCRETE ∪ CONTINUOUS — the non-hot observed-trajectory output pass.
     varying_rules: Vec<AlgebraicRule>,
 }
 
-/// The solve-wide products of the cadence partition and the static hoist,
-/// shared by every segment and by both driver exits.
+/// The run-wide products of the cadence partition and the static hoist,
+/// shared by every segment of a [`super::SolveSession`].
 #[cfg(feature = "solve")]
-struct SolveSetup {
-    cadence: ObservedCadence,
+pub(super) struct SolveSetup {
+    pub(super) cadence: ObservedCadence,
     /// The CONST observeds, materialized ONCE — seeded into every RHS eval.
-    static_obs: ArrMap,
-}
-
-/// One segmented (DISCRETE-cadence) integration's fixed inputs — bundled so
-/// [`ArrayCompiled::run_segmented`] takes the run plus the refresh callback.
-#[cfg(feature = "solve")]
-struct SegmentedRun<'a> {
-    t0: f64,
-    t_end: f64,
-    boundaries: &'a [f64],
-    ic_vec: &'a [f64],
-    param_vec: &'a [f64],
-    setup: &'a SolveSetup,
-    opts: &'a SolveOptions,
-    program: Option<&'a SolveProgram>,
-    /// The solve's fault latch.
-    faults: &'a FaultScope,
+    pub(super) static_obs: ArrMap,
 }
 
 /// The program a `native` solve integrates, with the right-hand side's and
@@ -3266,7 +2764,7 @@ pub(super) struct SolveProgram {
 
 #[cfg(feature = "solve")]
 impl SolveProgram {
-    fn new(compiled: &ArrayCompiled, tape: &std::sync::Arc<TapeProgram>) -> Self {
+    pub(super) fn new(compiled: &ArrayCompiled, tape: &std::sync::Arc<TapeProgram>) -> Self {
         SolveProgram {
             program: super::range::RhsProgram::for_solve(compiled, std::sync::Arc::clone(tape)),
             rhs: RefCell::new(None),
@@ -3276,7 +2774,7 @@ impl SolveProgram {
 
     /// The driver refreshed the forcing buffer: every workspace built so far
     /// re-runs its SEGMENT section on its next call.
-    fn forcing_refreshed(&self) {
+    pub(super) fn forcing_refreshed(&self) {
         for w in [&self.rhs, &self.jac] {
             if let Some(ws) = w.borrow_mut().as_mut() {
                 ws.forcing_refreshed();
@@ -4001,6 +3499,25 @@ mod field_ic_memo_tests {
             let sol = solve(&prob, &SolveOptions::default()).expect("solves");
             assert_eq!(field_ic_resolutions() - before, 1, "[{compiler}]");
             assert_eq!(first_column(&sol), [1.0, 2.0, 3.0], "[{compiler}]");
+        }
+    }
+
+    /// The memo answers to what the resolution read, not to who holds the
+    /// buffer: taking a handle, or writing a field no initial condition
+    /// reads, leaves it standing.
+    #[test]
+    fn a_handle_or_an_unread_write_keeps_the_memo() {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let prob = loaded(compiler);
+            let compiled = prob.debug_array_compiled().expect("an array model");
+            compiled.forcing_handle().borrow_mut().insert(
+                "not_read_by_any_ic".to_string(),
+                ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), 7.0),
+            );
+            let before = field_ic_resolutions();
+            let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+            assert_eq!(field_ic_resolutions() - before, 0, "[{compiler}]");
+            assert_eq!(first_column(&sol), [0.0, 0.0, 0.0], "[{compiler}]");
         }
     }
 

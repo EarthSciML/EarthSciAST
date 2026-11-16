@@ -71,6 +71,10 @@ mod layout;
 pub(crate) mod range;
 mod recurrence_group;
 mod rhs;
+#[cfg(feature = "solve")]
+mod session;
+#[cfg(feature = "solve")]
+pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
 mod vectorized;
 
@@ -788,10 +792,6 @@ pub struct ArrayCompiled {
     /// `data_source_unbound`, CONFORMANCE_SPEC §5.46). Empty for every model
     /// with no data feed.
     data_fed: Vec<(String, String)>,
-    /// How many times [`Self::forcing_handle`] has handed out the buffer: a
-    /// host holding a handle can have written it since, which is what
-    /// [`driver::FieldIcMemo`] checks.
-    forcing_generation: std::cell::Cell<u64>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of the equation list by [`Self::from_model_with_arrays`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]

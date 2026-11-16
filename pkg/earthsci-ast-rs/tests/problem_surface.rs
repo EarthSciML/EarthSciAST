@@ -602,6 +602,37 @@ fn stepping_a_model_with_a_scalar_observed_feeds_back_only_state() {
     );
 }
 
+/// A stepping run reports progress against the whole run, as one `solve`
+/// does: the Problem's span, and accepted steps counted from its start, so a
+/// progress bar does not restart at every grid point. The run's metadata
+/// sums every step's solver statistics.
+#[test]
+fn stepping_progress_and_metadata_cover_the_whole_run() {
+    let prob = decay_problem((0.0, 2.0));
+    let seen: Arc<Mutex<Vec<(f64, f64, usize)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let opts = SolveOptions {
+        progress: Some(Arc::new(move |p: &Progress<'_>| {
+            sink.lock().unwrap().push((p.t0, p.t_end, p.step));
+            Flow::Continue
+        })),
+        ..tight(grid(2.0, 4))
+    };
+    let mut integ = init(&prob, &opts).expect("init");
+    let sol = integ.solve_to_completion().expect("run");
+    let seen = seen.lock().unwrap();
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|&(t0, t_end, _)| t0 == 0.0 && t_end == 2.0));
+    assert!(
+        seen.windows(2).all(|w| w[0].2 <= w[1].2),
+        "the step count went backwards: {seen:?}"
+    );
+    let last = seen.last().unwrap().2;
+    assert!(last > 0);
+    assert_eq!(last, sol.metadata.n_accepted_steps);
+    assert!(sol.metadata.n_rhs_calls > 0);
+}
+
 #[test]
 fn solve_to_completion_runs_the_whole_interval_in_one_call() {
     let prob = decay_problem((0.0, 2.0));

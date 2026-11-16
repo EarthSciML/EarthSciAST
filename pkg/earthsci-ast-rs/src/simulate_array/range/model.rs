@@ -104,7 +104,6 @@ impl ProgramModel {
             n_states,
             forcing: Default::default(),
             data_fed: self.data_fed.clone(),
-            forcing_generation: std::cell::Cell::new(0),
             field_ics: Vec::new(),
             init_faqs: Vec::new(),
             ic_scope: Default::default(),
