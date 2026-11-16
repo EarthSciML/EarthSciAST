@@ -312,6 +312,23 @@ fn same_bits(a: &[f64], b: &[f64]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
+/// The error a latched fault reports.
+fn fault_error(fault: Fault) -> SimulateError {
+    crate::compile_error::CompileError::InterpreterBuildError {
+        details: fault.message,
+    }
+    .into()
+}
+
+/// A solve that fails after the right-hand side latched a fault failed
+/// BECAUSE of it: the fault substituted `NaN`, and the integrator's step-size
+/// or error-test failure is the symptom. Report the latched fault instead, as
+/// `assemble_solution` does on success.
+#[cfg(feature = "solve")]
+fn fault_first(faults: &FaultScope, err: SimulateError) -> SimulateError {
+    faults.take().map_or(err, fault_error)
+}
+
 /// Which of a solve's two evaluation workspaces a call uses: the right-hand
 /// side's or the finite-difference Jacobian's, so the two never alias.
 #[cfg(feature = "solve")]
@@ -1088,7 +1105,7 @@ impl ArrayCompiled {
             scratch.set_exports_active(true);
         }
         let mut dy: Vec<f64> = Vec::new();
-        crate::simulate_array::take_const_array_oob();
+        let faults = FaultScope::enter();
         for (k, &t) in times.iter().enumerate() {
             evaluate_rhs_with_scratch(
                 &RhsCall {
@@ -1107,10 +1124,8 @@ impl ArrayCompiled {
                 &mut RhsStats::default(),
                 &mut scratch,
             );
-            if let Some(details) = crate::simulate_array::take_const_array_oob() {
-                return Err(
-                    crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
-                );
+            if let Some(fault) = faults.take() {
+                return Err(fault_error(fault));
             }
             let obs = scratch
                 .taped_observeds()
@@ -1467,8 +1482,8 @@ impl ArrayCompiled {
                 Ok(_) => return Err(invalid("the `faq` did not evaluate to its box".to_string())),
                 Err(e) => return Err(invalid(e.to_string())),
             };
-            if let Some(details) = crate::simulate_array::take_const_array_oob() {
-                return Err(invalid(details));
+            if let Some(fault) = take_fault() {
+                return Err(invalid(fault.message));
             }
             // Every cell of the ranges, the box `eval_faq` fills from `lo`.
             let total: usize = ranges
@@ -1908,17 +1923,13 @@ impl ArrayCompiled {
         initial_conditions: &HashMap<String, f64>,
         start: &IcStart<'_>,
     ) -> Result<Vec<f64>, SimulateError> {
-        crate::simulate_array::take_const_array_oob();
+        let faults = FaultScope::enter();
         let u0 = self.build_param_vec(params).and_then(|param_vec| {
             self.build_initial_state_with(initial_conditions, &param_vec, start, false)
         });
-        // Drained at every exit, so no later call reads this one's gather. An
-        // error building the state is the answer over a gather it latched.
-        let oob = crate::simulate_array::take_const_array_oob();
-        match (u0, oob) {
-            (Ok(_), Some(details)) => {
-                Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into())
-            }
+        // An error building the state is the answer over a gather it latched.
+        match (u0, faults.finish()) {
+            (Ok(_), Some(fault)) => Err(fault_error(fault)),
             (u0, _) => u0,
         }
     }
@@ -2109,12 +2120,13 @@ impl ArrayCompiled {
         // Validate the override names and build the positional param vector
         // and the initial state vector `u0` (loaded-field / coordinate
         // `ic`s folded in — see [`Self::build_initial_state`]).
-        // §5.5.5: the per-cell oracle LATCHES an out-of-range const-array gather
-        // rather than raising (the tree walk returns a bare `Value`). Clear the
-        // latch before the solve; `assemble_solution` drains it at every exit,
-        // so a trajectory built on a const-array bug fails loudly instead of
-        // carrying the `NaN` the gather substituted.
-        crate::simulate_array::take_const_array_oob();
+        // §5.5.5: the evaluators LATCH a fail-closed fault (an out-of-range
+        // const-array gather, say) rather than raising, since the right-hand
+        // side has no error channel. The solve owns the latch for its whole
+        // run; `assemble_solution` drains it at every exit, so a trajectory
+        // built on such a fault fails loudly instead of carrying the `NaN` it
+        // substituted.
+        let faults = FaultScope::enter();
         let param_vec = self.build_param_vec(params_owned)?;
 
         // Seed the forcing buffer at t0 BEFORE the static hoist reads it — a
@@ -2180,8 +2192,9 @@ impl ArrayCompiled {
                     opts,
                     program.as_ref(),
                 )
-                .map_err(Self::const_oob_first)?;
+                .map_err(|e| fault_first(&faults, e))?;
             return self.assemble_solution(
+                &faults,
                 time,
                 state,
                 retcode,
@@ -2207,6 +2220,7 @@ impl ArrayCompiled {
             setup: &setup,
             opts,
             program: program.as_ref(),
+            faults: &faults,
         };
         let (time, state, stats, retcode) = self.run_segmented(&run, &mut refresh_fn)?;
 
@@ -2216,6 +2230,7 @@ impl ArrayCompiled {
         // array STATE trajectory (the fire front) is per-segment correct, which
         // is what the runner reads.
         self.assemble_solution(
+            &faults,
             time,
             state,
             retcode,
@@ -2416,6 +2431,7 @@ impl ArrayCompiled {
             setup,
             opts,
             program,
+            faults,
         } = run;
         let n_states = self.n_states;
 
@@ -2501,7 +2517,7 @@ impl ArrayCompiled {
                     &seg_opts,
                     program,
                 )
-                .map_err(Self::const_oob_first)?;
+                .map_err(|e| fault_first(faults, e))?;
             stats += seg_stats;
             // A segment that stopped early ends the whole run: the state at its
             // right endpoint never materialised, so there is nothing to seed the
@@ -2544,6 +2560,7 @@ impl ArrayCompiled {
     #[allow(clippy::too_many_arguments)]
     fn assemble_solution(
         &self,
+        faults: &FaultScope,
         time: Vec<f64>,
         mut state: Vec<Vec<f64>>,
         retcode: ReturnCode,
@@ -2565,10 +2582,8 @@ impl ArrayCompiled {
             output_observed,
             tape,
         );
-        if let Some(details) = crate::simulate_array::take_const_array_oob() {
-            return Err(
-                crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
-            );
+        if let Some(fault) = faults.take() {
+            return Err(fault_error(fault));
         }
         Ok(Solution {
             time,
@@ -2577,20 +2592,6 @@ impl ArrayCompiled {
             retcode,
             metadata,
         })
-    }
-
-    /// A solve that fails after the RHS latched an out-of-range const-array gather
-    /// failed BECAUSE of it: the gather substituted `NaN`, and the integrator's
-    /// step-size or error-test failure is the symptom. Report the latched
-    /// `E_TREEWALK_CONSTARRAY_OOB` instead, as `assemble_solution` does on success.
-    #[cfg(feature = "solve")]
-    fn const_oob_first(err: SimulateError) -> SimulateError {
-        match crate::simulate_array::take_const_array_oob() {
-            Some(details) => {
-                crate::compile_error::CompileError::InterpreterBuildError { details }.into()
-            }
-            None => err,
-        }
     }
 
     /// Integrate ONE segment `[t0, t_end]` from initial state `u0`, reading the
@@ -3304,6 +3305,8 @@ struct SegmentedRun<'a> {
     setup: &'a SolveSetup,
     opts: &'a SolveOptions,
     program: Option<&'a SolveProgram>,
+    /// The solve's fault latch.
+    faults: &'a FaultScope,
 }
 
 /// The program a `native` solve integrates, with the right-hand side's and

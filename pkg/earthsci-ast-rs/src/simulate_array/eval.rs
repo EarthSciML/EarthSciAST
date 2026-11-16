@@ -76,11 +76,14 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     if let Some(scope) = ctx.recur
         && scope.name == name
     {
-        latch_gather_fault(format!(
-            "E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence \
+        latch_fault(
+            fault_code::RECUR_UNAVAILABLE,
+            format!(
+                "E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence \
              definition — the whole array does not exist during the sweep. Read it through \
              `index` at a strictly earlier position instead (esm-spec §4.3.1.1)."
-        ));
+            ),
+        );
         return Value::Scalar(f64::NAN);
     }
     if let Some(v) = ctx.loop_binds.get(name) {
@@ -140,15 +143,18 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     //     declared, defined and referenced perfectly well, and had nothing to
     //     do with the cycle. Bisecting from that message costs an afternoon.
     if declared.contains(name) {
-        latch_gather_fault(format!(
-            "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
+        latch_fault(
+            fault_code::UNRESOLVED_ORDER,
+            format!(
+                "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
              produced a value for it at the point this expression was evaluated. For an observed \
              that means its defining rule had not run yet — the usual cause is a dependency \
              cycle among observed variables, which no evaluation order satisfies (esm-spec \
              §4.9.6). Run `esm validate`: it reports the cycle as `observed_cycle` and names the \
              observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
              that (CONFORMANCE_SPEC §5.23)."
-        ));
+            ),
+        );
         return;
     }
     // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
@@ -165,15 +171,18 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
     // point drains it, so the read surfaces as a named build/solve failure
     // instead of a number. The `NaN` returned alongside is only what the walk
     // carries until the drain.
-    latch_gather_fault(format!(
-        "E_TREEWALK_UNBOUND_NAME: '{name}' is referenced in an expression but bound by \
+    latch_fault(
+        fault_code::UNBOUND_NAME,
+        format!(
+            "E_TREEWALK_UNBOUND_NAME: '{name}' is referenced in an expression but bound by \
          NOTHING in scope — it is not the independent variable, a loop index, a state, an \
          observed, a parameter, or a forcing channel. A name declared nowhere in the \
          document is a structural error (`esm validate` reports it against the equation); \
          reaching evaluation means one route skipped that gate. Fail-closed per \
          CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
          comparison would launder into a plausible number by dropping the operand."
-    ));
+        ),
+    );
 }
 
 /// Latch the fault for a forcing-buffer entry whose shape is not the box a
@@ -182,12 +191,15 @@ pub(super) fn latch_unbound_read(name: &str, declared: &HashSet<String>) {
 /// build, so it cannot, and says so rather than reading the entry through the
 /// wrong box.
 pub(super) fn latch_forcing_shape_mismatch(name: &str, built: &[usize], held: &[usize]) {
-    latch_gather_fault(format!(
-        "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
+    latch_fault(
+        fault_code::UNCODED,
+        format!(
+            "the forcing buffer holds '{name}' with shape {held:?}, but the compiled program \
          reads it as {built:?} (the shape the buffer held, or else the variable declared, \
          when the program was built). A compiled program's boxes are fixed at build: a \
          forcing field that changes shape between refreshes cannot be read by it."
-    ));
+        ),
+    );
 }
 
 /// Bind (or rebind) a loop index in `binds` without reallocating the key on the
@@ -1802,33 +1814,78 @@ thread_local! {
     static CONST_OOB: RefCell<Option<LatchedFault>> = const { RefCell::new(None) };
 }
 
+/// The codes of the fail-closed faults the evaluators latch, each the
+/// prefix of its message (`"<code>: …"`).
+pub(crate) mod fault_code {
+    macro_rules! codes {
+        ($($name:ident),* $(,)?) => {
+            $(pub(crate) const $name: &str = concat!("E_TREEWALK_", stringify!($name));)*
+            /// Every code above.
+            pub(crate) const ALL: &[&str] = &[$($name),*];
+        };
+    }
+    codes!(
+        CONSTARRAY_OOB,
+        FILTER_UNALIGNED,
+        INDEX_ON_SCALAR,
+        NESTED_BOX_MISMATCH,
+        RECUR_UNAVAILABLE,
+        UNBOUND_NAME,
+        UNRESOLVED_ORDER,
+    );
+    /// The code of a fault whose message leads with none of [`ALL`].
+    pub(crate) const UNCODED: &str = "rhs_fault";
+
+    /// The code `message` leads with, for a message latched without one
+    /// (the tape latches the texts the evaluator's message builders made).
+    pub(crate) fn of(message: &str) -> &'static str {
+        ALL.iter()
+            .copied()
+            .find(|c| {
+                message
+                    .strip_prefix(c)
+                    .is_some_and(|rest| rest.starts_with(':'))
+            })
+            .unwrap_or(UNCODED)
+    }
+}
+
+/// A fail-closed fault an evaluation latched: its code
+/// ([`fault_code`]) and its message.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Fault {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
 /// The latched fault and, for one the tape latched through
 /// [`latch_ordered_fault`], where it sits in its rule's evaluation order.
 struct LatchedFault {
-    msg: String,
+    fault: Fault,
     order: Option<(u32, SmallVec<[i64; 12]>)>,
 }
 
-/// Take (and clear) the pending fail-closed gather diagnostic, if any.
+/// Take (and clear) the pending fail-closed fault's message, if any.
 ///
 /// Named for the first fault that used this channel
-/// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
-/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4),
-/// `E_TREEWALK_UNBOUND_NAME` / `E_TREEWALK_UNRESOLVED_ORDER` (§5.23) and
-/// `E_TREEWALK_INDEX_ON_SCALAR` (§7.1). All of them are "fail closed, do not
-/// silently substitute a number" faults with the same drain sites, so they
-/// share one latch rather than adding a second one that a future drain site
-/// could forget.
+/// (`E_TREEWALK_CONSTARRAY_OOB`); it carries every code in [`fault_code`].
+/// All of them are "fail closed, do not silently substitute a number" faults
+/// with the same drain sites, so they share one latch.
 pub fn take_const_array_oob() -> Option<String> {
-    CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.msg))
+    take_fault().map(|f| f.message)
 }
 
-/// The fault latch of one program call ([`crate::RhsProgram::eval_into`]):
-/// made on entry, it holds whatever the caller had latched and leaves the
-/// latch empty for the call; [`Self::finish`] takes the call's own fault and
-/// puts the caller's back. A call runs on one thread and starts no other, so
-/// nothing it latches is visible outside it, and nothing latched outside it
-/// is reported as its own.
+/// Take (and clear) the pending fail-closed fault, if any.
+pub(crate) fn take_fault() -> Option<Fault> {
+    CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.fault))
+}
+
+/// The fault latch of one evaluation: made on entry, it holds whatever the
+/// caller had latched and leaves the latch empty for the evaluation;
+/// [`Self::take`] and [`Self::finish`] read the evaluation's own fault, and
+/// the caller's is put back when the scope ends. An evaluation runs on one
+/// thread and starts no other, so nothing it latches is visible outside it,
+/// and nothing latched outside it is reported as its own.
 pub(crate) struct FaultScope {
     prev: Option<LatchedFault>,
 }
@@ -1840,31 +1897,46 @@ impl FaultScope {
         }
     }
 
-    /// The fault the call latched, if any; the caller's latch is restored.
-    pub(crate) fn finish(mut self) -> Option<String> {
+    /// Take the fault latched so far in this scope, if any, leaving the latch
+    /// empty for the rest of it.
+    pub(crate) fn take(&self) -> Option<Fault> {
+        take_fault()
+    }
+
+    /// The fault the evaluation latched, if any; the caller's latch is
+    /// restored.
+    pub(crate) fn finish(mut self) -> Option<Fault> {
         let prev = self.prev.take();
-        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.msg))
+        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.fault))
     }
 }
 
 impl Drop for FaultScope {
     fn drop(&mut self) {
-        if let Some(prev) = self.prev.take() {
-            CONST_OOB.with(|c| *c.borrow_mut() = Some(prev));
-        }
+        let prev = self.prev.take();
+        CONST_OOB.with(|c| *c.borrow_mut() = prev);
     }
 }
 
-/// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
-/// tape's `Instr::Fault` latches through here too, so both evaluators keep
-/// the same first-wins record.
-pub(crate) fn latch_gather_fault(msg: String) {
+/// Latch the FIRST fail-closed fault of this evaluation, with its code.
+pub(crate) fn latch_fault(code: &'static str, message: String) {
+    debug_assert!(code == fault_code::UNCODED || message.starts_with(code));
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
-            *slot = Some(LatchedFault { msg, order: None });
+            *slot = Some(LatchedFault {
+                fault: Fault { code, message },
+                order: None,
+            });
         }
     });
+}
+
+/// Latch the FIRST fail-closed fault of this evaluation, coded by the code
+/// its message leads with. The tape's `Instr::Fault` latches through here
+/// too, so both evaluators keep the same first-wins record.
+pub(crate) fn latch_gather_fault(msg: String) {
+    latch_fault(fault_code::of(&msg), msg);
 }
 
 /// Latch a fault the tape raises in rule `rule` at `key`, the position the
@@ -1887,8 +1959,12 @@ pub(crate) fn latch_ordered_fault(rule: u32, key: &[i64], msg: impl FnOnce() -> 
             Some(_) => false,
         };
         if replace {
+            let message = msg();
             *slot = Some(LatchedFault {
-                msg: msg(),
+                fault: Fault {
+                    code: fault_code::of(&message),
+                    message,
+                },
                 order: Some((rule, key.iter().copied().collect())),
             });
         }
@@ -1898,7 +1974,10 @@ pub(crate) fn latch_ordered_fault(rule: u32, key: &[i64], msg: impl FnOnce() -> 
 /// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
 /// outside the recurrence axis, or names a cell the sweep has not published.
 fn latch_recur_unavailable(name: &str, raw: &[i64]) {
-    latch_gather_fault(recur_unavailable_message(name, raw));
+    latch_fault(
+        fault_code::RECUR_UNAVAILABLE,
+        recur_unavailable_message(name, raw),
+    );
 }
 
 /// The text [`latch_recur_unavailable`] latches, shared with the tape's
@@ -1929,7 +2008,10 @@ pub(crate) fn recur_unavailable_message(name: &str, raw: &[i64]) -> String {
 /// goes on to apply — the document then reports a number that was never
 /// computed.
 fn latch_index_on_scalar(base: &Expr, subscripts: usize) {
-    latch_gather_fault(index_on_scalar_message(base, subscripts));
+    latch_fault(
+        fault_code::INDEX_ON_SCALAR,
+        index_on_scalar_message(base, subscripts),
+    );
 }
 
 /// The text [`latch_index_on_scalar`] latches, shared with the tape lowering,
@@ -1952,7 +2034,10 @@ pub(crate) fn index_on_scalar_message(base: &Expr, subscripts: usize) -> String 
 
 /// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
 fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
-    latch_gather_fault(const_oob_message(name, one_based, n, d));
+    latch_fault(
+        fault_code::CONSTARRAY_OOB,
+        const_oob_message(name, one_based, n, d),
+    );
 }
 
 /// The text [`latch_const_oob`] latches, shared with the tape lowering.
@@ -2514,7 +2599,7 @@ pub(crate) fn eval_observed_recurrence(
     };
     let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
     let scope = RecurScope::new(name, shape, origin);
-    take_const_array_oob(); // discard any latch left by an earlier failed call
+    let faults = FaultScope::enter();
     let arr = {
         let mut ctx = env.ctx(inputs);
         super::rhs::sweep_recurrence(
@@ -2529,8 +2614,10 @@ pub(crate) fn eval_observed_recurrence(
     // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
     // the channel the tree walk has for one, and draining it here is what makes
     // this path fail closed rather than hand back an array built on a sentinel.
-    match take_const_array_oob() {
-        Some(details) => Some(Err(CompileError::InterpreterBuildError { details })),
+    match faults.finish() {
+        Some(fault) => Some(Err(CompileError::InterpreterBuildError {
+            details: fault.message,
+        })),
         None => Some(Ok(arr)),
     }
 }
@@ -2684,10 +2771,12 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         declared: empty_declared_names(),
     };
     let mut ctx = env.ctx(inputs);
-    take_const_array_oob(); // discard any latch left by an earlier failed call
+    let faults = FaultScope::enter();
     let v = eval(expr, &mut ctx);
-    match take_const_array_oob() {
-        Some(details) => Err(CompileError::InterpreterBuildError { details }),
+    match faults.finish() {
+        Some(fault) => Err(CompileError::InterpreterBuildError {
+            details: fault.message,
+        }),
         None => Ok(v),
     }
 }
@@ -2763,13 +2852,16 @@ pub(super) fn filter_excludes(
                 return a.first().copied().unwrap_or(0.0) == 0.0;
             }
             let unaligned = |why: String| {
-                latch_gather_fault(format!(
-                    "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
+                latch_fault(
+                    fault_code::FILTER_UNALIGNED,
+                    format!(
+                        "E_TREEWALK_FILTER_UNALIGNED: a `faq` filter evaluated to an array of shape \
                      {:?}, {why}, so it does not say which index tuple each element gates. \
                      Read the filter's operands through `index` at the node's symbols \
                      (esm-spec §4.3.1).",
-                    a.shape()
-                ));
+                        a.shape()
+                    ),
+                );
                 true
             };
             let Some(cell) = cell else {
@@ -2912,7 +3004,10 @@ pub(super) fn cell_term(v: Value, body: &Expr, cell: Option<&CellBox>, ctx: &Eva
             match nested_faq_box(body, cell) {
                 NestedBox::Same => cell_element(&a, cell, ctx).unwrap_or(f64::NAN),
                 NestedBox::Other(what) => {
-                    latch_gather_fault(nested_box_message(cell, &what));
+                    latch_fault(
+                        fault_code::NESTED_BOX_MISMATCH,
+                        nested_box_message(cell, &what),
+                    );
                     f64::NAN
                 }
                 NestedBox::None => f64::NAN,
