@@ -10,8 +10,8 @@ import (
 // TestAssembleSystemDeduplicatesSameEquation pins the cross-system dedup in
 // assembleSystem: two systems that give the same variable the same equation
 // keep one copy, where "the same" treats a `D` with no `wrt` as `wrt: "t"`,
-// ignores the annotations `id`, `attrs` and `expect_cadence`, and holds for a
-// NaN constant; a different right-hand side is still a conflict.
+// ignores the annotations `id` and `expect_cadence`, and holds for a NaN
+// constant; a different right-hand side, `attrs` included, is still a conflict.
 func TestAssembleSystemDeduplicatesSameEquation(t *testing.T) {
 	lhs := ExprNode{Op: "D", Args: []any{"A.x"}, Wrt: strPtr("t")}
 	cases := []struct {
@@ -28,7 +28,13 @@ func TestAssembleSystemDeduplicatesSameEquation(t *testing.T) {
 		{
 			name: "annotations ignored",
 			rhsA: ExprNode{Op: "*", Args: []any{"k", "A.x"}, ID: strPtr("n1"), ExpectCadence: strPtr("const")},
-			rhsB: ExprNode{Op: "*", Args: []any{"k", "A.x"}, Attrs: map[string]any{"a": 1.0}},
+			rhsB: ExprNode{Op: "*", Args: []any{"k", "A.x"}, ID: strPtr("n2")},
+		},
+		{
+			name:     "different attrs conflict",
+			rhsA:     ExprNode{Op: "upwind", Args: []any{"A.x"}, Attrs: map[string]any{"order": 1.0}},
+			rhsB:     ExprNode{Op: "upwind", Args: []any{"A.x"}, Attrs: map[string]any{"order": 2.0}},
+			conflict: true,
 		},
 		{
 			name: "NaN constant equals itself",

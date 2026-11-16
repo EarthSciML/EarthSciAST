@@ -283,9 +283,10 @@ func sameExpression(a, b any) bool {
 }
 
 // expressionNodeAnnotations are the operator-node fields that annotate a node
-// without changing the value it computes: the `id` a derived index set names,
-// the open `attrs` of a rewrite-target op, and the author's `expect_cadence`.
-var expressionNodeAnnotations = []string{"id", "attrs", "expect_cadence"}
+// without changing the value it computes: the `id` a derived index set names
+// and the author's `expect_cadence`. A rewrite-target op's `attrs` are its
+// scheme parameters, so they stay in the key.
+var expressionNodeAnnotations = []string{"id", "expect_cadence"}
 
 // expressionKey is the comparison key of an expression or an equation,
 // decoded or typed: its canonical form (CanonicalizeDocument; numbers in their
