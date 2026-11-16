@@ -980,7 +980,7 @@ fn collect_algebraic(
         let sets = expr_sets(&expr, flat).map_err(|why| {
             strip_error(
                 crate::diagnostic::codes::KERNEL_OUTPUT_UNRESOLVED,
-                format!("the residual of `{}`: {why}", crate::to_ascii(&eq.lhs)),
+                format!("the residual of `{}`: {why}", eq.lhs),
             )
         })?;
         for n in crate::simulate_array::free_variable_names(&expr) {

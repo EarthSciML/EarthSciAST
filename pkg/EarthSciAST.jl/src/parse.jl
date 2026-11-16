@@ -497,7 +497,7 @@ end
 # esm-spec §9.7.6). Anything else is a `MetaparameterExpression` the schema
 # admits (a symbolic dimension name, or an arithmetic node over one) and is kept
 # as an `ASTExpr`, so a still-open bound survives the typed round-trip instead of
-# crashing in `Int(x)`. `format_bound` (display.jl) already renders both shapes.
+# crashing in `Int(x)`.
 _coerce_region_bound(x) =
     (x isa Integer && !(x isa Bool)) ? Int(x) :
     (x isa Real && isinteger(x)) ? Int(x) :

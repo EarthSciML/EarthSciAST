@@ -478,10 +478,11 @@ is a `Dict{String,NumExpr}` and has no method, so build it as
 
 # Examples
 ```julia
-e = parse_expression("k * (T_wall - T_air)")
+names = ["k", "k0", "T_wall", "T_air"]
+e = expression_from_json(parse_math("k (T_(upright(\"wall\")) - T_(upright(\"air\")))", names, :typst))
 bindings = Dict{String,ASTExpr}("T_wall" => NumExpr(300.5),
-                                "k" => parse_expression("2 * k0"))
-to_ascii(substitute(e, bindings))  # "2 * k0 * (300.5 - T_air)"
+                                "k" => expression_from_json(parse_math("2 italic(\"k0\")", names, :typst)))
+substitute(e, bindings)  # shows as Typst math: (2 italic("k0")) (300.5 - T_(upright("air")))
 ```
 """
 function substitute(expr::NumExpr, bindings::Dict{String, ASTExpr})::ASTExpr

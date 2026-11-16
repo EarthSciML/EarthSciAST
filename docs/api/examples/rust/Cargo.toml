@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 earthsci-ast = { path = "../../../../pkg/earthsci-ast-rs" }
+serde_json = "1"
 
 # The examples share one helper: `fixture`, which finds the shared `.esm`
 # documents relative to this directory rather than the working directory.

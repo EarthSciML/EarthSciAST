@@ -1725,9 +1725,8 @@ mod tests {
     }
 
     /// The legal spellings must stay legal — including the ONE-operand unary
-    /// form, which is an authored in-tree idiom (`tests/display/
-    /// structural_ops.json`, `canonicalize.rs`), and the one-operand n-ary
-    /// form (`tests/property_corpus/expressions/expr_039.json`).
+    /// form, which is an authored in-tree idiom (`canonicalize.rs`), and the
+    /// one-operand n-ary form (`tests/property_corpus/expressions/expr_039.json`).
     #[test]
     fn well_formed_broadcasts_produce_no_finding() {
         for expr in [

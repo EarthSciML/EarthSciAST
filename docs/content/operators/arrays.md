@@ -14,9 +14,9 @@ rejected with `array_shape_mismatch`.
 Element or sub-array access. `args[0]` is the array; `args[1..]` are the index
 expressions.
 
-**Text**
-```text
-C[i, j]
+**LaTeX**
+```latex
+C_{i, j}
 ```
 **JSON**
 ```json
@@ -25,9 +25,9 @@ C[i, j]
 
 Indices are expressions, so arithmetic on them is ordinary:
 
-**Text**
-```text
-C[i - 1]
+**LaTeX**
+```latex
+C_{i - 1}
 ```
 **JSON**
 ```json
@@ -71,10 +71,6 @@ interior/boundary idiom work — fill the interior with a stencil, then overwrit
 the faces with the boundary condition. There is no boundary-condition block
 anywhere in the format; this is where a BC lives:
 
-**Text**
-```text
-makearray([2:9] = k * C[i], [1:1] = 0, [10:10] = 0)
-```
 **JSON**
 ```json
 {
@@ -107,10 +103,6 @@ stencil was instantiated below its scheme's minimum extent.
 Reshapes `args[0]` to the target `shape` field. Entries are integers or symbolic
 dimension names.
 
-**Text**
-```text
-reshape(v, [lon, lat])
-```
 **JSON**
 ```json
 { "op": "reshape", "args": ["v"], "shape": ["lon", "lat"] }
@@ -120,10 +112,6 @@ reshape(v, [lon, lat])
 
 Axis permutation of `args[0]`. With no `perm`, axes are reversed:
 
-**Text**
-```text
-transpose(A)
-```
 **JSON**
 ```json
 { "op": "transpose", "args": ["A"] }
@@ -131,10 +119,6 @@ transpose(A)
 
 `perm` is a list of **0-based** axis indices giving the new order:
 
-**Text**
-```text
-transpose(A, [1, 0])
-```
 **JSON**
 ```json
 { "op": "transpose", "args": ["A"], "perm": [1, 0] }
@@ -145,10 +129,6 @@ transpose(A, [1, 0])
 Concatenates its operand arrays along `axis`, which is **0-based**. All operands
 must have identical shape on every other axis.
 
-**Text**
-```text
-concat(A, B, axis=1)
-```
 **JSON**
 ```json
 { "op": "concat", "args": ["A", "B"], "axis": 1 }
@@ -171,7 +151,8 @@ comparisons, the logical connectives, and `ifelse`. It may not name a
 non-pointwise op, and `args` must satisfy that operator's arity. There is no
 default: an absent or invalid `fn` is rejected with `invalid_broadcast_fn`.
 
-`broadcast` has no text form of its own — it prints as the operator it applies.
+Document math has no notation of its own for `broadcast`: a document writes it
+in the generic `\esm{broadcast}{…}{…}` form, its fields as JSON.
 
 Most of the time you do not need it: ordinary elementwise operators already
 broadcast over array operands by index-set alignment. Reach for it when the

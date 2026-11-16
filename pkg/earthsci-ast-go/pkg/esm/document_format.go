@@ -12,7 +12,11 @@ package esm
 // golden set is tests/conformance/document_format/.
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm/internal/docfmt"
 )
@@ -91,8 +95,111 @@ func PrintDocument(doc any, format DocumentFormat) string {
 // spellings that would collide with it. The result is what a document display
 // holds, without its delimiters; it is meant for showing one expression outside
 // a document, so no template is in scope.
+//
+// expr may also be, or hold at any depth (an equation map whose `rhs` is an
+// ExprNode), one of this package's typed values (an ExprNode, an Equation, a
+// pointer to one), which prints as its JSON encoding does.
 func PrintMath(expr any, names []string, f DocumentFormat) string {
+	expr = decodedValue(expr)
 	return docfmt.PrintMath(docfmt.FromGo(CanonicalizeDocument(expr)), names, f != DocumentTypst)
+}
+
+// ExpressionNames returns the variable names an expression or an equation
+// uses, in order of first use: its string leaves under `lhs`, `rhs` and `args`.
+// These are the names to give PrintMath to show an expression on its own, with
+// its names declared. expr is a decoded expression or equation, or one of this
+// package's typed values (ExprNode, Equation, ...).
+func ExpressionNames(expr any) []string {
+	var out []string
+	seen := map[string]bool{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case string:
+			if !seen[x] {
+				seen[x] = true
+				out = append(out, x)
+			}
+		case []any:
+			for _, item := range x {
+				walk(item)
+			}
+		case map[string]any:
+			for _, key := range []string{"lhs", "rhs", "args"} {
+				if child, ok := x[key]; ok {
+					walk(child)
+				}
+			}
+		}
+	}
+	walk(decodedValue(expr))
+	return out
+}
+
+// ParseMath reads one expression, or one equation, written as math under a
+// set of declared names: LaTeX for DocumentMarkdown (Lean `Math.parseLatex`),
+// Typst math for DocumentTypst (`Math.parseTypst`). It is the inverse of
+// PrintMath: ParseMath(PrintMath(e, names, f), names, f) is e in canonical form
+// (CanonicalizeDocument), the value PrintMath takes.
+//
+// text is what a document display holds, without its delimiters. Text whose
+// top is `=` reads as an equation, a map with `lhs` and `rhs`, as a display
+// does (`Source.eqSides`); any other text reads as an expression. names plays
+// the part of the variables a component declares: it decides how a run of
+// letters reads (in LaTeX, `RT` is the name `RT` when it is declared, the
+// product of `R` and `T` when they are). No template is in scope.
+//
+// A text that is not math returns a *DocumentFormatError with code
+// `removed_op` when it uses an operator removed from the format (esm-spec
+// §4.2), and `parse_error` for any other text, and for one past a bound of the
+// reader, as ParseMarkdown: nested too deeply, or holding a number beyond the
+// binary64 range.
+func ParseMath(text string, names []string, format DocumentFormat) (any, error) {
+	var lim docfmt.Lim
+	e, ok := docfmt.ParseMath(&lim, text, names, format != DocumentTypst)
+	if !ok && lim.RemovedOp == "" && !lim.TooDeep {
+		return nil, &DocumentFormatError{
+			Code:    CodeParseError,
+			Message: fmt.Sprintf("not an ESM expression in %s math", map[DocumentFormat]string{DocumentMarkdown: "LaTeX", DocumentTypst: "Typst"}[format]),
+		}
+	}
+	return checkedRead(e, ok, &lim, format)
+}
+
+// decodedValue is v as encoding/json decodes it: a typed value of this package
+// (ExprNode, Equation, a pointer to one, at any depth, inside a map or a slice
+// too) becomes its JSON tree, in which an operator node built with no Args has
+// the empty `args` the schema requires. A non-finite number, which no JSON
+// holds, stays a float64 in the tree.
+func decodedValue(v any) any {
+	tree := jsonTree(v)
+	var fill func(any)
+	fill = func(x any) {
+		switch t := x.(type) {
+		case map[string]any:
+			if args, ok := t["args"]; ok && args == nil {
+				if _, isNode := t["op"]; isNode {
+					t["args"] = []any{}
+				}
+			}
+			for _, child := range t {
+				fill(child)
+			}
+		case []any:
+			for _, child := range t {
+				fill(child)
+			}
+		}
+	}
+	fill(tree)
+	return tree
+}
+
+// mathText is an expression or an equation, decoded or typed, as Typst math
+// under its own names: how a message or a String method shows one.
+func mathText(expr any) string {
+	v := decodedValue(expr)
+	return PrintMath(v, ExpressionNames(v), DocumentTypst)
 }
 
 // ParseMarkdown reads a Markdown ESM document (Lean `Source.Md.parseMd`). The
@@ -124,6 +231,13 @@ func ParseDocument(text string, format DocumentFormat) (any, error) {
 	} else {
 		d, ok = docfmt.ParseMd(&lim, text)
 	}
+	return checkedRead(d, ok, &lim, format)
+}
+
+// checkedRead is the result of a read (Rust `checked`): refused past a bound
+// of the reader (nested too deeply, a number beyond binary64), else the
+// reader's value in Go form, else the reader's refusal.
+func checkedRead(d docfmt.Json, ok bool, lim *docfmt.Lim, format DocumentFormat) (any, error) {
 	if lim.TooDeep || (ok && docfmt.JSONDepth(d) > docfmt.MaxJSONDepth) {
 		return nil, &DocumentFormatError{
 			Code: CodeParseError,
@@ -159,5 +273,88 @@ func documentRefusal(removedOp string, format DocumentFormat) *DocumentFormatErr
 	return &DocumentFormatError{
 		Code:    CodeParseError,
 		Message: fmt.Sprintf("not an ESM %s document", map[DocumentFormat]string{DocumentMarkdown: "Markdown", DocumentTypst: "Typst"}[format]),
+	}
+}
+
+// sameExpression reports whether two expressions, decoded or typed, are the
+// same: whether their expressionKey is.
+func sameExpression(a, b any) bool {
+	return expressionKey(a) == expressionKey(b)
+}
+
+// expressionNodeAnnotations are the operator-node fields that annotate a node
+// without changing the value it computes: the `id` a derived index set names
+// and the author's `expect_cadence`. A rewrite-target op's `attrs` are its
+// scheme parameters, so they stay in the key.
+var expressionNodeAnnotations = []string{"id", "expect_cadence"}
+
+// expressionKey is the comparison key of an expression or an equation,
+// decoded or typed: its canonical form (CanonicalizeDocument; numbers in their
+// canonical kind, CONFORMANCE §5.5.3.1) with every `D` that names no `wrt`
+// given the independent variable it means (esm-spec §4.2), and with the
+// expressionNodeAnnotations of every operator node dropped, written out as
+// text. Everything else is kept, and a non-finite number is written out as
+// well, so a NaN constant has the same key as itself.
+func expressionKey(v any) string {
+	var b strings.Builder
+	writeExpressionKey(&b, CanonicalizeDocument(decodedValue(v)))
+	return b.String()
+}
+
+func writeExpressionKey(b *strings.Builder, v any) {
+	switch x := v.(type) {
+	case nil:
+		b.WriteString("null")
+	case bool:
+		b.WriteString(strconv.FormatBool(x))
+	case string:
+		b.WriteString(strconv.Quote(x))
+	case int64:
+		b.WriteString("i")
+		b.WriteString(strconv.FormatInt(x, 10))
+	case float64:
+		b.WriteString("f")
+		b.WriteString(strconv.FormatFloat(x, 'g', -1, 64))
+	case json.Number:
+		b.WriteString("n")
+		b.WriteString(string(x))
+	case []any:
+		b.WriteString("[")
+		for i, item := range x {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			writeExpressionKey(b, item)
+		}
+		b.WriteString("]")
+	case map[string]any:
+		_, isNode := x["op"]
+		if isNode {
+			if x["op"] == "D" {
+				if _, has := x["wrt"]; !has {
+					x["wrt"] = DefaultIndepVar
+				}
+			}
+			for _, k := range expressionNodeAnnotations {
+				delete(x, k)
+			}
+		}
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("{")
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(strconv.Quote(k))
+			b.WriteString(":")
+			writeExpressionKey(b, x[k])
+		}
+		b.WriteString("}")
+	default:
+		fmt.Fprintf(b, "%T(%#v)", x, x)
 	}
 }

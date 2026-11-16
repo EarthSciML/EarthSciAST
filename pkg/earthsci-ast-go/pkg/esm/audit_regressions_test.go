@@ -225,12 +225,12 @@ func TestAuditG5_OperatorComposeIsDeterministic(t *testing.T) {
 		}
 		for i := range want {
 			// FlattenedEquation carries Expression TREES, which are not
-			// comparable with ==; render both sides through the shared renderer.
+			// comparable with ==; compare both sides in canonical form.
 			got := flat.Equations[i]
-			if got.LHSString() != want[i].LHSString() || got.RHSString() != want[i].RHSString() ||
+			if !sameExpression(got.LHS, want[i].LHS) || !sameExpression(got.RHS, want[i].RHS) ||
 				got.SourceSystem != want[i].SourceSystem {
 				t.Fatalf("NON-DETERMINISTIC flatten at iteration %d, equation %d:\n first run: %s ~ %s\n this run: %s ~ %s",
-					iter, i, want[i].LHSString(), want[i].RHSString(), got.LHSString(), got.RHSString())
+					iter, i, showJSON(want[i].LHS), showJSON(want[i].RHS), showJSON(got.LHS), showJSON(got.RHS))
 			}
 		}
 	}
@@ -251,8 +251,8 @@ func TestAuditG5_TranslateIsAppliedOnce(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		rhs := eq.RHSString()
-		if strings.Contains(rhs, "A.q") && strings.Contains(rhs, "B.r") {
+		rhs := showJSON(eq.RHS)
+		if strings.Contains(rhs, `"A.q"`) && strings.Contains(rhs, `"B.r"`) {
 			t.Errorf("a translate entry chained into the other: RHS = %q", rhs)
 		}
 	}
@@ -619,18 +619,17 @@ func TestAuditG13_VariableMapFactorIsParenthesized(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		rhs := eq.RHSString()
-		if !strings.Contains(rhs, "A.x") || !strings.Contains(rhs, "^") {
+		rhs := showJSON(eq.RHS)
+		if !strings.Contains(rhs, `"A.x"`) || !strings.Contains(rhs, `"^"`) {
 			continue
 		}
 		// The factor is a `*` NODE spliced into the `^` node's base slot, so the
-		// grouping is carried by the tree and the renderer parenthesizes it. The
-		// old text splice had to remember to write the brackets itself.
-		if strings.Contains(rhs, "(2 * A.x)^2") {
+		// grouping is carried by the tree.
+		want := map[string]any{"op": "^", "args": []any{map[string]any{"op": "*", "args": []any{2, "A.x"}}, 2}}
+		if sameExpression(eq.RHS, want) {
 			return // precedence-safe in every context
 		}
-		t.Errorf("the conversion factor lost its grouping, so it re-parses under the "+
-			"surrounding precedence: RHS = %q", rhs)
+		t.Errorf("the conversion factor lost its grouping: RHS = %s, want %s", rhs, showJSON(want))
 		return
 	}
 	t.Fatal("no flattened equation referenced the mapped variable")

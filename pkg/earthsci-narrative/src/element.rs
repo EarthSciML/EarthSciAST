@@ -18,7 +18,7 @@
 //!     {"kind": "model", "name": "Decay"},
 //!     {"kind": "var", "name": "N", "default": 100, "units": "mol"},
 //!     {"kind": "param", "name": "lambda", "default": 0.1, "units": "1/s"},
-//!     {"kind": "eq", "text": "D(N, t) = -lambda*N", "label": "eq-decay"},
+//!     {"kind": "eq", "math": "(dif N)/(dif t) = -lambda N", "label": "eq-decay"},
 //!     {"kind": "plot", "time_span": {"start": 0, "end": 50}, "y": "N"}
 //!   ]
 //! }
@@ -90,7 +90,7 @@ pub enum ElementKind {
     Var(QuantityElement),
     /// A parameter.
     Param(QuantityElement),
-    /// An equation in the text syntax.
+    /// An equation, in Typst math.
     Eq(EqElement),
     /// An esm-spec §6.6 inline test.
     Test(ModelTest),
@@ -200,8 +200,12 @@ pub struct QuantityElement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EqElement {
-    /// The equation in the text syntax, e.g. `D(N, t) = -lambda*N`.
-    pub text: String,
+    /// The equation in Typst math, the text between `$ … $` of an ESM Typst
+    /// display, e.g. `(dif N)/(dif t) = -lambda N`. It is read
+    /// (`earthsci_ast::parse_math`) with its model's declared quantities as
+    /// the names in scope, so a name of more than one letter must be declared
+    /// by a `var` or `param` element.
+    pub math: String,
     /// A label for cross-references, e.g. `eq-decay`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -581,7 +585,7 @@ mod tests {
                 {"kind": "model", "name": "Decay", "source": {"file": "a.md", "line": 3}},
                 {"kind": "var", "name": "N", "default": 100, "units": "mol"},
                 {"kind": "param", "name": "lambda", "default": 0.1},
-                {"kind": "eq", "text": "D(N, t) = -lambda*N", "label": "eq-decay"},
+                {"kind": "eq", "math": "(dif N)/(dif t) = -lambda N", "label": "eq-decay"},
                 {"kind": "test", "id": "t1", "time_span": {"start": 0, "end": 1},
                  "assertions": [{"variable": "N", "time": 1, "expected": 90.5}]},
                 {"kind": "analysis", "id": "a1", "time_span": {"start": 0, "end": 1}},
@@ -623,7 +627,7 @@ mod tests {
             "elements": [
                 {"kind": "var", "name": "N"},
                 {"kind": "var", "nme": "M", "source": {"line": 7}},
-                {"kind": "eqn", "text": "x = 1"},
+                {"kind": "eqn", "math": "x = 1"},
                 {"kind": "param", "name": "k"}
             ]
         });
@@ -650,7 +654,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_serde() {
-        let text = r#"{"version":1,"name":null,"description":null,"authors":[],"elements":[{"kind":"eq","text":"x = 1","source":{"label":"eq:x"}}]}"#;
+        let text = r#"{"version":1,"name":null,"description":null,"authors":[],"elements":[{"kind":"eq","math":"x = 1","source":{"label":"eq:x"}}]}"#;
         let doc: Document = serde_json::from_str(text).unwrap();
         assert_eq!(
             doc.elements[0].source.as_ref().unwrap().to_string(),

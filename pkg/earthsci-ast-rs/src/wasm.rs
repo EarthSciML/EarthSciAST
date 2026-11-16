@@ -31,43 +31,6 @@ fn to_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
         .map_err(js_err("Serialization error"))
 }
 
-/// Render every model equation and reaction rate of a loaded file with one of
-/// the real expression pretty-printers from [`crate::display`] (the same ones
-/// the CLI `pretty` command uses).
-fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) -> String {
-    let mut out = String::new();
-    if let Some(models) = &esm_file.models {
-        let mut ids: Vec<&String> = models.keys().collect();
-        ids.sort();
-        for model_id in ids {
-            out.push_str(&format!("Model: {model_id}\n"));
-            for (i, eq) in models[model_id].equations.iter().enumerate() {
-                out.push_str(&format!(
-                    "  Eq {}: {} = {}\n",
-                    i + 1,
-                    render(&eq.lhs),
-                    render(&eq.rhs)
-                ));
-            }
-        }
-    }
-    if let Some(reaction_systems) = &esm_file.reaction_systems {
-        let mut ids: Vec<&String> = reaction_systems.keys().collect();
-        ids.sort();
-        for rs_id in ids {
-            out.push_str(&format!("Reaction System: {rs_id}\n"));
-            for (i, reaction) in reaction_systems[rs_id].reactions.iter().enumerate() {
-                out.push_str(&format!(
-                    "  Reaction {}: rate = {}\n",
-                    i + 1,
-                    render(&reaction.rate)
-                ));
-            }
-        }
-    }
-    out
-}
-
 /// Load an ESM file from JSON string (WASM version)
 #[wasm_bindgen]
 pub fn load_string(json_str: &str) -> Result<JsValue, JsValue> {
@@ -93,31 +56,41 @@ pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
     to_js(&result)
 }
 
-/// Pretty-print every equation and reaction rate with the Unicode expression
-/// printer ([`crate::display::to_unicode`]) — the same renderer the CLI's
-/// `pretty` command uses. (Earlier versions returned a metadata summary
-/// instead of rendered math.)
-#[wasm_bindgen]
-pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
-    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
-    Ok(render_expressions(&esm_file, crate::display::to_unicode))
+/// The document format a math export names: `"markdown"` (LaTeX math) or
+/// `"typst"`.
+fn math_format(format: &str) -> Result<crate::DocumentFormat, JsValue> {
+    match format {
+        "markdown" => Ok(crate::DocumentFormat::Markdown),
+        "typst" => Ok(crate::DocumentFormat::Typst),
+        other => Err(JsValue::from_str(&format!(
+            "Format error: `{other}` is not `markdown` or `typst`"
+        ))),
+    }
 }
 
-/// Pretty-print every equation and reaction rate with the LaTeX expression
-/// printer ([`crate::display::to_latex`]).
+/// Print one expression or equation (JSON text) as math, with its own names
+/// declared ([`crate::print_math`] under [`crate::expression_names`]).
+/// `format` is `"markdown"` (LaTeX) or `"typst"`.
 #[wasm_bindgen]
-pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
-    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
-    Ok(render_expressions(&esm_file, crate::display::to_latex))
+pub fn print_math(expr_json: &str, format: &str) -> Result<String, JsValue> {
+    let expr: serde_json::Value = serde_json::from_str(expr_json).map_err(js_err("Parse error"))?;
+    Ok(crate::print_math(
+        &expr,
+        &crate::expression_names(&expr),
+        math_format(format)?,
+    ))
 }
 
-/// Pretty-print every equation and reaction rate with the ASCII expression
-/// printer ([`crate::display::to_ascii`]) — pure-ASCII output, unlike the
-/// Unicode renderer.
+/// Read one expression or equation written as math under the declared names
+/// (`names_json`, a JSON array of strings) and return it as canonical JSON
+/// text ([`crate::parse_math`]). `format` is `"markdown"` (LaTeX) or
+/// `"typst"`.
 #[wasm_bindgen]
-pub fn to_ascii(json_str: &str) -> Result<String, JsValue> {
-    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
-    Ok(render_expressions(&esm_file, crate::display::to_ascii))
+pub fn parse_math(text: &str, names_json: &str, format: &str) -> Result<String, JsValue> {
+    let names: Vec<String> = serde_json::from_str(names_json).map_err(js_err("Parse error"))?;
+    let expr =
+        crate::parse_math(text, &names, math_format(format)?).map_err(js_err("Parse error"))?;
+    serde_json::to_string(&expr).map_err(js_err("Serialization error"))
 }
 
 /// Substitute expressions in ESM file (WASM version)

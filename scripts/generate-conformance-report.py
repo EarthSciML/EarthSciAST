@@ -241,7 +241,7 @@ HTML_TEMPLATE = """
             <div class="summary-card">
                 <h3>Test Categories</h3>
                 <div class="metric">{total_categories}</div>
-                <div>Validation, Display, Substitution</div>
+                <div>Validation, Substitution</div>
             </div>
         </div>
 
@@ -288,7 +288,6 @@ def format_category_results(analysis_data: Dict[str, Any]) -> str:
 
     categories = [
         ("validation", "Validation Tests", analysis_data.get("validation_analysis", {})),
-        ("display", "Display Format Tests", analysis_data.get("display_analysis", {})),
         ("substitution", "Substitution Tests", analysis_data.get("substitution_analysis", {})),
     ]
 
@@ -332,7 +331,6 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
 
     categories = [
         ("validation", "Validation Divergences", analysis_data.get("validation_analysis", {})),
-        ("display", "Display Format Divergences", analysis_data.get("display_analysis", {})),
         (
             "substitution",
             "Substitution Divergences",
@@ -369,19 +367,6 @@ def format_divergence_details(analysis_data: Dict[str, Any]) -> str:
                     for inconsistency in divergence_data["inconsistencies"]:
                         html += f"<li>{inconsistency}</li>"
                     html += "</ul>"
-
-            elif category_id == "display":
-                # Display divergences
-                if isinstance(divergence_data, list):
-                    for divergence in divergence_data:
-                        html += f"""
-                        <p><strong>Type:</strong> {divergence.get("type", "Unknown")}</p>
-                        <p><strong>Input:</strong> <code>{divergence.get("input", "")}</code></p>
-                        <p><strong>Reference ({divergence.get("reference_lang", "")}):</strong>
-                           <span class="code-block">{divergence.get("reference_output", "")}</span></p>
-                        <p><strong>Divergent ({divergence.get("divergent_lang", "")}):</strong>
-                           <span class="code-block">{divergence.get("divergent_output", "")}</span></p>
-                        """
 
             elif category_id == "substitution":
                 # Substitution divergences
@@ -428,7 +413,7 @@ def generate_html_report(analysis_file: Path, output_file: Path):
     num_languages = len(languages_tested)
     languages_list = ", ".join(languages_tested)
     critical_divergences = len(divergence_summary.get("critical_divergences", []))
-    total_categories = 3
+    total_categories = 2
 
     # Determine CSS classes based on status
     overall_status_class = overall_status.lower()

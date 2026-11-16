@@ -68,8 +68,22 @@ println("Equations: ", length(model.equations))
 N = model.variables["N"]
 println("Variable type: ", N.type)          # UnknownVariable
 
-# Display an equation
-println(to_unicode(model.equations[1]))     # ∂N/∂t = (−λ)·N
+# Display an equation: `show` writes an expression or equation as Typst math
+println(model.equations[1])                 # (dif N)/(dif t) = (-lambda) N
+```
+
+### Expressions as math
+
+`print_math` writes one decoded expression or equation as LaTeX (`:markdown`)
+or Typst math (`:typst`) under the names it declares, and `parse_math` reads it
+back; `expression_names` lists the names an expression uses.
+
+```julia
+eq = Dict("lhs" => Dict("op" => "D", "args" => ["N"], "wrt" => "t"),
+          "rhs" => Dict("op" => "*", "args" => [Dict("op" => "-", "args" => ["lambda"]), "N"]))
+names = expression_names(eq)                 # ["N", "lambda"]
+print_math(eq, names, :markdown)             # \frac{\mathrm{d} N}{\mathrm{d} t} = \left(-\lambda\right) N
+parse_math("(dif N)/(dif t) = (-lambda) N", names, :typst) == canonicalize_document(eq)  # true
 ```
 
 ### Validation

@@ -431,7 +431,7 @@ fn directive(page: &mut Page, scope: &mut Option<Scope>, sources: &mut Sources, 
         }
         ("eq", Form::Leaf) => {
             let e = bad(
-                "`::eq[…]` is no longer read; write the equation as a display in LaTeX: a line `$$`, the equation (`\\frac{\\mathrm{d} N}{\\mathrm{d} t} = …` for `D(N, t) = …`), and a line `$$`, with `{#label}` after it for an anchor"
+                "`::eq[…]` is no longer read; write the equation as a display in LaTeX: a line `$$`, the equation (`\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -\\lambda N`), and a line `$$`, with `{#label}` after it for an anchor"
                     .to_string(),
             );
             page.diagnostics.push(e.clone());

@@ -160,7 +160,9 @@ def test_unsolvable_algebraic_constraint_is_refused(compiler):
     # The equation and the unknown it was to determine are both named.
     assert "M.K" in message
     assert "M.z" in message
-    assert "exp(M.z)" in message
+    # The array path quotes the equation as Typst math, where a dotted name is
+    # joined by "."; the sympy path quotes its own sympy form.
+    assert 'exp(M"."z)' in message or "exp(M.z)" in message
 
 
 @pytest.mark.parametrize("compiler", [None, "native", "interpreter", "sympy"])
@@ -196,7 +198,7 @@ def test_state_with_both_a_derivative_and_an_algebraic_equation_is_refused():
         message = str(excinfo.value)
         assert "equation_count_mismatch" in message
         assert "M.x" in message
-        assert "D(M.x, t)" in message
+        assert '(dif M"."x)/(dif t)' in message
 
 
 def test_doubly_defined_state_is_invalid_by_the_structural_check_too():
@@ -245,7 +247,7 @@ def test_array_build_refuses_a_driver_equation_it_cannot_apply(monkeypatch):
         _build(SUBSYSTEM_ALGEBRAIC_UNKNOWN, "native")
     message = str(excinfo.value)
     assert excinfo.value.code == "unsupported_construct"
-    assert "M.sub.w" in message
+    assert 'M"."italic("sub")"."w' in message
     assert "Python array interpreter" in message
 
 

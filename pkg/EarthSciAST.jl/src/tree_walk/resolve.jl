@@ -875,8 +875,8 @@ function _resolve_index_of_makearray(
     )
     if !isempty(bound_syms) && any(a -> _reads_bound_sym(a, bound_syms), idx_args)
         return _resolve_index_of_makearray_symbolic(
-            regions, values, idx_args, array_var_info, var_map,
-            const_arrays, pgather, memo, bound_syms
+            regions, _bind_makearray_loops(makearray_expr, values, idx_args), idx_args,
+            array_var_info, var_map, const_arrays, pgather, memo, bound_syms
         )
     end
     k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
@@ -897,6 +897,7 @@ function _resolve_index_of_makearray(
         )
         in_region && ((result_expr, result_region) = (val_expr, region))  # overwrite; last match wins
     end
+    result_expr = _bind_makearray_loop(makearray_expr, result_expr, idx_args)
     # esm-spec §9.6.8: a region value MAY be a self-contained ARRAY-VALUED
     # aggregate (the spec's worked example authors the interior stencil and the
     # boundary faces this way, each with its own `output_idx`/`ranges`). The
@@ -943,6 +944,45 @@ function _resolve_index_of_makearray(
         result_expr, array_var_info, var_map, const_arrays,
         pgather, memo, bound_syms
     )
+end
+
+# A `makearray`'s string `output_idx` entries are loop symbols it binds to the
+# cell being assembled (esm-spec §4.3, "Shadowing"; the pointwise lift tags its
+# operator makearray this way, esm-libraries-spec §4.7.5). Read at `idx_args`,
+# each such symbol takes the subscript in its position: the substitution that
+# does it, or `nothing` when there is none to make. A makearray read at its own
+# symbols (the lift's `index(M, ℓ…)`) needs none, so its values stay the shared
+# nodes identity-keyed memos expect.
+function _makearray_loop_bindings(makearray_expr::OpExpr, idx_args::Vector{ASTExpr})
+    oi = makearray_expr.output_idx
+    (oi === nothing || isempty(oi)) && return nothing
+    length(oi) == length(idx_args) ||
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_MAKEARRAY_NDIM",
+            "makearray output_idx names $(length(oi)) loop symbols but it is " *
+                "read with $(length(idx_args)) indices"
+        )
+    )
+    loops = Dict{String, ASTExpr}()
+    for (sym, k) in zip(oi, idx_args)
+        sym isa AbstractString || continue
+        k isa VarExpr && (k::VarExpr).name == sym && continue
+        loops[String(sym)] = k
+    end
+    return isempty(loops) ? nothing : loops
+end
+
+# The region values of `makearray_expr` read at `idx_args`, and one of them.
+function _bind_makearray_loops(makearray_expr::OpExpr, values, idx_args::Vector{ASTExpr})
+    loops = _makearray_loop_bindings(makearray_expr, idx_args)
+    loops === nothing && return values
+    memo = _SubMemo()
+    return ASTExpr[_sub_preserving(v, loops, memo) for v in values]
+end
+function _bind_makearray_loop(makearray_expr::OpExpr, value::ASTExpr, idx_args::Vector{ASTExpr})
+    loops = _makearray_loop_bindings(makearray_expr, idx_args)
+    return loops === nothing ? value : _sub_preserving(value, loops)
 end
 
 # `index(makearray, k…)` with a subscript that reads a symbol bound on the

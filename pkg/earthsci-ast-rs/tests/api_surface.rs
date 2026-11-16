@@ -240,7 +240,6 @@ fn manifest_names_resolve() {
         // Core format surface.
         EsmFile,
         Expr,
-        ExpressionParseError,
         // Flatten / validate / display / canonicalize.
         FlattenedSystem,
         // Versions.
@@ -257,6 +256,7 @@ fn manifest_names_resolve() {
         algebraic_unknowns,
         canonical_json,
         canonicalize,
+        expression_names,
         flatten,
         // Expression operations.
         free_variables,
@@ -266,15 +266,13 @@ fn manifest_names_resolve() {
         load_string,
         observed_unknowns,
         ode_states,
-        parse_expression,
+        parse_math,
+        print_math,
         simplify,
         substitute,
         system_kind,
-        to_ascii,
         to_json,
         to_json_compact,
-        to_latex,
-        to_unicode,
         validate,
         write_path,
     };

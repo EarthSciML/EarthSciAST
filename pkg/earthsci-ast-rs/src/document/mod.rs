@@ -144,6 +144,104 @@ pub fn expression_names(expr: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// Why [`parse_math`] refused a text, and where in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MathError {
+    /// Stable cross-binding diagnostic code: `removed_op` or `parse_error`.
+    pub code: &'static str,
+    /// Human-readable description (binding-local prose).
+    pub message: String,
+    /// For text that is not math, the 0-based character offset in the text
+    /// where reading went wrong: the first character no token of the math
+    /// starts with, or the start of the furthest token the parser reached (the
+    /// text's length in characters when the math ends too soon). `None` for a
+    /// refusal of the text as a whole: a removed operator, or a bound of the
+    /// reader.
+    pub at: Option<usize>,
+}
+
+impl std::fmt::Display for MathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {}", self.code, self.message)?;
+        if let Some(at) = self.at {
+            write!(f, " (at character {at})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for MathError {}
+
+/// Read one expression, or one equation, written as math under a set of
+/// declared names: LaTeX for [`DocumentFormat::Markdown`] (`Math.parseLatex`),
+/// Typst math for [`DocumentFormat::Typst`] (`Math.parseTypst`). The inverse
+/// of [`print_math`]: `parse_math(&print_math(e, names, f), names, f)` is `e`
+/// in canonical form.
+///
+/// `text` is what a document display holds, without its delimiters. Text
+/// whose top is `=` reads as an equation, an object with `lhs` and `rhs`, as
+/// a display does (`Source.eqSides`); any other text reads as an expression.
+/// `names` plays the part of the variables a component declares: it decides
+/// how a run of letters reads (in LaTeX, `RT` is the name `RT` when it is
+/// declared, the product of `R` and `T` when they are). No template is in
+/// scope.
+///
+/// # Errors
+///
+/// A [`MathError`] with code `removed_op` when the math uses an operator
+/// removed from the format (spec §4.2), and `parse_error` for any other text
+/// that is not math, with where in the text reading went wrong, and for one
+/// past a bound of the Rust reader ([`limits`]): nested too deeply, or
+/// holding a number beyond the binary64 range.
+pub fn parse_math(
+    text: &str,
+    names: &[String],
+    format: DocumentFormat,
+) -> Result<serde_json::Value, MathError> {
+    let sym = math::Sym {
+        names: names.to_vec(),
+        templates: Vec::new(),
+    };
+    let cs: Vec<char> = text.chars().collect();
+    let (read, found) = limits::reading(|| {
+        let (sf, lexed) = match format {
+            DocumentFormat::Markdown => (math::token::Sf::Latex, math::latex::lex_at(&cs)),
+            DocumentFormat::Typst => (math::token::Sf::Typst, math::typst::lex_at(&cs)),
+        };
+        let (toks, starts) = lexed?;
+        limits::track(&toks);
+        Ok((math::parse_toks(sf, &sym, &toks), starts))
+    });
+    let (e, at) = match read {
+        Ok((e, starts)) => {
+            let at = found
+                .reach
+                .map(|i| starts.get(i).copied().unwrap_or(cs.len()));
+            (e, at)
+        }
+        Err(at) => (None, Some(at)),
+    };
+    let e = e.map(|e| match source::equation::split_eq(e) {
+        Ok((lhs, rhs)) => json::Json::Obj(vec![("lhs".to_string(), lhs), ("rhs".to_string(), rhs)]),
+        Err(e) => e,
+    });
+    if e.is_none() && found.removed_op.is_none() && !found.too_deep {
+        return Err(MathError {
+            code: codes::PARSE_ERROR,
+            message: match format {
+                DocumentFormat::Markdown => "not an ESM expression in LaTeX math".to_string(),
+                DocumentFormat::Typst => "not an ESM expression in Typst math".to_string(),
+            },
+            at,
+        });
+    }
+    checked(e, found, format).map_err(|d| MathError {
+        code: d.code,
+        message: d.message,
+        at: None,
+    })
+}
+
 /// Read a Markdown ESM document (`Source.Md.parseMd`). The result is in
 /// canonical form.
 ///
@@ -302,6 +400,79 @@ mod tests {
     fn code(r: Result<serde_json::Value, DiagnosticError>) -> (&'static str, String) {
         let e = r.expect_err("refused");
         (e.code, e.message)
+    }
+
+    fn math_code(r: Result<serde_json::Value, MathError>) -> (&'static str, String) {
+        let e = r.expect_err("refused");
+        (e.code, e.message)
+    }
+
+    #[test]
+    fn parse_math_reads_an_expression_or_an_equation() {
+        let names = vec!["RT".to_string(), "k".to_string(), "y".to_string()];
+        let e = parse_math("RT + k", &names, DocumentFormat::Markdown).unwrap();
+        assert_eq!(e, serde_json::json!({"op": "+", "args": ["RT", "k"]}));
+        // With its letters declared instead, a run of letters in LaTeX is
+        // their product; with neither, it is not read.
+        let rt = vec!["R".to_string(), "T".to_string()];
+        let e = parse_math("RT", &rt, DocumentFormat::Markdown).unwrap();
+        assert_eq!(e, serde_json::json!({"op": "*", "args": ["R", "T"]}));
+        assert!(parse_math("RT", &[], DocumentFormat::Markdown).is_err());
+        let e = parse_math("y = 2 k", &names, DocumentFormat::Typst).unwrap();
+        assert_eq!(
+            e,
+            serde_json::json!({"lhs": "y", "rhs": {"op": "*", "args": [2, "k"]}})
+        );
+        for (text, format) in [
+            ("y = k", DocumentFormat::Markdown),
+            ("(dif y)/(dif t) = -k y", DocumentFormat::Typst),
+        ] {
+            let e = parse_math(text, &names, format).unwrap();
+            assert_eq!(print_math(&e, &names, format), text);
+        }
+    }
+
+    #[test]
+    fn parse_math_refuses_as_a_document_read_does() {
+        let names = vec!["k".to_string()];
+        let (c, _) = math_code(parse_math("k +", &names, DocumentFormat::Markdown));
+        assert_eq!(c, codes::PARSE_ERROR);
+        let (c, _) = math_code(parse_math("1.0e400 k", &names, DocumentFormat::Typst));
+        assert_eq!(c, codes::PARSE_ERROR);
+        let (c, m) = math_code(parse_math(
+            "\\operatorname{arrayop}(k)",
+            &names,
+            DocumentFormat::Markdown,
+        ));
+        assert_eq!(c, codes::REMOVED_OP, "{m}");
+        let deep = format!("{}k{}", "(".repeat(50_000), ")".repeat(50_000));
+        let (c, _) = math_code(parse_math(&deep, &names, DocumentFormat::Typst));
+        assert_eq!(c, codes::PARSE_ERROR);
+    }
+
+    #[test]
+    fn parse_math_says_where_the_math_goes_wrong() {
+        let names = vec!["k".to_string(), "y".to_string()];
+        let at = |text: &str, format| parse_math(text, &names, format).unwrap_err().at;
+        // A character no token starts with.
+        assert_eq!(at("y = k ? 2", DocumentFormat::Typst), Some(6));
+        assert_eq!(at("y = k \\@", DocumentFormat::Markdown), Some(6));
+        assert_eq!(at("λ = k", DocumentFormat::Typst), Some(0));
+        // The token the parser stops at.
+        assert_eq!(at("y = k ) + 1", DocumentFormat::Typst), Some(6));
+        assert_eq!(at("y = k ) + 1", DocumentFormat::Markdown), Some(6));
+        // Math that ends too soon goes wrong at its end.
+        assert_eq!(at("y = -k +", DocumentFormat::Typst), Some(8));
+        assert_eq!(at("y = -k +", DocumentFormat::Markdown), Some(8));
+        // A one-token index read on its own still counts in the whole text.
+        assert_eq!(at("y_k = k )", DocumentFormat::Typst), Some(8));
+        // A refusal of the whole text has no place.
+        let e = parse_math(
+            "\\operatorname{arrayop}(k)",
+            &names,
+            DocumentFormat::Markdown,
+        );
+        assert_eq!(e.unwrap_err().at, None);
     }
 
     #[test]

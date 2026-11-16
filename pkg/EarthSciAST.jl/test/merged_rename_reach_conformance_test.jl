@@ -105,7 +105,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
                 @test !haskey(flat.parameters, g)
                 @test !haskey(flat.observed_variables, g)
                 for eq in flat.equations
-                    rendered = string(to_ascii(eq.lhs), " = ", to_ascii(eq.rhs))
+                    rendered = canonical_expr_json(eq)
                     @test !occursin(g, rendered)
                 end
             end
@@ -121,7 +121,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             )
             @test idx !== nothing
             if idx !== nothing
-                rhs = to_ascii(flat.equations[idx].rhs)
+                rhs = canonical_expr_json(flat.equations[idx].rhs)
                 for name in case.tendency_references
                     @test occursin(String(name), rhs)
                 end
@@ -235,7 +235,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             @test length(affects) == length(case.event_affects)
             for (affect, want) in zip(affects, case.event_affects)
                 @test affect.lhs == String(want.lhs)
-                rhs = to_ascii(affect.rhs)
+                rhs = canonical_expr_json(affect.rhs)
                 for name in want.rhs_references
                     @test occursin(String(name), rhs)
                 end
@@ -250,7 +250,7 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
                 if v !== nothing && v.update !== nothing
                     rendered = join(
                         [
-                            to_ascii(r.expression) for r in v.update
+                            canonical_expr_json(r.expression) for r in v.update
                                 if r.expression !== nothing
                         ], " "
                     )
@@ -263,22 +263,24 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
             # The dead spelling survives in NEITHER, in either form: not the
             # qualified name a collect-time namespacing carries through, and not
             # the bare local a coupling-time one leaves behind.
-            haystack = join(
+            names = Set{String}(
                 vcat(
-                    [to_ascii(a.rhs) for a in affects],
-                    [a.lhs for a in affects],
-                    [
-                        to_ascii(r.expression)
-                            for v in vcat(
-                                collect(values(flat.parameters)),
-                                collect(values(flat.state_variables))
-                            )
-                            if v.update !== nothing for r in v.update if r.expression !== nothing
-                    ]
-                ), " "
+                    reduce(vcat, [expression_names(a.rhs) for a in affects]; init = String[]),
+                    String[a.lhs for a in affects],
+                    reduce(
+                        vcat, [
+                            expression_names(r.expression)
+                                for v in vcat(
+                                    collect(values(flat.parameters)),
+                                    collect(values(flat.state_variables))
+                                )
+                                if v.update !== nothing for r in v.update if r.expression !== nothing
+                        ]; init = String[]
+                    ),
+                )
             )
             for gone in case.absent_from_events_and_updates
-                @test !(String(gone) in split(haystack))
+                @test !(String(gone) in names)
             end
         end
     end

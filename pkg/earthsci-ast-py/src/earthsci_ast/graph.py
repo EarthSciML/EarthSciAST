@@ -52,7 +52,6 @@ from .classification import (
     ode_states,
     sampled_parameters,
 )
-from .display import _format_chemical_subscripts
 from .esm_types import (
     CallbackCoupling,
     CouplingCouple,
@@ -810,17 +809,6 @@ _DEPENDENCY_EDGE_STYLE: dict[str, tuple[str, str]] = {
 }
 _DEPENDENCY_EDGE_DEFAULT_STYLE = ("solid", "-->")
 
-#: A name is treated as a chemical formula — and rendered with subscripts —
-#: only when letters are followed by digits. Mirrors Julia's `format_node_label`.
-_CHEMICAL_RE = re.compile(r"[A-Za-z]+\d+")
-
-
-def _format_node_label(name: str) -> str:
-    """Render a node label, applying chemical subscripts where they apply."""
-    if _CHEMICAL_RE.search(name):
-        return _format_chemical_subscripts(name, "unicode")
-    return name
-
 
 def _dot_escape(text: str) -> str:
     """Escape a string for a DOT double-quoted id/label."""
@@ -854,7 +842,7 @@ def to_dot(graph: Graph[Any, Any]) -> str:
         lines = ["digraph ComponentGraph {"]
         for node in graph.nodes:
             fillcolor, _ = _COMPONENT_NODE_STYLE.get(node.type, _COMPONENT_NODE_DEFAULT_STYLE)
-            label = _format_node_label(node.name)
+            label = node.name
             lines.append(
                 f'  "{_dot_escape(node.id)}" [label="{_dot_escape(label)}", '
                 f"fillcolor={fillcolor}, style=filled];"
@@ -872,7 +860,7 @@ def to_dot(graph: Graph[Any, Any]) -> str:
     lines = ["digraph ExpressionGraph {"]
     for node in graph.nodes:
         shape, _ = _VARIABLE_NODE_STYLE.get(node.kind, _VARIABLE_NODE_DEFAULT_STYLE)
-        label = _format_node_label(node.name)
+        label = node.name
         lines.append(f'  "{_dot_escape(node.name)}" [label="{_dot_escape(label)}", shape={shape}];')
     for edge in graph.edges:
         style, _ = _DEPENDENCY_EDGE_STYLE.get(
@@ -900,7 +888,7 @@ def to_mermaid(graph: Graph[Any, Any]) -> str:
             _, (open_tok, close_tok) = _COMPONENT_NODE_STYLE.get(
                 node.type, _COMPONENT_NODE_DEFAULT_STYLE
             )
-            label = _mermaid_label(_format_node_label(node.name))
+            label = _mermaid_label(node.name)
             lines.append(f'    {_mermaid_id(node.id)}{open_tok}"{label}"{close_tok}')
         for edge in graph.edges:
             _, arrow = _COUPLING_EDGE_STYLE.get(edge.data.type, _COUPLING_EDGE_DEFAULT_STYLE)
@@ -913,7 +901,7 @@ def to_mermaid(graph: Graph[Any, Any]) -> str:
 
     for node in graph.nodes:
         _, (open_tok, close_tok) = _VARIABLE_NODE_STYLE.get(node.kind, _VARIABLE_NODE_DEFAULT_STYLE)
-        label = _mermaid_label(_format_node_label(node.name))
+        label = _mermaid_label(node.name)
         lines.append(f'    {_mermaid_id(node.name)}{open_tok}"{label}"{close_tok}')
     for edge in graph.edges:
         _, arrow = _DEPENDENCY_EDGE_STYLE.get(

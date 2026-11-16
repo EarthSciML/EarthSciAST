@@ -139,62 +139,6 @@ function run_validation(manifest, project_root::String)
 end
 
 """
-Render every manifest display case in all three formats.
-
-A bare-string input is a CHEMICAL FORMULA; a dict input is an Expression. The
-manifest tags which, so no producer has to re-derive it (and get it wrong: this
-producer used to look for a top-level `chemical_formulas` key that NO fixture in
-`tests/display/` has, so it emitted nothing at all and the comparator scored the
-empty intersection as 100% consistent — audit C2).
-"""
-function run_display(manifest)
-    results = Dict{String, Any}()
-
-    for case in manifest["display_cases"]
-        id = String(case["id"])
-        # A "formula" case is a bare chemical-formula STRING ("O3" → "O₃"); an
-        # "expression" case is a dict-form Expression that has to be parsed into
-        # this binding's AST first. Julia's `to_unicode` dispatches on the type,
-        # so handing it the raw dict would throw.
-        is_formula = String(case["kind"]) == "formula"
-        record = Dict{String, Any}()
-        errors = Dict{String, Any}()
-
-        target = nothing
-        parse_failure = nothing
-        try
-            target = is_formula ? String(case["input"]) :
-                EarthSciAST.expression_from_json(case["input"])
-        catch e
-            parse_failure = string(e)
-        end
-
-        for (fmt, renderer) in (
-                ("unicode", EarthSciAST.to_unicode),
-                ("latex", EarthSciAST.to_latex),
-                ("ascii", EarthSciAST.to_ascii),
-            )
-            if parse_failure !== nothing
-                record[fmt] = nothing
-                errors[fmt] = parse_failure
-                continue
-            end
-            try
-                record[fmt] = renderer(target)
-            catch e
-                record[fmt] = nothing
-                errors[fmt] = string(e)
-            end
-        end
-
-        isempty(errors) || (record["errors"] = errors)
-        results[id] = record
-    end
-
-    return results
-end
-
-"""
 Apply `substitute` to every manifest substitution case.
 
 The result is serialized back to the dict-form Expression the corpus and the
@@ -264,7 +208,6 @@ function main()
 
     errors = String[]
     validation_results = Dict{String, Any}()
-    display_results = Dict{String, Any}()
     substitution_results = Dict{String, Any}()
 
     try
@@ -273,14 +216,6 @@ function main()
     catch e
         push!(errors, "Validation sweep crashed: $(string(e))")
         println("✗ Validation sweep crashed: $e")
-    end
-
-    try
-        display_results = run_display(manifest)
-        println("✓ Display sweep completed ($(length(display_results)) cases)")
-    catch e
-        push!(errors, "Display sweep crashed: $(string(e))")
-        println("✗ Display sweep crashed: $e")
     end
 
     try
@@ -299,7 +234,6 @@ function main()
                 "language" => "julia",
                 "timestamp" => string(now()),
                 "validation_results" => validation_results,
-                "display_results" => display_results,
                 "substitution_results" => substitution_results,
                 "errors" => errors,
             )

@@ -134,6 +134,12 @@ class ExprNode:
         metadata={"kind": "internal", "wire": "__esm_template_origin"},
     )
 
+    def __str__(self) -> str:
+        """The expression as Typst math (``print_math`` under its own names)."""
+        from ._show import show_expr
+
+        return show_expr(self)
+
 
 #: An expression (esm-spec §4): a numeric literal (``int`` or ``float``), a
 #: variable or parameter reference (``str``), or an operator node
@@ -271,6 +277,12 @@ class Equation:
     lhs: Expr
     rhs: Expr
     _comment: str | None = None
+
+    def __str__(self) -> str:
+        """The equation as Typst math (``print_math`` under its own names)."""
+        from ._show import show_equation
+
+        return show_equation(self.lhs, self.rhs)
 
 
 @dataclass

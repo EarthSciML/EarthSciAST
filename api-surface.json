@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 1000,
+    "symbols": 984,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 360,
-      "typescript": 246,
-      "python": 274,
-      "rust": 398,
-      "go": 467
+      "julia": 353,
+      "typescript": 239,
+      "python": 270,
+      "rust": 394,
+      "go": 457
     },
     "by_tier": {
-      "extension": 688,
-      "stable": 312
+      "extension": 676,
+      "stable": 308
     }
   },
   "planned": [
@@ -3924,9 +3924,13 @@
     {
       "name": "expression_names",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "expression_names"
+        "go": "ExpressionNames",
+        "julia": "expression_names",
+        "python": "expression_names",
+        "rust": "expression_names",
+        "typescript": "expressionNames"
       }
     },
     {
@@ -3935,18 +3939,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "ExpressionNode"
-      }
-    },
-    {
-      "name": "expression_parse_error",
-      "kind": "error",
-      "tier": "stable",
-      "bindings": {
-        "go": "ExpressionParseError",
-        "julia": "ExpressionParseError",
-        "python": "ExpressionParseError",
-        "rust": "ExpressionParseError",
-        "typescript": "ExpressionParseError"
       }
     },
     {
@@ -4246,38 +4238,6 @@
       }
     },
     {
-      "name": "fmt_ascii",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "FmtASCII"
-      }
-    },
-    {
-      "name": "fmt_latex",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "FmtLatex"
-      }
-    },
-    {
-      "name": "fmt_unicode",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "FmtUnicode"
-      }
-    },
-    {
-      "name": "fmt_unicode_spaced",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "go": "FmtUnicodeSpaced"
-      }
-    },
-    {
       "name": "forcing_buffer_index",
       "kind": "function",
       "tier": "extension",
@@ -4353,30 +4313,6 @@
         "julia": "format_canonical_float",
         "rust": "format_canonical_float",
         "typescript": "formatCanonicalFloat"
-      }
-    },
-    {
-      "name": "format_chemical_name",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "formatChemicalName"
-      }
-    },
-    {
-      "name": "format_expression_ascii",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "format_expression_ascii"
-      }
-    },
-    {
-      "name": "format_node_label",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "format_node_label"
       }
     },
     {
@@ -5164,6 +5100,14 @@
       }
     },
     {
+      "name": "math_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "MathError"
+      }
+    },
+    {
       "name": "max_rewrite_passes",
       "kind": "constant",
       "tier": "extension",
@@ -5271,14 +5215,6 @@
       "tier": "extension",
       "bindings": {
         "python": "model_nodes"
-      }
-    },
-    {
-      "name": "model_summary",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ModelSummary"
       }
     },
     {
@@ -5840,36 +5776,12 @@
       }
     },
     {
-      "name": "parse_equation",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "ParseEquation",
-        "julia": "parse_equation",
-        "python": "parse_equation",
-        "rust": "parse_equation",
-        "typescript": "parseEquation"
-      }
-    },
-    {
       "name": "parse_error",
       "kind": "error",
       "tier": "stable",
       "bindings": {
         "julia": "ParseError",
         "typescript": "ParseError"
-      }
-    },
-    {
-      "name": "parse_expression",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "ParseExpression",
-        "julia": "parse_expression",
-        "python": "parse_expression",
-        "rust": "parse_expression",
-        "typescript": "parseExpression"
       }
     },
     {
@@ -5885,11 +5797,15 @@
       }
     },
     {
-      "name": "parse_reaction",
+      "name": "parse_math",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "typescript": "parseReaction"
+        "go": "ParseMath",
+        "julia": "parse_math",
+        "python": "parse_math",
+        "rust": "parse_math",
+        "typescript": "parseMath"
       }
     },
     {
@@ -6725,14 +6641,6 @@
       "tier": "extension",
       "bindings": {
         "go": "RenameVariableInFile"
-      }
-    },
-    {
-      "name": "render_chemical_formula",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "render_chemical_formula"
       }
     },
     {
@@ -8090,18 +7998,6 @@
       }
     },
     {
-      "name": "to_ascii",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "ToASCII",
-        "julia": "to_ascii",
-        "python": "to_ascii",
-        "rust": "to_ascii",
-        "typescript": "toAscii"
-      }
-    },
-    {
       "name": "to_dot",
       "kind": "function",
       "tier": "stable",
@@ -8167,26 +8063,6 @@
       }
     },
     {
-      "name": "to_latex",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "ToLatex",
-        "julia": "to_latex",
-        "python": "to_latex",
-        "rust": "to_latex",
-        "typescript": "toLatex"
-      }
-    },
-    {
-      "name": "to_math_ml",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "toMathML"
-      }
-    },
-    {
       "name": "to_mermaid",
       "kind": "function",
       "tier": "stable",
@@ -8212,26 +8088,6 @@
       "tier": "extension",
       "bindings": {
         "python": "to_sympy"
-      }
-    },
-    {
-      "name": "to_unicode",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "ToUnicode",
-        "julia": "to_unicode",
-        "python": "to_unicode",
-        "rust": "to_unicode",
-        "typescript": "toUnicode"
-      }
-    },
-    {
-      "name": "to_unicode_spaced",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ToUnicodeSpaced"
       }
     },
     {
