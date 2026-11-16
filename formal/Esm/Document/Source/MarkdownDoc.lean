@@ -113,7 +113,7 @@ def capsMd : Caps where
     (tmLex (prMd S e).toList).isNone
   rxn S x := rxnOK { x with rate := printLatex S x.rate }
   plot a := a.all attrOK && a.all (fun kv => dqOK kv.2)
-  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex S j), body := printLatex S t.body }) &&
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printLatex (Esm.Document.Math.Sym.mk S.names []) j), body := printLatex S t.body }) &&
     t.attrs.all (fun kv => dqOK kv.2)
 
 theorem heads_sub {c : Char} : ∀ {bol : Bool} {x : List Char}, c ∈ heads bol x → c ∈ x
@@ -452,6 +452,34 @@ theorem withComment_none (es : List Eqn) (h : ∀ e ∈ es, e.comment = none) : 
   | nil => rfl
   | cons e es => cases e; simp at h; simp [withComment, h.1]
 
+/-- Rows joined by row breaks keep `\times` before a bracket, `&` or a row break. -/
+theorem TN_joinRows : ∀ (rows : List (List Tok)), (∀ x ∈ rows, Latex.TN x) → Latex.TN (joinRows rows)
+  | [], _ => trivial
+  | [r], h => by simpa [joinRows] using h r (by simp)
+  | r :: r2 :: rs, h => by
+    have ih := TN_joinRows (r2 :: rs) (fun x hx => h x (by simp [hx]))
+    simp only [joinRows, List.flatMap_cons] at ih ⊢
+    exact Latex.TN_app_sep .nl (Or.inr rfl) r _ (h r (by simp)) ih
+
+/-- The pieces of a layout of printed tokens keep `\times` where the printer put it. -/
+theorem TN_rowsToks (Ls : List Layout) (h : ∀ L ∈ Ls, Latex.TN L.toks) : Latex.TN (rowsToks Ls) := by
+  unfold rowsToks
+  apply TN_joinRows
+  intro x hx
+  obtain ⟨L, hL, hx⟩ := List.mem_flatMap.1 hx
+  have hT := h L hL
+  unfold Layout.toks at hT
+  have hl := Latex.TN_left _ _ (Latex.TN_left _ _ hT)
+  have hr := Latex.TN_right _ _ (Latex.TN_left _ _ hT)
+  have hm := Latex.TN_right _ _ hT
+  simp only [Layout.rows, List.mem_cons, List.mem_map] at hx
+  rcases hx with rfl | ⟨m, hm', rfl⟩
+  · exact Latex.TN_app_sep .amp (Or.inl rfl) _ _ hl hr
+  · obtain ⟨s, t, he⟩ := List.append_of_mem hm'
+    rw [he] at hm
+    simp only [List.flatten_append, List.flatten_cons] at hm
+    exact Latex.TN_sep .amp (Or.inl rfl) m (Latex.TN_left _ _ (Latex.TN_right _ _ hm))
+
 /-- **The `aligned` variant reads as the equations it lays out**: a display
 `\begin{aligned} … \end{aligned}` whose rows lay out the canonical LaTeX of equations
 (`Layout`) reads back as exactly those equations. -/
@@ -461,23 +489,29 @@ theorem ckMd_aligned (S : Sym) (Ls : List Layout) (es : List Eqn)
       isE e.rhs = true) Ls es) :
     ckMd S (String.ofList ("\\begin{aligned}".toList ++ Latex.render (rowsToks Ls) ++
       "\\end{aligned}".toList)) = some (es.map (fun e => ⟨none, e.lhs, e.rhs⟩)) := by
-  have htok : ∀ t ∈ rowsToks Ls, Latex.tokOK t := by
+  have hprint : ∀ L ∈ Ls, ∃ e ∈ es, L.toks = print .latex S (eqExpr e) ∧ isE e.lhs = true ∧
+      isE e.rhs = true := by
+    intro L hLm
+    clear hL hne
+    induction h with
+    | nil => cases hLm
+    | @cons L' e' _ _ hh _ ih =>
+      rcases List.mem_cons.mp hLm with rfl | hm
+      · exact ⟨e', List.mem_cons_self, hh⟩
+      · obtain ⟨e'', hm', h''⟩ := ih hm
+        exact ⟨e'', List.mem_cons_of_mem _ hm', h''⟩
+  have hTN : Latex.TN (rowsToks Ls) := TN_rowsToks Ls (fun L hLm => by
+    obtain ⟨e, -, he⟩ := hprint L hLm
+    rw [he.1]; exact (Latex.print_tokL S _ (isE_eqExpr e he.2.1 he.2.2)).2)
+  have htok' : ∀ t ∈ rowsToks Ls, Latex.tokOK t ∨ t = .kw .times := by
     intro t ht
     rcases mem_rowsToks ht with rfl | rfl | ⟨L, hLm, htL⟩
-    · simp [Latex.tokOK, Latex.kwOK]
-    · simp [Latex.tokOK, Latex.kwOK]
-    · obtain ⟨e, -, he⟩ : ∃ e ∈ es, L.toks = print .latex S (eqExpr e) ∧ isE e.lhs = true ∧
-          isE e.rhs = true := by
-        clear hL hne htL ht
-        induction h with
-        | nil => cases hLm
-        | @cons L' e' _ _ hh _ ih =>
-          rcases List.mem_cons.mp hLm with rfl | hm
-          · exact ⟨e', List.mem_cons_self, hh⟩
-          · obtain ⟨e'', hm', h''⟩ := ih hm
-            exact ⟨e'', List.mem_cons_of_mem _ hm', h''⟩
+    · left; simp [Latex.tokOK, Latex.kwOK]
+    · left; simp [Latex.tokOK, Latex.kwOK]
+    · obtain ⟨e, -, he⟩ := hprint L hLm
       rw [he.1] at htL
-      exact Latex.print_tokOK S _ (isE_eqExpr e he.2.1 he.2.2) t htL
+      exact (Latex.print_tokL S _ (isE_eqExpr e he.2.1 he.2.2)).1 t htL
+  have htok : Latex.TokL (rowsToks Ls) := ⟨htok', hTN⟩
   set X := Latex.render (rowsToks Ls) with hX
   have henv : envOf ("\\begin{aligned}".toList ++ X ++ "\\end{aligned}".toList) = some (false, X) := by
     unfold envOf

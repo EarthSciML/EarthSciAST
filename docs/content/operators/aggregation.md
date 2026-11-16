@@ -13,7 +13,7 @@ expression: a semiring reduction of a body over named index sets.
 | `output_idx` | Index symbols, or the integer `1` for an inserted singleton dimension. These are the *free* indices — the result's shape. |
 | `expr` | The scalar body, evaluated at each index point. |
 | `ranges` | Map from index symbol to the range it iterates. Either a dense tuple `[start, stop]` / `[start, step, stop]`, or `{"from": "<index set>"}` with an optional `"of"` for a ragged inner set. |
-| `args` | The input array operands `expr` references. A derived cache, not a source of truth. |
+| `args` | The input array operands `expr` references. A derived cache, not a source of truth. In document math, `args` equal to the arrays the body indexes is the `\limits` marker (`\sum\limits`); any other list of names is a superscript set, on the operator (`\sum_{i \in S}^{\{f, g\}}`) or, with output indices, on the bracket (`\left[ … \right]^{\{f\}}_{2 \le i \le N - 1}`). |
 | `reduce` | Shorthand naming only ⊕: `"+"` (default), `"*"`, `"max"`, `"min"`. |
 | `semiring` | The named (⊕, ⊗) pair; supersedes `reduce` when present. |
 | `join` | Restricts which index tuples contribute — by key equality or by envelope overlap. |
@@ -273,8 +273,9 @@ arity 2 for points — and `eps` inflates both outward before the test.
 The gate is **only** the conservative broad phase — the exact test stays in
 `filter` — so the materialized result is identical to the full-product path;
 only the number of tuples visited changes. Document math has no notation of
-its own for an `overlap` join: a document writes the node in the generic
-`\esm{faq}{…}{…}` form, its fields as JSON.
+its own for an `overlap` join: a document writes the node in the call form,
+`\operatorname{faq}(\mathit{src}, \mathit{tgt}; \mathrm{expr} = a, \mathrm{join} = […], …)`,
+its operands positional and its other fields named, JSON-valued fields as JSON.
 
 ### `distinct` and `key` — producing an index set
 

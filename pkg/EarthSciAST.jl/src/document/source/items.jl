@@ -13,7 +13,7 @@ module SItems
 using ..DJson
 using ..MExpr: Sym
 using ..SSkeleton
-using ..SSkeleton: is_math_field, sym_for, top_sym, map_math, scope
+using ..SSkeleton: is_math_field, sym_for, top_sym, map_math, scope, mscope
 
 export RItem, RDesc, RBlock, RComp, RDecl, REqn, REqx, RRxn, RPlot, RTm
 
@@ -228,7 +228,7 @@ pr_mx(pr_e, pr_r, s::Sym, m::MxPlot) = m
 function pr_mx(pr_e, pr_r, s::Sym, m::MxTm)
     t = m.t
     sc = scope(t, s)
-    lhs = t.lhs === nothing ? nothing : pr_r(sc, t.lhs)
+    lhs = t.lhs === nothing ? nothing : pr_r(mscope(t, s), t.lhs)
     return MxTm(Tm(t.name, t.params, lhs, pr_r(sc, t.body), t.attrs))
 end
 
@@ -249,7 +249,7 @@ function ck_mx(ck_e, ck_r, s::Sym, m::MxTm)
     sc = scope(t, s)
     lhs = nothing
     if t.lhs !== nothing
-        lhs = ck_r(sc, t.lhs)
+        lhs = ck_r(mscope(t, s), t.lhs)
         lhs === nothing && return nothing
     end
     body = ck_r(sc, t.body)

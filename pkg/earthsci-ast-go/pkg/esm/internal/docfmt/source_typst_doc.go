@@ -100,7 +100,7 @@ func (capsT) plot(a Obj) bool { return stypArgsOk(a) }
 func (capsT) tm(lim *Lim, s *Sym, t *Tm[Json]) bool {
 	rt := Tm[string]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Body: mathPrintTypst(s, t.Body), Attrs: t.Attrs}
 	if t.HasLhs {
-		rt.Lhs = mathPrintTypst(s, t.Lhs)
+		rt.Lhs = mathPrintTypst(&Sym{Names: s.Names}, t.Lhs)
 	}
 	return stypItemOk(lim, &RItem{K: RITm, Tm: rt})
 }

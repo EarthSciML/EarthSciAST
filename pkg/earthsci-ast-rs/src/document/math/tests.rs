@@ -182,6 +182,56 @@ fn hand_written_json_strings() {
     );
 }
 
+#[test]
+fn hand_written_array_notation() {
+    let sy = hw();
+    let (x, k, a) = (s("x"), s("k"), s("a"));
+    // A bare `\operatorname{n}` is a template applied with no bindings; with
+    // `()` it is an open operator with no operands.
+    let bare = super::parse::t_node("dlon", vec![]);
+    reads_l(&sy, "\\operatorname{dlon}", bare.clone());
+    reads_l(&sy, "\\operatorname{dlon}()", node("dlon", vec![]));
+    reads_t(&sy, "op(\"dlon\")", bare);
+    reads_t(&sy, "op(\"dlon\")()", node("dlon", vec![]));
+    // `\times [` outside a region is still a product with a bracket group.
+    let prod = node("*", vec![a.clone(), node("+", vec![x.clone(), int(1)])]);
+    reads_l(&sy, "a \\times [x + 1]", prod.clone());
+    reads_l(&sy, "a \\times[x + 1]", prod.clone());
+    reads_t(&sy, "a times [x + 1]", prod);
+    // A `makearray` table, the region product spaced any way.
+    let table = print::mk_json(&print::MkForm {
+        out: vec![],
+        regions: vec![
+            vec![(int(1), s("N"))],
+            vec![(int(1), int(1)), (int(2), int(2))],
+        ],
+        values: vec![x.clone(), int(0)],
+    });
+    reads_l(
+        &sy,
+        "\\left[\\begin{array}{l|l} x & [1, N] \\\\ 0 & [1, 1]\\times[2, 2] \\end{array}\\right]",
+        table.clone(),
+    );
+    reads_t(
+        &sy,
+        "mat(delim: \"[\", augment: #1, x, [1, N]; 0, [1, 1] times [2, 2])",
+        table.clone(),
+    );
+    reads_l(&sy, &print_latex(&sy, &table), table.clone());
+    reads_t(&sy, &print_typst(&sy, &table), table);
+    // A lone equality filter followed by a superscript set is the filter, not
+    // a dense range.
+    let filt_set = Json::Obj(vec![
+        ("args".into(), Json::Arr(vec![a])),
+        ("expr".into(), x),
+        ("filter".into(), node("==", vec![k, int(1)])),
+        ("op".into(), s("faq")),
+        ("output_idx".into(), Json::Arr(vec![])),
+    ]);
+    reads_l(&sy, "\\sum_{k = 1}^{\\{a\\}} x", filt_set.clone());
+    reads_l(&sy, &print_latex(&sy, &filt_set), filt_set);
+}
+
 // ## The golden set
 
 fn keys_of(v: Option<&serde_json::Value>) -> Vec<String> {
@@ -288,4 +338,319 @@ fn golden_set_math() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+// ## Review fixes of the array notation
+
+#[track_caller]
+fn refuses_l(sy: &Sym, text: &str) {
+    assert_eq!(
+        parse_latex(sy, text),
+        None,
+        "LaTeX {text:?} must be refused"
+    );
+}
+
+#[track_caller]
+fn refuses_t(sy: &Sym, text: &str) {
+    assert_eq!(
+        parse_typst(sy, text),
+        None,
+        "Typst {text:?} must be refused"
+    );
+}
+
+#[track_caller]
+fn round_trips(sy: &Sym, e: &Json) {
+    reads_l(sy, &print_latex(sy, e), e.clone());
+    reads_t(sy, &print_typst(sy, e), e.clone());
+}
+
+fn fsym() -> Sym {
+    sym(&["a", "f", "g", "i", "k", "x", "N", "S"])
+}
+
+#[test]
+fn marked_reduction_refuses_a_set() {
+    let sy = fsym();
+    // rank 0: the head's own set
+    assert!(parse_latex(&sy, "\\sum\\limits_{1 \\le k \\le N} a_{k}").is_some());
+    refuses_l(&sy, "\\sum\\limits_{1 \\le k \\le N}^{\\{f\\}} a_{k}");
+    assert!(parse_typst(&sy, "limits(sum)_(1 <= k <= N) a_k").is_some());
+    refuses_t(&sy, "limits(sum)_(1 <= k <= N)^({f}) a_k");
+    // output form: the bracket's set
+    let out_l = "\\left[\\sum\\limits_{1 \\le k \\le N} a_{k} x_{i}\\right]_{1 \\le i \\le N}";
+    assert!(parse_latex(&sy, out_l).is_some());
+    refuses_l(
+        &sy,
+        "\\left[\\sum\\limits_{1 \\le k \\le N} a_{k} x_{i}\\right]^{\\{f\\}}_{1 \\le i \\le N}",
+    );
+    let out_t = "lr([limits(sum)_(1 <= k <= N) a_k x_i])_(1 <= i <= N)";
+    assert!(parse_typst(&sy, out_t).is_some());
+    refuses_t(
+        &sy,
+        "lr([limits(sum)_(1 <= k <= N) a_k x_i])^({f})_(1 <= i <= N)",
+    );
+}
+
+#[test]
+fn output_form_set_only_on_the_bracket() {
+    let sy = fsym();
+    let canon_l =
+        "\\left[\\sum\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}";
+    let e = parse_latex(&sy, canon_l).expect("canonical output form reads");
+    assert_eq!(print_latex(&sy, &e), canon_l);
+    round_trips(&sy, &e);
+    // a set inside the bracket is refused, with or without one outside
+    refuses_l(
+        &sy,
+        "\\left[\\sum^{\\{f, g\\}}\\left(f_{i + 1} - f_{i}\\right)\\right]_{2 \\le i \\le N - 1}",
+    );
+    refuses_l(
+        &sy,
+        "\\left[\\sum^{\\{a\\}}\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}",
+    );
+    refuses_t(
+        &sy,
+        "lr([sum^({f, g}) (f_(i + 1) - f_i)])_(2 <= i <= N - 1)",
+    );
+    refuses_t(
+        &sy,
+        "lr([sum^({a}) (f_(i + 1) - f_i)])^({f, g})_(2 <= i <= N - 1)",
+    );
+    // rank 0 keeps its own set
+    assert!(parse_latex(&sy, "\\sum^{\\{f\\}}_{1 \\le i \\le N} f_{i}").is_none());
+    assert!(parse_latex(&sy, "\\sum_{1 \\le i \\le N}^{\\{a\\}} f_{i}").is_some());
+}
+
+#[test]
+fn delim_and_augment_are_names_in_typst() {
+    let sy = sym(&["x", "delim", "augment"]);
+    reads_t(
+        &sy,
+        "x = delim + 1",
+        node("==", vec![s("x"), node("+", vec![s("delim"), int(1)])]),
+    );
+    round_trips(&sy, &d_node(s("augment"), "t"));
+    round_trips(&sy, &node("+", vec![s("delim"), int(1)]));
+    let e = node("*", vec![s("delim"), s("augment")]);
+    round_trips(&sy, &e);
+    // the makearray table head still reads and prints the same
+    let table = print::mk_json(&print::MkForm {
+        out: vec![],
+        regions: vec![vec![(int(1), int(2))]],
+        values: vec![s("delim")],
+    });
+    assert_eq!(
+        print_typst(&sy, &table),
+        "mat(delim: \"[\", augment: #1, italic(\"delim\"), [1, 2])"
+    );
+    round_trips(&sy, &table);
+}
+
+#[test]
+fn call_form_reads_only_what_the_printer_writes() {
+    let sy = sym(&["a", "x"]);
+    // an annotation on a core operator goes to the escape form
+    refuses_l(
+        &sy,
+        "\\operatorname{broadcast}(a, x; \\mathrm{id} = \\text{\"q\"})",
+    );
+    refuses_t(&sy, "op(\"broadcast\")(a, x; upright(\"id\") = #\"q\")");
+    refuses_l(
+        &sy,
+        "\\operatorname{broadcast}(a, x; \\mathrm{expect\\_cadence} = \\text{\"const\"}, \\mathrm{fn} = \\text{\"+\"})",
+    );
+    // ... an open operator keeps it in the call form
+    let open = mk_node("myop", vec![s("x")], vec![("id".into(), s("q"))]);
+    reads_l(
+        &sy,
+        "\\operatorname{myop}(x; \\mathrm{id} = \\text{\"q\"})",
+        open.clone(),
+    );
+    assert!(print_latex(&sy, &open).starts_with("\\operatorname{myop}(x; \\mathrm{id} = "));
+    round_trips(&sy, &open);
+    // repeated keys, `op`, `args`
+    refuses_l(
+        &sy,
+        "\\operatorname{myop}(x; \\mathrm{s} = 1, \\mathrm{s} = 2)",
+    );
+    refuses_l(&sy, "\\operatorname{myop}(x; \\mathrm{op} = 1)");
+    refuses_l(&sy, "\\operatorname{myop}(x; \\mathrm{args} = 1)");
+    // a node with a native spelling
+    refuses_l(&sy, "\\operatorname{const}(; \\mathrm{value} = [1, 2])");
+    refuses_t(&sy, "op(\"const\")(; upright(\"value\") = #(1, 2))");
+    reads_l(&sy, "\\begin{bmatrix}1 \\\\ 2\\end{bmatrix}", {
+        Json::Obj(vec![
+            ("args".into(), Json::Arr(vec![])),
+            ("op".into(), s("const")),
+            ("value".into(), Json::Arr(vec![int(1), int(2)])),
+        ])
+    });
+    let rank3 = "\\operatorname{const}(; \\mathrm{value} = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]])";
+    assert!(parse_latex(&sy, rank3).is_some());
+    let mk = print::mk_json(&print::MkForm {
+        out: vec![],
+        regions: vec![vec![(int(1), int(2))]],
+        values: vec![s("x")],
+    });
+    let Json::Obj(kvs) = &mk else { unreachable!() };
+    assert!(print::native_form(Sf::Latex, kvs));
+    // a key the printer would escape still reads in the call form
+    reads_l(
+        &sy,
+        "\\operatorname{myop}(x; \\mathrm{a{\\char037}b} = 1)",
+        mk_node("myop", vec![s("x")], vec![("a%b".into(), int(1))]),
+    );
+}
+
+#[test]
+fn bare_template_name() {
+    let sy = Sym {
+        names: vec!["x".into()],
+        templates: vec![("zero".into(), vec![]), ("one".into(), vec!["u".into()])],
+    };
+    let t = super::parse::t_node;
+    // a template known to take no parameters prints `n()`, so bare is refused
+    let z = t("zero", vec![]);
+    assert_eq!(print_latex(&sy, &z), "\\operatorname{zero}()");
+    assert_eq!(print_typst(&sy, &z), "op(\"zero\")()");
+    refuses_l(&sy, "\\operatorname{zero}");
+    refuses_l(&sy, "\\operatorname{zero} + x");
+    refuses_t(&sy, "op(\"zero\")");
+    round_trips(&sy, &z);
+    // with parameters, or out of scope, the bare name stays
+    for n in ["one", "elsewhere"] {
+        let e = t(n, vec![]);
+        assert_eq!(print_latex(&sy, &e), format!("\\operatorname{{{n}}}"));
+        round_trips(&sy, &e);
+        reads_l(
+            &sy,
+            &format!("\\operatorname{{{n}}} + x"),
+            node("+", vec![e, s("x")]),
+        );
+    }
+}
+
+#[test]
+fn region_product_is_two_tokens() {
+    use super::token::{Kw, Tok};
+    let cs: Vec<char> = "[1, N] \\times [2, 2]".chars().collect();
+    let toks = latex::lex(&cs).unwrap();
+    assert_eq!(toks[5], Tok::Kw(Kw::Times));
+    assert_eq!(toks[6], Tok::Kw(Kw::Lbk));
+    let cs: Vec<char> = "[1, N] times [2, 2]".chars().collect();
+    let toks = super::typst::lex(&cs).unwrap();
+    assert_eq!(toks[5], Tok::Kw(Kw::Times));
+    assert_eq!(toks[6], Tok::Kw(Kw::Lbk));
+    let sy = hw();
+    // after a pair's `]`, `\times [` continues the region; a product in the
+    // value stays a product
+    let table = print::mk_json(&print::MkForm {
+        out: vec![],
+        regions: vec![vec![(int(1), s("N")), (int(1), int(2))]],
+        values: vec![node("*", vec![s("a"), s("x")])],
+    });
+    reads_l(
+        &sy,
+        "\\left[\\begin{array}{l|l} a \\times [x] & [1, N]\n\\times\n[1, 2] \\end{array}\\right]",
+        table.clone(),
+    );
+    reads_t(
+        &sy,
+        "mat(delim: \"[\", augment: #1, a times [x], [1, N] times [1, 2])",
+        table.clone(),
+    );
+    assert_eq!(
+        print_latex(&sy, &table),
+        "\\left[\\begin{array}{l|l} a x & [1, N] \\times [1, 2] \\end{array}\\right]"
+    );
+    assert_eq!(
+        print_typst(&sy, &table),
+        "mat(delim: \"[\", augment: #1, a x, [1, N] times [1, 2])"
+    );
+    round_trips(&sy, &table);
+}
+
+#[test]
+fn wide_constant_matrix() {
+    let sy = hw();
+    let cnst = |rows: Vec<Vec<i128>>| {
+        Json::Obj(vec![
+            ("args".into(), Json::Arr(vec![])),
+            ("op".into(), s("const")),
+            (
+                "value".into(),
+                Json::Arr(
+                    rows.into_iter()
+                        .map(|r| Json::Arr(r.into_iter().map(int).collect()))
+                        .collect(),
+                ),
+            ),
+        ])
+    };
+    let wide = cnst(vec![(1..=11).collect(), (12..=22).collect()]);
+    let row = |a: i128, b: i128| {
+        (a..=b)
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(" & ")
+    };
+    let want = format!(
+        "\\left[\\begin{{array}}{{ccccccccccc}}{} \\\\ {} \\end{{array}}\\right]",
+        row(1, 11),
+        row(12, 22)
+    );
+    assert_eq!(print_latex(&sy, &wide), want);
+    round_trips(&sy, &wide);
+    assert!(print_typst(&sy, &wide).starts_with("mat(1, 2,"));
+    // ten columns stay a bmatrix
+    let ten = cnst(vec![(1..=10).collect(), (11..=20).collect()]);
+    assert!(print_latex(&sy, &ten).starts_with("\\begin{bmatrix}"));
+    round_trips(&sy, &ten);
+    // a long column stays a bmatrix
+    let col = Json::Obj(vec![
+        ("args".into(), Json::Arr(vec![])),
+        ("op".into(), s("const")),
+        ("value".into(), Json::Arr((1..=12).map(int).collect())),
+    ]);
+    assert!(print_latex(&sy, &col).starts_with("\\begin{bmatrix}"));
+    round_trips(&sy, &col);
+    // canonical only: a wide bmatrix, a narrow array, a wrong count
+    refuses_l(
+        &sy,
+        &format!(
+            "\\begin{{bmatrix}}{} \\\\ {}\\end{{bmatrix}}",
+            row(1, 11),
+            row(12, 22)
+        ),
+    );
+    refuses_l(
+        &sy,
+        "\\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]",
+    );
+    refuses_l(
+        &sy,
+        &format!(
+            "\\left[\\begin{{array}}{{cccccccccccc}}{} \\\\ {} \\end{{array}}\\right]",
+            row(1, 11),
+            row(12, 22)
+        ),
+    );
+    refuses_l(
+        &sy,
+        &format!(
+            "\\left[\\begin{{array}}{{ccccccccccc}}{} \\\\ {} \\end{{array}}\\right]",
+            row(1, 11),
+            row(12, 21)
+        ),
+    );
+    // the makearray table head is a separate token
+    use super::token::{Kw, Tok};
+    let cs: Vec<char> = "\\begin{array}{l|l}".chars().collect();
+    assert_eq!(latex::lex(&cs), Some(vec![Tok::Kw(Kw::Barr)]));
+    let cs: Vec<char> = "\\begin{array}{ccc}".chars().collect();
+    assert_eq!(latex::lex(&cs), Some(vec![Tok::Carr(3)]));
+    let cs: Vec<char> = "\\begin{array}{}".chars().collect();
+    assert_eq!(latex::lex(&cs), None);
 }

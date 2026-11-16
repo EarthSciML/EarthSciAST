@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from ...esm_types import NODE_ANNOTATION_KEYS
 from ..value import MISSING, Dec, Obj, look, num_wf
 from . import token as K
 from . import units as U
@@ -280,6 +281,13 @@ CMP_KW = {"<": K.LT, "<=": K.LE, ">": K.GT, ">=": K.GE, "==": K.EQ, "!=": K.NE}
 #: ``Math.callOps``: core operators in the call form.
 CALL_OPS = frozenset({"sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum"})
 
+#: ``Math.fieldCallOps``: core operators with no notation of their own that print in
+#: the call form, their fields as named arguments after ``;`` (when no field
+#: annotates the node).
+FIELD_CALL_OPS = frozenset(
+    {"broadcast", "reshape", "transpose", "concat", "faq", "makearray", "const"}
+)
+
 
 def reserved_opn(n: str) -> bool:
     """``Math.reservedOpn``: names ``\\operatorname{…}`` never means a template or
@@ -303,6 +311,27 @@ CORE_OPS = frozenset(
 def opn_ok(s: str) -> bool:
     """``Math.opnOK``: identifier characters and dots."""
     return s != "" and is_id_start(s[0]) and all(is_id_char(d) or d == "." for d in s[1:])
+
+
+#: ``Math.annotKeys``: the fields that annotate a node.
+ANNOT_KEYS = NODE_ANNOTATION_KEYS
+
+
+def call_form_ok(o: str, fs: list) -> bool:
+    """``Math.callFormOK``: an operator prints in the call form: an open operator, or
+    a core operator of :data:`FIELD_CALL_OPS` none of whose fields annotates it."""
+    return o not in CORE_OPS or (o in FIELD_CALL_OPS and all(k not in ANNOT_KEYS for k, _ in fs))
+
+
+#: ``Math.mathKeys``: the fields of a core operator in the call form that hold an
+#: expression; the others print as JSON, even a string that is a name.
+MATH_KEYS = frozenset({"expr", "filter", "key"})
+
+
+def math_field(o: str, kv: tuple) -> bool:
+    """``Math.mathField``: a field of a call-form node prints as math: its value is
+    an expression and, for a core operator, the field holds one."""
+    return is_e(kv[1]) and (o not in CORE_OPS or kv[0] in MATH_KEYS)
 
 
 def key_ok(s: str) -> bool:
@@ -711,15 +740,15 @@ def rows_of(xs: list):
 
 
 def arr_form(xs: list):
-    """``Math.arrForm``: a constant array printed natively: ``("col", ns)`` or
-    ``("mat", rows)``."""
+    """``Math.arrForm``: a constant array printed natively, of any size:
+    ``("col", ns)`` or ``("mat", rows)``."""
     ns = nums_of(xs)
     if ns is not None:
-        return ("col", ns) if 0 < len(ns) <= 16 else None
+        return ("col", ns) if ns else None
     rs = rows_of(xs)
     if rs:
         r = rs[0]
-        if len(r) >= 2 and all(len(q) == len(r) for q in rs[1:]) and len(rs) * len(r) <= 16:
+        if len(r) >= 2 and all(len(q) == len(r) for q in rs[1:]):
             return ("mat", rs)
     return None
 
@@ -728,15 +757,24 @@ def _num_toks(ns: list) -> list:
     return [[("num", n)] for n in ns]
 
 
+#: The most columns amsmath's ``bmatrix`` typesets (its ``MaxMatrixCols``).
+BMAT_MAX_COLS = 10
+
+
 def arr_toks(sf: str, a: tuple) -> list:
-    """``Math.arrToks``: LaTeX ``bmatrix``, Typst ``vec(…)`` / ``mat(…)``."""
+    """``Math.arrToks``: LaTeX ``bmatrix`` (a matrix wider than
+    :data:`BMAT_MAX_COLS` as ``\\left[\\begin{array}{c…c} … \\end{array}\\right]``),
+    Typst ``vec(…)`` / ``mat(…)``."""
     kind, v = a
     if kind == "col":
         if sf == K.LATEX:
             return [K.BMAT, *sep_by([K.NL], _num_toks(v)), K.EMAT]
         return [K.VEC, K.LP, *sep_by([K.COMMA], _num_toks(v)), K.RP]
     if sf == K.LATEX:
-        return [K.BMAT, *sep_by([K.NL], [sep_by([K.AMP], _num_toks(r)) for r in v]), K.EMAT]
+        rows = sep_by([K.NL], [sep_by([K.AMP], _num_toks(r)) for r in v])
+        if len(v[0]) > BMAT_MAX_COLS:
+            return [K.LBKG, ("arrc", len(v[0])), *rows, K.EARR, K.RBKG]
+        return [K.BMAT, *rows, K.EMAT]
     return [K.MAT, K.LP, *sep_by([K.SEMI], [sep_by([K.COMMA], _num_toks(r)) for r in v]), K.RP]
 
 
@@ -782,11 +820,13 @@ _RED_FIELD = {
 
 
 class FaqForm:
-    """``Math.FaqForm``: a ``faq`` node with a native spelling, by its parts."""
+    """``Math.FaqForm``: a ``faq`` node with a native spelling, by its parts.
+    ``marked``: ``args`` lists the arrays the body indexes; otherwise ``args`` is
+    ``set`` (empty, or names printed as a superscript set)."""
 
-    __slots__ = ("red", "marked", "out", "ranges", "expr", "filter")
+    __slots__ = ("red", "marked", "out", "ranges", "expr", "filter", "set")
 
-    def __init__(self, red, marked, out, ranges, expr, filter):
+    def __init__(self, red, marked, out, ranges, expr, filter, set):
         self.red = red
         self.marked = marked
         self.out = out
@@ -794,12 +834,21 @@ class FaqForm:
         self.expr = expr
         #: ``MISSING`` when the node has no filter.
         self.filter = filter
+        self.set = set
+
+    def args(self) -> list:
+        """``FaqForm.args``: the ``args`` of a native ``faq``."""
+        return list(bases(self.expr)) if self.marked else list(self.set)
+
+    def sup(self) -> list:
+        """``FaqForm.sup``: the names a superscript set shows: ``set`` when ``args``
+        is not the body's arrays."""
+        return [] if self.marked else self.set
 
 
 def faq_json(f: FaqForm) -> Obj:
     """``Math.faqJson``."""
-    args = list(bases(f.expr)) if f.marked else []
-    kvs = [("args", args), ("expr", f.expr)]
+    kvs = [("args", f.args()), ("expr", f.expr)]
     if f.filter is not MISSING:
         kvs.append(("filter", f.filter))
     kvs.append(("op", "faq"))
@@ -835,7 +884,15 @@ def faq_cand(kvs: list):
         rs = list(rs)
     else:
         return None
-    return FaqForm(red, bool(args), out, rs, e, look("filter", kvs))
+    if not args:
+        marked, st = False, []
+    elif args == bases(e):
+        marked, st = True, []
+    elif all(type(a) is str for a in args):
+        marked, st = False, list(args)
+    else:
+        return None
+    return FaqForm(red, marked, out, rs, e, look("filter", kvs), st)
 
 
 def faq_form(kvs: Obj):
@@ -901,7 +958,9 @@ def faq_ok(f: FaqForm) -> bool:
         return False
     if f.filter is not MISSING and not is_e(f.filter):
         return False
-    if not all(out_ok(j) for j in f.out) or not _nodup(names) or not keys_sorted(f.ranges):
+    if not all(out_ok(j) for j in f.out) or not _nodup(names):
+        return False
+    if not all(name_ok(s) for s in f.set) or not keys_sorted(f.ranges):
         return False
     for k, v in f.ranges:
         if not (name_ok(k) and range_ok(v)):
@@ -962,8 +1021,16 @@ def head_toks(sf: str, f: FaqForm) -> list:
 
 
 def sub_toks_l(c: Ctx, f: FaqForm) -> list:
+    """``Math.subToksL``: none, one row, a lone dense range ``_{k=a}^{b}`` (not when
+    ``args`` is a superscript set), or ``\\substack``."""
     rr = red_ranges(f)
-    if len(rr) == 1 and f.filter is MISSING and type(rr[0][1]) is list and len(rr[0][1]) == 2:
+    if (
+        len(rr) == 1
+        and f.filter is MISSING
+        and not f.sup()
+        and type(rr[0][1]) is list
+        and len(rr[0][1]) == 2
+    ):
         k, ab = rr[0]
         return [
             K.US,
@@ -992,10 +1059,28 @@ def sub_toks_t(c: Ctx, f: FaqForm) -> list:
     return [K.US, K.LPG, *sep_by([K.NL], rows), K.RP]
 
 
+def sup_toks(c: Ctx, ns: list) -> list:
+    """``Math.supToks``: the superscript set of names: LaTeX ``^{\\{f, g\\}}``,
+    Typst ``^({f, g})``."""
+    names = sep_by([K.COMMA], [name_toks(c, n) for n in ns])
+    if c.sf == K.LATEX:
+        return [K.CARET, K.LB, K.LSET, *names, K.RSET, K.RB]
+    return [K.CARET, K.LPG, K.LSET, *names, K.RSET, K.RP]
+
+
+def sup_t(c: Ctx, f: FaqForm) -> list:
+    """``Math.supT``: the ``args`` set of a ``faq``, as a superscript, when it is
+    one."""
+    st = f.sup()
+    return sup_toks(c, st) if st else []
+
+
 def red_toks(c: Ctx, f: FaqForm) -> list:
-    """``Math.redToks``: operator, subscript, body at level 5."""
+    """``Math.redToks``: operator, subscript, the superscript set (on the operator
+    only when there are no output indices), body at level 5."""
     sub = sub_toks_l(c, f) if c.sf == K.LATEX else sub_toks_t(c, f)
-    return [*head_toks(c.sf, f), *sub, *pa(c, 5, f.expr)]
+    sup = sup_t(c, f) if not f.out else []
+    return [*head_toks(c.sf, f), *sub, *sup, *pa(c, 5, f.expr)]
 
 
 def entry_toks(c: Ctx, f: FaqForm, j: Any) -> list:
@@ -1010,13 +1095,147 @@ def entry_toks(c: Ctx, f: FaqForm, j: Any) -> list:
 
 def faq_out(c: Ctx, f: FaqForm) -> Out:
     """``Math.faqOut``: the native ``faq``, wrapped with its output indices when it
-    has some."""
+    has some. A superscript set goes on the bracket, before its subscript; the form
+    is then a power's level (a power of it, or an index into it, is
+    parenthesized)."""
     if not f.out:
         return Out(5, red_toks(c, f))
     es = sep_by([K.COMMA], [entry_toks(c, f, j) for j in f.out])
+    sup = sup_t(c, f)
+    lvl = 8 if sup else 10
     if c.sf == K.LATEX:
-        return Out(10, [K.LBKG, *red_toks(c, f), K.RBKG, K.US, K.LB, *es, K.RB])
-    return Out(10, [K.LR, K.LP, K.LBK, *red_toks(c, f), K.RBK, K.RP, K.US, K.LPG, *es, K.RP])
+        return Out(lvl, [K.LBKG, *red_toks(c, f), K.RBKG, *sup, K.US, K.LB, *es, K.RB])
+    return Out(lvl, [K.LR, K.LP, K.LBK, *red_toks(c, f), K.RBK, K.RP, *sup, K.US, K.LPG, *es, K.RP])
+
+
+# ## Block assembly (`makearray`)
+
+
+def _strs_of(xs: list):
+    """``Math.strsOf``: the strings of a list, when they are all strings."""
+    return list(xs) if all(type(x) is str for x in xs) else None
+
+
+class MkForm(NamedTuple):
+    """``Math.MkForm``: a ``makearray`` node with a native spelling, by its parts:
+    the output indices (empty when the node has no ``output_idx``), and the regions
+    (lists of bound pairs) with their values."""
+
+    out: list
+    regions: list
+    values: list
+
+
+def mk_json(m: MkForm) -> Obj:
+    """``Math.mkJson``."""
+    kvs: list = [("args", []), ("op", "makearray")]
+    if m.out:
+        kvs.append(("output_idx", list(m.out)))
+    kvs.append(("regions", [[[a, b] for a, b in r] for r in m.regions]))
+    kvs.append(("values", m.values))
+    return Obj(kvs)
+
+
+def _regions_of(rs: list):
+    """``Math.regionsOf``: the regions of a ``regions`` list, each a list of bound
+    pairs."""
+    out = []
+    for r in rs:
+        if type(r) is not list:
+            return None
+        ps = []
+        for p in r:
+            if type(p) is not list or len(p) != 2:
+                return None
+            ps.append((p[0], p[1]))
+        out.append(ps)
+    return out
+
+
+def mk_cand(kvs: list):
+    """``Math.mkCand``: the parts a ``makearray`` node would have."""
+    rs = look("regions", kvs)
+    vs = look("values", kvs)
+    if type(rs) is not list or type(vs) is not list:
+        return None
+    o = look("output_idx", kvs)
+    if o is MISSING:
+        out: list | None = []
+    elif type(o) is list:
+        out = _strs_of(o)
+    else:
+        out = None
+    regs = _regions_of(rs)
+    if out is None or regs is None:
+        return None
+    return MkForm(out, regs, vs)
+
+
+def mk_form(kvs: Obj):
+    """``Math.mkForm``: the parts of a ``makearray`` node, when it is exactly the
+    node they rebuild."""
+    m = mk_cand(kvs)
+    if m is None:
+        return None
+    return m if mk_json(m) == kvs else None
+
+
+def mk_ok(m: MkForm) -> bool:
+    """``Math.mkOK``: the conditions under which the native spelling reads back."""
+    return (
+        bool(m.values)
+        and len(m.regions) == len(m.values)
+        and all(is_e(v) for v in m.values)
+        and all(r and all(is_e(a) and is_e(b) for a, b in r) for r in m.regions)
+        and all(name_ok(n) for n in m.out)
+    )
+
+
+def _pair_toks(c: Ctx, p: tuple) -> list:
+    """``Math.pairToks``: a bound pair ``a, b`` (its brackets are written around
+    it)."""
+    return [*pa(c, 1, p[0]), K.COMMA, *pa(c, 1, p[1])]
+
+
+def _reg_toks(c: Ctx, r: list) -> list:
+    """``Math.regToks``: a region ``[a, b] \\times [c, d]``, one bound pair per
+    dimension."""
+    out = [K.LBK, *_pair_toks(c, r[0]), K.RBK]
+    for q in r[1:]:
+        out.extend([K.TIMES, K.LBK, *_pair_toks(c, q), K.RBK])
+    return out
+
+
+#: ``Math.matHead``: the Typst table head ``mat(delim: "[", augment: #1,``.
+MAT_HEAD = [
+    K.MAT, K.LP, ("word", "delim"), K.COLON, ("txt", "["), K.COMMA, ("word", "augment"),
+    K.COLON, ("code", 1), K.COMMA,
+]  # fmt: skip
+
+
+def _mk_sub(c: Ctx, out: list) -> list:
+    """``Math.mkSub``: the output indices as the bracket's subscript."""
+    if not out:
+        return []
+    names = sep_by([K.COMMA], [name_toks(c, n) for n in out])
+    if c.sf == K.LATEX:
+        return [K.US, K.LB, *names, K.RB]
+    return [K.US, K.LPG, *names, K.RP]
+
+
+def mk_out(c: Ctx, m: MkForm) -> Out:
+    """``Math.mkOutT``: the native ``makearray``: a bracketed two-column table,
+    value then region, one row per region in order; the output indices as its
+    subscript."""
+    latex = c.sf == K.LATEX
+    cell = K.AMP if latex else K.COMMA
+    rows = sep_by(
+        [K.NL if latex else K.SEMI],
+        [[*pa(c, 1, v), cell, *_reg_toks(c, r)] for v, r in zip(m.values, m.regions)],
+    )
+    if latex:
+        return Out(10, [K.LBKG, K.BARR, *rows, K.EARR, K.RBKG, *_mk_sub(c, m.out)])
+    return Out(10, [*MAT_HEAD, *rows, K.RP, *_mk_sub(c, m.out)])
 
 
 def tname_ok(n: str) -> bool:
@@ -1037,17 +1256,96 @@ def _opn(c: Ctx, kvs: Obj) -> Out:
     if type(o) is str and type(args) is list:
         fs = fields_of(kvs)
         if (
-            o not in CORE_OPS
+            call_form_ok(o, fs)
             and opn_ok(o)
             and tparams(c.s, o) is None
             and all(key_ok(k) for k, _ in fs)
         ):
             fields = [
-                [*key_toks(c.sf, k), K.EQ, *(pa(c, 4, v) if is_e(v) else json_val(c.sf, v))]
+                [
+                    *key_toks(c.sf, k),
+                    K.EQ,
+                    *(pa(c, 4, v) if math_field(o, (k, v)) else json_val(c.sf, v)),
+                ]
                 for k, v in fs
             ]
             return Out(10, open_toks(c.sf, o, [pa(c, 4, a) for a in args], fields))
     return _esc(c, kvs)
+
+
+def prints_call_form(c: Ctx, kvs: Obj) -> bool:
+    """The node ``kvs`` (of operator ``o``) is one the reader takes in the call
+    form ``\\operatorname{o}(…; …)``: :func:`call_form_ok` holds, ``o`` is an
+    operator name, no template ``o`` is in scope, and no native spelling applies.
+    Field keys are not checked: a key :func:`key_ok` refuses still reads. Every
+    native spelling has a fixed set of identifier keys, so a node with another key
+    has none; otherwise :func:`pr` decides."""
+    o = look("op", kvs)
+    if type(o) is not str:
+        return False
+    fs = fields_of(kvs)
+    if not (call_form_ok(o, fs) and opn_ok(o) and tparams(c.s, o) is None):
+        return False
+    return not native_form(c.sf, kvs)
+
+
+def native_form(sf: str, kvs: Obj) -> bool:
+    """A node :func:`call_form_ok` admits that :func:`pr` nevertheless writes in a
+    native spelling: a ``faq``, a ``makearray`` or a ``const``. Decided from the
+    node's own fields, without printing its operands; the other operators
+    :func:`call_form_ok` admits have no native spelling."""
+    o = look("op", kvs)
+    if o == "faq":
+        f = faq_form(kvs)
+        return f is not None and faq_ok(f)
+    if o == "makearray":
+        m = mk_form(kvs)
+        return m is not None and mk_ok(m)
+    if o == "const":
+        return const_native(sf, kvs) is not None
+    return False
+
+
+def const_native(sf: str, kvs: Obj):
+    """The native spelling of a ``const`` node, if it has one: an array (rank 1 or
+    2) of numbers, or a number or such an array with typeset units. ``None`` when
+    the node prints in the call form."""
+    n = len(kvs)
+    if n == 3:
+        (k0, args), (k1, o), (k2, v) = kvs
+        if (
+            k0 == "args"
+            and type(args) is list
+            and not args
+            and k1 == "op"
+            and o == "const"
+            and k2 == "value"
+        ):
+            if type(v) is list:
+                af = arr_form(v)
+                if af is not None:
+                    return Out(10, arr_toks(sf, af))
+    elif n == 4:
+        (k0, args), (k1, o), (k2, u), (k3, v) = kvs
+        if (
+            k0 == "args"
+            and type(args) is list
+            and not args
+            and k1 == "op"
+            and o == "const"
+            and k2 == "units"
+            and type(u) is str
+            and k3 == "value"
+            and units_ok(sf, u)
+        ):
+            tv = type(v)
+            if tv is int or tv is Dec:
+                return Out(7, [("num", v), ("units", factors_of(u))])
+            if tv is list:
+                af = arr_form(v)
+                if af is not None:
+                    return Out(7, [*arr_toks(sf, af), ("units", factors_of(u))])
+    return None
 
 
 def pr(c: Ctx, e: Any) -> Out:
@@ -1097,10 +1395,8 @@ def pr(c: Ctx, e: Any) -> Out:
             and k2 == "value"
             and type(v2) is list
         ):
-            af = arr_form(v2)
-            if af is not None:
-                return Out(10, arr_toks(sf, af))
-            return _opn(c, kvs)
+            out = const_native(sf, kvs)
+            return out if out is not None else _opn(c, kvs)
     elif n == 4:
         (k0, args), (k1, v1), (k2, v2), (k3, v3) = kvs
         empty_args = k0 == "args" and type(args) is list and not args
@@ -1112,17 +1408,10 @@ def pr(c: Ctx, e: Any) -> Out:
             and type(v2) is str
             and k3 == "value"
         ):
-            u = v2
             tv = type(v3)
-            if tv is int or tv is Dec:
-                if units_ok(sf, u):
-                    return Out(7, [("num", v3), ("units", factors_of(u))])
-                return _esc(c, kvs)
-            if tv is list:
-                af = arr_form(v3)
-                if af is not None and units_ok(sf, u):
-                    return Out(7, [*arr_toks(sf, af), ("units", factors_of(u))])
-                return _esc(c, kvs)
+            if tv is int or tv is Dec or tv is list:
+                out = const_native(sf, kvs)
+                return out if out is not None else _opn(c, kvs)
         if (
             empty_args
             and k1 == "bindings"
@@ -1136,6 +1425,9 @@ def pr(c: Ctx, e: Any) -> Out:
     f = faq_form(kvs)
     if f is not None and faq_ok(f):
         return faq_out(c, f)
+    m = mk_form(kvs)
+    if m is not None and mk_ok(m):
+        return mk_out(c, m)
     return _opn(c, kvs)
 
 
@@ -1244,6 +1536,8 @@ def _pr_template(c: Ctx, kvs: Obj, n: str, bs: Obj) -> Out:
         return Out(10, call_toks(sf, [("opn", n)], args))
     if bs and all(name_ok(k) for k, _ in bs):
         return Out(10, call_toks(sf, [("opn", n)], [[*name_toks(c, k), K.EQ, *v] for k, v in vals]))
+    if not bs:
+        return Out(5, [("opn", n)])
     return _esc(c, kvs)
 
 

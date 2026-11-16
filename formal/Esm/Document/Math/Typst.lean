@@ -56,9 +56,10 @@ def kwChars : Kw → List Char
   | .vec => "vec".toList | .mat => "mat".toList
   | .sum => "sum".toList | .prod => "product".toList | .inn => "in".toList
   | .limits => "limits".toList | .lr => "lr".toList | .nl => ['\\']
+  | .lset => ['{'] | .rset => ['}']
   | .rpg | .lb | .rb | .frac | .labs | .rabs | .lfloor | .rfloor
   | .lceil | .rceil | .dotacc | .bcases | .ecases | .bmat | .emat
-  | .substack | .lbkg | .rbkg | .limitsL => []
+  | .substack | .lbkg | .rbkg | .limitsL | .barr | .earr | .barrC _ => []
 
 def pieceChars (p : String × String) : List Char :=
   "upright(".toList ++ Strings.quote true p.1 ++ [')'] ++
@@ -221,7 +222,7 @@ def punct : Char → Option Kw
   | '>' => some .gt | '/' => some .slash | '^' => some .caret | '_' => some .us
   | ')' => some .rp | '[' => some .lbk | ']' => some .rbk
   | ',' => some .comma | ';' => some .semi | ':' => some .colon | '&' => some .amp
-  | '.' => some .sdot | '\\' => some .nl
+  | '.' => some .sdot | '\\' => some .nl | '{' => some .lset | '}' => some .rset
   | _ => none
 
 /-- `upright(e)`, Euler's number written without quotes (an accepted variant, read as

@@ -265,10 +265,10 @@ const _STRUCTURAL_FIELDS = (
     # operator — `max`, say — must not rewrite `{"op": "max", …}` into
     # `{"op": 3, …}`, which then dies in the typed load with a raw "cannot
     # unmarshal number into `op`" instead of a diagnostic. `id` and
-    # `expect_cadence` are the same kind of node-level annotation.
+    # `expect_cadence` (`EXPRESSION_NODE_ANNOTATIONS`) are the same kind of
+    # node-level annotation.
     "op" => :node,
-    "id" => :node,
-    "expect_cadence" => :node,
+    (k => :node for k in EXPRESSION_NODE_ANNOTATIONS)...,
     "reduce" => :registry,
     "semiring" => :registry,
     "fn" => :registry,

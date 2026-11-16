@@ -252,3 +252,178 @@ describe('math: the golden set', () => {
 function big(_k: string, v: unknown): unknown {
   return typeof v === 'bigint' ? `${v}n` : v
 }
+
+// ## Array notation: canonical-only reading
+
+describe('math: array notation reads only what it prints', () => {
+  const sy = sym(['S', 'w', 'v', 'C', 'f', 'g', 'N', 'x', 'k', 'delim', 'augment'])
+  const roundL = (text: string): void => {
+    const e = parseLatex(sy, text)
+    expect(e, text).toBeDefined()
+    expect(printLatex(sy, e as Json)).toBe(text)
+  }
+  const roundT = (text: string): void => {
+    const e = parseTypst(sy, text)
+    expect(e, text).toBeDefined()
+    expect(printTypst(sy, e as Json)).toBe(text)
+  }
+
+  it('a \\limits head carries no superscript set', () => {
+    roundL('\\sum\\limits_{i \\in S} w_{i}')
+    expect(parseLatex(sy, '\\sum\\limits_{i \\in S}^{\\{w\\}} w_{i}')).toBeUndefined()
+    expect(parseTypst(sy, 'limits(sum)_(i in S)^({w}) w_i')).toBeUndefined()
+    expect(
+      parseLatex(sy, '\\left[\\sum\\limits_{i \\in S} w_{i} v_{j}\\right]^{\\{w\\}}_{j \\in C}'),
+    ).toBeUndefined()
+  })
+
+  it('a wrapped reduction has its set on the bracket only', () => {
+    const canon =
+      '\\left[\\sum\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}'
+    roundL(canon)
+    // inner set only
+    expect(
+      parseLatex(
+        sy,
+        '\\left[\\sum^{\\{f, g\\}}\\left(f_{i + 1} - f_{i}\\right)\\right]_{2 \\le i \\le N - 1}',
+      ),
+    ).toBeUndefined()
+    // inner and outer set
+    expect(
+      parseLatex(
+        sy,
+        '\\left[\\sum^{\\{f\\}}\\left(f_{i + 1} - f_{i}\\right)\\right]^{\\{f, g\\}}_{2 \\le i \\le N - 1}',
+      ),
+    ).toBeUndefined()
+  })
+
+  it('delim and augment are ordinary words in Typst', () => {
+    readsT(sy, 'delim + 1', node('+', [s('delim'), int(1)]))
+    expect(parseTypst(sy, '(d augment)/(d t)')).toBeDefined()
+    roundT('(dif italic("augment"))/(dif t)')
+    roundT('italic("augment") + italic("delim")')
+    roundT('mat(delim: "[", augment: #1, 0, [1, 2] times [1, 3])_(i)')
+  })
+
+  it('the call form reads only a node the printer writes in it', () => {
+    roundL('\\operatorname{foo}(x; \\mathrm{a} = 1)')
+    roundL('\\operatorname{const}(; \\mathrm{value} = 2)')
+    // An annotated core operator prints in the escape form.
+    expect(
+      parseLatex(sy, '\\operatorname{const}(; \\mathrm{id} = \\text{"n1"}, \\mathrm{value} = 2)'),
+    ).toBeUndefined()
+    expect(
+      parseLatex(
+        sy,
+        '\\operatorname{const}(; \\mathrm{expect\\_cadence} = \\text{"const"}, \\mathrm{value} = 2)',
+      ),
+    ).toBeUndefined()
+    expect(
+      parseTypst(sy, 'op("const")(; upright("id") = #"n1", upright("value") = #2)'),
+    ).toBeUndefined()
+    // An open operator keeps its annotation fields in the call form.
+    roundL('\\operatorname{foo}(x; \\mathrm{id} = \\mathit{n1})')
+    readsL(
+      sy,
+      '\\operatorname{foo}(x; \\mathrm{id} = \\text{"n1"})',
+      mkNode('foo', [s('x')], [['id', s('n1')]]),
+    )
+    // A field key repeats, or names the node's own `op` / `args`.
+    expect(
+      parseLatex(sy, '\\operatorname{foo}(x; \\mathrm{a} = 1, \\mathrm{a} = 2)'),
+    ).toBeUndefined()
+    expect(parseLatex(sy, '\\operatorname{foo}(x; \\mathrm{op} = 1)')).toBeUndefined()
+    expect(parseLatex(sy, '\\operatorname{foo}(x; \\mathrm{args} = 1)')).toBeUndefined()
+    expect(parseTypst(sy, 'op("foo")(x; upright("a") = 1, upright("a") = 2)')).toBeUndefined()
+    // A constant array has a native spelling, so its call form is refused.
+    expect(parseLatex(sy, '\\operatorname{const}(; \\mathrm{value} = [1, 2])')).toBeUndefined()
+    // So does a makearray table.
+    const mk = parseLatex(
+      sy,
+      '\\left[\\begin{array}{l|l} 0 & [1, 2] \\end{array}\\right]_{i}',
+    ) as Json
+    expect(mk).toBeDefined()
+    expect(printLatex(sy, mk).startsWith('\\left[')).toBe(true)
+    expect(
+      parseLatex(
+        sy,
+        '\\operatorname{makearray}(; \\mathrm{output\\_idx} = [\\text{"i"}], \\mathrm{regions} = [[[1, 2]]], \\mathrm{values} = [0])',
+      ),
+    ).toBeUndefined()
+    // With no region the table has no native spelling: the call form reads.
+    roundL('\\operatorname{makearray}(; \\mathrm{regions} = [], \\mathrm{values} = [])')
+    // Field keys are read in any spelling; the printer escapes this node.
+    const pct = mkNode('foo', [s('x')], [['a%b', int(1)]])
+    readsL(sy, '\\operatorname{foo}(x; \\mathrm{a{\\char037}b} = 1)', pct)
+    expect(printLatex(sy, pct)).toBe('\\esm{foo}{{\\text{"a{\\char037}b"}: 1}}{x}')
+    readsL(sy, printLatex(sy, pct), pct)
+  })
+
+  it('a bare template name is refused when it is in scope with no parameters', () => {
+    const t0 = jobj([
+      ['args', jarr([])],
+      ['bindings', jobj([])],
+      ['name', s('g0')],
+      ['op', s('apply_expression_template')],
+    ])
+    const out: Sym = { names: ['x'], templates: [] }
+    const zero: Sym = { names: ['x'], templates: [['g0', []]] }
+    const one: Sym = { names: ['x'], templates: [['g0', ['p']]] }
+    expect(printLatex(out, t0)).toBe('\\operatorname{g0}')
+    readsL(out, '\\operatorname{g0}', t0)
+    readsL(one, '\\operatorname{g0}', t0)
+    expect(printLatex(zero, t0)).toBe('\\operatorname{g0}()')
+    readsL(zero, '\\operatorname{g0}()', t0)
+    expect(parseLatex(zero, '\\operatorname{g0}')).toBeUndefined()
+    expect(parseLatex(zero, '\\operatorname{g0} + x')).toBeUndefined()
+    expect(parseTypst(zero, 'op("g0")')).toBeUndefined()
+  })
+
+  it('the region product is two tokens', () => {
+    roundL('\\left[\\begin{array}{l|l} 0 & [1, 2] \\times [1, 3] \\end{array}\\right]_{i}')
+    roundT('mat(delim: "[", augment: #1, 0, [1, 2] times [1, 3])_(i)')
+    // Outside a region `\times [` is a product.
+    readsL(sy, 'x \\times [k]', node('*', [s('x'), s('k')]))
+    readsT(sy, 'x times [k]', node('*', [s('x'), s('k')]))
+    readsL(sy, 'x \\times[k]', node('*', [s('x'), s('k')]))
+  })
+
+  it('a constant matrix wider than ten columns prints as an array', () => {
+    const row = (a: number): Json => jarr(Array.from({ length: 11 }, (_, i) => int(a + i)))
+    const m = jobj([
+      ['args', jarr([])],
+      ['op', s('const')],
+      ['value', jarr([row(1), row(12)])],
+    ])
+    const cells = (a: number): string => Array.from({ length: 11 }, (_, i) => a + i).join(' & ')
+    const text = `\\left[\\begin{array}{ccccccccccc}${cells(1)} \\\\ ${cells(12)} \\end{array}\\right]`
+    expect(printLatex(sy, m)).toBe(text)
+    readsL(sy, text, m)
+    expect(printTypst(sy, m)).toBe(
+      `mat(${Array.from({ length: 11 }, (_, i) => 1 + i).join(', ')}; ${Array.from({ length: 11 }, (_, i) => 12 + i).join(', ')})`,
+    )
+    // the column count must match every row and exceed ten
+    expect(parseLatex(sy, text.replace('{ccccccccccc}', '{cccccccccccc}'))).toBeUndefined()
+    expect(
+      parseLatex(sy, '\\left[\\begin{array}{cc}1 & 2 \\\\ 3 & 4 \\end{array}\\right]'),
+    ).toBeUndefined()
+    // a bmatrix holds at most ten columns
+    expect(
+      parseLatex(sy, `\\begin{bmatrix}${cells(1)} \\\\ ${cells(12)}\\end{bmatrix}`),
+    ).toBeUndefined()
+    const ten = jobj([
+      ['args', jarr([])],
+      ['op', s('const')],
+      ['value', jarr([jarr(Array.from({ length: 10 }, (_, i) => int(i)))])],
+    ])
+    expect(printLatex(sy, ten).startsWith('\\begin{bmatrix}')).toBe(true)
+    // with units
+    const mu = jobj([
+      ['args', jarr([])],
+      ['op', s('const')],
+      ['units', s('m')],
+      ['value', jarr([row(1)])],
+    ])
+    roundL(printLatex(sy, mu))
+  })
+})

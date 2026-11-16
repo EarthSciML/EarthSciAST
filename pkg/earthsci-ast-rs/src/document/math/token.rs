@@ -91,6 +91,13 @@ pub enum Kw {
     Lr,
     /// The LaTeX marker `\limits`.
     LimitsL,
+    // makearray: LaTeX `\begin{array}{l|l}`; LaTeX `\end{array}`, which also
+    // closes a wide constant matrix ([`Tok::Carr`])
+    Barr,
+    Earr,
+    // a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
+    Lset,
+    Rset,
 }
 
 /// `Math.Tok`.
@@ -113,6 +120,9 @@ pub enum Tok {
     Esc(String),
     /// Typst `#value`.
     Code(Json),
+    /// LaTeX `\begin{array}{c…c}` with this many columns: a constant matrix
+    /// wider than `bmatrix` allows.
+    Carr(usize),
     /// The unit after a quantity's number.
     Units(Vec<Factor>),
     Kw(Kw),

@@ -253,6 +253,10 @@ pub fn kw_chars(k: Kw) -> &'static str {
         Kw::LimitsL => "\\limits",
         Kw::Lbkg => "\\left[",
         Kw::Rbkg => "\\right]",
+        Kw::Barr => "\\begin{array}{l|l}",
+        Kw::Earr => "\\end{array}",
+        Kw::Lset => "\\{",
+        Kw::Rset => "\\}",
         Kw::Abs
         | Kw::Floor
         | Kw::Ceil
@@ -288,6 +292,12 @@ pub fn tok_chars(t: &Tok) -> Vec<char> {
         Tok::Esc(o) => wrap("\\esm{", esc(o)),
         Tok::Units(l) => wrap("\\,\\mathrm{", units::latex_body(l)),
         Tok::Kw(k) => kw_chars(*k).chars().collect(),
+        Tok::Carr(n) => {
+            let mut out: Vec<char> = "\\begin{array}{".chars().collect();
+            out.extend(std::iter::repeat_n('c', *n));
+            out.push('}');
+            out
+        }
         Tok::Ups(_) | Tok::Code(_) => vec![],
     }
 }
@@ -349,6 +359,8 @@ pub fn pretty(p: Option<&Tok>, t1: &Tok, t2: &Tok) -> bool {
         || (matches!(t2, Tok::Kw(Kw::Minus)) && atom_end(t1))
         || (matches!(t1, Tok::Kw(Kw::Minus)) && p.is_some_and(atom_end))
         || (atom_end(t1) && atom_start(t2) && !matches!(t2, Tok::Kw(Kw::Lp | Kw::Lbk)))
+        || matches!(t1, Tok::Kw(Kw::Barr))
+        || matches!(t2, Tok::Kw(Kw::Earr))
 }
 
 /// `Latex.sp`.
@@ -420,6 +432,16 @@ fn chars(s: &str) -> Vec<char> {
     s.chars().collect()
 }
 
+/// `Latex.carrTok`: after `\begin{array}{`: one or more `c` then `}`, the
+/// column spec of a wide constant matrix.
+pub fn carr_tok(r: &[char]) -> Option<(Tok, &[char])> {
+    let n = r.iter().take_while(|&&c| c == 'c').count();
+    match &r[n..] {
+        ['}', r2 @ ..] if n > 0 => Some((Tok::Carr(n), r2)),
+        _ => None,
+    }
+}
+
 /// `Latex.ctrlTok`: after a control word: its token.
 pub fn ctrl_tok<'a>(w: &str, r: &'a [char]) -> Option<(Tok, &'a [char])> {
     if ["mathit", "mathrm", "operatorname", "text", "esm"].contains(&w) {
@@ -467,12 +489,21 @@ pub fn ctrl_tok<'a>(w: &str, r: &'a [char]) -> Option<(Tok, &'a [char])> {
     } else if w == "begin" {
         match drop_p(&chars("{cases}"), r) {
             Some(r2) => Some((Tok::Kw(Kw::Bcases), r2)),
-            None => drop_p(&chars("{bmatrix}"), r).map(|r2| (Tok::Kw(Kw::Bmat), r2)),
+            None => match drop_p(&chars("{bmatrix}"), r) {
+                Some(r2) => Some((Tok::Kw(Kw::Bmat), r2)),
+                None => match drop_p(&chars("{array}{l|l}"), r) {
+                    Some(r2) => Some((Tok::Kw(Kw::Barr), r2)),
+                    None => drop_p(&chars("{array}{"), r).and_then(carr_tok),
+                },
+            },
         }
     } else if w == "end" {
         match drop_p(&chars("{cases}"), r) {
             Some(r2) => Some((Tok::Kw(Kw::Ecases), r2)),
-            None => drop_p(&chars("{bmatrix}"), r).map(|r2| (Tok::Kw(Kw::Emat), r2)),
+            None => match drop_p(&chars("{bmatrix}"), r) {
+                Some(r2) => Some((Tok::Kw(Kw::Emat), r2)),
+                None => drop_p(&chars("{array}"), r).map(|r2| (Tok::Kw(Kw::Earr), r2)),
+            },
         }
     } else if is_greek(&chars(w)) {
         Some((Tok::Greek(w.to_string()), r))
@@ -566,6 +597,10 @@ pub fn lex_one(cs: &[char]) -> Option<(Tok, &[char])> {
                 unit_tok(r).map(|(l, r2)| (Tok::Units(l), r2))
             } else if *c == '\\' {
                 Some((Tok::Kw(Kw::Nl), r))
+            } else if *c == '{' {
+                Some((Tok::Kw(Kw::Lset), r))
+            } else if *c == '}' {
+                Some((Tok::Kw(Kw::Rset), r))
             } else {
                 None
             }

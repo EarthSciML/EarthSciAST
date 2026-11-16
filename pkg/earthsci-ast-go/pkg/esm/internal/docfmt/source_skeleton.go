@@ -299,6 +299,14 @@ func (t *Tm[R]) scope(s *Sym) *Sym {
 	return &Sym{Names: names, Templates: s.Templates}
 }
 
+// mscope is `Tm.mscope`: the symbol table a rule's `match` pattern is read
+// under: its body's, with no templates. A pattern never applies a template
+// (spec §9.7.3), so an operator in it named like a template in scope (a rule
+// is in scope under its own name) reads as that operator, in the call form.
+func (t *Tm[R]) mscope(s *Sym) *Sym {
+	return &Sym{Names: t.scope(s).Names}
+}
+
 // skRootTs is `Source.rootTs`.
 func skRootTs[A, R any](root Obj, rm []Mx[A, R]) []TemplateParams {
 	out := skTemplatesOf(lookV("expression_templates", root))

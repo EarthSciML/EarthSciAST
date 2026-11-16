@@ -59,13 +59,17 @@ A name of more than one letter is read only when the component declares it, so
 juxtaposition is multiplication (`k A B`), and a multi-letter name prints
 italic (`\mathit{lat}`) or with an upright subscript (`x_{\mathrm{min}}`).
 
-A **JSON block with no LaTeX partner** is a node the math notation has no
-notation of its own for: `broadcast`, `makearray`, `reshape`, `transpose`,
-`concat`, a `faq` with a non-default semiring or a `join`, and a few others. A
-document still spells such a node losslessly, with the generic
-`\esm{op}{fields}{args}` form, which carries the node's fields as JSON; the
-page shows the JSON alone. Whole `.esm` documents are shown as JSON
-throughout.
+Array nodes have notation too. A `makearray` is a bracketed table, each row a
+value and the region it fills,
+`\left[\begin{array}{l|l} v_{1} & [2, N - 1] \\ v_{2} & [1, 1] \times [2, N] \end{array}\right]`
+(Typst `mat(delim: "[", augment: #1, …)`). The shape operators `broadcast`,
+`reshape`, `transpose` and `concat`, and a `faq` with a non-default semiring or a
+`join`, are written in the call form with their fields as named arguments,
+`\operatorname{reshape}(A; \mathrm{shape} = [2, 3])`. Only a node that carries an
+`id` or `expect_cadence`, or has a field whose key is not an identifier, is still
+written in the generic `\esm{op}{fields}{args}` form (Typst `esm.node(…)`), which
+carries the node's fields as JSON and which KaTeX does not render; such a page shows
+the JSON alone. Whole `.esm` documents are shown as JSON throughout.
 
 ## Index
 

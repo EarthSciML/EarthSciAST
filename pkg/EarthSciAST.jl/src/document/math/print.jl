@@ -281,6 +281,12 @@ const CMP_KW = (("<", KLt), ("<=", KLe), (">", KGt), (">=", KGe), ("==", KEq), (
 """`Math.callOps`: core operators in the call form."""
 const CALL_OPS = ("sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum")
 
+"""`Math.fieldCallOps`: core operators with no notation of their own that print
+in the call form, their fields as named arguments after `;` (when no field
+annotates the node)."""
+const FIELD_CALL_OPS =
+    ("broadcast", "reshape", "transpose", "concat", "faq", "makearray", "const")
+
 """`Math.reservedOpn`: names `\\operatorname{…}` never means a template or an
 open operator by."""
 reserved_opn(n::AbstractString) =
@@ -310,6 +316,26 @@ function opn_ok(s::AbstractString)
     end
     return true
 end
+
+"""`Math.annotKeys`: the fields that annotate a node
+(`Notation.annotatedNodeFields`): the package's
+`EXPRESSION_NODE_ANNOTATIONS`."""
+const ANNOT_KEYS = HOST.EXPRESSION_NODE_ANNOTATIONS
+
+"""`Math.callFormOK`: an operator prints in the call form: an open operator, or
+a core operator of `fieldCallOps` none of whose fields annotates it."""
+call_form_ok(o::AbstractString, fs) =
+    !(o in CORE_OPS) || (o in FIELD_CALL_OPS && all(kv -> !(kv.first in ANNOT_KEYS), fs))
+
+"""`Math.mathKeys`: the fields of a core operator in the call form that hold an
+expression; the others print as JSON, even a string that is a name."""
+const MATH_KEYS = ("expr", "filter", "key")
+
+"""`Math.mathField`: a field of a call-form node prints as math: its value is
+an expression and, for a core operator, the field holds one. An open operator's
+fields are all read as math when they can be."""
+math_field(o::AbstractString, kv::Pair) =
+    is_e(kv.second) && (!(o in CORE_OPS) || kv.first in MATH_KEYS)
 
 """`Math.keyOK`: a field key printed upright in a call: an identifier."""
 key_ok(s::AbstractString) = seg_ok(collect(Char, s))
@@ -811,14 +837,13 @@ function arr_form(j)
     xs = j.xs
     ns = nums_of(xs)
     if ns !== nothing
-        (!isempty(ns) && length(ns) <= 16) && return AForm(:col, ns, Vector{JNum}[])
+        isempty(ns) || return AForm(:col, ns, Vector{JNum}[])
         return nothing
     end
     rs = rows_of(xs)
     (rs === nothing || isempty(rs)) && return nothing
     r = rs[1]
-    if 2 <= length(r) && all(q -> length(q) == length(r), @view rs[2:end]) &&
-            length(rs) * length(r) <= 16
+    if 2 <= length(r) && all(q -> length(q) == length(r), @view rs[2:end])
         return AForm(:mat, JNum[], rs)
     end
     return nothing
@@ -827,18 +852,22 @@ end
 """`Math.numToks`."""
 num_toks(ns) = [Tok[TNum(n)] for n in ns]
 
-"""`Math.arrToks`: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`."""
+"""`Math.bmatCols`: the most columns a LaTeX `bmatrix` has (amsmath's
+`MaxMatrixCols`); a wider matrix is an `array` with one `c` per column."""
+const BMAT_COLS = 10
+
+"""`Math.arrToks`: LaTeX `bmatrix` (`\\left[\\begin{array}{c…c} … \\end{array}\\right]`
+when wider than `BMAT_COLS`), Typst `vec(…)` / `mat(…)`."""
 function arr_toks(sf::Sf, a::AForm)
     if a.tag === :col
         sf == SF_LATEX && return tc((kw(KBmat),), sep_by((kw(KNl),), num_toks(a.ns)), (kw(KEmat),))
         return tc((kw(KVec), kw(KLp)), sep_by((kw(KComma),), num_toks(a.ns)), (kw(KRp),))
     end
     if sf == SF_LATEX
-        return tc(
-            (kw(KBmat),),
-            sep_by((kw(KNl),), [sep_by((kw(KAmp),), num_toks(r)) for r in a.rs]),
-            (kw(KEmat),),
-        )
+        rows = sep_by((kw(KNl),), [sep_by((kw(KAmp),), num_toks(r)) for r in a.rs])
+        n = length(a.rs[1])
+        n <= BMAT_COLS && return tc((kw(KBmat),), rows, (kw(KEmat),))
+        return tc((kw(KLbkg), TArrCols(n)), rows, (kw(KEarr), kw(KRbkg)))
     end
     return tc(
         (kw(KMat), kw(KLp)),
@@ -901,7 +930,8 @@ function redk_field(r::Symbol)
 end
 
 """`Math.FaqForm`: a `faq` node with a native spelling, by its parts. `filter`
-is `nothing` when absent."""
+is `nothing` when absent. `marked`: `args` lists the arrays the body indexes;
+otherwise `args` is `set` (empty, or names printed as a superscript set)."""
 struct FaqForm
     red::Symbol
     marked::Bool
@@ -909,19 +939,37 @@ struct FaqForm
     ranges::Kvs
     expr::Any
     filter::Any
+    set::Vector{String}
 end
 Base.:(==)(a::FaqForm, b::FaqForm) = fieldeq(a, b)
 
+"""`Math.FaqForm.args`: the `args` of a native `faq`."""
+faq_args(f::FaqForm) = f.marked ? Any[s for s in bases(f.expr)] : Any[s for s in f.set]
+
+"""`Math.FaqForm.sup`: the names a superscript set shows: `set` when `args` is
+not the body's arrays."""
+faq_sup(f::FaqForm) = f.marked ? String[] : f.set
+
 """`Math.faqJson`."""
 function faq_json(f::FaqForm)
-    args = f.marked ? Any[s for s in bases(f.expr)] : Any[]
-    kvs = Kvs(["args" => JArr(args), "expr" => f.expr])
+    kvs = Kvs(["args" => JArr(faq_args(f)), "expr" => f.expr])
     f.filter !== nothing && push!(kvs, "filter" => f.filter)
     push!(kvs, "op" => "faq")
     push!(kvs, "output_idx" => JArr(copy(f.out)))
     isempty(f.ranges) || push!(kvs, "ranges" => JObj(copy(f.ranges)))
     append!(kvs, redk_field(f.red))
     return JObj(kvs)
+end
+
+"""`Math.strsOf`: the strings of a list of JSON values, when they are all
+strings."""
+function strs_of(xs)
+    out = String[]
+    for x in xs
+        x isa String || return nothing
+        push!(out, x)
+    end
+    return out
 end
 
 """`Math.faqCand`: the parts a `faq` node would have."""
@@ -950,7 +998,17 @@ function faq_cand(kvs)
     else
         return nothing
     end
-    return FaqForm(red, !isempty(args.xs), copy(out.xs), rs, e, look("filter", kvs))
+    as = args.xs
+    ak = if isempty(as)
+        (false, String[])
+    elseif jbeq(as, Any[s for s in bases(e)])
+        (true, String[])
+    else
+        st = strs_of(as)
+        st === nothing && return nothing
+        (false, st)
+    end
+    return FaqForm(red, ak[1], copy(out.xs), rs, e, look("filter", kvs), ak[2])
 end
 
 """`Math.faqForm`: the parts of a `faq` node, when it is exactly the node they
@@ -1001,6 +1059,7 @@ function faq_ok(f::FaqForm)
     (f.filter === nothing || is_e(f.filter)) || return false
     all(out_ok, f.out) || return false
     nodup(names) || return false
+    all(name_ok, f.set) || return false
     keys_sorted(f.ranges) || return false
     return all(f.ranges) do (k, v)
         name_ok(k) && range_ok(v) &&
@@ -1057,11 +1116,12 @@ function head_toks(sf::Sf, f::FaqForm)
     return Tok[kw(redk_kw(f.red))]
 end
 
-"""`Math.subToksL`: the LaTeX subscript."""
+"""`Math.subToksL`: the LaTeX subscript: none, one row, a lone dense range
+`_{k=a}^{b}` (not when `args` is a superscript set), or `\\substack`."""
 function sub_toks_l(c::Ctx, f::FaqForm)
     rr = red_ranges(f)
     if length(rr) == 1 && rr[1].second isa JArr && f.filter === nothing &&
-            length(rr[1].second.xs) == 2
+            length(rr[1].second.xs) == 2 && isempty(faq_sup(f))
         k = rr[1].first
         ab = rr[1].second.xs
         return tc(
@@ -1088,8 +1148,22 @@ end
 """`Math.subToks`."""
 sub_toks(c::Ctx, f::FaqForm) = c.sf == SF_LATEX ? sub_toks_l(c, f) : sub_toks_t(c, f)
 
-"""`Math.redToks`: operator, subscript, body at level 5."""
-red_toks(c::Ctx, f::FaqForm) = tc(head_toks(c.sf, f), sub_toks(c, f), pa(c, 5, f.expr))
+"""`Math.supToks`: the superscript set of names: LaTeX `^{\\{f, g\\}}`, Typst
+`^({f, g})`."""
+function sup_toks(c::Ctx, ns)
+    body = sep_by((kw(KComma),), [name_toks(c, n) for n in ns])
+    c.sf == SF_LATEX && return tc((kw(KCaret), kw(KLb), kw(KLset)), body, (kw(KRset), kw(KRb)))
+    return tc((kw(KCaret), kw(KLpg), kw(KLset)), body, (kw(KRset), kw(KRp)))
+end
+
+"""`Math.supT`: the `args` set of a `faq`, as a superscript, when it is one."""
+sup_t(c::Ctx, f::FaqForm) = isempty(faq_sup(f)) ? Tok[] : sup_toks(c, faq_sup(f))
+
+"""`Math.redToks`: operator, subscript, the superscript set (on the operator
+only when there are no output indices), body at level 5."""
+red_toks(c::Ctx, f::FaqForm) = tc(
+    head_toks(c.sf, f), sub_toks(c, f), isempty(f.out) ? sup_t(c, f) : Tok[], pa(c, 5, f.expr)
+)
 
 """`Math.entryToks`: an output entry: its range row when it has one."""
 function entry_toks(c::Ctx, f::FaqForm, j)
@@ -1101,24 +1175,174 @@ function entry_toks(c::Ctx, f::FaqForm, j)
 end
 
 """`Math.faqOut`: the native `faq`, wrapped with its output indices when it has
-some."""
+some. A superscript set goes on the bracket, before its subscript; the form is
+then a power's level (a power of it, or an index into it, is parenthesized: no
+double superscript)."""
 function faq_out(c::Ctx, f::FaqForm)
     isempty(f.out) && return mk_out(5, red_toks(c, f))
     es = sep_by((kw(KComma),), [entry_toks(c, f, j) for j in f.out])
+    sup = sup_t(c, f)
+    l = isempty(sup) ? 10 : 8
     if c.sf == SF_LATEX
         return mk_out(
-            10, tc(
-                (kw(KLbkg),), red_toks(c, f), (kw(KRbkg), kw(KUs), kw(KLb)), es, (kw(KRb),),
+            l, tc(
+                (kw(KLbkg),), red_toks(c, f), (kw(KRbkg),), sup, (kw(KUs), kw(KLb)), es,
+                (kw(KRb),),
             )
         )
     end
     return mk_out(
-        10, tc(
-            (kw(KLr), kw(KLp), kw(KLbk)), red_toks(c, f),
-            (kw(KRbk), kw(KRp), kw(KUs), kw(KLpg)), es, (kw(KRp),),
+        l, tc(
+            (kw(KLr), kw(KLp), kw(KLbk)), red_toks(c, f), (kw(KRbk), kw(KRp)), sup,
+            (kw(KUs), kw(KLpg)), es, (kw(KRp),),
         )
     )
 end
+
+# ## Block assembly (`makearray`)
+
+"""`Math.MkForm`: a `makearray` node with a native spelling, by its parts: the
+output indices (empty when the node has no `output_idx`), and the regions
+(each a vector of bound pairs) with their values."""
+struct MkForm
+    out::Vector{String}
+    regions::Vector{Vector{Tuple{Any, Any}}}
+    values::Vector{Any}
+end
+Base.:(==)(a::MkForm, b::MkForm) = fieldeq(a, b)
+
+"""`Math.regionJson`."""
+region_json(r) = JArr(Any[JArr(Any[p[1], p[2]]) for p in r])
+
+"""`Math.mkJson`."""
+function mk_json(m::MkForm)
+    kvs = Kvs(["args" => JArr(Any[]), "op" => "makearray"])
+    isempty(m.out) || push!(kvs, "output_idx" => JArr(Any[o for o in m.out]))
+    push!(kvs, "regions" => JArr(Any[region_json(r) for r in m.regions]))
+    push!(kvs, "values" => JArr(copy(m.values)))
+    return JObj(kvs)
+end
+
+"""`Math.pairsOf`: the bound pairs of a region."""
+function pairs_of(xs)
+    out = Tuple{Any, Any}[]
+    for x in xs
+        (x isa JArr && length(x.xs) == 2) || return nothing
+        push!(out, (x.xs[1], x.xs[2]))
+    end
+    return out
+end
+
+"""`Math.regionsOf`: the regions of a `regions` list."""
+function regions_of(xs)
+    out = Vector{Tuple{Any, Any}}[]
+    for x in xs
+        x isa JArr || return nothing
+        q = pairs_of(x.xs)
+        q === nothing && return nothing
+        push!(out, q)
+    end
+    return out
+end
+
+"""`Math.mkCand`: the parts a `makearray` node would have."""
+function mk_cand(kvs)
+    rs = look("regions", kvs)
+    vs = look("values", kvs)
+    (rs isa JArr && vs isa JArr) || return nothing
+    o = look("output_idx", kvs)
+    out = if o === nothing
+        String[]
+    elseif o isa JArr
+        strs_of(o.xs)
+    else
+        nothing
+    end
+    out === nothing && return nothing
+    regs = regions_of(rs.xs)
+    regs === nothing && return nothing
+    return MkForm(out, regs, copy(vs.xs))
+end
+
+"""`Math.mkForm`: the parts of a `makearray` node, when it is exactly the node
+they rebuild: `args` empty, `regions` and `values`, and an `output_idx` of names
+or none."""
+function mk_form(kvs)
+    m = mk_cand(kvs)
+    m === nothing && return nothing
+    return jbeq(mk_json(m), JObj(collect(kvs))) ? m : nothing
+end
+
+"""`Math.mkOK`: the conditions under which the native spelling reads back: one
+value per region, at least one region, each region a nonempty list of bound
+pairs, values and bounds expressions, output indices names."""
+mk_ok(m::MkForm) =
+    !isempty(m.values) && length(m.regions) == length(m.values) && all(is_e, m.values) &&
+    all(r -> !isempty(r) && all(p -> is_e(p[1]) && is_e(p[2]), r), m.regions) &&
+    all(name_ok, m.out)
+
+"""`Math.cellSep`: the cell separator of the table."""
+cell_sep(sf::Sf) = sf == SF_LATEX ? KAmp : KComma
+
+"""`Math.rowSep`: the row separator of the table."""
+row_sep(sf::Sf) = sf == SF_LATEX ? KNl : KSemi
+
+"""`Math.pairToks`: a bound pair: `a, b` (its brackets are written around it)."""
+pair_toks(c::Ctx, p) = tc(pa(c, 1, p[1]), (kw(KComma),), pa(c, 1, p[2]))
+
+"""`Math.regToks`: a region: `[a, b] \\times [c, d]`, one bound pair per
+dimension."""
+function reg_toks(c::Ctx, r)
+    isempty(r) && return Tok[]
+    out = tc((kw(KLbk),), pair_toks(c, r[1]), (kw(KRbk),))
+    for q in @view r[2:end]
+        push!(out, kw(KTimes), kw(KLbk))
+        append!(out, pair_toks(c, q))
+        push!(out, kw(KRbk))
+    end
+    return out
+end
+
+"""`Math.mkRow`: a row of the table: the value, then the region it fills."""
+mk_row(c::Ctx, v, r) = tc(pa(c, 1, v), (kw(cell_sep(c.sf)),), reg_toks(c, r))
+
+"""`Math.matHead`: the Typst table head: `mat(delim: "[", augment: #1,`."""
+const MAT_HEAD = (
+    TKw(KMat), TKw(KLp), TWord("delim"), TKw(KColon), TTxt("["), TKw(KComma),
+    TWord("augment"), TKw(KColon), TCode(JInt(1)), TKw(KComma),
+)
+
+"""`Math.mkSub`: the output indices as the bracket's subscript."""
+function mk_sub(c::Ctx, out)
+    isempty(out) && return Tok[]
+    body = sep_by((kw(KComma),), [name_toks(c, o) for o in out])
+    c.sf == SF_LATEX && return tc((kw(KUs), kw(KLb)), body, (kw(KRb),))
+    return tc((kw(KUs), kw(KLpg)), body, (kw(KRp),))
+end
+
+"""`Math.mkOutT`: the native `makearray`: a bracketed two-column table, value
+then region, one row per region in order; LaTeX
+`\\left[\\begin{array}{l|l} v & [a, b] \\\\ … \\end{array}\\right]`, Typst
+`mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its
+subscript."""
+function mk_out_t(c::Ctx, m::MkForm)
+    rows = sep_by((kw(row_sep(c.sf)),), [mk_row(c, v, r) for (v, r) in zip(m.values, m.regions)])
+    if c.sf == SF_LATEX
+        return mk_out(10, tc((kw(KLbkg), kw(KBarr)), rows, (kw(KEarr), kw(KRbkg)), mk_sub(c, m.out)))
+    end
+    return mk_out(10, tc(MAT_HEAD, rows, (kw(KRp),), mk_sub(c, m.out)))
+end
+
+"""`Math.callFormHead`: the operator `o` with the fields `fs` has the call form:
+[`call_form_ok`](@ref), a name `\\operatorname` can spell, and no template of
+that name in scope."""
+call_form_head(c::Ctx, o::AbstractString, fs) =
+    call_form_ok(o, fs) && opn_ok(o) && tparams(c.s, o) === nothing
+
+"""`Math.callForm`: [`pr_opn`](@ref) prints the operator `o` with the fields
+`fs` in the call form: [`call_form_head`](@ref) and every key an identifier."""
+call_form(c::Ctx, o::AbstractString, fs) =
+    call_form_head(c, o, fs) && all(kv -> key_ok(kv.first), fs)
 
 """`Math.tnameOK`."""
 tname_ok(n::AbstractString) = opn_ok(n) && !reserved_opn(n)
@@ -1140,14 +1364,15 @@ function pr_opn(c::Ctx, kvs)
     args = look("args", kvs)
     if o isa String && args isa JArr
         fs = fields_of(kvs)
-        if !(o in CORE_OPS) && opn_ok(o) && tparams(c.s, o) === nothing &&
-                all(kv -> key_ok(kv.first), fs)
+        if call_form(c, o, fs)
             return mk_out(
                 10, open_toks(
                     sf, o, [pa(c, 4, a) for a in args.xs],
                     [
-                        tc(key_toks(sf, k), (kw(KEq),), is_e(v) ? pa(c, 4, v) : json_val(sf, v))
-                            for (k, v) in fs
+                        tc(
+                            key_toks(sf, kv.first), (kw(KEq),),
+                            math_field(o, kv) ? pa(c, 4, kv.second) : json_val(sf, kv.second),
+                        ) for kv in fs
                     ],
                 )
             )
@@ -1197,29 +1422,7 @@ function pr(c::Ctx, e)
             end
             return pr_esc(c, kvs)
         end
-        if empty_args() && str_at(2, "op", "const")
-            xs = field(3, "value")
-            if xs isa JArr
-                af = arr_form(JArr(copy(xs.xs)))
-                af !== nothing && return mk_out(10, arr_toks(sf, af))
-                return pr_opn(c, kvs)
-            end
-        end
     elseif n == 4
-        if empty_args() && str_at(2, "op", "const")
-            u = field(3, "units")
-            if u isa String
-                v = field(4, "value")
-                if v isa JNum
-                    return units_ok(sf, u) ? mk_out(7, qty_toks(v, factors_of(u))) : pr_esc(c, kvs)
-                elseif v isa JArr
-                    af = arr_form(JArr(copy(v.xs)))
-                    af === nothing && return pr_esc(c, kvs)
-                    units_ok(sf, u) || return pr_esc(c, kvs)
-                    return mk_out(7, tc(arr_toks(sf, af), unit_toks(factors_of(u))))
-                end
-            end
-        end
         if empty_args()
             bs, nm = field(2, "bindings"), field(3, "name")
             if bs isa JObj && nm isa String && str_at(4, "op", "apply_expression_template")
@@ -1227,9 +1430,73 @@ function pr(c::Ctx, e)
             end
         end
     end
-    f = faq_form(kvs)
-    (f !== nothing && faq_ok(f)) && return faq_out(c, f)
+    q = const_out(sf, kvs)
+    q !== nothing && return q
+    f = native_faq(kvs)
+    f !== nothing && return faq_out(c, f)
+    m = native_mk(kvs)
+    m !== nothing && return mk_out_t(c, m)
     return pr_opn(c, kvs)
+end
+
+"""`Math.constForm`: the parts of a `const` node with a native spelling: its
+array form (`nothing` for a quantity) and its unit (`nothing` when it has none);
+`nothing` when the node has no native spelling (it then prints in the call
+form)."""
+function const_form(sf::Sf, kvs)
+    n = length(kvs)
+    (3 <= n <= 4 && kvs[1].first == "args" && kvs[1].second isa JArr) || return nothing
+    isempty(kvs[1].second.xs) || return nothing
+    (kvs[2].first == "op" && kvs[2].second == "const") || return nothing
+    if n == 3
+        v = kvs[3].first == "value" ? kvs[3].second : nothing
+        v isa JArr || return nothing
+        af = arr_form(v)
+        return af === nothing ? nothing : (af, nothing)
+    end
+    (kvs[3].first == "units" && kvs[4].first == "value") || return nothing
+    u, v = kvs[3].second, kvs[4].second
+    (u isa String && units_ok(sf, u)) || return nothing
+    v isa JNum && return nothing, u
+    v isa JArr || return nothing
+    af = arr_form(v)
+    return af === nothing ? nothing : (af, u)
+end
+
+"""`Math.constOut`: the native spelling of a `const` node: an array as a matrix
+or column vector, a quantity, an array with its unit ([`const_form`](@ref))."""
+function const_out(sf::Sf, kvs)
+    q = const_form(sf, kvs)
+    q === nothing && return nothing
+    af, u = q
+    af === nothing && return mk_out(7, qty_toks(kvs[4].second, factors_of(u)))
+    u === nothing && return mk_out(10, arr_toks(sf, af))
+    return mk_out(7, tc(arr_toks(sf, af), unit_toks(factors_of(u))))
+end
+
+"""`Math.nativeFaq`: the parts of a `faq` node that prints natively."""
+function native_faq(kvs)
+    f = faq_form(kvs)
+    return (f !== nothing && faq_ok(f)) ? f : nothing
+end
+
+"""`Math.nativeMk`: the parts of a `makearray` node that prints natively."""
+function native_mk(kvs)
+    m = mk_form(kvs)
+    return (m !== nothing && mk_ok(m)) ? m : nothing
+end
+
+"""`Math.callFormNode`: the node is one [`pr`](@ref) gives the call form with
+named fields: [`call_form_head`](@ref) holds and no native spelling of a
+`const`, `faq` or `makearray` applies. The reader accepts the call form with `;`
+only for such a node. Keys are not checked: a key the printer would not write
+upright still reads."""
+function call_form_node(c::Ctx, kvs)
+    o = look("op", kvs)
+    (o isa String && look("args", kvs) isa JArr) || return false
+    call_form_head(c, o, fields_of(kvs)) || return false
+    return const_form(c.sf, kvs) === nothing && native_faq(kvs) === nothing &&
+        native_mk(kvs) === nothing
 end
 
 # The `[("args", .arr as), ("op", .str o)]` case of `Math.pr`.
@@ -1334,6 +1601,7 @@ function pr_template(c::Ctx, n::String, bs, kvs)
             10, call_toks(sf, Tok[TOpn(n)], [tc(name_toks(c, k), (kw(KEq),), v) for (k, v) in vals])
         )
     end
+    isempty(bs) && return mk_out(5, Tok[TOpn(n)])
     return pr_esc(c, kvs)
 end
 

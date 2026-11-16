@@ -90,6 +90,8 @@ KW_CHARS = {
     K.LIMITS: "limits",
     K.LR: "lr",
     K.NL: "\\",
+    K.LSET: "{",
+    K.RSET: "}",
 }
 
 
@@ -342,6 +344,8 @@ PUNCT = {
     "&": K.AMP,
     ".": K.SDOT,
     "\\": K.NL,
+    "{": K.LSET,
+    "}": K.RSET,
 }
 
 

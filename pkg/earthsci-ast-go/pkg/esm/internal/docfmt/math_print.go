@@ -356,6 +356,11 @@ var prCmpKw = []opKw{
 // prCallOps is `Math.callOps`: core operators in the call form.
 var prCallOps = []string{"sign", "atan2", "asinh", "acosh", "atanh", "Pre", "enum"}
 
+// prFieldCallOps is `Math.fieldCallOps`: core operators with no notation of
+// their own that print in the call form, their fields as named arguments after
+// `;` (when no field annotates the node).
+var prFieldCallOps = []string{"broadcast", "reshape", "transpose", "concat", "faq", "makearray", "const"}
+
 // prReservedOpn is `Math.reservedOpn`: names `\operatorname{…}` never means a
 // template or an open operator by.
 func prReservedOpn(n string) bool {
@@ -390,6 +395,48 @@ func prOpnOk(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// prCallFormOk is `Math.callFormOK`: an operator prints in the call form: an
+// open operator, or a core operator of prFieldCallOps none of whose fields
+// annotates it.
+func prCallFormOk(o string, fs Obj) bool {
+	if !prCoreOps[o] {
+		return true
+	}
+	if !slices.Contains(prFieldCallOps, o) {
+		return false
+	}
+	for _, kv := range fs {
+		if slices.Contains(NodeAnnotations, kv.K) {
+			return false
+		}
+	}
+	return true
+}
+
+// prOpnCallOk is the test the printer's open-operator form makes of a node
+// with operator o and fields fs (besides `args` and `op`) under the symbol
+// table s, apart from its field keys (prKeyOk): a core operator has a call
+// form and no annotation field (prCallFormOk), a name `\operatorname{…}` carries, and no
+// template o in scope. The parser's call form reads only nodes that pass it.
+func prOpnCallOk(s *Sym, o string, fs Obj) bool {
+	if !prCallFormOk(o, fs) || !prOpnOk(o) {
+		return false
+	}
+	_, isTemplate := prTparams(s, o)
+	return !isTemplate
+}
+
+// prMathKeys is `Math.mathKeys`: the fields of a core operator in the call form
+// that hold an expression; the others print as JSON, even a string that is a
+// name.
+var prMathKeys = []string{"expr", "filter", "key"}
+
+// prMathField is `Math.mathField`: a field of a call-form node prints as math:
+// its value is an expression and, for a core operator, the field holds one.
+func prMathField(o string, kv KV) bool {
+	return exprIsE(kv.V) && (!prCoreOps[o] || slices.Contains(prMathKeys, kv.K))
 }
 
 // prKeyOk is `Math.keyOK`: a field key printed upright in a call: an
@@ -955,7 +1002,7 @@ func prRowsOf(xs []Json) ([][]JNum, bool) {
 }
 
 // AForm is `Math.AForm`: the two array shapes with a native spelling (Col
-// when Mat is nil).
+// when Mat is nil), of any size.
 type AForm struct {
 	Col []JNum
 	Mat [][]JNum
@@ -968,7 +1015,7 @@ func prArrForm(j Json) (AForm, bool) {
 		return AForm{}, false
 	}
 	if ns, ok := prNumsOf(xs); ok {
-		if len(ns) > 0 && len(ns) <= 16 {
+		if len(ns) > 0 {
 			return AForm{Col: ns}, true
 		}
 		return AForm{}, false
@@ -978,7 +1025,7 @@ func prArrForm(j Json) (AForm, bool) {
 		return AForm{}, false
 	}
 	r := rs[0]
-	if len(r) < 2 || len(rs)*len(r) > 16 {
+	if len(r) < 2 {
 		return AForm{}, false
 	}
 	for _, q := range rs[1:] {
@@ -998,7 +1045,13 @@ func prNumToks(ns []JNum) [][]Tok {
 	return out
 }
 
-// prArrToks is `Math.arrToks`: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`.
+// prBmatMaxCols is the most columns a LaTeX `bmatrix` holds (amsmath's
+// MaxMatrixCols); a wider matrix prints as `\left[\begin{array}{c…c} …
+// \end{array}\right]`, one `c` per column.
+const prBmatMaxCols = 10
+
+// prArrToks is `Math.arrToks`: LaTeX `bmatrix` (or the `array` of a wider
+// matrix), Typst `vec(…)` / `mat(…)`.
 func prArrToks(sf Sf, a AForm) []Tok {
 	if a.Mat == nil {
 		if sf == SfLatex {
@@ -1010,6 +1063,9 @@ func prArrToks(sf Sf, a AForm) []Tok {
 	if sf == SfLatex {
 		for i, r := range a.Mat {
 			rows[i] = prSepBy(kws(KwAmp), prNumToks(r))
+		}
+		if n := len(a.Mat[0]); n > prBmatMaxCols {
+			return cat(kws(KwLbkg), []Tok{tArrC(n)}, prSepBy(kws(KwNl), rows), kws(KwEarr, KwRbkg))
 		}
 		return cat(kws(KwBmat), prSepBy(kws(KwNl), rows), kws(KwEmat))
 	}
@@ -1098,7 +1154,8 @@ func (r RedK) field() Obj {
 }
 
 // FaqForm is `Math.FaqForm`: a `faq` node with a native spelling, by its
-// parts.
+// parts. marked: `args` lists the arrays the body indexes; otherwise `args` is
+// set (empty, or names printed as a superscript set).
 type FaqForm struct {
 	red    RedK
 	marked bool
@@ -1107,17 +1164,36 @@ type FaqForm struct {
 	expr   Json
 	filter Json // nil when absent (hasFilter false)
 	hasFlt bool
+	set    []string
 }
 
-// prFaqJson is `Math.faqJson`.
-func prFaqJson(f FaqForm) Json {
+// args is `Math.FaqForm.args`: the `args` of a native `faq`.
+func (f FaqForm) args() []Json {
 	args := []Json{}
 	if f.marked {
 		for _, b := range prBases(f.expr) {
 			args = append(args, b)
 		}
+		return args
 	}
-	kvs := Obj{{"args", args}, {"expr", f.expr}}
+	for _, n := range f.set {
+		args = append(args, n)
+	}
+	return args
+}
+
+// sup is `Math.FaqForm.sup`: the names a superscript set shows: set when
+// `args` is not the body's arrays.
+func (f FaqForm) sup() []string {
+	if f.marked {
+		return nil
+	}
+	return f.set
+}
+
+// prFaqJson is `Math.faqJson`.
+func prFaqJson(f FaqForm) Json {
+	kvs := Obj{{"args", f.args()}, {"expr", f.expr}}
 	if f.hasFlt {
 		kvs = append(kvs, KV{"filter", f.filter})
 	}
@@ -1160,8 +1236,49 @@ func prFaqCand(kvs Obj) (FaqForm, bool) {
 		}
 		rs = o
 	}
+	marked, set := false, []string(nil)
+	if len(args) > 0 {
+		if prArgsAreBases(args, e) {
+			marked = true
+		} else {
+			st, ok := prStrsOf(args)
+			if !ok {
+				return FaqForm{}, false
+			}
+			set = st
+		}
+	}
 	flt, hasFlt := exprLook("filter", kvs)
-	return FaqForm{red: red, marked: len(args) > 0, out: out, ranges: rs, expr: e, filter: flt, hasFlt: hasFlt}, true
+	return FaqForm{red: red, marked: marked, out: out, ranges: rs, expr: e, filter: flt, hasFlt: hasFlt, set: set}, true
+}
+
+// prArgsAreBases is the `jbeqL as ((bases e).map .str)` test of
+// `Math.faqCand`: `args` is exactly the arrays the body indexes.
+func prArgsAreBases(args []Json, e Json) bool {
+	bs := prBases(e)
+	if len(bs) != len(args) {
+		return false
+	}
+	for i, b := range bs {
+		if s, ok := args[i].(string); !ok || s != b {
+			return false
+		}
+	}
+	return true
+}
+
+// prStrsOf is `Math.strsOf`: the strings of a list of JSON values, when they
+// are all strings.
+func prStrsOf(xs []Json) ([]string, bool) {
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		s, ok := x.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
 
 // prFaqForm is `Math.faqForm`: the parts of a `faq` node, when it is exactly
@@ -1261,6 +1378,11 @@ func prFaqOk(f FaqForm) bool {
 	if !nodupStrings(names) || !exprKeysSorted(f.ranges) {
 		return false
 	}
+	for _, n := range f.set {
+		if !exprNameOk(n) {
+			return false
+		}
+	}
 	for _, kv := range f.ranges {
 		if !exprNameOk(kv.K) || !prRangeOk(kv.V) {
 			return false
@@ -1345,10 +1467,12 @@ func prHeadToks(sf Sf, f FaqForm) []Tok {
 	return kws(f.red.kw())
 }
 
-// prSubToksL is `Math.subToksL`: the LaTeX subscript.
+// prSubToksL is `Math.subToksL`: the LaTeX subscript: none, one row, a lone
+// dense range `_{k=a}^{b}` (not when `args` is a superscript set), or
+// `\substack`.
 func prSubToksL(c Ctx, f FaqForm) []Tok {
 	rr := prRedRanges(f)
-	if len(rr) == 1 && !f.hasFlt {
+	if len(rr) == 1 && !f.hasFlt && len(f.sup()) == 0 {
 		if ab, ok := rr[0].V.([]Json); ok && len(ab) == 2 {
 			return cat(kws(KwUs, KwLb), prNameToks(c, rr[0].K), kws(KwEq), prPa(c, 4, ab[0]),
 				kws(KwRb, KwCaret, KwLb), prPa(c, 1, ab[1]), kws(KwRb))
@@ -1382,9 +1506,36 @@ func prSubToks(c Ctx, f FaqForm) []Tok {
 	return prSubToksT(c, f)
 }
 
-// prRedToks is `Math.redToks`: operator, subscript, body at level 5.
+// prSupToks is `Math.supToks`: the superscript set of names: LaTeX
+// `^{\{f, g\}}`, Typst `^({f, g})`.
+func prSupToks(c Ctx, ns []string) []Tok {
+	items := make([][]Tok, len(ns))
+	for i, n := range ns {
+		items[i] = prNameToks(c, n)
+	}
+	if c.sf == SfLatex {
+		return cat(kws(KwCaret, KwLb, KwLset), prSepBy(kws(KwComma), items), kws(KwRset, KwRb))
+	}
+	return cat(kws(KwCaret, KwLpg, KwLset), prSepBy(kws(KwComma), items), kws(KwRset, KwRp))
+}
+
+// prSupT is `Math.supT`: the `args` set of a `faq`, as a superscript, when it
+// is one.
+func prSupT(c Ctx, f FaqForm) []Tok {
+	if len(f.sup()) == 0 {
+		return nil
+	}
+	return prSupToks(c, f.sup())
+}
+
+// prRedToks is `Math.redToks`: operator, subscript, the superscript set (on
+// the operator only when there are no output indices), body at level 5.
 func prRedToks(c Ctx, f FaqForm) []Tok {
-	return cat(prHeadToks(c.sf, f), prSubToks(c, f), prPa(c, 5, f.expr))
+	var sup []Tok
+	if len(f.out) == 0 {
+		sup = prSupT(c, f)
+	}
+	return cat(prHeadToks(c.sf, f), prSubToks(c, f), sup, prPa(c, 5, f.expr))
 }
 
 // prEntryToks is `Math.entryToks`: an output entry: its range row when it has
@@ -1400,7 +1551,9 @@ func prEntryToks(c Ctx, f FaqForm, j Json) []Tok {
 }
 
 // prFaqOut is `Math.faqOut`: the native `faq`, wrapped with its output indices
-// when it has some.
+// when it has some. A superscript set goes on the bracket, before its
+// subscript; the form is then a power's level (a power of it, or an index into
+// it, is parenthesized: no double superscript).
 func prFaqOut(c Ctx, f FaqForm) Out {
 	if len(f.out) == 0 {
 		return prMkOut(5, prRedToks(c, f))
@@ -1410,10 +1563,221 @@ func prFaqOut(c Ctx, f FaqForm) Out {
 		entries[i] = prEntryToks(c, f, j)
 	}
 	es := prSepBy(kws(KwComma), entries)
-	if c.sf == SfLatex {
-		return prMkOut(10, cat(kws(KwLbkg), prRedToks(c, f), kws(KwRbkg, KwUs, KwLb), es, kws(KwRb)))
+	sup := prSupT(c, f)
+	l := 10
+	if len(sup) > 0 {
+		l = 8
 	}
-	return prMkOut(10, cat(kws(KwLr, KwLp, KwLbk), prRedToks(c, f), kws(KwRbk, KwRp, KwUs, KwLpg), es, kws(KwRp)))
+	if c.sf == SfLatex {
+		return prMkOut(l, cat(kws(KwLbkg), prRedToks(c, f), kws(KwRbkg), sup, kws(KwUs, KwLb), es, kws(KwRb)))
+	}
+	return prMkOut(l, cat(kws(KwLr, KwLp, KwLbk), prRedToks(c, f), kws(KwRbk, KwRp), sup, kws(KwUs, KwLpg), es, kws(KwRp)))
+}
+
+// ## Block assembly (`makearray`)
+
+// Pair is a bound pair `[a, b]` of a `makearray` region.
+type Pair struct{ A, B Json }
+
+// MkForm is `Math.MkForm`: a `makearray` node with a native spelling, by its
+// parts: the output indices (empty when the node has no `output_idx`), and
+// the regions with their values.
+type MkForm struct {
+	out     []string
+	regions [][]Pair
+	values  []Json
+}
+
+// prMkJson is `Math.mkJson`.
+func prMkJson(m MkForm) Json {
+	kvs := Obj{{"args", []Json{}}, {"op", "makearray"}}
+	if len(m.out) > 0 {
+		os := make([]Json, len(m.out))
+		for i, o := range m.out {
+			os[i] = o
+		}
+		kvs = append(kvs, KV{"output_idx", os})
+	}
+	rs := make([]Json, len(m.regions))
+	for i, r := range m.regions {
+		ps := make([]Json, len(r))
+		for j, p := range r {
+			ps[j] = []Json{p.A, p.B}
+		}
+		rs[i] = ps
+	}
+	return append(kvs, KV{"regions", rs}, KV{"values", append([]Json{}, m.values...)})
+}
+
+// prRegionsOf is `Math.regionsOf` (with `Math.pairsOf`): the regions of a
+// `regions` list.
+func prRegionsOf(xs []Json) ([][]Pair, bool) {
+	out := make([][]Pair, 0, len(xs))
+	for _, x := range xs {
+		ps, ok := x.([]Json)
+		if !ok {
+			return nil, false
+		}
+		r := make([]Pair, 0, len(ps))
+		for _, p := range ps {
+			ab, ok := p.([]Json)
+			if !ok || len(ab) != 2 {
+				return nil, false
+			}
+			r = append(r, Pair{ab[0], ab[1]})
+		}
+		out = append(out, r)
+	}
+	return out, true
+}
+
+// prMkCand is `Math.mkCand`: the parts a `makearray` node would have.
+func prMkCand(kvs Obj) (MkForm, bool) {
+	rv, _ := exprLook("regions", kvs)
+	vv, _ := exprLook("values", kvs)
+	rs, ok1 := rv.([]Json)
+	vs, ok2 := vv.([]Json)
+	if !ok1 || !ok2 {
+		return MkForm{}, false
+	}
+	var out []string
+	if ov, has := exprLook("output_idx", kvs); has {
+		os, ok := ov.([]Json)
+		if !ok {
+			return MkForm{}, false
+		}
+		if out, ok = prStrsOf(os); !ok {
+			return MkForm{}, false
+		}
+	}
+	regs, ok := prRegionsOf(rs)
+	if !ok {
+		return MkForm{}, false
+	}
+	return MkForm{out: out, regions: regs, values: vs}, true
+}
+
+// prMkForm is `Math.mkForm`: the parts of a `makearray` node, when it is
+// exactly the node they rebuild.
+func prMkForm(kvs Obj) (MkForm, bool) {
+	m, ok := prMkCand(kvs)
+	if !ok || !JsonEqual(prMkJson(m), kvs) {
+		return MkForm{}, false
+	}
+	return m, true
+}
+
+// prMkOk is `Math.mkOK`: the conditions under which the native spelling reads
+// back: one value per region, at least one region, each region a nonempty list
+// of bound pairs, values and bounds expressions, output indices names.
+func prMkOk(m MkForm) bool {
+	if len(m.values) == 0 || len(m.regions) != len(m.values) {
+		return false
+	}
+	for _, v := range m.values {
+		if !exprIsE(v) {
+			return false
+		}
+	}
+	for _, r := range m.regions {
+		if len(r) == 0 {
+			return false
+		}
+		for _, p := range r {
+			if !exprIsE(p.A) || !exprIsE(p.B) {
+				return false
+			}
+		}
+	}
+	for _, o := range m.out {
+		if !exprNameOk(o) {
+			return false
+		}
+	}
+	return true
+}
+
+// prCellSep is `Math.cellSep`: the cell separator of the table.
+func prCellSep(sf Sf) Kw {
+	if sf == SfLatex {
+		return KwAmp
+	}
+	return KwComma
+}
+
+// prRowSep is `Math.rowSep`: the row separator of the table.
+func prRowSep(sf Sf) Kw {
+	if sf == SfLatex {
+		return KwNl
+	}
+	return KwSemi
+}
+
+// prPairToks is `Math.pairToks`: a bound pair: `a, b` (its brackets are
+// written around it).
+func prPairToks(c Ctx, p Pair) []Tok {
+	return cat(prPa(c, 1, p.A), kws(KwComma), prPa(c, 1, p.B))
+}
+
+// prRegToks is `Math.regToks`: a region: `[a, b] \times [c, d]`, one bound
+// pair per dimension.
+func prRegToks(c Ctx, r []Pair) []Tok {
+	var out []Tok
+	for i, p := range r {
+		if i == 0 {
+			out = append(out, tKw(KwLbk))
+		} else {
+			out = append(out, tKw(KwTimes), tKw(KwLbk))
+		}
+		out = append(out, prPairToks(c, p)...)
+		out = append(out, tKw(KwRbk))
+	}
+	return out
+}
+
+// prMkRow is `Math.mkRow`: a row of the table: the value, then the region it
+// fills.
+func prMkRow(c Ctx, v Json, r []Pair) []Tok {
+	return cat(prPa(c, 1, v), kws(prCellSep(c.sf)), prRegToks(c, r))
+}
+
+// prMatHead is `Math.matHead`: the Typst table head: `mat(delim: "[",
+// augment: #1,`.
+func prMatHead() []Tok {
+	return []Tok{tKw(KwMat), tKw(KwLp), tWord("delim"), tKw(KwColon), tTxt("["), tKw(KwComma),
+		tWord("augment"), tKw(KwColon), tCode(IntNum(1)), tKw(KwComma)}
+}
+
+// prMkSub is `Math.mkSub`: the output indices as the bracket's subscript.
+func prMkSub(c Ctx, out []string) []Tok {
+	if len(out) == 0 {
+		return nil
+	}
+	items := make([][]Tok, len(out))
+	for i, n := range out {
+		items[i] = prNameToks(c, n)
+	}
+	if c.sf == SfLatex {
+		return cat(kws(KwUs, KwLb), prSepBy(kws(KwComma), items), kws(KwRb))
+	}
+	return cat(kws(KwUs, KwLpg), prSepBy(kws(KwComma), items), kws(KwRp))
+}
+
+// prMkOutT is `Math.mkOutT`: the native `makearray`: a bracketed two-column
+// table, value then region, one row per region in order; LaTeX
+// `\left[\begin{array}{l|l} v & [a, b] \\ … \end{array}\right]`, Typst
+// `mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its
+// subscript.
+func prMkOutT(c Ctx, m MkForm) Out {
+	rows := make([][]Tok, len(m.values))
+	for i, v := range m.values {
+		rows[i] = prMkRow(c, v, m.regions[i])
+	}
+	body := prSepBy(kws(prRowSep(c.sf)), rows)
+	if c.sf == SfLatex {
+		return prMkOut(10, cat(kws(KwLbkg, KwBarr), body, kws(KwEarr, KwRbkg), prMkSub(c, m.out)))
+	}
+	return prMkOut(10, cat(prMatHead(), body, kws(KwRp), prMkSub(c, m.out)))
 }
 
 // prTnameOk is `Math.tnameOK`.
@@ -1459,10 +1823,7 @@ func prPr(c Ctx, e Json) Out {
 			return esc()
 		}
 		fs := prFieldsOf(kvs)
-		if prCoreOps[os] || !prOpnOk(os) {
-			return esc()
-		}
-		if _, ok := prTparams(c.s, os); ok {
+		if !prOpnCallOk(c.s, os, fs) {
 			return esc()
 		}
 		for _, kv := range fs {
@@ -1477,7 +1838,7 @@ func prPr(c Ctx, e Json) Out {
 		fp := make([][]Tok, len(fs))
 		for i, kv := range fs {
 			var val []Tok
-			if exprIsE(kv.V) {
+			if prMathField(os, kv) {
 				val = prPa(c, 4, kv.V)
 			} else {
 				val = prJsonVal(sf, kv.V)
@@ -1540,9 +1901,9 @@ func prPr(c Ctx, e Json) Out {
 		}
 		if emptyArgs() && strAt(1, "op", "const") {
 			v, _ := field(2, "value")
-			if xs, ok := v.([]Json); ok {
-				if af, ok := prArrForm(xs); ok {
-					return prMkOut(10, prArrToks(sf, af))
+			if _, ok := v.([]Json); ok {
+				if nat, ok := prNative(c, kvs); ok {
+					return nat()
 				}
 				return opn()
 			}
@@ -1550,22 +1911,15 @@ func prPr(c Ctx, e Json) Out {
 	case 4:
 		if emptyArgs() && strAt(1, "op", "const") {
 			uv, _ := field(2, "units")
-			if u, ok := uv.(string); ok {
-				v, _ := field(3, "value")
-				switch x := v.(type) {
-				case JNum:
-					if prUnitsOk(sf, u) {
-						return prMkOut(7, prQtyToks(x, prFactorsOf(u)))
+			v, _ := field(3, "value")
+			_, isStr := uv.(string)
+			switch v.(type) {
+			case JNum, []Json:
+				if isStr {
+					if nat, ok := prNative(c, kvs); ok {
+						return nat()
 					}
-					return esc()
-				case []Json:
-					if af, ok := prArrForm(x); ok {
-						if prUnitsOk(sf, u) {
-							return prMkOut(7, cat(prArrToks(sf, af), prUnitToks(prFactorsOf(u))))
-						}
-						return esc()
-					}
-					return esc()
+					return opn()
 				}
 			}
 		}
@@ -1579,10 +1933,60 @@ func prPr(c Ctx, e Json) Out {
 			}
 		}
 	}
-	if f, ok := prFaqForm(kvs); ok && prFaqOk(f) {
-		return prFaqOut(c, f)
+	if nat, ok := prNative(c, kvs); ok {
+		return nat()
 	}
 	return opn()
+}
+
+// prNative is the native spelling the dispatch of `Math.pr` gives a `const`,
+// `faq` or `makearray` node, when one applies: a constant array (with a unit
+// the surface spells), a quantity, a reduction, a table. It returns the
+// printing to do, so a caller asking only whether one applies prints nothing.
+func prNative(c Ctx, kvs Obj) (func() Out, bool) {
+	sf := c.sf
+	field := func(i int, k string) (Json, bool) {
+		if i < len(kvs) && kvs[i].K == k {
+			return kvs[i].V, true
+		}
+		return nil, false
+	}
+	a, _ := field(0, "args")
+	o, _ := field(1, "op")
+	args, okA := a.([]Json)
+	if os, ok := o.(string); okA && ok && len(args) == 0 && os == "const" {
+		switch len(kvs) {
+		case 3:
+			v, _ := field(2, "value")
+			if xs, ok := v.([]Json); ok {
+				if af, ok := prArrForm(xs); ok {
+					return func() Out { return prMkOut(10, prArrToks(sf, af)) }, true
+				}
+			}
+		case 4:
+			uv, _ := field(2, "units")
+			v, _ := field(3, "value")
+			if u, ok := uv.(string); ok && prUnitsOk(sf, u) {
+				switch x := v.(type) {
+				case JNum:
+					return func() Out { return prMkOut(7, prQtyToks(x, prFactorsOf(u))) }, true
+				case []Json:
+					if af, ok := prArrForm(x); ok {
+						return func() Out {
+							return prMkOut(7, cat(prArrToks(sf, af), prUnitToks(prFactorsOf(u))))
+						}, true
+					}
+				}
+			}
+		}
+	}
+	if f, ok := prFaqForm(kvs); ok && prFaqOk(f) {
+		return func() Out { return prFaqOut(c, f) }, true
+	}
+	if m, ok := prMkForm(kvs); ok && prMkOk(m) {
+		return func() Out { return prMkOutT(c, m) }, true
+	}
+	return nil, false
 }
 
 // prPlain is the [("args", .arr as), ("op", .str o)] case of `Math.pr`.
@@ -1750,7 +2154,7 @@ func prTemplate(c Ctx, n string, bs Obj, esc func() Out) Out {
 		return prMkOut(10, prCallToks(sf, []Tok{tOpn(n)}, args))
 	}
 	if len(bs) == 0 {
-		return esc()
+		return prMkOut(5, []Tok{tOpn(n)})
 	}
 	for _, kv := range bs {
 		if !exprNameOk(kv.K) {

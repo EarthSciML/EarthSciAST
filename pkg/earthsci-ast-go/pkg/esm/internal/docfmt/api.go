@@ -2,6 +2,13 @@ package docfmt
 
 // The entry points the esm package calls.
 
+// NodeAnnotations are the operator-node fields that annotate a node without
+// changing the value it computes: the `id` a derived index set names and the
+// author's `expect_cadence` (`Notation.annotatedNodeFields`). The math printer
+// sends a node carrying one to the escape form; the esm package drops them
+// from an expression's comparison key.
+var NodeAnnotations = []string{"id", "expect_cadence"}
+
 // PrintMd prints a document (canonical form, keys sorted) as Markdown
 // (`Source.Md.printMd`).
 func PrintMd(d Json) string { return mdDocPrintMd(&Lim{}, d) }

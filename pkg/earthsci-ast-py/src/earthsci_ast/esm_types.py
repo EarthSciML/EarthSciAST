@@ -205,6 +205,10 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "template_origin",
 )
 
+#: The ExprNode fields that annotate a node rather than parameterize its op: its
+#: identity (``id``) and an assertion about it (``expect_cadence``).
+NODE_ANNOTATION_KEYS = frozenset({"id", "expect_cadence"})
+
 #: ExprNode fields ALWAYS emitted (never omitted when None/empty); every other
 #: field omits when its value is None.
 _EXPR_REQUIRED_FIELDS = frozenset({"op", "args"})

@@ -416,6 +416,60 @@
       "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\n\\begin{aligned}y &= \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\\end{aligned}\n$$\n",
       "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", "b"], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "canonical": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\n$$\n"
+    },
+    {
+      "id": "typst_delim_augment_names",
+      "kind": "variant",
+      "description": "Variables named delim and augment are bare words in Typst like any other declared name.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = delim + 2 augment $\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["delim", {"args": [2, "augment"], "op": "*"}], "op": "+"}}], "variables": {"augment": {"type": "parameter"}, "delim": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = italic(\"delim\") + 2 italic(\"augment\") $\n"
+    },
+    {
+      "id": "typst_augment_derivative",
+      "kind": "variant",
+      "description": "A variable named augment as a bare word inside a derivative.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif augment)/(dif t) = k augment $\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["augment"], "op": "D", "wrt": "t"}, "rhs": {"args": ["k", "augment"], "op": "*"}}], "variables": {"augment": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif italic(\"augment\"))/(dif t) = k italic(\"augment\") $\n"
+    },
+    {
+      "id": "makearray_region_tight",
+      "kind": "variant",
+      "description": "A region's bound pairs joined by \\times with no spaces.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N]\\times[1, N] \\end{array}\\right]\n$$\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\end{array}\\right]\n$$\n"
+    },
+    {
+      "id": "makearray_region_tight_typst",
+      "kind": "variant",
+      "description": "A region's bound pairs joined by times with no space before the bracket.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times[1, N]) $\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]) $\n"
+    },
+    {
+      "id": "times_bracket_product",
+      "kind": "variant",
+      "description": "Outside a makearray region, a \\times before a bracket is a product, the bracket a group.",
+      "surface": "markdown",
+      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\times [b]\n$$\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a b\n$$\n"
+    },
+    {
+      "id": "times_bracket_product_typst",
+      "kind": "variant",
+      "description": "Outside a makearray region, times before a bracket is a product.",
+      "surface": "typst",
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a times [b] $\n",
+      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a b $\n"
     }
   ]
 }

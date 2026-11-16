@@ -105,6 +105,8 @@ const KW_CHARS: Record<Kw, string> = {
   Limits: 'limits',
   Lr: 'lr',
   Nl: '\\',
+  Lset: '{',
+  Rset: '}',
   Rpg: '',
   Lb: '',
   Rb: '',
@@ -124,6 +126,8 @@ const KW_CHARS: Record<Kw, string> = {
   Lbkg: '',
   Rbkg: '',
   LimitsL: '',
+  Barr: '',
+  Earr: '',
 }
 
 /** `Typst.kwChars`. */
@@ -168,6 +172,7 @@ export function tokChars(t: Tok): string {
     case 'rm':
     case 'jstr':
     case 'esc':
+    case 'acols':
       return ''
   }
 }
@@ -227,6 +232,7 @@ export function atomEnd(t: Tok): boolean {
     case 'opn':
     case 'jstr':
     case 'esc':
+    case 'acols':
       return false
     case 'kw':
       return t.k === 'Rp' || t.k === 'Rbk'
@@ -424,6 +430,8 @@ const PUNCT: Readonly<Record<string, Kw>> = {
   '&': 'Amp',
   '.': 'Sdot',
   '\\': 'Nl',
+  '{': 'Lset',
+  '}': 'Rset',
 }
 
 /** `Typst.punct`. */

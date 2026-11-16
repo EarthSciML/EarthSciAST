@@ -254,6 +254,17 @@ struct _OverlapJoinSpec
     eps_given::Bool
 end
 
+"""
+    EXPRESSION_NODE_ANNOTATIONS
+
+The fields of an expression node that annotate it rather than define its
+value: `id` (the name a derived index set gives its producer through
+`from_faq`) and `expect_cadence` (an author assertion of the node's cadence
+class). Metaparameter substitution leaves them alone, and the document formats
+print a node carrying one in the escape form.
+"""
+const EXPRESSION_NODE_ANNOTATIONS = ("id", "expect_cadence")
+
 # `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
 # licence to mutate: the build path treats `OpExpr` as an immutable value and only
 # ever copies-with-changes through `reconstruct` (fields are never assigned after

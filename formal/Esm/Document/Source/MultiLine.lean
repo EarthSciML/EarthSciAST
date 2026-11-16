@@ -30,8 +30,9 @@ open Esm.Document Esm.Document.Math
 
 /-- How a token changes the delimiter depth. -/
 def delta : Tok → Int
-  | .kw .lp | .kw .lpg | .kw .lb | .kw .lbk | .kw .bcases | .kw .bmat | .kw .lbkg => 1
-  | .kw .rp | .kw .rpg | .kw .rb | .kw .rbk | .kw .ecases | .kw .emat | .kw .rbkg => -1
+  | .kw .lp | .kw .lpg | .kw .lb | .kw .lbk | .kw .bcases | .kw .bmat | .kw .lbkg | .kw .barr
+  | .kw (.barrC _) => 1
+  | .kw .rp | .kw .rpg | .kw .rb | .kw .rbk | .kw .ecases | .kw .emat | .kw .rbkg | .kw .earr => -1
   | _ => 0
 
 /-- The token is the keyword `k`. -/

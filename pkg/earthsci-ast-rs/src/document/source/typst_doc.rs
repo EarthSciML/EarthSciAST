@@ -127,7 +127,15 @@ impl Caps for CapsT {
         item_ok(&RItem::Tm(Tm {
             name: t.name.clone(),
             params: t.params.clone(),
-            lhs: t.lhs.as_ref().map(|j| print_typst(s, j)),
+            lhs: t.lhs.as_ref().map(|j| {
+                print_typst(
+                    &Sym {
+                        names: s.names.clone(),
+                        templates: vec![],
+                    },
+                    j,
+                )
+            }),
             body: print_typst(s, &t.body),
             attrs: t.attrs.clone(),
         }))

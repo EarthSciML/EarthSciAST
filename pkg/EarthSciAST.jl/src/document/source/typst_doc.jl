@@ -88,7 +88,9 @@ rxn(::CapsT, s::Sym, x::Rxn) =
 plot(::CapsT, a) = all(arg_ok, a)
 
 function tm(::CapsT, s::Sym, t::Tm)
-    lhs = t.lhs === nothing ? nothing : DMath.print_typst(s, t.lhs)
+    # A rule's match pattern is printed with no templates in the table.
+    ms = Sym(s.names, Tuple{String, Vector{String}}[])
+    lhs = t.lhs === nothing ? nothing : DMath.print_typst(ms, t.lhs)
     return item_ok(RTm(Tm(t.name, t.params, lhs, DMath.print_typst(s, t.body), t.attrs)))
 end
 

@@ -272,6 +272,12 @@ def Mx.head {α ρ : Type} : Mx α ρ → Option (String × List String)
 template's parameters declared. -/
 def Tm.scope {ρ : Type} (S : Sym) (t : Tm ρ) : Sym := { S with names := S.names ++ t.ps }
 
+/-- The symbol table a rule's `match` pattern is read under: its body's, with no templates.
+A pattern never applies a template (spec §9.7.3: `match` patterns MUST NOT contain
+`apply_expression_template` nodes), so an operator in it named like a template in scope
+(a rule is in scope under its own name) reads as that operator, in the call form. -/
+def Tm.mscope {ρ : Type} (S : Sym) (t : Tm ρ) : Sym := ⟨(t.scope S).names, []⟩
+
 /-- The templates of the document: those of the top-level block, then the top-level
 template entries. -/
 def rootTs {α ρ : Type} (root : List (String × Json)) (rm : List (Mx α ρ)) :
