@@ -1906,10 +1906,10 @@ pub(crate) fn prepare_document_ops(value: &mut serde_json::Value) -> Result<(), 
 /// document, for a later pass that would otherwise walk it again.
 pub(crate) struct AuthoredFacts {
     /// The path of the first object, in pre-order, with both an `op` and a
-    /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
+    /// `units` key (what the const-units version gate looks for).
     pub(crate) op_with_units: Option<String>,
     /// The pointer of the first model variable carrying `lb` or `ub` (what
-    /// [`crate::variable_bounds::reject_variable_bounds_pre_v21`] looks for).
+    /// the variable-bounds version gate looks for).
     /// Looked for only when the document declares esm below 2.1.0, the one
     /// case the gate can fire; `None` otherwise.
     pub(crate) variable_bound: Option<String>,

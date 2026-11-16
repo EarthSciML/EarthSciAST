@@ -2546,19 +2546,6 @@ pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
     out
 }
 
-/// Reject declared `units` on an expression node in a document declaring
-/// `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
-/// `offending` yields the path of the first expression node in THIS file that
-/// declares `units` (the loader's authored walk), and runs only when the
-/// declared version is below 1.2.0. Each file is judged against its own `esm`
-/// (§4.7), so the walk must not reach into a mounted file.
-pub(crate) fn reject_const_units_pre_v12(
-    view: &serde_json::Value,
-    offending: impl FnOnce() -> Option<String>,
-) -> Result<(), crate::diagnostic::DiagnosticError> {
-    crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS].check(view, offending)
-}
-
 /// Parse a unit string into a Unit struct
 ///
 /// Supports common scientific unit notations:
@@ -4765,8 +4752,9 @@ mod tests {
             })
         };
         let path = || Some("/models/M/equations/0/rhs".to_string());
-        let err =
-            reject_const_units_pre_v12(&doc("1.1.0"), path).expect_err("1.1.0 must be rejected");
+        let err = crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS]
+            .check(&doc("1.1.0"), path)
+            .expect_err("1.1.0 must be rejected");
         assert!(
             err.to_string().contains("const_units_version_too_old"),
             "{err}"
@@ -4775,7 +4763,11 @@ mod tests {
             err.to_string().contains("/models/M/equations/0/rhs"),
             "{err}"
         );
-        assert!(reject_const_units_pre_v12(&doc("1.2.0"), path).is_ok());
+        assert!(
+            crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS]
+                .check(&doc("1.2.0"), path)
+                .is_ok()
+        );
     }
 
     #[test]

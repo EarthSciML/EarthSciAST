@@ -7,7 +7,6 @@
 //! applies to equations ([`crate::flatten`], esm-libraries-spec §4.7.5).
 
 use crate::EsmFile;
-use crate::diagnostic::DiagnosticError;
 use crate::structural::{
     ObservedScope, document_observeds, for_each_model_node, referenced_names, resolve_observed_ref,
     resolve_scoped_ref,
@@ -45,17 +44,6 @@ pub(crate) fn first_bound_pointer(doc: &Value) -> Option<String> {
     models
         .iter()
         .find_map(|(name, model)| in_component(model, &format!("/models/{name}")))
-}
-
-/// Reject `lb` / `ub` in a document declaring `esm` < 2.1.0 (esm-spec §6.3.2,
-/// "Version gate"), naming the first such field. `offending` yields that
-/// field's pointer in THIS file ([`first_bound_pointer`] over the authored
-/// tree) and is called only when the declared version is below 2.1.0.
-pub(crate) fn reject_variable_bounds_pre_v21(
-    view: &Value,
-    offending: impl FnOnce() -> Option<String>,
-) -> Result<(), DiagnosticError> {
-    crate::version_gates::VERSIONED[crate::version_gates::VARIABLE_BOUNDS].check(view, offending)
 }
 
 /// A bounded variable's declared shape, for comparison: `None` is scalar
