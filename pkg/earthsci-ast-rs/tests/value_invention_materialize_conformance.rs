@@ -8,9 +8,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{
-    LoadOptions, SolveOptions, load_string_with_options, run_inline_tests_with_base_dir,
-};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
+use earthsci_ast::{LoadOptions, SolveOptions, load_string_with_options};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -68,8 +67,16 @@ fn value_invention_materialize_outcomes_match_the_manifest() {
         };
         let file = load_string_with_options(&text, &options)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+            None,
+        );
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(results.len(), cases.len(), "{id}: assertion count");

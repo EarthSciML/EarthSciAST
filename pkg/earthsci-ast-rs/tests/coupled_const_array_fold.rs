@@ -23,7 +23,8 @@
 
 use std::path::PathBuf;
 
-use earthsci_ast::{SolveOptions, flatten, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
+use earthsci_ast::{flatten, load_path};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,7 +37,14 @@ fn fixture(name: &str) -> PathBuf {
 fn run(name: &str) -> Vec<earthsci_ast::AssertionResult> {
     let path = fixture(name);
     let file = load_path(&path).unwrap_or_else(|e| panic!("{name} does not load: {e}"));
-    run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent())
+    run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 /// The one assertion each fixture carries: the gather picks `totplnk[4] = 40`.

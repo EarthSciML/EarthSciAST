@@ -6979,14 +6979,6 @@
       }
     },
     {
-      "name": "run_inline_tests_filtered",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_filtered"
-      }
-    },
-    {
       "name": "run_inline_tests_paths",
       "kind": "function",
       "tier": "extension",
@@ -6995,27 +6987,11 @@
       }
     },
     {
-      "name": "run_inline_tests_with_base_dir",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_with_base_dir"
-      }
-    },
-    {
       "name": "run_inline_tests_with_options",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "rust": "run_inline_tests_with_options"
-      }
-    },
-    {
-      "name": "run_inline_tests_with_providers",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_inline_tests_with_providers"
       }
     },
     {

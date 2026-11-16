@@ -33,7 +33,7 @@
 //!    per-cell measure cancels between numerator and denominator).
 //! 3. `from_file` references — `{type: "from_file", path, format?}`: `path`
 //!    resolves relative to the .esm file's directory (the
-//!    [`run_inline_tests_with_base_dir`] `base_dir`; [`run_inline_tests`] resolves
+//!    [`InlineTestOptions::base_dir`]; [`run_inline_tests`] resolves
 //!    against the working directory); the default and only v1 `format` is
 //!    "json" — a row-major nested JSON array exactly matching the field's
 //!    shape (validated; mismatch is a clear error). The loaded array is used
@@ -88,7 +88,7 @@ use crate::simulate::{Solution, SolveOptions};
 /// rather than once per test. `Err` carries a message naming what could not be
 /// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
-/// See [`run_inline_tests_with_providers`].
+/// See [`InlineTestOptions::providers`].
 #[cfg(not(target_arch = "wasm32"))]
 pub type BuildProviderFactory<'a> =
     dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
@@ -162,47 +162,28 @@ fn scope_to_component(
         .collect()
 }
 
-/// The caller-supplied override SEEDS of one document, laid beneath every
-/// test's own maps.
+/// Lay a caller's `seed` (an [`InlineTestOptions`] map) under a test's
+/// `authored` map: the document is authoritative about its own test, so an
+/// authored key wins and the seed only supplies what the document left unsaid.
 ///
-/// Empty for the four `&EsmFile` entry points, which take no seeds; filled
-/// from an [`InlineTestOptions`] by [`run_inline_tests_paths`].
-#[derive(Clone, Debug, Default)]
-struct InlineTestSeeds {
-    parameter_overrides: HashMap<String, InlineValue>,
-    initial_conditions: HashMap<String, InlineValue>,
-    /// WHICH compiler builds each test's right-hand side (API_SPEC §5.8).
-    /// Loop-invariant context like the seeds beside it: it comes from one
-    /// [`InlineTestOptions`] for the whole document, so it does not enter the
-    /// build memo's [`BuildKey`].
-    compiler: Option<crate::problem::Compiler>,
-}
-
-impl InlineTestSeeds {
-    /// Lay `seed` under a test's `authored` map: the document is authoritative
-    /// about its own test, so an authored key wins and the seed only supplies
-    /// what the document left unsaid.
-    ///
-    /// The merge happens BEFORE [`scope_to_component`], so a seed key and an
-    /// authored key naming the same variable collide on the one spelling.
-    /// Merging afterwards would instead hand the build both `T` and `M.T` —
-    /// two keys designating one parameter, with two values.
-    fn lay_under(
-        &self,
-        seed: &HashMap<String, InlineValue>,
-        authored: Option<&HashMap<String, InlineValue>>,
-    ) -> Option<HashMap<String, InlineValue>> {
-        if seed.is_empty() {
-            return authored.cloned();
-        }
-        let mut out = seed.clone();
-        if let Some(authored) = authored {
-            for (k, v) in authored {
-                out.insert(k.clone(), v.clone());
-            }
-        }
-        Some(out)
+/// The merge happens BEFORE [`scope_to_component`], so a seed key and an
+/// authored key naming the same variable collide on the one spelling.
+/// Merging afterwards would instead hand the build both `T` and `M.T` — two
+/// keys designating one parameter, with two values.
+fn lay_under(
+    seed: &HashMap<String, InlineValue>,
+    authored: Option<&HashMap<String, InlineValue>>,
+) -> Option<HashMap<String, InlineValue>> {
+    if seed.is_empty() {
+        return authored.cloned();
     }
+    let mut out = seed.clone();
+    if let Some(authored) = authored {
+        for (k, v) in authored {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Some(out)
 }
 
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
@@ -2107,7 +2088,7 @@ fn static_trajectory(_prob: &EsmProblem, _times: &[f64]) -> Option<Result<Soluti
 /// * `initial_conditions` → [`ProblemOptions::u0`].
 ///
 /// Every other `ProblemOptions` field the loop sets is loop-invariant:
-/// `inspect: true`, `compile` chosen solely from `build_providers.is_some()`,
+/// `inspect: true`, `compile` chosen solely from whether a provider factory is given,
 /// `build_pipeline` likewise, and `..Default::default()` for the rest
 /// (`model_name: None`, no metaparameters, no `base_path`, no callbacks, no
 /// run-time `providers`, no `const_arrays`, no `sample_time`).
@@ -2450,19 +2431,16 @@ fn declared_extents(
 /// Build one test's problem — the body that used to be inline in
 /// [`run_model_tests`]'s loop, lifted out so the loop can skip it on a
 /// [`BuildKey`] hit.
-// Eight parameters against clippy's seven: the test, the names its build keeps
-// readable, and the loop-invariant context `run_component_tests` holds.
-#[allow(clippy::too_many_arguments)]
 fn build_for_test(
     key: BuildKey,
     file: &EsmFile,
     model_name: &str,
     t: &crate::types::ModelTest,
     retain_data_fields: Vec<String>,
-    base_dir: Option<&Path>,
+    topts: &InlineTestOptions,
     build_providers: Option<&BuildProviderFactory<'_>>,
-    seeds: &InlineTestSeeds,
 ) -> BuiltModel {
+    let base_dir = topts.base_dir.as_deref();
     // esm-spec §9.7.10 form C: a test that injects a discretization runs
     // against an EPHEMERAL instance of this component with the test's
     // imports appended to its scope and its rewrite-targets lowered; the
@@ -2504,8 +2482,8 @@ fn build_for_test(
     let mut ephemeral = ephemeral;
     let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
 
-    let seeded_params = seeds.lay_under(&seeds.parameter_overrides, t.parameter_overrides.as_ref());
-    let seeded_ics = seeds.lay_under(&seeds.initial_conditions, t.initial_conditions.as_ref());
+    let seeded_params = lay_under(&topts.parameter_overrides, t.parameter_overrides.as_ref());
+    let seeded_ics = lay_under(&topts.initial_conditions, t.initial_conditions.as_ref());
     let run_flat = OnceCell::new();
     let params = scope_to_component(seeded_params.as_ref(), model_name, run_file, &run_flat);
     let ics = scope_to_component(seeded_ics.as_ref(), model_name, run_file, &run_flat);
@@ -2564,7 +2542,7 @@ fn build_for_test(
     // asks for the pipeline itself, just below.
     let retry_bindings = build_providers
         .is_none()
-        .then(|| (scalar_params.clone(), u0.clone(), seeds.compiler));
+        .then(|| (scalar_params.clone(), u0.clone(), topts.compiler));
     // Only the native provider branch below writes to it.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut popts = ProblemOptions {
@@ -2572,7 +2550,7 @@ fn build_for_test(
         u0,
         inspect: true,
         rhs: crate::problem::Rhs::Always,
-        compiler: seeds.compiler,
+        compiler: topts.compiler,
         ..Default::default()
     };
     // The document's own `data_sources`, ingested (esm-spec §8.9). A
@@ -2783,14 +2761,10 @@ fn is_build_field_variable(model: &crate::types::Model, variable: &str) -> bool 
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
 ///
-/// The caller's `seeds` are part of that loop-invariant context: they come from
-/// one [`InlineTestOptions`] for the whole DOCUMENT and so are constant across
-/// the tests this loop memoises over. That is why they need not enter the
-/// [`BuildKey`] — a key hit within one call is a hit under the same seeds.
-// Ten parameters against clippy's seven. They are the loop-invariant context
-// the build memo keys on, described above; bundling them into a struct would
-// move the same values behind one more name without making any of them
-// optional.
+/// The caller's [`InlineTestOptions`] are part of that loop-invariant context:
+/// one record for the whole DOCUMENT, constant across the tests this loop
+/// memoises over. That is why its seeds need not enter the [`BuildKey`] — a
+/// key hit within one call is a hit under the same seeds.
 #[allow(clippy::too_many_arguments)]
 fn run_component_tests(
     file: &EsmFile,
@@ -2799,13 +2773,13 @@ fn run_component_tests(
     tests: &[crate::types::ModelTest],
     tolerance: Option<&Tolerance>,
     index_sets: &HashMap<String, IndexSet>,
-    opts: &SolveOptions,
-    base_dir: Option<&Path>,
+    topts: &InlineTestOptions,
     build_providers: Option<&BuildProviderFactory<'_>>,
-    test_filter: Option<&str>,
-    seeds: &InlineTestSeeds,
     results: &mut Vec<AssertionResult>,
 ) {
+    let opts = &topts.solve;
+    let base_dir = topts.base_dir.as_deref();
+    let test_filter = topts.test_filter.as_deref();
     let mut memo: Option<BuiltModel> = None;
     for t in tests {
         if test_filter.is_some_and(|needle| !t.id.contains(needle)) {
@@ -2837,9 +2811,8 @@ fn run_component_tests(
                 model_name,
                 t,
                 retain,
-                base_dir,
+                topts,
                 build_providers,
-                seeds,
             ));
         }
         let cached = memo.as_ref().expect("just built");
@@ -2984,7 +2957,7 @@ fn run_component_tests(
                             // such build per `BuildKey`, however many of its
                             // tests reach here (`BuiltModel::retry_fields`).
                             if fields.is_empty()
-                                && seeds.compiler.unwrap_or_default().is_strict()
+                                && topts.compiler.unwrap_or_default().is_strict()
                                 && let Some(f) = crate::problem::stateless_fields(prob)
                             {
                                 fields = f;
@@ -3096,8 +3069,8 @@ fn run_component_tests(
 /// rounding DOWN — the pinned cross-binding convention) or collapsed per its
 /// `reduce` (error norms evaluate the `reference` — an analytic expression
 /// cellwise via [`evaluate_cellwise`], or a `{type: "from_file", path,
-/// format?}` JSON snapshot resolved against the working directory; use
-/// [`run_inline_tests_with_base_dir`] to anchor at the .esm file's directory).
+/// format?}` JSON snapshot resolved against the working directory; set
+/// [`InlineTestOptions::base_dir`] to anchor at the .esm file's directory).
 /// An assertion with neither `coords` nor `reduce` samples a scalar state.
 /// Mirrors the Julia binding's `run_inline_tests` 1:1 (tolerances per §6.6.4;
 /// the pass predicate is Julia `isapprox`). Models iterate in sorted name
@@ -3107,128 +3080,43 @@ pub fn run_inline_tests(
     model_name: Option<&str>,
     opts: &SolveOptions,
 ) -> Vec<AssertionResult> {
-    run_inline_tests_with_base_dir(file, model_name, opts, None)
-}
-
-/// [`run_inline_tests`] with an explicit `base_dir` anchoring `from_file`
-/// reference paths (esm-spec §6.6.5, pinned convention: relative to the .esm
-/// file's directory). `None` resolves relative paths against the working
-/// directory — callers that loaded the document from a path should pass that
-/// path's parent, matching the Julia / Python bindings' default.
-pub fn run_inline_tests_with_base_dir(
-    file: &EsmFile,
-    model_name: Option<&str>,
-    opts: &SolveOptions,
-    base_dir: Option<&Path>,
-) -> Vec<AssertionResult> {
-    run_inline_tests_with_providers(file, model_name, opts, base_dir, None)
-}
-
-/// [`run_inline_tests_with_base_dir`] with the document's `data_sources` actually
-/// INGESTED (esm-spec §8.9).
-///
-/// A document whose parameters carry `update: {kind: "data", …}` reads its
-/// numbers off disk. Nothing in this crate opens a file on its own — the
-/// build-time provider contract [`crate::prepare::PrepareProvider`] is supplied
-/// by the CALLER, and a runner that supplies none evaluates the document
-/// against every data-fed parameter's `default`. That is a silent wrong answer,
-/// not a missing feature, which is why this entry point exists and why
-/// `build_providers` returning `Err` is recorded as an assertion ERROR naming
-/// the source rather than swallowed.
-///
-/// `build_providers` is a FACTORY, not a set: [`crate::problem::ProblemOptions`]
-/// takes its providers by value, so the runner needs a fresh set for every
-/// problem it builds. It is called **once per BUILD** — which is once per test
-/// only for tests that differ in their [`BuildKey`]; consecutive tests that
-/// share a build share the one provider set that built it, and a document whose
-/// tests all share a key reads its `data_sources` once rather than once per
-/// test. It is called only for a model that actually declares tests, and (with
-/// `test_filter`) only for tests that were selected.
-///
-/// With providers bound, construction runs the deterministic build pipeline and
-/// its materialized fields answer §6.6.5 array assertions directly. A document
-/// with no differential equations is testable without integrating: `solve`
-/// reports [`crate::SimulateError::NotDynamic`], and the
-/// assertions are evaluated against the build's own products at the asserted
-/// times.
-pub fn run_inline_tests_with_providers(
-    file: &EsmFile,
-    model_name: Option<&str>,
-    opts: &SolveOptions,
-    base_dir: Option<&Path>,
-    build_providers: Option<&BuildProviderFactory<'_>>,
-) -> Vec<AssertionResult> {
-    run_inline_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
-}
-
-/// [`run_inline_tests_with_providers`] restricted to the tests whose `id` CONTAINS
-/// `test_filter`.
-///
-/// The selection happens BEFORE anything is built or solved, which is the whole
-/// point: a caller that narrows to one test of a document should pay for one
-/// test of a document. The surviving rows are identical to filtering the
-/// returned `Vec` by `test_id`, because a result's `test_id` is always its
-/// test's `id` on every path — the assertion rows and the whole-test ERROR rows
-/// alike.
-///
-/// `None` runs every test, and is what the three unfiltered entry points pass.
-pub fn run_inline_tests_filtered(
-    file: &EsmFile,
-    model_name: Option<&str>,
-    opts: &SolveOptions,
-    base_dir: Option<&Path>,
-    build_providers: Option<&BuildProviderFactory<'_>>,
-    test_filter: Option<&str>,
-) -> Vec<AssertionResult> {
     run_inline_tests_seeded(
         file,
         None,
-        model_name,
-        opts,
-        base_dir,
-        build_providers,
-        test_filter,
-        &InlineTestSeeds::default(),
+        &InlineTestOptions {
+            model_name: model_name.map(str::to_string),
+            solve: opts.clone(),
+            ..Default::default()
+        },
+        None,
     )
 }
 
-/// [`run_inline_tests_filtered`] driven by a whole [`InlineTestOptions`] — the
-/// entry a CALLER with one loaded document and a full set of knobs wants.
-///
-/// The four positional entry points above grew one argument at a time and
-/// cannot express the two newest knobs, the override seeds and the COMPILER
-/// (API_SPEC §5.8). A sixth positional arity for each would be the wrong
-/// answer; `InlineTestOptions` already names every knob, and
-/// [`run_inline_tests_paths`] already takes it — this is the same options
-/// record against a document the caller has already loaded.
+/// [`run_inline_tests`] driven by a whole [`InlineTestOptions`] — the entry a
+/// caller with one loaded document and any knob beyond the solver wants: the
+/// `from_file` anchor, a test filter, override seeds, the compiler, and the
+/// document's `data_sources` ingested through
+/// [`InlineTestOptions::providers`].
 ///
 /// `opts.base_dir` is used as given: unlike [`run_inline_tests_paths`], there
 /// is no path here to fall back to, so a caller with `from_file` references
 /// must set it.
+///
+/// `build_providers` is the provider factory passed beside the options rather
+/// than in them; it wins over [`InlineTestOptions::providers`] when both are
+/// given. It exists for callers not yet moved to the options field and goes
+/// once they are.
 pub fn run_inline_tests_with_options(
     file: &EsmFile,
     opts: &InlineTestOptions,
     build_providers: Option<&BuildProviderFactory<'_>>,
 ) -> Vec<AssertionResult> {
-    run_inline_tests_seeded(
-        file,
-        None,
-        opts.model_name.as_deref(),
-        &opts.solve,
-        opts.base_dir.as_deref(),
-        build_providers,
-        opts.test_filter.as_deref(),
-        &InlineTestSeeds {
-            parameter_overrides: opts.parameter_overrides.clone(),
-            initial_conditions: opts.initial_conditions.clone(),
-            compiler: opts.compiler,
-        },
-    )
+    let providers = build_providers.or(opts.providers.as_deref());
+    run_inline_tests_seeded(file, None, opts, providers)
 }
 
-/// [`run_inline_tests_filtered`] with the caller's override SEEDS — the one
-/// thing the four `&EsmFile` entry points cannot express and
-/// [`run_inline_tests_paths`] can.
+/// Run the inline tests of `file` under `opts`, with `build_providers` the
+/// provider factory in effect.
 ///
 /// Both kinds of test-bearing component run here: `models` first, then
 /// `reaction_systems`, each in sorted name order for deterministic output. The
@@ -3238,17 +3126,13 @@ pub fn run_inline_tests_with_options(
 /// reported, which is the silent half of a coverage gap: a component that
 /// produced no rows is indistinguishable in the result list from one that was
 /// never looked at.
-#[allow(clippy::too_many_arguments)]
 fn run_inline_tests_seeded(
     file: &EsmFile,
     source: Option<&Path>,
-    model_name: Option<&str>,
-    opts: &SolveOptions,
-    base_dir: Option<&Path>,
+    opts: &InlineTestOptions,
     build_providers: Option<&BuildProviderFactory<'_>>,
-    test_filter: Option<&str>,
-    seeds: &InlineTestSeeds,
 ) -> Vec<AssertionResult> {
+    let model_name = opts.model_name.as_deref();
     let mut results = Vec::new();
 
     // Every row of this document's run names the document, so a BATCH's rows
@@ -3302,10 +3186,7 @@ fn run_inline_tests_seeded(
             tolerance,
             &index_sets,
             opts,
-            base_dir,
             build_providers,
-            test_filter,
-            seeds,
             &mut results,
         );
     }
@@ -3356,6 +3237,27 @@ pub struct InlineTestOptions {
     /// is strict — a document the tape cannot lower fails its tests with the
     /// refusal rather than running on a slower path.
     pub compiler: Option<crate::problem::Compiler>,
+    /// Builds the document's data providers, once per build, so its
+    /// `data_sources` are INGESTED (esm-spec §8.9). `None` evaluates every
+    /// data-fed parameter at its `default`.
+    ///
+    /// A document whose parameters carry `update: {kind: "data", …}` reads its
+    /// numbers off disk, and nothing in this crate opens a file on its own: a
+    /// runner that supplies no providers evaluates such a document against
+    /// every data-fed parameter's `default`, a silent wrong answer. A factory
+    /// that returns `Err` is recorded as an assertion ERROR naming the source,
+    /// never swallowed.
+    ///
+    /// A FACTORY rather than a set, because [`crate::problem::ProblemOptions`]
+    /// takes its providers by value and the runner needs a fresh set for every
+    /// problem it builds. It is called once per BUILD — consecutive tests that
+    /// share a build share one provider set — only for a component that
+    /// declares tests, and only for tests [`Self::test_filter`] selects. With
+    /// providers bound, construction runs the build pipeline and its
+    /// materialized fields answer §6.6.5 array assertions directly; a document
+    /// with no differential equations is tested against the build's own
+    /// products at the asserted times.
+    pub providers: Option<std::sync::Arc<BuildProviderFactory<'static>>>,
 }
 
 impl std::fmt::Debug for InlineTestOptions {
@@ -3368,6 +3270,7 @@ impl std::fmt::Debug for InlineTestOptions {
             .field("initial_conditions", &self.initial_conditions.len())
             .field("parameter_overrides", &self.parameter_overrides.len())
             .field("compiler", &self.compiler)
+            .field("providers", &self.providers.as_ref().map(|_| "<factory>"))
             .finish()
     }
 }
@@ -3470,24 +3373,18 @@ pub fn run_inline_tests_paths(
         // A `from_file` reference is anchored at the .esm file's own directory
         // unless the caller says otherwise — the pinned cross-binding
         // convention, and the same default the Julia and Python entries apply.
-        let base_dir = opts
-            .base_dir
-            .clone()
-            .or_else(|| path.parent().map(Path::to_path_buf));
-        let seeds = InlineTestSeeds {
-            parameter_overrides: opts.parameter_overrides.clone(),
-            initial_conditions: opts.initial_conditions.clone(),
-            compiler: opts.compiler,
+        let opts = InlineTestOptions {
+            base_dir: opts
+                .base_dir
+                .clone()
+                .or_else(|| path.parent().map(Path::to_path_buf)),
+            ..opts
         };
         results.extend(run_inline_tests_seeded(
             &file,
             Some(&path),
-            opts.model_name.as_deref(),
-            &opts.solve,
-            base_dir.as_deref(),
-            None,
-            opts.test_filter.as_deref(),
-            &seeds,
+            &opts,
+            opts.providers.as_deref(),
         ));
     }
     results
@@ -4898,8 +4795,16 @@ mod tests {
             ),
         ]));
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results =
-            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(results.len(), 2);
         // Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in &results {
@@ -4925,8 +4830,16 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r =
-            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        )[0];
         assert!(!r.passed);
         assert!(
             r.message
@@ -4950,8 +4863,16 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r =
-            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        )[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("expected a number"),
@@ -4971,8 +4892,16 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r =
-            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        )[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("file not found"),
@@ -4989,8 +4918,16 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r =
-            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        )[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("format 'netcdf' is not supported"),
@@ -5010,8 +4947,16 @@ mod tests {
         assert!(fixture.is_file(), "missing shared fixture {fixture:?}");
         let text = std::fs::read_to_string(&fixture).expect("fixture reads");
         let file = load_string(&text).expect("fixture loads");
-        let results =
-            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                base_dir: fixture.parent().map(|p| p.to_path_buf()),
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(results.len(), 7);
         for r in &results {
             assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
@@ -5796,11 +5741,10 @@ mod tests {
         }
     }
 
-    /// An ELEMENT of a data-fed `[lev]` parameter is answered from the
-    /// ingested column, which the build keeps only when retained by its stem.
-    #[test]
-    fn an_element_of_a_data_fed_field_is_assertable() {
-        let doc = json!({
+    /// The document of the two tests below: an assertion on an ELEMENT of a
+    /// data-fed `[lev]` parameter, whose provider supplies `[3, 5, 7]`.
+    fn data_fed_element_doc() -> serde_json::Value {
+        json!({
             "esm": "2.0.0",
             "metadata": {"name": "data_fed_element"},
             "index_sets": {"lev": {"kind": "interval", "size": 3}},
@@ -5821,17 +5765,51 @@ mod tests {
                     "assertions": [{"variable": "p[2]", "time": 0.0, "expected": 5.0}],
                 }],
             }},
-        });
-        let file = load_string(&doc.to_string()).expect("doc loads");
-        let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
+        })
+    }
+
+    fn data_fed_element_providers() -> std::sync::Arc<BuildProviderFactory<'static>> {
+        std::sync::Arc::new(|| {
             Ok(vec![(
                 "p".to_string(),
                 Box::new(ConstColumn(vec![3.0, 5.0, 7.0]))
                     as Box<dyn crate::prepare::PrepareProvider>,
             )])
+        })
+    }
+
+    /// An ELEMENT of a data-fed `[lev]` parameter is answered from the
+    /// ingested column, which the build keeps only when retained by its stem.
+    #[test]
+    fn an_element_of_a_data_fed_field_is_assertable() {
+        let file = load_string(&data_fed_element_doc().to_string()).expect("doc loads");
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: tight_opts(),
+                providers: Some(data_fed_element_providers()),
+                ..Default::default()
+            },
+            None,
+        );
+        let summary = summarize(&results);
+        assert_eq!(results.len(), 1, "{summary:?}");
+        assert!(results[0].passed, "{summary:?}");
+    }
+
+    /// The paths entry ingests a document's data through the providers its
+    /// options name.
+    #[test]
+    fn the_paths_entry_ingests_through_the_options_providers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("data_fed_element.esm");
+        std::fs::write(&path, data_fed_element_doc().to_string()).expect("write");
+        let results = run_inline_tests_paths(&[&path], &|_| InlineTestOptions {
+            solve: tight_opts(),
+            providers: Some(data_fed_element_providers()),
+            ..Default::default()
         });
-        let results =
-            run_inline_tests_with_providers(&file, Some("M"), &tight_opts(), None, Some(&*make));
         let summary = summarize(&results);
         assert_eq!(results.len(), 1, "{summary:?}");
         assert!(results[0].passed, "{summary:?}");

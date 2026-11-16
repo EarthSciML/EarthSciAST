@@ -22,8 +22,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_inline_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
 use std::path::PathBuf;
 
@@ -89,8 +89,16 @@ fn static_evaluation_assertions_match_golden() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+            None,
+        );
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(
@@ -150,7 +158,13 @@ fn an_algebraic_document_is_evaluated_at_every_asserted_time() {
     };
     for (time, expected) in [(0.0, 0.0), (5.0, 10.0), (10.0, 20.0)] {
         let file = load_string(&doc(time, expected)).expect("document loads");
-        let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(
@@ -194,7 +208,13 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
     };
     let run = |declared: &str| {
         let file = load_string(&doc(declared)).expect("document loads");
-        let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                ..Default::default()
+            },
+            None,
+        );
         assert_eq!(results.len(), 1);
         (results[0].passed, results[0].actual)
     };
@@ -238,7 +258,13 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 3);
     for id in ["past_end", "before_start"] {
         let r = results
@@ -294,7 +320,13 @@ fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 2);
     for r in &results {
         assert!(
@@ -342,7 +374,13 @@ fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 2);
     let away = results
         .iter()
@@ -403,7 +441,13 @@ fn a_reference_that_mentions_t_is_refused() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 1);
     let r = &results[0];
     assert!(!r.passed, "actual {:?}", r.actual);
@@ -449,8 +493,14 @@ fn a_min_reduction_over_a_shaped_static_document_is_not_its_identity() {
     let path = common::repo_fixture(MIN_REDUCTION_FIXTURE);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&text).unwrap_or_else(|e| panic!("fixture {path:?} does not load: {e}"));
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+        None,
+    );
     assert_eq!(results.len(), 7, "fixture assertion count");
     for r in &results {
         assert!(

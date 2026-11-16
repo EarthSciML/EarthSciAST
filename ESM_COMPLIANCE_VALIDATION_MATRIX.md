@@ -708,8 +708,8 @@ The geometry-op operand-ring requirements (padding, degenerate vertices) belonge
 > reuse (construction leaves the record empty, `solve` overwrites it on the array backend
 > only, and `take_inspection` drains it, so without the reset the second test of a
 > STATE-FREE document would read an emptied record); -006/-007 are
-> `run_inline_tests_filtered`, which the CLI's `--filter` now calls instead of filtering the
-> returned `Vec`. Gate: `earthsci-ast-rs/tests/inline_test_build_memo.rs` — the
+> `InlineTestOptions::test_filter`, which the CLI's `--filter` now sets instead of filtering
+> the returned `Vec`. Gate: `earthsci-ast-rs/tests/inline_test_build_memo.rs` — the
 > `build_providers` factory is called once per build, so a counting factory reports the
 > build count directly, and every case is ALSO built so that a missing key field gives a
 > wrong number rather than merely a fast one. Sabotage-verified: dropping each of the
