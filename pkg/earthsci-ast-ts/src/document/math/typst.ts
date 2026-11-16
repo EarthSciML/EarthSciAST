@@ -105,9 +105,6 @@ const KW_CHARS: Record<Kw, string> = {
   Limits: 'limits',
   Lr: 'lr',
   Nl: '\\',
-  TimesLbk: 'times [',
-  DelimK: 'delim',
-  AugK: 'augment',
   Lset: '{',
   Rset: '}',
   Rpg: '',
@@ -175,6 +172,7 @@ export function tokChars(t: Tok): string {
     case 'rm':
     case 'jstr':
     case 'esc':
+    case 'acols':
       return ''
   }
 }
@@ -234,6 +232,7 @@ export function atomEnd(t: Tok): boolean {
     case 'opn':
     case 'jstr':
     case 'esc':
+    case 'acols':
       return false
     case 'kw':
       return t.k === 'Rp' || t.k === 'Rbk'
@@ -284,8 +283,7 @@ export function pretty(p: Tok | undefined, t1: Tok, t2: Tok): boolean {
     (isKwIn(t2, 'Minus') && atomEnd(t1)) ||
     (isKwIn(t1, 'Minus') && p !== undefined && atomEnd(p)) ||
     (atomEnd(t1) && atomStart(t2)) ||
-    t2.t === 'units' ||
-    isKwIn(t2, 'TimesLbk')
+    t2.t === 'units'
   )
 }
 
@@ -350,8 +348,6 @@ export const IDENT_KW: readonly (readonly [string, Kw])[] = [
   ['in', 'Inn'],
   ['limits', 'Limits'],
   ['lr', 'Lr'],
-  ['delim', 'DelimK'],
-  ['augment', 'AugK'],
 ]
 const IDENT_KW_MAP: ReadonlyMap<string, Kw> = new Map(IDENT_KW)
 
@@ -478,8 +474,6 @@ export function lexIdent(cs: Chars, i: number): Read<Tok> {
       const r = dropP('.node', cs, e)
       return r === undefined ? undefined : [kw('Esmnode'), r]
     }
-    case 'times':
-      return cs[skip(cs, e)] === '[' ? [kw('TimesLbk'), skip(cs, e) + 1] : [kw('Times'), e]
   }
   const k = IDENT_KW_MAP.get(w)
   if (k !== undefined) return [kw(k), e]

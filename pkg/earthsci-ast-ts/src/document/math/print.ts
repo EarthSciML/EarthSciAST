@@ -35,6 +35,7 @@ import {
   type Json,
   type Kvs,
 } from '../json.js'
+import { EXPRESSION_NODE_ANNOTATIONS } from '../../expression.js'
 import { digitChar, type Chars, type Read } from '../number.js'
 import {
   REMOVED_OPS,
@@ -55,6 +56,7 @@ import {
 } from './expr.js'
 import {
   kw,
+  tAcols,
   tCode,
   tEsc,
   tGreek,
@@ -68,6 +70,7 @@ import {
   tUnits,
   tUps,
   tWord,
+  tokEq,
   type Kw,
   type Sf,
   type Tok,
@@ -186,6 +189,11 @@ export function unescK(s: string): string {
 export interface Ctx {
   readonly sf: Sf
   readonly s: Sym
+  /**
+   * Field keys need not be identifiers for the call form (set only by
+   * {@link printsAsCall}, whose reader accepts any key spelling there).
+   */
+  readonly anyKey?: boolean
 }
 
 /** `Math.rpG`: the closing token of a grouping parenthesis. */
@@ -442,16 +450,15 @@ export function opnOk(s: string): boolean {
   return true
 }
 
-/** `Math.annotKeys`: the fields that annotate a node (`Notation.annotatedNodeFields`). */
-export const ANNOT_KEYS: readonly string[] = ['id', 'expect_cadence']
-
 /**
  * `Math.callFormOK`: an operator prints in the call form: an open operator, or
  * a core operator of {@link FIELD_CALL_OPS} none of whose fields annotates it.
  */
 export function callFormOk(o: string, fs: readonly Kv[]): boolean {
   return (
-    !isCoreOp(o) || (FIELD_CALL_OPS.includes(o) && fs.every((kv) => !ANNOT_KEYS.includes(kv[0])))
+    !isCoreOp(o) ||
+    (FIELD_CALL_OPS.includes(o) &&
+      fs.every((kv) => !(EXPRESSION_NODE_ANNOTATIONS as readonly string[]).includes(kv[0])))
   )
 }
 
@@ -1000,21 +1007,29 @@ export function numToks(ns: readonly JNum[]): Tok[][] {
   return ns.map((n) => [tNum(n)])
 }
 
-/** `Math.arrToks`: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`. */
+/** `Math.bmatMaxCols`: the most columns a LaTeX `bmatrix` holds (amsmath `MaxMatrixCols`). */
+export const BMAT_MAX_COLS = 10
+
+/**
+ * `Math.arrToks`: LaTeX `bmatrix`, or `\left[\begin{array}{c…c} … \end{array}\right]`
+ * for a matrix wider than {@link BMAT_MAX_COLS}; Typst `vec(…)` / `mat(…)`.
+ */
 export function arrToks(sf: Sf, a: AForm): Tok[] {
   if (a.k === 'col') {
     return sf === 'latex'
       ? cat([kw('Bmat')], sepBy([kw('Nl')], numToks(a.ns)), [kw('Emat')])
       : cat([kw('Vec'), kw('Lp')], sepBy(COMMA, numToks(a.ns)), [kw('Rp')])
   }
+  const width = a.rs[0].length
+  const wide = width > BMAT_MAX_COLS
   return sf === 'latex'
     ? cat(
-        [kw('Bmat')],
+        wide ? [kw('Lbkg'), tAcols(width)] : [kw('Bmat')],
         sepBy(
           [kw('Nl')],
           a.rs.map((r) => sepBy([kw('Amp')], numToks(r))),
         ),
-        [kw('Emat')],
+        wide ? [kw('Earr'), kw('Rbkg')] : [kw('Emat')],
       )
     : cat(
         [kw('Mat'), kw('Lp')],
@@ -1531,7 +1546,7 @@ export function pairToks(c: Ctx, p: readonly [Json, Json]): Tok[] {
 export function regToks(c: Ctx, ps: readonly (readonly [Json, Json])[]): Tok[] {
   if (ps.length === 0) return []
   const out = cat([kw('Lbk')], pairToks(c, ps[0]), [kw('Rbk')])
-  for (const q of ps.slice(1)) out.push(kw('TimesLbk'), ...pairToks(c, q), kw('Rbk'))
+  for (const q of ps.slice(1)) out.push(kw('Times'), kw('Lbk'), ...pairToks(c, q), kw('Rbk'))
   return out
 }
 
@@ -1540,16 +1555,19 @@ export function mkRow(c: Ctx, v: Json, r: readonly (readonly [Json, Json])[]): T
   return cat(pa(c, 1, v), [kw(cellSep(c.sf))], regToks(c, r))
 }
 
-/** `Math.matHead`: the Typst table head: `mat(delim: "[", augment: #1,`. */
+/**
+ * `Math.matHead`: the Typst table head: `mat(delim: "[", augment: #1,`; `delim`
+ * and `augment` are plain words, not keywords.
+ */
 export function matHead(): Tok[] {
   return [
     kw('Mat'),
     kw('Lp'),
-    kw('DelimK'),
+    tWord('delim'),
     kw('Colon'),
     tTxt('['),
     kw('Comma'),
-    kw('AugK'),
+    tWord('augment'),
     kw('Colon'),
     tCode(jnum(mkInt(1))),
     kw('Comma'),
@@ -1630,7 +1648,7 @@ export function pr(c: Ctx, e: Json): Out {
       !callFormOk(o.s, fs) ||
       !opnOk(o.s) ||
       tparams(c.s, o.s) !== undefined ||
-      !fs.every((kv) => keyOk(kv[0]))
+      !(c.anyKey === true || fs.every((kv) => keyOk(kv[0])))
     ) {
       return esc()
     }
@@ -1860,6 +1878,19 @@ function prTemplate(c: Ctx, n: string, bs: Kvs, esc: () => Out): Out {
   }
   if (bs.length === 0) return mkOut(5, [tOpn(n)])
   return esc()
+}
+
+/**
+ * The printer writes node `e` in the call form of operator `o`
+ * (`\operatorname{o}(…; …)`): {@link callFormOk} and the other conditions of the
+ * call form hold and no native spelling of the node applies. The reader accepts
+ * the call form only for such a node, so each node has one spelling; the one
+ * exception is the field keys, read in any spelling ({@link keyOk} is not
+ * required).
+ */
+export function printsAsCall(c: Ctx, o: string, e: Json): boolean {
+  const ts = pr({ ...c, anyKey: true }, e).toks
+  return ts.length > 1 && ts[0].t === 'opn' && ts[0].s === o && tokEq(ts[1], lpC(c.sf))
 }
 
 /** `Math.pa`: the tokens of an expression for a position needing level `L`. */

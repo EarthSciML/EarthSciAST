@@ -20,7 +20,6 @@ const OPENS: ReadonlySet<Kw> = new Set<Kw>([
   'Bmat',
   'Lbkg',
   'Barr',
-  'TimesLbk',
 ])
 const CLOSES: ReadonlySet<Kw> = new Set<Kw>([
   'Rp',
@@ -35,6 +34,7 @@ const CLOSES: ReadonlySet<Kw> = new Set<Kw>([
 
 /** `Source.delta`: how a token changes the delimiter depth. */
 function delta(t: Tok): number {
+  if (t.t === 'acols') return 1
   if (t.t !== 'kw') return 0
   return OPENS.has(t.k) ? 1 : CLOSES.has(t.k) ? -1 : 0
 }

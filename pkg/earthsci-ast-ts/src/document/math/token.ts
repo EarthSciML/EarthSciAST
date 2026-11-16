@@ -95,14 +95,10 @@ export type Kw =
   | 'Rbkg'
   | 'Lr'
   | 'LimitsL'
-  // makearray: LaTeX `\begin{array}{l|l}` `\end{array}`; the region product with the
-  // bracket of the next bound pair, LaTeX `\times [`, Typst `times [`; the Typst named
-  // arguments `delim` and `augment` of its `mat(…)`
+  // makearray: LaTeX `\begin{array}{l|l}` `\end{array}` (`\end{array}` also closes a
+  // wide constant matrix)
   | 'Barr'
   | 'Earr'
-  | 'TimesLbk'
-  | 'DelimK'
-  | 'AugK'
   // a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
   | 'Lset'
   | 'Rset'
@@ -116,6 +112,8 @@ export type Kw =
  * - `esc`: LaTeX `\esm{op}`.
  * - `code`: Typst `#value`.
  * - `units`: the unit after a quantity's number.
+ * - `acols`: LaTeX `\begin{array}{c…c}`, the opener of a constant matrix with
+ *   more columns than `bmatrix` allows, carrying its column count.
  */
 export type Tok =
   | { readonly t: 'num'; readonly n: JNum }
@@ -131,6 +129,7 @@ export type Tok =
   | { readonly t: 'esc'; readonly s: string }
   | { readonly t: 'code'; readonly j: Json }
   | { readonly t: 'units'; readonly l: readonly Factor[] }
+  | { readonly t: 'acols'; readonly n: number }
   | { readonly t: 'kw'; readonly k: Kw }
 
 /** `Math.Sf`: which surface. */
@@ -161,6 +160,7 @@ export const tJstr = (s: string): Tok => ({ t: 'jstr', s })
 export const tEsc = (s: string): Tok => ({ t: 'esc', s })
 export const tCode = (j: Json): Tok => ({ t: 'code', j })
 export const tUnits = (l: readonly Factor[]): Tok => ({ t: 'units', l })
+export const tAcols = (n: number): Tok => ({ t: 'acols', n })
 
 /** The token is the keyword `k`. */
 export function isKwTok(t: Tok | undefined, k: Kw): boolean {
@@ -187,6 +187,8 @@ export function tokEq(a: Tok, b: Tok): boolean {
       return b.t === 'units' && factorsEq(a.l, b.l)
     case 'kw':
       return b.t === 'kw' && a.k === b.k
+    case 'acols':
+      return b.t === 'acols' && a.n === b.n
     default:
       return b.t === a.t && (b as { s: string }).s === a.s
   }
