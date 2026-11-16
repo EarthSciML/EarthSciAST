@@ -11,6 +11,8 @@ the DERIVED classification API (which replaced the ``state`` / ``observed`` /
 ``DataSource*`` rename.
 """
 
+import json
+
 import pytest
 from conftest import VALID_DIR
 
@@ -135,3 +137,41 @@ def test_repr_latex_shows_reactions_and_equations():
     assert "\\frac{\\mathrm{d} x}{\\mathrm{d} t} = k x" in m
     whole = esm_file._repr_latex_()
     assert "\\textbf{m}" in whole and "\\textbf{rs}" in whole
+
+
+@pytest.mark.parametrize(
+    ("name", "title"),
+    [
+        ("NOx%chem", r"\textbf{NOx}\%\textbf{chem}"),
+        ("A&B", r"\textbf{A}\&\textbf{B}"),
+        ("a$b", r"\textbf{a}\$\textbf{b}"),
+        ("c#d", r"\textbf{c}\#\textbf{d}"),
+        ("e_f", r"\textbf{e}\_\textbf{f}"),
+        ("g^h", r"\textbf{g}\hat{}\textbf{h}"),
+        ("i~j", r"\textbf{i}\tilde{}\textbf{j}"),
+        ("k\\l", r"\textbf{k}\backslash \textbf{l}"),
+        ("m{n}", r"\textbf{m}\{\textbf{n}\}"),
+        ("two words", r"\textbf{two words}"),
+    ],
+)
+def test_repr_latex_title_prints_every_character_of_the_name(name, title):
+    """A component name heads its rows as written: each TeX special in it is
+    the math-mode symbol that prints it (MathJax reads ``\\textbf``'s argument
+    literally, so text-mode escapes would show their backslashes there), and
+    the rest stays bold text."""
+    esm_file = load_string(
+        json.dumps(
+            {
+                "esm": "2.3.0",
+                "metadata": {"name": "x"},
+                "models": {
+                    name: {
+                        "variables": {"x": {"type": "unknown"}},
+                        "equations": [{"lhs": {"op": "D", "args": ["x"]}, "rhs": 1}],
+                    }
+                },
+            }
+        )
+    )
+    rows = esm_file._repr_latex_().removeprefix("$$\\begin{gathered}\n").split(" \\\\\n")
+    assert rows[0] == title
