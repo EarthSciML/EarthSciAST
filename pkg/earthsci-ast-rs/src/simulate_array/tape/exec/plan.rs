@@ -146,7 +146,8 @@ fn place(
     ways: usize,
     chains: &[super::chain::SegChain],
 ) -> Place {
-    if let Some(ch) = chains.iter().find(|c| c.start == pc && c.end <= end) {
+    let at = chains.partition_point(|c| c.start < pc);
+    if let Some(ch) = chains.get(at).filter(|c| c.start == pc && c.end <= end) {
         return Place::Loop(ch.end - pc);
     }
     let ins = &prog.instrs[pc];
@@ -232,12 +233,11 @@ impl CallPlan {
     /// is too long to place or reads observeds published at run time.
     pub(super) fn build(
         prog: &TapeProgram,
+        prep: &Prepared,
         range: std::ops::Range<usize>,
         ways: usize,
-        chains: &[super::chain::SegChain],
-        dy_home: &[usize],
-        base_off: &[usize],
     ) -> Option<CallPlan> {
+        let (chains, dy_home) = (&prep.seg_chains[..], &prep.dy.home_quiet[..]);
         if ways < 2 || range.len() > MAX_PLANNED {
             return None;
         }
@@ -257,7 +257,7 @@ impl CallPlan {
         // Per slot, the storage the plan gives it (`u32::MAX`: the
         // program's); a moved slot's storage is numbered past the program's.
         let mut moved = vec![u32::MAX; prog.tables.slots.len()];
-        let mut slot_off = base_off.to_vec();
+        let mut slot_off = prep.slot_off.clone();
         let mut slab_len = prog.slab.total_elems;
         let budget = prog.slab.total_elems;
         let mut n_moved = 0usize;
@@ -523,11 +523,8 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
         let TapeExec {
             slab,
             slot_off,
-            plan_full,
-            asm_covered,
             idx_tables,
             simd,
-            dy_home_quiet,
             scratch,
             peers,
             ..
@@ -536,11 +533,9 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
             env,
             slab_ptr: slab.as_mut_ptr(),
             slot_off,
-            plan_full,
-            asm_covered,
             idx_tables,
             simd: *simd,
-            dy_home: dy_home_quiet,
+            dy_home: &env.prep.dy.home_quiet,
             dy: dy.as_mut_ptr(),
             dy_len: dy.len(),
         };

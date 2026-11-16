@@ -855,6 +855,7 @@ impl<'m> TapeBuilder<'m> {
             lanes: Vec::new(),
             fuse_stats: FuseStats::default(),
             col_major: false,
+            prepared: Default::default(),
         };
         super::super::dedup::dedup_const(&mut prog);
         super::super::scan_shift::rewrite_scan_makearray_reads(&mut prog);

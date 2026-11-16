@@ -15,7 +15,6 @@
 
 use super::fused::{
     FCHUNK, RunCursor, Window, dispatch_bin_kernel, dispatch_un_kernel, exec_fused_runs_generic,
-    node_elems,
 };
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
@@ -315,7 +314,7 @@ fn drive(with_nan: bool) {
     };
 
     let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
-    let ne = node_elems(&fs.schedule.nodes);
+    let ne = crate::simulate_array::tape::prepared::node_elems(&fs.schedule.nodes);
     // Runs the group as the given `(lo, hi, period)` windows, in order (the
     // whole group when `windows` is `[(0, usize::MAX, 0)]`), into fresh
     // output buffers.

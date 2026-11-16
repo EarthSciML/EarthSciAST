@@ -77,6 +77,7 @@ mod lower;
 mod lowering_limit_tests;
 #[cfg(test)]
 mod makearray_index_tests;
+mod prepared;
 mod prune;
 #[cfg(test)]
 mod refexec;

@@ -11,30 +11,7 @@ use super::*;
 // Operand resolution.
 // ---------------------------------------------------------------------------
 
-/// Row-major strides (elements) of `shape` — the slab slot layout.
-pub(super) fn rm_strides(shape: &[usize]) -> DimI {
-    let n = shape.len();
-    let mut st = DimI::from_elem(0, n);
-    let mut acc = 1i64;
-    for d in (0..n).rev() {
-        st[d] = acc;
-        acc *= shape[d] as i64;
-    }
-    st
-}
-
-/// Column-major strides (elements) of `shape` — the flat state-vector layout
-/// of each variable block.
-pub(super) fn cm_strides(shape: &[usize]) -> DimI {
-    let n = shape.len();
-    let mut st = DimI::from_elem(0, n);
-    let mut acc = 1i64;
-    for d in 0..n {
-        st[d] = acc;
-        acc *= shape[d] as i64;
-    }
-    st
-}
+pub(super) use super::super::layout::{cm_strides, rm_strides};
 
 /// Where state variable `ix`'s block starts in the layout the program reads
 /// it in: the row-major mirror for a mirrored variable, else the caller's

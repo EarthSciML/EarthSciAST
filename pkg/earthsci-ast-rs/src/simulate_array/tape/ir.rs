@@ -3349,9 +3349,21 @@ pub(crate) struct TapeProgram {
     /// copy. The boundaries with logical arrays (forcing loads, exports)
     /// transpose. `false` is the program exactly as lowered.
     pub col_major: bool,
+    /// The executor's analyses of the finished program, built by the first
+    /// execution context and shared by every later one ([`Self::prepared`]).
+    /// Empty while the lowering passes still rewrite the program.
+    pub(in crate::simulate_array::tape) prepared: std::sync::OnceLock<super::prepared::Prepared>,
 }
 
 impl TapeProgram {
+    /// The executor's analyses of this program ([`super::prepared`]), built
+    /// on first use. Only a finished program is asked: an execution context
+    /// holds it behind an `Arc`, so nothing rewrites it afterwards.
+    pub(in crate::simulate_array::tape) fn prepared(&self) -> &super::prepared::Prepared {
+        self.prepared
+            .get_or_init(|| super::prepared::Prepared::of(self))
+    }
+
     /// The tables [`Instr::for_each_read`] and [`Instr::for_each_def`] read.
     pub(crate) fn slot_tables(&self) -> SlotTables<'_> {
         SlotTables {

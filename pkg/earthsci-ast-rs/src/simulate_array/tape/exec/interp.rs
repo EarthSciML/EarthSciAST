@@ -54,27 +54,23 @@ pub(super) fn run_range(
         sblocks,
         sblock_at,
         sregs,
-        plan_full,
-        asm_covered,
         scratch,
         idx_tables,
         lscratch,
         exports_active,
         simd,
-        dy_home,
-        dy_home_quiet,
-        #[cfg(not(target_arch = "wasm32"))]
-        seg_chains,
         #[cfg(not(target_arch = "wasm32"))]
         chain_scratch,
         ..
     } = exec;
     let exports_active = *exports_active;
     let dy_home: &[usize] = if exports_active {
-        dy_home
+        &env.prep.dy.home
     } else {
-        dy_home_quiet
+        &env.prep.dy.home_quiet
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let seg_chains = &env.prep.seg_chains;
     let simd = *simd;
     let prog = env.prog;
     let slab_ptr = slab.as_mut_ptr();
@@ -247,8 +243,6 @@ pub(super) fn run_range(
                     env,
                     slab_ptr,
                     slot_off,
-                    plan_full,
-                    asm_covered,
                     idx_tables,
                     simd,
                     dy_home,
@@ -408,8 +402,6 @@ pub(super) fn run_range(
                     env,
                     slab_ptr,
                     slot_off,
-                    plan_full,
-                    asm_covered,
                     idx_tables,
                     simd,
                     dy_home,
@@ -1173,8 +1165,6 @@ pub(super) struct Cx<'a> {
     pub(super) env: &'a Env<'a>,
     pub(super) slab_ptr: *mut f64,
     pub(super) slot_off: &'a [usize],
-    pub(super) plan_full: &'a [bool],
-    pub(super) asm_covered: &'a [bool],
     pub(super) idx_tables: &'a [Vec<Option<super::fused::IndexTable>>],
     pub(super) simd: SimdLevel,
     pub(super) dy_home: &'a [usize],
@@ -1193,8 +1183,6 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
         env,
         slab_ptr,
         slot_off,
-        plan_full,
-        asm_covered,
         dy_home,
         dy,
         dy_len,
@@ -1283,7 +1271,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Gather { src, plan, out } => {
-            let full = plan_full[*plan as usize];
+            let full = env.prep.plan_full[*plan as usize];
             let plan = &prog.tables.plans[*plan as usize];
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             let off = slot_off[*out as usize];
@@ -1401,7 +1389,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let off = slot_off[*out as usize];
             let dst = unsafe { slab_ptr.add(off) };
             let parts = &prog.tables.assemblies[*table as usize].parts;
-            let covered = asm_covered[*table as usize];
+            let covered = env.prep.asm_covered[*table as usize];
             let out_rm = rm_strides(&desc.shape);
             // A large assembly splits across the call's workers, each
             // assembling its own share of the box (see `par`).
@@ -1806,7 +1794,6 @@ pub(super) unsafe fn exec_share(
         env,
         slab_ptr,
         slot_off,
-        asm_covered,
         dy_home,
         dy,
         ..
@@ -1839,7 +1826,7 @@ pub(super) unsafe fn exec_share(
                     &desc.shape,
                     &prog.tables.regions,
                     parts,
-                    asm_covered[*table as usize],
+                    env.prep.asm_covered[*table as usize],
                 )
             };
         }

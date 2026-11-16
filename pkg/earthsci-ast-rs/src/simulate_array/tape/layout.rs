@@ -25,6 +25,7 @@
 //! cells, a recurrence sweep, a scatter that writes one position twice — keep
 //! the program as lowered, as does an observed read through the runtime map.
 
+use super::super::DimI;
 use super::ir::*;
 use smallvec::SmallVec;
 
@@ -44,6 +45,42 @@ pub(super) fn align_state_layout(prog: &mut TapeProgram) {
 /// true when at most one axis has more than one element.
 pub(crate) fn order_free(shape: &[usize]) -> bool {
     shape.iter().filter(|&&n| n > 1).count() <= 1
+}
+
+/// Row-major strides (elements) of `shape`: a slab slot's layout.
+pub(crate) fn rm_strides(shape: &[usize]) -> DimI {
+    let n = shape.len();
+    let mut st = DimI::from_elem(0, n);
+    let mut acc = 1i64;
+    for d in (0..n).rev() {
+        st[d] = acc;
+        acc *= shape[d] as i64;
+    }
+    st
+}
+
+/// Column-major strides (elements) of `shape`: the flat state vector's
+/// layout of each variable block.
+pub(crate) fn cm_strides(shape: &[usize]) -> DimI {
+    let n = shape.len();
+    let mut st = DimI::from_elem(0, n);
+    let mut acc = 1i64;
+    for d in 0..n {
+        st[d] = acc;
+        acc *= shape[d] as i64;
+    }
+    st
+}
+
+/// The strides of a state variable's `dy` (and state) block over `shape`,
+/// the box `prog` stores it as: row-major over a column-major program's
+/// reversed box, column-major over a row-major program's.
+pub(crate) fn dy_strides(prog: &TapeProgram, shape: &[usize]) -> DimI {
+    if prog.col_major {
+        rm_strides(shape)
+    } else {
+        cm_strides(shape)
+    }
 }
 
 fn rev<T: Copy, A: smallvec::Array<Item = T>>(v: &SmallVec<A>) -> SmallVec<A> {
@@ -180,6 +217,8 @@ fn reverse(prog: &mut TapeProgram) {
         lanes: _,
         fuse_stats: _,
         col_major: _,
+        // Built from the finished program, after every pass.
+        prepared: _,
     } = prog;
 
     // Instructions: the axis fields that live inline.

@@ -677,9 +677,6 @@ pub(super) struct FusedScratch {
     /// The sources of the current group's whole-read gathers, in input
     /// order (their `bases` entries point into `whole`).
     whole_src: Vec<*const f64>,
-    /// Per group, [`node_elems`] of its schedule: what lets a worker step
-    /// straight to the start of its share of the group.
-    node_elems: Vec<Vec<usize>>,
     /// The register files and cursors of the workers a split group runs on
     /// (native targets only; see `par`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -707,11 +704,6 @@ impl FusedScratch {
             ),
             whole: vec![0.0; most(whole_len)],
             whole_src: Vec::with_capacity(most(|f| f.inputs.len())),
-            node_elems: prog
-                .fused
-                .iter()
-                .map(|f| node_elems(&f.schedule.nodes))
-                .collect(),
             #[cfg(not(target_arch = "wasm32"))]
             workers: super::par::FusedWorkers::for_program(prog),
         }
@@ -752,37 +744,6 @@ pub(super) fn n_scans(fs: &FusedSpec) -> usize {
             _ => 0,
         })
         .sum()
-}
-
-/// The elements one execution of each schedule node covers: a run's length,
-/// or ONE repetition of a `Repeat`'s body (its whole span is that times its
-/// count). Pre-order, like the nodes.
-pub(super) fn node_elems(nodes: &[RunNode]) -> Vec<usize> {
-    fn span(nodes: &[RunNode], out: &mut [usize], i: usize) -> (usize, usize) {
-        match &nodes[i] {
-            RunNode::Run(r) => {
-                out[i] = r.len as usize;
-                (out[i], i + 1)
-            }
-            RunNode::Repeat { count, body, .. } => {
-                let end = i + 1 + *body as usize;
-                let (mut rep, mut j) = (0usize, i + 1);
-                while j < end {
-                    let (t, next) = span(nodes, out, j);
-                    rep += t;
-                    j = next;
-                }
-                out[i] = rep;
-                (rep * *count as usize, end)
-            }
-        }
-    }
-    let mut out = vec![0usize; nodes.len()];
-    let mut j = 0usize;
-    while j < nodes.len() {
-        j = span(nodes, &mut out, j).1;
-    }
-    out
 }
 
 /// The share of a fused group one execution of the chunk loop runs: the
@@ -1141,11 +1102,10 @@ pub(super) unsafe fn resolve_fused<'a>(
         cursor,
         whole,
         whole_src,
-        node_elems,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
     } = scratch;
-    let node_elems = &node_elems[spec][..];
+    let node_elems = &env.prep.node_elems[spec][..];
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
