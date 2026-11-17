@@ -22,13 +22,9 @@ function _merge_flat_registry(component_templates)
     rename = OrderedDict{String, Dict{String, String}}()
     component_templates === nothing && return (merged, rename)
     byname = OrderedDict{String, Vector{Tuple{String, Any}}}()
-    # DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, normative): components in
-    # the order the file declares them, entries in the order their block declares
-    # them. Both loops previously sorted "so dedup first-occurrence and the
-    # collision rename are reproducible" — document order is equally
-    # reproducible, and it is the order the spec fixes. Sorting agreed with it
-    # only when component names happened to sort in declaration order. The
-    # dedup / collision-rename SEMANTICS below are untouched.
+    # Document order (esm-libraries-spec §4.7.5 step 4, normative): components
+    # in the order the file declares them, entries in the order their block
+    # declares them.
     for (compkey, block) in component_templates
         _is_object(block) || continue
         path = String(last(split(compkey, "."; limit = 2)))

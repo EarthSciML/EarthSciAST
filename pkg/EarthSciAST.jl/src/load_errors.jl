@@ -6,9 +6,9 @@
 
 Exception raised when a load-time lowering pass fails: expression-template
 expansion (esm-spec §9.6), template-library imports (§9.7), coupling-library
-imports (§10.9–§10.11), and the subsystem-reference / index-set checks in
-`parse.jl`. Carries a stable diagnostic `code` drawn from
-[`ERROR_CODES`](@ref) — [`_KNOWN_DIAGNOSTIC_CODES`](@ref) names the subset of
+imports (§10.9–§10.11), the §4.7 mount checks (subsystem references and
+their index sets), and other load-time gates. Carries a stable diagnostic
+`code` drawn from [`ERROR_CODES`](@ref) — [`_KNOWN_DIAGNOSTIC_CODES`](@ref) names the subset of
 that registry this exception is raised with. Codes (and their message texts)
 are conformance-relevant, so a new raise site MUST use a code registered there
 — and a genuinely new code MUST be added to `ERROR_CODES` (and coordinated
@@ -26,8 +26,7 @@ Base.showerror(io::IO, e::ExpressionTemplateError) =
     _KNOWN_DIAGNOSTIC_CODES
 
 The subset of [`ERROR_CODES`](@ref) that is raised as an
-[`ExpressionTemplateError`](@ref) anywhere in the package (`templates/`,
-`mounts.jl`, `coupling_imports.jl`, `parse.jl`, `solver.jl`), grouped by the
+[`ExpressionTemplateError`](@ref) anywhere in the package, grouped by the
 spec section that pins it. Every entry is a REFERENCE into the central
 registry (`src/error_codes.jl`), never a literal — this tuple records which
 codes belong to this exception, and `ERROR_CODES` alone owns their values.
@@ -105,7 +104,8 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.COUPLING_ROLE_UNUSED,
     ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
     ERROR_CODES.COUPLING_LIBRARY_NESTED_IMPORT,
-    # Subsystem-reference / index-set checks (parse.jl).
+    # esm-spec §4.7 mount checks: what a subsystem reference may target, and
+    # index-set conflicts across a mount (mount resolution).
     ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
     ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,

@@ -3,7 +3,7 @@
 
 """
 Load-time rewrite pass for `expression_templates` (esm-spec §9.6,
-docs/rfcs/ast-expression-templates.md, esm-giy).
+docs/rfcs/ast-expression-templates.md).
 
 `expression_templates` is the single structural-substitution mechanism in the
 format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
@@ -54,18 +54,6 @@ tree) and returns the rewritten `OrderedDict{String,Any}` document ready for
 """
 
 const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
-
-# (The `JSONLikeDict` property-surface shim that used to live here is gone:
-# documents are normalized ONCE at the wire boundary into the single
-# `OrderedDict{String,Any}` carrier — see `_to_ordered` in json_walk.jl — and
-# every downstream consumer speaks plain string-keyed `get`.)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-# (`_is_object` / `_is_array` — the raw-JSON node-kind predicates — and
-# `_to_ordered` — the ONE sharing-preserving, order-preserving normalizer —
-# live in src/json_walk.jl with the shared traversal combinators.)
 
 # ---------------------------------------------------------------------------
 # Substitution
@@ -119,10 +107,11 @@ end
 The ONE call-site resolution shared by [`_expand_apply`](@ref) (expansion)
 and [`_validate_apply_ref`](@ref) (surviving-reference check): `name` present,
 declared in `templates`, `bindings` an object covering the declaration's
-`params` exactly. `reject_match_rule = true` additionally rejects — directly
-after the declaration lookup, preserving the historical error precedence — a
-reference to a `match` rewrite rule (only match-less templates are invocable
-by name, esm-spec §9.6.2). Throws the stable §9.6.6 diagnostics.
+`params` exactly. `reject_match_rule = true` additionally rejects a reference
+to a `match` rewrite rule (only match-less templates are invocable by name,
+esm-spec §9.6.2); that check runs directly after the declaration lookup, so it
+takes precedence over a bindings mismatch. Throws the stable §9.6.6
+diagnostics.
 """
 function _resolve_apply_site(
         node, templates::AbstractDict, scope::String;
@@ -185,11 +174,11 @@ end
 
 function _expand_apply(node, templates::AbstractDict, scope::String)
     _, decl, bindings_raw = _resolve_apply_site(node, templates, scope)
-    # The bindings have already been rewritten in place by the bottom-up
-    # `_rewrite` pass (children are rewritten before their parent apply node is
-    # expanded), so they are consumed as-is here. The template `body` is
-    # instantiated by pure structural substitution and is NOT re-scanned
-    # (esm-spec §9.6.3 rule 2: a replacement body is not re-matched).
+    # The bindings are consumed as they are: `_expand_refs_walk`, the only
+    # route here, expands the references inside them first. The template
+    # `body` is instantiated by pure structural substitution and is NOT
+    # re-scanned (esm-spec §9.6.3 rule 2: a replacement body is not
+    # re-matched).
     resolved = Dict{String, Any}()
     for (k, v) in pairs(bindings_raw)
         resolved[string(k)] = v
@@ -963,8 +952,7 @@ because it shares a deeply-nested, float-heavy array with non-integral floats
 (the `1`/`8` of `{op:"/",args:[1,8]}` nested under a `cos(pi·…)` aggregate body).
 The AST-golden pathway (`resolve_template_machinery` → `lower_expression_templates`
 → canonical sorted write) never runs `expression_from_json`, so without this pass a
-widened `1.0`/`8.0` survives all the way to the emitted golden — the lone Julia
-outlier vs. Python/Rust/TS/Go, which read `[1,8]` as integers.
+widened `1.0`/`8.0` would reach the emitted golden, which spells `[1,8]`.
 
 Narrowing is scoped to `args` array elements (the Expression operand position),
 so scalar CONFIGURATION floats an authored `1.0`/`0.0` legitimately occupies
@@ -1132,8 +1120,8 @@ function lower_expression_templates(raw_data)
                 "$cscope.$k", shape_env, target_bearing
             )
             # Call-site checks on surviving references (§9.6.9): unknown
-            # name / bindings mismatch. Known surviving references are the
-            # new normal (Option B) — no longer an error.
+            # name / bindings mismatch. A reference to a known template
+            # survives (Option B).
             _check_surviving_refs(comp[k], named, "$cscope.$k")
         end
         # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
@@ -1168,11 +1156,6 @@ function lower_expression_templates(raw_data)
         )
     end
 
-    # esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
-    # references are the NEW NORMAL. Only UNKNOWN-name / bindings-mismatch
-    # references are errors — already checked per component / per transform by
-    # `_check_surviving_refs`. No global "no apply ops remain" gate.
-
     # Validation discharge (esm-spec §9.6.9): the makearray-region check on the
     # reference-preserving form. Region bounds cannot carry template params, so
     # it runs on the reference-preserving tree AND the retained folded template
@@ -1181,11 +1164,7 @@ function lower_expression_templates(raw_data)
     _validate_makearray_regions_in_registries(registries)
 
     # Canonical arithmetic-operand literal narrowing (CONFORMANCE_SPEC §5.5.3.1
-    # rule 1): normalize any integral, Int64-representable `Float64` that JSON3's
-    # structural number inference widened in an `args` position back to an
-    # integer, so the AST-golden pathway (which never calls `expression_from_json`)
-    # emits `[1,8]` — byte-identical with Python/Rust/TS/Go — for an integer
-    # ratio nested inside an aggregate. See `_narrow_arg_literals!`.
+    # rule 1); see `_narrow_arg_literals!`.
     _narrow_arg_literals!(root)
 
     return root

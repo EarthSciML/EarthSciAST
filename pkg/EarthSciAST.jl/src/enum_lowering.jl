@@ -7,10 +7,8 @@
 
 Raised when enum lowering (esm-spec §9.3) fails, carrying the stable diagnostic
 `code` as a structured field rather than interpolated into the message — the
-same error TYPE the four other bindings raise here (`EnumLoweringError` in TypeScript, Python and Rust;
-`DiagnosticError` in Go). Julia raised `ParseError` from this pass until
-API_SPEC.md §8 item 15, which made a caller's `catch e; e isa ParseError` the
-only portable way to handle a failure that is not a parse failure at all.
+same error type the other bindings raise here (`EnumLoweringError` in
+TypeScript, Python and Rust; `DiagnosticError` in Go; API_SPEC.md §8 item 15).
 
 Codes: `enum_op_malformed`, `unknown_enum`, `unknown_enum_symbol`.
 """
@@ -284,12 +282,9 @@ function _lower_expr_enums_uncached(
         end
         return OpExpr("const", ASTExpr[]; value = mapping[symbol_name])
     end
-    # Recurse into EVERY expression-bearing field via the shared field-preserving
+    # Recurse into every expression-bearing field through the field-preserving
     # rewrite (`map_children`), so an `enum` nested in an integral bound, a
-    # filter/key predicate, a makearray value, a table axis, or a dense `ranges`
-    # bound is also lowered — and no `OpExpr` field is silently dropped on the
-    # rebuild (the previous hand-listed ~17-keyword `OpExpr(...)` reconstruction
-    # dropped `int_var`/`semiring`/`join`/`filter`/`id`/… whenever any child
-    # changed, and never recursed `lower`/`upper`/`filter`/`key`/`ranges`).
+    # filter/key predicate, a makearray value, a table axis, or a dense
+    # `ranges` bound is also lowered, and every other `OpExpr` field is kept.
     return map_children(x -> _lower_expr_enums(x, enums, memo), e)
 end

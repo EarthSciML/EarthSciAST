@@ -75,11 +75,10 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
         # declared params are wildcards; it MUST NOT contain nested
-        # apply_expression_template ops. Nontermination is NOT checked
-        # statically any more — the bounded fixpoint (`MAX_REWRITE_PASSES`,
-        # esm-spec §9.6.3) is the authoritative guard, so a self-reintroducing
-        # rule is rejected at load time (`rewrite_rule_nonterminating`) only when
-        # it actually fails to converge within the pass bound.
+        # apply_expression_template ops. Nontermination is not checked
+        # statically: the bounded fixpoint (`MAX_REWRITE_PASSES`, esm-spec
+        # §9.6.3) is the guard, so a self-reintroducing rule is rejected
+        # (`rewrite_rule_nonterminating`) only when it fails to converge.
         match = _raw_get(decl, "match")
         if match !== nothing
             _assert_no_nested_apply(match, name, "/match")
@@ -166,7 +165,7 @@ across all bindings.
 const MAX_TEMPLATE_EXPANSION_DEPTH = 32
 
 # ---------------------------------------------------------------------------
-# Registration-time body composition (esm-spec §9.7.3)
+# The template body-reference graph (esm-spec §9.7.3)
 # ---------------------------------------------------------------------------
 
 # The `name` of every `apply_expression_template` node in a template body

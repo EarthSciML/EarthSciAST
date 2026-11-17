@@ -30,33 +30,25 @@ _expand_expr_refs(e::OpExpr, reg) = _expand_expr_refs(e, reg, nothing)
 # is recorded `root => apply node`, at every nesting level. The tree-walk build's
 # affine stencil compiler treats each recorded root as a compilation boundary
 # (one compiled body per use site × region class) while every other consumer
-# sees the plain Option-A expanded tree. `sites === nothing` is the plain
-# expansion (byte-identical to the pre-tier behavior).
+# sees the plain Option-A expanded tree. `sites === nothing` records nothing.
 const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 
-# Expansion memo (perf plan A4): the recursive expansion of an
-# `apply_expression_template` node is a PURE function of (template name,
-# unexpanded bindings, registry) — `reg` is fixed for one `_expand_model_refs!`
-# call — so two structurally-identical apply sites expand to structurally-equal
-# subtrees. Keying `(name, canonical bindings)` → expanded root lets the second
-# site REUSE the first's expansion instead of re-running serialize → substitute
-# → re-parse → recurse, which the profiler flagged as ~34% build wall / ~46%
-# build allocs on the 7×7×7 transport fixture (the PPM flux templates recur at
-# every tracer equation, and each nested sub-template re-expands per parent).
+# Expansion memo: the recursive expansion of an `apply_expression_template`
+# node is a pure function of (template name, unexpanded bindings, registry),
+# and the registry is fixed for one memo, so two structurally identical apply
+# sites expand to structurally equal subtrees. Keying `(name, canonical
+# bindings)` → expanded root lets the second site reuse the first's expansion
+# instead of serializing, substituting, re-parsing and recursing again (a
+# template that recurs at every equation, with nested sub-templates, would
+# otherwise re-expand per parent).
 #
-# SHARING SAFETY: returning the SAME object for two sites makes the expanded
-# equation set a DAG — exactly the DAG A1 interning would collapse it to one
-# pass later (build.jl `_intern_model`). The two identity consumers are
-# DAG-safe by construction: `sites` is read as a `haskey` boundary Set
-# (stencil.jl:347/538) — a shared root is still a boundary; and
-# `_translate_sites_lockstep!` (build_helpers.jl) already carries a `seen`
-# guard "O(distinct nodes) on a shared DAG". The A1 pre-audit
-# (audits/intern_preaudit_2026-07-19.md) established that merging site keys is
-# harmless because the only site consumers are those `haskey` checks. Output is
-# byte-identical (verified by the differential oracle + the affine/intern
-# oracles), so the memo is not a choice of evaluator and every compiler keeps
-# it; `nothing` is the per-site re-expansion, for a caller that wants the
-# sharing measured rather than assumed.
+# Returning the same object for two sites makes the expanded equation set a
+# DAG, the one interning (`_intern_model`) would produce anyway. Its identity
+# consumers are DAG-safe: the stencil compiler reads `sites` only as a
+# `haskey` boundary set, so a shared root is still a boundary, and
+# `_translate_sites_lockstep!` keeps a `seen` set. The expanded output is the
+# same with or without the memo; `nothing` is the per-site re-expansion, for a
+# caller that wants the sharing measured rather than assumed.
 #
 # The memo also carries the per-template INSTANTIATION cache (`_TplSkel`): each
 # template is substituted, parsed and expanded ONCE per memo with a sentinel
@@ -95,7 +87,7 @@ function _cache_for!(memo::_ExpandCache, reg)
     memo.reg = reg
     return memo
 end
-# The entry points also take a bare bindings memo (the earlier form of `memo`).
+# The entry points also take a bare bindings memo.
 _expand_cache(m::Union{Nothing, _ExpandCache}) = m
 _expand_cache(m::Dict{Tuple{String, String}, OpExpr}) = _ExpandCache(m)
 
