@@ -145,6 +145,8 @@ function _resolve_one_index_set_ref(
 end
 
 # True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
+# Every expression-bearing field is searched (`filter` and an expression-valued
+# range bound included), as `_resolve_isr` rewrites them all.
 # Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
 # structurally-shared tree — the per-path recursion was exponential on a DAG.
 _has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr, Nothing}())
@@ -154,8 +156,14 @@ function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
     if expr.ranges !== nothing
         for v in values(expr.ranges)
             v isa IndexSetRef && return true
+            if v isa AbstractVector
+                for b in v
+                    b isa OpExpr && _has_index_set_ref(b, seen) && return true
+                end
+            end
         end
     end
+    expr.filter isa OpExpr && _has_index_set_ref(expr.filter::OpExpr, seen) && return true
     for a in expr.args
         a isa OpExpr && _has_index_set_ref(a, seen) && return true
     end
@@ -203,20 +211,29 @@ function _resolve_isr(
     new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
     new_lower = expr.lower === nothing ? nothing : res(expr.lower)
     new_upper = expr.upper === nothing ? nothing : res(expr.upper)
+    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
     new_ranges = expr.ranges
-    if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
-        changed = true
-        new_ranges = Dict{String, Any}()
+    if expr.ranges !== nothing
+        # A range bound may itself be an expression holding a reference; `res`
+        # marks `changed` when it rewrites one.
+        resolved = Dict{String, Any}()
         for (k, v) in expr.ranges
-            new_ranges[k] = v isa IndexSetRef ?
-                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
+            resolved[k] = if v isa IndexSetRef
+                changed = true
+                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope)
+            elseif v isa AbstractVector && any(b -> b isa OpExpr, v)
+                Any[b isa OpExpr ? res(b) : b for b in v]
+            else
+                v
+            end
         end
+        changed && (new_ranges = resolved)
     end
     result = changed ?
         reconstruct(
             expr; args = new_args, expr_body = new_body,
             values = new_values, lower = new_lower, upper = new_upper,
-            ranges = new_ranges
+            filter = new_filter, ranges = new_ranges
         ) : expr
     memo[expr] = result
     return result
