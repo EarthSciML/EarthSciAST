@@ -100,22 +100,22 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 # the resolved §6.6.4 tolerances.
 
 # ============================================================
-# wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
+# OPTIONAL BLAS accelerator for the linear mat-vec observed
 # ============================================================
 #
-# The Phase C compile-once evaluator folds the contraction `conc[out…] =
+# The compile-once evaluator folds the contraction `conc[out…] =
 # Σ_c A[c,out…]·E[c]` SEQUENTIALLY per output cell (a type-stable
-# `_NK_CONTRACTION`, ~47 µs/cell, zero per-cell alloc). For this SPECIAL linear
-# sum-product shape the entire field is one matrix product `conc = A' · E`, which
-# a single BLAS `mul!` evaluates far faster. This layer recognises that shape and
-# takes the BLAS path; it FALLS BACK (returns `nothing`) to Phase C — the
+# `_NK_CONTRACTION`, zero per-cell alloc). For this SPECIAL linear sum-product
+# shape the entire field is one matrix product `conc = A' · E`, which a single
+# BLAS `mul!` evaluates far faster. This layer recognises that shape and takes
+# the BLAS path; it FALLS BACK (returns `nothing`) to the compile-once path — the
 # bit-identical-to-oracle baseline — for everything else, and is engaged only via
 # the opt-in `evaluate_cellwise(…; blas_accel=true)` flag.
 #
-# HONEST correctness: BLAS sums each dot product in a blocked/SIMD order that
-# differs from Phase C's sequential fold, so the result is NOT bit-identical — it
-# agrees to a few ULPs (machine precision), which the Phase D tests pin at
-# rtol 1e-10. Phase C remains the bit-exact baseline.
+# Correctness: BLAS sums each dot product in a blocked/SIMD order that differs
+# from the sequential fold, so the result is NOT bit-identical — it agrees to a
+# few ULPs, which `evaluate_cellwise_blas_accel_test.jl` pins at rtol 1e-10. The
+# compile-once path remains the bit-exact baseline.
 #
 # Reuse: the SEMIRING guard (`_pd_oplus == ("+",0)`) and the body-shape predicate
 # (`_pd_matvec_factors`) are the SAME ones the pushdown auto-rewrite (`_pd_detect`,
@@ -215,11 +215,11 @@ end
 """
     _evaluate_cellwise_blas(expr, cells, const_arrays, registered_functions, params)
 
-The wall2 Phase D BLAS fast path. Returns the evaluated field `Vector{Float64}`
+The BLAS fast path. Returns the evaluated field `Vector{Float64}`
 when `expr` is (or elementwise-wraps) the linear sum-product mat-vec
 `conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays `A`/`E`, else `nothing` (⇒ the
-caller falls back to the Phase C compile-once path). Rank-1 and rank-≥2 output are
-both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to Phase C — see
+caller falls back to the compile-once path). Rank-1 and rank-≥2 output are
+both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to that path — see
 the module note — but agrees to machine precision.
 """
 function _evaluate_cellwise_blas(
@@ -239,7 +239,7 @@ function _evaluate_cellwise_blas(
     agg = aggs[1]
 
     # SEMIRING GUARD — the additive (+,0) monoid ONLY (mirrors `_pd_detect`; a
-    # max/min-semiring contraction of the same shape is left to Phase C).
+    # max/min-semiring contraction of the same shape is left to the compile-once path).
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing
     # A PLAIN contraction only — no relational join / filter / value-invention.
@@ -273,7 +273,7 @@ function _evaluate_cellwise_blas(
     out_sizes = size(A)[2:end]
 
     # Contracted range → concrete UNIT range within 1:N_c. A stepped range would
-    # not map to one contiguous gemv slice ⇒ bail to Phase C.
+    # not map to one contiguous gemv slice ⇒ bail to the compile-once path.
     rspec = ranges[c_sym]
     (rspec isa AbstractVector && _is_const_int_range(rspec)) || return nothing
     crange = _expand_int_range(rspec)
@@ -294,8 +294,8 @@ function _evaluate_cellwise_blas(
 
     # WRAPPED elementwise form `f(conc[out…])`: replace the aggregate with a gather
     # of the precomputed `conc`, then evaluate the (now array-producer-free) wrapper
-    # per cell via the Phase C compile-once path, binding the aggregate's OWN output
-    # symbols. A collision with a param / the time symbol ⇒ bail to Phase C.
+    # per cell via the compile-once path, binding the aggregate's OWN output
+    # symbols. A collision with a param / the time symbol ⇒ bail out.
     for s in out_syms
         (s == "t" || haskey(params, s)) && return nothing
     end
@@ -320,10 +320,10 @@ function _evaluate_cellwise_blas(
 end
 
 # ============================================================
-# Phase E — the JOIN-GATED aggregate, still on ONE compile
+# The JOIN-GATED aggregate, still on ONE compile
 # ============================================================
 #
-# Phase C keeps the OUTPUT index symbolic and compiles the observed body once.
+# The compile-once path keeps the OUTPUT index symbolic and compiles the observed body once.
 # It cannot do that for an aggregate carrying `join_gates`: which contracted
 # tuples contribute is decided per output cell by a build-time join index (the
 # §5.5.6 overlap broad phase, the §5.5.8 `on` match set), so the admitted term
@@ -407,9 +407,9 @@ end
 """
     _evaluate_cellwise_gated(expr, cells, const_arrays, registered_functions, params, t)
 
-Phase E. Returns the evaluated field `Vector{Float64}` when `expr` is — or
+The join-gated compile-once path. Returns the evaluated field `Vector{Float64}` when `expr` is — or
 elementwise wraps — a single `faq` carrying resolved `join_gates`, else
-`nothing` (⇒ the caller falls through to the per-cell walk it always had).
+`nothing` (⇒ the caller falls through to the per-cell walk).
 """
 function _evaluate_cellwise_gated(
         expr::ASTExpr,
@@ -423,7 +423,7 @@ function _evaluate_cellwise_gated(
     (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
 
     # Exactly one reduction anywhere in the (otherwise elementwise) tree, and it
-    # must be the gated one — an ungated aggregate is Phase C's business and has
+    # must be the gated one — an ungated aggregate is the compile-once path's business and has
     # already had its turn by the time this runs.
     aggs = _blas_collect_aggregates!(OpExpr[], expr)
     length(aggs) == 1 || return nothing
@@ -502,7 +502,7 @@ function _evaluate_cellwise_gated(
 
     # WRAPPED elementwise form `f(agg[out…])`: materialize the aggregate's whole
     # field once, substitute a gather of it for the aggregate, and compile the
-    # (now array-producer-free) wrapper once through Phase C — the same shape
+    # (now array-producer-free) wrapper once through the compile-once path — the same shape
     # the BLAS accelerator above uses, and for the same reason.
     for s in out_syms
         (s == "t" || haskey(params, s)) && return nothing
@@ -576,13 +576,13 @@ function evaluate_cellwise(
         t::Float64 = 0.0
     )::Vector{Float64}
     isempty(cells) && return Float64[]
-    # OPT-IN BLAS accelerator (wall2 Phase D): when `blas_accel=true` and the
+    # OPT-IN BLAS accelerator: when `blas_accel=true` and the
     # observed is (or elementwise-wraps) the linear sum-product mat-vec
     # `conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays, evaluate the WHOLE field
-    # with one BLAS `mul!` (`conc = A' * E`) instead of the Phase C per-cell
-    # contraction. It is a PURE OPTIMISATION layered on Phase C: it returns
+    # with one BLAS `mul!` (`conc = A' * E`) instead of the per-cell
+    # contraction. It is a PURE OPTIMISATION layered on the compile-once path: it returns
     # `nothing` (⇒ falls through to the compile-once path below, byte-identical)
-    # on ANY shape it does not recognise, and its result agrees with Phase C to
+    # on ANY shape it does not recognise, and its result agrees with that path to
     # machine precision (BLAS sums in a different order — NOT bit-identical).
     # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
     if blas_accel
@@ -592,7 +592,7 @@ function evaluate_cellwise(
         )
         blas === nothing || return blas
     end
-    # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
+    # Compile-once fast path: resolve+compile the
     # observed body ONCE with the output indices bound as parameters, then evaluate
     # each cell by rebinding only those params. Applies only when every cell shares
     # one output rank; it is a pure optimisation and returns `nothing` (→ per-cell
@@ -600,10 +600,9 @@ function evaluate_cellwise(
     #
     # RANK 0 (`nidx == 0`, the single empty cell of a SHAPELESS observed) goes
     # through the same door. There is no output index to bind, so "compile once
-    # and evaluate every cell" is one compile and one evaluation — the cheapest
-    # shape there is, and the one the fast path used to decline outright, which
-    # sent every scalar observed of every document to the per-cell walk and so to
-    # the strict compiler's refusal.
+    # and evaluate every cell" is one compile and one evaluation. Declining it
+    # would send every scalar observed to the per-cell walk and so to the strict
+    # compiler's refusal.
     nidx = length(first(cells))
     if all(c -> length(c) == nidx, cells)
         ce = _cellwise_compile_once(
@@ -614,7 +613,7 @@ function evaluate_cellwise(
         # The GATED aggregate the plain compile-once form cannot keep symbolic:
         # its admitted terms are chosen per output cell by a build-time join
         # index, so one compiled body with the output index bound as a parameter
-        # cannot express it. Phase E compiles the aggregate's TERM once instead —
+        # cannot express it. `_evaluate_cellwise_gated` compiles the aggregate's TERM once instead —
         # every loop symbol, output and contracted alike, bound as a parameter —
         # and walks the gate's own admitted key sequence. Still one compile for
         # the whole field; `nothing` on any shape it does not recognise.
