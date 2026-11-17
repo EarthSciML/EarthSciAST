@@ -107,6 +107,9 @@ function _oop_merge_sig!(
     elseif k === _NK_REDUCE
         why[] = :reduce; print(io, "X")
     elseif k === _NK_OP
+        # The clone takes an op's payload from the class representative, so a
+        # payload the signature cannot compare keeps the kernel out of the merge.
+        n.payload === nothing || (why[] = :op_payload)
         print(io, "O", n.op)
         print(io, "(")
         for c in n.children
