@@ -421,7 +421,8 @@ end
                 cache_root = joinpath(dir, "c2"), window = window,
                 records_per_sample = Dict("M.f" => 2)
             )["M.f"]
-            @test two.select[1] == "all"
+            @test two.select[1] isa
+                Base.get_extension(EarthSciAST, :EarthSciASTEarthSciIOExt)._AllAxis
             @test EarthSciAST.provider_sample(two, feb) ==
                 [221.0 222.0 223.0; 321.0 322.0 323.0]
 
