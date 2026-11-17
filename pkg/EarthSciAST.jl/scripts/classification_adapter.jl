@@ -1,14 +1,8 @@
-#!/usr/bin/env julia
-# Julia classification conformance adapter (esm-spec §6.3.1).
+# Julia classification conformance check (esm-spec §6.3.1).
 #
 # esm 1.0.0 declares TWO variable types, `unknown` and `parameter`, and derives
-# everything else a solver needs. Five bindings deriving it independently is
-# five chances to disagree, so `tests/conformance/classification/` pins one
-# answer and this adapter is Julia's side of that comparison.
-#
-# Usage (mirrors the cadence adapter):
-#
-#     <adapter> --manifest <manifest.json> --output <result.json>
+# everything else a solver needs. `tests/conformance/classification/` pins one
+# answer for every binding, and this file is Julia's side of that comparison.
 #
 # For each fixture it loads the document through the ordinary front door
 # (`EarthSciAST.load`) and, for every model NODE — a top-level model and each of
@@ -18,13 +12,12 @@
 # lexicographically so the comparison is order-independent across languages.
 #
 # `test/classification_test.jl` includes this file and asserts the result
-# against the goldens; the `PROGRAM_FILE` guard below keeps the CLI entry from
-# firing under that include.
+# against the goldens. The cross-language runner has no classification stage,
+# so there is no command-line entry.
 
 module ClassificationConformanceAdapter
 
     using EarthSciAST
-    import JSON3
 
     """
         classify_model(model::Model) -> Dict{String,Any}
@@ -79,57 +72,4 @@ module ClassificationConformanceAdapter
     classify_fixture(path::AbstractString) =
         Dict{String, Any}("models" => classify_document(EarthSciAST.load_path(String(path))))
 
-    function parse_args(argv)
-        manifest_path = nothing
-        output_path = nothing
-        i = 1
-        while i <= length(argv)
-            a = argv[i]
-            if a == "--manifest"
-                manifest_path = argv[i + 1]; i += 2
-            elseif a == "--output"
-                output_path = argv[i + 1]; i += 2
-            else
-                error("classification_adapter: unrecognised argument $(repr(a))")
-            end
-        end
-        (manifest_path === nothing || output_path === nothing) &&
-            error("classification_adapter: --manifest and --output are both required")
-        return manifest_path, output_path
-    end
-
-    # The manifest's fixture paths are relative to the REPO ROOT, which is the
-    # manifest's own tests/conformance/classification/ grandparent.
-    repo_root_of(manifest_path) =
-        normpath(joinpath(dirname(abspath(manifest_path)), "..", "..", ".."))
-
-    function main(argv)
-        manifest_path, output_path = parse_args(argv)
-        manifest = JSON3.read(read(manifest_path, String))
-        base = dirname(abspath(manifest_path))
-
-        fixtures = Dict{String, Any}()
-        for fx in manifest["fixtures"]
-            # A fixture path is written relative to the manifest's directory
-            # ("fixtures/<id>.esm"); fall back to the repo root for an
-            # absolute-from-root spelling.
-            rel = String(fx["fixture"])
-            path = isfile(joinpath(base, rel)) ? joinpath(base, rel) :
-                joinpath(repo_root_of(manifest_path), rel)
-            fixtures[String(fx["id"])] = classify_fixture(path)
-        end
-
-        result = Dict{String, Any}("binding" => "julia", "fixtures" => fixtures)
-        mkpath(dirname(abspath(output_path)))
-        open(output_path, "w") do io
-            JSON3.write(io, result)
-            write(io, "\n")
-        end
-        return 0
-    end
-
 end # module ClassificationConformanceAdapter
-
-if abspath(PROGRAM_FILE) == @__FILE__
-    exit(ClassificationConformanceAdapter.main(ARGS))
-end

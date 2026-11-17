@@ -8,9 +8,6 @@ because they require those packages to be loaded — this file only declares
 the stubs, the `GapReport` type used to collect unsupported-construct
 warnings, and the MTK-independent formatting helpers shared by both
 extensions.
-
-See `scripts/roundtrip.jl` for the validator CLI that exercises this path
-as the EarthSciModels migration acceptance gate.
 """
 
 """
