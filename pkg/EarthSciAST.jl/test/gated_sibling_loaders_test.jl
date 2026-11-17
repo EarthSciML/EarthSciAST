@@ -122,4 +122,34 @@ end
     @test out["SR"] == full[1, [1, 3], :]
 end
 
+# A provider that cannot take a selection is fetched whole and sliced by the
+# same per-axis selection; an `all` axis is a `Colon()` there too.
+mutable struct WholeOnlyMock
+    full::Array{Float64, 3}
+end
+EA.provider_supports_selection(::WholeOnlyMock) = false
+EA.provider_refresh_times(::WholeOnlyMock) = Float64[]
+EA.provider_sample(m::WholeOnlyMock, ::Real; selection = nothing) = m.full
+
+@testset "gated hook 2 — a provider without selection support is sliced whole" begin
+    full = reshape(collect(1.0:24.0), (2, 6, 2))
+    idx = Dict{String, Any}("supp" => EA.IndexSet("derived"; from_faq = "faq1"))
+    vi = (
+        members = Dict{String, Vector{Any}}("faq1" => Any[1, 3]),
+        extents = Dict{String, Int}("faq1" => 2),
+    )
+    model = (variables = Dict{String, Any}("L.SR" => nothing),)
+    gated = Dict{String, Any}(
+        "L.SR" => (
+            prov = WholeOnlyMock(copy(full)),
+            gate = Dict{String, Any}(
+                "axes" => Any[Dict("fixed" => Any[1]), Dict("gated_by" => "supp"), "all"],
+                "applies_to" => Any["SR"]
+            ),
+        )
+    )
+    out = EA._fetch_gated_providers(gated, idx, vi, 0.0, model)
+    @test out["L.SR"] == full[2, [1, 3], :]
+end
+
 end # module

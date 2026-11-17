@@ -8853,18 +8853,15 @@ function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64
                 end
             end
         else
-            # FALLBACK: reader cannot push down — fetch whole, then slice. Build a
-            # per-axis index tuple (fixed→scalar DROPS the axis, gated→member vec,
-            # all→Colon) so the sliced result matches the pushdown result exactly.
+            # FALLBACK: reader cannot push down — fetch whole, then slice by the
+            # same per-axis selection (a fixed `Int` DROPS the axis, a gated or
+            # range axis is an index vector, `all` is `Colon()`), so the sliced
+            # result matches the pushdown result exactly.
             sample = provider_sample(prov, t0)
-            idx = Any[
-                a == "all" ? Colon() :
-                    (a isa Integer ? Int(a) : Vector{Int}(a)) for a in selection
-            ]
             for name in applies
                 nm = String(name)
                 full = _sample_field(sample, nm)
-                field = full[idx...]
+                field = full[selection...]
                 arr = forcing_from_sample(field, nm)
                 size(arr, gated_pos_out) == gated_extent || throw(
                     RefreshError(
