@@ -1185,39 +1185,63 @@ function _resolve_join_in_expr(
         expr::OpExpr, index_sets::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
         const_arrays::AbstractDict = Dict{String, Any}(),
         var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-        obs_defs::AbstractDict = Dict{String, ASTExpr}()
+        obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
     )
-    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_values = expr.values === nothing ? nothing :
-        ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    gates = (_is_faq_op(expr.op) && expr.join !== nothing) ?
-        _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) : expr.join_gates
-    return reconstruct(
-        expr; args = new_args, expr_body = new_body,
-        values = new_values, lower = new_lower, upper = new_upper,
-        filter = new_filter, join_gates = gates
-    )
+    # IDENTITY-MEMOIZED and IDENTITY-PRESERVING, as `_resolve_isr` is: a shared
+    # node resolves to one shared output node, and a subtree with no `join`
+    # below it is returned as it is, so a shared graph is neither walked once
+    # per path nor re-inflated into a tree.
+    cached = get(memo, expr, nothing)
+    cached === nothing || return cached
+    changed = false
+    res(x) = begin
+        r = _resolve_join_in_expr(
+            x, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo
+        )
+        r === x || (changed = true)
+        r
+    end
+    new_args = ASTExpr[res(a) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
+    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
+    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
+    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
+    own_join = _is_faq_op(expr.op) && expr.join !== nothing
+    out = if own_join || changed
+        gates = own_join ?
+            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) :
+            expr.join_gates
+        reconstruct(
+            expr; args = new_args, expr_body = new_body,
+            values = new_values, lower = new_lower, upper = new_upper,
+            filter = new_filter, join_gates = gates
+        )
+    else
+        expr
+    end
+    memo[expr] = out
+    return out
 end
 _resolve_join_in_expr(
     expr::ASTExpr, ::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
     const_arrays::AbstractDict = Dict{String, Any}(),
     var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-    obs_defs::AbstractDict = Dict{String, ASTExpr}()
+    obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
 ) = expr
 
 _resolve_join_in_eq(
     eq::Equation, index_sets::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
     const_arrays::AbstractDict = Dict{String, Any}(),
     var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-    obs_defs::AbstractDict = Dict{String, ASTExpr}()
+    obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
 ) =
     Equation(
-    _resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs),
-    _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs);
+    _resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo),
+    _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo);
     _comment = eq._comment
 )
 
@@ -1237,5 +1261,9 @@ function _resolve_join_gates(
         obs_defs::AbstractDict = Dict{String, ASTExpr}()
     )
     any(_eq_has_join, eqs) || return eqs
-    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for eq in eqs]
+    memo = IdDict{OpExpr, ASTExpr}()
+    return Equation[
+        _resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo)
+            for eq in eqs
+    ]
 end
