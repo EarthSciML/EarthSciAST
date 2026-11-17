@@ -487,15 +487,7 @@ function _walk_recurrence!(
     return nothing
 end
 
-@inline _recur_oplus(op::Symbol, a, b) =
-    op === :+ ? a + b : op === :* ? a * b : op === :max ? max(a, b) :
-    op === :min ? min(a, b) : op === :or ? _or_combine(a, b) :
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
-            "no fold for the reduction '$op' in a recurrence body"
-        )
-    )
+@inline _recur_oplus(op::Symbol, a, b) = _oplus(op, a, b)
 
 # The cell's reduction, as `_cg_fold` (array_contraction.jl) emits it: one
 # accumulator seeded from the Float64 0̄, the TABLE form's entries for the cell at

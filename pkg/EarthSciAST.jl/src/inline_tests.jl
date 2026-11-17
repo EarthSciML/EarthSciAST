@@ -354,12 +354,8 @@ end
 const _GATED_KEYS_OP = "__esm_gate_keys"
 
 # One ⊕ step of the fold, matching `_combine_with_reducer` + `_scalar_op`.
-@inline function _gated_oplus(oplus::String, a::Float64, b::Float64)
-    oplus == "+" && return a + b
-    oplus == "*" && return a * b
-    oplus == "max" && return max(a, b)
-    return min(a, b)
-end
+@inline _gated_oplus(oplus::String, a::Float64, b::Float64) =
+    _oplus_numeric(Symbol(oplus), a, b)
 
 # Evaluate the gated aggregate at every cell of `cells` by walking the gate's
 # admitted key sequence and folding the once-compiled term `ce`.
@@ -468,7 +464,7 @@ function _evaluate_cellwise_gated(
         _is_resource_error(err) && rethrow()
         return nothing
     end
-    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    _is_numeric_reducer(oplus) || return nothing
 
     # The per-term body, with the aggregate's own `filter` folded in exactly as
     # `_foreach_aggregate_product` folds it: a runtime `ifelse(guard, term, 0̄)`.

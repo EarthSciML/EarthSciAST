@@ -914,15 +914,18 @@ end
 """`Math.bases`."""
 bases(e) = bases_j(e, String[])
 
+"""The native reductions: each one's name, keyword and `reduce` field
+(`nothing` for the default sum). `redk_kw`, `redk_field`, `faq_cand`'s reading of
+`reduce` and the parser's `red_of` are all read from it."""
+const RED_TABLE = ((:sum, KSum, nothing), (:prod, KProd, "*"), (:max, KMax, "max"), (:min, KMin, "min"))
+
 """`Math.RedK.kw`."""
-redk_kw(r::Symbol) = r === :sum ? KSum : r === :prod ? KProd : r === :max ? KMax : KMin
+redk_kw(r::Symbol) = RED_TABLE[findfirst(x -> x[1] === r, RED_TABLE)][2]
 
 """`Math.RedK.field`."""
 function redk_field(r::Symbol)
-    r === :sum && return Kvs()
-    r === :prod && return Kvs(["reduce" => "*"])
-    r === :max && return Kvs(["reduce" => "max"])
-    return Kvs(["reduce" => "min"])
+    f = RED_TABLE[findfirst(x -> x[1] === r, RED_TABLE)][3]
+    return f === nothing ? Kvs() : Kvs(["reduce" => f])
 end
 
 """`Math.FaqForm`: a `faq` node with a native spelling, by its parts. `filter`
@@ -975,17 +978,9 @@ function faq_cand(kvs)
     args = look("args", kvs)
     (e !== nothing && out isa JArr && args isa JArr) || return nothing
     r = look("reduce", kvs)
-    red = if r === nothing
-        :sum
-    elseif r == "*"
-        :prod
-    elseif r == "max"
-        :max
-    elseif r == "min"
-        :min
-    else
-        return nothing
-    end
+    i = findfirst(x -> r === nothing ? x[3] === nothing : (x[3] !== nothing && r == x[3]), RED_TABLE)
+    i === nothing && return nothing
+    red = RED_TABLE[i][1]
     rr = look("ranges", kvs)
     rs = if rr isa JObj
         copy(rr.kvs)

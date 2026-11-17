@@ -20,11 +20,10 @@ end
 # ========================================
 
 # The ⊕ spellings this lowering folds with, mapped to the Julia reducer the
-# low-level `SymbolicUtils.ArrayOp` constructor takes (functions from the op
-# registry, same pattern as `_BROADCAST_FNS` in lowering.jl).
+# low-level `SymbolicUtils.ArrayOp` constructor takes: the numeric rows of the
+# reducer table (`EarthSciAST._REDUCERS`).
 const _REDUCE_FNS = Dict{String, Function}(
-    name => EarthSciAST._op_spec(name).scalar_fn
-        for name in ("+", "*", "max", "min")
+    String(r.sym) => r.fn for r in EarthSciAST._REDUCERS if r.numeric
 )
 
 # The reducer and the 0̄ identity of a `faq` node. `semiring`, when present,

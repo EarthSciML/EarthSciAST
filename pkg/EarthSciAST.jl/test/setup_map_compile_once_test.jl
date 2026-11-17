@@ -176,21 +176,37 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     # ---- the two guards that keep the fast path exact ----
 
     @testset "`/` in a gather subscript: the fill reads it as the reference does" begin
-        # `_eval_const_int` reads `/` as TRUNCATING integer `div`; a subscript the
-        # compile-once sweep keeps symbolic would read it as true Float64
-        # division, so that sweep declines any `/` under an `index` subscript
-        # (`_subscripts_int_exact`). The compiled fill resolves subscripts the
-        # way the right-hand side does, with the reference's integer reading, so
-        # it serves the map — including `(x+1)/2`, where the two readings
-        # differ at every even `x`.
-        for sub in (_op("/", _op("*", _v("x"), 2), 2), _op("/", _op("+", _v("x"), 1), 2))
-            body = _op("exp", _ix(_v("B"), sub, _v("y")))
-            j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
-            fast, ref, hits, miss = both_ways(j, ENV0)
-            @test hits == 1 && miss == 0
-            @test bitsame(fast, ref)
-            @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        # A bare quotient in an integer subscript must be exact
+        # (`_subscript_quotient`); a subscript the compile-once sweep keeps
+        # symbolic would carry a fractional quotient on as Float64, so that sweep
+        # declines any `/` under an `index` subscript (`_subscripts_int_exact`).
+        # The compiled fill resolves subscripts the way the reference does, so it
+        # serves an exact quotient `(2x)/2`, and an inexact one `(x+1)/2` is
+        # refused on both routes alike.
+        sub = _op("/", _op("*", _v("x"), 2), 2)
+        body = _op("exp", _ix(_v("B"), sub, _v("y")))
+        j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
+        fast, ref, hits, miss = both_ways(j, ENV0)
+        @test hits == 1 && miss == 0
+        @test bitsame(fast, ref)
+        @test !EA._subscripts_int_exact(EA.expression_from_json(j))
+        inexact = _map(
+            ["x", "y"], ["x" => "X", "y" => "Y"],
+            _op("exp", _ix(_v("B"), _op("/", _op("+", _v("x"), 1), 2), _v("y")))
+        )
+        rhs = EA.expression_from_json(inexact)
+        code(f) = try
+            f(); nothing
+        catch e
+            e isa EA.TreeWalkError ? e.code : e
         end
+        @test code(() -> EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX)) ==
+            "E_TREEWALK_INEXACT_SUBSCRIPT"
+        @test code(
+            () -> EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, IDX)
+            end
+        ) == "E_TREEWALK_INEXACT_SUBSCRIPT"
         # The compile-once guard finds a `/` in a NESTED node's body too, not
         # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
         inner = _map(

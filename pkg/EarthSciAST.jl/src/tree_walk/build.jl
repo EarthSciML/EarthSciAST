@@ -2928,6 +2928,11 @@ function _seed_faq_init_u0!(
         ranges_dict = _ranges_dict(rhs_op)
         body = rhs_op.expr_body
         body === nothing && continue
+        # An array-valued observed: a numeric evaluator refuses ⊕ = `or` there
+        # (CONFORMANCE_SPEC §5.6.1).
+        isempty(idx_names) ||
+            _is_numeric_reducer(first(_aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce))) ||
+            _throw_array_bool_and_or("or")
         # A POINTWISE filter (no contracted index): a cell whose predicate is
         # false is the semiring's 0̄ (esm-schema `filter`). It goes on the body as
         # the `ifelse` guard the array-equation path builds for it
@@ -6170,7 +6175,7 @@ function _affine_reduce_form(
     )
     isempty(contract_names) && return nothing
     agg_gates === nothing || return nothing
-    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    _is_numeric_reducer(oplus) || return nothing
     rngs = UnitRange{Int}[]
     for c in contract_const
         (c === nothing || isempty(c)) && return nothing
@@ -6185,7 +6190,7 @@ end
 # Which of `_affine_reduce_form`'s conditions a join-free contraction fails, in
 # words, for a refusal to name the construct it actually refuses.
 function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplus::String)
-    oplus in ("+", "*", "max", "min") ||
+    _is_numeric_reducer(oplus) ||
         return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
     for (name, c) in zip(contract_names, contract_const)
         (c === nothing || isempty(c)) && continue
@@ -6875,6 +6880,9 @@ function _compile_faq_equation!(
         rhs_op = rhs_expr::OpExpr
         rhs_oplus, rhs_zerobar =
             _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)
+        # An array equation's right-hand side is array-valued: a numeric
+        # evaluator refuses ⊕ = `or` there (CONFORMANCE_SPEC §5.6.1).
+        _is_numeric_reducer(rhs_oplus) || _throw_array_bool_and_or(rhs_oplus)
         agg_gates = rhs_op.join_gates
         agg_filter = rhs_op.filter
         rhs_ranges = _ranges_dict(rhs_op)
@@ -6960,7 +6968,7 @@ function _compile_faq_equation!(
         agg_gates === nothing || return "it has a join gate"
         agg_filter === nothing || return "it has a filter"
         all(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
-        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") ||
+        _is_numeric_reducer(rhs_oplus) ||
             return "its ⊕ is `$(rhs_oplus)`, and the loop folds only +, *, max or min"
         isempty(range_iters) && return "it has no output index"
         prod(length(c) for c in contract_const) >= _contraction_loop_min() ||
@@ -7309,7 +7317,7 @@ function _compile_faq_equation!(
             )
         elseif !isempty(contract_names) && agg_gates === nothing && agg_filter === nothing &&
                 all(c -> c !== nothing, contract_const) &&
-                (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+                _is_numeric_reducer(rhs_oplus) &&
                 prod(length(c) for c in contract_const) >= _array_contraction_min()
             ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
         end

@@ -1,13 +1,10 @@
-# Operator-vocabulary registry — the single source of truth for the op sets
-# that were previously hand-maintained in five parallel `const` Sets ("kept in
-# sync with…" comments). The registry is pure data: a load-time table with no
-# dependency on the AST types, consulted ONCE at include time to derive the
-# per-pass const sets. Nothing on any hot path dispatches through it — the
-# scalar/access-kernel evaluator ladders (`_eval_node_op` / `_eval_acc_op`) keep
-# their if/elseif form, and the derived Sets keep their original names, files,
-# and element types, so runtime behavior (set membership, dispatch, error
-# codes) is bit-identical to the hand-maintained originals. Memberships are
-# pinned literal-for-literal by test/op_registry_test.jl.
+# Operator-vocabulary registry: the one table of the operator vocabulary. The
+# registry is pure data: a load-time table with no dependency on the AST types.
+# The per-pass op sets derive from it at include time, and the evaluator ladders
+# (`_eval_node_op`, `_eval_acc_op`, `_scalar_op`) and the Julia emitter
+# (`_cg_emit_op`) are GENERATED from its `shape` column at include time
+# (tree_walk/op_ladder.jl), so nothing on a hot path looks it up at run time.
+# Memberships are pinned literal-for-literal by test/op_registry_test.jl.
 
 """
     _OpSpec
@@ -20,21 +17,31 @@ and the boolean membership flags from which the per-pass op sets derive.
 Fields:
 
 - `name::String` — the op string as it appears on the wire (and in `OpExpr.op`).
-- `arity::Union{UnitRange{Int},Nothing}` — nominal accepted argument count
-  (`1:1` unary, `2:2` binary, `1:2` for `-`/`atan`, `2:typemax(Int)` n-ary,
-  `0:0` niladic constants). INFORMATIONAL: arity enforcement stays in the
-  evaluator ladders (`_expect_arity_n` and the per-arm guards), which are the
-  conformance-pinned error source; `nothing` for structural ops whose argument
-  conventions live outside the scalar ladders.
+- `arity::Union{UnitRange{Int},Nothing}` — the accepted argument count
+  (`1:1` unary, `2:2` binary, `1:2` for `-`/`atan`, `1:typemax(Int)` or
+  `2:typemax(Int)` n-ary, `0:0` niladic constants). NORMATIVE (esm-spec §4.2):
+  a node outside it is refused with `E_TREEWALK_ARITY` when the tree walk
+  compiles it ([`_check_op_arity`](@ref)), by every evaluator arm and emitter
+  generated from the `shape` column, and by the ModelingToolkit and Catalyst
+  lowerings; an n-ary operator folds every operand. `nothing` for structural
+  ops whose argument conventions live outside the scalar ladders.
 - `category::Symbol` — coarse family, one of `:arithmetic`, `:comparison`,
   `:logical`, `:control`, `:elementary`, `:constant`, `:calculus`, `:array`,
-  `:aggregate`, `:function`, `:data`, `:value_invention`.
+  `:aggregate`, `:data`, `:value_invention`.
 - `scalar_fn::Union{Function,Nothing}` — the scalar Julia function the
   elementwise evaluator arms apply per value/lane (`sin`, `+`, …). For the
   comparison ops this is the Base predicate (`<`, `==`, …); the evaluator arms
   additionally map its `Bool` through `1.0`/`0.0` (spec comparison semantics).
   `nothing` where the arm's semantics are not a single Base function
   (`and`/`or`/`not`/`ifelse`/`Pre`, constants, structural ops).
+- `shape::Union{Symbol,Nothing}` — how an evaluator applies the op, one of
+  [`_OP_SHAPES`](@ref); the evaluator ladders are generated from it.
+  `nothing` for an op no scalar ladder evaluates (structural ops, and the
+  `true`/`false` constants, which `_compile_op` folds to literals).
+- `lazy_from::Int` — the first operand an evaluator may skip: `2` for `ifelse`
+  (only the taken branch runs) and `and`/`or` (they stop at the first decisive
+  operand), `0` for every op that evaluates all of its operands.
+- `value::Union{Float64,Nothing}` — the value of a niladic constant.
 - `dim_class::Union{Symbol,Nothing}` — the op's dimensional-analysis class,
   one of [`_DIM_CLASSES`](@ref) (`:transcendental`, `:circular`,
   `:inverse_circular`, `:comparison`, `:boolean`) or `nothing` for ops with
@@ -49,6 +56,9 @@ struct _OpSpec
     arity::Union{UnitRange{Int}, Nothing}
     category::Symbol
     scalar_fn::Union{Function, Nothing}
+    shape::Union{Symbol, Nothing}
+    lazy_from::Int
+    value::Union{Float64, Nothing}
     dim_class::Union{Symbol, Nothing}
     ws4_foldable::Bool
     cse_opaque::Bool
@@ -59,22 +69,25 @@ struct _OpSpec
     self_indexed::Bool
     builtin_fn::Bool
     xcse_expensive::Bool
+    shape_remap::Bool
 end
 
 # Compact row constructor for `_OP_TABLE` (keyword flags keep the table
 # readable; every flag defaults to false).
 _op(
     name::String; arity = nothing, category::Symbol, fn = nothing,
+    shape::Union{Symbol, Nothing} = nothing, lazy::Int = 0,
+    value::Union{Float64, Nothing} = nothing,
     dimclass::Union{Symbol, Nothing} = nothing,
     ws4::Bool = false, cse::Bool = false, stencil::Bool = false,
     geo::Bool = false, known::Bool = false,
     arrprod::Bool = false, selfidx::Bool = false,
-    builtin::Bool = false, xcse::Bool = false
+    builtin::Bool = false, xcse::Bool = false, remap::Bool = false
 ) =
     _OpSpec(
-    name, arity, category, fn, dimclass,
+    name, arity, category, fn, shape, lazy, value, dimclass,
     ws4, cse, stencil, geo, known,
-    arrprod, selfidx, builtin, xcse
+    arrprod, selfidx, builtin, xcse, remap
 )
 
 """
@@ -91,11 +104,14 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 - `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
 - `:xcse_expensive`     → `_XCSE_EXPENSIVE_OPS`           (tree_walk/xcse.jl)
+- `:shape_remap`        → `_SHAPE_REMAP_OPS`              (tree_walk/resolve.jl) and
+                          `_LIFT_WHOLE_ARRAY_OPS`         (pointwise_lift.jl): the ops
+                          that restructure a whole array (esm-spec §4.3.5)
 """
 const _OP_FLAG_NAMES =
     (
     :ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
-    :array_producer, :self_indexed, :builtin_fn, :xcse_expensive,
+    :array_producer, :self_indexed, :builtin_fn, :xcse_expensive, :shape_remap,
 )
 
 """
@@ -153,57 +169,57 @@ const _OP_TABLE = _OpSpec[
     #    spellings of unary `-` / `^` (see `_DEPRECATED_OPS`): the loader rewrites
     #    them away, so they reach the evaluator only from an AST built in code) ──
     _op(
-        "+"; arity = 1:typemax(Int), category = :arithmetic, fn = (+),
+        "+"; shape = :fold, arity = 1:typemax(Int), category = :arithmetic, fn = (+),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "-"; arity = 1:2, category = :arithmetic, fn = (-),
+        "-"; shape = :minus, arity = 1:2, category = :arithmetic, fn = (-),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "*"; arity = 1:typemax(Int), category = :arithmetic, fn = (*),
+        "*"; shape = :fold, arity = 1:typemax(Int), category = :arithmetic, fn = (*),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "/"; arity = 2:2, category = :arithmetic, fn = (/),
+        "/"; shape = :binary, arity = 2:2, category = :arithmetic, fn = (/),
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "^"; arity = 2:2, category = :arithmetic, fn = (^),
+        "^"; shape = :binary, arity = 2:2, category = :arithmetic, fn = (^),
         ws4 = true, stencil = true, geo = true, known = true, xcse = true
     ),
     _op(
-        "pow"; arity = 2:2, category = :arithmetic, fn = (^),
+        "pow"; shape = :binary, arity = 2:2, category = :arithmetic, fn = (^),
         ws4 = true, stencil = true, xcse = true
     ),
     _op(
-        "neg"; arity = 1:1, category = :arithmetic, fn = (-),
+        "neg"; shape = :negate, arity = 1:1, category = :arithmetic, fn = (-),
         ws4 = true, stencil = true
     ),
 
     # ── Comparisons → 1.0/0.0 (spec comparison semantics) ──
     _op(
-        "<"; arity = 2:2, category = :comparison, fn = (<), dimclass = :comparison,
+        "<"; shape = :compare, arity = 2:2, category = :comparison, fn = (<), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
     _op(
-        "<="; arity = 2:2, category = :comparison, fn = (<=), dimclass = :comparison,
+        "<="; shape = :compare, arity = 2:2, category = :comparison, fn = (<=), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
     _op(
-        ">"; arity = 2:2, category = :comparison, fn = (>), dimclass = :comparison,
+        ">"; shape = :compare, arity = 2:2, category = :comparison, fn = (>), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
     _op(
-        ">="; arity = 2:2, category = :comparison, fn = (>=), dimclass = :comparison,
+        ">="; shape = :compare, arity = 2:2, category = :comparison, fn = (>=), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
     _op(
-        "=="; arity = 2:2, category = :comparison, fn = (==), dimclass = :comparison,
+        "=="; shape = :compare, arity = 2:2, category = :comparison, fn = (==), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
     _op(
-        "!="; arity = 2:2, category = :comparison, fn = (!=), dimclass = :comparison,
+        "!="; shape = :compare, arity = 2:2, category = :comparison, fn = (!=), dimclass = :comparison,
         stencil = true, geo = true, known = true
     ),
 
@@ -216,26 +232,26 @@ const _OP_TABLE = _OpSpec[
     # not compile at all. The runtime ladder these lower to already has the
     # `:and` / `:or` / `:not` arms; only the vocabulary gate was missing.
     _op(
-        "and"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
+        "and"; shape = :and, lazy = 2, arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
         stencil = true, geo = true
     ),
     _op(
-        "or"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
+        "or"; shape = :or, lazy = 2, arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
         stencil = true, geo = true
     ),
     _op(
-        "not"; arity = 1:1, category = :logical, dimclass = :boolean,
+        "not"; shape = :not, arity = 1:1, category = :logical, dimclass = :boolean,
         stencil = true, geo = true
     ),
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──
     _op(
-        "ifelse"; arity = 3:3, category = :control, ws4 = true,
+        "ifelse"; shape = :select, lazy = 2, arity = 3:3, category = :control, ws4 = true,
         stencil = true, geo = true, known = true, builtin = true
     ),
     _op(
-        "Pre"; arity = 1:1, category = :control, stencil = true, known = true,
+        "Pre"; shape = :passthrough, arity = 1:1, category = :control, stencil = true, known = true,
         builtin = true
     ),
 
@@ -249,123 +265,119 @@ const _OP_TABLE = _OpSpec[
     #    its dimension) and the dimension-preserving `abs`/`sign`/`floor`/
     #    `ceil`/`min`/`max` have bespoke rules, not a class (units.jl).
     _op(
-        "sin"; arity = 1:1, category = :elementary, fn = sin,
+        "sin"; shape = :unary, arity = 1:1, category = :elementary, fn = sin,
         dimclass = :circular, builtin = true,
         ws4 = true, stencil = true, geo = true, known = true, xcse = true
     ),
     _op(
-        "cos"; arity = 1:1, category = :elementary, fn = cos,
+        "cos"; shape = :unary, arity = 1:1, category = :elementary, fn = cos,
         dimclass = :circular, builtin = true,
         ws4 = true, stencil = true, geo = true, known = true, xcse = true
     ),
     _op(
-        "tan"; arity = 1:1, category = :elementary, fn = tan,
+        "tan"; shape = :unary, arity = 1:1, category = :elementary, fn = tan,
         dimclass = :circular, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "asin"; arity = 1:1, category = :elementary, fn = asin,
+        "asin"; shape = :unary, arity = 1:1, category = :elementary, fn = asin,
         dimclass = :inverse_circular, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "acos"; arity = 1:1, category = :elementary, fn = acos,
+        "acos"; shape = :unary, arity = 1:1, category = :elementary, fn = acos,
         dimclass = :inverse_circular, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "atan"; arity = 1:2, category = :elementary, fn = atan,
+        "atan"; shape = :atan, arity = 1:2, category = :elementary, fn = atan,
         dimclass = :inverse_circular, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "atan2"; arity = 2:2, category = :elementary, fn = atan,
+        "atan2"; shape = :binary, arity = 2:2, category = :elementary, fn = atan,
         dimclass = :inverse_circular, builtin = true,
         stencil = true, geo = true, xcse = true
     ),
     _op(
-        "sinh"; arity = 1:1, category = :elementary, fn = sinh,
+        "sinh"; shape = :unary, arity = 1:1, category = :elementary, fn = sinh,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "cosh"; arity = 1:1, category = :elementary, fn = cosh,
+        "cosh"; shape = :unary, arity = 1:1, category = :elementary, fn = cosh,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "tanh"; arity = 1:1, category = :elementary, fn = tanh,
+        "tanh"; shape = :unary, arity = 1:1, category = :elementary, fn = tanh,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "asinh"; arity = 1:1, category = :elementary, fn = asinh,
+        "asinh"; shape = :unary, arity = 1:1, category = :elementary, fn = asinh,
         dimclass = :transcendental, builtin = true, stencil = true, xcse = true
     ),
     _op(
-        "acosh"; arity = 1:1, category = :elementary, fn = acosh,
+        "acosh"; shape = :unary, arity = 1:1, category = :elementary, fn = acosh,
         dimclass = :transcendental, builtin = true, stencil = true, xcse = true
     ),
     _op(
-        "atanh"; arity = 1:1, category = :elementary, fn = atanh,
+        "atanh"; shape = :unary, arity = 1:1, category = :elementary, fn = atanh,
         dimclass = :transcendental, builtin = true, stencil = true, xcse = true
     ),
     _op(
-        "exp"; arity = 1:1, category = :elementary, fn = exp,
+        "exp"; shape = :unary, arity = 1:1, category = :elementary, fn = exp,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "log"; arity = 1:1, category = :elementary, fn = log,
+        "log"; shape = :unary, arity = 1:1, category = :elementary, fn = log,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "log10"; arity = 1:1, category = :elementary, fn = log10,
+        "log10"; shape = :unary, arity = 1:1, category = :elementary, fn = log10,
         dimclass = :transcendental, builtin = true,
         ws4 = true, stencil = true, known = true, xcse = true
     ),
     _op(
-        "sqrt"; arity = 1:1, category = :elementary, fn = sqrt, builtin = true,
+        "sqrt"; shape = :unary, arity = 1:1, category = :elementary, fn = sqrt, builtin = true,
         ws4 = true, stencil = true, geo = true, known = true, xcse = true
     ),
     _op(
-        "abs"; arity = 1:1, category = :elementary, fn = abs, builtin = true,
+        "abs"; shape = :unary, arity = 1:1, category = :elementary, fn = abs, builtin = true,
         ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "sign"; arity = 1:1, category = :elementary, fn = sign, builtin = true,
+        "sign"; shape = :unary, arity = 1:1, category = :elementary, fn = sign, builtin = true,
         ws4 = true, stencil = true
     ),
     _op(
-        "floor"; arity = 1:1, category = :elementary, fn = floor, builtin = true,
+        "floor"; shape = :unary, arity = 1:1, category = :elementary, fn = floor, builtin = true,
         ws4 = true, stencil = true, geo = true
     ),
     _op(
-        "ceil"; arity = 1:1, category = :elementary, fn = ceil, builtin = true,
+        "ceil"; shape = :unary, arity = 1:1, category = :elementary, fn = ceil, builtin = true,
         ws4 = true, stencil = true, geo = true
     ),
     _op(
-        "min"; arity = 2:typemax(Int), category = :elementary, fn = min,
+        "min"; shape = :minmax, arity = 2:typemax(Int), category = :elementary, fn = min,
         builtin = true, ws4 = true, stencil = true, geo = true, known = true
     ),
     _op(
-        "max"; arity = 2:typemax(Int), category = :elementary, fn = max,
+        "max"; shape = :minmax, arity = 2:typemax(Int), category = :elementary, fn = max,
         builtin = true, ws4 = true, stencil = true, geo = true, known = true
     ),
 
-    # ── Niladic constants (`true`/`false` appear only in the geometry-setup
-    #    vocabulary — `_geo_compile` folds them to literals; the scalar
-    #    ladders don't speak them) ──
-    _op("pi"; arity = 0:0, category = :constant, stencil = true),
-    _op("π"; arity = 0:0, category = :constant, stencil = true),
-    _op("e"; arity = 0:0, category = :constant, stencil = true),
-    _op("true"; arity = 0:0, category = :constant, geo = true),
-    _op("false"; arity = 0:0, category = :constant, geo = true),
-
-    # ── The retired v0.2.x closure marker: removed in v0.3.0, it always throws
-    #    at compile, and stays a CSE barrier until then ──
-    _op("call"; category = :function, cse = true, known = true),
+    # ── Niladic constants (`true`/`false` have no shape: `_compile_op` and
+    #    `_geo_compile` fold them to their `value` as literals, so no scalar
+    #    ladder sees them) ──
+    _op("pi"; shape = :constant, value = Float64(pi), arity = 0:0, category = :constant, stencil = true),
+    _op("π"; shape = :constant, value = Float64(pi), arity = 0:0, category = :constant, stencil = true),
+    _op("e"; shape = :constant, value = Float64(ℯ), arity = 0:0, category = :constant, stencil = true),
+    _op("true"; value = 1.0, arity = 0:0, category = :constant, geo = true),
+    _op("false"; value = 0.0, arity = 0:0, category = :constant, geo = true),
 
     # ── Const data / enum markers ──
     _op("const"; category = :data, cse = true),
@@ -422,9 +434,9 @@ const _OP_TABLE = _OpSpec[
         arrprod = true, selfidx = true
     ),
     _op("broadcast"; category = :array, cse = true, known = true),
-    _op("reshape"; category = :array, cse = true, known = true),
-    _op("transpose"; category = :array, cse = true, known = true),
-    _op("concat"; category = :array, cse = true, known = true),
+    _op("reshape"; category = :array, cse = true, known = true, remap = true),
+    _op("transpose"; category = :array, cse = true, known = true, remap = true),
+    _op("concat"; category = :array, cse = true, known = true, remap = true),
 
     # ── Functional Aggregate Query (semiring FAQ; RFC §5.3/§7.2) ──
     _op(
@@ -438,6 +450,120 @@ const _OP_TABLE = _OpSpec[
     #    refused with `unevaluable_operator`, not `unlowered_operator`. ──
     _op("distinct"; category = :value_invention),
 ]
+
+"""
+    _OP_SHAPES
+
+The legal values of the `shape` column, in the order the generated evaluator
+ladders test them (tree_walk/op_ladder.jl); within one shape, rows keep registry
+order. The order puts the right-hand side's hot arithmetic first.
+
+- `:fold`        — `+`, `*`: n-ary left fold; one operand is that operand.
+- `:minus`       — `-`: negation of one operand, difference of two.
+- `:negate`      — `neg`: negation (the deprecated spelling of unary `-`).
+- `:binary`      — `/`, `^`, `pow`, `atan2`: `scalar_fn(a, b)`.
+- `:compare`     — `<` … `!=`: `scalar_fn(a, b)` mapped to `1.0`/`0.0`.
+- `:and`, `:or`  — short-circuit connectives over every operand (`!= 0` is true).
+- `:not`         — `1.0` when the operand is `0`, else `0.0`.
+- `:select`      — `ifelse(c, a, b)`: `a` when `c != 0`; only the taken branch runs.
+- `:unary`       — `scalar_fn(x)`.
+- `:atan`        — `atan(y)` or `atan(y, x)`.
+- `:minmax`      — `min`, `max`: n-ary left fold of `scalar_fn`.
+- `:constant`    — the niladic constants; evaluate to the row's `value`.
+- `:passthrough` — `Pre`: its operand's value on the tree-walk path.
+"""
+const _OP_SHAPES = (
+    :fold, :minus, :negate, :binary, :compare, :and, :or, :not, :select,
+    :unary, :atan, :minmax, :constant, :passthrough,
+)
+
+for _s in _OP_TABLE
+    _s.shape === nothing || _s.shape in _OP_SHAPES ||
+        error("op_registry: op '$(_s.name)' has unknown shape $(_s.shape)")
+    _s.shape === nothing || _s.arity !== nothing ||
+        error("op_registry: op '$(_s.name)' has a shape but no arity")
+    _s.shape in (:binary, :compare, :unary, :minmax) && _s.scalar_fn === nothing &&
+        error("op_registry: op '$(_s.name)' of shape $(_s.shape) has no scalar function")
+    (_s.shape === :constant) == (_s.value !== nothing && _s.arity == 0:0 && _s.shape !== nothing) ||
+        _s.shape === nothing ||
+        error("op_registry: constant op '$(_s.name)' needs a value and arity 0:0")
+end
+
+"""
+    _SHAPED_OPS
+
+The registry rows that carry a `shape`, in ladder order (see
+[`_OP_SHAPES`](@ref)): exactly the operators the generated scalar ladders
+evaluate. Each entry is `(name, sym, spec)`.
+"""
+const _SHAPED_OPS = Tuple(
+    (name = s.name, sym = Symbol(s.name), spec = s)
+        for sh in _OP_SHAPES for s in _OP_TABLE if s.shape === sh
+)
+
+"""
+    _SHAPED_OP_SYMS
+
+The operator symbols an `_NK_OP` node may carry: the shaped registry rows.
+`_compile_op` refuses any other operator with `unevaluable_operator`, and every
+back end checks its own operator table against this set when it loads.
+"""
+const _SHAPED_OP_SYMS = Set{Symbol}(r.sym for r in _SHAPED_OPS)
+
+# Op symbol → registry row, for the build-time arity and laziness queries.
+const _OP_SYM_INDEX = Dict{Symbol, _OpSpec}(Symbol(s.name) => s for s in _OP_TABLE)
+
+"""
+    _op_lazy_from(op) -> Int
+
+The registry's `lazy_from` for `op` (a `String` or `Symbol`): the first operand
+an evaluator may skip, or `0` when every operand is always evaluated (including
+for an op with no registry row). Build-time only.
+"""
+_op_lazy_from(op::Symbol) = (s = get(_OP_SYM_INDEX, op, nothing); s === nothing ? 0 : s.lazy_from)
+_op_lazy_from(op::AbstractString) = (s = _op_spec(op); s === nothing ? 0 : s.lazy_from)
+
+"""
+    _op_arg_conditional(op, i::Int) -> Bool
+
+Is operand `i` of `op` evaluated only when a sibling takes a particular value?
+True for the operands from `lazy_from` on of `ifelse`, `and` and `or`.
+"""
+_op_arg_conditional(op, i::Int) = (lf = _op_lazy_from(op); lf > 0 && i >= lf)
+
+# The registry arity as words, for the one arity message every evaluator gives.
+function _arity_words(ar::UnitRange{Int})
+    first(ar) == last(ar) && return "$(first(ar))"
+    last(ar) == typemax(Int) && return "at least $(first(ar))"
+    last(ar) == first(ar) + 1 && return "$(first(ar)) or $(last(ar))"
+    return "$(first(ar)) to $(last(ar))"
+end
+
+"""
+    _throw_op_arity(op::Symbol, n::Int)
+
+Raise the `E_TREEWALK_ARITY` error for `op` applied to `n` operands, stating the
+registry arity. `@noinline` so an evaluator arm's happy path stays small.
+"""
+@noinline function _throw_op_arity(op::Symbol, n::Int)
+    s = get(_OP_SYM_INDEX, op, nothing)
+    want = (s === nothing || s.arity === nothing) ? "a different number of" :
+        _arity_words(s.arity::UnitRange{Int})
+    throw(TreeWalkError("E_TREEWALK_ARITY", "$op expects $want args, got $n"))
+end
+
+"""
+    _check_op_arity(op::Symbol, n::Int)
+
+Refuse `n` operands for `op` when the registry arity does not admit them. A no-op
+for an op with no registry arity. Called where the tree walk compiles a node, so
+no evaluator, emitter or back end receives a node of the wrong arity.
+"""
+function _check_op_arity(op::Symbol, n::Int)
+    s = get(_OP_SYM_INDEX, op, nothing)
+    (s === nothing || s.arity === nothing || n in s.arity) && return nothing
+    return _throw_op_arity(op, n)
+end
 
 """
     _DEPRECATED_OPS
@@ -531,7 +657,7 @@ lifted over an array. This is the positive half of esm-spec §4.3.4's
 comparison, etc.)"; its complement is the STRUCTURAL half of the vocabulary —
 `:array` (`index`/`makearray`/`broadcast`/`reshape`/`transpose`/`concat`),
 `:aggregate` (`faq`), `:calculus` (`D`/`ic`/`grad`/`div`/
-`laplacian`), `:function` (`call`), `:data` (`const`/`enum`),
+`laplacian`), `:data` (`const`/`enum`),
 `:value_invention` — none of which is a scalar operator.
 
 `:constant` (the niladic `pi`/`e`/`true`/`false`) IS a scalar category; a
@@ -633,33 +759,20 @@ end
 """
     _UNARY_ELEMENTWISE_OPS
 
-Ordered table of the MECHANICAL unary elementwise ops — exactly the ops whose
-scalar/access-kernel evaluator arms are the repetitive one-liners
-(`op === :sin → sin(x)` / `@. b = sin(c1)`): the `:elementary` registry rows
-with fixed arity `1:1` and a recorded scalar function. Each entry is
-`(name::String, sym::Symbol, fn::Function)`; order is the registry row order,
-which matches the current `_eval_node_op` / `_eval_acc_op` arm order.
-
-`atan` (1-or-2-ary), the arithmetic `neg` (`-x`), and the truth-valued `not`
-are deliberately NOT here — their arms are not mechanical applications of a
-unary scalar function. Intended consumer: `@eval`-generation of the unary
-ladder arms and the MTK `_build_broadcast` function map, so a new unary op
-added to `_OP_TABLE` grows every arm at once.
+The `:unary`-shaped registry rows (`sin` … `ceil`), in registry order, each as
+`(name::String, sym::Symbol, fn::Function)`. `atan` (one or two operands), `neg`
+and `not` have shapes of their own. Consumers that map a unary op to its Julia
+function: the ModelingToolkit `broadcast` lowering, the geometry emitter, the
+Julia emitter's audit test.
 """
 const _UNARY_ELEMENTWISE_OPS = Tuple(
     (name = s.name, sym = Symbol(s.name), fn = s.scalar_fn::Function)
-        for s in _OP_TABLE
-        if s.category === :elementary && s.arity == 1:1 && s.scalar_fn !== nothing
+        for s in _OP_TABLE if s.shape === :unary
 )
 
-# The row shape shared by the three generated-ladder tables below. `sym` is the
-# op symbol the ladder arm MATCHES (`OpExpr.op` as a Symbol); `fnsym` is the
-# module-scope function name the generated arm CALLS — they differ exactly for
-# the alias rows (`pow` calls `^`, `atan2` calls `atan`). Splicing `fnsym` as a
-# call reproduces the hand-written arm's AST verbatim (`a < b` IS
-# `(<)(a, b)`), so the generated methods compile to the same branches, and `@.`
-# / broadcast fusion in the access-kernel/oop consumers is unchanged. `fn` is kept
-# so load-time guards can assert `fnsym` still resolves to it in module scope.
+# The row shape of the three tables below. `sym` is the op symbol a node carries;
+# `fnsym` is the module-scope function name an emitted call names. They differ
+# exactly for the alias rows (`pow` calls `^`, `atan2` calls `atan`).
 _ladder_row(s::_OpSpec) =
     (
     name = s.name, sym = Symbol(s.name),
@@ -669,63 +782,27 @@ _ladder_row(s::_OpSpec) =
 """
     _COMPARISON_ELEMENTWISE_OPS
 
-Ordered table of the MECHANICAL comparison arms — the `:comparison` registry
-rows, in registry (= hand-ladder) order: `<`, `<=`, `>`, `>=`, `==`, `!=`.
-Every evaluator ladder applies the Base predicate and maps its `Bool` through
-`1.0`/`0.0` (spec comparison semantics); the per-ladder arm shape (scalar
-ternary, `@.` blend, broadcast blend) lives with each generator. Consumers:
-`_eval_node_comparison` (compile.jl), `_eval_acc_comparison` (access_kernel.jl),
-`_comparison` (scalar_ops.jl), `_eval_acc_comparison` (access_kernel.jl).
+The `:compare`-shaped rows, in registry order: `<`, `<=`, `>`, `>=`, `==`, `!=`.
+An evaluator applies the Base predicate and maps its `Bool` to `1.0`/`0.0`.
 """
 const _COMPARISON_ELEMENTWISE_OPS = Tuple(
-    _ladder_row(s) for s in _OP_TABLE if s.category === :comparison
+    _ladder_row(s) for s in _OP_TABLE if s.shape === :compare
 )
 
 """
     _BINARY_ELEMENTWISE_OPS
 
-Ordered table of the MECHANICAL fixed-2-ary elementwise arms: the registry's
-arithmetic/elementary rows with arity exactly `2:2` and a recorded scalar
-function — `/`, `^`, `pow` (the deprecated word spelling of `^`), `atan2` (the
-explicit 2-ary `atan` spelling). NOTE the `^`/`pow` arms are mechanical only
-because the literal-exponent protection lives in the LEAVES, not the arm: a
-literal/const exponent stays `Float64` at every value type (see the `^` notes
-at `_eval_node`'s and `_eval_acc`'s literal kinds), so the generated
-`x ^ y` lands on `Dual^Float64` — the power rule — exactly as the hand arms
-did. Same four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
+The `:binary`-shaped rows, in registry order: `/`, `^`, `pow`, `atan2`.
 """
 const _BINARY_ELEMENTWISE_OPS = Tuple(
-    _ladder_row(s) for s in _OP_TABLE
-        if (s.category === :arithmetic || s.category === :elementary) &&
-        s.arity == 2:2 && s.scalar_fn !== nothing
+    _ladder_row(s) for s in _OP_TABLE if s.shape === :binary
 )
 
 """
     _NARY_MINMAX_OPS
 
-Ordered table of the MECHANICAL n-ary fold arms with a ≥2-arity guard: the
-elementary rows with arity `2:typemax` — `min`, `max` (esm-spec §4.2). The
-n-ary `+`/`*` are deliberately NOT here: their 1-ary form is a pass-through
-(and, on the access-kernel ladder, returns the CHILD's buffer — a property
-`_vk_hoistable` depends on), so those arms are semantic, not mechanical. Same
-four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
+The `:minmax`-shaped rows: `min`, `max` (esm-spec §4.2, two or more operands).
 """
 const _NARY_MINMAX_OPS = Tuple(
-    _ladder_row(s) for s in _OP_TABLE
-        if s.category === :elementary && s.arity == 2:typemax(Int)
+    _ladder_row(s) for s in _OP_TABLE if s.shape === :minmax
 )
-
-# Load-time guard for the symbol-spliced generated arms: each recorded function
-# name must resolve, in THIS module's scope, to the registry's recorded
-# function — so a future shadowing of e.g. `min` or `==` cannot silently desync
-# the generated ladders from their `_OP_TABLE` rows. (`_UNARY_ELEMENTWISE_OPS`
-# gets the equivalent check in access_kernel.jl, next to its first consumer.)
-for _t in (_COMPARISON_ELEMENTWISE_OPS, _BINARY_ELEMENTWISE_OPS, _NARY_MINMAX_OPS)
-    for _row in _t
-        getfield(@__MODULE__, _row.fnsym) === _row.fn ||
-            error(
-            "op_registry: generated-ladder op '$(_row.name)' does not " *
-                "resolve to its recorded scalar function in module scope"
-        )
-    end
-end

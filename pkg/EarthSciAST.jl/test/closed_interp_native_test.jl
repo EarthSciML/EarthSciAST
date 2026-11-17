@@ -456,8 +456,9 @@ end
 end
 
 # A build-constant subscript holding a `faq` keeps integer arithmetic outside
-# the `faq`: `/` is `div` there, as in the subscript without one, and a `faq`
-# whose value is not an integer is refused as that value written by hand is.
+# the `faq`: `/` is the exact quotient there, as in the subscript without one
+# (an inexact one is refused), and a `faq` whose value is not an integer is
+# refused as that value written by hand is.
 @testset "build-constant subscript with a faq: integer arithmetic" begin
     axis = _op("const"; value = Any[1.0, 2.0, 3.0, 4.0])
     # The number of axis entries <= 1.5: one.
@@ -466,11 +467,24 @@ end
         expr_body = _op("ifelse", _op("<=", _op("index", axis, _v("k")), _n(1.5)), _i(1), _i(0))
     )
     ca = Dict{String, Any}()
-    # 5/2 + 1 is 3 in integer arithmetic (3.5, rounded to 4, in floating point).
-    sub = _op("+", _op("/", _i(5), _i(2)), cnt)
-    @test _TI._const_subscript_int(sub, ca) == 3
+    # 6/2 + 1 is 4 on every route.
+    sub = _op("+", _op("/", _i(6), _i(2)), cnt)
+    @test _TI._const_subscript_int(sub, ca) == 4
     @test _TI._const_subscript_int(sub, ca) ==
-        _TI._eval_const_int(_op("+", _op("/", _i(5), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca)
+        _TI._eval_const_int(_op("+", _op("/", _i(6), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca)
+    # 5/2 has no integer reading that agrees with the floating-point walk (3.5,
+    # rounded to 4 there, where an integer `div` gives 2): refused on both.
+    for f in (
+            () -> _TI._const_subscript_int(_op("+", _op("/", _i(5), _i(2)), cnt), ca),
+            () -> _TI._eval_const_int(_op("+", _op("/", _i(5), _i(2)), _i(1)), _TI._EMPTY_IDX_ENV, ca),
+        )
+        e = try
+            f(); nothing
+        catch x
+            x
+        end
+        @test e isa _TI.TreeWalkError && e.code == "E_TREEWALK_INEXACT_SUBSCRIPT"
+    end
     # A `faq` worth 1.5: 2 + 1.5 is no subscript.
     half = _op("faq"; output_idx = Any[], reduce = "+", ranges = Dict{String, Any}("k" => Any[1, 3]), expr_body = _n(0.5))
     err(f) = try

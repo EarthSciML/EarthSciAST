@@ -261,6 +261,8 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
     elseif node isa OpExpr
         op = node.op
         args = node.args
+        # The registry arity is normative here as on every evaluator.
+        _check_op_arity(Symbol(op), length(args))
         if op == "index"
             return _vi_index(node, ctx, bindings)
         elseif op == "true"
@@ -324,8 +326,9 @@ end
 # key template) stays a float so the key test downstream can name it.
 _vi_round(f, x::Float64) = isfinite(x) ? f(Int, x) : x
 
-# A build-time condition value: a Bool, or a number > 0 (NaN is false).
-_vi_truthy(v) = v isa Bool ? v : (v isa Real ? v > 0 : _vi_num_fail(v))
+# A build-time condition value: a Bool, or a number, true when `!= 0` as the
+# tree walk's `ifelse`/`and`/`or`/`not` test it (so NaN is true).
+_vi_truthy(v) = v isa Bool ? v : (v isa Real ? v != 0 : _vi_num_fail(v))
 _vi_num_fail(v) = throw(
     TreeWalkError(
         "E_TREEWALK_VI_SYMBOL",
@@ -533,7 +536,7 @@ end
 
 # The index range symbol of a join-key variable within the producer's ranges:
 # the producer range whose `from` equals the variable's (1-D) shape index set.
-function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
+function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx, pick = :left)
     shape = _vi_join_var_shape(vname, ctx)
     length(shape) == 1 || throw(
         TreeWalkError(
@@ -541,7 +544,7 @@ function _vi_join_index_sym(vname, producer_ranges, ctx::_ViCtx)
             "value-invention join key '$(vname)' must be a 1-D buffer; shape=$(shape)"
         )
     )
-    return _vi_range_sym_for_set(shape[1], vname, producer_ranges)
+    return _vi_range_sym_for_set(shape[1], vname, producer_ranges, pick)
 end
 
 # The range symbol an OVERLAP gate's env-factor list runs over. The list's
@@ -550,7 +553,7 @@ end
 # stack. A factor's first axis is its position axis in every form, so the first
 # factor's first shape index set names the range, as in the tree-walk's
 # `_overlap_env_sym`.
-function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_ViCtx)
+function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_ViCtx, pick = :left)
     rank = _overlap_env_rank(length(env_names))
     rank === nothing && throw(
         TreeWalkError(
@@ -581,20 +584,26 @@ function _vi_overlap_env_sym(env_names::AbstractVector, producer_ranges, ctx::_V
         )
     end
     fname = String(env_names[1])
-    return _vi_range_sym_for_set(_vi_join_var_shape(fname, ctx)[1], fname, producer_ranges)
+    return _vi_range_sym_for_set(_vi_join_var_shape(fname, ctx)[1], fname, producer_ranges, pick)
 end
 
-# The producer range whose `from` is index set `target`.
-function _vi_range_sym_for_set(target, vname, producer_ranges)
-    for (sym, spec) in producer_ranges
-        spec isa IndexSetRef && spec.from == target && return sym
-    end
-    throw(
+# The producer range a key column over index set `target` is read at, by the
+# rule the right-hand side's joins use (`_join_sym_for_key`, CONFORMANCE_SPEC
+# §5.5.8): `pick` is the clause's `syms` entry for this side, or `:left` /
+# `:right`, which take the earlier / later of two candidate ranges in canonical
+# range order. Three or more candidates without `syms` are refused, never
+# settled by hash order.
+function _vi_range_sym_for_set(target, vname, producer_ranges, pick = :left)
+    sym_to_set = Dict{String, String}(
+        String(s) => String(spec.from) for (s, spec) in producer_ranges if spec isa IndexSetRef
+    )
+    any(==(String(target)), values(sym_to_set)) || throw(
         TreeWalkError(
             "E_TREEWALK_VI_JOIN",
             "no producer range binds the index set '$(target)' of join key '$(vname)'"
         )
     )
+    return _join_sym_for_key(String(target), producer_ranges, sym_to_set, pick, nothing, :column)
 end
 
 # One resolved value-invention join gate (built ONCE per producer, not per
@@ -631,8 +640,8 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
     gates = _ViJoinGate[]
     for clause in join
         if clause isa _OverlapJoinSpec
-            sym_l = _vi_overlap_env_sym(clause.src_env, producer_ranges, ctx)
-            sym_r = _vi_overlap_env_sym(clause.tgt_env, producer_ranges, ctx)
+            sym_l = _vi_overlap_env_sym(clause.src_env, producer_ranges, ctx, :left)
+            sym_r = _vi_overlap_env_sym(clause.tgt_env, producer_ranges, ctx, :right)
             cands = _overlap_candidate_set(
                 _vi_env_vectors(clause.src_env, ctx),
                 _vi_env_vectors(clause.tgt_env, ctx);
@@ -640,17 +649,34 @@ function _vi_resolve_join(join, producer_ranges, ctx::_ViCtx)
             )
             push!(gates, _ViJoinGate(sym_l, sym_r, nothing, nothing, _OverlapIndex(cands)))
         else
+            syms = _clause_syms(clause)
+            pl, pr = syms === nothing ? (:left, :right) : syms
             for pair in clause
                 lname, rname = String(pair[1]), String(pair[2])
-                ls = _vi_join_index_sym(lname, producer_ranges, ctx)
-                rs = _vi_join_index_sym(rname, producer_ranges, ctx)
-                ml, mr = ctx.maps[lname], ctx.maps[rname]
+                ls = _vi_join_index_sym(lname, producer_ranges, ctx, pl)
+                rs = _vi_join_index_sym(rname, producer_ranges, ctx, pr)
+                ml, mr = _vi_join_column(ctx, lname), _vi_join_column(ctx, rname)
                 cands = _vi_equality_candidates(ls, ml, rs, mr, producer_ranges, ctx)
                 push!(gates, _ViJoinGate(ls, rs, ml, mr, cands))
             end
         end
     end
     return gates
+end
+
+# A join key column's materialised buffer. Every column a producer's join names
+# is materialised before the producer (`_vi_detect` orders them), so a missing
+# one is a column the document never defines as a value-invention column.
+function _vi_join_column(ctx::_ViCtx, name::String)
+    m = get(ctx.maps, name, nothing)
+    m === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_VI_JOIN",
+            "value-invention join key column '$(name)' is not a materialised join " *
+                "column: it must be a 1-D per-element `faq` over the joined index set"
+        )
+    )
+    return m
 end
 
 # The key-equality match pairs of a bin-equality gate, as the drive index for
@@ -765,12 +791,13 @@ end
 
 # ---- Compiled column bodies -------------------------------------------------
 # A join column whose body is build-time arithmetic over its one range symbol
-# (the bin column `floor(lon[i] / dx)`) is evaluated once per cell. `_vi_eval` resolves every name through the bindings
-# dictionary and the const-array registry at each cell; this lowers the body
-# once into a small node tree whose names are already resolved (the range
-# symbol to the loop value, a parameter to its value, a gather to its array),
-# then evaluates it per cell with the same arms in the same order, so every key
-# is the one `_vi_eval` computes. A body with anything else (a ragged range, a
+# (the bin column `floor(lon[i] / dx)`) is evaluated once per cell. `_vi_eval`
+# resolves every name through the bindings dictionary and the const-array
+# registry at each cell; this lowers the body once into a small node tree whose
+# names are already resolved (the range symbol to the loop value, a parameter to
+# its value, a gather to its array) and compiles it to Julia code
+# (`_vic_kernel`) with the same arms in the same order, so every key is the one
+# `_vi_eval` computes. A body with anything else (a ragged range, a
 # gather from a bounded or non-Float64 array or from an upstream buffer, an
 # unresolved name) returns `nothing` and keeps `_vi_eval`. A producer's key
 # and filter over several interval / categorical ranges compile the same way
@@ -837,18 +864,9 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
         end
         op = get(_VIC_OPS, node.op, nothing)
         op === nothing && return nothing
-        nargs = length(args)
-        if op in (:vtrue, :vfalse)
-            nargs == 0 || return nothing
-        elseif op === :ifelse
-            nargs == 3 || return nothing
-        elseif op === :not
-            nargs == 1 || return nothing
-        elseif op in (:floor, :ceil, :-, :*, :+, :and, :or, :min, :max)
-            nargs >= 1 || return nothing
-        else
-            nargs >= 2 || return nothing
-        end
+        # An operand count outside the registry arity keeps `_vi_eval`, which
+        # refuses it.
+        length(args) in (_op_spec(node.op).arity::UnitRange{Int}) || return nothing
         sub = _ViC[]
         for a in args
             c = _vi_compile_node(a, ctx, syms)
@@ -860,83 +878,10 @@ function _vi_compile_node(node, ctx::_ViCtx, syms::Vector{String})
     return nothing
 end
 
-# A range symbol's value: `v` is the one symbol's value, or the binding vector.
-@inline _vic_sym(v::Int, ::Int) = v
-@inline _vic_sym(v::Vector{Int}, slot::Int) = @inbounds v[slot]
-
-# `_vi_eval` arm for arm (the `_vi_num` guards cannot fire: every compiled
-# value is a number or a Bool).
-function _vic_eval(n::_ViC, v::Union{Int, Vector{Int}})::Union{Int, Float64, Bool}
-    k = n.kind
-    k == _VIC_INT && return n.ival
-    k == _VIC_NUM && return n.fval
-    k == _VIC_SYM && return _vic_sym(v, n.ival)
-    a = n.args
-    if k == _VIC_GATHER
-        if length(a) == 1
-            return n.arr[Int(_vic_eval(a[1], v))]
-        end
-        return n.arr[(Int(_vic_eval(x, v)) for x in a)...]
-    end
-    op = n.op
-    if op === :vtrue
-        return true
-    elseif op === :vfalse
-        return false
-    elseif op === :ifelse
-        return _vic_eval(_vi_truthy(_vic_eval(a[1], v)) ? a[2] : a[3], v)
-    elseif op === :and
-        for x in a
-            _vi_truthy(_vic_eval(x, v)) || return false
-        end
-        return true
-    elseif op === :or
-        for x in a
-            _vi_truthy(_vic_eval(x, v)) && return true
-        end
-        return false
-    elseif op === :not
-        return !_vi_truthy(_vic_eval(a[1], v))
-    elseif op === :min || op === :max
-        # `minimum` / `maximum` of the operands: NaN wins, -0.0 < +0.0, in
-        # any order.
-        acc = Float64(_vic_eval(a[1], v))
-        for j in 2:length(a)
-            x = Float64(_vic_eval(a[j], v))
-            acc = op === :min ? min(acc, x) : max(acc, x)
-        end
-        return acc
-    elseif op === :floor
-        return _vi_round(floor, Float64(_vic_eval(a[1], v)))
-    elseif op === :ceil
-        return _vi_round(ceil, Float64(_vic_eval(a[1], v)))
-    elseif op === :/
-        return Float64(_vic_eval(a[1], v)) / Float64(_vic_eval(a[2], v))
-    elseif op === :* || op === :+
-        acc = Float64(_vic_eval(a[1], v))
-        for j in 2:length(a)
-            x = Float64(_vic_eval(a[j], v))
-            acc = op === :* ? acc * x : acc + x
-        end
-        return acc
-    elseif op === :-
-        return length(a) == 1 ? -Float64(_vic_eval(a[1], v)) :
-            Float64(_vic_eval(a[1], v)) - Float64(_vic_eval(a[2], v))
-    end
-    x = Float64(_vic_eval(a[1], v))
-    y = Float64(_vic_eval(a[2], v))
-    op === :< && return x < y
-    op === :> && return x > y
-    op === :<= && return x <= y
-    op === :>= && return x >= y
-    op === :(==) && return x == y
-    return x != y
-end
-
 # Materialise a plain per-element `join` column (see `_vi_detect`'s `columns`)
 # → Dict(output-index → exact integer). A NaN value is
 # `value_invention_key_out_of_range` naming the column. A body over one interval
-# or categorical range is compiled once (`_vi_compile_node`).
+# or categorical range is compiled once (`_vi_compile_node`, `_vic_kernel`).
 function _vi_materialize_column!(ctx::_ViCtx, vname::AbstractString, node::OpExpr)
     sym = String(only(node.output_idx))
     body = node.expr_body
@@ -955,8 +900,11 @@ function _vi_materialize_column!(ctx::_ViCtx, vname::AbstractString, node::OpExp
         compiled = is !== nothing && is.kind in ("interval", "categorical") ?
             _vi_compile_node(body, ctx, sym) : nothing
         if compiled !== nothing
+            k = _vic_kernel(compiled)
+            vec = Int[0]
             for v in _vi_range_values(spec, ctx, Dict{String, Any}())
-                x = _vic_eval(compiled, v)
+                vec[1] = v
+                x = k(vec)
                 out[v] = x isa AbstractFloat && isnan(x) ?
                     _vi_key_checked(x, column, Dict{String, Any}(sym => v)) : _vi_key_int(x)
             end
@@ -997,8 +945,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     _vi_enumerate_join(
         ranges, join_gates, ctx, bindings -> begin
             if filt !== nothing
-                fv = _vi_eval(filt, ctx, bindings)
-                (fv === true || (isa(fv, Real) && fv > 0)) || return
+                _vi_truthy(_vi_eval(filt, ctx, bindings)) || return
             end
             if join_gates !== nothing && !_vi_join_ok(join_gates, bindings)
                 return
@@ -1033,7 +980,7 @@ function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
 end
 
 # A compiled node as Julia code, compiled once through RuntimeGeneratedFunctions
-# and called per binding as `k(v)`: `_vic_eval` arm for arm, the same
+# and called per binding as `k(v)`: `_vi_eval` arm for arm, the same
 # operations in the same order on the same value types (an `Int` literal or
 # range symbol stays an `Int`, a `floor` keeps `_vi_round`'s result, a
 # comparison is a `Bool`), so every value is the walker's.
@@ -1118,8 +1065,7 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     for _ in 1:n
         keep = true
         if cf !== nothing
-            fv = cf(v)
-            keep = fv === true || (isa(fv, Real) && fv > 0)
+            keep = _vi_truthy(cf(v))
         end
         keep && push!(out, _vic_key(k, v, syms, column))
         # The last symbol runs fastest, as `_vi_enumerate`'s innermost loop.

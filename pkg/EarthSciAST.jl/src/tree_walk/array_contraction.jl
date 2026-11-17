@@ -257,7 +257,7 @@ function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     ch = nd.children
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:ragged_loop_reentered))
     fnsym = _cg_oplus_fn(nd.op)
-    nd.op in (:+, :*, :max, :min) || throw(_CodegenDecline(:unsupported_op))
+    _is_numeric_reducer(nd.op) || throw(_CodegenDecline(:unsupported_op))
     seed = nd.literal
     kv = _cg_name(ctx, "rk")
     acc = _cg_name(ctx, "racc")
@@ -343,9 +343,8 @@ function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node,
             any(x -> x === nd, out) || push!(out, nd)
         return out
     end
-    lazy = nd.kind === _NK_OP && nd.op in (:ifelse, :and, :or)
     for (j, c) in enumerate(nd.children)
-        lazy && j > 1 && break
+        nd.kind === _NK_OP && _op_arg_conditional(nd.op, j) && break
         _ragged_hoists!(out, c, ref, memo)
     end
     return out
@@ -618,9 +617,7 @@ function _ac_cell_only(nd::_Node, refs)
     return _allof(c -> _ac_cell_only(c, refs), nd.children)
 end
 
-_cg_oplus_fn(op::Symbol) =
-    op === :+ ? :+ : op === :* ? :* : op === :max ? :max : op === :min ? :min :
-    op === :or ? :_or_combine : throw(_CodegenDecline(:unsupported_op))
+_cg_oplus_fn(op::Symbol) = _reducer_fnsym(op)
 
 # `_NK_CONTRACTION_LOOP` as a counted loop, `_eval_contraction_loop` step for
 # step, for every emitter that writes one (the nest's term below, the scalar
@@ -719,7 +716,7 @@ function _cg_count_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi, span)
     else
         return nothing
     end
-    cmp = _CG_CMP_FN[cond.op]
+    cmp = _op_fnsym(_OP_SYM_INDEX[cond.op])
     xv = _cg_name(ctx, "cx")
     cv = _cg_name(ctx, "cn")
     xe = _cg_emit(ctx, kc, x)

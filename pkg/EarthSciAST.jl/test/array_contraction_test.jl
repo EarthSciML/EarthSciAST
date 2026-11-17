@@ -450,25 +450,26 @@ _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
         @test all(isequal(Jn[vn["R.E[$s]"]], Ji[vi["R.E[$s]"]]) for s in 1:NS)
     end
 
-    # bool_and_or's ⊕ is `or`, folded from 0̄ = false on the evaluator's 1.0/0.0
-    # encoding. A long one is the nest's (the affine tier has no run-time fold
-    # for `or` and unrolls only a short one, which it does here); both agree
-    # with the per-cell fold and with the closed form, `any` over the terms.
-    @testset "a bool_and_or contraction of $NS terms folds as the per-cell build" for
-        (NS, nest, thr) in ((16, true, 36.0), (4, false, 20.0))
+    # bool_and_or's ⊕ is `or`, which is index-set-producing: an array-valued
+    # bool_and_or reduction (an output index contracting another) is refused by
+    # every numeric evaluator (CONFORMANCE_SPEC §5.6.1), at any length and under
+    # every compiler. Only a scalar (rank-0) one runs.
+    @testset "an array-valued bool_and_or contraction of $NS terms is refused" for NS in (16, 4)
         NR = 6
         doc, ics = _ac_doc(NS, NR), _ac_ics(NS, NR)
         agg = doc["models"]["R"]["equations"][2]["rhs"]
         agg["semiring"] = "bool_and_or"
-        agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], thr])
-        dn, vn, tn = _ac_du(doc, ics)
-        do_, vo, _ = _ac_du(doc, ics; compiler = :interpreter)
-        @test _ac_fired(tn) == (nest ? 1 : 0)
-        A = _ac_outs(dn, vn, NR)
-        @test all(A[r] === _ac_outs(do_, vo, NR)[r] for r in 1:NR)
-        ex = [any(_ac_sr(s, r) * _ac_e0(s) > thr for s in 1:NS) ? 1.0 : 0.0 for r in 1:NR]
-        @test A == ex
-        @test 0.0 < sum(ex) < NR    # both answers occur
+        agg["expr"] = Dict("op" => ">", "args" => Any[agg["expr"], 20.0])
+        for c in (:native, :interpreter)
+            err = try
+                _ac_build(doc, ics; compiler = c)
+                nothing
+            catch e
+                e
+            end
+            @test err isa _AC_ESS.TreeWalkError
+            @test err.code == "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING"
+        end
     end
 
     # An output range with no cell (an extent a metaparameter can set to 0)

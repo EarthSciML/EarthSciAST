@@ -403,10 +403,10 @@ function _geo_reduce_fold(reduce_spec, semiring_spec)
     else
         "+"   # unspecified → additive fold (§5.1 note 1)
     end
-    oplus == "+"   && return (_OPLUS_IDENTITY["+"], +)
-    oplus == "min" && return (_OPLUS_IDENTITY["min"], min)
-    oplus == "max" && return (_OPLUS_IDENTITY["max"], max)
-    oplus == "*"   && return (_OPLUS_IDENTITY["*"], *)
+    if _is_numeric_reducer(oplus)
+        r = _REDUCER_INDEX[Symbol(oplus)]
+        return (r.zerobar, r.fn)
+    end
     throw(
         TreeWalkError(
             "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
@@ -1120,9 +1120,10 @@ _setup_map_compile_once_disabled() = !_setup_compile_once_enabled()
 # per-cell loop (a decline, or an eval-time error).
 
 # The ops on which `_eval_const_int` (integer) and `_eval_node` (Float64 +
-# `round(Int, …)`) can disagree for exact-integer operands. Only `/` qualifies:
-# `_eval_const_int` maps it to truncating `div`, `_compile` to true division.
-# (`floor` is a pass-through there, so `floor(a/b)` is rejected by the same walk.)
+# `round(Int, …)`) can disagree for integer operands. Only `/` qualifies:
+# `_eval_const_int` refuses an inexact quotient (`_subscript_quotient`), while
+# `_compile` carries the fractional value on, so the two would disagree on
+# whether the subscript is an error.
 const _INDEX_INEXACT_OPS = Set{String}(["/"])
 
 # True iff no `index` subscript anywhere in `e` uses an op whose integer and

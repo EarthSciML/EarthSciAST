@@ -790,12 +790,7 @@ end
 # names, the integer ops it implements, and gathers from a const array (by
 # name or inline) at such subscripts. Anything else (an array producer, a
 # name that is not a loop index) leaves `_eval_const_int` without a value.
-const _LANE_SUBSCRIPT_OPS = Set(
-    [
-        "+", "-", "*", "/", "floor", "ceil", "mod", "max", "min",
-        "ifelse", "<", "<=", ">", ">=", "==", "neg",
-    ]
-)
+const _LANE_SUBSCRIPT_OPS = Set(keys(_SUBSCRIPT_OPS))
 function _lane_subscript_static(
         e::ASTExpr, idxset::Set{String},
         const_arrays::AbstractDict
@@ -1426,29 +1421,27 @@ end
 # `ok = false` for that cell, which then takes `_eval_recipe` itself, so the
 # table and every error are exactly the per-cell resolution's.
 
-const _IX_LIT, _IX_LOOP, _IX_ADD, _IX_SUB, _IX_NEG, _IX_MUL, _IX_DIV, _IX_MOD,
-    _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
-    _IX_GATHER, _IX_FLD, _IX_CLD = Int8.(1:19)
+const _IX_LIT, _IX_LOOP, _IX_OP, _IX_GATHER = Int8.(1:4)
 
 struct _IdxNode
     kind::Int8
     val::Int                    # literal, or loop position
+    op::Symbol                  # `_IX_OP`: the subscript operator (`_SUBSCRIPT_OPS`)
     args::Vector{_IdxNode}
     flat::Vector{Float64}       # gather: the const array's data, column-major
     dims::Vector{Int}
-    _IdxNode(kind, val, args, flat, dims) = _new_typed(_IdxNode, kind, val, args, flat, dims)
+    _IdxNode(kind, val, op, args, flat, dims) = _new_typed(_IdxNode, kind, val, op, args, flat, dims)
 end
 _def_new_typed(_IdxNode)
 _IdxNode(kind::Int8, val::Int, args::Vector{_IdxNode} = _IdxNode[]) =
-    _IdxNode(kind, val, args, Float64[], Int[])
-
-const _IX_BINOPS = Dict{String, Int8}(
-    "/" => _IX_DIV, "mod" => _IX_MOD, "<" => _IX_LT,
-    "<=" => _IX_LE, ">" => _IX_GT, ">=" => _IX_GE, "==" => _IX_EQ
-)
+    _IdxNode(kind, val, Symbol(""), args, Float64[], Int[])
+_IdxNode(op::Symbol, args::Vector{_IdxNode}) =
+    _IdxNode(_IX_OP, 0, op, args, Float64[], Int[])
 
 # The `_IdxNode` form of an index expression, or `nothing` when some part of it
 # is outside what `_ix_eval` models (the caller keeps `_eval_const_int`).
+# An operator compiles when it is a subscript operator applied at an arity it
+# admits (`_SUBSCRIPT_OPS`); a wrong arity is left to `_eval_const_int` to refuse.
 function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::AbstractDict)
     if e isa IntExpr
         return _IdxNode(_IX_LIT, Int(e.value))
@@ -1462,13 +1455,6 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
     elseif e isa OpExpr
         op = e.op
         c = e.args
-        sub() = (
-            xs = _IdxNode[]; for a in c
-                x = _ix_compile(a, idx_names, const_arrays)
-                x === nothing && return nothing
-                push!(xs, x)
-            end; xs
-        )
         if op == "index"
             (length(c) >= 2 && c[1] isa VarExpr) || return nothing
             arr = get(const_arrays, (c[1]::VarExpr).name, nothing)
@@ -1480,35 +1466,17 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
                 x === nothing && return nothing
                 push!(xs, x)
             end
-            return _IdxNode(_IX_GATHER, 0, xs, vec(data), collect(Int, size(data)))
+            return _IdxNode(_IX_GATHER, 0, Symbol(""), xs, vec(data), collect(Int, size(data)))
         end
-        xs = sub()
-        xs === nothing && return nothing
-        n = length(xs)
-        if op == "+" && n >= 1
-            return _IdxNode(_IX_ADD, 0, xs)
-        elseif op == "*" && n >= 1
-            return _IdxNode(_IX_MUL, 0, xs)
-        elseif op == "-" && n == 1 || op == "neg" && n == 1
-            return _IdxNode(_IX_NEG, 0, xs)
-        elseif op == "-" && n == 2
-            return _IdxNode(_IX_SUB, 0, xs)
-        elseif (op == "floor" || op == "ceil") && n == 1
-            # A rounded quotient rounds the exact quotient, as `_eval_const_int`
-            # does; over an integer subexpression the rounding is the identity.
-            q = c[1]
-            if q isa OpExpr && q.op == "/" && length(q.args) == 2
-                x = xs[1]
-                return _IdxNode(op == "floor" ? _IX_FLD : _IX_CLD, 0, x.args)
-            end
-            return xs[1]
-        elseif (op == "max" || op == "min") && n >= 1
-            return _IdxNode(op == "max" ? _IX_MAX : _IX_MIN, 0, xs)
-        elseif op == "ifelse" && n == 3
-            return _IdxNode(_IX_IFELSE, 0, xs)
-        elseif haskey(_IX_BINOPS, op) && n == 2
-            return _IdxNode(_IX_BINOPS[op], 0, xs)
+        ar = get(_SUBSCRIPT_OPS, op, nothing)
+        (ar !== nothing && length(c) in ar) || return nothing
+        xs = _IdxNode[]
+        for a in c
+            x = _ix_compile(a, idx_names, const_arrays)
+            x === nothing && return nothing
+            push!(xs, x)
         end
+        return _IdxNode(Symbol(op), xs)
     end
     return nothing
 end
@@ -1520,24 +1488,7 @@ function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int, Bool}
     k === _IX_LIT && return (n.val, true)
     k === _IX_LOOP && return (@inbounds(loop[n.val]), true)
     a = n.args
-    if k === _IX_ADD || k === _IX_MUL || k === _IX_MAX || k === _IX_MIN
-        acc, ok = _ix_eval(a[1], loop)
-        ok || return (0, false)
-        for j in 2:length(a)
-            v, ok = _ix_eval(a[j], loop)
-            ok || return (0, false)
-            acc = k === _IX_ADD ? acc + v : k === _IX_MUL ? acc * v :
-                k === _IX_MAX ? max(acc, v) : min(acc, v)
-        end
-        return (acc, true)
-    elseif k === _IX_NEG
-        v, ok = _ix_eval(a[1], loop)
-        return (-v, ok)
-    elseif k === _IX_IFELSE
-        c, ok = _ix_eval(a[1], loop)
-        ok || return (0, false)
-        return _ix_eval(c != 0 ? a[2] : a[3], loop)
-    elseif k === _IX_GATHER
+    if k === _IX_GATHER
         lin = 0
         stride = 1
         for d in eachindex(a)
@@ -1550,19 +1501,24 @@ function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int, Bool}
         (isfinite(x) && -9.0e18 <= x <= 9.0e18) || return (0, false)
         return (Int(x), true)
     end
-    x, ok1 = _ix_eval(a[1], loop)
-    y, ok2 = _ix_eval(a[2], loop)
-    (ok1 && ok2) || return (0, false)
-    k === _IX_SUB && return (x - y, true)
-    if k === _IX_DIV || k === _IX_MOD || k === _IX_FLD || k === _IX_CLD
-        y == 0 && return (0, false)
-        v = k === _IX_DIV ? div(x, y) : k === _IX_MOD ? mod(x, y) :
-            k === _IX_FLD ? fld(x, y) : cld(x, y)
+    # An operator: the shared integer meaning (`_subscript_eval_op`). A failure
+    # (an out-of-range gather below, a zero divisor, an inexact quotient)
+    # reports `ok = false`, and the caller's `_eval_const_int` raises it.
+    ok = Ref(true)
+    ev(x::_IdxNode) = (r = _ix_eval(x, loop); r[2] || (ok[] = false); r[1])
+    quot(x::_IdxNode) = (x.kind === _IX_OP && x.op === :/) ? x.args : nothing
+    op = n.op
+    if op === :/ || op === :mod || ((op === :floor || op === :ceil) && quot(a[1]) !== nothing)
+        q = op === :/ || op === :mod ? a : quot(a[1])
+        x = ev(q[1]); y = ev(q[2])
+        (ok[] && y != 0) || return (0, false)
+        (op === :/ && rem(x, y) != 0) && return (0, false)
+        v = op === :/ ? div(x, y) : op === :mod ? mod(x, y) :
+            _subscript_rounded_quotient(op, x, y)
         return (v, true)
     end
-    b = k === _IX_LT ? x < y : k === _IX_LE ? x <= y : k === _IX_GT ? x > y :
-        k === _IX_GE ? x >= y : x == y
-    return (b ? 1 : 0, true)
+    v = _subscript_eval_op(op, a, ev, quot)
+    return ok[] ? (v::Int, true) : (0, false)
 end
 
 """

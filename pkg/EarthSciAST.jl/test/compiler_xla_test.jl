@@ -303,27 +303,16 @@ _cx_du(prob, u, t) = (
         @test isempty(insp.compiler_report.rules)
         @test insp.compiler_report.compiler === :native   # the untouched default
 
-        # A construct the EMITTER cannot lower. `Reactant.@compile` may hand the
-        # emitter's `DirectEmitError` back wrapped; either way it has to come
-        # out as the named refusal, never as an anonymous failure.
-        err4 = _cx_catch(
-            () -> esm_problem(
-                _cx_unsupported(), (0.0, 1.0);
-                compiler = :xla
-            )
-        )
-        @test err4 isa TreeWalkError
-        @test err4.code == CX.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("compiler=:xla refuses '", err4.detail)
-        @test occursin("state equation", err4.detail)
-        @test occursin("cannot lower", err4.detail)
-        @test occursin("`/`", err4.detail)
-        # `native` rejects the same document with the walker's arity error,
-        # not a refusal, so the refusal above is the emitter's.
-        err5 = _cx_catch(() -> esm_problem(_cx_unsupported(), (0.0, 1.0)))
-        @test err5 isa TreeWalkError
-        @test err5.code == "E_TREEWALK_ARITY"
-        @test occursin("/ expects 2 args, got 3", err5.detail)
+        # A three-operand `/`: registry arity is normative, so the build refuses
+        # it with the walker's arity error under every compiler, before any
+        # emitter sees the node (the emitter's own refusal of a malformed node
+        # is pinned in reactant_direct_emit_test.jl).
+        for c in (:xla, :native)
+            err4 = _cx_catch(() -> esm_problem(_cx_unsupported(), (0.0, 1.0); compiler = c))
+            @test err4 isa TreeWalkError
+            @test err4.code == "E_TREEWALK_ARITY"
+            @test occursin("/ expects 2 args, got 3", err4.detail)
+        end
     end
 
     @testset "the device: a typo is a configuration error, a missing GPU is unavailable" begin

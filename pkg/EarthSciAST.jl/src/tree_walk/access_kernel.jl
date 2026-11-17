@@ -118,6 +118,40 @@ const _AK_STATE_TBL_BOX = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ g
 # which is why the VALUES are never materialized the way a const lane's are.
 const _AK_ARR_TBL_BOX = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
 
+# What each descriptor kind reads and how it is addressed, indexed by the tag.
+# The kind lists the passes test (which kinds are box-addressed, cell-invariant,
+# lockstep-mergeable, a state / forcing / const family) are derived from these
+# two columns, so a new kind is one row plus the ladders that compute with it.
+#   source: :state (the ODE state), :const (a frozen array), :forcing (a live
+#           buffer, read as it is at the call), :value (a hoisted scalar),
+#           :loop (the loop index itself)
+#   addr:   :affine (output slot + delta), :box (strided box address),
+#           :table (an index table read at a box address), :fixed (one slot),
+#           :cell (the cell ordinal), :edge (cell × neighbour), :conn (through
+#           unstructured connectivity), :loop (a loop index)
+const _AK_INFO = (
+    (source = :state, addr = :affine),   # 1  STATE_AFFINE
+    (source = :const, addr = :affine),   # 2  CONST_AFFINE
+    (source = :const, addr = :box),      # 3  CONST_BOX
+    (source = :state, addr = :fixed),    # 4  STATE_FIXED
+    (source = :loop, addr = :loop),      # 5  LOOP_IDX
+    (source = :value, addr = :fixed),    # 6  SCALAR
+    (source = :const, addr = :cell),     # 7  CONST_CELL
+    (source = :const, addr = :edge),     # 8  CONST_EDGE
+    (source = :forcing, addr = :fixed),  # 9  ARR_FIXED
+    (source = :state, addr = :conn),     # 10 STATE_INDIRECT
+    (source = :state, addr = :conn),     # 11 STATE_INDIRECT_COL
+    (source = :forcing, addr = :box),    # 12 FORCING_BOX
+    (source = :state, addr = :table),    # 13 STATE_TBL_BOX
+    (source = :forcing, addr = :table),  # 14 ARR_TBL_BOX
+)
+length(_AK_INFO) == _AK_ARR_TBL_BOX ||
+    error("access_kernel: _AK_INFO has $(length(_AK_INFO)) rows for $(Int(_AK_ARR_TBL_BOX)) descriptor kinds")
+_ak_source(k::UInt8) = _AK_INFO[k].source
+_ak_addr(k::UInt8) = _AK_INFO[k].addr
+# Addressed through `s1`/`s2`/`s3`/`off` (and `sx` past rank 3).
+_ak_box_addressed(k::UInt8) = (a = _ak_addr(k); a === :box || a === :table)
+
 struct _AccDesc
     kind::UInt8
     arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
@@ -456,9 +490,10 @@ function _eval_acc(
             end
         end
         return _eval_acc(S.spine, u, p, t, c, n, oln, midx, S, T)
-    else # _NK_OP
+    elseif k === _NK_OP
         return _eval_acc_op(nd, u, p, t, c, n, oln, midx, K, T)
     end
+    return _unknown_kind(nd, "the access-kernel walker")
 end
 
 # The affine reduction's fold (`_NK_AREDUCE`): `midx` is widened to cover the
@@ -486,7 +521,7 @@ function _areduce_fold(
         mi = Base.setindex(midx, j, d)
         if r == 1
             v = _eval_acc(body, u, p, t, c, n, oln, mi, K, T)
-            s = op === :+ ? s + v : op === :* ? s * v : op === :max ? max(s, v) : min(s, v)
+            s = _oplus_numeric(op, s, v)
         else
             s = _areduce_fold(body, spec, r - 1, s, op, u, p, t, c, n, oln, mi, K, T)
         end
@@ -528,203 +563,33 @@ function _eval_acc_contraction(
             s = _or_combine(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
         end
         return s
-    else  # :min
+    elseif op === :min
         s = nd.literal
         @inbounds for k in eachindex(ch)
             s = min(s, _eval_acc(ch[k], u, p, t, c, n, oln, midx, K, T))
         end
         return s
     end
+    return _throw_unknown_reducer(op)
 end
 
-# ---- Generated mechanical arms (op-registry tables, src/op_registry.jl) ----
-#
-# The MECHANICAL arms of `_eval_acc_op` — unary elementwise, comparisons,
-# fixed-2-ary `/`/`^`/`pow`/`atan2`, and the n-ary `min`/`max` folds — are
-# GENERATED from the same registry tables that grow the other three ladders
-# (`_eval_node_op` / `_eval_acc_op` / `_scalar_op`), so a mechanical op added to
-# `_OP_TABLE` reaches the access spine automatically. Probe protocol as
-# everywhere: `nothing` ⇒ not in the table ⇒ the ladder falls through.
-# DELIBERATELY NO ARITY GUARDS on the unary/comparison/binary arms — the
-# hand-written access arms had none (the spine is compiled from an
-# already-validated tree), and adding them would change the failure mode of a
-# malformed spine. `min`/`max` keep their historical `< 2` guard.
-let arms = :(return nothing)
-    for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.sym)(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T))
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_unary_elementwise(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.fnsym)(
-                        _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                        _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
-                    ) ? 1.0 : 0.0
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_comparison(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                return $(row.fnsym)(
-                    _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                    _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
-                )
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_binary_elementwise(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-let arms = :(return nothing)
-    for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                length(ch) < 2 && throw(
-                    TreeWalkError(
-                        "E_TREEWALK_ARITY",
-                        $(row.name * " needs ≥2 args")
-                    )
-                )
-                s = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T)
-                @inbounds for i in 2:length(ch)
-                    s = $(row.fnsym)(s, _eval_acc(ch[i], u, p, t, c, n, oln, midx, K, T))
-                end
-                return s
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_acc_minmax(
-            op::Symbol, ch::Vector{_Node},
-            u, p, t, c::Int, n::Int, oln::Int,
-            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# Op application over an access spine. MIRRORS `_eval_node_op` (compile.jl) arm for
-# arm — same arities, same n-ary folds, same `^`/comparison/logical/elementary-fn
-# semantics — because the affine path must be bit-identical to the per-cell path,
-# whose spine is the SAME compiled `_Node` tree evaluated by `_eval_node_op`. The
-# only difference is the leaf recursion (`_eval_acc`, which resolves `_NK_ACCESS` /
-# `_NK_REDUCE`). The mechanical arms are generated from the SAME registry tables
-# as `_eval_node_op`'s (see above), so those cannot drift by construction; the
-# hand-written remainder is still caught by the differential test.
-function _eval_acc_op(
+# Op application over an access spine: the same generated ladder as
+# `_eval_node_op` (`_op_ladder`, tree_walk/op_ladder.jl), so the affine path is
+# bit-identical to the per-cell path, whose spine is the SAME compiled `_Node`
+# tree. The only difference is the operand recursion (`_eval_acc`, which resolves
+# `_NK_ACCESS` / `_NK_REDUCE`).
+@eval function _eval_acc_op(
         nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
     ) where {T}
     op = nd.op
     ch = nd.children
-    @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K, T)
-    if op === :+
-        length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch)
-            s += ev(ch[i])
-        end
-        return s
-    elseif op === :*
-        length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch)
-            s *= ev(ch[i])
-        end
-        return s
-    elseif op === :-
-        length(ch) == 1 && return -ev(ch[1])
-        length(ch) == 2 && return ev(ch[1]) - ev(ch[2])
-        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-    elseif op === :neg
-        return -ev(ch[1])
-
-        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED (registry).
-    elseif (bin = _eval_acc_binary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return bin
-
-        # Comparisons → 1.0/0.0 — GENERATED (registry).
-    elseif (cmp = _eval_acc_comparison(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return cmp
-
-        # Logical
-    elseif op === :and
-        @inbounds for x in ch
-            ev(x) == 0 && return 0.0
-        end
-        return 1.0
-    elseif op === :or
-        @inbounds for x in ch
-            ev(x) != 0 && return 1.0
-        end
-        return 0.0
-    elseif op === :not
-        return ev(ch[1]) == 0 ? 1.0 : 0.0
-
-    elseif op === :ifelse
-        return ev(ch[1]) != 0 ? ev(ch[2]) : ev(ch[3])
-
-        # Elementary functions — the mechanical unary arms (`sin` … `ceil`) are
-        # GENERATED (registry); `atan` (1-or-2-ary) stays hand-written, `atan2` is
-        # handled by the binary probe above.
-    elseif (unary = _eval_acc_unary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return unary
-    elseif op === :atan
-        length(ch) == 1 && return atan(ev(ch[1]))
-        length(ch) == 2 && return atan(ev(ch[1]), ev(ch[2]))
-        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-
-        # n-ary min/max (arity ≥ 2) — GENERATED (registry).
-    elseif (mm = _eval_acc_minmax(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
-        return mm
-    elseif op === :pi || op === :π
-        return Float64(pi)
-    elseif op === :e
-        return Float64(ℯ)
-    elseif op === :Pre
-        return ev(ch[1])
-    end
-    throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
+    $(
+        _op_ladder(
+            i -> :(_eval_acc(ch[$i], u, p, t, c, n, oln, midx, K, T)), :(length(ch)),
+            :(throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op))))
+        )
+    )
 end
 
 # One cell's output value: fill the per-cell CSE scratch (each shared subtree
@@ -881,8 +746,7 @@ end
 # may vary per call) iff it is a fixed state slot, a fixed forcing read, or a
 # scalar. Everything else (STATE_AFFINE, CONST_BOX/CELL/EDGE, FORCING_BOX, LOOP_IDX,
 # STATE_INDIRECT[_COL]) is addressed by the cell.
-@inline _acc_desc_invariant(k::UInt8) =
-    k === _AK_STATE_FIXED || k === _AK_ARR_FIXED || k === _AK_SCALAR
+@inline _acc_desc_invariant(k::UInt8) = _ak_addr(k) === :fixed
 
 # A value-number key (`_acc_vn_key`) with its hash, compared type first. The
 # keys are tuples of several types; in a `Dict{Any}` two keys whose hashes share

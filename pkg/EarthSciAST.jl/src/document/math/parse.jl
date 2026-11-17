@@ -20,7 +20,7 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces, Sym
-using ..MPrint: BMAT_COLS, CALL_OPS, CORE_OPS, FIELD_CALL_OPS, MAT_HEAD, Ctx, call_form_node, FaqForm, MkForm, faq_json,
+using ..MPrint: BMAT_COLS, CALL_OPS, CMP_KW, CORE_OPS, FIELD_CALL_OPS, FN_KW, MAT_HEAD, RED_TABLE, Ctx, call_form_node, FaqForm, MkForm, faq_json,
     formula_raw, ins_kv, mk_json, mk_node, node, simple_tok, tname_ok, tparams, unesc_k,
     unesc_t, spell_unit_factors
 using ..MSurface: neg_num
@@ -48,22 +48,13 @@ expect(k::Kw, ts::Toks) = kat(ts, 1, k) ? tdrop(ts) : nothing
 node."""
 close_chain(o::AbstractString, xs::Vector{Any}) = length(xs) == 1 ? xs[1] : node(o, xs)
 
-"""`Math.cmpOf`: the comparison a token spells."""
-function cmp_of(k::Kw)
-    k == KLt && return "<"
-    k == KLe && return "<="
-    k == KGt && return ">"
-    k == KGe && return ">="
-    k == KEq && return "=="
-    k == KNe && return "!="
-    return nothing
-end
+const CMP_OF = Dict{Kw, String}(k => o for (o, k) in CMP_KW)
 
-const FN_OF = Dict{Kw, String}(
-    KExp => "exp", KLn => "log", KSin => "sin", KCos => "cos", KTan => "tan",
-    KAsin => "asin", KAcos => "acos", KAtan => "atan", KSinh => "sinh", KCosh => "cosh",
-    KTanh => "tanh",
-)
+"""`Math.cmpOf`: the comparison a token spells (the inverse of `CMP_KW`)."""
+cmp_of(k::Kw) = get(CMP_OF, k, nothing)
+
+# The inverse of `FN_KW`.
+const FN_OF = Dict{Kw, String}(k => n for (n, k) in FN_KW)
 
 """`Math.fnOf`: the unary function a keyword spells."""
 fn_of(k::Kw) = get(FN_OF, k, nothing)
@@ -523,13 +514,10 @@ Base.:(==)(a::Row, b::Row) = fieldeq(a, b)
 rng(k, v) = Row(:rng, k, v)
 filt(v) = Row(:filt, "", v)
 
-"""`Math.redOf`."""
+"""`Math.redOf` (the inverse of `RED_TABLE`'s keyword column)."""
 function red_of(k::Kw)
-    k == KSum && return :sum
-    k == KProd && return :prod
-    k == KMax && return :max
-    k == KMin && return :min
-    return nothing
+    i = findfirst(x -> x[2] == k, RED_TABLE)
+    return i === nothing ? nothing : RED_TABLE[i][1]
 end
 
 """`Math.pRedHead`: the operator of a reduction, whether it is marked, and the

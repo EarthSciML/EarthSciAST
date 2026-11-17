@@ -652,21 +652,20 @@ end
         W = [1.0 + k / 8 for k in 1:2:(2K - 1)]
         @test all(dL[i] === foldl(+, (i / 3) * w for w in W; init = 0.0) for i in 1:n)
     end
-    @testset "a ⊕ the loop does not fold is refused by name, at any length" begin
-        for K in (10, 100_000)
+    @testset "an array-valued bool_and_or contraction is refused, at any length" begin
+        # ⊕ = `or` is index-set-producing: every numeric evaluator refuses it for
+        # an array-valued reduction (CONFORMANCE_SPEC §5.6.1), the interpreter
+        # included, before any tier is chosen.
+        for K in (10, 100_000), c in (_CL_NONSTRICT, :interpreter)
+            K == 100_000 && c === :interpreter && continue
             e = try
-                _cl_long_du(_cl_long_doc(n, K; orsr = true), n, _CL_NONSTRICT); nothing
+                _cl_long_du(_cl_long_doc(n, K; orsr = true), n, c); nothing
             catch err
                 err
             end
             @test e isa _CL_ESS.TreeWalkError &&
-                e.code == _CL_ESS.ERROR_CODES.COMPILER_REFUSED_RULE
-            @test occursin("per-cell contraction loop does not take it: its ⊕ is `or`", e.detail)
-            @test occursin("contraction of $K terms", e.detail)
-            @test occursin("compiler=:interpreter", e.detail)
+                e.code == "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING"
         end
-        di, _ = _cl_long_du(_cl_long_doc(n, 10; orsr = true), n, :interpreter)
-        @test di == [Float64(i / 3 > 1.125) for i in 1:n]
     end
     @testset "strict native's refusal names the stepped range, not the ⊕" begin
         # Its ⊕ is `+`, which the affine run-time fold takes; the step of 2 on
@@ -682,9 +681,10 @@ end
         @test !occursin("this one is `+`", e.detail)
     end
     @testset "strict native's whole-array nest reads the live buffer, bit for bit" begin
-        for orsr in (false, true), K in (10, 1000)
-            dn, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :native)
-            di, _ = _cl_long_du(_cl_long_doc(n, K; orsr), n, :interpreter)
+        # (An `or` contraction here is array-valued, so it is refused; see above.)
+        for K in (10, 1000)
+            dn, _ = _cl_long_du(_cl_long_doc(n, K), n, :native)
+            di, _ = _cl_long_du(_cl_long_doc(n, K), n, :interpreter)
             @test reinterpret(UInt64, dn) == reinterpret(UInt64, di)
         end
     end

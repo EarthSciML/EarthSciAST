@@ -89,7 +89,7 @@ function _detect_equality_scatter(
     agg_gates === nothing || return nothing
     isempty(contract_names) && return nothing
     isempty(idx_names) && return nothing
-    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    _is_numeric_reducer(oplus) || return nothing
     conj = _scatter_conjuncts!(ASTExpr[], agg_filter)
     pins = Tuple{Int, ASTExpr}[]
     rest = ASTExpr[]

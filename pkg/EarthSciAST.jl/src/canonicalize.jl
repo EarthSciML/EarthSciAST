@@ -667,8 +667,11 @@ kept, and nothing else changes. These are the rules of Lean
 canonicalize_document(doc::AbstractDict) =
     _canonical_document_numbers(_canonicalize_document_value(doc, false))
 
-# The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count).
-const _DEPRECATED_DOCUMENT_OPS = Dict("neg" => ("-", 1), "pow" => ("^", 2))
+# The deprecated ops (esm-spec §4.2): spelling => (replacement, operand count),
+# from the registry (`_DEPRECATED_OPS` and each spelling's fixed arity).
+const _DEPRECATED_DOCUMENT_OPS = Dict(
+    k => (v, only(_op_spec(k).arity::UnitRange{Int})) for (k, v) in _DEPRECATED_OPS
+)
 
 # A JSON number in canonical form (CONFORMANCE §5.5.3.1): an integral float in
 # Int64 is an integer, an integer outside Int64 a float. A float already holds

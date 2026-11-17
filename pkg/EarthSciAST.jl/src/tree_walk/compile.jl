@@ -67,7 +67,18 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 #     gate fixed while `p` is, the const tier) can take it for one.
 #   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`, ess-r7h); `idx` holds
 #     the value-number slot.
+#   * `_NK_CONTRACTION_LOOP` — `_ContractLoop`; `_NK_RAGGED_LOOP` — `_RaggedLoop`;
+#     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
+#     gather; `_NK_LOOPVAR` — the loop counter's `Base.RefValue{Int}`.
+#   * the access-kernel kinds (access_kernel.jl): `_NK_REDUCE` — a `_Bound`,
+#     `_NK_SUBCALL` — an `_AccKernel`, `_NK_AREDUCE` — an `_AReduceSpec`.
+#   * `_NK_OP` — `nothing`, except the setup-time geometry operators
+#     (`:geo_gather`, `:geo_agg`, `:geo_count`, `:geomemo`, `:cellmemo`), which exist
+#     only in build-time geometry bodies and carry their source or spec.
 #   * every other kind — `nothing`.
+#
+# A pass that branches on `kind` ends in `_unknown_kind`, never in a catch-all
+# arm that treats an unlisted kind as an operator.
 struct _Node
     kind::UInt8
     op::Symbol
@@ -771,6 +782,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
                 "must eliminate it"
         )
     )
+    _check_op_arity(op_sym, length(children))
     return _mknode(kind = _NK_OP, op = op_sym, children = children)
 end
 
@@ -888,19 +900,10 @@ const _CSE_OPAQUE_OPS = _ops_with(:cse_opaque)
 _cse_hoistable(e::OpExpr) =
     !(e.op in _CSE_OPAQUE_OPS) && !_op_in_T(e.op) && _has_tree_walk_rule(e.op)
 
-# The ops `_eval_node_op` has an arm for: the registry-generated mechanical arms
-# plus the hand-written ones. `_compile_op` refuses any other op reaching its
-# generic tail with `unevaluable_operator` (esm-spec §9.6.6).
-const _TREE_WALK_RULE_OPS = Set{Symbol}(
-    vcat(
-        Symbol[row.sym for row in _UNARY_ELEMENTWISE_OPS],
-        Symbol[row.sym for row in _COMPARISON_ELEMENTWISE_OPS],
-        Symbol[row.sym for row in _BINARY_ELEMENTWISE_OPS],
-        Symbol[row.sym for row in _NARY_MINMAX_OPS],
-        Symbol[:+, :*, :-, :neg, :and, :or, :not, :ifelse, :atan, :pi, :π, :e, :Pre],
-    )
-)
-_has_tree_walk_rule(op::AbstractString) = Symbol(op) in _TREE_WALK_RULE_OPS
+# `_eval_node_op` has an arm for exactly the shaped registry rows
+# (`_SHAPED_OP_SYMS`). `_compile_op` refuses any other op reaching its generic
+# tail with `unevaluable_operator` (esm-spec §9.6.6).
+_has_tree_walk_rule(op::AbstractString) = Symbol(op) in _SHAPED_OP_SYMS
 _cse_hoistable(::ASTExpr) = false
 
 # ---- Keying an expression built over a live forcing buffer (ess-qic) ----------
@@ -1173,18 +1176,12 @@ struct _CSEKeyUnset end
 const _CSE_KEY_UNSET = _CSEKeyUnset()
 
 # Is argument `i` of `op` evaluated CONDITIONALLY — i.e. only when a sibling
-# argument takes a particular value? Exactly the three lazy/short-circuiting arms of
-# `_eval_node_op`: `ifelse` walks only the taken branch (args 2 and 3), and `and` /
-# `or` stop at the first decisive argument (args 2..n). Arg 1 of all three is always
-# evaluated. Every other op evaluates all of its arguments, always.
-#
-# This is the ONE place the guard structure is declared; `_cse_count!` propagates the
-# flag to all descendants, so a node inside a guarded arm is guarded however deep.
-@inline _cse_arg_conditional(op::String, i::Int) =
-    (op == "ifelse" && i >= 2) || ((op == "and" || op == "or") && i >= 2)
-# The same three arms on a compiled `_Node`'s op symbol.
-@inline _cse_arg_conditional(op::Symbol, i::Int) =
-    (op === :ifelse || op === :and || op === :or) && i >= 2
+# argument takes a particular value? The registry's `lazy_from` column says
+# (`_op_arg_conditional`): `ifelse` walks only the taken branch (args 2 and 3), and
+# `and` / `or` stop at the first decisive argument (args 2..n). Every other op
+# evaluates all of its arguments, always. `_cse_count!` propagates the flag to all
+# descendants, so a node inside a guarded arm is guarded however deep.
+@inline _cse_arg_conditional(op::Union{String, Symbol}, i::Int) = _op_arg_conditional(op, i)
 
 # Count pass: tally `canonical_json` occurrences of every hoistable subexpression
 # across all RHS trees, splitting each key's tally into (TOTAL, UNCONDITIONAL).
@@ -1726,7 +1723,9 @@ function _cse_rebuild(expr::OpExpr, var_map, param_syms, ctx::_CSEContext)
         _compile_cse(a, var_map, param_syms, ctx)
             for a in expr.args
     ]
-    return _mknode(kind = _NK_OP, op = Symbol(expr.op), children = children)
+    op_sym = Symbol(expr.op)
+    _check_op_arity(op_sym, length(children))
+    return _mknode(kind = _NK_OP, op = op_sym, children = children)
 end
 
 # Compile `expr` to a `_Node`, hoisting any subexpression whose canonical key is
@@ -1948,10 +1947,26 @@ end
         return _eval_state_gather(n, u, p, t, T)
     elseif k === _NK_RECUR_GATHER
         return _eval_recur_gather(n, u, p, t, T)
-    else
+    elseif k === _NK_OP
         return _eval_node_op(n, u, p, t, T)
     end
+    return _unknown_kind(n, "the scalar walker")
 end
+
+"""
+    _unknown_kind(n::_Node, pass::AbstractString)
+
+Raise for a node whose kind `pass` has no arm for: the last arm of every ladder
+over `_Node.kind`, so an untaught pass fails by name instead of reinterpreting
+the node.
+"""
+@noinline _unknown_kind(n::_Node, pass::AbstractString) = throw(
+    TreeWalkError(
+        "E_TREEWALK_UNKNOWN_NODE_KIND",
+        "$pass has no arm for a node of kind $(_node_kind_name(n.kind))" *
+            (n.op === Symbol("") ? "" : " (op $(n.op))")
+    )
+)
 
 # Runtime state read at a loop-var-dependent slot (ess-runtime-contraction).
 # Evaluates the subscript children to integers, bounds-checks each against the
@@ -2059,8 +2074,7 @@ function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     isempty(rng) && return T(n.literal)
     ref[] = first(rng)
     b1 = _eval_node(body, u, p, t, T)
-    s = op === :+ ? T(n.literal + b1) : op === :* ? T(n.literal * b1) :
-        op === :max ? T(max(n.literal, b1)) : T(min(n.literal, b1))
+    s = T(_oplus_numeric(op, n.literal, b1))
     rng = (first(rng) + spec.step):spec.step:spec.hi
     if op === :+
         @inbounds for k in rng
@@ -2077,11 +2091,13 @@ function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
             ref[] = k
             s = max(s, _eval_node(body, u, p, t, T))
         end
-    else  # :min
+    elseif op === :min
         @inbounds for k in rng
             ref[] = k
             s = min(s, _eval_node(body, u, p, t, T))
         end
+    else
+        _throw_unknown_reducer(op)
     end
     return s
 end
@@ -2104,11 +2120,11 @@ function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     # accumulator's type for the loop.
     ref[] = first(rng)
     v = _eval_node(body, u, p, t, T)
-    s = op === :+ ? z + v : op === :* ? z * v : op === :max ? max(z, v) : min(z, v)
+    s = _oplus_numeric(op, z, v)
     for k in Iterators.drop(rng, 1)
         ref[] = k
         v = _eval_node(body, u, p, t, T)
-        s = op === :+ ? s + v : op === :* ? s * v : op === :max ? max(s, v) : min(s, v)
+        s = _oplus_numeric(op, s, v)
     end
     return s
 end
@@ -2158,264 +2174,37 @@ function _eval_contraction(n::_Node, u, p, t, ::Type{T}) where {T}
             s = _or_combine(s, _eval_node(children[k], u, p, t, T))
         end
         return s
-    else  # :min
+    elseif op === :min
         s = n.literal  # +∞
         @inbounds for k in eachindex(children)
             s = min(s, _eval_node(children[k], u, p, t, T))
         end
         return s
     end
+    return _throw_unknown_reducer(op)
 end
 
-# ---- Generated mechanical arms (op-registry tables, src/op_registry.jl) ----
+# ---- The scalar walker's operator ladder ----
 #
-# The MECHANICAL arms of `_eval_node_op` — the unary elementwise ops
-# (`sin` … `ceil`), the comparisons, the fixed-2-ary `/`/`^`/`pow`/`atan2`,
-# and the n-ary `min`/`max` folds — are GENERATED from the op-registry tables,
-# following the pattern `_eval_acc_op`'s unary arms (access_kernel.jl)
-# established: one `op === :name` compare chain in table (= original
-# hand-ladder arm) order, each generated arm the hand-written original's AST
-# verbatim (splicing the function SYMBOL in call position reproduces the infix
-# form exactly — `a < b` IS `(<)(a, b)`). Each probe returns `nothing` when
-# `op` is not in its table, so the caller's ladder falls through to the
-# structurally distinct arms. This is NOT a Dict/table dispatch: the splice
-# compiles to the same compare-and-branch machine code as the hand ladder, and
-# the probe's small `Union{Nothing,…}` return is an isbits union — the
-# zero-allocation property of `f!` is untouched (pinned by
-# tree_walk_allocation_test.jl). A new mechanical op added to `_OP_TABLE`
-# grows every ladder at once.
-let arms = :(return nothing)
-    for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 1)
-                return $(row.sym)(_eval_node(c[1], u, p, t, T))
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_node_unary_elementwise(
-            op::Symbol, c::Vector{_Node},
-            u, p, t, ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# Comparisons → 1.0/0.0 (match `evaluate` semantics).
-let arms = :(return nothing)
-    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 2)
-                return $(row.fnsym)(
-                        _eval_node(c[1], u, p, t, T),
-                        _eval_node(c[2], u, p, t, T)
-                    ) ? 1.0 : 0.0
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_node_comparison(
-            op::Symbol, c::Vector{_Node},
-            u, p, t, ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# Fixed-2-ary elementwise: `/`, `^`, `pow`, `atan2`.
-#
-# THE `^`/`pow` ARMS DESERVE THEIR OLD COMMENT: a LITERAL EXPONENT MUST STAY A
-# `Float64`, and the walker's leaves are why it does. `^` is the one op whose
-# derivative w.r.t. an OPERAND needs a function with a smaller domain than the
-# op itself: ∂(x^y)/∂y = x^y·log(x). Hand ForwardDiff a `Dual` exponent and it
-# takes that branch even when the exponent's partials are all zero, so `c^2` at
-# any NEGATIVE c evaluates log(c) and silently poisons the gradient with NaN
-# while the primal value still looks perfect. Because `_NK_LITERAL` returns its
-# raw `Float64` (see `_eval_node` — nothing in the walker converts leaves into
-# `T`), the generated `x ^ y` compiles to `Dual^Float64` — the power rule,
-# defined on the whole domain `^` is. An exponent that genuinely depends on a
-# differentiated variable still lands on `Dual^Dual`, which is correct. The
-# protection lives in the LEAVES, so the arm itself is mechanical and safe to
-# generate.
-let arms = :(return nothing)
-    for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 2)
-                return $(row.fnsym)(
-                    _eval_node(c[1], u, p, t, T),
-                    _eval_node(c[2], u, p, t, T)
-                )
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_node_binary_elementwise(
-            op::Symbol, c::Vector{_Node},
-            u, p, t, ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# n-ary `min`/`max` (esm-spec §4.2 — arity ≥ 2), folded in child order.
-let arms = :(return nothing)
-    for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                length(c) < 2 && throw(
-                    TreeWalkError(
-                        "E_TREEWALK_ARITY",
-                        $(row.name * " needs ≥2 args")
-                    )
-                )
-                acc = _eval_node(c[1], u, p, t, T)
-                @inbounds for i in 2:length(c)
-                    acc = $(row.fnsym)(acc, _eval_node(c[i], u, p, t, T))
-                end
-                return acc
-            end,
-            arms
-        )
-    end
-    @eval @inline function _eval_node_minmax(
-            op::Symbol, c::Vector{_Node},
-            u, p, t, ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
+# Generated from the operator registry (`_op_ladder`, tree_walk/op_ladder.jl):
+# one compare-and-branch arm per shaped registry row, each checking the registry
+# arity. The setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl) sit at the
+# tail: they exist only in build-time compiled geometry bodies, where `u` is a
+# small loop-index frame, never the ODE state, so the right-hand side's operators
+# never reach that arm.
+@eval function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     op = n.op
     c = n.children
-
-    # Arithmetic — the hot paths. `+`/`*` (1-ary pass-through) and `-`/`neg`
-    # (1-or-2-ary `-`) stay hand-written: their arity polymorphism is
-    # semantic, not mechanical.
-    if op === :+
-        length(c) == 1 && return _eval_node(c[1], u, p, t, T)
-        acc = _eval_node(c[1], u, p, t, T)
-        @inbounds for i in 2:length(c)
-            acc += _eval_node(c[i], u, p, t, T)
-        end
-        return acc
-    elseif op === :*
-        length(c) == 1 && return _eval_node(c[1], u, p, t, T)
-        acc = _eval_node(c[1], u, p, t, T)
-        @inbounds for i in 2:length(c)
-            acc *= _eval_node(c[i], u, p, t, T)
-        end
-        return acc
-    elseif op === :-
-        if length(c) == 1
-            return -_eval_node(c[1], u, p, t, T)
-        elseif length(c) == 2
-            return _eval_node(c[1], u, p, t, T) - _eval_node(c[2], u, p, t, T)
-        end
-        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-    elseif op === :neg
-        # Canonical-form unary negation. `canonicalize` rewrites unary
-        # `-x` to `neg(x)`, so any AST that has been through `discretize`
-        # may carry `neg` ops where the source had `-x`.
-        _expect_arity_n(op, c, 1)
-        return -_eval_node(c[1], u, p, t, T)
-        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
-        # registry (see `_eval_node_binary_elementwise` above, where `^`'s
-        # literal-exponent note now lives). The probe sits where `/` sat.
-    elseif (bin = _eval_node_binary_elementwise(op, c, u, p, t, T)) !== nothing
-        return bin
-
-        # Comparisons → 1.0/0.0 (match `evaluate` semantics) — GENERATED from the
-        # registry (see `_eval_node_comparison` above).
-    elseif (cmp = _eval_node_comparison(op, c, u, p, t, T)) !== nothing
-        return cmp
-
-        # Logical: `and`/`or` take two or more operands (esm-spec §4.2), the
-        # arity the strict compiler's probe (`_sc_check_arity`) holds them to.
-    elseif op === :and
-        length(c) >= 2 || _throw_min_arity(op, c, 2)
-        for child in c
-            _eval_node(child, u, p, t, T) == 0 && return 0.0
-        end
-        return 1.0
-    elseif op === :or
-        length(c) >= 2 || _throw_min_arity(op, c, 2)
-        for child in c
-            _eval_node(child, u, p, t, T) != 0 && return 1.0
-        end
-        return 0.0
-    elseif op === :not
-        _expect_arity_n(op, c, 1)
-        return _eval_node(c[1], u, p, t, T) == 0 ? 1.0 : 0.0
-
-    elseif op === :ifelse
-        _expect_arity_n(op, c, 3)
-        return _eval_node(c[1], u, p, t, T) != 0 ?
-            _eval_node(c[2], u, p, t, T) :
-            _eval_node(c[3], u, p, t, T)
-
-        # Elementary functions. The mechanical unary arms (`sin` … `ceil`) are
-        # GENERATED from the registry (see `_eval_node_unary_elementwise` above);
-        # the probe sits where the first mechanical arm (`sin`) sat. `atan`
-        # (1-or-2-ary) stays hand-written; `atan2` is handled by the binary probe.
-    elseif (unary = _eval_node_unary_elementwise(op, c, u, p, t, T)) !== nothing
-        return unary
-    elseif op === :atan
-        if length(c) == 1
-            return atan(_eval_node(c[1], u, p, t, T))
-        elseif length(c) == 2
-            return atan(_eval_node(c[1], u, p, t, T), _eval_node(c[2], u, p, t, T))
-        end
-        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-
-        # n-ary min/max (esm-spec §4.2 — arity ≥ 2) — GENERATED from the registry.
-    elseif (mm = _eval_node_minmax(op, c, u, p, t, T)) !== nothing
-        return mm
-
-    elseif op === :pi || op === :π
-        return Float64(pi)
-    elseif op === :e
-        return Float64(ℯ)
-
-    elseif op === :Pre
-        _expect_arity_n(op, c, 1)
-        return _eval_node(c[1], u, p, t, T)
-
-    elseif op === :geo_gather || op === :geo_agg || op === :geo_count ||
-            op === :cellmemo || op === :geomemo
-        # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
-        # These exist only in build-time compiled geometry bodies — `u` is a
-        # small loop-index frame there, never the ODE state — so this arm is
-        # cold by construction; it sits at the ladder tail where the RHS hot
-        # ops never reach it.
-        return _eval_geo_op(n, u, p, t, T)
-    else
-        throw(_unevaluable_operator(op, "the scalar ladder has no arm for it"))
-    end
-end
-
-# `c` is an operator's operand list: the child nodes on the scalar walk
-# (`_eval_node_op`), evaluated scalars or lane vectors on the shared op ladder
-# (`_scalar_op`), hence the untyped `AbstractVector`. Only its length is read,
-# and the error message is built solely on the throw branch, so the happy path
-# stays allocation-free.
-@noinline _throw_min_arity(op::Symbol, c::AbstractVector, n::Int) = throw(
-    TreeWalkError("E_TREEWALK_ARITY", "$op expects at least $n args, got $(length(c))")
-)
-@inline function _expect_arity_n(op::Symbol, c::AbstractVector, n::Int)
-    length(c) == n ||
-        throw(
-        TreeWalkError(
-            "E_TREEWALK_ARITY",
-            "$op expects $n args, got $(length(c))"
+    $(
+        _op_ladder(
+            i -> :(_eval_node(c[$i], u, p, t, T)), :(length(c)),
+            quote
+                if op === :geo_gather || op === :geo_agg || op === :geo_count ||
+                        op === :cellmemo || op === :geomemo
+                    return _eval_geo_op(n, u, p, t, T)
+                end
+                throw(_unevaluable_operator(op, "the scalar ladder has no arm for it"))
+            end
         )
     )
-    return nothing
 end

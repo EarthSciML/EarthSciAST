@@ -1560,69 +1560,16 @@ function _eval_const_int(
     )
     op = expr.op
     c = expr.args
-    if op == "+"
-        return sum(_eval_const_int(a, idx_env, const_arrays) for a in c)
-    elseif op == "-"
-        length(c) == 1 && return -_eval_const_int(c[1], idx_env, const_arrays)
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "- in index needs 1-2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) - _eval_const_int(c[2], idx_env, const_arrays)
-    elseif op == "*"
-        return prod(_eval_const_int(a, idx_env, const_arrays) for a in c)
-    elseif op == "/"
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "/ in index needs 2 args"))
-        return div(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
-    elseif op == "floor" || op == "ceil"
-        # A rounded quotient (`floor((c - 1) / NX)`) rounds the exact quotient
-        # (`fld`/`cld`), as the walker and `_index_int` do, so a negative
-        # numerator reads the same element on every path; over any other
-        # (already integer) subexpression the rounding is the identity. This lets
-        # a loader reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the
-        # LIVE gather path (a discrete-cadence loader field), not only build-once.
-        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "$(op) in index needs 1 arg"))
-        q = c[1]
-        if q isa OpExpr && q.op == "/" && length(q.args) == 2
-            a = _eval_const_int(q.args[1], idx_env, const_arrays)
-            b = _eval_const_int(q.args[2], idx_env, const_arrays)
-            return op == "floor" ? fld(a, b) : cld(a, b)
-        end
-        return _eval_const_int(q, idx_env, const_arrays)
-    elseif op == "mod"
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
-        return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
-    elseif op == "max"
-        # `max`/`min` in an index position are integer index-CLAMP ops: a loader
-        # reindex clamps a computed cell subscript into the source-grid bounds
-        # (`max(1, min(NSRC, floor((c-1)/GX)+1))`). Every operand is an already-
-        # integer subexpression, so the clamp folds to a concrete Int on the LIVE
-        # gather / per-cell materialize path exactly as it does at build-once setup.
-        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "max in index needs ≥1 arg"))
-        return maximum(_eval_const_int(a, idx_env, const_arrays) for a in c)
-    elseif op == "min"
-        isempty(c) && throw(TreeWalkError("E_TREEWALK_ARITY", "min in index needs ≥1 arg"))
-        return minimum(_eval_const_int(a, idx_env, const_arrays) for a in c)
-    elseif op == "ifelse"
-        length(c) == 3 || throw(TreeWalkError("E_TREEWALK_ARITY", "ifelse in index needs 3 args"))
-        cond = _eval_const_int(c[1], idx_env, const_arrays)
-        return cond != 0 ? _eval_const_int(c[2], idx_env, const_arrays) : _eval_const_int(c[3], idx_env, const_arrays)
-    elseif op == "<"
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "< needs 2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) < _eval_const_int(c[2], idx_env, const_arrays) ? 1 : 0
-    elseif op == "<="
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "<= needs 2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) <= _eval_const_int(c[2], idx_env, const_arrays) ? 1 : 0
-    elseif op == ">"
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "> needs 2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) > _eval_const_int(c[2], idx_env, const_arrays) ? 1 : 0
-    elseif op == ">="
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", ">= needs 2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) >= _eval_const_int(c[2], idx_env, const_arrays) ? 1 : 0
-    elseif op == "=="
-        length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "== needs 2 args"))
-        return _eval_const_int(c[1], idx_env, const_arrays) == _eval_const_int(c[2], idx_env, const_arrays) ? 1 : 0
-    elseif op == "neg"
-        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "neg needs 1 arg"))
-        return -_eval_const_int(c[1], idx_env, const_arrays)
-    elseif op == "const"
+    # The arithmetic, rounding, clamp (`max`/`min`: a loader reindex clamps a
+    # computed cell subscript into the source-grid bounds) and comparison
+    # operators: the integer meaning every subscript evaluator shares
+    # (`_subscript_eval_op`, scalar_ops.jl).
+    v = _subscript_eval_op(
+        Symbol(op), c, a -> _eval_const_int(a, idx_env, const_arrays),
+        q -> (q isa OpExpr && q.op == "/" && length(q.args) == 2) ? q.args : nothing
+    )
+    v === nothing || return v
+    if op == "const"
         # A scalar `const` literal — what a lowered `enum` op becomes
         # (`_lower_expr_enums`), so a categorical lookup `index(T, enum(…), …)`
         # subscripts with one. It is the `NumExpr` arm above.

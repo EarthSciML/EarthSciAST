@@ -2,16 +2,6 @@
 # ESM ASTExpr → Symbolics conversion
 # ========================================
 
-# The elementwise functions the ODE lowering accepts, each applied to all of
-# its operands after the registry arity check (so `atan` takes one or two).
-# Narrower than the registry's `_UNARY_ELEMENTWISE_OPS` (no sign/floor/ceil/
-# asinh/…) and wider than the Catalyst rate interpreter's set.
-const _MTK_UNARY_SCALAR_OPS = (
-    "exp", "log", "log10", "sin", "cos", "tan",
-    "sinh", "cosh", "tanh", "asin", "acos", "atan",
-    "sqrt", "abs",
-)
-
 # The stencil gather context `_build_arrayop_sym` installs while it lowers an
 # arrayop body: the output index variables (`name => (pool var, physical lo,
 # length, step)`) in table-axis order. `_build_index` reads it to turn an
@@ -82,10 +72,10 @@ end
     _esm_to_symbolic(expr, L::_Lowering)
 
 Build a Symbolics.jl expression from an ESM `ASTExpr` tree under the lowering
-context `L`. The extension-independent scalar arms live in the shared
+context `L`. The registry's scalar operators lower in the shared
 `_esm_to_symbolic_core` (ext/shared/esm_to_symbolic.jl); everything MTK-
-specific — calculus/control/comparison ops and the array vocabulary — is
-handled by `_mtk_extended_op` below.
+specific — `D`, `Pre` and the array vocabulary — is handled by
+`_mtk_extended_op` below.
 """
 function _esm_to_symbolic(expr::EsmExpr, L::_Lowering)
     return _esm_to_symbolic_core(
@@ -93,7 +83,6 @@ function _esm_to_symbolic(expr::EsmExpr, L::_Lowering)
         a -> _esm_to_symbolic(a, L);
         number_value = _int_promoted_number,
         resolve_var = name -> _resolve_lowering_var(name, L),
-        unary_ops = _MTK_UNARY_SCALAR_OPS,
         extended_op = (op, e) -> _mtk_extended_op(op, e, L)
     )
 end
@@ -125,32 +114,22 @@ function _resolve_lowering_var(name::String, L::_Lowering)
     end
 end
 
-# Every operator `_esm_to_symbolic` lowers: the shared scalar arms, the
-# elementwise functions above, and the arms of `_mtk_extended_op` below. Keep
-# this in step with that ladder; `compiler = :mtk` reads it to refuse an
-# operator by name before the system is built.
-const _MTK_LOWERED_OPS = Set{String}(
-    [
-        "+", "-", "*", "/", "^", "min", "max", _MTK_UNARY_SCALAR_OPS...,
-        "neg", "pow", "D", "ifelse", "Pre", ">", "<", ">=", "<=", "==", "!=",
-        "faq", "makearray", "index", "broadcast", "reshape", "transpose",
-        "concat", "const",
-    ]
+# The arms of `_mtk_extended_op` below.
+const _MTK_EXTENDED_OPS = (
+    "D", "Pre", "faq", "makearray", "index", "broadcast", "reshape", "transpose",
+    "concat", "const",
 )
 
-# The MTK-specific OpExpr arms: calculus operators, control flow,
-# comparisons and the array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op outside the
-# shared scalar arms.
+# Every operator `_esm_to_symbolic` lowers: the shared scalar vocabulary and the
+# MTK arms. `compiler = :mtk` reads it to refuse an operator by name before the
+# system is built.
+const _MTK_LOWERED_OPS = union(_SYMBOLIC_SCALAR_OPS, Set{String}(_MTK_EXTENDED_OPS))
+
+# The MTK-specific OpExpr arms: the time derivative, `Pre` and the
+# array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op
+# outside the shared scalar vocabulary.
 function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
-    if op == "neg"
-        # `neg` and `pow` are the deprecated word spellings of unary `-` and
-        # `^` (`_DEPRECATED_OPS`, src/op_registry.jl). The loader rewrites them
-        # away; an AST built in code can still carry them.
-        return -_esm_to_symbolic(expr.args[1], L)
-    elseif op == "pow"
-        return _esm_to_symbolic(expr.args[1], L) ^
-            _esm_to_symbolic(expr.args[2], L)
-    elseif op == "D"
+    if op == "D"
         # Only the time derivative lowers. A spatial `D` is a rewrite target
         # that a discretization rule must replace before a system is built.
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
@@ -162,23 +141,9 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
             )
         )
         return Differential(L.t)(_esm_to_symbolic(expr.args[1], L))
-    elseif op == "ifelse"
-        cond = _esm_to_symbolic(expr.args[1], L)
-        t_val = _esm_to_symbolic(expr.args[2], L)
-        f_val = _esm_to_symbolic(expr.args[3], L)
-        return ifelse(cond, t_val, f_val)
     elseif op == "Pre"
         arg = _esm_to_symbolic(expr.args[1], L)
         return ModelingToolkit.Pre(arg)
-    elseif op in (">", "<", ">=", "<=", "==", "!=")
-        l = _esm_to_symbolic(expr.args[1], L)
-        r = _esm_to_symbolic(expr.args[2], L)
-        return op == ">" ? l > r :
-            op == "<" ? l < r :
-            op == ">=" ? l >= r :
-            op == "<=" ? l <= r :
-            op == "==" ? l == r :
-            l != r
     elseif op == "faq"
         return _build_arrayop_sym(expr, L)
     elseif op == "makearray"
