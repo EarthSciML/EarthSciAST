@@ -645,4 +645,71 @@ end
         # one expanded root.
         @test only(m.equations).rhs === m.guesses["c"] === only(mev.conditions)
     end
+
+    # -----------------------------------------------------------------------
+    # Expanding an `_expansion_copy` (the units view `validate` builds, and the
+    # copy the tree-walk build expands) leaves the loaded model as it was, at
+    # every site expansion rewrites in place: events, guesses and tests as well
+    # as equations and variables.
+    # -----------------------------------------------------------------------
+    @testset "expanding an expansion copy leaves the caller's model unchanged" begin
+        twice(f) = Dict(
+            "op" => "apply_expression_template", "args" => Any[],
+            "name" => "twice", "bindings" => Dict("f" => f),
+        )
+        doc = Dict(
+            "esm" => "2.0.0",
+            "metadata" => Dict("name" => "expansion_copy"),
+            "models" => Dict(
+                "M" => Dict(
+                    "expression_templates" => Dict(
+                        "twice" => Dict(
+                            "params" => ["f"],
+                            "body" => Dict("op" => "*", "args" => Any[2, "f"]),
+                        ),
+                    ),
+                    "variables" => Dict(
+                        "x" => Dict("type" => "unknown", "units" => "1", "default" => 1.0),
+                        "y" => Dict("type" => "unknown", "units" => "1"),
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["x"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "-", "args" => Any["x"]),
+                        ),
+                        Dict("lhs" => "y", "rhs" => twice("x")),
+                    ],
+                    "continuous_events" => Any[
+                        Dict(
+                            "conditions" => Any[
+                                Dict("op" => "-", "args" => Any[twice("x"), 1]),
+                            ],
+                            "affects" => Any[Dict("lhs" => "x", "rhs" => twice("x"))],
+                        ),
+                    ],
+                    "guesses" => Dict("y" => twice("x")),
+                ),
+            ),
+        )
+        f = EarthSciAST.load_string(JSON3.write(doc))
+        @test f.component_templates !== nothing
+        snapshot() = JSON3.write(serialize_esm_file(f))
+        before = snapshot()
+        m = f.models["M"]
+        @test _isapply(EarthSciAST.serialize_expression(only(m.continuous_events).affects[1].rhs))
+        @test _isapply(EarthSciAST.serialize_expression(m.guesses["y"]))
+
+        validate(f)
+        @test snapshot() == before
+
+        view = EarthSciAST._expansion_copy(m)
+        EarthSciAST._expand_model_refs!(view, f.component_templates["models.M"])
+        # The copy is expanded…
+        @test !_isapply(EarthSciAST.serialize_expression(only(view.continuous_events).affects[1].rhs))
+        @test !_isapply(EarthSciAST.serialize_expression(view.guesses["y"]))
+        # …and the loaded model is not.
+        @test snapshot() == before
+        @test _isapply(EarthSciAST.serialize_expression(only(m.continuous_events).affects[1].rhs))
+        @test _isapply(EarthSciAST.serialize_expression(m.guesses["y"]))
+    end
 end
