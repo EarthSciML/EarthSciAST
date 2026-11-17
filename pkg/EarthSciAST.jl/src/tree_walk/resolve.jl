@@ -1489,61 +1489,17 @@ function _array_contraction_min()
     return (n === nothing || n < 1) ? 1024 : n
 end
 
-# Resolve an array einsum's body ONCE with BOTH its output and its contracted
-# indices symbolic, so the whole equation compiles to a single node.
-#
-# `_try_build_contraction_loop` keeps only the CONTRACTED indices symbolic, which
-# still costs one resolve + `_compile` per OUTPUT CELL — the tier that fixed the
-# reduction length left the output extent to scale the build. Keeping the output
-# indices symbolic as well makes build IR O(1) in BOTH extents: the caller drives
-# the output loop counters at eval time and writes each cell's flat slot from a
-# precomputed vector (array_contraction.jl).
-#
-# The output symbols become reserved loop-var names like the contracted ones, so
-# the body's reads lower through the SAME runtime-gather machinery: a
-# const/provider array read at an output subscript becomes `_NK_CONST_GATHER`, a
-# state read `_NK_STATE_GATHER`, a bare output symbol `_NK_LOOPVAR`. Only the
-# contracted symbols get `__contract_loop` markers; the output refs are handed
-# back for the section runner to drive.
-#
-# Returns `(out_refs, marker)` in `out_names` order, or `nothing` when the body
-# does not resolve symbolically — the same "correctness first, fall back to the
-# existing cascade" contract `_try_build_contraction_loop` has.
-function _try_build_array_contraction(
-        body::ASTExpr, out_names::Vector{String},
-        contract_names::Vector{String}, contract_ranges::AbstractVector,
-        oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict
-    )
-    got = _resolve_array_contraction_term(
-        body, out_names, contract_names,
-        array_var_info, var_map, const_arrays, pgather
-    )
-    got === nothing && return nothing
-    out_refs, contract_refs, resolved = got
-    oplus_sym = Symbol(oplus)
-    node::ASTExpr = resolved
-    # Innermost-first over the contracted indices, matching the per-cell loop
-    # tier's nesting — so this tier's fold order IS that tier's fold order.
-    for d in eachindex(contract_names)
-        r = contract_ranges[d]
-        node = OpExpr(
-            "__contract_loop", ASTExpr[node];
-            value = _ContractLoopBuild(
-                contract_refs[d], first(r), last(r),
-                step(r), oplus_sym, zerobar
-            )
-        )
-    end
-    return (out_refs, node)
-end
-
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
 # `(out_refs, contract_refs, resolved)`, or `nothing` when the body does not
-# resolve that way. `_try_build_array_contraction` wraps it in the static
-# contraction loops; the table-driven form of the nest (array_contraction.jl)
-# drives the contracted refs from the admitted tuples instead.
+# resolve that way. Keeping the output indices symbolic as well as the
+# contracted ones makes the build O(1) in both extents: the body's reads lower
+# through the run-time gather machinery (a const read at an output subscript is
+# `_NK_CONST_GATHER`, a state read `_NK_STATE_GATHER`, a bare output symbol
+# `_NK_LOOPVAR`) and the caller drives the counters at eval time. The
+# whole-array nest (array_contraction.jl) drives the contracted refs from the
+# admitted tuples or its own loops; `_compile_init_once` (no contracted index)
+# compiles the term once for every output cell.
 function _resolve_array_contraction_term(
         body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
@@ -1729,17 +1685,6 @@ const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
 # instead of a folded `NumExpr`). Read-only sentinel — see the `_EMPTY_*`
 # invariant block next to `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_BOUND_SYMS = Set{String}()
-
-# True iff a subscript expression references any BOUND OUTPUT-INDEX symbol — the
-# predicate that classifies one gather subscript as runtime-varying (→ keep
-# symbolic, lower to `_NK_CONST_GATHER`) vs. build-time-constant (→ fold). Only
-# the plain arithmetic subscripts an `index` gather ever carries are walked
-# (`args`); an empty `bound_syms` makes this uniformly `false`, the fast exit on
-# every non-fast-path call.
-_refs_bound_sym(e::VarExpr, bound_syms::Set{String}) = e.name in bound_syms
-_refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
-    _anyof(a -> _refs_bound_sym(a, bound_syms), e.args)
-_refs_bound_sym(::ASTExpr, ::Set{String}) = false
 
 # True iff a subscript's value is known only at run time: it references a name
 # no integer environment binds here — a bound output-index symbol, or a
@@ -2076,7 +2021,7 @@ end
 # those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
 # index symbolic, so a state gather is never emitted on the normal RHS build or the
 # compile-once cellwise path (whose bound symbols use different names). Distinct
-# from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+# from `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
 _refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
 _refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
 _refs_loopvar(::ASTExpr) = false

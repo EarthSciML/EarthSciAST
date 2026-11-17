@@ -11,15 +11,14 @@
 #
 # A semiring is the pair (⊕, ⊗) together with its two NORMATIVE identity
 # elements (0̄, 1̄): 0̄ is the value of an empty ⊕-reduction and 1̄ the value of
-# an empty ⊗-product. The `reduce` field on an aggregate names ⊕ only; the
-# matching ⊗ and BOTH identities come from this table, NEVER from the file.
-# The registry is closed and exhaustive — adding a semiring is a spec change.
+# an empty ⊗-product (CONFORMANCE_SPEC §5.6.1). An aggregate's body writes its
+# own ⊗ as ordinary operators, so what the evaluator takes from this table is ⊕
+# and 0̄; the `reduce` field names ⊕ only, and 0̄ comes from here, NEVER from the
+# file. The registry is closed and exhaustive — adding a semiring is a spec
+# change.
 struct _Semiring
-    name::String
     oplus::String      # ⊕ reduce spelling
     zerobar::Float64   # 0̄ : result of an empty ⊕-reduction
-    otimes::String     # ⊗ product spelling
-    onebar::Float64    # 1̄ : result of an empty ⊗-product
 end
 
 # ±∞ identities are represented per-binding (Julia: Inf/-Inf) and are the
