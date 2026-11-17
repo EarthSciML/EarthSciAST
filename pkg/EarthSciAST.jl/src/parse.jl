@@ -924,8 +924,8 @@ function _coerce_subsystem_entry(name::String, v)
         end
         # Optional `expression_template_imports` injects a discretization
         # into the REFERENCED component's own scope (esm-spec §9.7.10
-        # form A). Kept as raw §9.7.2 entries; `_resolve_subsystem_ref`
-        # threads them into the referenced document's load and the
+        # form A). Kept as raw §9.7.2 entries; the mount pipeline
+        # (`_resolve_mount_edge`) threads them into the referenced document's load and the
         # §9.6.3 fixpoint consumes them before the mounted form is set.
         injected = Any[]
         imports_raw = _get_field(v, :expression_template_imports, nothing)
@@ -935,14 +935,13 @@ function _coerce_subsystem_entry(name::String, v)
         # Optional `index_set_rename` translates the MOUNTED document's index-set
         # names into this document's vocabulary at load (esm-spec §4.7
         # "Mount-edge index-set renaming"). Kept as a raw name→name map;
-        # `_resolve_subsystem_ref` threads it into the referenced document's load
+        # the mount pipeline (`_resolve_mount_edge`) threads it into the referenced document's load
         # and applies it once that document has resolved in its own scope, so it
         # is consumed at the mount and does not survive `parse → emit`.
         iset_rename = nothing
         rename_raw = _get_field(v, :index_set_rename, nothing)
         if rename_raw !== nothing
-            # A malformed (non-object) map is left for `_name_map` to reject with
-            # `template_import_rename_invalid` at the mount, not stringified here.
+            # A malformed (non-object) map is `template_import_rename_invalid`.
             iset_rename = _is_object(rename_raw) ?
                 OrderedDict{String, String}(
                     string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)

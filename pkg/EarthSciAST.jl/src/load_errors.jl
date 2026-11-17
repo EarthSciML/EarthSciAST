@@ -122,3 +122,39 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.RECORD_AXIS_MISPLACED,
     ERROR_CODES.RECORD_AXIS_TIME_INVARIANT_SOURCE,
 )
+
+"""
+    SubsystemRefError
+
+Exception thrown when subsystem reference resolution fails.
+"""
+struct SubsystemRefError <: EarthSciASTError
+    message::String
+    # The machine-readable half: `validate` renders the error as a structural
+    # finding (`unresolved_subsystem_ref`, `ambiguous_subsystem_ref`, ...) at
+    # `/models/<parent_model>/subsystems/<subsystem>`. The raising site knows the
+    # `ref` and the code; the mount form fills in the site (`_with_mount_site`).
+    code::String
+    ref::String
+    subsystem::String
+    parent_model::String
+
+    SubsystemRefError(
+        message::AbstractString;
+        code::AbstractString = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
+        ref::AbstractString = "", subsystem::AbstractString = "",
+        parent_model::AbstractString = ""
+    ) =
+        new(String(message), String(code), String(ref), String(subsystem), String(parent_model))
+end
+
+Base.showerror(io::IO, e::SubsystemRefError) =
+    print(io, "SubsystemRefError: ", e.message)
+
+# `e` with the mount site filled in where it is not set yet.
+_with_mount_site(e::SubsystemRefError, subsystem::AbstractString, parent_model::AbstractString) =
+    SubsystemRefError(
+    e.message; code = e.code, ref = e.ref,
+    subsystem = isempty(e.subsystem) ? subsystem : e.subsystem,
+    parent_model = isempty(e.parent_model) ? parent_model : e.parent_model
+)

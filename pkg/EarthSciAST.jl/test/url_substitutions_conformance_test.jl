@@ -66,18 +66,12 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         end
     end
 
-    # Every fixture twice: through `load_path` (the native mount walk), and
-    # through the TYPED subsystem walk — the path URL refs take, forced here
-    # with `native_subsystem_refs = false` — so the rule holds on both.
-    _load_typed(path) = EarthSciAST._load_document(
-        EarthSciAST._read_json_document(read(path, String)), dirname(abspath(path));
-        native_subsystem_refs = false
-    )
-    @testset "fixtures ($(walk)): $(f.id)" for walk in ("native", "typed"),
-            f in manifest.fixtures
+    # Every fixture through `load_path`. Local and http(s) leaves take the same
+    # mount pipeline; `mount_remote_leaf_test.jl` covers the URL-directory rule.
+    @testset "fixtures: $(f.id)" for f in manifest.fixtures
 
         path = normpath(joinpath(suite, String(f.path)))
-        load = walk == "native" ? EarthSciAST.load_path : _load_typed
+        load = EarthSciAST.load_path
         if String(f.expect) == "refused"
             e = _caught(() -> load(path))
             @test e isa EarthSciAST.ExpressionTemplateError
@@ -123,10 +117,9 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         end
     end
 
-    # `mount_subsystem_through_stops` over http(s): the typed walk is the only one
-    # that resolves URL refs, so a forwarded binding must stop there too. The
-    # catalogue mounts `outer` as a SUBSYSTEM (an assembly reached over http(s)
-    # inlines no top-level `{ref}`), and its relative refs join onto its URL
+    # `mount_subsystem_through_stops` over http(s): a forwarded binding must stop
+    # at the first declarer for a fetched leaf too. The
+    # catalogue mounts `outer` as a subsystem, and its relative refs join onto its URL
     # directory — which the mount-declared walk must follow, or `n_rows` would
     # be `template_import_unknown_name` at the root edge.
     @testset "a forwarded binding stops at the first declarer, over a URL" begin
