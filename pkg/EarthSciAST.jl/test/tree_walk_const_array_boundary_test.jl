@@ -203,6 +203,21 @@ const ESM = EarthSciAST
         taken = _op("ifelse", _op(">", _n(1), _n(0)), oob, _n(0))
         @test oob_code(() -> res(taken, ESM._BuildMemo())) == "E_TREEWALK_CONSTARRAY_OOB"
 
+        # The same rule when another subscript of the read is a run-time one
+        # (a bound output index), and for a live forcing buffer.
+        c2 = reshape(collect(1.0:6.0), 2, 3)
+        cas2 = Dict{String, Any}("c2" => c2)
+        bound = Set{String}(["i"])
+        mixed = _idx("c2", _v("i"), _i(5))
+        resb(e) = ESM._resolve_indices(e, avi, vm, cas2, ESM._EMPTY_PGATHER, nothing, bound)
+        @test oob_code(() -> resb(_op("ifelse", _op(">", _v("p"), _n(0)), mixed, _n(0)))) === nothing
+        @test oob_code(() -> resb(mixed)) == "E_TREEWALK_CONSTARRAY_OOB"
+        pg = Dict{String, Any}("F" => ESM._PGatherArray([1.0, 2.0, 3.0], [3]))
+        fo = _idx("F", _i(5))
+        resf(e) = ESM._resolve_indices(e, avi, vm, Dict{String, Any}(), pg, nothing)
+        @test oob_code(() -> resf(_op("ifelse", _op(">", _v("p"), _n(0)), fo, _n(0)))) === nothing
+        @test oob_code(() -> resf(fo)) == "E_TREEWALK_PGATHER_OOB"
+
         # Through a build: the unguarded read fails the build under both
         # compilers, whichever order the two sites are met in.
         N = 2

@@ -1870,6 +1870,20 @@ function _guarded_read_taken(guards::_ResolveGuards)
     return true
 end
 
+# Whether an out-of-range read under the current guards is left for run time:
+# some guard is in force and the build cannot show every one taken.
+function _guarded_oob_deferred()
+    guards = _resolve_guards()
+    return !isempty(guards) && !_guarded_read_taken(guards)
+end
+
+@noinline _throw_pgather_oob(name, ci, n, d) = throw(
+    TreeWalkError(
+        "E_TREEWALK_PGATHER_OOB",
+        "forcing array '$(name)' index $(ci) out of range [1, $(n)] on dim $(d)"
+    )
+)
+
 # A const read at constant subscripts the build may not raise for (see above):
 # the run-time gather, which resolves each subscript under the array's
 # boundary policy when — and only if — it is evaluated.
@@ -1943,6 +1957,7 @@ function _resolve_const_array_gather(
     )
     if _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+        guards = _resolve_guards()
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
             if _subscript_is_runtime(a, const_arrays)
@@ -1952,7 +1967,17 @@ function _resolve_const_array_gather(
                 )
             else
                 ci = _const_subscript_int(a, const_arrays)
-                ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
+                # The guarded out-of-range rule, as for a read at constant
+                # subscripts only: under a guard the build cannot show taken,
+                # the out-of-range constant stays for the run-time gather,
+                # which raises if the read is ever evaluated.
+                if !isempty(guards) && !(1 <= ci <= size(vals, d)) &&
+                        _const_dim_boundary(vals, d) === :error &&
+                        !_guarded_read_taken(guards)
+                    memo === nothing || (memo.deferrals[] += 1)
+                else
+                    ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
+                end
                 sub_nodes[d] = IntExpr(Int64(ci))
             end
         end
@@ -2497,13 +2522,10 @@ function _resolve_indices_op(
                         )
                     else
                         ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                        (1 <= ci <= pg.dims[d]) || throw(
-                            TreeWalkError(
-                                "E_TREEWALK_PGATHER_OOB",
-                                "forcing array '$(first_arg.name)' index $(ci) " *
-                                    "out of range [1, $(pg.dims[d])] on dim $(d)"
-                            )
-                        )
+                        # Out of range under a guard the build cannot show
+                        # taken: the run-time gather checks it if evaluated.
+                        (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred() ||
+                            _throw_pgather_oob(first_arg.name, ci, pg.dims[d], d)
                         sub_nodes[d] = IntExpr(Int64(ci))
                     end
                 end
@@ -2517,14 +2539,15 @@ function _resolve_indices_op(
                     for a in idx_args_expr
             ]
             for d in 1:length(pg.dims)
-                (1 <= int_indices[d] <= pg.dims[d]) ||
-                    throw(
-                    TreeWalkError(
-                        "E_TREEWALK_PGATHER_OOB",
-                        "forcing array '$(first_arg.name)' index $(int_indices[d]) " *
-                            "out of range [1, $(pg.dims[d])] on dim $(d)"
-                    )
+                (1 <= int_indices[d] <= pg.dims[d]) && continue
+                # The guarded out-of-range rule (above): a read the build
+                # cannot show evaluated becomes the run-time gather, which
+                # raises the same error if it is.
+                _guarded_oob_deferred() && return OpExpr(
+                    "index", ASTExpr[IntExpr(Int64(i)) for i in int_indices];
+                    value = _LiveGatherRef(pg.flat, pg.dims, first_arg.name)
                 )
+                _throw_pgather_oob(first_arg.name, int_indices[d], pg.dims[d], d)
             end
             lin = LinearIndices(Tuple(pg.dims))[int_indices...]
             return OpExpr(
