@@ -132,13 +132,38 @@ _make_catalyst_independent_var(name::Symbol) =
     Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem; name=:anonymous, kwargs...)
 
 Build a `Catalyst.ReactionSystem` from an ESM `ReactionSystem`.
+
+The system is built with `combinatoric_ratelaws = false`: esm-spec §7.4 gives a
+reaction the mass-action rate `k · ∏ Sᵢ^nᵢ` with no `1/nᵢ!` factor, which is
+what `src/reactions.jl` derives. Species and parameter `default`s are attached
+to their symbols. A system carrying `constraint_equations`, events or
+`subsystems`, which this constructor has no lowering for, is refused with an
+`ArgumentError` naming the field, as is a reaction with neither substrates nor
+products (`null_reaction`).
 """
 function Catalyst.ReactionSystem(
         rsys::EarthSciAST.ReactionSystem;
         name::Union{Symbol, AbstractString} = :anonymous,
         kwargs...
     )
+    for (field, present) in (
+            ("constraint_equations", !isempty(rsys.constraint_equations)),
+            ("discrete_events", !isempty(rsys.discrete_events)),
+            ("continuous_events", !isempty(rsys.continuous_events)),
+            ("subsystems", !isempty(rsys.subsystems)),
+        )
+        present && throw(
+            ArgumentError(
+                "Catalyst.ReactionSystem: the reaction system declares " *
+                    "`$(field)`, which this constructor has no lowering for; " *
+                    "flatten the document and build a ModelingToolkit.System " *
+                    "(or call esm_problem) instead"
+            )
+        )
+    end
     t = _make_catalyst_independent_var(:t)
+    _with_default(sym, val) =
+        val === nothing ? sym : Symbolics.setdefaultval(sym, Float64(val))
 
     species_dict = Dict{String, Any}()
     species_syms = Any[]
@@ -147,17 +172,17 @@ function Catalyst.ReactionSystem(
     for sp in rsys.species
         if sp.constant === true
             # Reservoir species: parameter with isconstantspecies=true metadata.
-            sym = _make_constant_species(Symbol(sp.name))
+            sym = _with_default(_make_constant_species(Symbol(sp.name)), sp.default)
             push!(param_syms, sym)
         else
-            sym = _make_species(Symbol(sp.name), t)
+            sym = _with_default(_make_species(Symbol(sp.name), t), sp.default)
             push!(species_syms, sym)
         end
         species_dict[sp.name] = sym
     end
 
     for p in rsys.parameters
-        sym = _make_catalyst_param(Symbol(p.name))
+        sym = _with_default(_make_catalyst_param(Symbol(p.name)), p.default)
         push!(param_syms, sym)
         param_dict[p.name] = sym
     end
@@ -196,34 +221,27 @@ function Catalyst.ReactionSystem(
             push!(product_stoich, st)
         end
 
-        if isempty(reactants_syms) && !isempty(products_syms)
-            push!(
-                rxns, Catalyst.Reaction(
-                    rate, nothing, products_syms,
-                    nothing, product_stoich
-                )
+        isempty(reactants_syms) && isempty(products_syms) && throw(
+            ArgumentError(
+                "null_reaction: reaction '$(esm_rxn.id)' has neither " *
+                    "substrates nor products"
             )
-        elseif !isempty(reactants_syms) && isempty(products_syms)
-            push!(
-                rxns, Catalyst.Reaction(
-                    rate, reactants_syms, nothing,
-                    reactant_stoich, nothing
-                )
+        )
+        push!(
+            rxns, Catalyst.Reaction(
+                rate,
+                isempty(reactants_syms) ? nothing : reactants_syms,
+                isempty(products_syms) ? nothing : products_syms,
+                isempty(reactants_syms) ? nothing : reactant_stoich,
+                isempty(products_syms) ? nothing : product_stoich
             )
-        elseif !isempty(reactants_syms) && !isempty(products_syms)
-            push!(
-                rxns, Catalyst.Reaction(
-                    rate, reactants_syms, products_syms,
-                    reactant_stoich, product_stoich
-                )
-            )
-        end
+        )
     end
 
     sys_name = name isa Symbol ? name : Symbol(name)
     return Catalyst.ReactionSystem(
         rxns, t, species_syms, param_syms;
-        name = sys_name, kwargs...
+        name = sys_name, combinatoric_ratelaws = false, kwargs...
     )
 end
 

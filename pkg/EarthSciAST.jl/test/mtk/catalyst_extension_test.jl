@@ -353,4 +353,89 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :AvogadroRate)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
     end
+
+    @testset "mass-action rate has no combinatorial factor and defaults are attached" begin
+        # esm-spec §7.4: 2A → B at rate k proceeds at k·A², so dA/dt = -2·k·A².
+        # With Catalyst's combinatorial rate law it would be -2·k·A²/2!.
+        esm_rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A"; default = 2.0), EarthSciAST.Species("B"; default = 0.0)],
+            EarthSciAST.Reaction[
+                EarthSciAST.Reaction(Dict("A" => 2), Dict("B" => 1), VarExpr("k")),
+            ];
+            parameters = [EarthSciAST.Parameter("k", 1.5)]
+        )
+        csys = ModelingToolkit.complete(Catalyst.ReactionSystem(esm_rsys; name = :Dimer))
+        @test Catalyst.get_combinatoric_ratelaws(csys) == false
+        # No initial values or parameters passed: the declared defaults supply them.
+        prob = ModelingToolkit.ODEProblem(csys, Dict{Any, Float64}(), (0.0, 1.0))
+        du = prob.f(prob.u0, prob.p, 0.0)
+        names = [string(u) for u in ModelingToolkit.unknowns(prob.f.sys)]
+        ia = findfirst(n -> startswith(n, "A"), names)
+        ib = findfirst(n -> startswith(n, "B"), names)
+        @test du[ia] ≈ -2 * 1.5 * 2.0^2
+        @test du[ib] ≈ 1.5 * 2.0^2
+    end
+
+    @testset "constructs it cannot lower are refused, not dropped" begin
+        sp = [EarthSciAST.Species("A"), EarthSciAST.Species("B")]
+        rx = EarthSciAST.Reaction[
+            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k")),
+        ]
+        ps = [EarthSciAST.Parameter("k", 1.0)]
+        with_constraint = EarthSciAST.ReactionSystem(
+            sp, rx; parameters = ps,
+            constraint_equations = [EarthSciAST.Equation(VarExpr("B"), NumExpr(0.0))]
+        )
+        err = try
+            Catalyst.ReactionSystem(with_constraint; name = :C)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("constraint_equations", err.msg)
+
+        nested = EarthSciAST.ReactionSystem(
+            sp, rx; parameters = ps,
+            subsystems = Dict("Inner" => EarthSciAST.ReactionSystem(sp, rx; parameters = ps))
+        )
+        @test_throws ArgumentError Catalyst.ReactionSystem(nested; name = :N)
+
+        null_rx = EarthSciAST.ReactionSystem(
+            sp, EarthSciAST.Reaction[EarthSciAST.Reaction("r0", nothing, nothing, VarExpr("k"))];
+            parameters = ps
+        )
+        err = try
+            Catalyst.ReactionSystem(null_rx; name = :Null)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("null_reaction", err.msg)
+    end
+
+    @testset "rate lowering checks operator arity instead of truncating" begin
+        sp = [EarthSciAST.Species("A"), EarthSciAST.Species("B")]
+        ps = [EarthSciAST.Parameter("k", 1.0)]
+        for rate in (
+                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0), NumExpr(2.0)]),
+                OpExpr("/", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0), NumExpr(2.0)]),
+                OpExpr("exp", EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(1.0)]),
+            )
+            rsys = EarthSciAST.ReactionSystem(
+                sp,
+                EarthSciAST.Reaction[EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), rate)];
+                parameters = ps
+            )
+            err = try
+                Catalyst.ReactionSystem(rsys; name = :Arity)
+                nothing
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "E_TREEWALK_ARITY"
+        end
+    end
 end
