@@ -2,7 +2,7 @@
 #
 # Reference binding. For every fixture in the manifest it:
 #   * evaluates the discretized RHS f(u, t) at each declared probe state via the
-#     MTK-free tree-walk evaluator (`build_evaluator` -> `f!(du, u, p, t)`), and
+#     MTK-free tree-walk evaluator (`Internal.build` -> `f!(du, u, p, t)`), and
 #   * integrates the trajectory from the declared initial conditions with the
 #     pinned integrator (Tsit5 + manifest reltol/abstol), sampling at the
 #     declared output times.

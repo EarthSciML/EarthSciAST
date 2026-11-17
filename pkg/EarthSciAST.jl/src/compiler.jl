@@ -284,9 +284,8 @@ What a build did, per rule. [`compiler_report`](@ref) returns one.
 * `compiler` — the vocabulary value that built this problem.
 * `rules` — a [`CompilerRuleRecord`](@ref) per equation / observed / setup
   array, in build order.
-* `tally` — this build's cascade counters (the per-build twin of the
-  process-global `_CASCADE_TALLY`), for the counts a per-rule row does not
-  carry: emitted kernels, class merges, subtree-table rescues.
+* `tally` — this build's cascade counters, for the counts a per-rule row does
+  not carry: emitted kernels, class merges, subtree-table rescues.
 
 `tier_histogram(report)` folds `rules` into tier → count, which is what
 `show(::EsmProblem)` prints.
@@ -347,10 +346,9 @@ end
 # The per-build record
 # ---------------------------------------------------------------------------
 #
-# The process-global `_CASCADE_TALLY` cannot answer "what did THIS build do" —
-# two builds in one session add into the same Dict, and a caller holding two
-# problems cannot tell them apart. This record is per build: `build_evaluator`
-# installs one for the duration of the build and the problem keeps it.
+# What ONE build did. `_build_evaluator_impl` installs a record for the duration
+# of the build (task-local, so concurrent builds keep their own), and the
+# finished report goes to the build's products and its problem.
 mutable struct _BuildRecord
     plan::CompilerPlan
     rules::Vector{CompilerRuleRecord}
@@ -499,9 +497,9 @@ end
 # ---------------------------------------------------------------------------
 #
 # `observed_field` files one report row per name, saying whether the read walked
-# per cell. That is a question about ONE CALL, which the process-global
-# `_CASCADE_TALLY` cannot answer: another task's evaluations add into it, and so
-# does an attempt the read made and then abandoned. So the read installs a
+# per cell. That is a question about ONE CALL: another task's evaluations must
+# not add into it, and neither may an attempt the read made and then abandoned.
+# So the read installs a
 # task-local counter, the per-cell cellwise route bumps it once it has SERVED a
 # value, and a caller that swallows a failed attempt drops what the attempt
 # counted (`_percell_mark` / `_percell_restore!`).

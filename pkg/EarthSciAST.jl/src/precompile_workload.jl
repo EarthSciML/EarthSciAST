@@ -220,17 +220,6 @@ const _WORKLOAD_DOCS = (
     end
     # The process-wide counters and build-scoped tables the builds above touched
     # start empty in a session, as they would without the workload.
-    empty!(_CASCADE_TALLY)
     empty!(_STATE_SLOT_TABLES)
     empty!(_LOOPVAR_REFS)
-    _CELLWISE_FASTPATH_HITS[] = 0
-    _CELLWISE_FASTPATH_MISS[] = 0
-    _VI_ENUM_VISITS[] = 0
-    _SETUP_MAP_FASTPATH_HITS[] = 0
-    for r in (
-            _GEOM_OVERLAP_DRIVE,
-            _GEOM_OVERLAP_GATE_ONLY, _GEOM_OVERLAP_NONE, _GEOM_EQ_DRIVE,
-        )
-        r[] = 0
-    end
 end

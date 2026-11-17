@@ -5,7 +5,7 @@
 # The scalar access-kernel runner (`_run_acc_kernel!`, access_kernel.jl) walks
 # the spine `_Node` tree once per cell: one dynamic kind/op dispatch per node
 # per cell per RHS call. This tier removes that interpretation entirely where
-# it can: at `build_evaluator` time each `_AccKernel` is EMITTED as Julia
+# it can: at `_build_evaluator` time each `_AccKernel` is EMITTED as Julia
 # source — the kernel's exact per-box loop nest with the spine as a
 # straight-line expression using direct indexing (`u[oln + Δ]`, literal
 # strides/offsets baked in) — and every emitted kernel is fused into ONE
@@ -36,8 +36,8 @@
 # `_cse_read`; see the tier note below), an oversized spine —
 # declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
-# counted per reason in `_CASCADE_TALLY` (`:codegen_kernel` /
-# `:codegen_decline_<reason>`), the `_tally_cascade!` pattern.
+# counted per reason in the build's cascade tally (`:codegen_kernel` /
+# `:codegen_decline_<reason>`, `_tally_cascade!`).
 #
 # GENERATED CODE NEVER TOUCHES INTERPRETER STATE: CSE/invariant slots become
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
@@ -103,8 +103,9 @@ end
 # ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
 # REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
 # leaves a tree walk in the right-hand side.
-# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
-# `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
+# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in the
+# build's cascade tally — the observability hook for which tier Dual evaluation
+# uses.
 _dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))

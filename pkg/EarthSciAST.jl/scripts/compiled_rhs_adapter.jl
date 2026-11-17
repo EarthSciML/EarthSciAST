@@ -33,7 +33,7 @@
 #
 # TWO ENGINES, ONE ADAPTER:
 #
-#   --engine interpreter  the MTK-free tree-walk evaluator (`build_evaluator` ->
+#   --engine interpreter  the MTK-free tree-walk evaluator (`Internal.build` ->
 #                         `f!(du, u, p, t)`). This is what mints the tier's
 #                         goldens and what the cross-binding gate compares.
 #   --engine compiled     direct StableHLO emission: the model's compiled

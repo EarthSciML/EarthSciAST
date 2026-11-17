@@ -8,7 +8,7 @@
 # `integral | mean | max | min` — or point-sample it via `coords`. The
 # MTK-based `run_esm_tests` cannot compile
 # `faq`/`makearray` discretizations; this runner drives the official
-# tree-walk pipeline instead: `esm_problem` + `solve` (build_evaluator → seed ICs → solve
+# tree-walk pipeline instead: `esm_problem` + `solve` (_build_evaluator → seed ICs → solve
 # via the SciMLBase extension) then per-assertion field reduction.
 #
 # `[[library-exposes-rhs-not-solver]]`: the caller supplies the ODE algorithm
@@ -538,7 +538,7 @@ Evaluate an array-valued expression (elementwise ops over array-producing
 `faq`/`makearray` nodes — e.g. a grid-geometry template expanded by a
 §9.7 import, or a §6.6.5 analytic `reference`) at each 1-based integer cell of
 `cells`, returning one Float64 per cell. This is the public entry to the same
-build-time machinery `build_evaluator` uses to seed coordinate-expression `ic`
+build-time machinery `_build_evaluator` uses to seed coordinate-expression `ic`
 fields.
 
 STATE references are not in scope. Model PARAMETERS (load-time constants) ARE:

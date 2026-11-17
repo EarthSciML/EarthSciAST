@@ -121,7 +121,7 @@ const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosin
 # function of (root STRUCTURE, loop-index-name set, region-class branch key)
 # plus BUILD-level context: `var_map` / `param_sym_set` /
 # `array_var_info` / `const_arrays` / `pgather` are the same objects for every
-# equation of one `build_evaluator` call (threaded unchanged from
+# equation of one `_build_evaluator` call (threaded unchanged from
 # `_build_compile_evaluator` through `_compile_derivative_equations`), and
 # `_branch_key!` carries ALL `idx_env` dependence (that is what already lets
 # one root share a variant across branches within an equation). After A1
@@ -574,7 +574,6 @@ function _stencilize_shared(
     vkey = (objectid(node), tctx.idxkey, bodykey)
     variant = get(tctx.variants, vkey, nothing)
     if variant === nothing
-        _BENCH_ON[] && (_BENCH_BODY_VARIANTS[] += 1)
         _count!(:body_variants)
         rs = _LaneRecipe[]
         # The body walk carries no template context: compile-once boundaries
@@ -1746,7 +1745,6 @@ function _build_branch_template(
         var_map::AbstractDict{String, Int},
         param_sym_set
     )::_StencilBranch
-    _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     _count!(:branch_templates)
     rs = _LaneRecipe[]
     # A fresh spine memo (its entries name this template's lane recipes), but

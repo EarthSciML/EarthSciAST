@@ -30,7 +30,7 @@ failures) so they are machine-checkable across bindings.
 """
 
 # Base variable name of a typed-IR LHS (`VarExpr` / `index` / `D`), used by
-# build_evaluator to drop value-invention equations from the ODE and by
+# _build_evaluator to drop value-invention equations from the ODE and by
 # `_vi_detect` below.
 function _vi_typed_lhs_base(expr)
     expr isa VarExpr && return expr.name
@@ -724,7 +724,7 @@ function _vi_enumerate_join(
         ctx::_ViCtx, cb
     )
     nvisit = Ref(0)
-    counted = bindings -> (_VI_ENUM_VISITS[] += 1; nvisit[] += 1; cb(bindings))
+    counted = bindings -> (nvisit[] += 1; cb(bindings))
     ov = _drivable_gate(gates)
     if ov === nothing
         r = _vi_enumerate(ranges, ctx, counted)   # full product
@@ -1116,7 +1116,6 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     v = ones(Int, length(lens))
     _count!(:vi_enum_visits, n)
     for _ in 1:n
-        _VI_ENUM_VISITS[] += 1
         keep = true
         if cf !== nothing
             fv = cf(v)

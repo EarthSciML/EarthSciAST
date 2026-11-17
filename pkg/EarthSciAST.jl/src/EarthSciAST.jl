@@ -144,7 +144,6 @@ include("rhs_program.jl")
 include("range_restricted.jl")
 include("strip_expose.jl")
 # Names that have left the public surface, kept for one minor version.
-include("deprecated.jl")
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
@@ -327,13 +326,8 @@ export
     broad_phase_candidates,
     # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
     evaluate_expr, TreeWalkError, BuildInspection, RecurrenceInfo,
-    # DEPRECATED (API_SPEC §8 item 23, src/deprecated.jl), exported until it is
-    # removed: a downstream that calls the bare name after `using EarthSciAST`
-    # (EarthSciASTDiff does, throughout its tests) must hear the deprecation
-    # warning, not an `UndefVarError`.
-    build_evaluator,
     # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
-    # model exactly as `build_evaluator` sees it post-expansion, for
+    # model exactly as the build sees it post-expansion, for
     # downstream analyzers (EarthSciASTDiff differentiates this tree). Two
     # halves of ONE seam, one per differentiable input shape:
     # `expanded_model(file, name)` for a single `Model` inside an `EsmFile`,
@@ -351,7 +345,7 @@ export
     expanded_model, expand_flattened_refs, expanded_file,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
     # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
-    # is a function of `p` and not a sixth `build_evaluator` return value.
+    # is a function of `p` and not a field of its own.
     param_map,
     # The parameter PARTITION (differentiability plan §3 Phase 5): which
     # parameters are `:numeric` (in the runtime `p` — differentiable, and
@@ -403,7 +397,7 @@ export
     forcing_buffers, forcing_buffer_index, sync_forcing!,
     # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
     # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
-    # pipeline (load → discretize → build_evaluator → seed → callbacks); the
+    # pipeline (load → discretize → build → seed → callbacks); the
     # verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
     # extension — which is also where `init` / `step!` / `solve!` / `remake` /
     # `EnsembleProblem` come from, so EarthSciAST exports none of those names

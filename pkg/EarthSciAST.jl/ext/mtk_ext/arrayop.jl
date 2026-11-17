@@ -344,7 +344,7 @@ function _build_arrayop_sym(
         # and are NOT evidence of a general guarantee.
         #
         # esm-spec §4.3.1 pins bit-exactness on the EXECUTING bindings; in Julia
-        # that is the tree-walk evaluator (`build_evaluator`, src/tree_walk/
+        # that is the tree-walk evaluator (`_build_evaluator`, src/tree_walk/
         # scan.jl, pinned by test/scan_prefix_test.jl), not this MTK export
         # path. Callers who need the normative low bits must use it.
         # Pinned by "Cumulative prefix reductions (MTK lowering)" in

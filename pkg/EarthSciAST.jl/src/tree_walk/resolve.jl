@@ -372,7 +372,7 @@ end
 # The shared unroll: `Iterators.product` over `iters` (which vary
 # `contract_names[1]` FASTEST), join-gate rejection, contracted-index
 # substitution, filter guard, emit. `COUNT` is a compile-time flag so the
-# `_VI_ENUM_VISITS` instrumentation exists ONLY in the overlap-gated
+# `:vi_enum_visits` count exists ONLY in the overlap-gated
 # specialisation — the ungated expansion, the engine's hottest loop, keeps
 # exactly the instruction stream it had.
 function _foreach_aggregate_product(
@@ -385,7 +385,7 @@ function _foreach_aggregate_product(
     nvisit = 0
     for k_tuple in _agg_tuples(iters)
         if binding !== nothing
-            COUNT && (_VI_ENUM_VISITS[] += 1; nvisit += 1)
+            COUNT && (nvisit += 1)
             for d in 1:length(contract_names)
                 binding[contract_names[d]] = k_tuple[d]
             end
@@ -423,7 +423,7 @@ function _foreach_keys1(
     nvisit = 0
     for k in it
         if binding !== nothing
-            COUNT && (_VI_ENUM_VISITS[] += 1; nvisit += 1)
+            COUNT && (nvisit += 1)
             binding[name] = k
             _join_admits(gates, binding) || continue
         end
@@ -515,7 +515,6 @@ function _foreach_aggregate_pairs(
     ) where {F}
     _count!(:vi_enum_visits, length(cols[1]))
     for p in 1:length(cols[1])
-        _VI_ENUM_VISITS[] += 1
         for d in 1:length(contract_names)
             binding[contract_names[d]] = cols[d][p]
         end

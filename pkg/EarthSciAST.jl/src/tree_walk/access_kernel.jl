@@ -1067,7 +1067,7 @@ _alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
 # The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
 # without a per-call allocation.
 
-# One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
+# One-time threading verdicts: bumped once per
 # generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
 # Read it via `EarthSciAST._THREAD_TALLY`, reset with
 # `EarthSciAST._reset_thread_tally!()`.

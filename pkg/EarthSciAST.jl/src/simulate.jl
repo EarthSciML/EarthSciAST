@@ -8,7 +8,7 @@
 #
 # Construction absorbs the whole deterministic-per-document pipeline (load →
 # flatten → shape transforms → pushdown rewrite → value invention → the gated
-# fetch of provider data → `build_evaluator`), plus the run wiring that belongs
+# fetch of provider data → `_build_evaluator`), plus the run wiring that belongs
 # to the DOCUMENT rather than to a particular run: the initial state, the
 # data-refresh callback, the output-sink callback and the checkpoint callback.
 # `solve` varies only the per-run knobs.
@@ -19,7 +19,7 @@
 # concept under the canonical name, with the run knobs it was missing.
 #
 # `[[library-exposes-rhs-not-solver]]`: EarthSciAST never depends on a solver.
-# Everything here — coerce → build_evaluator → seed → compose callbacks — is
+# Everything here — coerce → _build_evaluator → seed → compose callbacks — is
 # solver-free, so CONSTRUCTING an `EsmProblem` needs no SciMLBase and no
 # OrdinaryDiffEq (§2.5.9). The `ODEProblem` + `solve` live in a SciMLBase
 # package EXTENSION (EarthSciASTSimulateExt), which specializes
@@ -80,14 +80,14 @@ const DEFAULT_SIM_ABSTOL = 1.0e-6
 
 # --------------------------------------------------------------------------- #
 # Input coercion: path | native Dict | EsmFile | FlattenedSystem → a runnable
-# ESM document for build_evaluator.
+# ESM document for _build_evaluator.
 #
 # EVERY carrier of an AUTHORED document (a path, or the same document as a
 # Dict) is parsed and FLATTENED; only a `FlattenedSystem` — the type that says
 # "already flattened" — skips the flattener, and it is lowered to the native
-# single-model run document `build_evaluator` actually consumes.
+# single-model run document `_build_evaluator` actually consumes.
 #
-# A Dict must NOT be handed to `build_evaluator` directly. `build_evaluator`
+# A Dict must NOT be handed to `_build_evaluator` directly. `_build_evaluator`
 # runs ONE model (`_select_model`) and never reads `reaction_systems` or
 # `coupling` — those are lowered/applied BY `flatten`. So passing an authored
 # Dict through silently ran a single model with the reaction network and every
@@ -960,7 +960,7 @@ _solve_problem(prob, alg; kwargs...) = throw(
 # EsmProblem — the run-ready artifact, built exactly once per document.
 #
 # Everything deterministic-per-document (load → flatten → shape transforms →
-# flattened_to_esm → build_evaluator) plus the run wiring that belongs to the
+# flattened_to_esm → _build_evaluator) plus the run wiring that belongs to the
 # document (the seeded initial state, the refresh / output / checkpoint
 # callbacks) is done HERE, once. `solve(prob, alg; …)` then only varies the
 # per-run knobs, and `remake(prob; p, u0, tspan)` substitutes without redoing

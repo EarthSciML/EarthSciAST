@@ -108,10 +108,10 @@ evaluator instead, the oracle the compiled program agrees with bit for bit.
 Rust's `observed_trajectory(prob, sol, name)` answers the same question for
 every saved point of a solution at once (API_SPEC §5.8).
 
-!!! note "`build_evaluator` is deprecated"
-    `build_evaluator` warns once and forwards; use [`esm_problem`](@ref)
-    (`API_SPEC.md` §8 item 23). Its docstring maps each of its results to the
-    field or function of the Problem that provides it.
+!!! note "`build_evaluator` is removed"
+    Use [`esm_problem`](@ref) (`API_SPEC.md` §8 item 23): `prob.f!`,
+    `prob.u0`, `prob.p` and `prob.var_map` are what it returned, and
+    [`forcing_buffers`](@ref) / [`compiler_report`](@ref) take the Problem.
 
 ## `:xla` — the compiled StableHLO right-hand side
 

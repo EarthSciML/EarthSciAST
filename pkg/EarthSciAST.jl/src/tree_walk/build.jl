@@ -3,7 +3,7 @@
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Sections 2/2b/2c: BuildInspection and BuildProducts, the extracted build-pipeline
 # stages, the four build phases + _build_evaluator_impl, the public
-# build_evaluator entry points, and evaluate_expr.
+# _build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
 # One `observed_field` answer: the forcing epoch it was computed at
@@ -208,7 +208,7 @@ The **discrete-cadence materialization** sink — the middle phase of the
 three-phase cadence partition (`const ⊏ discrete ⊏ continuous`, `cadence.jl`).
 [`esm_problem`](@ref) ALWAYS makes the cut: it creates one of these when the
 `materialize_out` keyword is not given, and passing your own only makes it
-inspectable. A direct `build_evaluator` call without the keyword makes no cut,
+inspectable. An internal build without the keyword makes no cut,
 so its discrete-cadence derived fields stay inlined into the per-step RHS.
 
 Under `compiler = :native` each field's fill is one whole-array kernel, compiled
@@ -234,7 +234,7 @@ it gathers a raw forcing buffer. The build fills it:
   shows through to the RHS with zero reallocation).
 * `materialize!::Function` — a `() -> nothing` closure that recomputes every
   cache from the (already-refreshed) raw forcing buffers + const arrays + upstream
-  caches, in dependency order, unconditionally. `build_evaluator` runs it ONCE at
+  caches, in dependency order, unconditionally. `_build_evaluator` runs it ONCE at
   build (so u0 seeding and the first RHS evaluation read valid caches), and
   [`esm_problem`](@ref) wires it as the refresh callback's `post_refresh` hook.
 * `refresh!::Function` — a `() -> nothing` closure that runs `materialize!` only
@@ -278,7 +278,7 @@ DiscreteMaterializer() =
 #     ISR-resolution / observed-substitution pipeline as equation-defined
 #     observeds. This is the transitive-inlining path that lets a DEEP
 #     algebraic chain — e.g. the flattened Rothermel fire-physics chain
-#     reconstituted by `flattened_to_esm` — resolve through `build_evaluator`
+#     reconstituted by `flattened_to_esm` — resolve through `_build_evaluator`
 #     with NO caller pre-inlining (`_resolve_observed` collapses the chain to a
 #     fixed point). It used to be gated on geometry, which left a non-geometry
 #     expression-defined observed unbound. Synthesis only ADDS equations for
@@ -1418,16 +1418,13 @@ end
 # happens, and the model quietly measures the configuration they thought they
 # had switched off. Rust already raised `InvalidParameter` here; Julia and
 # Python now match it.
-function _normalize_param_override_keys(
-        model::Model, overrides::AbstractDict;
-        model_name = nothing
-    )
+function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
     isempty(overrides) && return overrides
     param_names = Set{String}(
         n for (n, v) in model.variables
             if v.type == ParameterVariable
     )
-    namespaces = _override_namespaces(param_names; model = model, model_name = model_name)
+    namespaces = _override_namespaces(param_names; model = model)
     # `Any`-valued: esm-spec §6.6.2 admits INLINE ARRAY DATA for a SHAPED
     # parameter alongside a scalar, and the array must survive key
     # canonicalization intact (`_register_inline_array_parameters` routes it to
@@ -1480,17 +1477,14 @@ end
 # as they are for `parameter_overrides`. An exact key always wins. The resolved
 # name is ADDED beside the caller's key, which stays, so a consumer that reads
 # the caller's spelling still finds it.
-function _normalize_const_array_keys(
-        model::Model, const_arrays::AbstractDict;
-        model_name = nothing
-    )
+function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict)
     isempty(const_arrays) && return const_arrays
     shaped = Set{String}(
         n for (n, v) in model.variables
             if v.type == ParameterVariable && _is_array_shape(v.shape)
     )
     isempty(shaped) && return const_arrays
-    namespaces = _override_namespaces(shaped; model = model, model_name = model_name)
+    namespaces = _override_namespaces(shaped; model = model)
     suffix_group = Dict{String, Vector{String}}()
     for n in shaped, s in _dotted_suffixes(n)
         push!(get!(suffix_group, s, String[]), n)
@@ -5547,7 +5541,7 @@ function _build_compile_evaluator(
     # slots are build-owned scratch above `length(u0)`, not integrator slots, and
     # every caller (solution indexing, cellwise evaluation, the conformance
     # runners) reads `var_map` as "state name → `u` index".
-    return f!, u0, p, tspan_default, layout.var_map, diag
+    return f!, u0, p, tspan_default, layout.var_map
 end
 
 # `compiler` (API_SPEC §5.8) is resolved FIRST, because the plan it expands to
@@ -5697,17 +5691,7 @@ function _build_evaluator_impl_inner(
         _template_reg = nothing,
         # Internal: the front door's expansion cache for `_template_reg`
         # (`_ExpandCache`), or `nothing`.
-        _expand_cache = nothing,
-        # Internal: the SELECTED MODEL's own name, threaded from
-        # the `EsmFile` / `AbstractDict` front-doors. Used only
-        # for the esm-spec §6.6.2 rule-2 namespace scope — a raw
-        # single-model build keeps its variable names BARE, so
-        # the model's name is the one legal leading segment its
-        # names cannot show. `nothing` on a direct `Model` call,
-        # where the key's leading segments are then validated
-        # against the model's own subsystems and name prefixes
-        # alone.
-        _model_name::Union{Nothing, AbstractString} = nothing
+        _expand_cache = nothing
     )
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
@@ -5737,7 +5721,7 @@ function _build_evaluator_impl_inner(
     # `const_arrays` (a CONST provider's materialized field, a gated provider's
     # fetched slab, and inline array data for a shaped parameter) and
     # `param_arrays` (the live buffer a DISCRETE provider rewrites). It sits at
-    # the BUILD entry rather than in `esm_problem` so that `build_evaluator` and
+    # the BUILD entry rather than in `esm_problem` so that `_build_evaluator` and
     # `run_inline_tests` answer identically, and before anything is compiled so
     # that the answer does not depend on the `compiler`.
     _refuse_unbound_data_feeds(
@@ -5851,11 +5835,8 @@ function _build_evaluator_impl_inner(
     # BEFORE any consumer reads it, so the same map binds the parameter
     # NamedTuple, the coordinate-expression `ic` seed, the setup env, and
     # `products.params`. Idempotent — the AbstractDict front-door normalizes
-    # too, and a document whose parameters are already bare is unchanged.
-    parameter_overrides = _normalize_param_override_keys(
-        model, parameter_overrides;
-        model_name = _model_name
-    )
+    # too.
+    parameter_overrides = _normalize_param_override_keys(model, parameter_overrides)
     # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
     # A SHAPED parameter whose value the document supplies — a row-major nested
     # array on its own `default` or in the caller's `parameter_overrides`, or one
@@ -5867,12 +5848,10 @@ function _build_evaluator_impl_inner(
     # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
-    const_arrays = _normalize_const_array_keys(model, const_arrays; model_name = _model_name)
+    const_arrays = _normalize_const_array_keys(model, const_arrays)
     # A boundary policy is keyed by the same caller spelling as its array, so it
     # resolves by the same rule: the policy reaches the name the equations read.
-    const_array_boundaries = _normalize_const_array_keys(
-        model, const_array_boundaries; model_name = _model_name
-    )
+    const_array_boundaries = _normalize_const_array_keys(model, const_array_boundaries)
     # A derived index set value invention has already sized (the front door
     # ran it) resolves a declared shape here too, keyed by the SET's name.
     vi_set_extents = isempty(_vi_extents) ? _EMPTY_DERIVED_EXTENTS :
@@ -6645,8 +6624,8 @@ end
 #                         (plain compiled scalar nodes on `rhs_list`, evaluated
 #                         by `_eval_node` — the differential oracle)
 # One increment per array equation, at the cascade's dispatch below. Cheap
-# (a Dict bump per EQUATION, not per cell) and always on; read it via
-# `EarthSciAST._CASCADE_TALLY`, reset with `EarthSciAST._reset_cascade_tally!()`.
+# (a Dict bump per EQUATION, not per cell) and always on; each lands in the
+# build's `CompilerReport.tally` and in the engagement counts (`_count!`).
 #
 # One NON-routing key rides the same tally:
 #   :affine_subtree_tbl — the subtree-table rescue fired (stencil.jl
@@ -6673,10 +6652,6 @@ end
 #                           safety-net counters and are expected to be ZERO;
 #                           nonzero means genuinely residual work the direct
 #                           stages did not see.
-const _CASCADE_TALLY = Dict{Symbol, Int}()
-# Builds and output-time reads on different tasks all bump the one Dict.
-const _CASCADE_TALLY_LOCK = ReentrantLock()
-
 # The ROUTING keys — the ones that say where an array equation finally landed,
 # exactly one per equation. Bumping one of these closes the rule the cascade
 # opened and files it in the build's `CompilerReport`; every other key is a
@@ -6718,9 +6693,6 @@ function _has_contract_loop(e)
 end
 
 function _tally_cascade!(k::Symbol)
-    lock(_CASCADE_TALLY_LOCK) do
-        _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
-    end
     _count!(k)
     rec = _build_record()
     if rec !== nothing
@@ -6730,7 +6702,6 @@ function _tally_cascade!(k::Symbol)
     end
     return nothing
 end
-_reset_cascade_tally!() = (lock(() -> empty!(_CASCADE_TALLY), _CASCADE_TALLY_LOCK); nothing)
 
 # One-line identity of a faq equation, for the compiler report's rule label and
 # for a refusal's message: the derivative target and its output axes with their
@@ -8326,10 +8297,11 @@ end
     _build_evaluator(model::Model; initial_conditions=Dict(),
                     parameter_overrides=Dict(), tspan=nothing, kwargs...)
 
-Build a tree-walk ODE RHS evaluator for `model` (internal; the exported
-entries are `build_evaluator` and `esm_problem`). Returns `(f!, u0, p, tspan,
-var_map)`. Thin wrapper over `_build_evaluator_impl`, which additionally
-returns build diagnostics.
+Build a tree-walk ODE RHS evaluator for `model` (internal; callers use
+[`esm_problem`](@ref), and the package's tests and adapters
+`EarthSciAST.Internal.build`, both of which flatten first). Returns `(f!, u0,
+p, tspan, var_map)`; everything else the build produced goes to its `products`
+record ([`BuildProducts`](@ref)).
 
 State variables may be scalar or array-shaped; an array state is laid out as
 one block of cells (`StateLayout`). `faq` and `makearray` are supported in expression
@@ -8393,8 +8365,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 """
 function _build_evaluator(model::Model; kwargs...)
     _refuse_float32(model, "Float64", "")
-    f!, u0, p, tspan_default, var_map, _diag = _build_evaluator_impl(model; kwargs...)
-    return f!, u0, p, tspan_default, var_map
+    return _build_evaluator_impl(model; kwargs...)
 end
 
 """
@@ -8458,9 +8429,8 @@ the default changes nothing either) — a wrong gradient and a wrong check
 agreeing silently. It is refused explicitly, with its own message.
 
 Like [`param_map`](@ref) this is a function of an artifact rather than an extra
-`build_evaluator` return value: the 5-tuple has hundreds of destructuring call
-sites. Pass `inspect = BuildInspection()` to `build_evaluator` / `esm_problem`,
-or read it off the `EsmProblem` that `esm_problem` returns.
+return value. Pass `inspect = BuildInspection()` to `esm_problem`, or read it
+off the `EsmProblem` that `esm_problem` returns.
 
 ```julia
 prob = esm_problem("model.esm", tspan)
@@ -8483,17 +8453,10 @@ function _build_evaluator(
     )
     _refuse_float32(file, model_name)
     model = _select_model(file, model_name)
-    # Thread the document-scoped index-set registry (esm-spec v0.8.0) into the
-    # typed evaluator, which no longer reads it off the `Model`. `_model_name`
-    # rides along for the §6.6.2 rule-2 namespace scope: the selected model's
-    # own name is the one namespace its (bare) variable names cannot show.
+    # Thread the document-scoped index-set registry into the typed evaluator.
     return _build_evaluator(
         model; index_sets = file.index_sets,
         _template_reg = _component_template_reg(file, model_name),
-        _model_name = (
-            model_name === nothing ?
-                _sole_model_name(file) : String(model_name)
-        ),
         kwargs...
     )
 end
@@ -8519,7 +8482,7 @@ end
 
 A deep copy of the selected model with every surviving Option-B
 `apply_expression_template` reference (esm-spec §9.6.4) expanded against the
-document's `component_templates` — the same expansion `build_evaluator`
+document's `component_templates` — the same expansion `_build_evaluator`
 performs before compiling, exposed as a public seam so downstream tools
 (e.g. EarthSciASTDiff, which differentiates the tree) analyze the expressions
 the evaluator compiles. The build goes on to rewrite this tree further without
@@ -8948,27 +8911,18 @@ function _build_evaluator_dict(
     # SAME resolved values. Without this a spec-spelled `{"pert_amp": 0}`
     # missed every one of them and the run silently used the default.
     if model !== nothing && haskey(kwd, :parameter_overrides)
-        # `model_name` is the one namespace this raw, UNFLATTENED model cannot
-        # show in its own variable names — the single-model front door keeps
-        # them bare — and it is exactly what makes the §4.6 spelling `M.A` a
-        # legal rule-2 key for the parameter `A` (esm-spec §6.6.2).
         kwd[:parameter_overrides] = _normalize_param_override_keys(
-            model, kwd[:parameter_overrides];
-            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
+            model, kwd[:parameter_overrides]
         )
     end
     # The same for the caller's `const_arrays` keys, so the front-door pre-passes
     # below read a shaped parameter's array under the name the model spells.
     if model !== nothing && haskey(kwd, :const_arrays)
-        kwd[:const_arrays] = _normalize_const_array_keys(
-            model, kwd[:const_arrays];
-            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
-        )
+        kwd[:const_arrays] = _normalize_const_array_keys(model, kwd[:const_arrays])
     end
     if model !== nothing && haskey(kwd, :const_array_boundaries)
         kwd[:const_array_boundaries] = _normalize_const_array_keys(
-            model, kwd[:const_array_boundaries];
-            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
+            model, kwd[:const_array_boundaries]
         )
     end
 
@@ -9101,33 +9055,6 @@ function _build_evaluator_dict(
     return _build_evaluator(file; model_name = model_name, kwd...)
 end
 
-"""
-    _build_evaluator(flat::FlattenedSystem; kwargs...)
-
-Build an evaluator directly from a `FlattenedSystem` by reconstituting it into a
-single-model native ESM document (`flattened_to_esm`) and running the
-`AbstractDict` front-door — so the regridders' value-invention geometry is
-materialized. Use this for a 0-D / array flattened system; for one carrying a
-spatial PDE, `discretize(flat; …)` first.
-"""
-function _build_evaluator(flat::FlattenedSystem; kwargs...)
-    # esm-spec §9.6.4 Option B / RFC §7.7: surviving `apply_expression_template`
-    # references carried by `flatten` (a non-empty `template_registry`) ride the
-    # reconstituted document (`flattened_to_esm` emits the registry as the
-    # model's `expression_templates` block), and the tree-walk impl entry
-    # expands them with SITE RECORDING so the affine build can compile each body
-    # once and call it as a sub-kernel (the RFC's compile-once tier) — the
-    # SINGLE evaluator-side expansion point. A no-op for a reference-free
-    # system.
-    #
-    # `flattened_to_esm` does not carry events, so they are refused HERE, while
-    # the flattened system still holds them (esm-spec §9.6.6).
-    _refuse_flat_events(flat)
-    _refuse_flat_wiener_noise(flat)
-    _refuse_flat_symbolic_updates(flat)
-    return _build_evaluator(flattened_to_esm(flat); kwargs...)
-end
-
 # Does any equation / variable expression of `model` (or a subsystem) carry a
 # surviving `apply_expression_template` node? Build-time guard input; one cheap
 # whole-model walk (the traversal descends `bindings` too, which is harmless
@@ -9159,17 +9086,6 @@ function _model_has_surviving_refs(model::Model)
         end
     end
     return found
-end
-
-# The single model's name when the document declares exactly one, else
-# `nothing` — the name `_build_evaluator(file)` selects by default, needed for
-# the esm-spec §6.6.2 rule-2 namespace scope (a bare-named single-model build
-# admits the §4.6 spelling `M.A` for its parameter `A` only if `M` is known to
-# name the model).
-function _sole_model_name(file::EsmFile)
-    models = file.models
-    (models === nothing || length(models) != 1) && return nothing
-    return String(first(keys(models)))
 end
 
 # Select one typed model from an `EsmFile`, mirroring `_select_model`'s name

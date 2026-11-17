@@ -30,7 +30,7 @@ _event_construct(::ContinuousEvent) = "continuous event"
 _event_construct(::DiscreteEvent) = "discrete event"
 
 # The tree-walk evaluator's refusal of an event (esm-spec §9.6.6), one message
-# for every entry that can still see the events: `build_evaluator` on a model or
+# for every entry that can still see the events: `_build_evaluator` on a model or
 # on a flattened system, and `simulate` / `run_inline_tests`. The event is named
 # `'name'`, or `(unnamed)`.
 _event_refusal(ev::Union{ContinuousEvent, DiscreteEvent}) = TreeWalkError(
@@ -216,21 +216,15 @@ struct _DataFeed
     var::ModelVariable
 end
 
-# Every data-fed parameter of `model` and, by recursion, of its subsystems, in
-# declaration order. A parameter is data-fed when some `update` rule is
+# Every data-fed parameter of `model`, in declaration order. A parameter is data-fed when some `update` rule is
 # `kind == "data"` and carries a `from` binding (esm-spec §5.4/§8.5) — the same
 # predicate `_collect_loader_fields!` applies, MINUS its requirement that the
 # named source resolve: a source the document does not declare is not a source
 # that is bound either, and dropping the parameter here is exactly how it used
 # to reach the build looking ordinary and run at its `default`.
-#
-# `prefix` is empty for the flattened single model `esm_problem` builds, whose
-# variable names already carry their component (`"Forcing.k"`), and grows for a
-# raw model handed to `build_evaluator` directly.
-function _collect_data_feeds!(
-        out::Vector{_DataFeed}, model::Model,
-        prefix::AbstractString
-    )
+# Every build sees the flattened single model, whose variable names already
+# carry their component (`"Forcing.k"`) and which has no subsystems left.
+function _collect_data_feeds!(out::Vector{_DataFeed}, model::Model)
     for (var_name, var) in model.variables
         var.type == ParameterVariable || continue
         var.update === nothing && continue
@@ -238,22 +232,12 @@ function _collect_data_feeds!(
             (rule.kind == "data" && rule.from !== nothing) || continue
             push!(
                 out, _DataFeed(
-                    isempty(prefix) ? String(var_name) :
-                        "$(prefix).$(var_name)",
-                    rule.source === nothing ? "(unnamed)" :
-                        String(rule.source), var
+                    String(var_name),
+                    rule.source === nothing ? "(unnamed)" : String(rule.source), var
                 )
             )
             break                      # one parameter is fed by one source
         end
-    end
-    for (sub_name, sub) in model.subsystems
-        sub isa Model || continue
-        _collect_data_feeds!(
-            out, sub,
-            isempty(prefix) ? String(sub_name) :
-                "$(prefix).$(sub_name)"
-        )
     end
     return out
 end
@@ -302,7 +286,7 @@ build entry, before any right-hand side exists, so the answer is the same under
 every `compiler`.
 """
 function _refuse_unbound_data_feeds(model::Model, bindings...)
-    feeds = _collect_data_feeds!(_DataFeed[], model, "")
+    feeds = _collect_data_feeds!(_DataFeed[], model)
     isempty(feeds) && return nothing
     for feed in feeds
         _data_feed_is_bound(feed.name, bindings) && continue
@@ -1196,20 +1180,11 @@ end
     return _eval_node(ce.node, _NO_STATE_U, p_nt, ce.t)
 end
 
-# ENGAGEMENT DIAGNOSTICS (wall2). Permanent module-level counters that record how
-# often the compile-once fast path ENGAGES (`_cellwise_compile_once` returns a
-# non-nothing `_CellEval`) versus FALLS BACK to the per-cell loop (returns
-# `nothing`). Purely observational — reading/incrementing them never alters the
-# evaluator's output. Reset them (`[] = 0`) around a build to attribute HITS/MISS
-# to one run. Every caller (the Phase C site in `evaluate_cellwise` and the
-# Phase D BLAS-wrapper site) flows through the thin wrapper below, so both are
-# tallied.
-const _CELLWISE_FASTPATH_HITS = Ref{Int}(0)
-const _CELLWISE_FASTPATH_MISS = Ref{Int}(0)
-
-# Thin instrumentation wrapper: forwards verbatim to `_cellwise_compile_once_impl`
-# and bumps the HIT/MISS counter by the impl's result. Behaviour-identical to the
-# impl — same return value, same signature — so no call site changes.
+# Engagement counts (`_count!`, compiler.jl): how often the compile-once fast
+# path engages (`_cellwise_compile_once_impl` returns a `_CellEval`,
+# `:cellwise_fastpath_hit`) versus falls back to the per-cell loop (`nothing`,
+# `:cellwise_fastpath_miss`). Every caller goes through this wrapper, which
+# returns the impl's result unchanged.
 function _cellwise_compile_once(
         expr::EarthSciAST.ASTExpr, nidx::Int,
         const_arrays::AbstractDict,
@@ -1222,10 +1197,8 @@ function _cellwise_compile_once(
         bind_syms = bind_syms, t = t
     )
     if ce === nothing
-        _CELLWISE_FASTPATH_MISS[] += 1
         _count!(:cellwise_fastpath_miss)
     else
-        _CELLWISE_FASTPATH_HITS[] += 1
         _count!(:cellwise_fastpath_hit)
     end
     return ce

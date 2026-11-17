@@ -49,7 +49,7 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # observeds) would otherwise re-match the pattern and stack a second
     # `pd_support__pd_support__…` layer. This makes the pass safe to request
     # from BOTH `prepare` (which must run it before flattening/provider
-    # classification) and the `build_evaluator` front door.
+    # classification) and the `_build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
     an = _pd_analyze(esm, model_name)
     an === nothing && return esm
