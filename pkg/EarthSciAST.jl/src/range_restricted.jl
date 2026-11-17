@@ -3388,7 +3388,8 @@ function _lane_check(lp::LaneProgram, ws::RhsWorkspace, du, u, aux, p, cells, n)
             "rhs!: `cells` has $(size(cells, 1)) rows; the lane sets are $(join(lp.sets, ", "))"
         )
     )
-    (1 <= n <= L) || throw(ArgumentError("rhs!: n = $n lanes of an L = $L batch"))
+    # A lane count out of range is a length, as in `gather_lane_inputs!`.
+    (1 <= n <= L) || throw(DimensionMismatch("rhs!: n = $n lanes of an L = $L batch"))
     length(u) == lp.layout.n_u * L || throw(
         DimensionMismatch(
             "rhs!: `u` has $(length(u)) elements; the lane layout needs $(lp.layout.n_u * L)"

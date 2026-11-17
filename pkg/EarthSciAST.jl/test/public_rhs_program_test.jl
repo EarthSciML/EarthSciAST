@@ -706,6 +706,9 @@ end
     @test li.fs[] === fs2
     # A parameter vector of the wrong length.
     @test_throws DimensionMismatch rhs!(db, lp, ws, ub, noaux, Float64[], 0.0, fs, cells, nb)
+    # A lane count out of range is the same error as for the gather.
+    @test_throws DimensionMismatch rhs!(db, lp, ws, ub, noaux, p, 0.0, fs, cells, 0)
+    @test_throws DimensionMismatch rhs!(db, lp, ws, ub, noaux, p, 0.0, fs, cells, nb + 1)
     # A tile of the same operator on its own workspace.
     dec = Decomposition(axes = ["x" => (period = nothing,), "y" => (period = nothing,)])
     tile = restrict(
