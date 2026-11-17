@@ -459,3 +459,51 @@ end
         @test all(du .≈ -0.1)
     end
 end
+
+@testset "derivative-equation compile refuses an equation of another shape" begin
+    # Every caller hands only D(x), D(index(x, …)) or a faq over D(index(x, …));
+    # anything else is refused, never dropped.
+    eq = ESM.Equation(ESM.VarExpr("y"), ESM.NumExpr(1.0))
+    err = try
+        ESM._compile_derivative_equations(
+            ESM.Equation[eq], Dict{String, ESM.ASTExpr}(),
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}("y" => 1),
+            Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}(), 1
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_UNSUPPORTED_LHS"
+end
+
+@testset "initial_conditions keys must name a state element" begin
+    vars = Dict("x" => ModelVariable(UnknownVariable; default = 1.0))
+    model = ESM.Model(vars, [ESM.Equation(_op("D", _v("x"); wrt = "t"), ESM.NumExpr(0.0))])
+    err = try
+        EarthSciAST._build_evaluator(model; initial_conditions = Dict("nope" => 2.0))
+        nothing
+    catch e
+        e
+    end
+    @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_UNKNOWN_STATE"
+    _, u0, _, _, vm = EarthSciAST._build_evaluator(model; initial_conditions = Dict("x" => 2.0))
+    @test u0[vm["x"]] == 2.0
+end
+
+@testset "a whole-array initial_conditions key sets every cell" begin
+    vars = Dict("u" => ModelVariable(UnknownVariable; shape = ["i"]))
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], ranges = Dict("i" => [1, 3]),
+        expr_body = _op("D", _op("index", _v("u"), _v("i")); wrt = "t")
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], ranges = Dict("i" => [1, 3]),
+        expr_body = ESM.NumExpr(0.0)
+    )
+    model = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    _, u0, _, _, vm = EarthSciAST._build_evaluator(
+        model; initial_conditions = Dict("u" => 1.5, "u[2]" => 4.0)
+    )
+    @test [u0[vm["u[$k]"]] for k in 1:3] == [1.5, 4.0, 1.5]
+end

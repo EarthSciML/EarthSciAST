@@ -2396,6 +2396,7 @@ function _build_u0(
         eq_ics::Dict{String, Float64}, fold_fields!;
         unvalued::Union{Nothing, Vector{Int}} = nothing
     )
+    _check_ic_keys(layout, initial_conditions)
     u0 = Vector{Float64}(undef, length(layout))
     # Slots with a starting value; the rest hold a 0.0 placeholder, reported
     # through `unvalued` (esm-spec §11.4).
@@ -2477,6 +2478,29 @@ function _build_u0(
         end
     end
     return u0
+end
+
+# Every explicit `initial_conditions` key must name a state element of the
+# layout (a scalar state, one array cell, or a whole array variable with a
+# scalar value, which sets every cell); a key that names none is refused, as
+# `esm_problem` refuses it for `u0`, never dropped. Whole-array inline data is
+# checked where it is expanded (`_expand_inline_array_ics`).
+_check_ic_keys(layout::StateLayout, ics::_InlineICs) = _check_ic_keys(layout, ics.explicit)
+function _check_ic_keys(layout::StateLayout, ics::AbstractDict)
+    for key in keys(ics)
+        named = key isa AbstractString && (
+            get(layout, key, 0) != 0 ||
+                (ics[key] isa Real && _layout_block(layout, String(key)) !== nothing)
+        )
+        named && continue
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNKNOWN_STATE",
+                "initial_conditions names unknown state element '$(key)'"
+            )
+        )
+    end
+    return nothing
 end
 
 # The array variable whose block holds state slot `s` (a slot past the scalars).
@@ -2928,6 +2952,8 @@ function _seed_faq_init_u0!(
         range_iters = [collect(_expand_int_range(ranges_dict[n])) for n in idx_names]
         todo = Tuple{Any, Int}[]
         may_override = _ics_may_name_cells(initial_conditions)
+        # A whole-variable key sets every cell, so the explicit value wins there too.
+        haskey(initial_conditions, var_name) && continue
         cell = Vector{Int}(undef, length(idx_names))
         for idx_tuple in Iterators.product(range_iters...)
             for d in eachindex(cell)
