@@ -1,12 +1,11 @@
 # End-to-end + zero-alloc + cadence loader-refresh tests (ess-14f.6, JL-J3).
 #
-# JL-J1 (ess-14f.4) built `build_refresh_callback` — the `PresetTimeCallback`
-# whose `affect!` samples a Provider and writes the live forcing buffer in place
-# (native forcing straight into the buffer; any native→sim regrid is an in-model
-# coupling the RHS evaluates, not a refresh-time transform — the obsolete
-# RegridApplier seam was removed in v0.8.0). J3 is the INTEGRATION layer: it
-# composes the library's exposed pieces — `build_evaluator` (the RHS) and
-# `build_refresh_callback` (the cadence callback + tstops) — into an honest
+# `build_refresh_callback` is the `PresetTimeCallback` whose `affect!` samples a
+# Provider and writes the live forcing buffer in place (native forcing straight
+# into the buffer; any native→sim regrid is an in-model coupling the RHS
+# evaluates, not a refresh-time transform). This file is the INTEGRATION layer:
+# it composes the build (`EarthSciAST.Internal.build`, the RHS) and
+# `build_refresh_callback` (the cadence callback + tstops) into an honest
 # `solve(prob, Tsit5(); callback, tstops)` over a loaded fixture, and asserts the
 # cadence contract end to end.
 #
@@ -68,12 +67,14 @@ function ESM.provider_sample(p::_RefreshLogProvider, t::Real)
     return p.fields[tf]
 end
 
-# Scalar initial conditions over the coupled fixture's two 3-cell array states.
+# Scalar initial conditions over the coupled fixture's two 3-cell array states,
+# by their flattened names (the fixture's one component is `M`). `scale` and
+# `src` are not declared, so the arrays bound to them keep that spelling.
 function _coupled_ics()
     ics = Dict{String, Float64}()
     for k in 1:3
-        ics["c[$k]"] = 0.0
-        ics["d[$k]"] = 0.0
+        ics["M.c[$k]"] = 0.0
+        ics["M.d[$k]"] = 0.0
     end
     return ics
 end
@@ -91,7 +92,7 @@ end
 
         scale = [1.0, 2.0, 3.0]          # CONST factor — materialized once at build
         srcbuf = [1.0, 1.0, 1.0]          # DISCRETE live buffer — the [0,1) segment value
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),    # CONST: inlined once (no tstops)
@@ -117,8 +118,8 @@ end
         # rate r_k = scale .* src_k:  r0=[1,2,3], r1=[2,4,6], r2=[3,6,9].
         #   c(3) = r0+r1+r2 = [6,12,18]                       (accumulated forced source)
         #   d(3) = 2.5·r0 + 1.5·r1 + 0.5·r2 = [7,14,21]       (coupled integral of c)
-        c = [sol.u[end][vm["c[$k]"]] for k in 1:3]
-        d = [sol.u[end][vm["d[$k]"]] for k in 1:3]
+        c = [sol.u[end][vm["M.c[$k]"]] for k in 1:3]
+        d = [sol.u[end][vm["M.d[$k]"]] for k in 1:3]
         @test isapprox(c, [6.0, 12.0, 18.0]; atol = 1.0e-7)
         @test isapprox(d, [7.0, 14.0, 21.0]; atol = 1.0e-7)   # dependent var recomputes from the refreshed buffer
         @test srcbuf == [3.0, 3.0, 3.0]                   # buffer holds the LAST refresh (in place, not realloc)
@@ -130,7 +131,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),
@@ -180,7 +181,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),

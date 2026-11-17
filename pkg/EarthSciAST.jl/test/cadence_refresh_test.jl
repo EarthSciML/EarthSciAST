@@ -75,27 +75,28 @@ function _cr_model(N)
         ),
         ESM.Equation(_D("z"), _op("+", _op("sin", fk()), _op("cos", fk()))),
     ]
-    ics = merge(Dict("u[$j]" => 0.1j for j in 1:N), Dict("z" => 0.3))
+    # The build flattens the model into component `M`.
+    ics = merge(Dict("M.u[$j]" => 0.1j for j in 1:N), Dict("M.z" => 0.3))
     return ESM.Model(vars, eqs), isets, ics
 end
 
 function _cr_refresh_sequence(N)
     model, isets, ics = _cr_model(N)
     F = [1.0 + 0.5j for j in 1:N]
-    nat = ESM._build_evaluator_impl(
+    nat = ESM.Internal.build(
         model; index_sets = isets, initial_conditions = ics,
         param_arrays = Dict("F" => F)
     )
-    ref = ESM._build_evaluator_impl(
+    ref = ESM.Internal.build(
         model; index_sets = isets, initial_conditions = ics,
         param_arrays = Dict("F" => F), compiler = :interpreter
     )
     # Each memoized tier this file is about is really there.
-    @test nat[6].n_mat_const_levels == 1
-    @test nat[6].n_mat_time_levels == 1
-    @test nat[6].n_time_slots >= 1
-    fn!, u0, p = nat[1], nat[2], nat[3]
-    fr! = ref[1]
+    @test nat.report.stats.n_mat_const_levels == 1
+    @test nat.report.stats.n_mat_time_levels == 1
+    @test nat.report.stats.n_time_slots >= 1
+    fn!, u0, p = nat.f!, nat.u0, nat.p
+    fr! = ref.f!
     du, dr = similar(u0), similar(u0)
     jac(f!, pp, t) = ForwardDiff.jacobian((d, uu) -> f!(d, uu, pp, t), similar(u0), u0)
     function agree(pp, t)
@@ -156,25 +157,25 @@ else
             model, isets, ics = _cr_model(8)
             F = [1.0 + 0.5j for j in 1:8]
             G = copy(F)
-            bF = ESM._build_evaluator_impl(
+            bF = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => F)
             )
-            bF2 = ESM._build_evaluator_impl(
+            bF2 = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => F)
             )
-            bG = ESM._build_evaluator_impl(
+            bG = ESM.Internal.build(
                 model; index_sets = isets,
                 initial_conditions = ics,
                 param_arrays = Dict("F" => G)
             )
             # The Jacobian reads the buffer only through the memoized `w`.
             call(b) = ForwardDiff.jacobian(
-                (d, uu) -> b[1](d, uu, b[3], 0.5),
-                similar(b[2]), b[2]
+                (d, uu) -> b.f!(d, uu, b.p, 0.5),
+                similar(b.u0), b.u0
             )
             d0 = call(bF)
             @test call(bF2) == d0 && call(bG) == d0
@@ -200,7 +201,7 @@ else
             )
             function solve_with(compiler, how)
                 F = [0.2j for j in 1:8]
-                f!, u0, p = ESM._build_evaluator_impl(
+                f!, u0, p = ESM.Internal.build(
                     model; index_sets = isets,
                     initial_conditions = ics, param_arrays = Dict("F" => F),
                     compiler = compiler

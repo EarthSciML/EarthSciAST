@@ -42,10 +42,20 @@ _ut_call(f!, u, p, t) = (d = zeros(Float64, length(u)); f!(d, u, p, t); d)
 _ut_bits(v) = UInt64[reinterpret(UInt64, Float64(x)) for x in v]
 _ut_same(a, b) = _ut_bits(collect(a)) == _ut_bits(collect(b))
 
-# The three builds under comparison, from one model-producing thunk.
-_ut_tiered(mk; kw...) = ESM._build_evaluator_impl(mk(); kw...)
+# `(f!, u0, p, tspan, var_map, stats)` of one build: the build report's
+# structural counts in the last slot.
+_ut_with_stats(b) = (b.f!, b.u0, b.p, b.tspan, b.var_map, b.report.stats)
+
+# The builds under comparison, from one model-producing thunk. The model is
+# flattened into component `M`, so its names are `M.<name>`.
+_ut_tiered(mk; kw...) = _ut_with_stats(ESM.Internal.build(mk(); kw...))
 _ut_untiered(mk; kw...) =
-    ESM._build_evaluator_impl(mk(); compiler = :interpreter, kw...)
+    _ut_with_stats(ESM.Internal.build(mk(); compiler = :interpreter, kw...))
+
+# `p` with the named parameters of component `M` replaced.
+_ut_set(p; kw...) = merge(
+    p, NamedTuple{Tuple(Symbol("M.$k") for k in keys(kw))}(Tuple(values(kw)))
+)
 
 # ---------------------------------------------------------------------------
 # Fixture 1 — the parameter-only Arrhenius chain: `k = A*exp(-Ea/(R*Tref))`
@@ -136,18 +146,12 @@ function _ut_fastjx_model(K::Int, M::Int)
 end
 
 # ---------------------------------------------------------------------------
-# Fixture 3 — repo documents. `EarthSciAST._build_evaluator(::EsmFile)` drops the diagnostics,
-# and this file needs them (a fixture whose prelude turned out EMPTY would pass
-# every assertion below while exercising nothing), so it goes through the same
-# model/index-set/template plumbing that method does.
+# Fixture 3 — repo documents, built whole. The structural counts matter here
+# too: a fixture whose prelude turned out EMPTY would pass every assertion
+# below while exercising nothing.
 # ---------------------------------------------------------------------------
 _ut_file(rel) = ESM.load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", rel))
-_ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
-    ESM._select_model(file, name);
-    index_sets = file.index_sets,
-    _template_reg = ESM._component_template_reg(file, name),
-    _model_name = String(name), kw...
-)
+_ut_doc_build(file; kw...) = _ut_with_stats(ESM.Internal.build(file; kw...))
 
 @testset "compiler=:interpreter ≡ the tiered prelude" begin
 
@@ -187,7 +191,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
         fi, u0, p, _ts, _vm, _di = _ut_tiered(_ut_arrhenius)
         fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(_ut_arrhenius)
 
-        p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
+        p2 = _ut_set(p; A = 7.0 * p[Symbol("M.A")], R = 8.0)
         seq = [
             (u0, p, 0.0), (u0, p, 0.0), (u0, p2, 0.0), ([0.4, -1.3], p, 0.0),
             (u0, p, 0.5), (u0, p2, 0.5), (u0, p, 0.5), ([2.0, 2.0], p2, 0.0),
@@ -215,7 +219,7 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
         fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(mk; param_arrays = pa())
         @test di.n_time_slots > 0
 
-        p2 = merge(p, (; w = 0.9, scale = 2.25))
+        p2 = _ut_set(p; w = 0.9, scale = 2.25)
         up = copy(u0); up[1] += 1.0e-6
         seq = Any[]
         push!(seq, (u0, p, 0.0)); push!(seq, (u0, p, 0.0))      # skip
@@ -248,19 +252,33 @@ _ut_doc_build(file, name; kw...) = ESM._build_evaluator_impl(
             # (file, model, a second `p` builder or `nothing`)
             (
                 "units_moves_registry.esm", "UnitsMovesRegistry",
-                p -> merge(p, (; link_avg_speed = 55.0, engine_power = 210.0)),
+                p -> merge(
+                    p, NamedTuple{
+                        (
+                            Symbol("UnitsMovesRegistry.link_avg_speed"),
+                            Symbol("UnitsMovesRegistry.engine_power"),
+                        ),
+                    }((55.0, 210.0))
+                ),
             ),
             (
                 "units_propagation.esm", "UnitPropagationModel",
-                p -> merge(p, (; temperature = 310.0, pressure = 90000.0)),
+                p -> merge(
+                    p, NamedTuple{
+                        (
+                            Symbol("UnitPropagationModel.temperature"),
+                            Symbol("UnitPropagationModel.pressure"),
+                        ),
+                    }((310.0, 90000.0))
+                ),
             ),
         )
         for (rel, name, bump) in cases
             @testset "$rel" begin
                 file = _ut_file(rel)
-                fi, u0, p, _ts, _vm, di = _ut_doc_build(file, name)
+                fi, u0, p, _ts, _vm, di = _ut_doc_build(file)
                 fu, _u2, _p2, _ts2, _vm2, du =
-                    _ut_doc_build(file, name; compiler = :interpreter)
+                    _ut_doc_build(file; compiler = :interpreter)
 
                 # The fixture must actually HAVE a prelude, or this proves nothing.
                 nslots = di.n_const_slots + di.n_time_slots + di.n_dynamic_slots
