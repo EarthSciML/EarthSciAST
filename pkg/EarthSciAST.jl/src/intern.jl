@@ -429,11 +429,9 @@ function _intern_equations(eqs::Vector{Equation}, ctx::_InternCtx)
 end
 
 function _intern_model(model::Model, ctx::_InternCtx)::Model
-    vars = model.variables
-    nvars = vars
-    # esm 1.0.0: a variable carries no `expression` — an observed unknown's
-    # defining right-hand side is an ordinary equation, interned below with
-    # every other equation, so there is nothing per-variable left to intern.
+    # A variable carries no expression of its own (an observed unknown's
+    # defining right-hand side is an ordinary equation, interned below), so the
+    # variable map is carried across as is.
     eqs = _intern_equations(model.equations, ctx)
     ieqs = _intern_equations(model.initialization_equations, ctx)
     guesses = model.guesses
@@ -457,12 +455,12 @@ function _intern_model(model::Model, ctx::_InternCtx)::Model
         end
     end
     (
-        nvars === vars && eqs === model.equations &&
+        eqs === model.equations &&
             ieqs === model.initialization_equations && ng === guesses &&
             nsubs === subs
     ) && return model
     return Model(
-        nvars, eqs, model.discrete_events, model.continuous_events,
+        model.variables, eqs, model.discrete_events, model.continuous_events,
         nsubs; tolerance = model.tolerance, tests = model.tests,
         analyses = model.analyses,
         initialization_equations = ieqs, guesses = ng,
