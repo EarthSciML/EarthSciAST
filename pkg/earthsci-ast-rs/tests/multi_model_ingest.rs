@@ -380,7 +380,7 @@ fn a_bare_override_naming_two_models_parameters_is_refused() {
         Err(e) => e,
     };
     assert!(
-        msg.contains("qualify it as one of") && msg.contains("A.k") && msg.contains("B.k"),
+        msg.contains("Ambiguous parameter 'k'") && msg.contains("A.k") && msg.contains("B.k"),
         "{msg}"
     );
 }

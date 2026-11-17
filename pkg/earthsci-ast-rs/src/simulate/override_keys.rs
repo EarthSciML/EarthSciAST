@@ -324,6 +324,160 @@ impl KnownNames for SuffixIndex {
     }
 }
 
+/// Which rule a [`KeyResolver`] maps a caller key by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum KeyPolicy {
+    /// esm-spec §6.6.2, as [`resolve_key`] applies it: a key designates at
+    /// most one name, an exact name wins over every other spelling of it, a
+    /// key two names end is ambiguous, and two non-exact keys for one name
+    /// collide.
+    Spec,
+    /// One model built alone, its names model-local: a key reaches EVERY
+    /// name it spells ([`key_spells`]) — the name itself, the name under the
+    /// model's own prefix, or a name it is a dotted suffix of — so a bare `k`
+    /// reaches a top-level `k` and a mounted `Leaf.k` alike. Each name takes
+    /// the strongest key that reaches it.
+    EveryName {
+        /// The model built alone.
+        model: String,
+    },
+}
+
+/// One build's names, and the one rule by which a caller key (a `p` entry, a
+/// const array, a provider) maps onto them.
+pub(crate) struct KeyResolver {
+    policy: KeyPolicy,
+    index: SuffixIndex,
+    namespaces: HashSet<String>,
+}
+
+impl KeyResolver {
+    /// A resolver over `names` by `policy`. Under [`KeyPolicy::Spec`] a
+    /// rule-2 key's leading segments must each be one of `namespaces`
+    /// ([`namespace_scope`]).
+    pub(crate) fn new<'a>(
+        policy: KeyPolicy,
+        names: impl IntoIterator<Item = &'a str>,
+        namespaces: HashSet<String>,
+    ) -> Self {
+        KeyResolver {
+            policy,
+            namespaces,
+            index: SuffixIndex::new(names),
+        }
+    }
+
+    /// The names `key` spells ([`key_spells`]), strongest first, then by
+    /// name: the name itself, the name under a model-local build's prefix,
+    /// and every name `key` is a dotted suffix of.
+    pub(crate) fn spells(&self, key: &str) -> Vec<(String, KeyMatch)> {
+        let mut out: Vec<(String, KeyMatch)> = Vec::new();
+        if self.index.contains(key) {
+            out.push((key.to_string(), KeyMatch::Exact));
+        }
+        if let KeyPolicy::EveryName { model } = &self.policy
+            && let Some(name) = key
+                .strip_prefix(model.as_str())
+                .and_then(|r| r.strip_prefix('.'))
+            && self.index.contains(name)
+        {
+            out.push((name.to_string(), KeyMatch::ModelPrefixed));
+        }
+        out.extend(
+            self.index
+                .suffix_owners(key)
+                .into_iter()
+                .map(|n| (n, KeyMatch::Suffix)),
+        );
+        out.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        out
+    }
+
+    /// The names `key` designates under the policy, strongest first: none
+    /// or one under [`KeyPolicy::Spec`] (an ambiguous key is an error), every
+    /// name it spells under [`KeyPolicy::EveryName`].
+    pub(crate) fn designates(
+        &self,
+        key: &str,
+    ) -> Result<Vec<(String, KeyMatch)>, OverrideKeyError> {
+        match &self.policy {
+            KeyPolicy::EveryName { .. } => Ok(self.spells(key)),
+            KeyPolicy::Spec => match resolve_key(&self.index, &self.namespaces, key) {
+                KeyHit::Exact(n) => Ok(vec![(n, KeyMatch::Exact)]),
+                KeyHit::Alias(n) => Ok(vec![(n, KeyMatch::Suffix)]),
+                KeyHit::Ambiguous(candidates) => Err(OverrideKeyError::Ambiguous {
+                    key: key.to_string(),
+                    candidates,
+                }),
+                KeyHit::Unknown => Ok(Vec::new()),
+            },
+        }
+    }
+
+    /// Whether `key` designates any name, an ambiguous key included.
+    pub(crate) fn designates_any(&self, key: &str) -> bool {
+        self.designates(key).is_ok_and(|v| !v.is_empty()) || self.designates(key).is_err()
+    }
+
+    /// Each caller key of `keys` mapped onto the names it designates, as one
+    /// map from name to the key that supplies it. A name designated by
+    /// several keys takes the strongest (under [`KeyPolicy::Spec`] an exact
+    /// key wins and two non-exact keys are a collision; under
+    /// [`KeyPolicy::EveryName`] ties go to the first key in name order). A
+    /// key that designates nothing is left out. Errors name the
+    /// lexicographically first offending key.
+    pub(crate) fn canonical<'k>(
+        &self,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<HashMap<String, &'k str>, OverrideKeyError> {
+        let mut keys: Vec<&str> = keys.into_iter().collect();
+        keys.sort_unstable();
+        if self.policy == KeyPolicy::Spec {
+            let routing = route_keys(&self.index, &self.namespaces, keys.iter().copied())?;
+            let by_key: HashMap<&str, &str> = keys.iter().map(|k| (*k, *k)).collect();
+            return Ok(routing
+                .targets
+                .into_iter()
+                .filter(|(k, _)| !routing.shadowed.contains(k))
+                .map(|(k, name)| (name, by_key[k.as_str()]))
+                .collect());
+        }
+        let mut chosen: HashMap<String, (KeyMatch, &str)> = HashMap::new();
+        for k in keys {
+            for (name, how) in self.spells(k) {
+                match chosen.get(&name) {
+                    Some((held, _)) if *held <= how => {}
+                    _ => {
+                        chosen.insert(name, (how, k));
+                    }
+                }
+            }
+        }
+        Ok(chosen.into_iter().map(|(n, (_, k))| (n, k)).collect())
+    }
+
+    /// The one name `key` spells most strongly, or `None` when it spells
+    /// none, or several equally. A key several names of a whole-document
+    /// build end, and nothing names more strongly, is refused.
+    pub(crate) fn strongest(&self, key: &str) -> Result<Option<String>, OverrideKeyError> {
+        let found = self.spells(key);
+        if self.policy == KeyPolicy::Spec
+            && found.len() > 1
+            && found.iter().all(|(_, m)| *m == KeyMatch::Suffix)
+        {
+            return Err(OverrideKeyError::Ambiguous {
+                key: key.to_string(),
+                candidates: found.into_iter().map(|(n, _)| n).collect(),
+            });
+        }
+        let Some((first, best)) = found.first().cloned() else {
+            return Ok(None);
+        };
+        let unique = found.iter().filter(|(_, m)| *m == best).count() == 1;
+        Ok(unique.then_some(first))
+    }
+}
+
 /// What ONE key designates under the [`canonicalize_override_keys`] rules,
 /// before keys are compared with each other.
 #[derive(Debug, Clone, PartialEq, Eq)]

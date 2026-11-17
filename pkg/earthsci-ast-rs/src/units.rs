@@ -4403,10 +4403,8 @@ mod tests {
         }
     }
 
-    /// The fold is IDEMPOTENT. It has to be: the array runtime runs the same
-    /// rewrite on a `FlattenedSystem` that `flatten` already folded
-    /// (`simulate_array::compile::normalize_model_angle_arguments`), and a
-    /// second application would evaluate `sin(90 · 0.01745²)` with no error.
+    /// The fold is IDEMPOTENT, so a second application never evaluates
+    /// `sin(90 · 0.01745²)` with no error.
     /// What makes it idempotent is the rewrite's own output: the product
     /// carries a BARE LITERAL, so its unit is undeterminable (§4.8.4) and
     /// `angle_normalization_factor` is never reached a second time.

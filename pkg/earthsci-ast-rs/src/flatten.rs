@@ -2051,7 +2051,7 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
 }
 
 /// The name a right-hand-side structural `D` differentiates, for the first such
-/// node in `flat` that [`resolve_rhs_time_derivatives`] left standing — or
+/// node in `flat` that [`resolve_rhs_time_derivatives_per_contribution`] left standing — or
 /// `None` when every one of them resolved.
 ///
 /// The companion gate to that phase, and the second half of esm-spec §4.2's
@@ -2462,7 +2462,7 @@ fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), Fl
 /// The [`FlattenedSystem`]-shaped accumulation produced by phase 5
 /// ([`assemble_output`]) and refined by the post-collection passes
 /// ([`apply_variable_map_removals`], [`maybe_apply_pointwise_lift`],
-/// [`resolve_rhs_time_derivatives`], [`extract_field_ics`]).
+/// [`resolve_rhs_time_derivatives_per_contribution`], [`extract_field_ics`]).
 struct AssembledParts {
     state_variables: IndexMap<String, ModelVariable>,
     parameters: IndexMap<String, ModelVariable>,
@@ -2900,78 +2900,6 @@ fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
         && !crate::op_registry::is_rewrite_target_derivative(node)
 }
 
-/// Phase 5b′ of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
-/// derivative into the tendency the flattened system already defines for it.
-///
-/// `D` on an equation's LEFT-hand side is structural: it is what makes the
-/// equation differential, and system assembly consumes it. On a RIGHT-hand
-/// side there was no consumer at all, and the three evaluators each answered
-/// `D(anything) = 0` "for parity" with one another — a silent wrong answer
-/// rather than a missing feature, which is what made an observed written
-/// `dxdt ~ D(x, t)` (esm-spec §6.6.2, the instantaneous-derivative test shape)
-/// read as exactly `0` and grade its inline test against a configuration the
-/// model never computed.
-///
-/// The value is not a runner's to invent: everything it needs is already in
-/// this system. `D(x, t)` over a state is `x`'s own `D(x)/dt ~ f`; `D(y, t)`
-/// over an OBSERVED is the total derivative of `y`'s defining equation, which
-/// is that equation's right-hand side differentiated by the same rule, one
-/// level down. So the whole rule is one recursive walk, `deriv` below, and it
-/// runs HERE — the layer that qualifies names, applies coupling and lowers a
-/// reaction network to its mass-action ODEs — so no evaluator ever meets a
-/// right-hand-side `D` and every `FlattenedSystem` consumer answers alike by
-/// construction. It is what lets `D(Chem.O3, t)` in a sibling model resolve to
-/// the mechanism's tendency (esm-spec §7.4) with no runner learning anything
-/// about reactions.
-///
-/// What `deriv` covers, and nothing else:
-///
-/// * a STATE (a name carrying `D(x)/dt ~ f`) — its tendency, with any `D`
-///   inside that tendency resolved in turn, so a chained
-///   `D(lai)/dt ~ sla · D(biomass)/dt` terminates in states;
-/// * an OBSERVED (a name carrying `y ~ g`) — `deriv(g)`, the chain rule
-///   applied by substituting the definition and differentiating it;
-/// * a TIME-INVARIANT name (a parameter) and a literal — `0`;
-/// * `+`, binary and unary `-`, n-ary `*`, and binary `/` — distributed
-///   by the ordinary sum, product and quotient rules over the operands'
-///   derivatives. The deprecated `neg` (esm-spec §4.2) is read as unary `-`:
-///   the loader has already rewritten an authored one, so only a code-built
-///   node reaches here spelled that way.
-///
-/// Every other shape — `^`, a call, a reduction, a nested `D`, a name in no
-/// table — resolves to NOTHING and is left exactly as authored, as is any
-/// cyclic chain (`active` stops it). Those reach
-/// [`first_unresolved_rhs_time_derivative`] and are refused with
-/// `unlowered_operator`: §4.2 forbids inventing a value for them, in
-/// particular `0`. A SPATIAL `D` is untouched — it is a rewrite target for a
-/// discretization rule (§9.6.8) and that gate still owns it — and left-hand
-/// sides are never rewritten.
-///
-/// Returns whether any right-hand side carried a time derivative; when none
-/// did, nothing is rewritten and none is left.
-pub(crate) fn resolve_rhs_time_derivatives(
-    equations: &mut [Equation],
-    time_invariant: &HashSet<String>,
-) -> bool {
-    // An authored model carries no lifted equation: a per-cell tendency
-    // written in the document is not the pointwise lift's.
-    let Some((carriers, tables)) =
-        plan_time_derivative_resolution(equations.iter().map(|eq| (eq, false)), time_invariant)
-    else {
-        return false;
-    };
-    let Some(tables) = tables else {
-        return true;
-    };
-    for (eq, carries) in equations.iter_mut().zip(carriers) {
-        if carries {
-            let mut active = self_defined(&eq.lhs, false);
-            eq.rhs = tables.substitute(&eq.rhs, &mut active);
-        }
-    }
-    true
-}
-
 /// Which right-hand sides carry a structural time derivative, and the tables
 /// to resolve them against (`None` when the equations define nothing to
 /// resolve against). `None` overall when no right-hand side carries one: a
@@ -2991,8 +2919,9 @@ fn plan_time_derivative_resolution<'e, 'a>(
     Some((carriers, DerivTables::build(equations, time_invariant)))
 }
 
-/// [`resolve_rhs_time_derivatives`] over flatten's own equations: the resolved
-/// expression replaces the `D` node INSIDE the referencing contribution, which
+/// Resolve each right-hand-side `D` over flatten's own equations (esm-spec
+/// §4.2): the resolved expression replaces the `D` node INSIDE the referencing
+/// contribution, which
 /// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
 /// contributions are not spliced in.
 fn resolve_rhs_time_derivatives_per_contribution(
@@ -3065,7 +2994,7 @@ fn is_lifted_tendency(expr: &Expr) -> bool {
         if node.op == "faq" && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()))
 }
 
-/// The tendency and defining equations [`resolve_rhs_time_derivatives`] reads,
+/// The tendency and defining equations the right-hand-side `D` resolution reads,
 /// plus the names whose time derivative is `0`.
 struct DerivTables<'a> {
     /// `x` -> the right-hand side of its `D(x)/dt ~ …` equation.

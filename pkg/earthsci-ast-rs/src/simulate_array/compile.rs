@@ -13,7 +13,7 @@ use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
-use crate::types::{Subsystem, TreeOrder, component_tree};
+use crate::types::{TreeOrder, component_tree};
 use crate::value_invention::{Factors, ValueInventionResult, invent_values};
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -47,7 +47,7 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
 
 /// Whether `pred` holds for `model` or for any component mounted beneath it
 /// through `subsystems` (esm-spec §4.6). A mounted component's equations and
-/// variables are part of the model [`mount_subsystems`] builds, so a routing
+/// variables are part of the model `flatten` builds, so a routing
 /// question about the model is a question about its whole mount tree: a
 /// document whose only array or derivative lives in a subsystem is otherwise
 /// routed as if it had none. An unresolved `{"ref": …}` contributes nothing
@@ -206,85 +206,6 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
     }
 }
 
-/// Mount every subsystem of `model` into the model's own registries under
-/// dot-prefixed names (esm-spec §4.6): each subsystem variable `x` becomes
-/// `"<sub>.x"` (with sibling references inside its expression renamed to the
-/// mounted names), each subsystem equation is appended with its references
-/// renamed the same way. Recursive, so a nested subsystem mounts as `"<sub>.<subsub>.x"`. This is the
-/// array-runtime analogue of the Julia flatten's subsystem namespacing — it is
-/// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
-/// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
-/// resolvable. A model without subsystems is untouched (byte-identical build).
-/// An unresolved `{"ref": …}` (a document built in code and not resolved) is
-/// a hard error, never a silent drop.
-pub(crate) fn mount_subsystems(model: &mut Model) -> Result<(), CompileError> {
-    let Some(subs) = model.subsystems.take() else {
-        return Ok(());
-    };
-    let mut subs: Vec<(String, Subsystem<Model>)> = subs.into_iter().collect();
-    subs.sort_by(|a, b| a.0.cmp(&b.0));
-    for (sub_name, sub) in subs {
-        let mut sub_model = match sub {
-            Subsystem::Inline(sub_model) => *sub_model,
-            Subsystem::Reference(_) => {
-                return Err(CompileError::build_err(format!(
-                    "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
-                     through the official loader (crate::parse::load_path) so \
-                     resolve_subsystem_refs_raw inlines it first"
-                )));
-            }
-        };
-        // Grandchildren first, so their variables are already dot-prefixed
-        // within `sub_model` when this level's prefix is applied.
-        mount_subsystems(&mut sub_model)?;
-        // Every sibling reference is prefixed in ONE pass, so a nested
-        // subsystem that repeats this one's name (`s.b` beside a local `b`)
-        // cannot have the local's new name renamed again as the nested one.
-        // A loop symbol spelled like a sibling shadows it.
-        let siblings: HashSet<&str> = sub_model.variables.keys().map(String::as_str).collect();
-        let rename_all = |expr: &Expr| -> Expr {
-            crate::binders::rename_free_names(expr, Binders::LOOP, &|n| {
-                siblings.contains(n).then(|| format!("{sub_name}.{n}"))
-            })
-        };
-        for (vname, var) in &sub_model.variables {
-            let mounted = format!("{sub_name}.{vname}");
-            if model.variables.contains_key(&mounted) {
-                return Err(CompileError::build_err(format!(
-                    "mounting subsystem '{sub_name}' would overwrite existing variable \
-                         '{mounted}'"
-                )));
-            }
-            let mut var = var.clone();
-            // A parameter `update`'s Expressions are the only ones a variable
-            // still carries (esm 1.0.0); an unknown's definition is an equation,
-            // renamed with the rest below.
-            var.for_each_expression_mut(&mut |expr| *expr = rename_all(expr));
-            model.variables.insert(mounted, var);
-        }
-        for eq in &sub_model.equations {
-            model.equations.push(crate::types::Equation {
-                lhs: rename_all(&eq.lhs),
-                rhs: rename_all(&eq.rhs),
-                comment: eq.comment.clone(),
-            });
-        }
-        // Its initialization equations follow the parent's, as `flatten`
-        // orders them.
-        for eq in sub_model.initialization_equations.iter().flatten() {
-            model
-                .initialization_equations
-                .get_or_insert_with(Vec::new)
-                .push(crate::types::Equation {
-                    lhs: rename_all(&eq.lhs),
-                    rhs: rename_all(&eq.rhs),
-                    comment: eq.comment.clone(),
-                });
-        }
-    }
-    Ok(())
-}
-
 // ============================================================================
 // Ragged keyed-factor scope resolution (esm-spec §4.3.1 / RFC §5.4).
 // ============================================================================
@@ -357,36 +278,6 @@ pub(super) fn apply_ragged_factor_scope(
             index_sets.get_mut(&name).expect("present").values = Some(scoped);
         }
     }
-    Ok(())
-}
-
-/// The rewrites `flatten` makes to a model's equations, for the build
-/// pipeline's model-local build (`crate::prepare`), which reads the AUTHORED
-/// model rather than a flattened system:
-///
-/// * esm-spec §4.2, the two halves of the right-hand-side `D` rule (`flatten`'s
-///   phase 5b′): each RHS structural `D` resolves into the tendency the model
-///   defines for it, and one that resolves to nothing is refused rather than
-///   answered with `0` (or, through a reference evaluator, `NaN`);
-/// * esm-spec §4.8.3 "Angles are the ONE exception" (phase 5g): see
-///   [`normalize_model_angle_arguments`].
-pub(crate) fn apply_authored_flatten_rewrites(model: &mut Model) -> Result<(), CompileError> {
-    let time_invariant: std::collections::HashSet<String> = model
-        .variables
-        .iter()
-        .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
-        .map(|(name, _)| name.clone())
-        .collect();
-    let carried =
-        crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
-    if carried
-        && crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some()
-    {
-        return Err(CompileError::UnloweredOperatorError {
-            op: "D".to_string(),
-        });
-    }
-    normalize_model_angle_arguments(model);
     Ok(())
 }
 
@@ -530,39 +421,6 @@ pub(super) fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
     for (name, axes) in shapes {
         if let Some(var) = model.variables.get_mut(name) {
             var.shape = Some(axes.clone());
-        }
-    }
-}
-
-/// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
-/// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
-/// issue #409).
-///
-/// The build pipeline's model-local build (`crate::prepare`) does not flatten,
-/// so `flatten`'s phase 5g (`crate::flatten::normalize_angle_arguments`) does
-/// not run for it. This is that phase, against the authored model's own
-/// declarations, so every route answers one document with one number.
-fn normalize_model_angle_arguments(model: &mut Model) {
-    // A document that declares no angle at a scale other than 1 cannot be
-    // rewritten, so decide that from the DECLARATIONS (each distinct unit
-    // string once) and walk nothing.
-    let mut seen: HashSet<&str> = HashSet::new();
-    let declares_angle = model
-        .variables
-        .values()
-        .filter_map(|v| v.units.as_deref())
-        .filter(|u| seen.insert(u))
-        .any(|u| {
-            crate::units::parse_unit(u)
-                .is_ok_and(|unit| crate::units::angle_normalization_factor(&unit).is_some())
-        });
-    if !declares_angle {
-        return;
-    }
-    let (env, _) = crate::units::build_unit_env(&model.variables);
-    for eq in &mut model.equations {
-        if let Some(next) = crate::units::normalize_angle_arguments(&eq.rhs, &env) {
-            eq.rhs = next;
         }
     }
 }
@@ -2946,8 +2804,8 @@ fn build_observed_rules(
     // WHICH rule form it lowers to is decided by the LHS, and both forms matter:
     //
     // * a `faq` LHS (`faq{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
-    //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form the
-    //   whole-array overlay vectorizes. Lowering it as a wholesale body instead
+    //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form a
+    //   per-cell definition takes. Lowering it as a wholesale body instead
     //   silently drops a varying array observed onto the per-cell oracle — the
     //   dominant per-step cost for a coupled behaviour stack;
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
@@ -4763,167 +4621,6 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
     }
 }
 
-/// Resolve every self-qualified reference in `model` (`M.a` written inside
-/// model `M`) to its local name, as the single-model route does before it
-/// compiles — for the build pipeline, which reads the same authored model.
-/// Run it after [`mount_subsystems`], so a reference authored inside a
-/// subsystem body is resolved too.
-pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
-    resolve_self_references(model, model_name);
-}
-
-fn resolve_self_references(model: &mut Model, model_name: &str) {
-    let hits = self_qualified_references(model, model_name);
-    if !hits.is_empty() {
-        resolve_self_qualified_references(model, &hits);
-    }
-}
-
-/// esm-spec §4.6: inside model `M`, `M.x` — and `M.sub.x` for a mounted
-/// subsystem `sub` — is the FULLY QUALIFIED spelling of the local `x`
-/// (`sub.x`): the same variable the bare / subsystem-relative form names. The
-/// single-model array build keeps the model's own unqualified names (the
-/// flattened multi-model build and the scalar path qualify everything, which is
-/// why the same reference resolves there), so a self-qualified reference has to
-/// be brought back to the local spelling before the build. This collects the
-/// `(qualified, local)` pairs to rewrite: every variable reference in the
-/// model's expressions that starts with `<model_name>.` and whose remainder is
-/// a declared variable or is rooted at a declared subsystem. Anything else is
-/// left alone for the usual unbound-name diagnostics. Empty — the common case,
-/// costing one read-only walk — means the model is used untouched.
-///
-/// Scope: every expression of the model as it stands. The callers run this
-/// after `mount_subsystems`, so a subsystem's equations are already the
-/// model's own under their mounted names, and a self-qualified reference
-/// authored inside a subsystem body (`M.Ocean.Surface.sst` in
-/// `M.Atmosphere`'s equation) is collected like one in the parent's.
-fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
-    let prefix = format!("{model_name}.");
-    let subsystems: HashSet<&str> = model
-        .subsystems
-        .as_ref()
-        .map(|s| s.keys().map(String::as_str).collect())
-        .unwrap_or_default();
-    // A `BTreeMap` both DEDUPES and orders, where the first cut rescanned a
-    // growing `Vec` per name; and the walk looks only at variable LEAVES rather
-    // than materializing `free_variables`' whole name set for every node.
-    let mut hits: BTreeMap<String, String> = BTreeMap::new();
-    fn collect(
-        expr: &Expr,
-        prefix: &str,
-        model: &Model,
-        subsystems: &HashSet<&str>,
-        hits: &mut BTreeMap<String, String>,
-    ) {
-        match expr {
-            Expr::Variable(name) => {
-                let Some(rest) = name.strip_prefix(prefix) else {
-                    return;
-                };
-                let local = model.variables.contains_key(rest)
-                    || rest
-                        .split_once('.')
-                        .is_some_and(|(head, _)| subsystems.contains(head));
-                if local && !hits.contains_key(name) {
-                    hits.insert(name.clone(), rest.to_string());
-                }
-            }
-            Expr::Operator(node) => {
-                node.for_each_child(&mut |c| collect(c, prefix, model, subsystems, hits));
-            }
-            Expr::Number(_) | Expr::Integer(_) => {}
-        }
-    }
-    {
-        // Scoped so the closure's `&mut hits` borrow ends before the map is
-        // consumed below.
-        let mut visit = |expr: &Expr| collect(expr, prefix.as_str(), model, &subsystems, &mut hits);
-        // The expression-bearing fields the array build compiles: every equation
-        // (both sides) and every variable's own expressions (a parameter
-        // `update`'s `when` / `expression`, esm 1.0.0).
-        for eq in &model.equations {
-            visit(&eq.lhs);
-            visit(&eq.rhs);
-        }
-        for var in model.variables.values() {
-            var.for_each_expression(&mut visit);
-        }
-    }
-    hits.into_iter().collect()
-}
-
-/// Apply the `(qualified, local)` rewrites of [`self_qualified_references`] to
-/// every expression of `model`, in ONE capture-aware pass.
-///
-/// Capture-aware in BOTH directions, which is why this is not
-/// [`crate::binders::rename_free_names`]. That helper shadows on the name it
-/// renames FROM, which for a `<model>.`-qualified source is never a loop
-/// symbol; the direction that matters here is the TARGET. A node that binds the LOCAL name — model
-/// variable `i` read as `M.i` inside `aggregate(i from x; …)` — would otherwise
-/// capture the rewritten reference and silently read the loop index instead of
-/// the variable. The rewrite is therefore dropped for that subtree and the
-/// qualified spelling survives into the build's ordinary unbound-name
-/// diagnostic: a named error, not a wrong number. One pass rather than one per
-/// hit also stops an H-hit model from being rebuilt H times.
-fn resolve_self_qualified_references(model: &mut Model, hits: &[(String, String)]) {
-    let map: HashMap<&str, &str> = hits.iter().map(|(q, l)| (q.as_str(), l.as_str())).collect();
-    let mut rewrite = |expr: &mut Expr| {
-        *expr = rewrite_self_qualified(expr, &map);
-    };
-    for eq in &mut model.equations {
-        rewrite(&mut eq.lhs);
-        rewrite(&mut eq.rhs);
-    }
-    for var in model.variables.values_mut() {
-        var.for_each_expression_mut(&mut rewrite);
-    }
-}
-
-/// One capture-aware substitution pass for [`resolve_self_qualified_references`]:
-/// every free `Variable(q)` with `hits[q] == l` becomes `Variable(l)`, and a
-/// node that BINDS either spelling — as an `output_idx` / `ranges` loop symbol
-/// or an `integral`'s `var` — drops that hit for its whole subtree.
-fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
-    if hits.is_empty() {
-        return expr.clone();
-    }
-    match expr {
-        Expr::Variable(v) => hits
-            .get(v.as_str())
-            .map_or_else(|| expr.clone(), |l| Expr::Variable((*l).to_string())),
-        Expr::Operator(node) => {
-            let binds = |s: &str| node.binds(Binders::SCOPE, s);
-            // Only reallocate the map on the rare node that shadows something.
-            let narrowed: Option<HashMap<&str, &str>> =
-                hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
-                    hits.iter()
-                        .filter(|&(q, l)| !binds(q) && !binds(l))
-                        .map(|(q, l)| (*q, *l))
-                        .collect()
-                });
-            let sub = narrowed.as_ref().unwrap_or(hits);
-            let mut out = node.map_children(&mut |a| rewrite_self_qualified(a, sub));
-            // `map_children` preserves `join` verbatim, so the node's
-            // string-encoded variable references catch up with its child ones
-            // here, through [`crate::types::JoinClause::map_reference_names`].
-            if let Some(join) = &out.join {
-                out.join = Some(
-                    join.iter()
-                        .map(|c| {
-                            c.map_reference_names(|n| {
-                                sub.get(n.as_str())
-                                    .map_or_else(|| n.clone(), |l| l.to_string())
-                            })
-                        })
-                        .collect(),
-                );
-            }
-            Expr::operator(out)
-        }
-        Expr::Number(_) | Expr::Integer(_) => expr.clone(),
-    }
-}
-
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
 /// enclosing loop symbols: a region value that is a pointwise
 /// `faq` whose output ranges equal the region bounds exactly
@@ -5854,6 +5551,19 @@ mod subsystem_ragged_and_inspection_tests {
         serde_json::from_value(doc).expect("test model deserializes")
     }
 
+    /// `m` built alone as the build pipeline builds a model: flattened as the
+    /// one model `M`, its names shown model-locally.
+    fn mounted(m: Model) -> Model {
+        let doc = crate::EsmFile {
+            models: Some(indexmap::IndexMap::from([("M".to_string(), m)])),
+            ..Default::default()
+        };
+        let flat = crate::flatten::flatten(&doc).expect("flattens");
+        let mut out = model_from_flattened(&flat);
+        super::normalize::unqualify(&mut out, "M");
+        out
+    }
+
     /// The aggregate RHS of the mounted equation defining `lhs`.
     fn agg_defining<'a>(m: &'a Model, lhs: &str) -> &'a ExpressionNode {
         let eq = m
@@ -5905,8 +5615,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// spells two ways must agree after the mount.
     #[test]
     fn mounting_carries_a_leafs_join_on_key_columns() {
-        let mut m = host_mounting_a_join_leaf(json!([["left_key", "right_key"]]));
-        mount_subsystems(&mut m).expect("mounts");
+        let m = mounted(host_mounting_a_join_leaf(json!([["left_key", "right_key"]])));
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -5945,7 +5654,7 @@ mod subsystem_ragged_and_inspection_tests {
             )
             .expect("equation"),
         );
-        mount_subsystems(&mut m).expect("mounts");
+        let m = mounted(m);
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -5963,7 +5672,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// symbols the node binds and are left alone — they are not references.
     #[test]
     fn mounting_carries_overlap_envelope_factors() {
-        let mut m = model(json!({
+        let m = model(json!({
             "variables": { "out": { "type": "unknown" } },
             "equations": [ { "lhs": "out", "rhs": "Geo.hits" } ],
             "subsystems": { "Geo": {
@@ -5984,7 +5693,7 @@ mod subsystem_ragged_and_inspection_tests {
                 ]
             }}
         }));
-        mount_subsystems(&mut m).expect("mounts");
+        let m = mounted(m);
 
         let node = agg_defining(&m, "Geo.hits");
         let ov = node.join.as_ref().expect("join survives")[0]
@@ -6001,7 +5710,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// the local `b` into `s.b` and then rename it again with the nested one.
     #[test]
     fn mounting_a_nested_subsystem_that_repeats_its_parents_name() {
-        let mut m = model(json!({
+        let m = model(json!({
             "variables": { "out": { "type": "unknown" } },
             "equations": [ { "lhs": "out", "rhs": "s.b" } ],
             "subsystems": { "s": {
@@ -6013,7 +5722,7 @@ mod subsystem_ragged_and_inspection_tests {
                 }}
             }}
         }));
-        mount_subsystems(&mut m).expect("mounts");
+        let m = mounted(m);
 
         let eqs: Vec<serde_json::Value> =
             m.equations.iter().map(|e| json!([e.lhs, e.rhs])).collect();
@@ -6365,10 +6074,7 @@ mod subsystem_ragged_and_inspection_tests {
                     "expr": {"op": "*", "args": ["M.i", "i"]}}}
             ]
         }));
-        let hits = self_qualified_references(&m, "M");
-        assert_eq!(hits, vec![("M.i".to_string(), "i".to_string())]);
-        let mut out = m.clone();
-        resolve_self_qualified_references(&mut out, &hits);
+        let out = mounted(m);
         assert!(matches!(&out.equations[0].rhs, Expr::Variable(v) if v == "i"));
         let Expr::Operator(node) = &out.equations[1].rhs else {
             panic!("expected the aggregate");
