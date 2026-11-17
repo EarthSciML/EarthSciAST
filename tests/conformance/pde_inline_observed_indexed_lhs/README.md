@@ -117,7 +117,7 @@ prose in the test's `description` instead.
 
 | Binding | Adapter |
 |---|---|
-| Julia | `pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_indexed_lhs_test.jl` |
+| Julia | `pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl` |
 | Python | `pkg/earthsci-ast-py/tests/test_pde_inline_observed_indexed_lhs_conformance.py` |
 | Rust | `pkg/earthsci-ast-rs/tests/pde_inline_observed_indexed_lhs_conformance.rs` |
 
