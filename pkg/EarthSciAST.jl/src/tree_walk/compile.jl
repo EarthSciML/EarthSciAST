@@ -163,13 +163,11 @@ end
 #
 # Unlike `_PGatherRef` (a LIVE buffer read at a FIXED offset) this reads a FROZEN
 # const array at a RUNTIME-computed offset. Like `_PGatherRef` it exists only
-# between the resolve and compile passes of one build. Crucially it is created
-# ONLY when a non-empty `bound_syms` set is threaded through `_resolve_indices`
-# — i.e. exclusively on the compile-once `evaluate_cellwise` fast path. The
-# RHS-build path (`_build_evaluator_impl` / `_cse_compile_scalar`) threads an
-# EMPTY `bound_syms`, so a `_ConstGatherRef` NEVER reaches the CSE / canonical
-# machinery (`_cse_key` / `canonical_json`) that `_PGatherRef`'s stand-in exists
-# to guard — `evaluate_cellwise` compiles straight through `_compile`, no CSE.
+# between the resolve and compile passes of one build. It is created for any
+# subscript that is not a build-time constant (`_subscript_is_runtime`): a bound
+# output index on the compile-once `evaluate_cellwise` path, and a parameter, a
+# state or `t` on the right-hand side, where it reaches the CSE keying, which
+# keys it by the array's identity (`_cse_value_key`).
 struct _ConstGatherRef
     vals::AbstractArray   # the frozen const/provider source array (read at eval time)
     name::String          # its `const_arrays` registry name — diagnostics / identity
@@ -1110,13 +1108,21 @@ function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
             a isa VarExpr ? (:var, a.name) : _emit_json(a)
     end
     key = (
-        e.op, ops, e.wrt, e.dim, e.fn, e.name,
-        e.value === nothing ? nothing : _emit_canonical_value(e.value), e.units,
+        e.op, ops, e.wrt, e.dim, e.fn, e.name, _cse_value_key(e.value), e.units,
     )
     n = get!(M.ids, key, length(M.ids) + 1)
     M.num[e] = n
     return n
 end
+
+# A node's `value` in its key: the canonical JSON of a document value, or, for
+# the run-time const gather (`_ConstGatherRef`, which no JSON carries), the
+# identity of the array it reads. One array object is one registry entry for
+# the whole build, and the subscripts are the node's operands, so two gathers
+# share a key exactly when they read the same element.
+_cse_value_key(::Nothing) = nothing
+_cse_value_key(v::_ConstGatherRef) = (:const_gather, v.name, objectid(v.vals))
+_cse_value_key(v) = _emit_canonical_value(v)
 
 # The number of a canonical form that is a bare variable (`x * 1`), in the
 # same numbering: such a key's JSON is the quoted name.
