@@ -149,31 +149,30 @@ whatever the target actually exports (or whatever occurs free).
 _is_valid_dotted_name(s::AbstractString) =
     !isempty(s) && all(seg -> occursin(_NAME_SEGMENT_RE, seg), split(s, '.'))
 
+# Throw the import-edge diagnostic `code` with `"<ctx>: <text>"`.
+_bad_edge(code::String, ctx::AbstractString, text::AbstractString) =
+    throw(ExpressionTemplateError(code, string(ctx, ": ", text)))
+
+const _DOTTED_NAME_RULE =
+    "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
+
 function _name_map(raw, field::String, ctx::String)::OrderedDict{String, String}
     out = OrderedDict{String, String}()
     raw === nothing && return out
-    _is_object(raw) || throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-            "$ctx: `$field` must be an object mapping names to names (esm-spec §9.7.7)"
-        )
+    _is_object(raw) || _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+        "`$field` must be an object mapping names to names (esm-spec §9.7.7)"
     )
     for (k, v) in pairs(raw)
         ks = string(k)
-        isempty(ks) && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-                "$ctx: `$field` has an empty key (esm-spec §9.7.7)"
-            )
+        isempty(ks) && _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            "`$field` has an empty key (esm-spec §9.7.7)"
         )
-        (v isa AbstractString && _is_valid_dotted_name(string(v))) ||
-            throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-                "$ctx: `$field`.$ks target $(repr(v)) is not a valid dotted " *
-                    "identifier (segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; " *
-                    "esm-spec §9.7.7)"
-            )
+        (v isa AbstractString && _is_valid_dotted_name(string(v))) || _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            "`$field`.$ks target $(repr(v)) is not a valid dotted identifier " *
+                _DOTTED_NAME_RULE
         )
         out[ks] = string(v)
     end
@@ -415,79 +414,119 @@ function _collect_ref_names!(out::Set{String}, x, shadowed::Set{String})
 end
 
 """
-    _apply_edge_renames!(scope, entry, origin, ref) -> scope
+    _ImportEdge(entry, origin)
 
-Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
-the target's SURVIVING export scope — templates after `only`, all index sets,
-and metaparameters still open after this edge's `bindings` — transitively
-through every occurrence inside the surviving declarations (index-set
-references in `from`/`wrt`/`dim`/`var` and registry `of` lists, open-metaparameter
-names in expression positions and structural integer sites, keyed-factor and
-other free names in variable-reference positions and registry
-`offsets`/`values`, `apply_expression_template.name` references). Runs after
-`bindings` instantiation and `only` filtering, before the §9.7.4/§9.7.5 merge,
-so dedup and conflict detection operate on post-rename names. Pure load-time
-substitution: determinism, §9.6.3 ordering, and the expansion-depth bound are
-untouched.
+One `expression_template_imports` entry (esm-spec §9.7.2, §9.7.7), its keys read
+once. `ref` is checked here (an entry that is not an object, or has no
+non-empty string `ref`, is `template_import_unresolved`); `prefix`, `rename`
+and `rebind` are kept as written and checked by [`_edge_name_maps`](@ref), in
+the order the edge's steps run. `ctx` is the diagnostic prefix
+`"<origin>: import of '<ref>'"`.
 """
-function _apply_edge_renames!(scope::_TemplateScope, entry, origin::String, ref::String)
-    ctx = "$origin: import of '$ref'"
-    prefix_raw = _raw_get(entry, "prefix")
-    rename = _name_map(_raw_get(entry, "rename"), "rename", ctx)
-    rebind = _name_map(_raw_get(entry, "rebind"), "rebind", ctx)
+struct _ImportEdge
+    ref::String
+    origin::String
+    ctx::String
+    bindings::Any
+    only::Union{Nothing, Vector{String}}
+    prefix::Any
+    rename::Any
+    rebind::Any
+end
+
+function _ImportEdge(entry, origin::String)
+    _is_object(entry) || _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        "expression_template_imports entries must be objects with a `ref` field"
+    )
+    ref_raw = _raw_get(entry, "ref")
+    (ref_raw isa AbstractString && !isempty(string(ref_raw))) || _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        "expression_template_imports entry requires a non-empty string `ref`"
+    )
+    ref = string(ref_raw)
+    bindings = _raw_get(entry, "bindings")
+    only_raw = _raw_get(entry, "only")
+    only = (only_raw !== nothing && _is_array(only_raw)) ?
+        String[string(n) for n in only_raw] : nothing
+    return _ImportEdge(
+        ref, origin, "$origin: import of '$ref'",
+        (bindings !== nothing && _is_object(bindings)) ? bindings : nothing,
+        only, _raw_get(entry, "prefix"), _raw_get(entry, "rename"),
+        _raw_get(entry, "rebind")
+    )
+end
+
+"""
+    _edge_name_maps(scope, edge) -> Union{Nothing, NamedTuple}
+
+The final name of every name `scope` exports at `edge` under its `prefix` and
+`rename`, per namespace (`tplmap`, `isetmap`, `metamap`), and its `rebind` map;
+`nothing` when the edge renames nothing. Checks the three keys' shapes, that
+every `rename` key names a surviving export, and that no two names of one
+namespace end on the same final name.
+"""
+function _edge_name_maps(scope::_TemplateScope, edge::_ImportEdge)
+    ctx = edge.ctx
+    rename = _name_map(edge.rename, "rename", ctx)
+    rebind = _name_map(edge.rebind, "rebind", ctx)
+    prefix_raw = edge.prefix
     if prefix_raw !== nothing &&
             !(prefix_raw isa AbstractString && _is_valid_dotted_name(string(prefix_raw)))
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-                "$ctx: `prefix` $(repr(prefix_raw)) is not a valid dotted identifier " *
-                    "(segments [A-Za-z_][A-Za-z0-9_]* joined by single dots; esm-spec §9.7.7)"
-            )
+        _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            "`prefix` $(repr(prefix_raw)) is not a valid dotted identifier $(_DOTTED_NAME_RULE)"
         )
     end
     prefix = _maybe(string, prefix_raw)
-    (prefix === nothing && isempty(rename) && isempty(rebind)) && return scope
+    (prefix === nothing && isempty(rename) && isempty(rebind)) && return nothing
 
-    # --- `rename` keys must name a surviving exported name (typo protection) ---
+    # `rename` keys must name a surviving exported name (typo protection).
     exported = Set{String}()
     union!(exported, keys(scope.templates))
     union!(exported, keys(scope.index_sets))
     union!(exported, keys(scope.metaparams))
     for k in keys(rename)
-        k in exported || throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
-                "$ctx: `rename` names '$k', which the target does not export at this " *
-                    "edge (the surviving exports are templates after `only`, index sets, and " *
-                    "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"
-            )
+        k in exported || _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME, ctx,
+            "`rename` names '$k', which the target does not export at this " *
+                "edge (the surviving exports are templates after `only`, index sets, and " *
+                "metaparameters left open by this edge's `bindings`; esm-spec §9.7.7)"
         )
     end
 
-    _final(n) = haskey(rename, n) ? rename[n] : (prefix === nothing ? n : "$(prefix).$(n)")
-    tplmap = OrderedDict{String, String}(n => _final(n) for n in keys(scope.templates))
-    isetmap = OrderedDict{String, String}(n => _final(n) for n in keys(scope.index_sets))
-    metamap = OrderedDict{String, String}(n => _final(n) for n in keys(scope.metaparams))
+    final(n) = haskey(rename, n) ? rename[n] : (prefix === nothing ? n : "$(prefix).$(n)")
+    tplmap = OrderedDict{String, String}(n => final(n) for n in keys(scope.templates))
+    isetmap = OrderedDict{String, String}(n => final(n) for n in keys(scope.index_sets))
+    metamap = OrderedDict{String, String}(n => final(n) for n in keys(scope.metaparams))
 
-    # --- per-namespace final-name uniqueness ---
+    # Per-namespace final-name uniqueness.
     for (what, m) in (
             ("template", tplmap), ("index set", isetmap),
             ("metaparameter", metamap),
         )
         seen = Dict{String, String}()
         for (o, n) in m
-            haskey(seen, n) && throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
-                    "$ctx: $what names '$(seen[n])' and '$o' both map to '$n' after " *
-                        "renaming (esm-spec §9.7.7)"
-                )
+            haskey(seen, n) && _bad_edge(
+                ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION, ctx,
+                "$what names '$(seen[n])' and '$o' both map to '$n' after " *
+                    "renaming (esm-spec §9.7.7)"
             )
             seen[n] = o
         end
     end
+    return (; tplmap, isetmap, metamap, rebind, exported)
+end
 
-    # --- free / bound name inventory over the surviving declarations ---
+"""
+    _check_rebind(scope, maps, ctx)
+
+`rebind` addresses only names that occur free in the surviving declarations,
+and no renamed or rebound name may capture a name still in use there (a
+remaining free name, a bound index symbol, a template parameter, or another
+target) (esm-spec §9.7.7).
+"""
+function _check_rebind(scope::_TemplateScope, maps, ctx::String)
     free = Set{String}()
     bound = Set{String}()
     params_all = Set{String}()
@@ -511,67 +550,67 @@ function _apply_edge_renames!(scope::_TemplateScope, entry, origin::String, ref:
     end
     setdiff!(free, keys(scope.metaparams))   # declared names are not free
 
-    # --- `rebind` keys must denote free names (typo protection) ---
-    for k in keys(rebind)
-        k in exported && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
-                "$ctx: `rebind` names '$k', a declared name of the target (template / " *
-                    "index set / metaparameter) — `rebind` addresses only free names; use " *
-                    "`rename` for declared names (esm-spec §9.7.7)"
-            )
+    for k in keys(maps.rebind)
+        k in maps.exported && _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME, ctx,
+            "`rebind` names '$k', a declared name of the target (template / " *
+                "index set / metaparameter) — `rebind` addresses only free names; use " *
+                "`rename` for declared names (esm-spec §9.7.7)"
         )
-        k in bound && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-                "$ctx: `rebind` key '$k' is a bound index symbol (`output_idx` / " *
-                    "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
-            )
+        k in bound && _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID, ctx,
+            "`rebind` key '$k' is a bound index symbol (`output_idx` / " *
+                "`ranges`) of an imported template, not a free name (esm-spec §9.7.7)"
         )
-        k in free || throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
-                "$ctx: `rebind` names '$k', which does not occur free in the imported " *
-                    "declarations (esm-spec §9.7.7)"
-            )
+        k in free || _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME, ctx,
+            "`rebind` names '$k', which does not occur free in the imported " *
+                "declarations (esm-spec §9.7.7)"
         )
     end
 
-    # --- freshness guard: new bare names must not capture / merge ---
-    taken = union(Set{String}(setdiff(free, keys(rebind))), bound, params_all)
+    taken = union(Set{String}(setdiff(free, keys(maps.rebind))), bound, params_all)
     newnames = String[]
-    for (o, n) in metamap
+    for (o, n) in maps.metamap
         o != n && push!(newnames, n)
     end
-    for (o, n) in rebind
+    for (o, n) in maps.rebind
         o != n && push!(newnames, n)
     end
     for t in newnames
-        t in taken && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
-                "$ctx: renamed/rebound name '$t' collides with a name still in use " *
-                    "inside the imported declarations (a remaining free name, a bound index " *
-                    "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"
-            )
+        t in taken && _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION, ctx,
+            "renamed/rebound name '$t' collides with a name still in use " *
+                "inside the imported declarations (a remaining free name, a bound index " *
+                "symbol, a template param, or another rename/rebind target; esm-spec §9.7.7)"
         )
         push!(taken, t)
     end
+    return nothing
+end
 
-    # --- apply (identity entries dropped; one simultaneous substitution) ---
+"""
+    _rename_scope!(scope, maps) -> scope
+
+Apply the checked maps to `scope` in one simultaneous substitution (identity
+entries dropped): declared names take their final names, and every occurrence
+inside the surviving declarations follows (`_rename_decl`, `_rename_walk`, an
+index set's `of` list).
+"""
+function _rename_scope!(scope::_TemplateScope, maps)
     varmap = OrderedDict{String, String}()
-    for (o, n) in metamap
+    for (o, n) in maps.metamap
         o != n && (varmap[o] = n)
     end
-    for (o, n) in rebind
+    for (o, n) in maps.rebind
         o != n && (varmap[o] = n)
     end
-    iset_changed = OrderedDict{String, String}(o => n for (o, n) in isetmap if o != n)
-    tpl_changed = OrderedDict{String, String}(o => n for (o, n) in tplmap if o != n)
+    iset_changed = OrderedDict{String, String}(o => n for (o, n) in maps.isetmap if o != n)
+    tpl_changed = OrderedDict{String, String}(o => n for (o, n) in maps.tplmap if o != n)
 
     newt = OrderedDict{String, Any}()
     for (n, d) in scope.templates
-        newt[tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
+        newt[maps.tplmap[n]] = _rename_decl(d, varmap, iset_changed, tpl_changed)
     end
     scope.templates = newt
 
@@ -585,16 +624,33 @@ function _apply_edge_renames!(scope::_TemplateScope, entry, origin::String, ref:
                     for e in of
             ]
         end
-        newi[isetmap[n]] = nd
+        newi[maps.isetmap[n]] = nd
     end
     scope.index_sets = newi
 
     newm = OrderedDict{String, Any}()
     for (n, d) in scope.metaparams
-        newm[metamap[n]] = d
+        newm[maps.metamap[n]] = d
     end
     scope.metaparams = newm
     return scope
+end
+
+"""
+    _apply_edge_renames!(scope, edge) -> scope
+
+Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
+the target's surviving export scope (templates after `only`, all index sets,
+metaparameters still open after this edge's `bindings`), transitively through
+every occurrence inside the surviving declarations. Runs after `bindings` and
+`only`, before the §9.7.4/§9.7.5 merge, so dedup and conflict detection see
+the final names.
+"""
+function _apply_edge_renames!(scope::_TemplateScope, edge::_ImportEdge)
+    maps = _edge_name_maps(scope, edge)
+    maps === nothing && return scope
+    _check_rebind(scope, maps, edge.ctx)
+    return _rename_scope!(scope, maps)
 end
 
 # ---------------------------------------------------------------------------
@@ -786,167 +842,151 @@ end
 """
     _resolve_import_entry(entry, base, stack, origin, src) -> _TemplateScope
 
-Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load the
-target (path-scoped cycle detection over canonical refs, as §4.7), verify
-library purity, resolve the target recursively in its own scope, instantiate
-at this edge's `bindings`, apply `only` visibility filtering, then apply the
-edge's `prefix`/`rename`/`rebind` (esm-spec §9.7.7).
-
-`base` is the importing document's base and `src` the load's reader
-([`_read_library`](@ref)).
+Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load and
+check the target and resolve it in its own scope (`_load_library`), bind this
+edge's metaparameters (`_bind_edge!`), filter by `only` (`_filter_only!`), then
+apply the edge's `prefix`/`rename`/`rebind` (`_apply_edge_renames!`). `base` is
+the importing document's base and `src` the load's reader.
 """
 function _resolve_import_entry(
         entry, base::_RefBase, stack::Vector{String},
         origin::String, src::_DocumentSource
     )::_TemplateScope
-    _is_object(entry) || throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-            "$origin: expression_template_imports entries must be objects with a `ref` field"
-        )
-    )
-    ref_raw = _raw_get(entry, "ref")
-    (ref_raw isa AbstractString && !isempty(string(ref_raw))) ||
-        throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-            "$origin: expression_template_imports entry requires a non-empty string `ref`"
-        )
-    )
-    ref = string(ref_raw)
+    edge = _ImportEdge(entry, origin)
+    scope = _load_library(edge, base, stack, src)
+    _bind_edge!(scope, edge)
+    _filter_only!(scope, edge)
+    return _apply_edge_renames!(scope, edge)
+end
+
+"""
+    _load_library(edge, base, stack, src) -> _TemplateScope
+
+Read the library `edge.ref` names (path-scoped cycle detection over canonical
+refs, as §4.7), check it as authored and as a pure, schema-valid template
+library (§9.7.1), and resolve it in its own scope (`_process_library`). A
+diagnostic raised inside the library names its file.
+"""
+function _load_library(edge::_ImportEdge, base::_RefBase, stack::Vector{String}, src::_DocumentSource)
+    origin, ref = edge.origin, edge.ref
     # Keyed on the resolved spelling, so a bundled file has one identity
     # however it is reached (`esm:std/<f>`, or relative inside the bundle).
     canonical = _resolve_ref(base, ref).key
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_CYCLE,
-                "$origin: import-graph cycle detected: $(join(cyc, " -> ")) (esm-spec §9.7.2)"
-            )
+        _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_CYCLE, origin,
+            "import-graph cycle detected: $(join(cyc, " -> ")) (esm-spec §9.7.2)"
         )
     end
 
     raw, target = _read_library(src, base, ref, origin)
-    _check_authored_document(raw, :template_library)
+    _in_file(() -> _check_authored_document(raw, :template_library), target.key)
 
-    # Library purity (esm-spec §9.7.1): the two reference mechanisms are
-    # disjoint — a component/subsystem file, and a coupling-library file, are
-    # not importable as a template library.
-    if _is_coupling_library_doc(raw)
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
-                "$origin: import target '$ref' is a coupling-library file " *
-                    "(has `coupling_roles`), not a template library (esm-spec §10.9)"
-            )
-        )
-    end
-    _is_template_library_doc(raw) || throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
-            "$origin: import target '$ref' lacks top-level `expression_templates` — " *
-                "not a template-library file (esm-spec §9.7.1)"
-        )
+    # Library purity (esm-spec §9.7.1): a component file and a coupling-library
+    # file are not importable as a template library.
+    _is_coupling_library_doc(raw) && _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_IS_COUPLING_LIBRARY, origin,
+        "import target '$ref' is a coupling-library file " *
+            "(has `coupling_roles`), not a template library (esm-spec §10.9)"
+    )
+    _is_template_library_doc(raw) || _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY, origin,
+        "import target '$ref' lacks top-level `expression_templates` — " *
+            "not a template-library file (esm-spec §9.7.1)"
     )
     for k in _LIBRARY_FORBIDDEN_KEYS
-        _raw_haskey(raw, k) && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
-                "$origin: import target '$ref' declares `$k` — not a pure template-library file (esm-spec §9.7.1)"
-            )
+        _raw_haskey(raw, k) && _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY, origin,
+            "import target '$ref' declares `$k` — not a pure template-library file (esm-spec §9.7.1)"
         )
     end
     schema_errors = validate_schema(raw)
-    isempty(schema_errors) || throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-            "$origin: import target '$ref' failed schema validation: " *
-                "$(schema_errors[1].path): $(schema_errors[1].message)"
-        )
+    isempty(schema_errors) || _bad_edge(
+        ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, origin,
+        "import target '$ref' failed schema validation: " *
+            "$(schema_errors[1].path): $(schema_errors[1].message)"
     )
 
     push!(stack, canonical)
-    scope = try
-        _process_library(raw, target.base, stack, "$origin -> $ref", src)
+    try
+        return _in_file(target.key) do
+            _process_library(raw, target.base, stack, "$origin -> $ref", src)
+        end
     finally
         pop!(stack)
     end
+end
 
-    # Edge metaparameter bindings (esm-spec §9.7.6 binding site 1). A binding
-    # VALUE may be a metaparameter expression over the importer's metaparameters
-    # (e.g. `NX*NY`); at an import edge the importer's names are not yet closed
-    # (innermost-first), so the value is carried SYMBOLICALLY into the child and
-    # folds when the importing document closes (§9.7.6 "Binding value flow").
-    bindings_raw = _raw_get(entry, "bindings")
+"""
+    _bind_edge!(scope, edge) -> scope
+
+The edge's metaparameter `bindings` (esm-spec §9.7.6 binding site 1). A value
+may be an expression over the importer's metaparameters (`NX*NY`); those are
+not closed yet at an import edge (innermost-first), so it is carried
+symbolically into the target and folds when the importer closes. A bound name
+leaves the scope's open metaparameters.
+"""
+function _bind_edge!(scope::_TemplateScope, edge::_ImportEdge)
+    edge.bindings === nothing && return scope
+    origin, ref = edge.origin, edge.ref
     values = Dict{String, Any}()
-    if bindings_raw !== nothing && _is_object(bindings_raw)
-        for (k, v) in pairs(bindings_raw)
-            name = string(k)
-            haskey(scope.metaparams, name) || throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-                    "$origin: import of '$ref' binds metaparameter '$name', which the " *
-                        "target neither declares nor re-exports (esm-spec §9.7.6)"
-                )
-            )
-            values[name] = require_meta_expr(
-                _to_ordered(v),
-                "$origin: import of '$ref', binding '$name'"
-            )
-        end
+    for (k, v) in pairs(edge.bindings)
+        name = string(k)
+        haskey(scope.metaparams, name) || _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME, origin,
+            "import of '$ref' binds metaparameter '$name', which the " *
+                "target neither declares nor re-exports (esm-spec §9.7.6)"
+        )
+        values[name] = require_meta_expr(
+            _to_ordered(v),
+            "$origin: import of '$ref', binding '$name'"
+        )
     end
-    if !isempty(values)
-        _instantiate_scope!(scope, values, "$origin -> $ref")
-        for name in keys(values)
-            delete!(scope.metaparams, name)
-        end
+    isempty(values) && return scope
+    _instantiate_scope!(scope, values, "$origin -> $ref")
+    for name in keys(values)
+        delete!(scope.metaparams, name)
     end
+    return scope
+end
 
-    # `only` visibility filtering (esm-spec §9.7.2) — after the target's own
-    # internal wiring resolved in its own scope.
-    only_raw = _raw_get(entry, "only")
-    if only_raw !== nothing && _is_array(only_raw)
-        keep = String[string(n) for n in only_raw]
-        for n in keep
-            haskey(scope.templates, n) || throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME,
-                    "$origin: `only` names template '$n', which '$ref' does not declare (esm-spec §9.7.2)"
-                )
-            )
-        end
-        keepset = Set(keep)
-        # esm-spec §9.7.2 / §9.6.4 rule 5 (Option B): `only` filters the
-        # importer's EXPLICIT visibility, but the kept templates' bodies may
-        # reference other "internal-wiring" templates that resolved in the
-        # target's own scope (a BC rule referencing an interior stencil). With
-        # bodies no longer inlined (§9.7.3), those referenced templates must be
-        # carried along as the transitive reference closure, or the surviving
-        # references would dangle. `only` is respected automatically —
-        # materialization is by reference closure.
-        closure = Set{String}()
-        wstack = String[]
-        for n in keep
-            append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[n], "body")))
-        end
-        while !isempty(wstack)
-            r = pop!(wstack)
-            (r in keepset || r in closure || !haskey(scope.templates, r)) && continue
-            push!(closure, r)
-            append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[r], "body")))
-        end
-        filtered = OrderedDict{String, Any}()
-        for (n, d) in scope.templates
-            (n in keepset || n in closure) && (filtered[n] = d)
-        end
-        scope.templates = filtered
-    end
+"""
+    _filter_only!(scope, edge) -> scope
 
-    # Import-edge renaming / namespacing + free-name rebinding (esm-spec
-    # §9.7.7) — after `bindings` instantiation and `only` filtering, before
-    # the §9.7.4/§9.7.5 merge, so dedup/conflict checks see post-rename names.
-    return _apply_edge_renames!(scope, entry, origin, ref)
+`only` visibility filtering (esm-spec §9.7.2), after the target's own wiring
+resolved in its own scope. The kept templates' bodies may reference other
+templates of the target (a boundary rule calling an interior stencil); bodies
+are not inlined (§9.7.3), so those travel along as the reference closure, or
+the references would dangle (§9.6.4 rule 5).
+"""
+function _filter_only!(scope::_TemplateScope, edge::_ImportEdge)
+    keep = edge.only
+    keep === nothing && return scope
+    for n in keep
+        haskey(scope.templates, n) || _bad_edge(
+            ERROR_CODES.TEMPLATE_IMPORT_UNKNOWN_NAME, edge.origin,
+            "`only` names template '$n', which '$(edge.ref)' does not declare (esm-spec §9.7.2)"
+        )
+    end
+    keepset = Set(keep)
+    closure = Set{String}()
+    wstack = String[]
+    for n in keep
+        append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[n], "body")))
+    end
+    while !isempty(wstack)
+        r = pop!(wstack)
+        (r in keepset || r in closure || !haskey(scope.templates, r)) && continue
+        push!(closure, r)
+        append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[r], "body")))
+    end
+    filtered = OrderedDict{String, Any}()
+    for (n, d) in scope.templates
+        (n in keepset || n in closure) && (filtered[n] = d)
+    end
+    scope.templates = filtered
+    return scope
 end
 
 """
