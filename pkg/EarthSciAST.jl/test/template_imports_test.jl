@@ -1548,6 +1548,18 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 Dict("op" => "/", "args" => Any["NX", 7]),
                 Dict("NX" => 18)
             ) == "metaparameter_type_error"
+
+            # A mount contribution's size: an unbound name stays symbolic, a
+            # bound one folds, and a bound one that does not fold is an error.
+            decl = Dict{String, Any}(
+                "kind" => "interval",
+                "size" => Dict("op" => "/", "args" => Any["NX", 7])
+            )
+            @test EarthSciAST.fold_mount_contribution(decl, Dict("NY" => 3)) === decl
+            @test EarthSciAST.fold_mount_contribution(decl, Dict("NX" => 14))["size"] == 2
+            @test _err_code(
+                () -> EarthSciAST.fold_mount_contribution(decl, Dict("NX" => 18))
+            ) == "metaparameter_type_error"
         end
 
         # ---- 2. import edge: GX = NX*NY carried symbolically, folds at close ----

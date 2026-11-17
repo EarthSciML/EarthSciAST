@@ -2305,21 +2305,24 @@ cross a `subsystems.<k>` mount without widening the typed registry.
 
 A `size` already an integer is returned unchanged. A `size` whose free names are
 NOT all in `env` stays symbolic rather than throwing: the enclosing document is
-not obliged to be able to close a name the assembly never declared.
+not obliged to be able to close a name the assembly never declared. A size whose
+names are all bound but which does not fold (`/` that does not divide exactly,
+overflow) raises the folding error.
 """
 function fold_mount_contribution(decl, env::AbstractDict{String, <:Integer})
     _is_object(decl) || return decl
     sz = _raw_get(decl, "size")
     sz === nothing && return decl
     (sz isa Integer && !(sz isa Bool)) && return decl
-    folded = try
-        eval_meta_expr(
-            _to_native_json(sz), Dict{String, Int}(String(k) => Int(v) for (k, v) in env),
-            "index set size"
-        )
-    catch
-        return decl
-    end
+    expr = _to_native_json(sz)
+    # A free name the enclosing environment does not bind leaves the size
+    # symbolic; any other folding failure (inexact division, overflow, a
+    # non-integer literal) is the document's error and propagates.
+    all(n -> haskey(env, n), _collect_names!(String[], expr)) || return decl
+    folded = eval_meta_expr(
+        expr, Dict{String, Int}(String(k) => Int(v) for (k, v) in env),
+        "index set size"
+    )
     out = OrderedDict{String, Any}()
     for (k, v) in pairs(decl)
         out[String(k)] = v
