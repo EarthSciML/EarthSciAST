@@ -311,39 +311,11 @@ function _collect_events!(
     # left alone when it is already qualified.
     ns_target(lhs) = is_placeholder(lhs) ? lhs :
         occursin('.', lhs) ? (ns(VarExpr(lhs))::VarExpr).name : "$(prefix).$(lhs)"
-    ns_affects(affects) = AffectEquation[
-        AffectEquation(ns_target(a.lhs), ns(a.rhs)) for a in affects
-    ]
     for ev in component_continuous
-        push!(
-            continuous_events,
-            ContinuousEvent(
-                ASTExpr[ns(c) for c in ev.conditions],
-                ns_affects(ev.affects);
-                affect_neg = ev.affect_neg === nothing ? nothing :
-                    ns_affects(ev.affect_neg),
-                root_find = ev.root_find,
-                reinitialize = ev.reinitialize,
-                description = ev.description,
-                name = ev.name
-            )
-        )
+        push!(continuous_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
     end
-
     for ev in component_discrete
-        new_trigger = if ev.trigger isa ConditionTrigger
-            ConditionTrigger(ns(ev.trigger.expression))
-        else
-            ev.trigger
-        end
-        push!(
-            discrete_events,
-            DiscreteEvent(
-                new_trigger, ns_affects(ev.affects);
-                reinitialize = ev.reinitialize,
-                description = ev.description, name = ev.name
-            )
-        )
+        push!(discrete_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
     end
     return nothing
 end
@@ -519,12 +491,16 @@ function _collect_reaction_system!(
         # The §6.3 value model travels with the parameter. `update` above all:
         # it is the only channel binding a parameter to a data source
         # (esm-spec §5.4), so leaving it behind here would flatten a
-        # data-driven parameter into a constant.
-        params[namespaced] = ModelVariable(
-            ParameterVariable;
-            default = p.default, description = p.description, units = p.units,
-            default_units = p.default_units, shape = p.shape,
-            distribution = p.distribution, update = p.update
+        # data-driven parameter into a constant. Its rules' expressions resolve
+        # in this system's scope, so they are namespaced like a rate.
+        params[namespaced] = _map_variable_sites(
+            e -> namespace_expr(e, prefix, local_names),
+            ModelVariable(
+                ParameterVariable;
+                default = p.default, description = p.description, units = p.units,
+                default_units = p.default_units, shape = p.shape,
+                distribution = p.distribution, update = p.update
+            )
         )
     end
 

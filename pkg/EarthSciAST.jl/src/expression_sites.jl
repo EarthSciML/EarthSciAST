@@ -343,7 +343,8 @@ end
 
 # The map forms over the pieces a flattened system holds, which are not
 # wrapped in a `Model`: one variable's sites, a variable table (a new table only
-# when some variable changed), and an event vector (always a new vector).
+# when some variable changed), and an event or an event vector (always a new
+# vector).
 _map_variable_sites(f::F, v::ModelVariable) where {F} =
     _walk_variable((e, _, _) -> f(e)::ASTExpr, v, nothing)
 
@@ -360,6 +361,8 @@ end
 
 _map_event_exprs(f::F, events::Vector{<:EventType}) where {F} =
     _walk_events!((e, _, _) -> f(e)::ASTExpr, copy(events), nothing)
+_map_event_exprs(f::F, ev::EventType) where {F} =
+    _walk_event((e, _, _) -> f(e)::ASTExpr, ev, nothing)
 
 # `ev` with each affect target (`lhs`, a variable name) passed through
 # `rename(name)::String`; the name-valued twin of the expression sites.

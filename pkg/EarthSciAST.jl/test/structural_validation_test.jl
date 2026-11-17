@@ -1250,6 +1250,38 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @test !any(p -> occursin("/p/update/0", p), paths)
     end
 
+    @testset "a reaction system's parameter update rules are reference-checked" begin
+        gt(e) = OpExpr(">", ASTExpr[e, NumExpr(0.0)])
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [EarthSciAST.StoichiometryEntry("A", 1)], nothing, VarExpr("k"))];
+            parameters = [
+                Parameter(
+                    "k", 1.0;
+                    update = ParameterUpdate("condition"; when = gt(VarExpr("ghost")), expression = VarExpr("A"))
+                ),
+            ]
+        )
+        file = EsmFile("2.0.0", Metadata("R"); reaction_systems = Dict("R" => rs))
+        errs = EarthSciAST.validate_reference_integrity(file)
+        @test [(e.error_type, e.path) for e in errs] ==
+            [("undefined_variable", "/reaction_systems/R/parameters/k/update/when")]
+    end
+
+    @testset "a spatial derivative in a subsystem or reaction system names a coordinate" begin
+        D(v, w) = OpExpr("D", ASTExpr[VarExpr(v)]; wrt = w)
+        sub = Model(
+            Dict("y" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("y", "t"), D("y", "xi"))]
+        )
+        m = Model(Dict("x" => ModelVariable(UnknownVariable; default = 0.0)), Equation[]; subsystems = Dict("S" => sub))
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [EarthSciAST.StoichiometryEntry("A", 1)], nothing, D("A", "eta"))]
+        )
+        file = EsmFile("2.0.0", Metadata("C"); models = Dict("M" => m), reaction_systems = Dict("R" => rs))
+        coords = EarthSciAST._coordinate_names(file)
+        @test "xi" in coords && "eta" in coords && !("t" in coords)
+    end
+
     @testset "a subsystem of a coupled model resolves with the coupled scope" begin
         D(v) = OpExpr("D", ASTExpr[VarExpr(v)]; wrt = "t")
         sub = Model(

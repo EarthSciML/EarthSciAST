@@ -368,6 +368,75 @@ end
         @test _uses_var(eq.rhs, "Source.value")
     end
 
+    @testset "7e. variable_map substitution reaches every site a flattened system carries" begin
+        E = EarthSciAST
+        gt(e) = _op(">", e, _N(0.0))
+        vars = Dict{String, ModelVariable}(
+            "T" => ModelVariable(UnknownVariable; default = 1.0, ub = "external"),
+            "external" => ModelVariable(ParameterVariable, default = 1.0),
+            "q" => ModelVariable(
+                ParameterVariable; default = 0.0,
+                update = [
+                    E.ParameterUpdate("condition"; when = gt(_V("external")), expression = _V("external")),
+                    E.ParameterUpdate(
+                        "data"; source = "S",
+                        from = E.DataSourceBinding("f"; unit_conversion = _V("external"))
+                    ),
+                ]
+            ),
+        )
+        model = Model(
+            vars, [Equation(_deriv("T"), _op("*", _V("external"), _V("T")))];
+            continuous_events = [
+                ContinuousEvent(ESMExpr[gt(_V("external"))], [AffectEquation("T", _V("external"))]),
+            ],
+            discrete_events = [
+                DiscreteEvent(ConditionTrigger(gt(_V("external"))), [AffectEquation("T", _V("external"))]),
+            ]
+        )
+        source = Model(
+            Dict{String, ModelVariable}("value" => ModelVariable(UnknownVariable, default = 0.5)),
+            Equation[]
+        )
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [E.StoichiometryEntry("A", 1)], nothing, _V("k"))];
+            parameters = [
+                Parameter("k", 1.0; update = E.ParameterUpdate("condition"; when = gt(_V("A")), expression = _V("A"))),
+            ]
+        )
+        file = E.EsmFile(
+            "0.1.0", E.Metadata("t7e");
+            models = Dict("Target" => model, "Source" => source),
+            reaction_systems = Dict("R" => rs),
+            coupling = CouplingEntry[
+                CouplingVariableMap("Source.value", "Target.external", "param_to_var"),
+            ]
+        )
+        flat = flatten(file)
+        @test !haskey(flat.parameters, "Target.external")
+        stale = String[]
+        reads(e) = "Target.external" in E.free_variables(e)
+        for ev in flat.continuous_events
+            any(reads, ev.conditions) && push!(stale, "condition")
+            any(a -> reads(a.rhs), ev.affects) && push!(stale, "affect")
+        end
+        for ev in flat.discrete_events
+            reads(ev.trigger.expression) && push!(stale, "trigger")
+            any(a -> reads(a.rhs), ev.affects) && push!(stale, "discrete affect")
+        end
+        rules = flat.parameters["Target.q"].update
+        reads(rules[1].when) && push!(stale, "update when")
+        reads(rules[1].expression) && push!(stale, "update expression")
+        reads(rules[2].from.unit_conversion) && push!(stale, "unit_conversion")
+        @test isempty(stale)
+        @test rules[2].from.unit_conversion == _V("Source.value")
+        @test flat.state_variables["Target.T"].ub == "Source.value"
+        # A reaction system's parameter update rule resolves in its own scope.
+        krule = flat.parameters["R.k"].update[1]
+        @test krule.expression == _V("R.A")
+        @test E.free_variables(krule.when) == Set(["R.A"])
+    end
+
     @testset "7a. variable_map endpoints reach INTO a subsystem (esm-spec §4.6)" begin
         # A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds
         # the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.

@@ -133,8 +133,14 @@ end
 
 Rename a variable throughout the model.
 
-Updates the variable definition and all references in equations.
-Throws [`EditError`](@ref) if `old_name` does not exist.
+Renames the declaration and every reference in the model's own scope: each
+expression site ([`EXPRESSION_SITE_KINDS`](@ref): equations, initialization
+equations, guesses, update rules, bounds, events, inline-test references), and
+each place that names the variable as a string: an event affect's target, a
+`guesses` key, a bound written as a name, an update handler's `read_vars` /
+`read_params`, and an inline test's assertion variable, `initial_conditions`
+and `parameter_overrides` keys. Subsystems are separate scopes and are left
+alone. Throws [`EditError`](@ref) if `old_name` does not exist.
 """
 function rename_variable(model::Model, old_name::String, new_name::String)::Model
     if !haskey(model.variables, old_name)
@@ -145,24 +151,53 @@ function rename_variable(model::Model, old_name::String, new_name::String)::Mode
         @warn "Variable '$new_name' already exists, this will replace it"
     end
 
-    # Update variables dictionary
-    new_variables = copy(model.variables)
-    variable = new_variables[old_name]
-    delete!(new_variables, old_name)
-    new_variables[new_name] = variable
-
-    # Update equations
     substitution = Dict{String, ASTExpr}(old_name => VarExpr(new_name))
-    new_equations = [
-        Equation(
-            substitute(eq.lhs, substitution),
-            substitute(eq.rhs, substitution);
-            _comment = eq._comment
-        )
-            for eq in model.equations
-    ]
+    out = map_expressions(e -> substitute(e, substitution), model; subsystems = false)
+    ren(n::String) = n == old_name ? new_name : n
+    renkey(d) = haskey(d, old_name) ? typeof(d)(ren(k) => v for (k, v) in d) : d
 
-    return _rebuild(model; variables = new_variables, equations = new_equations)
+    # The declaration, then the name-valued sites.
+    variable = out.variables[old_name]
+    delete!(out.variables, old_name)
+    out.variables[new_name] = variable
+    for (name, v) in out.variables
+        nv = _rename_handler_reads(v, ren)
+        nv === v || (out.variables[name] = nv)
+    end
+    for events in (out.continuous_events, out.discrete_events)
+        for (i, ev) in enumerate(events)
+            events[i] = _rename_affect_targets(ren, ev)
+        end
+    end
+    haskey(out.guesses, old_name) && (out.guesses[new_name] = pop!(out.guesses, old_name))
+    for (i, t) in enumerate(out.tests)
+        out.tests[i] = _reconstruct_fields(
+            t;
+            assertions = Assertion[
+                a.variable == old_name ? _reconstruct_fields(a; variable = new_name) : a
+                    for a in t.assertions
+            ],
+            initial_conditions = renkey(t.initial_conditions),
+            parameter_overrides = renkey(t.parameter_overrides)
+        )
+    end
+    return out
+end
+
+# `v` with the names its update handlers read passed through `ren`.
+function _rename_handler_reads(v::ModelVariable, ren)
+    v.update === nothing && return v
+    any(r -> r.handler !== nothing, v.update) || return v
+    rules = ParameterUpdate[
+        r.handler === nothing ? r : reconstruct(
+                r; handler = _reconstruct_fields(
+                    r.handler;
+                    read_vars = r.handler.read_vars === nothing ? nothing : map(ren, r.handler.read_vars),
+                    read_params = r.handler.read_params === nothing ? nothing : map(ren, r.handler.read_params)
+                )
+            ) for r in v.update
+    ]
+    return reconstruct(v; update = rules)
 end
 
 # Equation operations (Section 4.2)
