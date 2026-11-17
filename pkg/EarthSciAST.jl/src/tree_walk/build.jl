@@ -6165,6 +6165,16 @@ function _compile_derivative_equations(
                 rhs_list_compiled = rhs_list_compiled,
                 obs_nst = obs_nst
             )
+        else
+            # Every caller hands only the three derivative shapes above; an
+            # equation of another shape would otherwise drop out unseen.
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_UNSUPPORTED_LHS",
+                    "a derivative equation's left-hand side must be D(x), " *
+                        "D(index(x, …)) or a faq over D(index(x, …))"
+                )
+            )
         end
     end
     # The pooled scalarizer-level emitter: one grouping over EVERY per-cell
