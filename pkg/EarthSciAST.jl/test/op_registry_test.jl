@@ -444,3 +444,55 @@ end
         @test ESM.raw_substrates(rsrc) === nothing
     end
 end
+
+@testset "document-format keyword tables derive their literals" begin
+    # The lexers' keyword and punctuation tables are inverses of each surface's
+    # `KW_CHARS`, and the parser's function, comparison and reduction readings
+    # are inverses of the printer's tables. Pin the derived values against the
+    # literals they replace.
+    DF = ESM.DocumentFormats
+    L, Ty, P, Pr = DF.MLatex, DF.MTypst, DF.MParse, DF.MPrint
+    K = DF.MToken
+    @test L.CTRL_KW == Dict{String, K.Kw}(
+        "ne" => K.KNe, "neq" => K.KNe, "le" => K.KLe, "leq" => K.KLe, "ge" => K.KGe, "geq" => K.KGe,
+        "land" => K.KLand, "lor" => K.KLor, "lnot" => K.KLnot, "cdot" => K.KCdot, "times" => K.KTimes,
+        "frac" => K.KFrac, "sqrt" => K.KSqrt, "exp" => K.KExp, "ln" => K.KLn, "log" => K.KLog,
+        "sin" => K.KSin, "cos" => K.KCos, "tan" => K.KTan, "arcsin" => K.KAsin, "arccos" => K.KAcos,
+        "arctan" => K.KAtan, "sinh" => K.KSinh, "cosh" => K.KCosh, "tanh" => K.KTanh, "min" => K.KMin,
+        "max" => K.KMax, "lfloor" => K.KLfloor, "rfloor" => K.KRfloor, "lceil" => K.KLceil,
+        "rceil" => K.KRceil, "partial" => K.KPdiff, "dot" => K.KDotacc, "sum" => K.KSum,
+        "prod" => K.KProd, "in" => K.KInn, "substack" => K.KSubstack, "limits" => K.KLimitsL,
+    )
+    @test L.PUNCT == Dict{Char, K.Kw}(
+        '+' => K.KPlus, '-' => K.KMinus, '=' => K.KEq, '<' => K.KLt, '>' => K.KGt, '/' => K.KSlash,
+        '^' => K.KCaret, '_' => K.KUs, '(' => K.KLp, ')' => K.KRp, '{' => K.KLb, '}' => K.KRb, '[' => K.KLbk,
+        ']' => K.KRbk, ',' => K.KComma, ';' => K.KSemi, ':' => K.KColon, '&' => K.KAmp, '.' => K.KSdot,
+    )
+    @test Ty.IDENT_KW == Dict{String, K.Kw}(
+        "and" => K.KLand, "or" => K.KLor, "not" => K.KLnot, "dot" => K.KCdot, "times" => K.KTimes,
+        "sqrt" => K.KSqrt, "exp" => K.KExp, "ln" => K.KLn, "log" => K.KLog, "sin" => K.KSin,
+        "cos" => K.KCos, "tan" => K.KTan, "arcsin" => K.KAsin, "arccos" => K.KAcos, "arctan" => K.KAtan,
+        "sinh" => K.KSinh, "cosh" => K.KCosh, "tanh" => K.KTanh, "min" => K.KMin, "max" => K.KMax,
+        "abs" => K.KAbs, "floor" => K.KFloor, "ceil" => K.KCeil, "partial" => K.KPdiff, "dif" => K.KDif,
+        "cases" => K.KCases, "vec" => K.KVec, "mat" => K.KMat, "sum" => K.KSum, "product" => K.KProd,
+        "in" => K.KInn, "limits" => K.KLimits, "lr" => K.KLr,
+    )
+    @test Ty.PUNCT == Dict{Char, K.Kw}(
+        '+' => K.KPlus, '-' => K.KMinus, '=' => K.KEq, '<' => K.KLt, '>' => K.KGt, '/' => K.KSlash,
+        '^' => K.KCaret, '_' => K.KUs, ')' => K.KRp, '[' => K.KLbk, ']' => K.KRbk, ',' => K.KComma,
+        ';' => K.KSemi, ':' => K.KColon, '&' => K.KAmp, '.' => K.KSdot, '\\' => K.KNl, '{' => K.KLset,
+        '}' => K.KRset,
+    )
+    for (n, k) in Pr.FN_KW
+        @test P.fn_of(k) == n
+    end
+    for (o, k) in Pr.CMP_KW
+        @test P.cmp_of(k) == o
+    end
+    @test P.cmp_of(K.KPlus) === nothing
+    for (r, k, _) in Pr.RED_TABLE
+        @test P.red_of(k) === r
+        @test Pr.redk_kw(r) == k
+    end
+    @test P.red_of(K.KPlus) === nothing
+end
