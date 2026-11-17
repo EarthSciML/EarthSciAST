@@ -48,6 +48,9 @@ include("errors.jl")
 # Central diagnostic-code registry. Pure data, no dependencies; must precede
 # every raise site that names a code.
 include("error_codes.jl")
+# The load pipeline's error type and the codes it is raised with; needs only
+# errors.jl and error_codes.jl.
+include("load_errors.jl")
 # Compiler selection (API_SPEC §5.8, esm-libraries-spec §2.5.10): the closed
 # vocabulary, the per-tier plan each value expands to, the per-build report and
 # the strict-`native` refusal. Pure data plus task-local accessors; the types
