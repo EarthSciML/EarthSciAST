@@ -345,7 +345,7 @@ export
     # `flatten` ALWAYS hands its consumers reference-preserving expressions, so
     # any consumer without its own template handling must call this at its
     # entry ("Expand at your boundary", RFC out-of-line-expression-templates
-    # §7.7) — the MTK `System`/`PDESystem` constructors and EarthSciASTDiff's
+    # §7.7) — the MTK `System` constructor and EarthSciASTDiff's
     # `sysview` both do.
     expanded_model, expand_flattened_refs, expanded_file,
     # Parameter-vector ABI: name → position in a `p` that is an AbstractVector

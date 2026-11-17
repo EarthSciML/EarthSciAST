@@ -76,7 +76,7 @@ end
 # The `_GatherCtx` is smuggled to `_build_index` through `dim_dict::Dict{
 # String,Any}` under this reserved key rather than as an explicit argument.
 # `_esm_to_symbolic` has dozens of call sites (every `_build_*` helper, the
-# System/PDESystem constructors, event and slice-BC lowering), all sharing
+# System constructor, event lowering), all sharing
 # the `(expr, var_dict, t_sym, dim_dict)` signature; adding a context
 # parameter would touch every one of them for the benefit of exactly one
 # producer (`_build_arrayop_sym`) and one consumer (`_build_index`). Until
@@ -85,8 +85,8 @@ end
 # Invariants that keep it safe:
 # - `_build_arrayop_sym` installs the ctx before evaluating an arrayop body
 #   and restores the previous value in a `finally` (nesting-safe).
-# - `_get_or_make_dim` can never collide: the key is not a valid dimension
-#   name and is only ever written by `_build_arrayop_sym`.
+# - The key is not a valid variable name and is only ever written by
+#   `_build_arrayop_sym`.
 # - `_build_index` type-checks (`ctx isa _GatherCtx`) before use.
 const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
 

@@ -2507,7 +2507,7 @@ equations and observed expressions against the merged `template_registry`,
 returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
 when the registry is empty (no references survived). `flatten` ALWAYS carries
 references, so a consumer with no template handling calls this at its entry —
-the MTK `System`/`PDESystem` constructors do; the tree-walk build
+the MTK `System` constructor does; the tree-walk build
 does NOT (it expands at its own entry with site recording, the compile-once
 tier).
 

@@ -16,7 +16,8 @@ const _MTK_UNARY_SCALAR_OPS = (
 """
 Build a Symbolics.jl expression from an ESM `ASTExpr` tree, using the given
 variable dictionary (name → symbolic variable) and the time symbol `t_sym`.
-Spatial dimension symbols are created on demand and cached in `dim_dict`.
+`dim_dict` holds the time symbol plus the lowering context stored under the
+reserved keys of ext/mtk_ext/arrayop.jl.
 
 The extension-independent scalar arms live in the shared
 `_esm_to_symbolic_core` (ext/shared/esm_to_symbolic.jl); everything MTK-
@@ -50,7 +51,7 @@ function _int_promoted_number(v)
     end
 end
 
-# Unknown-variable policy of the ODE/PDE lowering: variables must already be
+# Unknown-variable policy of the ODE lowering: variables must already be
 # declared (state/parameter/observed dictionaries or a known dimension) —
 # THROW otherwise. The Catalyst rate lowering auto-creates instead; the
 # divergence is live behavior (see ext/shared/esm_to_symbolic.jl).
@@ -89,33 +90,17 @@ function _mtk_extended_op(
         return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
             _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
     elseif op == "D"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        # Only the time derivative lowers. A spatial `D` is a rewrite target
+        # that a discretization rule must replace before a system is built.
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
-        if wrt_name == "t"
-            return Differential(t_sym)(arg)
-        else
-            dim_sym = _get_or_make_dim(dim_dict, wrt_name)
-            return Differential(dim_sym)(arg)
-        end
-    elseif op == "grad"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        expr.dim === nothing && throw(ArgumentError("grad operator requires dim parameter"))
-        dim_sym = _get_or_make_dim(dim_dict, expr.dim)
-        return Differential(dim_sym)(arg)
-    elseif op == "div"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        expr.dim === nothing && throw(ArgumentError("div operator requires dim parameter"))
-        dim_sym = _get_or_make_dim(dim_dict, expr.dim)
-        return Differential(dim_sym)(arg)
-    elseif op == "laplacian"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        x_sym = _get_or_make_dim(dim_dict, "x")
-        y_sym = _get_or_make_dim(dim_dict, "y")
-        z_sym = _get_or_make_dim(dim_dict, "z")
-        Dx = Differential(x_sym)
-        Dy = Differential(y_sym)
-        Dz = Differential(z_sym)
-        return Dx(Dx(arg)) + Dy(Dy(arg)) + Dz(Dz(arg))
+        wrt_name == "t" || throw(
+            ArgumentError(
+                "D(wrt = \"$(wrt_name)\") is a spatial derivative with no " *
+                    "ModelingToolkit lowering: discretize it (a `faq` stencil over " *
+                    "an index set) before building the system"
+            )
+        )
+        return Differential(t_sym)(_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict))
     elseif op == "ifelse"
         cond = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         t_val = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
@@ -169,9 +154,8 @@ end
 
 # Walk an ESM expression tree looking for any spatial differential operator
 # (`grad`/`div`/`laplacian`). Returns the offending op name on the first
-# match, or `nothing` if none is present. Used by the ODE-path
-# `ModelingToolkit.System` constructor to enforce the canonical pipeline
-# contract (esm-i7b).
+# match, or `nothing` if none is present. Used by `ModelingToolkit.System` to
+# refuse an undiscretized spatial operator with a message that says so.
 function _find_spatial_op(expr::EsmExpr)::Union{String, Nothing}
     if expr isa OpExpr
         if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
@@ -568,13 +552,4 @@ function _build_concat(
     expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
     arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     return cat(arrs...; dims = expr.axis + 1)
-end
-
-function _get_or_make_dim(dim_dict::Dict{String, Any}, name::AbstractString)
-    if haskey(dim_dict, name)
-        return dim_dict[name]
-    end
-    v = Symbolics.variable(Symbol(name))
-    dim_dict[String(name)] = v
-    return v
 end

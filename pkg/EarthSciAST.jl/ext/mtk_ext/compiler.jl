@@ -162,23 +162,20 @@ end
 # while hiding that something is broken.
 function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # A CONTINUOUS SPATIAL DIMENSION. `ModelingToolkit.System` is the ODE
-    # constructor; a document with spatial independent variables is a PDE, which
-    # needs `ModelingToolkit.PDESystem` plus a discretizer (MethodOfLines) that
-    # this compiler does not run. A DISCRETIZED spatial document — one whose
-    # stencil is already `arrayop` over an index set — has no spatial IV and
-    # goes straight through. The predicate is `_has_spatial_ivs`, the one
-    # `ModelingToolkit.System(flat)` enforces; the list is only for the message.
+    # constructor and this binding has no PDE constructor. A DISCRETIZED spatial
+    # document — one whose stencil is already a `faq` over an index set — has no
+    # spatial IV and goes straight through. The predicate is `_has_spatial_ivs`,
+    # the one `ModelingToolkit.System(flat)` enforces; the list is only for the
+    # message.
     if _has_spatial_ivs(flat)
         ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
         _mtk_refuse(
             _mtk_first_rule_label(flat),
             "the document declares the continuous spatial independent variable" *
                 (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
-                "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
-                "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
-                "discretization, which it does not run. Discretize the document (an " *
-                "`arrayop` stencil over an index set), or hand the flattened system to " *
-                "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD"
+                "This compiler builds the ODE `ModelingToolkit.System` and has no PDE " *
+                "lowering. Discretize the document (a `faq` stencil over an index " *
+                "set) first. $_MTK_TRY_INSTEAD"
         )
     end
 

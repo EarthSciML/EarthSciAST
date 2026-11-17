@@ -79,8 +79,7 @@ end
     # `FluidMechanics` — carries `grad(P, dim: x)`, an unlowered rewrite-target
     # operator that puts `x` in the DOCUMENT's independent variables, and
     # `ModelingToolkit.System` refuses a flattened system with spatial
-    # independent variables (it redirects to `PDESystem`, which this MTK engine
-    # has no route to). Spatiality is a property of the whole flatten, so the
+    # independent variables (the binding has no PDE constructor). Spatiality is a property of the whole flatten, so the
     # refusal reaches all five containers and not just the one that caused it.
     #
     # That is deliberate and it is the CROSS-BINDING number: the Rust CLI
@@ -95,7 +94,7 @@ end
     @test !isempty(res)
     @test count(r -> r.status == EarthSciAST.PASS, res) == 0   # Rust: 0
     @test all(r -> r.status == EarthSciAST.ERROR, res)
-    @test all(r -> occursin("PDESystem", r.message), res)
+    @test all(r -> occursin("no PDE constructor", r.message), res)
     # All five containers are refused, not only the one carrying the `grad`.
     @test length(Set(r.container_name for r in res)) == 5
 end

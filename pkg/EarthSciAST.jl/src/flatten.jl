@@ -138,8 +138,8 @@ A coupled ESM file flattened into a single symbolic representation.
 All variables, parameters, and species are dot-namespaced (e.g.
 `"SimpleOzone.O3"`, `"Atmosphere.Chemistry.NO2"`). Equations are real
 `Equation` objects whose ASTExpr trees reference namespaced names via `VarExpr`.
-This is the canonical intermediate form consumed by MTK/PDESystem constructors
-(in the Julia extension) and by cross-language code generators.
+This is the canonical intermediate form consumed by the build, the
+ModelingToolkit `System` constructor (in the Julia extension) and by cross-language code generators.
 
 Fields:
 - `independent_variables::Vector{Symbol}`: `[:t]` for pure-ODE systems, or
@@ -302,7 +302,7 @@ _flat_od(::Type{V}, d::AbstractDict) where {V} =
     OrderedDict{String, V}(String(k) => v for (k, v) in d)
 
 # Backward-compatible constructors: callers that predate the index-set /
-# template registries (e.g. hand-built MTK PDESystem fixtures)
+# template registries (e.g. hand-built test fixtures)
 # get empty registries, and callers that predate the esm-1.0.0 canonical field
 # set (the §6.3.1 subset maps, `field_ics`, `loader_fields`, `lifted_shapes`)
 # get empty ones. Adding a field must NOT silently drop a positional caller, so
@@ -397,9 +397,9 @@ end
 """
     _has_spatial_ivs(flat::FlattenedSystem) -> Bool
 
-Return true when the flattened system has spatial independent variables
-(i.e. needs a PDESystem rather than an ODESystem). A FlattenedSystem with
-`[:t]` only is a pure ODE; anything else is a PDE.
+Return true when the flattened system has spatial independent variables. A
+FlattenedSystem with `[:t]` only is a pure ODE; anything else is a PDE, which
+the ModelingToolkit extension refuses (it has no PDE constructor).
 """
 function _has_spatial_ivs(flat::FlattenedSystem)
     return !(
@@ -409,26 +409,17 @@ function _has_spatial_ivs(flat::FlattenedSystem)
 end
 
 """
-    _use_pde_ctor_msg(flat, pde_ctor, ode_ctor) -> String
+    _spatial_system_msg(flat, ctor) -> String
 
-Error text for calling an ODE-only constructor (`ode_ctor`, e.g.
-`"ModelingToolkit.System"`) on a flattened system with spatial independent
-variables. Used by the MTK extension so the redirect wording stays
-consistent everywhere the split is enforced.
+Error text for calling the ODE constructor `ctor` (e.g.
+`"ModelingToolkit.System"`) on a flattened system with a continuous spatial
+independent variable.
 """
-_use_pde_ctor_msg(flat::FlattenedSystem, pde_ctor::String, ode_ctor::String) =
+_spatial_system_msg(flat::FlattenedSystem, ctor::String) =
     "Flattened system has independent variables $(flat.independent_variables), " *
-    "which indicates a PDE. Use $(pde_ctor)(...) instead of $(ode_ctor)(...)."
-
-"""
-    _use_ode_ctor_msg(ode_ctor, pde_ctor) -> String
-
-Mirror of [`_use_pde_ctor_msg`](@ref): error text for calling a PDE-only
-constructor (`pde_ctor`) on a pure-ODE flattened system.
-"""
-_use_ode_ctor_msg(ode_ctor::String, pde_ctor::String) =
-    "Flattened system has independent variables [t] only — this is a " *
-    "pure ODE system. Use $(ode_ctor)(...) instead of $(pde_ctor)(...)."
+    "which indicates a PDE with a continuous spatial dimension. $(ctor) builds " *
+    "ODE systems only and this binding has no PDE constructor: discretize the " *
+    "spatial operators (a `faq` stencil over an index set) first."
 
 # ========================================
 # Reaction Lowering Helper (§4.6 + §4.7.6)
@@ -587,7 +578,7 @@ a `D` node. No op name is privileged.
 Returned in FIRST-ENCOUNTER order, deduplicated. This used to return a
 `Set{Symbol}`, whose iteration order is the host hash's — and it feeds
 `independent_variables`, which §4.7.5 step 4 requires to be in document order and
-which downstream constructors read POSITIONALLY to decide a PDESystem's axes. A
+which downstream consumers read POSITIONALLY as the system's axes. A
 set there made `[t, y, x]` out of a document that writes `x` before `y`.
 """
 function spatial_dims_in_expr(expr::ASTExpr)::Vector{Symbol}

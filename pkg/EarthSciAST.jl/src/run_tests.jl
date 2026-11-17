@@ -854,7 +854,7 @@ function run_file_tests!(
     # A container in a document this engine cannot build gets that document's
     # failure, NOT a private per-container build that would paper over it. One
     # component's unlowered `grad` making the whole flatten spatial — which
-    # `ModelingToolkit.System` refuses, redirecting to `PDESystem` — refuses
+    # `ModelingToolkit.System` refuses, having no PDE constructor — refuses
     # every container in that document, which is what the Rust CLI already does
     # for the same file (`tests/valid/units_dimensional_analysis.esm`: 0 pass in
     # both). A document must not validate under one binding and fail under

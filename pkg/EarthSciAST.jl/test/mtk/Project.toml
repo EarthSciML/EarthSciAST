@@ -12,7 +12,6 @@
 # would do the same, but Julia 1.10 (the lts this suite runs at) ignores it.
 [deps]
 Catalyst = "479239e8-5488-4da2-87a7-35f2df7eef83"
-DomainSets = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
 EarthSciAST = "c7bf5e87-b31b-4281-bdce-ffb8a46ec87c"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
@@ -27,7 +26,6 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 Catalyst = "16, 17.0"
-DomainSets = "0.7, 0.8"
 JSON3 = "1"
 ModelingToolkit = "11"
 OrderedCollections = "1, 2"

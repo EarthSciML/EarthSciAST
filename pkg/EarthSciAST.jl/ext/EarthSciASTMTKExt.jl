@@ -1,15 +1,16 @@
 """
     EarthSciASTMTKExt
 
-The ModelingToolkit binding, loaded automatically when `ModelingToolkit`,
-`Symbolics`, and `DomainSets` are in the session. It supplies both
-directions of the ESM ⇄ MTK bridge:
+The ModelingToolkit binding, loaded automatically when `ModelingToolkit` and
+`Symbolics` are in the session. It supplies both directions of the ESM ⇄ MTK
+bridge:
 
-- **ESM → MTK**: `ModelingToolkit.System(::FlattenedSystem/::Model)` and
-  `ModelingToolkit.PDESystem(...)` constructors that lower the flattened
-  equations (including the `arrayop` stencil vocabulary and events) into
-  real symbolic systems (`mtk_ext/lowering.jl`, `mtk_ext/arrayop.jl`,
-  `mtk_ext/variables.jl`, `mtk_ext/systems.jl`).
+- **ESM → MTK**: the `ModelingToolkit.System(::FlattenedSystem/::Model)`
+  constructors that lower the flattened equations (including the `faq` stencil
+  vocabulary and events) into an ODE system (`mtk_ext/lowering.jl`,
+  `mtk_ext/arrayop.jl`, `mtk_ext/variables.jl`, `mtk_ext/systems.jl`). A
+  system with a continuous spatial independent variable is refused; there is
+  no PDE constructor.
 - **MTK → ESM**: `EarthSciAST.Model(::AbstractSystem)` plus the `mtk2esm` /
   `mtk2esm_gaps` migration exporters with their `GapReport` machinery
   (`mtk_ext/export.jl`).
@@ -21,8 +22,8 @@ directions of the ESM ⇄ MTK bridge:
 Kept a `weakdep` extension (mirroring `SimulateExt` / `DataRefreshExt`) so
 the base package carries no MTK dependency; without it loaded, the core
 stubs in src/mtk_export.jl throw an `ArgumentError` naming what to load,
-and the MTK-free path (`flatten` → `FlattenedSystem`, `build_evaluator`,
-`esm_problem`) remains fully available.
+and the MTK-free path (`flatten` → `FlattenedSystem`, `esm_problem`) remains
+fully available.
 """
 module EarthSciASTMTKExt
 
@@ -40,23 +41,22 @@ using EarthSciAST: FlattenedSystem, ModelVariable, UnknownVariable,
     Domain, flatten, infer_array_shapes, expand_flattened_refs,
     GapReport, SimulateError, EsmProblem,
     # MTK-independent helpers shared with the Catalyst extension
-    # (src/mtk_export.jl) plus the ODE-vs-PDE split predicate and redirect
-    # messages (src/flatten.jl).
+    # (src/mtk_export.jl) plus the spatial-system predicate and its refusal
+    # message (src/flatten.jl).
     _strip_time, _resolve_sys_name,
     _reference_notes, _esm_file_metadata, _warn_gaps,
-    _has_spatial_ivs, _use_pde_ctor_msg, _use_ode_ctor_msg
+    _has_spatial_ivs, _spatial_system_msg
 # Explicit import so we can add methods to these generics.
 import EarthSciAST: mtk2esm, mtk2esm_gaps
 const EsmExpr = EarthSciAST.ASTExpr
 using ModelingToolkit
-using ModelingToolkit: @variables, @parameters, Differential, System, PDESystem
+using ModelingToolkit: @variables, @parameters, Differential, System
 using Symbolics
 using Symbolics: Num
 # SymbolicUtils ships inside Symbolics (via @reexport); access the module
 # through Symbolics.SymbolicUtils so we don't need to declare a separate
 # weak dep in Project.toml. Alias it locally for readability.
 const SymUtils = Symbolics.SymbolicUtils
-using DomainSets: Interval
 
 # Files under ext/shared/ are included by BOTH this module and
 # EarthSciASTCatalystExt (each gets its own copy); see their headers for the
