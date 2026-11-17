@@ -103,84 +103,56 @@ end
     flatten_template_registries(loaded) -> (root, merged_registry)
 
 The flatten-time template-registry merge (esm-spec §9.6.4 rule 7, §10.7;
-esm-libraries-spec §4.7.5 step 4). Given an Option-B loaded multi-component
-document `loaded`, merge every component's `expression_templates` registry into
-a single document-scoped merged registry:
+esm-libraries-spec §4.7.5 step 4) over an Option-B loaded multi-component
+document `loaded`: every component's match-less `expression_templates` entries
+go through [`_merge_flat_registry`](@ref) (`match` rules are not merged; only
+match-less templates are referenceable, §9.6.2), so
 
-- **Deep-equal dedup at first occurrence** — the common case, two components
+- **deep-equal same-name entries dedupe at first occurrence** — two components
   importing one stencil produce identical folded bodies, kept once under the
-  bare name.
-- **Non-deep-equal same-name collision** — both entries are renamed
-  deterministically to `<ComponentPath>.<name>` and their
-  `apply_expression_template` references are rewritten in lockstep (total,
-  deterministic; no new diagnostic).
-- **Collisions propagate along the reference DAG** — a declaration that
+  bare name;
+- **a non-deep-equal same-name collision** renames both entries to
+  `<ComponentPath>.<name>`, with their `apply_expression_template` references
+  rewritten in lockstep (total, deterministic; no new diagnostic);
+- **collisions propagate along the reference DAG** — a declaration that
   references a colliding name collides too (see
   [`_registry_collision_names`](@ref)), so a byte-identical wrapper over a
   per-component leaf is renamed per owner rather than deduped into a single body
   whose nested reference no longer resolves.
 
-Returns the rewritten document `root` (component reference sites updated) and
-the merged registry as an `OrderedDict` (the FlattenedSystem's first-class
-registry field). Downstream consumers resolve surviving references against it
-or `Expand` them (§9.6.4 rule 2). `match` rules are not merged (only match-less
-templates are referenceable, §9.6.2).
+The merged registry is in document order: components as the file declares
+them, entries as their block declares them. Returns the rewritten document
+`root` (each component's reference sites renamed and its
+`expression_templates` block removed) and the merged registry as an
+`OrderedDict` (the FlattenedSystem's first-class registry field). Downstream
+consumers resolve surviving references against it or `Expand` them (§9.6.4
+rule 2).
 """
 function flatten_template_registries(loaded)
     root = _to_ordered(loaded)::OrderedDict{String, Any}
-    # (path, compkind, cname, comp, named)
-    comps = Tuple{String, String, String, OrderedDict{String, Any}, Dict{String, Any}}[]
+    comps = Tuple{String, OrderedDict{String, Any}}[]       # (path, comp)
+    blocks = OrderedDict{String, Any}()                    # compkey => match-less block
     for (compkind, cname, comp) in _components(root)
-        # Match rules are not merged.
-        named = filter(((_, d),) -> _raw_get(d, "match") === nothing, _component_templates(comp))
-        push!(comps, (cname, compkind, cname, comp::OrderedDict{String, Any}, named))
+        push!(comps, (cname, comp::OrderedDict{String, Any}))
+        tpl = _raw_get(comp, "expression_templates")
+        _is_object(tpl) || continue
+        blocks["$compkind.$cname"] = OrderedDict{String, Any}(
+            string(n) => d for (n, d) in pairs(tpl) if _raw_get(d, "match") === nothing
+        )
     end
+    merged, rename = _merge_flat_registry(blocks)
 
-    # Group each template name across components (preserving first-seen path).
-    byname = OrderedDict{String, Vector{Tuple{String, Any}}}()
-    for (path, _, _, _, named) in comps
-        for n in sort(collect(keys(named)))
-            push!(get!(byname, n, Tuple{String, Any}[]), (path, named[n]))
-        end
-    end
-
-    merged = OrderedDict{String, Any}()
-    rename = Dict{String, Dict{String, String}}()   # path => (old => new)
-    collide = _registry_collision_names(byname)
-    for name in sort(collect(keys(byname)))
-        occ = byname[name]
-        if name in collide
-            for (path, decl) in occ                 # collision: owner-path rename
-                newname = "$path.$name"
-                merged[newname] = decl
-                get!(rename, path, Dict{String, String}())[name] = newname
-            end
-        else
-            merged[name] = occ[1][2]                # deep-equal dedup
-        end
-    end
-
-    # Rewrite reference sites in lockstep (component expression positions and the
-    # carried bodies of the renamed entries).
-    for (path, _, _, comp, _) in comps
+    # Rewrite each component's reference sites in lockstep with its renames,
+    # and drop its now-merged block from the flattened form.
+    for (path, comp) in comps
         rn = get(rename, path, nothing)
-        rn === nothing && continue
-        for k in collect(keys(comp))
-            k == "expression_templates" && continue
-            comp[k] = _rename_apply_refs(comp[k], rn)
+        if rn !== nothing
+            for k in collect(keys(comp))
+                k == "expression_templates" && continue
+                comp[k] = _rename_apply_refs(comp[k], rn)
+            end
         end
-        # The merged (renamed) bodies owned by this path get their nested
-        # references rewritten too.
-        for (old, new) in rn
-            haskey(merged, new) && (merged[new] = _rename_apply_refs(merged[new], rn))
-        end
-        # Drop the now-merged per-component block from the flattened form.
-        haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+        delete!(comp, "expression_templates")
     end
-    for (_, _, _, comp, named) in comps
-        # Components with no rename still surrender their (merged) block.
-        haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
-    end
-
     return (root, merged)
 end
