@@ -543,6 +543,7 @@ function expand_coupling_imports(
                 )
             )
         end
+        lib = _library_wire_form(lib)
         for expanded_edge in _expand_one(lib, entry.ref, entry.bind, file)
             push!(out, expanded_edge)
         end

@@ -1653,6 +1653,7 @@ function _resolve_import_entry(
     end
 
     raw, target_dir = load_ref(ref, base_dir, origin)
+    raw = _library_wire_form(raw)
     reject_expression_templates_pre_v04(raw)
     reject_template_imports_pre_v08(raw)
 

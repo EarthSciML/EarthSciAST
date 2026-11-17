@@ -2876,7 +2876,7 @@ end
 """
     _prepare_document_ops!(doc; gate = true) -> Nothing
 
-Settle expression-node `op` spellings for ONE document, in three steps:
+Settle expression-node `op` spellings for ONE document, in four steps:
 
 1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
    identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
@@ -2929,6 +2929,23 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
         end
     end
     return nothing
+end
+
+"""
+    _library_wire_form(raw) -> post-wire library document
+
+A template or coupling library as loaded (by the default loader or a caller's
+`load_ref`), copied into the post-wire carrier and passed through the same
+op-spelling boundary as every other document (`_prepare_document_ops!`): a
+removed op is refused by name and `neg` / `pow` are rewritten with the
+`deprecated_op` warning. A non-object is returned unchanged for the caller's
+own diagnostic.
+"""
+function _library_wire_form(raw)
+    _is_object(raw) || return raw
+    doc = _to_ordered(raw)
+    _prepare_document_ops!(doc)
+    return doc
 end
 
 # The `op` / `fn` / `args` field key of a post-wire node: the carrier is
