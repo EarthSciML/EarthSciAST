@@ -1124,7 +1124,8 @@ function p_opn(c::Ctx, f::Int, n::String, ts::Toks)
     return bare_template(c, n, ts)
 end
 
-"""`Math.bareTemplate`: a bare `\\operatorname{n}`: the template `n` applied
+"""Not in Lean: the reader side of `Math.bareOK`. A bare `\\operatorname{n}`:
+the template `n` applied
 with no bindings, as the printer writes it when no parameter list of `n` is
 known or the known one is not empty. A template in scope with no parameters
 prints as `\\operatorname{n}()`, so its bare name is refused."""
