@@ -639,6 +639,7 @@ function validate_schema(data::Any)::Vector{SchemaError}
         native = _to_native_json(data)
         _schema_walk!(errors, native, _compiled_schema(ESM_SCHEMA.data), "", _jsonschema_root_path())
     catch e
+        e isa InterruptException && rethrow()
         return [SchemaError("", "Schema validation error: $(e)", "error")]
     end
     return _dedup_schema_errors(errors)
@@ -3563,7 +3564,9 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
                 _default_coupling_load_ref(entry.ref, base),
                 entry.ref, entry.bind, file
             )
-        catch
+        catch e
+            # A library that does not load or bind is flatten's diagnostic.
+            e isa InterruptException && rethrow()
             continue
         end
         for edge in edges
@@ -4255,7 +4258,8 @@ function _check_connector_expressions(
         raw === nothing && continue
         expr = try
             expression_from_json(raw)
-        catch
+        catch e
+            e isa InterruptException && rethrow()
             continue    # a malformed expression is the schema's business
         end
         epath = "$path/connector/equations/$(i - 1)/expression"
