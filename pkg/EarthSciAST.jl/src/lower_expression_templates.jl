@@ -268,9 +268,8 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
         end
         # A body MAY reference other match-less in-scope templates via
         # apply_expression_template nodes (esm-spec §9.7.3); those are checked
-        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and inlined at
-        # registration by `_compose_template_bodies!` — the old any-nesting
-        # rejection is now cycle-only (`apply_expression_template_recursive_body`).
+        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) at registration by
+        # `_check_template_body_graph` and are not inlined.
 
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
@@ -1659,7 +1658,7 @@ function lower_expression_templates(raw_data)
                 # validate the body-reference DAG (acyclic, depth-bounded,
                 # references resolve to match-less templates). Bodies are NOT
                 # inlined — references are preserved (§9.6.4).
-                _compose_template_bodies!(templates, "$compkind.$(string(cname))")
+                _check_template_body_graph(templates, "$compkind.$(string(cname))")
                 decl_index = 0
                 for (tname, decl) in templates
                     decl_index += 1
@@ -1732,29 +1731,19 @@ function lower_expression_templates(raw_data)
     # receiving component, where a regridding library import (§9.7) lives.
     # The transform is rewritten to fixpoint exactly as a field of that
     # component would be (named templates + auto `match` rules, §9.6.3).
-    coupling = get(root, "coupling", nothing)
-    if coupling isa AbstractVector
-        for (i, entry) in enumerate(coupling)
-            _is_object(entry) || continue
-            get(entry, "type", nothing) == "variable_map" || continue
-            tr = get(entry, "transform", nothing)
-            _is_object(tr) || continue
-            target = get(entry, "to", nothing)
-            target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit = 2)))
-            reg = get(registries, comp_name, nothing)
-            reg === nothing && continue
-            entry["transform"] = _rewrite_to_fixpoint(
-                tr, reg.named,
-                reg.match_rules,
-                "coupling[$(i)].transform", reg.shape_env,
-                reg.target_bearing
-            )
-            _check_surviving_refs(
-                entry["transform"], reg.named,
-                "coupling[$(i)].transform"
-            )
-        end
+    for (i, entry, tr, comp_name) in _variable_map_transforms(root)
+        reg = get(registries, comp_name, nothing)
+        reg === nothing && continue
+        entry["transform"] = _rewrite_to_fixpoint(
+            tr, reg.named,
+            reg.match_rules,
+            "coupling[$(i)].transform", reg.shape_env,
+            reg.target_bearing
+        )
+        _check_surviving_refs(
+            entry["transform"], reg.named,
+            "coupling[$(i)].transform"
+        )
     end
 
     # esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
@@ -2617,23 +2606,13 @@ function expand_document(loaded)
         end
     end
 
-    coupling = get(root, "coupling", nothing)
-    if coupling isa AbstractVector
-        for (i, entry) in enumerate(coupling)
-            _is_object(entry) || continue
-            get(entry, "type", nothing) == "variable_map" || continue
-            tr = get(entry, "transform", nothing)
-            _is_object(tr) || continue
-            target = get(entry, "to", nothing)
-            target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit = 2)))
-            named = get(
-                comp_named, ("models", comp_name),
-                get(comp_named, ("reaction_systems", comp_name), nothing)
-            )
-            named === nothing && continue
-            entry["transform"] = _expand_all(tr, named, "coupling[$(i)].transform")
-        end
+    for (i, entry, tr, comp_name) in _variable_map_transforms(root)
+        named = get(
+            comp_named, ("models", comp_name),
+            get(comp_named, ("reaction_systems", comp_name), nothing)
+        )
+        named === nothing && continue
+        entry["transform"] = _expand_all(tr, named, "coupling[$(i)].transform")
     end
 
     return root
@@ -2884,6 +2863,27 @@ function _merge_flat_registry(component_templates)
     return (merged, rename)
 end
 
+# Each `variable_map` coupling entry of the raw document `root` whose
+# `transform` is an expression object, as `(index, entry, transform,
+# receiving component)`: the receiving component is the first segment of `to`,
+# whose template registry the transform's references resolve against
+# (esm-spec §10.4/§10.5).
+function _variable_map_transforms(root)
+    out = Tuple{Int, Any, Any, String}[]
+    coupling = get(root, "coupling", nothing)
+    coupling isa AbstractVector || return out
+    for (i, entry) in enumerate(coupling)
+        _is_object(entry) || continue
+        get(entry, "type", nothing) == "variable_map" || continue
+        tr = get(entry, "transform", nothing)
+        _is_object(tr) || continue
+        target = get(entry, "to", nothing)
+        target isa AbstractString || continue
+        push!(out, (i, entry, tr, String(first(split(target, "."; limit = 2)))))
+    end
+    return out
+end
+
 """
     _expand_coupling_transform_refs!(root)
 
@@ -2895,16 +2895,7 @@ self-contained. Called by the typed load path before `_materialize_components!`
 strips the component registries.
 """
 function _expand_coupling_transform_refs!(root)
-    coupling = get(root, "coupling", nothing)
-    coupling isa AbstractVector || return
-    for entry in coupling
-        _is_object(entry) || continue
-        get(entry, "type", nothing) == "variable_map" || continue
-        tr = get(entry, "transform", nothing)
-        _is_object(tr) || continue
-        target = get(entry, "to", nothing)
-        target isa AbstractString || continue
-        comp_name = String(first(split(target, "."; limit = 2)))
+    for (_, entry, tr, comp_name) in _variable_map_transforms(root)
         named = nothing
         for ck in ("models", "reaction_systems")
             comps = get(root, ck, nothing)

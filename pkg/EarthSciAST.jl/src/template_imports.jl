@@ -12,7 +12,7 @@ Per document the order is innermost-first (esm-spec §9.7.6):
 2. merge imported `index_sets` into the document registry;
 3. close and fold this document's metaparameters (loader-API bindings, then
    defaults; `metaparameter_unbound` if still open);
-4. §9.7.3 registration-time body composition (`_compose_template_bodies!`,
+4. §9.7.3 registration-time body checking (`_check_template_body_graph`,
    invoked per component from `lower_expression_templates`);
 5. the §9.6.3 fixpoint on fully-concrete trees.
 
@@ -750,9 +750,9 @@ function _collect_apply_names!(out::Vector{String}, x)
 end
 
 """
-    _compose_template_bodies!(templates, scope)
+    _check_template_body_graph(templates, scope)
 
-Registration-time body **checking** (esm-spec §9.7.3, Option B / esm 0.9.0):
+Registration-time body checking (esm-spec §9.7.3):
 template bodies MAY reference other in-scope MATCH-LESS templates via
 `apply_expression_template` nodes. Builds the body-reference graph, rejects
 cycles (`apply_expression_template_recursive_body`), references to undeclared
@@ -760,13 +760,12 @@ or `match`-bearing templates (`apply_expression_template_unknown_template`),
 and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
 (`template_body_expansion_too_deep`).
 
-From `esm: 0.9.0` (RFC out-of-line-expression-templates §7.1 step 4) bodies are
-**NOT inlined** — the references are preserved uninlined and denote their
+Bodies are not inlined: the references are preserved and denote their
 expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
 separately by [`_template_target_bearing`](@ref). This runs BEFORE the §9.6.3
-fixpoint ever consults a `match` rule; it now only validates the DAG.
+fixpoint ever consults a `match` rule.
 """
-function _compose_template_bodies!(templates::AbstractDict{String, Any}, scope::String)
+function _check_template_body_graph(templates::AbstractDict{String, Any}, scope::String)
     isempty(templates) && return
     refs = Dict{String, Vector{String}}()
     for (name, decl) in templates
@@ -796,11 +795,9 @@ function _compose_template_bodies!(templates::AbstractDict{String, Any}, scope::
         end
     end
 
-    # DFS over the reference graph: cycle detection, chain-depth bound, and a
-    # dependencies-first (post-) order for inlining.
+    # DFS over the reference graph: cycle detection and the chain-depth bound.
     state = Dict{String, Int}()   # 1 = on stack, 2 = done
     depth = Dict{String, Int}()   # templates on the longest chain from this node
-    order = String[]
     chain = String[]
     function visit(name::String)::Int
         st = get(state, name, 0)
@@ -831,16 +828,13 @@ function _compose_template_bodies!(templates::AbstractDict{String, Any}, scope::
                     "exceeds MAX_TEMPLATE_EXPANSION_DEPTH=$MAX_TEMPLATE_EXPANSION_DEPTH (esm-spec §9.7.3)"
             )
         )
-        push!(order, name)
         return d
     end
     for name in sort(collect(keys(refs)))
         visit(name)
     end
 
-    # esm 0.9.0 (Option B): DO NOT inline. The DAG has been checked (acyclic,
-    # depth-bounded, references resolve to match-less templates); the bodies are
-    # left with their `apply_expression_template` references intact. `Expand`
+    # The bodies keep their `apply_expression_template` references; `Expand`
     # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
     return
 end
@@ -1827,7 +1821,7 @@ function _process_library(
     end
 
     # §9.7.3 body-reference DAG validation in the library's own scope.
-    _compose_template_bodies!(scope.templates, origin)
+    _check_template_body_graph(scope.templates, origin)
     _expand_library_enum_calls!(scope.templates, raw, collect(String, keys(own)), origin)
     # In the library's own scope, before an importing edge's `bindings`
     # instantiate the templates and consume the names it closes.
@@ -1843,7 +1837,7 @@ end
 # eager expansion esm-spec §9.6.4 rule 3 requires at load anyway) and the result
 # lowered against the library's block. An op the expansion leaves spelled with
 # the calling template's own parameter stays open for the importer's binding.
-# Runs after `_compose_template_bodies!`, so the reference DAG is acyclic; every
+# Runs after `_check_template_body_graph`, so the reference DAG is acyclic; every
 # new body is computed before any is replaced.
 function _expand_library_enum_calls!(
         named, library, own_names::Vector{String},
@@ -2656,7 +2650,7 @@ function resolve_template_machinery(
     # Assignment (never delete-then-insert) keeps each block in its authored key
     # position in the `OrderedDict`.
     if is_library
-        _compose_template_bodies!(top_templates, "document")
+        _check_template_body_graph(top_templates, "document")
     end
     delete!(root, "expression_template_imports")
     if orig_templates === nothing
