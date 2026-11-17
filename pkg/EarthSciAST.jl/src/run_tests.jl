@@ -1042,7 +1042,8 @@ function _mounted_components(path::AbstractString)
     edges = String[]
     raw = try
         JSON3.read(read(path, String))
-    catch
+    catch err
+        err isa InterruptException && rethrow()
         return edges
     end
     (raw isa AbstractDict || raw isa JSON3.Object) || return edges

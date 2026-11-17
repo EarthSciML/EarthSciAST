@@ -1474,7 +1474,8 @@ function _observed_field(
                     cells,
                 )
             end
-        catch
+        catch err
+            err isa InterruptException && rethrow()
             # fall through to the inlined form below; whatever the abandoned
             # attempt walked per cell served nothing
             _percell_restore!(n0)
@@ -1815,7 +1816,8 @@ function _materialized_obs_scope(
             cand === nothing && continue
             vals = try
                 evaluate_cellwise(cand, cells; const_arrays = ca, params = params, t = t)
-            catch
+            catch err
+                err isa InterruptException && rethrow()
                 nothing
             end
             vals === nothing || break
@@ -2578,7 +2580,8 @@ function _scope_to_component(overrides, mname, target)
             ),
             flat.metadata.merged_variable_renames,
         )
-    catch
+    catch err
+        err isa InterruptException && rethrow()
         return overrides   # let `esm_problem` report the real failure
     end
     # `Any`-valued: esm-spec §6.6.2 admits a scalar or INLINE ARRAY DATA (a
