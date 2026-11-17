@@ -190,16 +190,8 @@ function id_run(cs::Chars)
     return view(cs, 1:n), drop(cs, n)
 end
 
-"""`Typst.identKw`."""
-const IDENT_KW = Dict{String, Kw}(
-    "and" => KLand, "or" => KLor, "not" => KLnot, "dot" => KCdot, "times" => KTimes,
-    "sqrt" => KSqrt, "exp" => KExp, "ln" => KLn, "log" => KLog, "sin" => KSin,
-    "cos" => KCos, "tan" => KTan, "arcsin" => KAsin, "arccos" => KAcos, "arctan" => KAtan,
-    "sinh" => KSinh, "cosh" => KCosh, "tanh" => KTanh, "min" => KMin, "max" => KMax,
-    "abs" => KAbs, "floor" => KFloor, "ceil" => KCeil, "partial" => KPdiff, "dif" => KDif,
-    "cases" => KCases, "vec" => KVec, "mat" => KMat, "sum" => KSum, "product" => KProd,
-    "in" => KInn, "limits" => KLimits, "lr" => KLr,
-)
+"""`Typst.identKw`: the spellings of `KW_CHARS` that are a word, inverted."""
+const IDENT_KW = Dict{String, Kw}(w => k for (k, w) in KW_CHARS if all(isletter, w))
 
 """`Typst.quotedArg`: `("…")` after a function name."""
 function quoted_arg(r::Chars)
@@ -265,12 +257,13 @@ function sci_exp(r::Chars)
     return DNumber.parse_int(r4)
 end
 
-const PUNCT = Dict{Char, Kw}(
-    '+' => KPlus, '-' => KMinus, '=' => KEq, '<' => KLt, '>' => KGt, '/' => KSlash,
-    '^' => KCaret, '_' => KUs, ')' => KRp, '[' => KLbk, ']' => KRbk, ',' => KComma,
-    ';' => KSemi, ':' => KColon, '&' => KAmp, '.' => KSdot, '\\' => KNl, '{' => KLset,
-    '}' => KRset,
-)
+# The one-character spellings of `KW_CHARS`, inverted, except `(`: both `KLp` and
+# `KLpg` print it, and the lexer reads it itself. `.` is `KSdot`, which prints
+# quoted.
+const PUNCT = let d = Dict{Char, Kw}(only(w) => k for (k, w) in KW_CHARS if length(w) == 1 && w != "(")
+    d['.'] = KSdot
+    d
+end
 
 """`Typst.punct`."""
 punct(c::Char) = get(PUNCT, c, nothing)

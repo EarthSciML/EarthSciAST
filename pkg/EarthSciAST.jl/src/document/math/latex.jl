@@ -253,17 +253,14 @@ end
 # ## Lexing
 
 """`Latex.ctrlKw`: control words that are keywords, with the variants read on
-input."""
-const CTRL_KW = Dict{String, Kw}(
-    "ne" => KNe, "neq" => KNe, "le" => KLe, "leq" => KLe, "ge" => KGe, "geq" => KGe,
-    "land" => KLand, "lor" => KLor, "lnot" => KLnot, "cdot" => KCdot, "times" => KTimes,
-    "frac" => KFrac, "sqrt" => KSqrt, "exp" => KExp, "ln" => KLn, "log" => KLog,
-    "sin" => KSin, "cos" => KCos, "tan" => KTan, "arcsin" => KAsin, "arccos" => KAcos,
-    "arctan" => KAtan, "sinh" => KSinh, "cosh" => KCosh, "tanh" => KTanh, "min" => KMin,
-    "max" => KMax, "lfloor" => KLfloor, "rfloor" => KRfloor, "lceil" => KLceil,
-    "rceil" => KRceil, "partial" => KPdiff, "dot" => KDotacc, "sum" => KSum,
-    "prod" => KProd, "in" => KInn, "substack" => KSubstack, "limits" => KLimitsL,
-)
+input. Derived from `KW_CHARS`: every spelling that is a backslash and letters,
+plus the three input variants `\\neq`, `\\leq`, `\\geq`."""
+const CTRL_KW = let d = Dict{String, Kw}("neq" => KNe, "leq" => KLe, "geq" => KGe)
+    for (k, w) in KW_CHARS
+        (length(w) >= 2 && w[1] == '\\' && all(isletter, w[2:end])) && (d[w[2:end]] = k)
+    end
+    d
+end
 
 """Not in Lean: after `\\begin`: `{array}{` and one or more `c`, then
 `}`: the opener of a wide constant matrix, with its column count."""
@@ -388,11 +385,8 @@ function unit_tok(r::Chars)
     return l === nothing ? nothing : (l, r2)
 end
 
-const PUNCT = Dict{Char, Kw}(
-    '+' => KPlus, '-' => KMinus, '=' => KEq, '<' => KLt, '>' => KGt, '/' => KSlash,
-    '^' => KCaret, '_' => KUs, '(' => KLp, ')' => KRp, '{' => KLb, '}' => KRb, '[' => KLbk,
-    ']' => KRbk, ',' => KComma, ';' => KSemi, ':' => KColon, '&' => KAmp, '.' => KSdot,
-)
+# The one-character spellings of `KW_CHARS`, inverted.
+const PUNCT = Dict{Char, Kw}(only(w) => k for (k, w) in KW_CHARS if length(w) == 1)
 
 """`Latex.punct`."""
 punct(c::Char) = get(PUNCT, c, nothing)
