@@ -123,6 +123,27 @@ pub struct ValueInventionResult {
     pub vi_var_names: HashSet<String>,
 }
 
+impl ValueInventionResult {
+    /// Producer id → member ids: what a derived set feeds back as its
+    /// `member_factor` and what a gated fetch selects. The engine makes every
+    /// key a scalar integer (`key_of`).
+    pub(crate) fn member_ids(&self) -> HashMap<String, Vec<i64>> {
+        self.members
+            .iter()
+            .map(|(faq, keys)| {
+                let ids = keys
+                    .iter()
+                    .map(|k| match k {
+                        Key::Int(i) => *i,
+                        other => unreachable!("value-invention keys are scalar: {other:?}"),
+                    })
+                    .collect();
+                (faq.clone(), ids)
+            })
+            .collect()
+    }
+}
+
 // --------------------------------------------------------------------------- //
 // Intermediate build-time value
 // --------------------------------------------------------------------------- //

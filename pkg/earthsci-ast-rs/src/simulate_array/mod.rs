@@ -86,12 +86,15 @@ pub use compile::{
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
+pub(crate) use compile::InventedSets;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::resolve_declared_shape;
 pub(crate) use compile::{BuiltVariables, model_tree_any};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::{MemberFactorColumn, member_factor_columns, run_value_invention_in_scope};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
 // The build pipeline normalizes what it builds through the same front half
 // as the compile path.
@@ -117,8 +120,8 @@ pub use eval::{
 pub(crate) use normalize::{BuildInput, NormalizedModel, normalize};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tape::StandaloneError;
-// The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
-// the vectorized overlay); re-exported crate-wide so a caller outside the
+// The scalar-op leaf kernel is defined once here (backs the per-cell oracle);
+// re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
 // simplifier) routes through the SAME definition.
 pub(crate) use eval::apply_binary;
@@ -428,8 +431,8 @@ enum AlgebraicRule {
     ///
     /// Structurally an [`AlgebraicRule::ArrayLoop`] plus the recurrence axis,
     /// but a SEPARATE variant on purpose: its cells are not independent, so it
-    /// must never reach the whole-array overlay or any other path that
-    /// evaluates cells out of order or in a batch (CONFORMANCE_SPEC §5.19.2).
+    /// must never reach a path that evaluates cells out of order or in a
+    /// batch (CONFORMANCE_SPEC §5.19.2).
     /// The interpreter evaluates it with `sweep_recurrence`; the tape with an
     /// ordered `Sweep` that runs its cell body one cell at a time in the same
     /// order. Being a distinct variant means every `match` over the rule
@@ -996,8 +999,8 @@ struct EvalCtx<'a> {
     ///
     /// `None` on every path in the runtime except the recurrence sweep itself,
     /// which is what makes the feature cost nothing for a document that does
-    /// not use it: one `Option` test on the `index` fast path and one on each
-    /// vectorized-overlay entry gate.
+    /// not use it: one `Option` test on the `index` fast path and one on the
+    /// variable lookup.
     recur: Option<&'a RecurScope<'a>>,
     /// Every name the compiled model DECLARES — states, parameters and
     /// observeds — regardless of whether a value for it exists in any of the
