@@ -11,7 +11,7 @@ using EarthSciAST: lower_expression_templates, resolve_template_machinery,
     reject_template_imports_pre_v08, ExpressionTemplateError,
     MAX_TEMPLATE_EXPANSION_DEPTH, serialize_esm_file, IntExpr, OpExpr,
     _url_join, _url_normalize, _url_dirname, _remove_dot_segments,
-    _canonical_ref, _URL_FETCHER, require_meta_expr, eval_meta_expr
+    require_meta_expr, eval_meta_expr
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
@@ -1367,14 +1367,15 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
             # Cycle-detection keys: URL identity is canonical. A relative ref
             # inside a URL-loaded document joins against the URL base; two
             # spellings of the same target collapse to one key.
-            @test _canonical_ref("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
-            @test _canonical_ref("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
-            @test _canonical_ref("sub/model.esm", "/tmp/base") ==
+            key(ref, base) = EarthSciAST._resolve_ref(EarthSciAST._ref_base(base), ref).key
+            @test key("../x.esm", "https://h/a/b") == "https://h/a/x.esm"
+            @test key("https://h/a/../x.esm", "/tmp") == "https://h/x.esm"
+            @test key("sub/model.esm", "/tmp/base") ==
                 abspath(joinpath("/tmp/base", "sub/model.esm"))
         end
 
-        # Offline integration: substitute the URL fetcher (no live network) and
-        # drive the real resolvers over a fake https host.
+        # Offline integration: the load's reader gets an offline fetcher (no
+        # live network) and the real resolvers run over a fake https host.
         _hosted = Dict{String, String}(
             # Template libraries: stencil.esm's OWN relative import must join
             # against ITS URL base -> https://esm.invalid/shared/grid.esm.
@@ -1425,13 +1426,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                    "equations": []}}}""",
         )
         _fetched = String[]
-        _old_fetcher = _URL_FETCHER[]
-        _URL_FETCHER[] = url -> begin
+        _fetch = url -> begin
             push!(_fetched, String(url))
             haskey(_hosted, url) || error("offline test host has no '$url'")
             _hosted[url]
         end
-        try
+        _load_offline(path) = EarthSciAST._load_document(
+            EarthSciAST._read_json_document(read(path, String)), dirname(abspath(path));
+            source = EarthSciAST._DocumentSource(fetch = _fetch)
+        )
+        begin
             mktempdir() do dir
                 # (1) Template-library import: relative refs INSIDE the
                 # URL-loaded library resolve against the URL base.
@@ -1450,7 +1454,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                                      {"lhs": "y",
                                       "rhs": {"op": "scale_by_n", "args": ["x"]}}]}}}"""
                 )
-                f = EarthSciAST.load_path(consumer)
+                f = _load_offline(consumer)
                 @test f.index_sets["cells"].size == 8
                 y = observed_definition(f.models["M"], "y")
                 @test y isa OpExpr && y.op == "*"
@@ -1468,7 +1472,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                        "variables": {"x": {"type": "unknown", "units": "1", "default": 1.5}},
                        "equations": []}}}"""
                 )
-                @test _err_code(() -> EarthSciAST.load_path(cyc)) ==
+                @test _err_code(() -> _load_offline(cyc)) ==
                     "template_import_cycle"
 
                 # (3) Subsystem ref to a URL: the remote document's own
@@ -1482,7 +1486,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                        "equations": [],
                        "subsystems": {"S": {"ref": "https://esm.invalid/models/outer.esm"}}}}}"""
                 )
-                fw = EarthSciAST.load_path(wrapper)
+                fw = _load_offline(wrapper)
                 sub = fw.models["Top"].subsystems["S"]
                 @test sub isa EarthSciAST.Model
                 w = observed_definition(sub, "w")
@@ -1493,8 +1497,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
                 @test "https://esm.invalid/models/tpl/lib.esm" in _fetched
                 @test "https://esm.invalid/models/inner.esm" in _fetched
             end
-        finally
-            _URL_FETCHER[] = _old_fetcher
         end
     end
 

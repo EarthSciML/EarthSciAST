@@ -185,16 +185,13 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
                 )
             )
         )
-        old = EarthSciAST._URL_FETCHER[]
-        EarthSciAST._URL_FETCHER[] = url -> haskey(docs, url) ? docs[url] :
-            error("no such test URL: $url")
-        try
-            loaded = EarthSciAST.load_string(root; base_path = binder)
-            @test loaded.index_sets["rows"].size == 4
-            @test loaded.index_sets["inner_rows"].size == 10
-        finally
-            EarthSciAST._URL_FETCHER[] = old
-        end
+        fetch = url -> haskey(docs, url) ? docs[url] : error("no such test URL: $url")
+        loaded = EarthSciAST._load_document(
+            EarthSciAST._read_json_document(root), binder;
+            source = EarthSciAST._DocumentSource(fetch = fetch)
+        )
+        @test loaded.index_sets["rows"].size == 4
+        @test loaded.index_sets["inner_rows"].size == 10
     end
 
     # `resolve_subsystem_refs!` called directly on a typed file that declares NO

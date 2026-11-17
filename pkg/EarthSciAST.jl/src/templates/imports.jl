@@ -753,62 +753,50 @@ function _instantiate_scope!(scope::_TemplateScope, values::AbstractDict{String}
     return
 end
 
-function _load_import_raw(ref::String, base_dir::String, origin::String)
-    authored = ref
-    ref = _expand_ref_env(ref, base_dir)
-    if _is_remote_ref(ref, base_dir)
-        # An absolute URL ref, or a relative ref inside a library that was
-        # itself loaded from a URL: join against the URL base (RFC 3986
-        # relative resolution over the cases §4.7 admits).
-        url = _is_url(ref) ? _url_normalize(ref) : _url_join(base_dir, ref)
-        local content::String
-        try
-            content = _fetch_url(url)
-        catch e
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-                    "$origin: failed to download template-library ref '$ref' " *
-                        "(resolved to '$url'): $e"
-                )
-            )
-        end
-        raw = try
-            JSON3.read(content)
-        catch e
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-                    "$origin: template-library ref '$url' is not valid JSON: $e"
-                )
-            )
-        end
-        # Relative refs INSIDE the URL-loaded library resolve against the
-        # library's own URL directory, mirroring the local dirname anchor.
-        return raw, _url_dirname(url)
+"""
+    _read_library(src, base, ref, origin) -> (raw, target)
+
+Read the template library an `expression_template_imports` entry's `ref` names
+(esm-spec §9.7.2), resolved against the importing document's `base`, through
+the load's reader `src`; or through `src.read_library` when the caller supplied
+one (the `load_ref` keyword of [`resolve_template_machinery`](@ref)). Returns
+the post-wire document and its `_RefTarget`, whose `key` is the cycle identity
+and whose `base` anchors the library's own imports. A target that cannot be
+read is `template_import_unresolved`.
+"""
+function _read_library(src::_DocumentSource, base::_RefBase, ref::String, origin::String)
+    t = _resolve_ref(base, ref)
+    if src.read_library !== nothing
+        raw, target_dir = src.read_library(ref, _base_string(base), origin)
+        return _library_wire_form(raw),
+            _RefTarget(t.key, _ref_base(String(target_dir)), t.ref, t.authored)
     end
-    path = abspath(joinpath(base_dir, ref))
-    isfile(path) || throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-            "$origin: template-library file not found: $path (from ref '$authored')"
-        )
-    )
-    raw = try
-        JSON3.read(read(path, String))
+    return try
+        _read_document(src, t), t
     catch e
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
-                "$origin: template-library ref '$path' is not valid JSON: $e"
-            )
-        )
+        e isa _RefUnreadable || rethrow()
+        throw(_library_unreadable(e, origin))
     end
-    return raw, dirname(path)
+end
+
+function _library_unreadable(u::_RefUnreadable, origin::String)
+    t = u.target
+    msg = if u.reason === :not_found
+        "$origin: template-library file not found: $(t.key) (from ref '$(t.authored)')"
+    elseif u.reason === :invalid_json
+        "$origin: template-library ref '$(t.key)' is not valid JSON: $(u.cause.original_error)"
+    elseif _is_remote(t)
+        "$origin: failed to download template-library ref '$(t.ref)' " *
+            "(resolved to '$(t.key)'): $(_unreadable_cause(u))"
+    else
+        "$origin: template-library file could not be read: $(t.key) " *
+            "(from ref '$(t.authored)'): $(_unreadable_cause(u))"
+    end
+    return ExpressionTemplateError(ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED, msg)
 end
 
 """
-    _resolve_import_entry(entry, base_dir, stack, origin) -> _TemplateScope
+    _resolve_import_entry(entry, base, stack, origin, src) -> _TemplateScope
 
 Resolve ONE `expression_template_imports` entry (esm-spec §9.7.2): load the
 target (path-scoped cycle detection over canonical refs, as §4.7), verify
@@ -816,13 +804,12 @@ library purity, resolve the target recursively in its own scope, instantiate
 at this edge's `bindings`, apply `only` visibility filtering, then apply the
 edge's `prefix`/`rename`/`rebind` (esm-spec §9.7.7).
 
-`load_ref(ref, base_dir, origin) -> (raw_doc, target_base_dir)` resolves the
-edge's target document (see [`resolve_template_machinery`](@ref)); it defaults
-to the file/URL loader `_load_import_raw`.
+`base` is the importing document's base and `src` the load's reader
+([`_read_library`](@ref)).
 """
 function _resolve_import_entry(
-        entry, base_dir::String, stack::Vector{String},
-        origin::String; load_ref = _load_import_raw
+        entry, base::_RefBase, stack::Vector{String},
+        origin::String, src::_DocumentSource
     )::_TemplateScope
     _is_object(entry) || throw(
         ExpressionTemplateError(
@@ -841,7 +828,7 @@ function _resolve_import_entry(
     ref = string(ref_raw)
     # Keyed on the resolved spelling, so a bundled file has one identity
     # however it is reached (`esm:std/<f>`, or relative inside the bundle).
-    canonical = _canonical_ref(_expand_ref_env(ref, base_dir), base_dir)
+    canonical = _resolve_ref(base, ref).key
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
         throw(
@@ -852,10 +839,8 @@ function _resolve_import_entry(
         )
     end
 
-    raw, target_dir = load_ref(ref, base_dir, origin)
-    raw = _library_wire_form(raw)
-    reject_expression_templates_pre_v04(raw)
-    reject_template_imports_pre_v08(raw)
+    raw, target = _read_library(src, base, ref, origin)
+    _check_authored_document(raw, :template_library)
 
     # Library purity (esm-spec §9.7.1): the two reference mechanisms are
     # disjoint — a component/subsystem file, and a coupling-library file, are
@@ -895,7 +880,7 @@ function _resolve_import_entry(
 
     push!(stack, canonical)
     scope = try
-        _process_library(raw, target_dir, stack, "$origin -> $ref"; load_ref = load_ref)
+        _process_library(raw, target.base, stack, "$origin -> $ref", src)
     finally
         pop!(stack)
     end
@@ -977,7 +962,7 @@ function _resolve_import_entry(
 end
 
 """
-    _process_library(raw, dir, stack, origin) -> _TemplateScope
+    _process_library(raw, base, stack, origin, src) -> _TemplateScope
 
 Resolve a template-library document in its OWN scope: its imports
 (depth-first post-order), then its own templates / index sets /
@@ -986,14 +971,14 @@ body composition — so a BC-layer body reference to an imported interior
 stencil closes here, before any `only` filtering by a downstream importer.
 """
 function _process_library(
-        raw, dir::String, stack::Vector{String},
-        origin::String; load_ref = _load_import_raw
+        raw, base::_RefBase, stack::Vector{String},
+        origin::String, src::_DocumentSource
     )::_TemplateScope
     scope = _TemplateScope()
     imports = _raw_get(raw, "expression_template_imports")
     if imports !== nothing && _is_array(imports)
         for entry in imports
-            sub = _resolve_import_entry(entry, dir, stack, origin; load_ref = load_ref)
+            sub = _resolve_import_entry(entry, base, stack, origin, src)
             _merge_scope!(scope, sub, origin)
         end
     end
@@ -1135,20 +1120,16 @@ end
 # (§9.7.4 order), and land the scope's index sets / open metaparameters in the
 # document registries. Returns the effective top-level template map.
 function _resolve_root_templates!(
-        root::OrderedDict{String, Any}, base_dir::String,
+        root::OrderedDict{String, Any}, base::_RefBase,
         stack::Vector{String},
         doc_isets::OrderedDict{String, Any},
-        doc_meta::OrderedDict{String, Any};
-        load_ref = _load_import_raw
+        doc_meta::OrderedDict{String, Any}, src::_DocumentSource
     )::OrderedDict{String, Any}
     topscope = _TemplateScope()
     imports = get(root, "expression_template_imports", nothing)
     if imports !== nothing && _is_array(imports)
         for entry in imports
-            sub = _resolve_import_entry(
-                entry, base_dir, stack, "document";
-                load_ref = load_ref
-            )
+            sub = _resolve_import_entry(entry, base, stack, "document", src)
             _merge_scope!(topscope, sub, "document")
         end
     end
@@ -1163,11 +1144,10 @@ end
 # as its own template block; scope index sets / open metaparameters merge into
 # the document registries.
 function _resolve_component_imports!(
-        root::OrderedDict{String, Any}, base_dir::String,
+        root::OrderedDict{String, Any}, base::_RefBase,
         stack::Vector{String},
         doc_isets::OrderedDict{String, Any},
-        doc_meta::OrderedDict{String, Any};
-        load_ref = _load_import_raw
+        doc_meta::OrderedDict{String, Any}, src::_DocumentSource
     )
     for compkind in _COMPONENT_KINDS
         comps = get(root, compkind, nothing)
@@ -1180,10 +1160,7 @@ function _resolve_component_imports!(
             corigin = "$compkind.$(string(cname))"
             if _is_array(imports)
                 for entry in imports
-                    sub = _resolve_import_entry(
-                        entry, base_dir, stack, corigin;
-                        load_ref = load_ref
-                    )
+                    sub = _resolve_import_entry(entry, base, stack, corigin, src)
                     _merge_scope!(cscope, sub, corigin)
                 end
             end
@@ -1211,10 +1188,11 @@ per-edge instantiation, `index_sets` merge, metaparameter close
 bindings win, then API bindings, then defaults) and fold, expression-position
 substitution, and — for a root library file — §9.7.3 body composition.
 
-`load_ref` is an optional import-edge resolver
-`(ref, base_dir, origin) -> (raw_doc, target_base_dir)` — a test seam
-mirroring [`expand_coupling_imports`](@ref)'s kwarg; `nothing` (the default)
-uses the file/URL loader `_load_import_raw`.
+`load_ref` is an optional reader of raw library documents
+`(ref, base_dir, origin) -> (raw_doc, target_base_dir)` for the import edges,
+mirroring [`expand_coupling_imports`](@ref)'s keyword; `nothing` (the default)
+reads files and http(s) URLs. What it returns passes the same op-spelling
+boundary as a file read.
 
 Returns an order-preserving native tree ready for
 [`lower_expression_templates`](@ref) with `expression_template_imports`
@@ -1234,6 +1212,21 @@ function resolve_template_machinery(
         raw_data, base_path::AbstractString;
         metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         load_ref = nothing,
+        mount_declared::Union{Nothing, AbstractSet{String}} = nothing,
+        mounted_leaf::Bool = false
+    )
+    return _resolve_template_machinery(
+        raw_data, _ref_base(base_path), _DocumentSource(read_library = load_ref);
+        metaparameters = metaparameters, mount_declared = mount_declared,
+        mounted_leaf = mounted_leaf
+    )
+end
+
+# [`resolve_template_machinery`](@ref) on a typed base, reading every import
+# through the load's reader `src`.
+function _resolve_template_machinery(
+        raw_data, base::_RefBase, src::_DocumentSource;
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
         mount_declared::Union{Nothing, AbstractSet{String}} = nothing,
         mounted_leaf::Bool = false
     )
@@ -1270,8 +1263,6 @@ function resolve_template_machinery(
         end
         return nothing
     end
-    loader = load_ref === nothing ? _load_import_raw : load_ref
-    base_dir = String(base_path)
     root = _to_ordered(raw_data)::OrderedDict{String, Any}
     stack = String[]
 
@@ -1296,13 +1287,11 @@ function resolve_template_machinery(
     is_library = haskey(root, "expression_templates")
     top_templates = is_library ?
         _resolve_root_templates!(
-            root, base_dir, stack, doc_isets, doc_meta;
-            load_ref = loader
+            root, base, stack, doc_isets, doc_meta, src
         ) :
         OrderedDict{String, Any}()
     _resolve_component_imports!(
-        root, base_dir, stack, doc_isets, doc_meta;
-        load_ref = loader
+        root, base, stack, doc_isets, doc_meta, src
     )
     values = _close_document_metaparams(doc_meta, metaparameters, mounted)
     _check_metaparam_name_conflicts(root, top_templates, doc_meta, doc_isets)

@@ -2,7 +2,7 @@
 # documents, the data-source `extent` check, and mount-edge index-set renaming.
 
 """
-    _collect_mount_declared_metaparameters(raw, base_path) -> Set{String}
+    _collect_mount_declared_metaparameters(raw, base, src) -> Set{String}
 
 The metaparameter names declared by every document `raw` MOUNTS, at either
 §4.7 mount form — a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` and
@@ -10,42 +10,37 @@ a `subsystems.<j>` `{ref}` — transitively through the mount DAG.
 
 A §4.7 mount edge CONSUMES the referenced document's `metaparameters` at the
 edge (§9.7.6 binding site 3), so those names never reach the mounting
-document's own declared set — which is why a loader-API binding for one of them
-used to be refused at a root that had no reason to redeclare it. This walk is
-what lets the site-4 check (and the §8.9.4 `extent` check) ask "does ANYONE in
-this assembly declare that name?" instead of "does the root".
+document's own declared set. This walk is what lets the site-4 check (and the
+§8.9.4 `extent` check) ask "does ANYONE in this assembly declare that name?"
+instead of "does the root". With `follow_imports` it also follows §9.7.2
+import edges.
 
-Reads only each referenced file's top-level `metaparameters` KEYS. A ref that
+Reads each referenced file through the load's reader `src`, so the mount
+pipeline that resolves the same edges later reads nothing twice. A ref that
 cannot be read is IGNORED: this walk exists only to WIDEN acceptance, and the
-resolution error belongs to the ref resolver, which reports it with the proper
-mount pointer. `seen` (canonical ref identity) cycle-guards the walk.
+resolution error belongs to the mount pipeline, which reports it with the
+proper mount pointer. `seen` (canonical ref identity) cycle-guards the walk.
 """
 function _collect_mount_declared_metaparameters(
-        raw, base_path::AbstractString,
+        raw, base::_RefBase, src::_DocumentSource,
         seen::Set{String} = Set{String}(); follow_imports::Bool = false
     )::Set{String}
     out = Set{String}()
     _is_object(raw) || return out
-    base = String(base_path)
 
     function visit_ref!(ref_value)
         _is_object(ref_value) || return
         rv = _raw_get(ref_value, "ref")
         rv isa AbstractString || return
-        ref_str = String(rv)
-        key = try
-            _canonical_ref(_expand_ref_env(ref_str, base), base)
-        catch
-            return
-        end
-        key in seen && return
-        push!(seen, key)
-        loaded = try
-            _load_import_raw(ref_str, base, "mount-declared walk")
-        catch
+        t = _resolve_ref(base, String(rv))
+        t.key in seen && return
+        push!(seen, t.key)
+        child = try
+            _read_document(src, t; copy = false)
+        catch e
+            _is_resource_error(e) && rethrow()
             return   # unreadable ref: not this walk's diagnostic to raise
         end
-        child, child_base = loaded
         _is_object(child) || return
         decls = _raw_get(child, "metaparameters")
         if decls !== nothing && _is_object(decls)
@@ -55,8 +50,7 @@ function _collect_mount_declared_metaparameters(
         end
         union!(
             out, _collect_mount_declared_metaparameters(
-                child, child_base, seen;
-                follow_imports = follow_imports
+                child, t.base, src, seen; follow_imports = follow_imports
             )
         )
         return
@@ -260,7 +254,7 @@ function _document_declares_an_extent(raw)::Bool
 end
 
 """
-    check_data_source_extents(raw, base_path, mount_declared=nothing)
+    check_data_source_extents(raw, base, src, mount_declared=nothing)
 
 esm-spec §8.9.4: every `data_sources.<k>.extent.metaparameter` MUST name a
 metaparameter THIS document declares, or one a document it MOUNTS declares.
@@ -276,7 +270,7 @@ load, and `validate` refuses it: `template_import_unknown_name`, the code
 codes are the cross-binding contract).
 """
 function check_data_source_extents(
-        raw, base_path::AbstractString,
+        raw, base::_RefBase, src::_DocumentSource,
         mount_declared::Union{Nothing, AbstractSet{String}} = nothing
     )
     _is_object(raw) || return
@@ -299,7 +293,7 @@ function check_data_source_extents(
     declared = Set{String}(keys(_collect_metaparam_decls(raw, "document")))
     union!(
         declared, mount_declared === nothing ?
-            _collect_mount_declared_metaparameters(raw, base_path) : mount_declared
+            _collect_mount_declared_metaparameters(raw, base, src) : mount_declared
     )
     # Widened LAZILY, only for a name about to be refused: a metaparameter an
     # imported library declares and the edge leaves unbound is RE-EXPORTED into
@@ -312,8 +306,7 @@ function check_data_source_extents(
         name in declared && continue
         if reachable === nothing
             reachable = _collect_mount_declared_metaparameters(
-                raw, base_path;
-                follow_imports = true
+                raw, base, src; follow_imports = true
             )
         end
         name in reachable && continue

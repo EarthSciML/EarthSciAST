@@ -65,17 +65,18 @@ end
         @test haskey(file.models["Outer"].subsystems, "Inner")
     end
 
-    @testset "_canonical_ref for local paths" begin
+    @testset "_resolve_ref key for local paths" begin
         base = "/tmp/test_dir"
         ref = "sub/model.esm"
-        canonical = EarthSciAST._canonical_ref(ref, base)
+        canonical = EarthSciAST._resolve_ref(EarthSciAST._DirBase(base), ref).key
         @test canonical == abspath(joinpath(base, ref))
     end
 
-    @testset "_canonical_ref for URLs" begin
+    @testset "_resolve_ref key for URLs" begin
         ref = "https://example.com/model.esm"
-        canonical = EarthSciAST._canonical_ref(ref, "/tmp")
-        @test canonical == ref
+        t = EarthSciAST._resolve_ref(EarthSciAST._DirBase("/tmp"), ref)
+        @test t.key == ref
+        @test t.base == EarthSciAST._UrlBase("https://example.com")
     end
 
     @testset "_load_ref with missing local file" begin

@@ -3511,12 +3511,13 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
     # document with no known location is left to flatten.
     base = file.coupling_import_base
     base === nothing && return errors
+    src = _DocumentSource()
     for (i, entry) in enumerate(file.coupling)
         entry isa CouplingImport || continue
         local edges
         try
             edges = _expand_one(
-                _default_coupling_load_ref(entry.ref, base),
+                _read_coupling_library(src, _ref_base(base), entry.ref),
                 entry.ref, entry.bind, file
             )
         catch e

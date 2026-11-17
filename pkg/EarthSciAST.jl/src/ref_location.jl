@@ -74,11 +74,6 @@ function _expand_ref_env(ref::AbstractString, base_dir = nothing)
     return r
 end
 
-# The URL-resolution test every ref site applies: a URL ref, or a relative ref
-# inside a URL-loaded document — but never a bundled standard-library file.
-_is_remote_ref(ref::AbstractString, base::AbstractString) =
-    !_is_bundled_path(ref) && (_is_url(ref) || _is_url(base))
-
 """
     _is_url(s) -> Bool
 
@@ -165,6 +160,80 @@ function _url_dirname(url::AbstractString)::String
     return (i === nothing || i <= 1) ? sa : sa * path[1:prevind(path, i)]
 end
 
+# ---------------------------------------------------------------------------
+# Where a reference points, and the one reader of referenced documents
+# ---------------------------------------------------------------------------
+
+"""
+    _RefBase
+
+Where a document's own relative refs resolve: the directory it was read from
+(`_DirBase`) or, for a document fetched over http(s), its URL directory
+(`_UrlBase`, RFC 3986 joining). Strings become a base only at the public entry
+points ([`_ref_base`](@ref)).
+"""
+abstract type _RefBase end
+
+struct _DirBase <: _RefBase
+    dir::String
+end
+
+struct _UrlBase <: _RefBase
+    url::String
+end
+
+"""
+    _ref_base(s) -> _RefBase
+
+The base a caller's `base_path` string names: an http(s) URL directory, or a
+filesystem directory.
+"""
+_ref_base(s::AbstractString) = _is_url(s) ? _UrlBase(String(s)) : _DirBase(String(s))
+_ref_base(b::_RefBase) = b
+
+# The base as the string the public helpers and messages take.
+_base_string(b::_DirBase) = b.dir
+_base_string(b::_UrlBase) = b.url
+
+"""
+    _RefTarget
+
+One resolved reference. `key` is its canonical identity (an absolute path, a
+normalised URL, or a path into the bundled standard library), used for cycle
+detection and as the reader's cache key; it is also where the document is
+read from. `base` is the target's own base, against which ITS relative refs
+resolve. `ref` is the spelling after `\${VAR}` and `esm:std/` expansion, and
+`authored` the spelling as written; diagnostics quote one of the two.
+"""
+struct _RefTarget
+    key::String
+    base::_RefBase
+    ref::String
+    authored::String
+end
+
+_is_remote(t::_RefTarget) = t.base isa _UrlBase
+
+"""
+    _resolve_ref(base, ref) -> _RefTarget
+
+Resolve `ref` against `base` (esm-spec §4.7): expand `\${VAR}` tokens and the
+`esm:std/` scheme, then a bundled standard-library path is taken as is, an
+http(s) URL is normalised, a relative ref inside a URL-loaded document is
+URL-joined onto its base, and anything else is an absolute local path.
+"""
+function _resolve_ref(base::_RefBase, authored::AbstractString)::_RefTarget
+    r = _expand_ref_env(authored, base isa _DirBase ? base.dir : nothing)
+    if _is_bundled_path(r)
+        return _RefTarget(r, _DirBase(dirname(r)), r, String(authored))
+    elseif _is_url(r) || base isa _UrlBase
+        key = _is_url(r) ? _url_normalize(r) : _url_join(base.url, r)
+        return _RefTarget(key, _UrlBase(_url_dirname(key)), r, String(authored))
+    end
+    key = abspath(joinpath(base.dir, r))
+    return _RefTarget(key, _DirBase(dirname(key)), r, String(authored))
+end
+
 """
     _download_url_contents(url) -> String
 
@@ -177,34 +246,92 @@ function _download_url_contents(url::AbstractString)::String
     return content
 end
 
-const _URL_FETCHER = Ref{Function}(_download_url_contents)
+"""
+    _DocumentSource(; fetch = _download_url_contents, read_library = nothing)
+
+The reader of every document a load references: mounted documents (§4.7),
+template libraries (§9.7.2) and coupling libraries (§10.10). One is created
+per load by the public entry points and travels with the load, so a load
+reads and parses each file once however many edges or walks reach it, and
+nothing global decides what a load reads.
+
+* `fetch(url) -> String` reads an http(s) document. Tests pass an offline
+  fetcher here, through the internal entry [`_load_document`](@ref).
+* `read_library(ref, base_dir, origin) -> (raw_doc, target_base_dir)`, when
+  given, replaces the reader for template-library imports only: the `load_ref`
+  keyword of [`resolve_template_machinery`](@ref).
+* `cache` holds each document by `_RefTarget.key` in its post-wire form
+  (`_wire_document`: the carrier, op spellings settled once, so the
+  `deprecated_op` warning fires once per file per load).
+"""
+struct _DocumentSource
+    fetch::Function
+    read_library::Union{Nothing, Function}
+    cache::Dict{String, Any}
+end
+
+_DocumentSource(; fetch = _download_url_contents, read_library = nothing) =
+    _DocumentSource(fetch, read_library, Dict{String, Any}())
 
 """
-    _fetch_url(url) -> String
+    _RefUnreadable(target, reason, cause)
 
-Fetch the contents of an http(s) URL. Indirected through `_URL_FETCHER`
-so tests can substitute an offline fetcher (see `template_imports_test.jl`);
-the default is [`_download_url_contents`](@ref) (`Base.download`).
+A referenced document could not be read: `reason` is `:not_found` (no such
+local file), `:unreachable` (the read or the fetch failed; `cause` is the
+error) or `:invalid_json` (`cause` is the `ParseError`). Internal: each
+reference mechanism converts it at its edge into its own diagnostic
+(`unresolved_subsystem_ref`, `template_import_unresolved`,
+`coupling_import_unresolved`).
 """
-_fetch_url(url::AbstractString)::String = _URL_FETCHER[](url)
+struct _RefUnreadable <: EarthSciASTError
+    target::_RefTarget
+    reason::Symbol
+    cause::Any
+end
 
-"""
-    _canonical_ref(ref::String, base_path::String) -> String
-
-Produce a canonical key for a reference, used for cycle detection.
-URL identity is canonical: an absolute http(s) ref is normalized
-(dot segments removed), and a relative ref whose referencing document
-was itself loaded from a URL (`base_path` is a URL base) is joined
-against that base. Local paths are resolved to absolute paths.
-"""
-function _canonical_ref(ref::String, base_path::String)::String
-    if _is_bundled_path(ref)
-        return ref
-    elseif _is_url(ref)
-        return _url_normalize(ref)
-    elseif _is_url(base_path)
-        return _url_join(base_path, ref)
-    else
-        return abspath(joinpath(base_path, ref))
+# The text of the document `t` names. A resource error or an interrupt is
+# never reported as an unreadable document.
+function _read_text(src::_DocumentSource, t::_RefTarget)::String
+    if !_is_remote(t)
+        isfile(t.key) || throw(_RefUnreadable(t, :not_found, nothing))
+    end
+    try
+        return _is_remote(t) ? String(src.fetch(t.key)) : read(t.key, String)
+    catch e
+        _is_resource_error(e) && rethrow()
+        throw(_RefUnreadable(t, :unreachable, e))
     end
 end
+
+"""
+    _read_document(src, t; copy = true) -> post-wire document
+
+The document `t` names, read and parsed through `src` once per load
+(`_wire_document`: JSON parse, carrier, op spellings). A caller that mutates
+gets a fresh `deepcopy`; `copy = false` hands out the cached tree for a
+read-only look. Raises `_RefUnreadable`; an op-spelling refusal (`removed_op`,
+the `faq` gate) propagates as the `ParseError` it is.
+"""
+function _read_document(src::_DocumentSource, t::_RefTarget; copy::Bool = true)
+    if !haskey(src.cache, t.key)
+        text = _read_text(src, t)
+        parsed = try
+            _parse_json_text(text)
+        catch e
+            e isa ParseError || rethrow()
+            throw(_RefUnreadable(t, :invalid_json, e))
+        end
+        src.cache[t.key] = _wire_document(parsed)
+    end
+    doc = src.cache[t.key]
+    return copy ? deepcopy(doc) : doc
+end
+
+# The cause of an unreadable reference, as message text.
+_unreadable_cause(u::_RefUnreadable) =
+    u.cause === nothing ? "" : sprint(showerror, u.cause)
+
+Base.showerror(io::IO, u::_RefUnreadable) = print(
+    io, "referenced document '", u.target.ref, "' (", u.target.key, ") could not be read: ",
+    u.reason, isnothing(u.cause) ? "" : ": " * _unreadable_cause(u)
+)
