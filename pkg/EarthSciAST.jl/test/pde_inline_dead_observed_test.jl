@@ -473,5 +473,6 @@ end
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    @test occursin("has no cells in var_map", results[1].message)
+    # The refusal names the variable and the component it is not declared in.
+    @test occursin("'nope' not found in component 'M'", results[1].message)
 end
