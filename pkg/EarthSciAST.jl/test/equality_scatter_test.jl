@@ -522,9 +522,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         end
     end
 
-    @testset "a ragged nest scatter: the call allocates nothing and scales linearly" begin
+    @testset "a ragged nest scatter: one scatter pass, and the call allocates nothing" begin
         for rt in (false, true)
-            times = Float64[]
             builds = Float64[]
             for n in (10_000, 100_000)
                 # About five members per row, one row per cell, each cell
@@ -540,12 +539,10 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
                 f!(du, u, p, 0.0)
                 f!(du, u, p, 0.0)
                 @test (@allocated f!(du, u, p, 0.0)) == 0
-                push!(times, minimum(@elapsed(f!(du, u, p, 0.0)) for _ in 1:5))
                 push!(builds, bt)
             end
-            # Ten times the cells and points: far from the hundredfold a
-            # per-cell walk of the whole nest costs.
-            @test times[2] / times[1] < 30.0
+            # The linear cost is the scatter pass firing (`_sx_fired`) with no
+            # per-call allocation; the build bound is a hang guard.
             @test builds[2] < 120.0
         end
     end
@@ -701,7 +698,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         end
     end
 
-    @testset "the call allocates nothing and scales linearly" begin
+    @testset "two scatter passes, and the call allocates nothing" begin
         band(n; rt = false) = begin
             sh(s) = rt ? _sx_rt(_sx("+", "i", s)) : _sx("+", "i", s)
             prod(shift, lbl) = _sx(
@@ -715,7 +712,6 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
             d
         end
         for rt in (false, true)
-            times = Float64[]
             for n in (100_000, 1_000_000)
                 bt = @elapsed (f!, u0, p, _t, vm, rep) = ESX.Internal.build(band(n; rt = rt); compiler = :native)
                 t = rep.counts
@@ -724,11 +720,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
                 f!(du, u0, p, 0.0)
                 f!(du, u0, p, 0.0)
                 @test (@allocated f!(du, u0, p, 0.0)) == 0
-                push!(times, minimum(@elapsed(f!(du, u0, p, 0.0)) for _ in 1:5))
                 @test bt < 120.0
             end
-            # Ten times the cells: far from the hundredfold a dense fold costs.
-            @test times[2] / times[1] < 30.0
         end
     end
 end
