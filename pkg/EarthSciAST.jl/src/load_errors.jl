@@ -26,8 +26,8 @@ Base.showerror(io::IO, e::ExpressionTemplateError) =
     _KNOWN_DIAGNOSTIC_CODES
 
 The subset of [`ERROR_CODES`](@ref) that is raised as an
-[`ExpressionTemplateError`](@ref) anywhere in the package (this file,
-`template_imports.jl`, `coupling_imports.jl`, `parse.jl`, `solver.jl`), grouped by the
+[`ExpressionTemplateError`](@ref) anywhere in the package (`templates/`,
+`mounts.jl`, `coupling_imports.jl`, `parse.jl`, `solver.jl`), grouped by the
 spec section that pins it. Every entry is a REFERENCE into the central
 registry (`src/error_codes.jl`), never a literal — this tuple records which
 codes belong to this exception, and `ERROR_CODES` alone owns their values.
@@ -51,8 +51,7 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
     ERROR_CODES.SOLVER_TIME_SPAN_INVALID,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
-    # (lower_expression_templates.jl; the recursive-body composition check
-    # lives in template_imports.jl).
+    # (templates/declarations.jl, templates/rewrite.jl).
     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
@@ -75,7 +74,7 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # `solver` block in a file declaring esm < 1.1.0.
     ERROR_CODES.SOLVER_VERSION_TOO_OLD,
     # esm-spec §9.7 template-library imports + metaparameters
-    # (template_imports.jl).
+    # (templates/imports.jl, templates/metaparameters.jl).
     ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
     ERROR_CODES.TEMPLATE_IMPORT_UNRESOLVED,
     ERROR_CODES.TEMPLATE_IMPORT_NOT_LIBRARY,
@@ -111,7 +110,7 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
     # esm-spec §4.7 mount-edge index-set renaming: the rename's own unknown-key
-    # check (template_imports.jl).
+    # check (mounts.jl).
     ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
     # esm-spec §4.7 mount-edge `url_substitutions` (data_source_urls.jl).
     ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,

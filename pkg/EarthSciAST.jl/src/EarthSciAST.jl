@@ -105,8 +105,8 @@ include("templates/flat_registry.jl")
 # `extent` check, mount-edge index-set rename).
 include("mounts.jl")
 # Document-scoped solver hints (esm-spec §2.2): the version gate and the §2.2.2
-# tolerance resolution order. After template_imports.jl, whose raw-JSON helpers
-# and ExpressionTemplateError it shares.
+# tolerance resolution order. After the template files, whose raw-JSON helpers
+# it shares.
 include("solver.jl")
 # Wire I/O
 include("parse.jl")

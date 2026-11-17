@@ -1935,7 +1935,7 @@ end
 # than requiring a dimensionless one. The union adds the spec-adjacent
 # spellings this rule has always accepted (`ln`, `log2`, `expm1`) — they have
 # NO registry row on purpose: an op absent from the registry is classified by
-# `_op_in_T` (lower_expression_templates.jl) as an open-namespace rewrite
+# `_op_in_T` (templates/rewrite.jl) as an open-namespace rewrite
 # target, and giving these spellings rows would silently change that.
 const _TRANSCENDENTAL_OPS = union(
     _ops_with_dim_class(:transcendental),

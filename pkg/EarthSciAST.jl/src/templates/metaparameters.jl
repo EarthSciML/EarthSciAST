@@ -50,10 +50,11 @@ end
 # Canonical structural-field table
 # ---------------------------------------------------------------------------
 # The ONE registry of raw-JSON object keys whose VALUES are structural — never
-# ordinary expression positions — for the two load-time rewrite passes in this
-# file (metaparameter substitution, esm-spec §9.7.6, and the import-edge
-# rename walk, esm-spec §9.7.7). The skip/protect sets below are DERIVED from
-# it; nothing else hand-maintains key membership.
+# ordinary expression positions — for the two load-time rewrite passes over
+# declarations (metaparameter substitution, esm-spec §9.7.6, in this file, and
+# the import-edge rename walk, esm-spec §9.7.7, in templates/imports.jl). The
+# skip/protect sets below are DERIVED from it; nothing else hand-maintains key
+# membership.
 #
 # NEW Expression structural fields MUST be registered here with the right
 # kind, or metaparameter substitution / import-edge renaming will rewrite
