@@ -110,7 +110,7 @@ const ESM = EarthSciAST
         catch e
             e
         end
-        @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_TRACED_SUBSCRIPT"
+        @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_INEXACT_SUBSCRIPT"
         @test_throws ESM.TreeWalkError ESM._index_int(op(:/, lit(7.0), lit(0.0)))
 
         # The enclosing runtime contraction loop's counter, read through its `Ref`.

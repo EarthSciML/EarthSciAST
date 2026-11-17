@@ -1125,9 +1125,10 @@ const _SETUP_MAP_FASTPATH_HITS = Ref{Int}(0)
 const _SETUP_MAP_FASTPATH_MISS = Ref{Int}(0)
 
 # The ops on which `_eval_const_int` (integer) and `_eval_node` (Float64 +
-# `round(Int, …)`) can disagree for exact-integer operands. Only `/` qualifies:
-# `_eval_const_int` maps it to truncating `div`, `_compile` to true division.
-# (`floor` is a pass-through there, so `floor(a/b)` is rejected by the same walk.)
+# `round(Int, …)`) can disagree for integer operands. Only `/` qualifies:
+# `_eval_const_int` refuses an inexact quotient (`_subscript_quotient`), while
+# `_compile` carries the fractional value on, so the two would disagree on
+# whether the subscript is an error.
 const _INDEX_INEXACT_OPS = Set{String}(["/"])
 
 # True iff no `index` subscript anywhere in `e` uses an op whose integer and

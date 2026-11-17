@@ -40,15 +40,105 @@ end
 # Deliberately NARROW: exactly the kinds an index expression can contain. Anything
 # else is a genuinely state-dependent subscript, which cannot be resolved at trace
 # time at all, and says so rather than silently tracing into the same dead end.
+# ---- Integer subscript operators -------------------------------------------
+#
+# A gather subscript is integer arithmetic over loop counters, literals and
+# constant tables. Three evaluators compute one: `_eval_const_int` (the document
+# tree, at build), `_ix_eval` (a subscript compiled once per box, stencil.jl) and
+# `_index_int` (a `_Node` subscript on the out-of-place path). They share this
+# table of operators with their arities and the integer meaning of each, so a
+# subscript reads the same element on every route. A registry operator keeps its
+# registry arity; `mod` has no registry row and is a subscript operator only
+# (the run-time gather path, `_subscript_from_counters`, does not admit it).
+#
+# The rounding rules: `floor(a / b)` and `ceil(a / b)` round the EXACT quotient
+# (`fld`/`cld`), as the walker's floating-point value rounds; over an integer
+# operand `floor`/`ceil` is the identity. A bare quotient must be exact
+# (`_subscript_quotient`): the walker carries a fractional quotient into the
+# enclosing arithmetic, so no integer reading of an inexact one agrees with it.
+const _SUBSCRIPT_OPS = Dict{String, UnitRange{Int}}(
+    "+" => 1:typemax(Int), "*" => 1:typemax(Int), "-" => 1:2, "neg" => 1:1,
+    "/" => 2:2, "floor" => 1:1, "ceil" => 1:1, "mod" => 2:2,
+    "max" => 2:typemax(Int), "min" => 2:typemax(Int), "ifelse" => 3:3,
+    "<" => 2:2, "<=" => 2:2, ">" => 2:2, ">=" => 2:2, "==" => 2:2, "!=" => 2:2,
+)
+for (_n, _ar) in _SUBSCRIPT_OPS
+    _s = _op_spec(_n)
+    (_s === nothing || _s.arity == _ar) ||
+        error("scalar_ops: subscript operator '$_n' has arity $_ar, the registry $(_s.arity)")
+end
+
+# Refuse a subscript operator applied to a count its arity does not admit.
+_check_subscript_arity(op::AbstractString, n::Int) =
+    n in _SUBSCRIPT_OPS[op] || _throw_op_arity(Symbol(op), n)
+
 @noinline _inexact_subscript_quotient(a::Int, b::Int) = throw(
     TreeWalkError(
-        "E_TREEWALK_TRACED_SUBSCRIPT",
-        "a gather subscript divides $(a) by $(b), which is not an integer; the " *
-            "out-of-place evaluator works in integers and would read a different " *
-            "element than the interpreted one. Round the quotient explicitly " *
+        "E_TREEWALK_INEXACT_SUBSCRIPT",
+        "a gather subscript divides $(a) by $(b), which is not an integer; an " *
+            "integer subscript has no reading of it that agrees with the " *
+            "floating-point walk. Round the quotient explicitly " *
             "(`floor(a / b)` or `ceil(a / b)`)."
     )
 )
+
+# A bare quotient in a subscript: exact, or refused.
+@inline _subscript_quotient(a::Int, b::Int) =
+    (b != 0 && rem(a, b) == 0) ? div(a, b) : _inexact_subscript_quotient(a, b)
+
+# The integer meaning of a two-operand subscript operator (`-`, `/`, `mod`, the
+# comparisons) and of one step of an n-ary one (`+`, `*`, `max`, `min`).
+function _subscript_binop(op::Symbol, x::Int, y::Int)::Int
+    op === :+ && return x + y
+    op === :* && return x * y
+    op === :- && return x - y
+    op === :/ && return _subscript_quotient(x, y)
+    op === :mod && return mod(x, y)
+    op === :max && return max(x, y)
+    op === :min && return min(x, y)
+    op === :< && return Int(x < y)
+    op === :<= && return Int(x <= y)
+    op === :> && return Int(x > y)
+    op === :>= && return Int(x >= y)
+    op === :(==) && return Int(x == y)
+    op === :!= && return Int(x != y)
+    throw(TreeWalkError("E_TREEWALK_INDEX_NOT_CONST", "'$op' is not an integer subscript operator"))
+end
+
+# `floor`/`ceil` of the exact quotient `a / b`.
+@inline _subscript_rounded_quotient(op::Symbol, a::Int, b::Int) =
+    op === :floor ? fld(a, b) : cld(a, b)
+
+const _SUBSCRIPT_OP_ARITY = Dict{Symbol, UnitRange{Int}}(Symbol(k) => v for (k, v) in _SUBSCRIPT_OPS)
+
+"""
+    _subscript_eval_op(op::Symbol, c, ev, quotient) -> Union{Int,Nothing}
+
+Evaluate the subscript operator `op` over the operand list `c`, the one
+definition the integer evaluators share: `ev(x)::Int` evaluates an operand, and
+`quotient(x)` returns the operand pair of `x` when `x` is a two-operand `/`
+(for `floor`/`ceil`), else `nothing`. `ifelse` evaluates only the taken branch.
+`nothing` when `op` is not a subscript operator.
+"""
+function _subscript_eval_op(op::Symbol, c, ev::E, quotient::Q) where {E, Q}
+    ar = get(_SUBSCRIPT_OP_ARITY, op, nothing)
+    ar === nothing && return nothing
+    length(c) in ar || _throw_op_arity(op, length(c))
+    if op === :ifelse
+        return ev(c[1]) != 0 ? ev(c[2]) : ev(c[3])
+    elseif op === :floor || op === :ceil
+        q = quotient(c[1])
+        q === nothing && return ev(c[1])
+        return _subscript_rounded_quotient(op, ev(q[1]), ev(q[2]))
+    elseif op === :neg || (op === :- && length(c) == 1)
+        return -ev(c[1])
+    end
+    acc = ev(c[1])
+    for i in 2:length(c)
+        acc = _subscript_binop(op, acc, ev(c[i]))
+    end
+    return acc
+end
 
 function _index_int(n::_Node)::Int
     k = n.kind
@@ -68,45 +158,11 @@ function _index_int(n::_Node)::Int
         end
         return round(Int, @inbounds cg.flat[off])
     elseif k === _NK_OP
-        op = n.op
-        c = n.children
-        if op === :+
-            s = 0
-            @inbounds for d in eachindex(c)
-                s += _index_int(c[d])
-            end
-            return s
-        elseif op === :-
-            # `-` is unary or binary (esm-spec §4.2), as in every other ladder.
-            length(c) == 1 && return -_index_int(c[1])
-            length(c) == 2 ||
-                throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-            return _index_int(c[1]) - _index_int(c[2])
-        elseif op === :*
-            s = 1
-            @inbounds for d in eachindex(c)
-                s *= _index_int(c[d])
-            end
-            return s
-        elseif (op === :floor || op === :ceil) && length(c) == 1
-            # A rounded quotient (`floor((c - 1) / NX)`), rounded the way the
-            # in-place walk rounds its floating-point value.
-            q = c[1]
-            if q.kind === _NK_OP && q.op === :/ && length(q.children) == 2
-                a, b = _index_int(q.children[1]), _index_int(q.children[2])
-                return op === :floor ? fld(a, b) : cld(a, b)
-            end
-            return _index_int(q)
-        elseif op === :/ && length(c) == 2
-            # A quotient not under `floor`/`ceil` (a const gather's subscript;
-            # a live gather's never has one, `_subscript_from_counters`). The
-            # walk carries its floating-point value into the enclosing
-            # arithmetic and rounds once at the end, so an integer quotient here
-            # can only agree with it when the division is exact.
-            a, b = _index_int(c[1]), _index_int(c[2])
-            (b != 0 && rem(a, b) == 0) && return div(a, b)
-            _inexact_subscript_quotient(a, b)
-        end
+        v = _subscript_eval_op(
+            n.op, n.children, _index_int,
+            q -> (q.kind === _NK_OP && q.op === :/ && length(q.children) == 2) ? q.children : nothing
+        )
+        v === nothing || return v
     end
     throw(
         TreeWalkError(
