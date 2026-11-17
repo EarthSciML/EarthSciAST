@@ -1174,35 +1174,6 @@ end
 # ========================================
 
 """
-    _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry}) -> EsmFile
-
-Return a copy of `file` with its `coupling` vector replaced. Used to splice
-`coupling_import`-expanded edges into the document the rest of `flatten`
-consumes.
-
-Carries the fields `flatten` reads plus `solver` (esm-spec §2.2), which is
-document-scoped configuration a caller may read back off the returned file, and
-the `document_base` its `external` resolves against (§2.2.6). The
-LOAD-TIME fields — `expression_templates`, `metaparameters`,
-`component_templates`, `coupling_roles` — and `coordinates` are deliberately not
-rebuilt: nothing downstream of `flatten` consults them, and the result never
-escapes `flatten`.
-"""
-_with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
-    EsmFile(
-    file.esm, file.metadata;
-    models = file.models,
-    reaction_systems = file.reaction_systems,
-    data_sources = file.data_sources,
-    coupling = coupling,
-    domain = file.domain,
-    enums = file.enums,
-    index_sets = file.index_sets,
-    solver = file.solver,
-    document_base = file.document_base
-)
-
-"""
     _check_flattened_record_shapes(file::EsmFile) -> Dict{String, Int}
 
 esm-spec §8.5.1 "When rules 2 and 3 are checked", at `flatten`, on the document
@@ -1276,7 +1247,7 @@ function flatten(
     # lift exactly as inline edges would. A file with no imports is unchanged.
     expanded = expand_coupling_imports(file; base_path = base_path, load_ref = load_ref)
     if expanded !== file.coupling
-        file = _with_coupling(file, expanded)
+        file = reconstruct(file; coupling = expanded)
     end
     # esm-spec §8.5.1 "When rules 2 and 3 are checked": a record shape
     # validation could not decide arrives with the expanded coupling sequence,
