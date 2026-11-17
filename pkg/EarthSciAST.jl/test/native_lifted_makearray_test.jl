@@ -75,9 +75,7 @@ _nlm_lifted(body, names, sets) =
     _nlm_faq(body, names, [n => Dict("from" => s) for (n, s) in zip(names, sets)])
 
 function _nlm_build(doc, c)
-    _NLM._reset_cascade_tally!()
-    prob = _NLM.esm_problem(doc, (0.0, 1.0); compiler = c)
-    return prob, copy(_NLM._CASCADE_TALLY)
+    return _NLM.Internal.counting(() -> _NLM.esm_problem(doc, (0.0, 1.0); compiler = c))
 end
 
 # A state with no two elements equal, keyed by element name.

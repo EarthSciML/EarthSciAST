@@ -91,12 +91,8 @@ function _scg_model(B::Int)
 end
 
 function _scg_build(model; compiler = :native)
-    insp = ESM.BuildInspection()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
-        model; compiler = compiler,
-        inspect = insp
-    )
-    return (; f!, u0, p, diag, report = insp.compiler_report)
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(model; compiler = compiler)
+    return (; f!, u0, p, diag = rep.stats, report = rep.compiler_report)
 end
 
 _scg_du(f!, u, p, t) = (d = zeros(eltype(u), length(u)); f!(d, u, p, t); d)
@@ -251,7 +247,7 @@ end
             end
             @test err isa ESM.TreeWalkError
             @test err.code == ESM.ERROR_CODES.COMPILER_REFUSED_RULE
-            @test occursin("compiler=:native refuses 'A_1'", err.detail)
+            @test occursin("compiler=:native refuses 'M.A_1'", err.detail)
             @test occursin("could not be modelled by the scalar code generator", err.detail)
             @test occursin("scalar equation", err.detail)
             bi = _scg_build(_scg_model(3); compiler = :interpreter)

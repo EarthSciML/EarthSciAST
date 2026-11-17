@@ -620,7 +620,7 @@ end
 
     @testset "the program seed is built on the first rhs_program call" begin
         p2 = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
-        r = p2.inspection.program_seed
+        r = p2.build.program_seed
         @test r isa RRT._ProgramSeedRecipe
         @test r.memo[] === nothing
         @test !any(f -> getfield(r, f) isa RRT.FlattenedSystem, fieldnames(typeof(r)))

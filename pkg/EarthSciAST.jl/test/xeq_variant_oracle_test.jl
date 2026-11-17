@@ -18,8 +18,6 @@
 using Test
 using JSON3
 using EarthSciAST
-using EarthSciAST: _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_COMPILE_CALLS,
-    _bench_reset!
 
 include("testutils.jl")
 const ESM = EarthSciAST
@@ -33,11 +31,11 @@ _xeq_probe_states(n) = (
 
 # Build under `compiler` and return (du probes, u0, p, var_map, counters).
 function _xeq_probe(build; compiler = :native)
-    _BENCH_ON[] = true
-    _bench_reset!()
-    f, u0, p, _, vmap = build(compiler)
-    counters = (variants = _BENCH_BODY_VARIANTS[], compiles = _BENCH_COMPILE_CALLS[])
-    _BENCH_ON[] = false
+    f, u0, p, _, vmap, rep = build(compiler)
+    counters = (
+        variants = get(rep.counts, :body_variants, 0),
+        compiles = get(rep.counts, :compile_calls, 0),
+    )
     dus = Vector{Float64}[]
     for (ti, u) in zip((0.0, 0.7, 3.25), _xeq_probe_states(length(u0)))
         du = similar(u0)
@@ -135,7 +133,7 @@ const ONE_EQ_VARIANTS = Ref(0)
     @testset "compile-once fixture (7³, one equation)" begin
         # Single equation: no cross-equation sharing possible — the hoist must
         # be a pure no-op (same variant count, same bits).
-        build(compiler) = ESM._build_evaluator(
+        build(compiler) = ESM.Internal.build(
             ESM.flatten(ESM.load_path(FIX));
             compiler = compiler
         )
@@ -147,7 +145,7 @@ const ONE_EQ_VARIANTS = Ref(0)
 
     @testset "two equations sharing template roots" begin
         FIX2 = _xeq_two_eq_fixture(FIX)
-        build(compiler) = ESM._build_evaluator(
+        build(compiler) = ESM.Internal.build(
             ESM.flatten(ESM.load_path(FIX2));
             compiler = compiler
         )
@@ -170,10 +168,10 @@ const ONE_EQ_VARIANTS = Ref(0)
         model = _xeq_observed_faq_model(N)
         ics = Dict{String, Float64}()
         for k in 1:N
-            ics["u[$k]"] = sin(0.3k) + 0.1k
-            ics["v[$k]"] = cos(0.2k) + 0.05k
+            ics["M.u[$k]"] = sin(0.3k) + 0.1k
+            ics["M.v[$k]"] = cos(0.2k) + 0.05k
         end
-        build(compiler) = ESM._build_evaluator(
+        build(compiler) = ESM.Internal.build(
             model; initial_conditions = ics,
             compiler = compiler
         )
@@ -196,7 +194,7 @@ const ONE_EQ_VARIANTS = Ref(0)
             "proxy27.esm"
         )
         if isfile(P27)
-            build(compiler) = ESM._build_evaluator(
+            build(compiler) = ESM.Internal.build(
                 ESM.load_path(P27);
                 compiler = compiler
             )
