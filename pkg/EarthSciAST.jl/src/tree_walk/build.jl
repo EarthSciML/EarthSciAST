@@ -8936,12 +8936,6 @@ function _build_evaluator_dict(
             _reject_unlowered_operators(model)
         end
     end
-    if model !== nothing && haskey(kwd, :const_array_boundaries)
-        kwd[:const_array_boundaries] = _normalize_const_array_keys(
-            model, kwd[:const_array_boundaries];
-            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
-        )
-    end
 
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # Rewrite the caller's LOCAL-named `parameter_overrides` onto this
@@ -8965,6 +8959,12 @@ function _build_evaluator_dict(
     if model !== nothing && haskey(kwd, :const_arrays)
         kwd[:const_arrays] = _normalize_const_array_keys(
             model, kwd[:const_arrays];
+            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
+        )
+    end
+    if model !== nothing && haskey(kwd, :const_array_boundaries)
+        kwd[:const_array_boundaries] = _normalize_const_array_keys(
+            model, kwd[:const_array_boundaries];
             model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
         )
     end
