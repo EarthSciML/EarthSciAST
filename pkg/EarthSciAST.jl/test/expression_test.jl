@@ -160,6 +160,7 @@ using JSON3
         # Test division: x / 1 = x, 0 / x = 0
         @test simplify(OpExpr("/", EarthSciAST.ASTExpr[var_x, NumExpr(1.0)])) === var_x
         @test simplify(OpExpr("/", EarthSciAST.ASTExpr[NumExpr(0.0), var_x])) == NumExpr(0.0)
+        @test simplify(OpExpr("/", EarthSciAST.ASTExpr[IntExpr(0), var_x])) == NumExpr(0.0)
 
         # Test recursive simplification
         nested = OpExpr("*", EarthSciAST.ASTExpr[OpExpr("+", EarthSciAST.ASTExpr[NumExpr(1.0), NumExpr(2.0)]), var_x])

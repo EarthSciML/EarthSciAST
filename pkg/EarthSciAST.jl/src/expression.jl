@@ -868,7 +868,7 @@ function simplify(expr::OpExpr)::ASTExpr
         end
 
         # 0 / x = 0 (for x != 0)
-        if isa(simplified_args[1], NumExpr) && simplified_args[1].value == 0.0
+        if is_lit_val(simplified_args[1], 0.0)
             return NumExpr(0.0)
         end
 
