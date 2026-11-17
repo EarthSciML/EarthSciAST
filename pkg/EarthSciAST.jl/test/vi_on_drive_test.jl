@@ -108,12 +108,12 @@ end
             "src_lon" => _lcg(n, 1, 6.0), "tgt_lon" => _lcg(n, 2, 6.0)
         )
         params = Dict("dx" => 1.0)
-        EA._VI_ENUM_VISITS[] = 0
-        vi = EA.materialize_value_invention(m, isets, ca, params)
-        driven = EA._VI_ENUM_VISITS[]
-        EA._VI_ENUM_VISITS[] = 0
-        ref = _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
-        full = EA._VI_ENUM_VISITS[]
+        vi, dc = EA.Internal.counting(() -> EA.materialize_value_invention(m, isets, ca, params))
+        driven = get(dc, :vi_enum_visits, 0)
+        ref, fc = EA.Internal.counting(
+            () -> _interp(() -> EA.materialize_value_invention(m, isets, ca, params))
+        )
+        full = get(fc, :vi_enum_visits, 0)
         @test isequal(vi.members["candidate_set"], ref.members["candidate_set"])
         @test length(vi.members["candidate_set"]) > n     # several pairs per bin
         @test full == n * n
@@ -155,9 +155,9 @@ end
             gs = EA._vi_resolve_join(node.join, ranges, ctx)
             cb = _ -> nothing
             EA._vi_enumerate_join(ranges, gs, ctx, cb)          # compile
-            EA._VI_ENUM_VISITS[] = 0
             bytes = @allocated EA._vi_enumerate_join(ranges, gs, ctx, cb)
-            return bytes, EA._VI_ENUM_VISITS[]
+            _, c = EA.Internal.counting(() -> EA._vi_enumerate_join(ranges, gs, ctx, cb))
+            return bytes, get(c, :vi_enum_visits, 0)
         end
         small, v_small = regrid_walk(500)
         big, v_big = regrid_walk(2000)

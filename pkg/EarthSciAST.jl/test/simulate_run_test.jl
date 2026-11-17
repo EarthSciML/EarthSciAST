@@ -9,7 +9,7 @@ const ESM_S = EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
 # `esm_problem` + `solve` — the two-step run surface (esm-libraries-spec §2.5):
-# construction coerces → build_evaluator → seeds → composes callbacks, and the
+# construction coerces → flattens → builds → seeds → composes callbacks, and the
 # verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
 # extension (active here: the test target loads SciMLBase + OrdinaryDiffEqTsit5).
 #
@@ -111,11 +111,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         @test isapprox(r[Symbol("M.y")][end], 7.5; atol = 1.0e-5)
     end
 
-    # The bug this guards: `build_evaluator` runs ONE model and never reads
-    # `reaction_systems` / `coupling` (both are applied BY `flatten`). `simulate`
-    # used to hand a Dict straight to it, so an authored document ran as its lone
-    # `Sink` model — reaction network and coupling edge dropped — and still
-    # reported a Success retcode, with an EMPTY state vector.
+    # The build compiles ONE model and never reads `reaction_systems` /
+    # `coupling` (both are applied BY `flatten`), so an authored document handed
+    # to it unflattened would run as its lone `Sink` model — reaction network and
+    # coupling edge dropped — with a Success retcode and an EMPTY state vector.
     @testset "an authored Dict is flattened, not run as one model" begin
         esm = additive_couple_esm()
 

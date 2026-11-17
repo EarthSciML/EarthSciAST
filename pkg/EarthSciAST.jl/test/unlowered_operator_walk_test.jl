@@ -101,8 +101,8 @@ end
         @test err isa _UW.TreeWalkError && occursin("godunov_hamiltonian", err.detail)
     end
 
-    @testset "the build_evaluator front door refuses it too" begin
-        err = _uw_error(() -> EarthSciAST._build_evaluator(_uw_box(_uw_op("laplacian", "c"))))
+    @testset "the internal build entry refuses it too" begin
+        err = _uw_error(() -> EarthSciAST.Internal.build(_uw_box(_uw_op("laplacian", "c"))))
         @test err isa _UW.TreeWalkError && err.code == "unlowered_operator"
         @test err isa _UW.TreeWalkError && occursin("laplacian", err.detail)
     end

@@ -446,25 +446,27 @@ end
     @test vi.extents[FAQ] == NP
 
     # ============================================================
-    # BUILD through the front door: auto-rewrite ON, ONLY raw lon/lat + provider.
+    # BUILD the rewritten document: ONLY raw lon/lat + provider. The rewrite
+    # matches the AUTHORED model, so it runs before the build flattens, as
+    # `esm_problem(…; pushdown_rewrite = true)` runs it.
     # ============================================================
     gate = Dict{String, Any}(
         "axes" => Any[Dict("fixed" => [0]), Dict("gated_by" => SET), "all"],
         "applies_to" => PATHS
     )
     mock = MockSRP5(fullSR, gate, Any[])
-    insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA._build_evaluator(
-        doc;
-        model_name = "ISRM", const_arrays = ca, inspect = insp,
-        pushdown_rewrite = true,
+    ca_q = Dict{String, Any}("ISRM." * k => v for (k, v) in ca)
+    f!, u0, p, _tspan, var_map, rep = EA.Internal.build(
+        EA.desugar_pushdown(doc; model_name = "ISRM");
+        const_arrays = ca_q,
         _gated_providers = Dict{String, Any}("ISRM_SR" => mock), _sample_time = 0.0
     )
+    insp = rep.products
 
     # X/Y were projected at BUILD time and landed in const_arrays for VI/E.
-    @test haskey(insp.const_arrays, "X") && haskey(insp.const_arrays, "Y")
-    @test Vector{Float64}(insp.const_arrays["X"]) ≈ projX
-    @test Vector{Float64}(insp.const_arrays["Y"]) ≈ projY
+    @test haskey(insp.const_arrays, "ISRM.X") && haskey(insp.const_arrays, "ISRM.Y")
+    @test Vector{Float64}(insp.const_arrays["ISRM.X"]) ≈ projX
+    @test Vector{Float64}(insp.const_arrays["ISRM.Y"]) ≈ projY
 
     # ============================================================
     # ASSERTION 3 — gated provider got selection == members, no wholesale fetch.
@@ -479,12 +481,12 @@ end
     @test sel[3] === Colon()
 
     # members fed back as the generated member_factor; compact SR merged.
-    @test haskey(insp.const_arrays, MF)
-    @test Vector{Float64}(insp.const_arrays[MF]) == Float64.(MEMBERS)
+    @test haskey(insp.const_arrays, "ISRM.$MF")
+    @test Vector{Float64}(insp.const_arrays["ISRM.$MF"]) == Float64.(MEMBERS)
     for name in PATHS
-        @test haskey(insp.const_arrays, name)
-        @test size(insp.const_arrays[name]) == (NP, N_RCV)
-        @test insp.const_arrays[name] ≈ srC(name)
+        @test haskey(insp.const_arrays, "ISRM.$name")
+        @test size(insp.const_arrays["ISRM.$name"]) == (NP, N_RCV)
+        @test insp.const_arrays["ISRM.$name"] ≈ srC(name)
     end
 
     # ============================================================
@@ -492,10 +494,7 @@ end
     # ============================================================
     cell_cells = [[c] for c in 1:NP]
     ev(name) = (
-        expr = get(
-            insp.observed_exprs, "ISRM.$name",
-            get(insp.observed_exprs, name, nothing)
-        );
+        expr = get(insp.observed_exprs, "ISRM.$name", nothing);
         expr === nothing ? error("no observed expr for $name") :
             EA.evaluate_cellwise(
                 expr, cell_cells; const_arrays = insp.const_arrays,

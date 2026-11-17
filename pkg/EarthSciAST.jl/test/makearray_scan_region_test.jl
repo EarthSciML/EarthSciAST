@@ -178,12 +178,12 @@ function _msr_divergence_model(n::Int, ncol::Int; top::Bool = false)
 end
 
 function _msr_check(model, isets; scans::Int)
-    nat = ESM_MSR._build_evaluator_impl(model; index_sets = isets)
-    ref = ESM_MSR._build_evaluator_impl(model; index_sets = isets, compiler = :interpreter)
-    @test nat[6].n_scan_folds == scans
+    nat = ESM_MSR.Internal.build(model; index_sets = isets)
+    ref = ESM_MSR.Internal.build(model; index_sets = isets, compiler = :interpreter)
+    @test nat.report.stats.n_scan_folds == scans
     f!, u0, p = nat
     g!, _, q = ref
-    @test length(u0) == length(ref[2])
+    @test length(u0) == length(ref.u0)
     for probe in (
             Float64[_msr_val(k) for k in eachindex(u0)],
             Float64[_msr_val(3k + 1) for k in eachindex(u0)],
@@ -242,11 +242,11 @@ _msr_sum(kset; filt = nothing, outer = false) = ESM_MSR.OpExpr(
 # The right-hand side at an all `-0.0` state, under both compilers, bit for bit:
 # every term is `-0.0`, and a non-empty sum of them is `+0.0` (esm-spec §4.3.1).
 function _msr_negzero(model, isets)
-    nat = ESM_MSR._build_evaluator_impl(model; index_sets = isets)
-    ref = ESM_MSR._build_evaluator_impl(model; index_sets = isets, compiler = :interpreter)
-    a = fill(NaN, length(nat[2])); b = fill(NaN, length(ref[2]))
-    nat[1](a, fill(-0.0, length(a)), nat[3], 0.0)
-    ref[1](b, fill(-0.0, length(b)), ref[3], 0.0)
+    nat = ESM_MSR.Internal.build(model; index_sets = isets)
+    ref = ESM_MSR.Internal.build(model; index_sets = isets, compiler = :interpreter)
+    a = fill(NaN, length(nat.u0)); b = fill(NaN, length(ref.u0))
+    nat.f!(a, fill(-0.0, length(a)), nat.p, 0.0)
+    ref.f!(b, fill(-0.0, length(b)), ref.p, 0.0)
     @test reinterpret(UInt64, a) == reinterpret(UInt64, b)
     @test !any(x -> x === -0.0, b)
     return nat
@@ -266,7 +266,7 @@ end
         # every term, and the staggered strict scan's top node.
         for filt in ("<=", "<", ">=", ">")
             nat = _msr_negzero(_msr_obs_model(_msr_sum("lev"; filt = filt), ["lev"], lev(8))...)
-            @test nat[6].n_scan_folds == 1
+            @test nat.report.stats.n_scan_folds == 1
         end
         nat = _msr_negzero(
             _msr_obs_model(
@@ -274,7 +274,7 @@ end
                 ["lev_nodes"], nodes(12)
             )...
         )
-        @test nat[6].n_scan_folds == 1
+        @test nat.report.stats.n_scan_folds == 1
         # The makearray of a scan and its column total (one staggered scan),
         # and the to-top form.
         for (ncol, kw) in ((0, (;)), (7, (;)), (0, (filt = ">=", top = :zero)))
@@ -315,26 +315,25 @@ end
         # ForwardDiff, where the nest runs column by column.
         for top in (false, true), ncol in (3, 40)
             m, is = _msr_divergence_model(10, ncol; top = top)
-            ESM_MSR._reset_cascade_tally!()
-            nat = ESM_MSR._build_evaluator_impl(m; index_sets = is)
-            tally = copy(ESM_MSR._CASCADE_TALLY)
+            nat = ESM_MSR.Internal.build(m; index_sets = is)
+            tally = nat.report.counts
             @test get(tally, :scan_colscan, 0) == 1
             @test get(tally, :scan_colscan_consumer, 0) == 1
             _msr_check(m, is; scans = 1)
-            ref = ESM_MSR._build_evaluator_impl(m; index_sets = is, compiler = :interpreter)
-            u = Float64[_msr_val(k) for k in eachindex(nat[2])]
+            ref = ESM_MSR.Internal.build(m; index_sets = is, compiler = :interpreter)
+            u = Float64[_msr_val(k) for k in eachindex(nat.u0)]
             seed = Float64[isodd(k) ? 1.0 : -0.5 for k in eachindex(u)]
             jd(f, p) = ForwardDiff.derivative(
                 x -> (du = zeros(typeof(x), length(u)); f(du, u .+ x .* seed, p, 0.0); du), 0.0
             )
-            @test reinterpret(UInt64, jd(nat[1], nat[3])) == reinterpret(UInt64, jd(ref[1], ref[3]))
+            @test reinterpret(UInt64, jd(nat.f!, nat.p)) == reinterpret(UInt64, jd(ref.f!, ref.p))
         end
     end
 
     @testset "a long column builds natively" begin
         m, is = _msr_nodes_model(4096, 0)
-        nat = ESM_MSR._build_evaluator_impl(m; index_sets = is)
-        @test nat[6].n_scan_folds == 1
+        nat = ESM_MSR.Internal.build(m; index_sets = is)
+        @test nat.report.stats.n_scan_folds == 1
     end
 
     @testset "scan + total regions are one staggered scan" begin

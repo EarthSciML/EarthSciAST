@@ -1,7 +1,7 @@
 # Allocation tests for the tree-walk PDE RHS (ess-9cc).
 #
 # The codebase's FIRST allocation test. It pins the hard property that the
-# in-place RHS `f!(du, u, p, t)` built by `build_evaluator` allocates NOTHING per
+# in-place RHS `f!(du, u, p, t)` the build returns allocates NOTHING per
 # call in steady state — at two+ grid sizes, so the property is N-independent
 # (no per-cell allocation hiding behind a small absolute number). This guards the
 # zero-allocation discipline of the vectorized array-kernel runner (ess-dhq +
@@ -56,7 +56,7 @@ end
 
 # 1-D periodic centered-advection document: discretizes to a faq whose RHS
 # is (u[i+1]-u[i-1])/(2·dx) — exercises PARAM (dx) + the `/` and `-` OP arms in a
-# REALISTIC parse→discretize→build_evaluator pipeline.
+# REALISTIC parse→discretize→build pipeline.
 function _advection_esm(n)
     dx = 1.0 / n
     return Dict{String, Any}(
@@ -199,7 +199,7 @@ if !_TWALLOC_CHILD
                 # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
                 # every size (a per-cell leak would grow the byte count with N).
                 for N in (64, 256, 1024, 2500)
-                    ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                    ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                     @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics) == 0
                 end
             end
@@ -207,9 +207,9 @@ if !_TWALLOC_CHILD
             @testset "vectorized reduction (sum_product) RHS: 0 bytes" begin
                 for M in (3, 16, 64)
                     A = reshape(collect(1.0:(2.0 * M)), 2, M)
-                    ics = Dict{String, Float64}("y[1]" => 0.0, "y[2]" => 0.0)
+                    ics = Dict{String, Float64}("M.y[1]" => 0.0, "M.y[2]" => 0.0)
                     for k in 1:M
-                        ics["x[$k]"] = 0.5k
+                        ics["M.x[$k]"] = 0.5k
                     end
                     @test built_rhs_alloc_bytes(
                         _contraction_model(M);
@@ -223,7 +223,7 @@ if !_TWALLOC_CHILD
                 # (a per-cell leak in the live forcing read would grow with N). Mirrors the
                 # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
                 for N in (64, 256, 1024)
-                    ics = Dict("u[$k]" => 0.1k for k in 1:N)
+                    ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
                     forcing = collect(1.0:Float64(N))
                     @test built_rhs_alloc_bytes(
                         _forcing_gather_model(N);
@@ -282,13 +282,13 @@ end  # if !_TWALLOC_CHILD
         # section and cached, so it adds no per-call allocation.
         withenv("ESS_THREADS_MIN_CELLS" => "256") do
             bytes = map((1024, 4096, 16384)) do N
-                ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics)
             end
             VERSION >= v"1.12" && @test all(==(0), bytes)
 
             fbytes = map((1024, 16384)) do N
-                ics = Dict("u[$k]" => 0.1k for k in 1:N)
+                ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
                 built_rhs_alloc_bytes(
                     _forcing_gather_model(N);
                     initial_conditions = ics,

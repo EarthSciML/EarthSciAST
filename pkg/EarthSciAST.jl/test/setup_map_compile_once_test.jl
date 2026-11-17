@@ -1,10 +1,9 @@
 # Compile-once materialization of a promoted-physics MAP — BIT-EXACTNESS.
 #
-# `_materialize_setup_general_map` used to re-run the ENTIRE build-time pipeline
-# (`_index_at_cell` → `_resolve_indices` → `_compile` → `_eval_node`) once per
-# output cell, so a per-cell physics lookup over an N-cell grid paid N full AST
-# lowerings — 55% of a ReSEACT chemistry `build_evaluator`, and the reason build
-# cost tracked the grid. It now resolves+compiles ONCE with the output indices
+# Run per output cell, the build-time pipeline (`_index_at_cell` →
+# `_resolve_indices` → `_compile` → `_eval_node`) would make a per-cell physics
+# lookup over an N-cell grid pay N full AST lowerings, so build cost would track
+# the grid. `_materialize_setup_general_map` resolves+compiles ONCE with the output indices
 # bound as parameters (the `_cellwise_compile_once` machinery: a
 # const read carrying an output index lowers to a runtime `_NK_CONST_GATHER`
 # instead of constant-folding) and rebinds only those per cell.
@@ -15,7 +14,7 @@
 # demands `isequal` cell for cell. `isequal`, never `≈` and never `==`: `-0.0`
 # must not pass for `+0.0` and `NaN` must match `NaN`.
 #
-# The engagement counters make the comparison non-vacuous: a case that silently
+# The engagement counts (`Internal.counting`) make the comparison non-vacuous: a case that silently
 # stopped taking the fast path would compare the reference against itself and
 # pass, so each case asserts which path it took.
 
@@ -49,10 +48,11 @@ const IDX = Dict{String, Int}("X" => 5, "Y" => 4)
 # Materialize `json` both ways and return (fast, reference, hits, miss).
 function both_ways(json, env)
     rhs = EA.expression_from_json(json)
-    hits0, miss0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-    fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
-    hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
-    miss = EA._SETUP_MAP_FASTPATH_MISS[] - miss0
+    fast, c = EA.Internal.counting(
+        () -> EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
+    )
+    hits = get(c, :setup_map_fastpath_hit, 0)
+    miss = get(c, :setup_map_fastpath_miss, 0)
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
     end
@@ -136,12 +136,11 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         j = _map(["x", "y"], ["x" => "X2", "y" => "Y"], body)
         idx = Dict{String, Int}("X2" => 4, "Y" => 4)
         rhs = EA.expression_from_json(j)
-        h0, m0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-        fast = EA._materialize_setup_general_map(
-            rhs, copy(ENV0), nothing, idx
+        fast, c = EA.Internal.counting(
+            () -> EA._materialize_setup_general_map(rhs, copy(ENV0), nothing, idx)
         )
-        @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
-        @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
+        @test get(c, :setup_map_fastpath_hit, 0) == 1
+        @test get(c, :setup_map_fastpath_miss, 0) == 0
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
                 rhs, copy(ENV0), nothing, idx
@@ -163,15 +162,15 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         body = _op("exp", _ix(_v("A"), _v("x"), _v("y")))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         rhs = EA.expression_from_json(j)
-        m0 = EA._SETUP_MAP_FASTPATH_MISS[]
-        h0 = EA._SETUP_MAP_FASTPATH_HITS[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, IDX
-            )
+        _, c = EA.Internal.counting() do
+            EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_setup_general_map(
+                    rhs, copy(ENV0), nothing, IDX
+                )
+            end
         end
-        @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 1   # forced onto the reference
-        @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 0
+        @test get(c, :setup_map_fastpath_miss, 0) == 1   # forced onto the reference
+        @test get(c, :setup_map_fastpath_hit, 0) == 0
     end
 
     # ---- the two guards that keep the fast path exact ----

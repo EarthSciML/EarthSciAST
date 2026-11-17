@@ -5,7 +5,7 @@
 # reduction Σ_{k=1..3} W[i,k]·k inside an otherwise-affine stencil body threw
 #     _StencilFallback("unsupported loop-var-dependent op 'faq'")
 # out of `_stencilize_op_core`'s catch-all, and the WHOLE equation landed on
-# the per-cell scalarize fallback — `_CASCADE_TALLY[:percell_acc] == 1`,
+# the per-cell scalarize fallback — a `:percell_acc` count of 1,
 # O(#cells) IR (the failure mode behind the GEOS-FP incident where one
 # declined equation was ~910k of ~935k `_compile` calls). `faq` is
 # deliberately outside `_STENCIL_ELEMENTWISE_OPS` (op_registry.jl carries no
@@ -70,19 +70,18 @@ end
 # NOT collapse through the exhaustive all-equal fold — the `_AccConstBox`
 # table lane is really exercised, not folded away.
 _stt_W(N) = Float64[sin(1.7i * k) + 0.05i for i in 1:N, k in 1:3]
-_stt_ics(N) = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+_stt_ics(N) = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
 
 # Build `model` under both compilers; tag → (f!, u0, p, tally, diag).
 function _stt_build3(model, ics, W)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, _vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, const_arrays = Dict("W" => W),
             compiler = compiler
         )
-        out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY), diag)
+        out[tag] = (f!, u0, p, rep.counts, rep.stats)
     end
     return out
 end
@@ -95,23 +94,14 @@ _stt_jac(t) = ForwardDiff.jacobian(
     uu -> (d = similar(uu); fill!(d, 0); t[1](d, uu, t[3], 0.0); d), t[2]
 )
 
-# Structural introspection build (grid pin): a zero primary node budget — a
-# retained tuning threshold — keeps the complete kernel list in
-# `kernel_section.kernels` (the grid_invariance_test idiom — n_emitted == 0
-# asserted at the use site).
+# Structural introspection build (grid pin): the build report's kernel list
+# (the post-merge access kernels) and every count the build made.
 function _stt_kernels(N)
-    return withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
-        ESM._reset_cascade_tally!()
-        f, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(
-            _stt_model(N);
-            initial_conditions = _stt_ics(N), const_arrays = Dict("W" => _stt_W(N))
-        )
-        ks = getfield(getfield(f, :kernel_section), :kernels)
-        (
-            kernels = ks, tally = copy(ESM._CASCADE_TALLY),
-            n_emitted = getfield(getfield(f, :kernel_section), :n_emitted),
-        )
-    end
+    rep = ESM.Internal.build(
+        _stt_model(N);
+        initial_conditions = _stt_ics(N), const_arrays = Dict("W" => _stt_W(N))
+    ).report
+    return (kernels = rep.kernels, tally = rep.counts)
 end
 # Total materialized const-box table length across kernels. In this fixture W
 # is read ONLY through the rescued lane, so every `_AK_CONST_BOX` descriptor
@@ -154,7 +144,6 @@ _stt_tbl_len(kernels) = sum(
         N1, N2 = 8, 24
         A = _stt_kernels(N1)
         B = _stt_kernels(N2)
-        @test A.n_emitted == 0 && B.n_emitted == 0     # lists are complete
         @test A.tally == B.tally                        # incl. :affine_subtree_tbl
         @test get(A.tally, :affine_subtree_tbl, 0) == 1
         @test length(A.kernels) == length(B.kernels)    # structure is O(1) in N

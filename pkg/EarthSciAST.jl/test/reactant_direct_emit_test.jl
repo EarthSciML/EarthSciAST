@@ -437,10 +437,10 @@ function _de_halo(; NI = 6, NJ = 6, M = 7)
     )
     ics = Dict{String, Any}()
     for i in 1:NI, j in 1:NJ
-        ics["out[$i,$j]"] = 0.0
+        ics["R.out[$i,$j]"] = 0.0
     end
     for a in 1:NQ, b in 1:NQ
-        ics["q[$a,$b]"] = Float64(10a + b)
+        ics["R.q[$a,$b]"] = Float64(10a + b)
     end
     return (doc, ics, NI, NJ, M)
 end
@@ -456,7 +456,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     "ESS_CONTRACTION_LOOP_MIN" => "8",
     "ESS_ARRAY_CONTRACTION_MIN" => "1024"
 ) do
-    EarthSciAST._build_evaluator(
+    EarthSciAST.Internal.build(
         doc; initial_conditions = ics, form = form,
         compiler = batch ? :native : :interpreter
     )
@@ -476,8 +476,8 @@ end
         )
         @test isfile(fixture)
         file = ESM_DE.load_path(fixture)
-        fo, u0, p, tspan, vmap = EarthSciAST._build_evaluator(file; model_name = "Column", form = :oop)
-        fi!, u0i, _, _, _ = EarthSciAST._build_evaluator(file; model_name = "Column")
+        fo, u0, p, tspan, vmap = EarthSciAST.Internal.build(file; form = :oop)
+        fi!, u0i, _, _, _ = EarthSciAST.Internal.build(file)
         @test u0 == u0i
         n = length(u0)
         samples = [
@@ -498,7 +498,8 @@ end
             a.reduce === nothing || continue
             idx = a.assertion_idx
             # assertion order in the fixture: u[lev=1], u[lev=3], max, min, s
-            slot = idx == 1 ? vmap["u[1]"] : idx == 2 ? vmap["u[3]"] : vmap["s"]
+            slot = idx == 1 ? vmap["Column.u[1]"] : idx == 2 ? vmap["Column.u[3]"] :
+                vmap["Column.s"]
             @test abs(du_d[slot] - a.actual) <= 1.0e-11
         end
 
@@ -516,8 +517,8 @@ end
 
     @testset "reaction–diffusion: state, parameters, pow, boundary kernels" begin
         N = 8
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(_de_rd(N))
         u1 = collect(range(0.2, 1.7; length = N))
         samples = [(u1, 0.0), (u1 .^ 2 .- 0.5, 2.0), (reverse(u1) .* 1.3, 10.0)]
         d, cd_ = _de_compare("reaction_diffusion", fo, fi!, p, samples)
@@ -532,8 +533,8 @@ end
         N = 8
         wind = fill(1.0, N)
         pa = Dict("wind" => wind)
-        fi!, _, p, _, _ = EarthSciAST._build_evaluator(_de_forced(N); param_arrays = pa)
-        fo, _, _, _, _ = EarthSciAST._build_evaluator(_de_forced(N); form = :oop, param_arrays = pa)
+        fi!, _, p, _, _ = EarthSciAST.Internal.build(_de_forced(N); param_arrays = pa)
+        fo, _, _, _, _ = EarthSciAST.Internal.build(_de_forced(N); form = :oop, param_arrays = pa)
         host = ESM_DE.forcing_buffers(fo)
         @test keys(host) == (:wind,)
         @test host.wind === wind                      # aliased, not copied
@@ -597,9 +598,9 @@ end
             ]
         )
         F = collect(1.0:n) ./ 7
-        pa = Dict("F" => F)
-        fi!, _, p, _, _ = EarthSciAST._build_evaluator(doc; param_arrays = pa)
-        fo, _, _, _, _ = EarthSciAST._build_evaluator(doc; form = :oop, param_arrays = pa)
+        pa = Dict("M.F" => F)
+        fi!, _, p, _, _ = EarthSciAST.Internal.build(doc; param_arrays = pa)
+        fo, _, _, _, _ = EarthSciAST.Internal.build(doc; form = :oop, param_arrays = pa)
         host = ESM_DE.forcing_buffers(fo)
         dev = map(RX_DE.ConcreteRArray, host)
         db = EXT_DE.direct_rhs_with_buffers(fo)
@@ -625,7 +626,7 @@ end
         bad["models"]["M"]["equations"][1]["rhs"]["expr"] =
             _de_o("*", _de_ix("F", _de_o("+", "k", "m")), "k")
         err = try
-            EarthSciAST._build_evaluator(bad; form = :oop, param_arrays = Dict("F" => copy(F)))
+            EarthSciAST.Internal.build(bad; form = :oop, param_arrays = Dict("M.F" => copy(F)))
             nothing
         catch e
             e
@@ -638,8 +639,8 @@ end
         fix = fullrank_per_cell_fixture()
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(flat)
         # The plan really does carry sub-kernels — otherwise this fixture would
         # be testing the ordinary kernel path under a different name.
         plans = getfield(fo.rhs, :acc_plans)
@@ -817,8 +818,8 @@ end
         fix = fullrank_per_cell_fixture()
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(flat)
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         ref = _de_ip(fi!, u1, p, 0.4)
@@ -938,8 +939,8 @@ end
         )
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(flat)
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(flat)
         n = length(u0)
         u1 = Float64[sin(0.1 * i) + 1.5 for i in 1:n]
         ref = _de_ip(fi!, u1, p, 0.4)
@@ -1107,8 +1108,8 @@ end
     end
 
     @testset "`log10`" begin
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_log10doc(); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_log10doc())
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(_de_log10doc(); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(_de_log10doc())
         samples = [(copy(u0), t) for t in (0.0, 1.0)]
         d, cd_ = _de_compare("log10", fo, fi!, p, samples)
         # `log10` is a `log` and a `divide`, never a `log10` op (there is none).
@@ -1135,8 +1136,9 @@ end
     @testset "a staggered prefix scan over `du`'s uncovered last node" begin
         n = 12
         m = _de_scan_stag(n)
-        foS, u0S, pS, _, vmS, dgS = ESM_DE._build_evaluator_impl(m; form = :oop)
-        fiS!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(m; form = :inplace)
+        foS, u0S, pS, _, vmS, rpS = ESM_DE.Internal.build(m; form = :oop)
+        fiS!, _, _, _, _, _ = ESM_DE.Internal.build(m; form = :inplace)
+        dgS = rpS.stats
         # The rewrite fired, and the fold is over the STATE equations (`du`).
         @test dgS.n_scan_folds == 1
         @test length(getfield(getfield(foS, :rhs), :scan_folds)) == 1
@@ -1158,23 +1160,24 @@ end
                 RX_DE.ConcreteRNumber(0.0)
             )
         )
-        terms = Float64[u[vmS["u[$j]"]] for j in 1:n]
-        @test du[vmS["c[1]"]] == 0.0
-        @test du[vmS["c[$(n + 1)]"]] ≈ sum(terms) rtol = 1.0e-13
+        terms = Float64[u[vmS["M.u[$j]"]] for j in 1:n]
+        @test du[vmS["M.c[1]"]] == 0.0
+        @test du[vmS["M.c[$(n + 1)]"]] ≈ sum(terms) rtol = 1.0e-13
     end
 
     @testset "a staggered prefix scan over a materialized observed's buffer" begin
         n = 9
         m, isets = _de_scan_stag_obs(n)
-        ics = Dict("u[$j]" => 0.4 * j - 1.3 for j in 1:n)
-        foO, u0O, pO, _, vmO, dgO = ESM_DE._build_evaluator_impl(
+        ics = Dict("M.u[$j]" => 0.4 * j - 1.3 for j in 1:n)
+        foO, u0O, pO, _, vmO, rpO = ESM_DE.Internal.build(
             m;
             index_sets = isets, initial_conditions = ics, form = :oop
         )
-        fiO!, _, _, _, _, _ = ESM_DE._build_evaluator_impl(
+        fiO!, _, _, _, _, _ = ESM_DE.Internal.build(
             m;
             index_sets = isets, initial_conditions = ics, form = :inplace
         )
+        dgO = rpO.stats
         rO = getfield(foO, :rhs)
         # `Mz` is materialized, its fill carries the fold, and the fold's slots
         # are in the EXTENDED map — the ReSEACT shape, not the `du` one.
@@ -1224,7 +1227,7 @@ end
     end
 
     @testset "the hard-error path names the construct and the rule" begin
-        fo, u0, p, _, vmap = EarthSciAST._build_evaluator(_de_unsupported_op(); form = :oop)
+        fo, u0, p, _, vmap = EarthSciAST.Internal.build(_de_unsupported_op(); form = :oop)
         d = EXT_DE.direct_rhs(fo; var_map = vmap)
         ur = RX_DE.ConcreteRArray(copy(u0))
         tr = RX_DE.ConcreteRNumber(0.0)
@@ -1292,8 +1295,8 @@ end
     @testset "reverse-mode ∂/∂p and ∂/∂u agree with the host" begin
         EZ = RX_DE.Enzyme
         N = 12
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(_de_rd(N))
         syms = keys(p)
         pv0 = collect(Float64, values(p))
         u = Float64[0.6sin(0.7k) + 1.2 for k in 1:N]
@@ -1351,8 +1354,8 @@ end
         # BOTH directions, the way `t` is, since a baked-in `p` returns the same
         # plausible numbers for ever with no error.
         N = 12
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(_de_rd(N); form = :oop)
-        fi!, _, _, _, _ = EarthSciAST._build_evaluator(_de_rd(N))
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(_de_rd(N); form = :oop)
+        fi!, _, _, _, _ = EarthSciAST.Internal.build(_de_rd(N))
         syms = keys(p)
         pv0 = collect(Float64, values(p))
         nt(pv) = NamedTuple{syms}(Tuple(pv))

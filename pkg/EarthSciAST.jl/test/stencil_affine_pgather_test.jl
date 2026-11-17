@@ -21,12 +21,12 @@ const ESM = EarthSciAST
 function _pg_build_both(model, ics, buf)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:aff, :native), (:ref, :interpreter))
-        f!, u0, p, _t, _vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, _vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing" => buf),
             compiler = compiler
         )
-        out[tag] = (f!, u0, p, diag)
+        out[tag] = (f!, u0, p, rep.stats)
     end
     return out
 end
@@ -95,7 +95,7 @@ end
 @testset "affine live-forcing pgather ≡ per-cell (differential, ess-affine)" begin
     @testset "pure forcing D(u[i])=forcing[i] (N=$N)" for N in (8, 32)
         buf = Float64[0.5 + 0.2k for k in 1:N]
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
         b = _pg_build_both(_pg_pure_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
@@ -108,7 +108,7 @@ end
 
     @testset "forcing + Laplacian, ghost boxes (N=$N)" for N in (8, 32, 64)
         buf = Float64[0.5 + 0.2k for k in 1:N]
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         b = _pg_build_both(_pg_1d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
@@ -122,7 +122,7 @@ end
     @testset "forcing kernel count N-independent" begin
         counts = map((8, 32, 128)) do N
             buf = Float64[0.2k for k in 1:N]
-            ics = Dict("u[$k]" => 0.1k for k in 1:N)
+            ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
             _pg_build_both(_pg_1d_model(N), ics, buf)[:aff][4].n_acc_kernels
         end
         @test all(==(counts[1]), counts)
@@ -130,7 +130,7 @@ end
 
     @testset "2-D forcing[i,j] + 5-point Laplacian (N=$N)" for N in (5, 16)
         buf = Float64[0.1i + 0.3j for i in 1:N, j in 1:N]
-        ics = Dict("u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) for i in 1:N, j in 1:N)
+        ics = Dict("M.u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) for i in 1:N, j in 1:N)
         b = _pg_build_both(_pg_2d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1

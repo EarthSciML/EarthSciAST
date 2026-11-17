@@ -14,11 +14,11 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _inv_build(model, ics; affine::Bool)
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
         initial_conditions = ics, compiler = affine ? :native : :interpreter
     )
-    return (f!, u0, p, vm, diag)
+    return (f!, u0, p, vm, rep.stats)
 end
 _du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
 
@@ -74,7 +74,7 @@ end
 
 @testset "affine invariant hoist ≡ per-cell (differential, ess-affine)" begin
     @testset "time-varying invariant sin(2t) (N=$N)" for N in (8, 32)
-        ics = Dict("c[$k]" => 1.0 + 0.1k for k in 1:N)
+        ics = Dict("M.c[$k]" => 1.0 + 0.1k for k in 1:N)
         fa, u0, pa, _, d = _inv_build(_inv_time_model(N), ics; affine = true)
         fr, _, pr, _, _ = _inv_build(_inv_time_model(N), ics; affine = false)
         @test d.n_acc_inv_slots >= 1        # sin(2t) hoisted
@@ -89,7 +89,7 @@ end
     end
 
     @testset "parameter invariant g/h (N=$N)" for N in (8, 32, 64)
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         fa, u0, pa, _, d = _inv_build(_inv_param_model(N), ics; affine = true)
         fr, _, pr, _, _ = _inv_build(_inv_param_model(N), ics; affine = false)
         @test d.n_acc_inv_slots >= 1
@@ -97,9 +97,9 @@ end
     end
 
     @testset "fixed-state invariant s·s (N=$N)" for N in (8, 32)
-        ics = Dict{String, Float64}("s" => 1.5)
+        ics = Dict{String, Float64}("M.s" => 1.5)
         for k in 1:N
-            ics["c[$k]"] = 0.5k
+            ics["M.c[$k]"] = 0.5k
         end
         fa, u0, pa, vm, d = _inv_build(_inv_state_model(N), ics; affine = true)
         fr, u0r, pr, _, _ = _inv_build(_inv_state_model(N), ics; affine = false)
@@ -109,7 +109,7 @@ end
 
     @testset "invariant slot count is N-independent" begin
         counts = map((8, 32, 128)) do N
-            ics = Dict("u[$k]" => 0.1k for k in 1:N)
+            ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
             _inv_build(_inv_param_model(N), ics; affine = true)[5].n_acc_inv_slots
         end
         @test all(==(counts[1]), counts)
@@ -117,7 +117,7 @@ end
     end
 
     @testset "pure stencil hoists nothing" begin
-        ics = Dict("u[$k]" => sin(0.3k) for k in 1:16)
+        ics = Dict("M.u[$k]" => sin(0.3k) for k in 1:16)
         _, _, _, _, d = _inv_build(_inv_none_model(16), ics; affine = true)
         @test d.n_acc_inv_slots == 0
     end

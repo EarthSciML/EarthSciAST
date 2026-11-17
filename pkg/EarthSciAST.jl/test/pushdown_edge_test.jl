@@ -352,18 +352,19 @@ end
     @test vi.extents["emis_src_cells_faq"] == length(HAND_MEMBERS)
 
     # ============================================================
-    # BUILD through the front-door — Hook 1 (feedback) + Hook 2 (defer+fetch).
-    # The front door does NOT namespace (bare names throughout, like the overlap
-    # conformance test), so the gated fetch, the members-fed factor, and the
-    # supplied const arrays all resolve under the authored names. `esm_problem`'s
-    # eager-loop deferral ROUTING is exercised by the separate testset below.
+    # BUILD — Hook 1 (feedback) + Hook 2 (defer+fetch), on the flattened
+    # document, so the supplied const arrays carry the component-qualified names
+    # and the gated fetch and the members-fed factor resolve onto them.
+    # `esm_problem`'s eager-loop deferral ROUTING is exercised by the separate
+    # testset below.
     # ============================================================
-    insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA._build_evaluator(
+    ca_q = Dict{String, Any}("ISRM." * k => v for (k, v) in ca)
+    f!, u0, p, _tspan, var_map, rep = EA.Internal.build(
         doc;
-        model_name = "ISRM", const_arrays = ca, inspect = insp,
+        const_arrays = ca_q,
         _gated_providers = Dict{String, Any}("ISRM_SR" => mock), _sample_time = 0.0
     )
+    insp = rep.products
 
     # ============================================================
     # ASSERTION 2 — gated provider got the pushed-down selection == members,
@@ -381,14 +382,14 @@ end
     # ============================================================
     # ASSERTION 3 — members fed back as `src_cell_of_ppl`; cell_* gathers resolve
     # ============================================================
-    @test haskey(insp.const_arrays, "src_cell_of_ppl")
-    @test Vector{Float64}(insp.const_arrays["src_cell_of_ppl"]) ==
+    @test haskey(insp.const_arrays, "ISRM.src_cell_of_ppl")
+    @test Vector{Float64}(insp.const_arrays["ISRM.src_cell_of_ppl"]) ==
         Float64.(HAND_MEMBERS)
     # the gated SR slab landed compact in const_arrays: [members, rcv]
     for name in PATHS
-        @test haskey(insp.const_arrays, name)
-        @test size(insp.const_arrays[name]) == (NP, N_RCV)
-        @test insp.const_arrays[name] ≈ srC(name)
+        @test haskey(insp.const_arrays, "ISRM.$name")
+        @test size(insp.const_arrays["ISRM.$name"]) == (NP, N_RCV)
+        @test insp.const_arrays["ISRM.$name"] ≈ srC(name)
     end
     # cell_* gathers (evaluate the derived-shaped observeds over the compact axis)
     cell_cells = [[c] for c in 1:NP]
@@ -396,7 +397,7 @@ end
             ("cell_W", cellW), ("cell_S", cellS),
             ("cell_E", cellE), ("cell_N", cellN),
         )
-        expr = get(insp.observed_exprs, "ISRM.$edge", get(insp.observed_exprs, edge, nothing))
+        expr = get(insp.observed_exprs, "ISRM.$edge", nothing)
         @test expr !== nothing
         got = EA.evaluate_cellwise(
             expr, cell_cells;
@@ -411,10 +412,7 @@ end
     # ============================================================
     # E_* are shaped over the DERIVED axis → evaluate the resolved expr directly.
     ev(name) = (
-        expr = get(
-            insp.observed_exprs, "ISRM.$name",
-            get(insp.observed_exprs, name, nothing)
-        );
+        expr = get(insp.observed_exprs, "ISRM.$name", nothing);
         expr === nothing ? error("no observed expr for $name") :
             EA.evaluate_cellwise(
                 expr, cell_cells; const_arrays = insp.const_arrays,
@@ -450,13 +448,14 @@ end
     # namespaced variable keys.)
     # ============================================================
     @testset "full esm_problem() API: eager-loop deferral + fetch" begin
-        ca_q = Dict{String, Any}("ISRM." * k => v for (k, v) in ca)
-        insp2 = EA.BuildInspection()
+        insp_pub = EA.BuildInspection()
         mock2 = MockSR(fullSR, gate, Any[])
         prep = EA.esm_problem(
             f, (0.0, 1.0); const_arrays = ca_q, providers = Dict("ISRM_SR" => mock2),
-            inspect = insp2
+            inspect = insp_pub
         )
+        insp2 = prep.build.products
+        @test insp_pub.const_arrays === insp2.const_arrays
         @test prep isa EA.EsmProblem
         # deferral: NEVER wholesale-materialized in the eager const loop
         @test count(c -> c[1] == :wholesale, mock2.calls) == 0
