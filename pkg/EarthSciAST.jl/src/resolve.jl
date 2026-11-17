@@ -151,7 +151,6 @@ apart — the only difference between them is which `base_path` anchors the refs
 function _load_document(
         raw_data, base_path::String;
         metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[],
         native_subsystem_refs::Bool = true,
         record_import_base::Bool = true
     )::EsmFile
@@ -254,7 +253,6 @@ function _load_document(
     doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(
         doc; base_path = base_path, metaparameters = metaparameters,
-        injected_imports = injected_imports,
         mount_declared = mount_declared, authored_checked = true
     )
     # Resolve nested subsystem references relative to the document's directory.
@@ -279,7 +277,7 @@ function _load_document(
     # base the caller really gave is recorded (`load_path` always has one); a
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
-    record_import_base && _record_coupling_import_base!(file, base_path)
+    record_import_base && (file = _record_coupling_import_base(file, base_path))
     # esm-spec §8.5.1: the deprecated `records_per_sample`, ONE warning per load.
     # Here, on the mounted document, because only the public entry points reach
     # `_load_document`; a ref-mounted child loads through `_load_parsed` and so
@@ -344,9 +342,6 @@ Julia decoration on the canonical `load_string`, not a fourth entry point:
 Runs the SAME pipeline [`load_path`](@ref) and [`load_document`](@ref) run —
 `_load_document`: top-level `{ref}` inlining, version gates, schema
 validation, template lowering, coercion, and nested subsystem-ref resolution.
-(Before that was shared, a stream-loaded document kept its subsystem refs as
-unresolved `SubsystemRef`s, which `flatten` silently SKIPS: the same document
-loaded from a stream flattened to a strictly smaller system, with no error.)
 `base_path` anchors relative `expression_template_imports` refs and nested
 `{ref}`s (esm-spec §9.7.2, §4.7), defaulting to `pwd()` for that; left at
 `nothing` the document has no location of its own, so a relative
@@ -356,27 +351,23 @@ the loader API (esm-spec §9.7.6).
 """
 function load_string(
         json::AbstractString; base_path::Union{Nothing, AbstractString} = nothing,
-        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[]
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}()
     )::EsmFile
     raw_data = _read_json_document(json)
     return _load_document(
         raw_data, String(something(base_path, pwd()));
         metaparameters = metaparameters,
-        injected_imports = injected_imports,
         record_import_base = base_path !== nothing
     )
 end
 
 function load_string(
         io::IO; base_path::Union{Nothing, AbstractString} = nothing,
-        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[]
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}()
     )::EsmFile
     return load_string(
         read(io, String); base_path = base_path,
-        metaparameters = metaparameters,
-        injected_imports = injected_imports
+        metaparameters = metaparameters
     )
 end
 
@@ -713,9 +704,10 @@ function _verbatim_decl(raw_data, key::Symbol)
     return d isa AbstractDict ? d : nothing
 end
 
-# Rebuild `file` carrying the verbatim declaration blocks and, from esm 0.9.0
-# (Option B), the per-component MATERIALIZED template registries + a possibly
-# version-stamped `esm`. `EsmFile` is immutable.
+# Rebuild `file` with the verbatim declaration blocks, the per-component
+# materialized template registries and a possibly version-stamped `esm`. Each
+# keyword replaces its field (`nothing` clears it), except `esm = nothing`, which
+# keeps `file.esm`. With every keyword `nothing`, `file` comes back as is.
 _with_declarations(
     file::EsmFile, templates, metaparams;
     component_templates = nothing, esm = nothing, coordinates = nothing
@@ -724,28 +716,13 @@ _with_declarations(
         templates === nothing && metaparams === nothing &&
         component_templates === nothing && esm === nothing && coordinates === nothing
     ) ? file :
-    EsmFile(
-        esm === nothing ? file.esm : esm, file.metadata;
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
+    reconstruct(
+        file;
+        esm = esm === nothing ? file.esm : esm,
         expression_templates = templates,
         metaparameters = metaparams,
         component_templates = component_templates,
-        coordinates = coordinates,
-        # `coupling_roles` is read at the coercion boundary (no lowering
-        # pass rewrites it), so carry the already-coerced value across
-        # this rebuild rather than re-snapshotting it. `solver` (esm-spec
-        # §2.2) is read at the same boundary for the same reason and is
-        # carried the same way — dropping it here would delete the block on
-        # every document that goes through template lowering.
-        coupling_roles = file.coupling_roles,
-        solver = file.solver,
-        document_base = file.document_base
+        coordinates = coordinates
     )
 
 # ========================================
@@ -998,25 +975,6 @@ function _inline_toplevel_refs(
     return native
 end
 
-"""
-    _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
-                             mount_noun, file_noun, parent_meta, api_meta, forwarded,
-                             precision) -> (comp, compdir, leaf_fold_env, leaf_precision)
-
-The per-edge core of the esm-spec §4.7 edge pipeline, shared by BOTH mount forms:
-read the referenced document, run its version gates and library rejections,
-close its metaparameters with this edge's `bindings` (§9.7.6 site 3, with the
-site-4 loader-API backfill for the names the leaf declares), apply this edge's
-§9.7.10 form-A injection, resolve its §9.7 machinery and run the §9.6.3
-fixpoint, and apply this edge's `index_set_rename`.
-
-The caller owns the cycle-detection push/pop on `visited` and everything the
-two mount forms do DIFFERENTLY once the leaf is resolved — a `models.<k>` edge
-selects one model and merges the leaf's by-name blocks, a `subsystems.<k>`
-edge requires exactly one component. One copy for every mount form, so the forms
-cannot drift apart. `file_noun` names what the edge mounts ("model" or "reaction
-system") in the not-found and not-an-object diagnostics.
-"""
 # esm-spec §4.7 "Working precision crosses a mount". A ROOT that declares no
 # `domain.element_type` evaluates in binary64 (§11.3); a MOUNTED document that
 # declares none adopts its mounter's.
@@ -1121,6 +1079,25 @@ function _lower_mounted_enums_at_edge(document, target, mount_noun::AbstractStri
     end
 end
 
+"""
+    _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
+                             mount_noun, file_noun, parent_meta, api_meta, forwarded,
+                             precision) -> (comp, compdir, leaf_fold_env, leaf_precision)
+
+The per-edge core of the esm-spec §4.7 edge pipeline, shared by BOTH mount forms:
+read the referenced document, run its version gates and library rejections,
+close its metaparameters with this edge's `bindings` (§9.7.6 site 3, with the
+site-4 loader-API backfill for the names the leaf declares), apply this edge's
+§9.7.10 form-A injection, resolve its §9.7 machinery and run the §9.6.3
+fixpoint, and apply this edge's `index_set_rename`.
+
+The caller owns the cycle-detection push/pop on `visited` and everything the
+two mount forms do DIFFERENTLY once the leaf is resolved — a `models.<k>` edge
+selects one model and merges the leaf's by-name blocks, a `subsystems.<k>`
+edge requires exactly one component. One copy for every mount form, so the forms
+cannot drift apart. `file_noun` names what the edge mounts ("model" or "reaction
+system") in the not-found and not-an-object diagnostics.
+"""
 function _resolve_mount_edge_core(
         entry::AbstractDict, ref::String, refpath::String,
         base_path::String, visited::Set{String};
@@ -1761,8 +1738,10 @@ function _inline_toplevel_form!(
     # precision, which each of its edges compares its leaf against.
     effective = something(_declared_element_type(native), String(precision))
     for (name, entry) in collect(components)
+        # A stub whose `ref` is not a string is left in place for the schema
+        # check to report.
         (
-            entry isa AbstractDict && haskey(entry, "ref") &&
+            entry isa AbstractDict && get(entry, "ref", nothing) isa AbstractString &&
                 !haskey(entry, form.body_key)
         ) || continue
         ref = _expand_ref_env(String(entry["ref"]), base_path)  # esm-spec §4.7 ${VAR} / esm:std
@@ -2033,12 +2012,6 @@ function _resolve_refs_in_file!(
         end
     end
 
-    # Resolve reaction system subsystem refs
-    if file.reaction_systems !== nothing
-        for (name, rsys) in file.reaction_systems
-            _resolve_reaction_system_refs!(file.reaction_systems, name, rsys, base_path, visited)
-        end
-    end
     # Merge into THIS document; its own entry wins a name clash. Returned are the
     # entries that could not be merged in place because `file` has no
     # `data_sources` registry to merge into — the caller rebuilds it with them
@@ -2087,7 +2060,7 @@ registry, or `file` itself when there are none.
 """
 _adopt_mounted_sources(file::EsmFile, mounted) =
     (mounted === nothing || isempty(mounted)) ? file :
-    _rebuild(file; data_sources = Dict{String, DataSource}(mounted))
+    reconstruct(file; data_sources = Dict{String, DataSource}(mounted))
 
 """
     _resolve_model_refs!(models_dict, name, model, base_path, visited, registry)
@@ -2311,13 +2284,6 @@ function _resolve_subsystem_ref(
     )
 end
 
-_resolve_subsystem_ref(
-    ref::String, base_path::String, visited::Set{String},
-    registry::AbstractDict{String, IndexSet} = OrderedDict{String, IndexSet}();
-    api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}()
-) =
-    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry; api_meta = api_meta)
-
 """
     _typed_mount_data_sources(loaded, subs, ref, base_path, where) -> Dict{String,DataSource}
 
@@ -2410,22 +2376,6 @@ function _validate_mount_url_substitutions(
         _native_source_locations(loaded.data_sources), subs, base_path, where
     )
     return nothing
-end
-
-"""
-    _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)
-
-Recursively resolve subsystem references within a ReactionSystem's subsystems.
-"""
-function _resolve_reaction_system_refs!(
-        rsys_dict::AbstractDict{String, ReactionSystem}, name::String,
-        rsys::ReactionSystem, base_path::String, visited::Set{String}
-    )
-    for (sub_name, sub_rsys) in rsys.subsystems
-        # Recursively resolve nested subsystem refs
-        _resolve_reaction_system_refs!(rsys.subsystems, sub_name, sub_rsys, base_path, visited)
-    end
-    return
 end
 
 """
@@ -2700,8 +2650,11 @@ function _load_local_ref(
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file — those reference mechanisms are disjoint (esm-spec §9.7.1, §10.9).
-    content = read(resolved_path, String)
-    raw_ref_doc = _read_json_document(content)
+    raw_ref_doc = _read_json_document(read(resolved_path, String))
+    # A second, independent copy for the inlining walk below, which rewrites it;
+    # copied rather than re-parsed so the wire boundary (and its
+    # `deprecated_op` warning) runs once per leaf.
+    ref_doc = deepcopy(raw_ref_doc)
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
     # The mounted file's own version gates, on its authored form: its own
     # top-level mounts are inlined below, and each of them is gated against its
@@ -2745,7 +2698,6 @@ function _load_local_ref(
     # as an unresolved edge. Local refs only — the inliner reads its targets with
     # `isfile`, so an assembly reached over http(s) is out of its reach (and out
     # of `_load_remote_ref`'s, which is why that path is untouched).
-    ref_doc = _read_json_document(content)
     # `api_meta` travels into the leaf's own top-level mounts too, so the §9.7.6
     # site-4 backfill composes down the reference DAG at BOTH mount forms — the
     # same threading TypeScript's `inlineNestedTopLevelMounts` and Go's
@@ -2890,7 +2842,7 @@ end
 """
     _prepare_document_ops!(doc; gate = true) -> Nothing
 
-Settle expression-node `op` spellings for ONE document, in three steps:
+Settle expression-node `op` spellings for ONE document, in four steps:
 
 1. `arrayop` (removed at esm 0.8.0) is rejected BY NAME. It is a well-formed
    identifier, so esm-spec §4.2 would otherwise admit it as an OPEN
@@ -2943,6 +2895,23 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
         end
     end
     return nothing
+end
+
+"""
+    _library_wire_form(raw) -> post-wire library document
+
+A template or coupling library as loaded (by the default loader or a caller's
+`load_ref`), copied into the post-wire carrier and passed through the same
+op-spelling boundary as every other document (`_prepare_document_ops!`): a
+removed op is refused by name and `neg` / `pow` are rewritten with the
+`deprecated_op` warning. A non-object is returned unchanged for the caller's
+own diagnostic.
+"""
+function _library_wire_form(raw)
+    _is_object(raw) || return raw
+    doc = _to_ordered(raw)
+    _prepare_document_ops!(doc)
+    return doc
 end
 
 # The `op` / `fn` / `args` field key of a post-wire node: the carrier is

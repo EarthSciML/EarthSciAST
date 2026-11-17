@@ -26,11 +26,6 @@ using ..MExpr: Sym
 using ..MPrint: esc_t, raw_b, unesc_t
 import ..MPrint, ..MParse, ..MLatex, ..MTypst
 
-"""The LaTeX surface (`MLatex`)."""
-const latex = MLatex
-"""The Typst surface (`MTypst`)."""
-const typst = MTypst
-
 """`Math.print` (Print.lean): the tokens of an expression under the symbol
 table `s`."""
 print(sf::Sf, s::Sym, e) = MPrint.print(sf, s, e)

@@ -18,9 +18,6 @@ function _strip_element_suffix(name::AbstractString)
     return m === nothing ? (String(name), false) : (String(m.captures[1]), true)
 end
 
-# Escape one JSON Pointer reference token (RFC 6901).
-_pointer_token(key::AbstractString) = replace(replace(key, "~" => "~0"), "/" => "~1")
-
 # The names an assertion may target by a bare name, mapped to the declared
 # `shape` (empty when absent): a model's `variables`, or a reaction system's
 # `species` (which carry no shape) and `parameters`.
@@ -100,7 +97,7 @@ function _check_inline_tests!(
                     _override_key_matches(bare_key, names, namespaces) && continue
                     push!(
                         errors, StructuralError(
-                            "$base/$field/$(_pointer_token(key))",
+                            "$base/$field/$(_ptr_escape(key))",
                             "Override key \"$key\" in $field matches no declared name",
                             ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
                             Dict{String, Any}("key" => key, "field" => field)

@@ -87,7 +87,7 @@ end
     end
 
     @testset "removed `call` op fails compile" begin
-        @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0); handler_id = "x"))
+        @test_throws ESM.TreeWalkError _eval1(_op("call", _n(1.0)))
     end
 
     @testset "Graceful errors on unsupported ops" begin

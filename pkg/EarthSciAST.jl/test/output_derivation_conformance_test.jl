@@ -177,3 +177,28 @@ end
         @test_throws OutputError derive_output_gridding(Dict("u[0]" => 1))
     end
 end
+
+@testset "derive_output_meta leaves its document unchanged" begin
+    doc = Dict{String, Any}(
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "x" => Dict{String, Any}("type" => "unknown"),
+                    "y" => Dict{String, Any}("type" => "unknown"),
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                        "rhs" => "y",
+                    ),
+                    Dict{String, Any}("lhs" => "y", "rhs" => 1.0),
+                ],
+            ),
+        ),
+    )
+    before = deepcopy(doc)
+    meta = derive_output_meta(doc)
+    @test meta.var_types["M.y"] == "observed"
+    @test meta.var_types["M.x"] == "unknown"
+    @test doc == before
+end

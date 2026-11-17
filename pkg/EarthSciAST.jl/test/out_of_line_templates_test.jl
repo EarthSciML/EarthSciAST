@@ -539,6 +539,22 @@ end
             ),
             equations = EarthSciAST.Equation[
                 EarthSciAST.Equation(base.equations[1].lhs, _apply("m.c")),
+            ],
+            discrete_parameters = OD{String, EarthSciAST.ModelVariable}(
+                "m.p" => _pvar(upd_expr)
+            ),
+            field_ics = Pair{String, EarthSciAST.ASTExpr}["m.c" => _apply("m.c")],
+            continuous_events = EarthSciAST.ContinuousEvent[
+                EarthSciAST.ContinuousEvent(
+                    EarthSciAST.ASTExpr[_apply("m.c")],
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("m.c", _apply("m.c"))]
+                ),
+            ],
+            discrete_events = EarthSciAST.DiscreteEvent[
+                EarthSciAST.DiscreteEvent(
+                    EarthSciAST.ConditionTrigger(_apply("m.c")),
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("m.c", _apply("m.c"))]
+                ),
             ]
         )
 
@@ -577,6 +593,14 @@ end
             @test ex.parameters["m.d"].update[1].kind == "condition"
             # A variable with nothing to expand is passed through BY IDENTITY.
             @test ex.state_variables["m.c"] === base.state_variables["m.c"]
+            # Field initial conditions and events are expanded too, and the
+            # subset map holds the same expanded variable as its parent.
+            @test !_hasapply(only(ex.field_ics).second)
+            cev = only(ex.continuous_events)
+            @test !_hasapply(only(cev.conditions)) && !_hasapply(only(cev.affects).rhs)
+            dev = only(ex.discrete_events)
+            @test !_hasapply(dev.trigger.expression) && !_hasapply(only(dev.affects).rhs)
+            @test ex.discrete_parameters["m.p"] === ex.parameters["m.p"]
         end
         _serupd(v) = Any[
             [

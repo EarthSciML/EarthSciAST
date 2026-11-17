@@ -997,12 +997,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
     # esm-spec §4.9.1.1 — a DECLARATION may not spell a globally-scoped name.
     #
-    # The independent variable and the §6.4 `_var` placeholder are implicitly
-    # declared in every component's expression scope (§4.9.1) and are resolved BY
-    # NAME ahead of the declaration maps, so a declaration spelled with one of
-    # them is unreachable: the implicit symbol shadows it, not the other way
-    # round. Issue #200 — a fuel time-lag constant declared as `t` validated
-    # clean, then silently became the simulation clock (`log(t) = -inf` at t=0).
     # esm-spec §6.3 — inline array data is only a SHAPED variable's value. On a
     # variable with no `shape` there is nothing for the array to fill.
     @testset "array_default_without_shape (§6.3)" begin
@@ -1027,6 +1021,23 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    # Ragged inline array data is a document error, reported as a ParseError.
+    @testset "ragged inline array data (§6.3)" begin
+        doc = """{"esm": "1.0.0", "metadata": {"name": "ragged"},
+        "index_sets": {"x": {"kind": "interval", "size": 2},
+                       "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {"variables": {
+            "k": {"type": "parameter", "shape": ["x", "y"],
+                  "default": [[1.0, 2.0], [3.0]]}},
+            "equations": []}}}"""
+        @test_throws EarthSciAST.ParseError EarthSciAST.load_string(doc)
+    end
+
+    # The independent variable and the §6.4 `_var` placeholder are implicitly
+    # declared in every component's expression scope (§4.9.1) and are resolved BY
+    # NAME ahead of the declaration maps, so a declaration spelled with one of
+    # them is unreachable: the implicit symbol shadows it, not the other way
+    # round.
     @testset "reserved_variable_name (§4.9.1.1)" begin
         _reserved(result) = filter(
             e -> e.error_type == "reserved_variable_name",
@@ -1200,6 +1211,85 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @test errs[1].details["cycle"] == ["N.Sub.Inner.v", "N.a", "N.Sub.Inner.v"]
         d_inner = """{"lhs": {"op": "D", "args": ["Inner.v"], "wrt": "t"}, "rhs": 1.0}"""
         @test isempty(_cycle(EarthSciAST.validate(EarthSciAST.load_string(nested(d_inner)))))
+    end
+
+    @testset "expression-field walker reports pointers as written" begin
+        # A single update rule is written in object form (`/update/...`); a
+        # condition trigger's expression sits under `/trigger/expression`.
+        x = VarExpr("x")
+        single = ModelVariable(
+            ParameterVariable; default = 0.0,
+            update = ParameterUpdate("condition"; when = x, expression = NumExpr(1.0))
+        )
+        double = ModelVariable(
+            ParameterVariable; default = 0.0,
+            update = ParameterUpdate[
+                ParameterUpdate("condition"; when = x, expression = NumExpr(1.0)),
+                ParameterUpdate("condition"; when = x, expression = NumExpr(2.0)),
+            ]
+        )
+        model = Model(
+            Dict{String, ModelVariable}(
+                "x" => ModelVariable(UnknownVariable; default = 0.0),
+                "p" => single, "q" => double
+            ),
+            Equation[Equation(OpExpr("D", ASTExpr[x]; wrt = "t"), NumExpr(1.0))];
+            discrete_events = DiscreteEvent[
+                DiscreteEvent(ConditionTrigger(x), AffectEquation[]),
+            ]
+        )
+        paths = String[]
+        EarthSciAST._foreach_model_expression(model, "/models/M", nothing) do _, p, _
+            push!(paths, p)
+            nothing
+        end
+        @test "/models/M/variables/p/update/when" in paths
+        @test "/models/M/variables/p/update/expression" in paths
+        @test "/models/M/variables/q/update/1/when" in paths
+        @test "/models/M/discrete_events/0/trigger/expression" in paths
+        @test !any(p -> occursin("/p/update/0", p), paths)
+    end
+
+    @testset "a subsystem of a coupled model resolves with the coupled scope" begin
+        D(v) = OpExpr("D", ASTExpr[VarExpr(v)]; wrt = "t")
+        sub = Model(
+            Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("y"), VarExpr("z"))]
+        )
+        a = Model(
+            Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("x"), NumExpr(0.0))];
+            subsystems = Dict("S" => sub)
+        )
+        b = Model(
+            Dict{String, ModelVariable}("z" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("z"), NumExpr(0.0))]
+        )
+        file = EsmFile(
+            "1.0.0", Metadata("coupled_sub");
+            models = Dict("A" => a, "B" => b),
+            coupling = CouplingEntry[CouplingOperatorCompose(["A", "B"])]
+        )
+        undefined = filter(
+            e -> e.error_type == "undefined_variable" && startswith(e.path, "/models/A/subsystems/S"),
+            EarthSciAST.validate_structural(file)
+        )
+        @test isempty(undefined)
+    end
+
+    @testset "an unresolvable unit on a reaction-system species or parameter" begin
+        rs = ReactionSystem(
+            Species[Species("A"; units = "not_a_unit")], Reaction[];
+            parameters = Parameter[Parameter("k", 1.0; units = "1/s"), Parameter("q", 1.0; units = "m/s2x")]
+        )
+        file = EsmFile("1.0.0", Metadata("rs_units"); reaction_systems = Dict("R" => rs))
+        found = sort!(
+            [
+                e.path for e in EarthSciAST.validate_structural(file)
+                    if e.error_type == "unit_parse_error"
+            ]
+        )
+        @test found == ["/reaction_systems/R/parameters/q", "/reaction_systems/R/species/A"]
     end
 
 end

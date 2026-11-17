@@ -318,30 +318,9 @@ function _namespace_variable_update(var::ModelVariable, _ns)::ModelVariable
     return changed ? reconstruct(var; update = rules) : var
 end
 
-"""
-Collect a Model's variables and equations into the flattener accumulators,
-recursing through subsystems. All names are rewritten to `prefix.local_name`.
-Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single
-shared registry seeded once by `flatten` — so their references inside
-equations (`shape`, `ranges` `from`, producer `id` / `from_faq`) keep their
-plain document-level names and are NOT namespaced here.
-
-`tpl_rename` is this component's slice of the flatten-time template-registry
-collision rename (esm-spec §9.6.4 rule 7 / §10.7; `_merge_flat_registry`): when
-a template name resolves to a different body per component, the merged registry
-keys that entry `<ComponentPath>.<name>` and every `apply_expression_template`
-reference the component authored must follow, or it resolves against nothing.
-The rewrite rides alongside namespacing because this is the one pass that still
-knows which component an expression came from — the "same renaming map …
-applies identically to … references" §10.7 mandates — and is threaded unchanged
-into subsystems, whose templates merged into their owner's registry at load.
-`nothing` (the common case: no collision) skips the rewrite entirely.
-"""
 # Namespace a component's events into the flatten accumulators. Shared by
 # `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
-# system carry their events into the flattened system by the SAME rule — a
-# reaction system's events used to be dropped here, and an evaluator that never
-# saw them ran the document without them (issues #264, #356).
+# system carry their events into the flattened system by the SAME rule.
 #
 # `ns` namespaces an expression in the component's scope. An affect LHS is a
 # NAME, not an expression, so it does not travel through `ns` and needs the
@@ -349,10 +328,7 @@ into subsystems, whose templates merged into their owner's registry at load.
 # variable of this component (or of any component) — it stands for whichever
 # state `operator_compose` expands it to — so it must survive namespacing
 # untouched, exactly as `namespace_expr` already leaves it alone inside the
-# CONDITION (it is in no component's `local_names`). Prefixing only the affect
-# half produced `Transport._var = 1e-3` beside a condition still reading
-# `_var`: one placeholder spelled two ways in one event, which is the
-# partial-rename fingerprint this fixture family was cleaned up to remove.
+# CONDITION (it is in no component's `local_names`).
 function _collect_events!(
         continuous_events::Vector{ContinuousEvent},
         discrete_events::Vector{DiscreteEvent},
@@ -402,6 +378,25 @@ function _collect_events!(
     return nothing
 end
 
+"""
+Collect a Model's variables and equations into the flattener accumulators,
+recursing through subsystems. All names are rewritten to `prefix.local_name`.
+Index sets (RFC §5.2) are document-scoped as of esm-spec v0.8.0 — a single
+shared registry seeded once by `flatten` — so their references inside
+equations (`shape`, `ranges` `from`, producer `id` / `from_faq`) keep their
+plain document-level names and are NOT namespaced here.
+
+`tpl_rename` is this component's slice of the flatten-time template-registry
+collision rename (esm-spec §9.6.4 rule 7 / §10.7; `_merge_flat_registry`): when
+a template name resolves to a different body per component, the merged registry
+keys that entry `<ComponentPath>.<name>` and every `apply_expression_template`
+reference the component authored must follow, or it resolves against nothing.
+The rewrite rides alongside namespacing because this is the one pass that still
+knows which component an expression came from — the "same renaming map …
+applies identically to … references" §10.7 mandates — and is threaded unchanged
+into subsystems, whose templates merged into their owner's registry at load.
+`nothing` (the common case: no collision) skips the rewrite entirely.
+"""
 function _collect_model!(
         states::OrderedDict{String, ModelVariable},
         params::OrderedDict{String, ModelVariable},

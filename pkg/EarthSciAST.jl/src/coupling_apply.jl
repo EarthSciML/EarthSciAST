@@ -1081,8 +1081,8 @@ end
 
 Apply §4.7.1 step 4's merged-away rename to a collected event, in place.
 
-Deliberately NOT `_lower_events!`: that one maps EXPRESSIONS, and an affect's
-`lhs` is a plain variable NAME string, not an expression. The `lhs` is precisely
+An affect's `lhs` is a plain variable NAME string, not an expression, so it is
+renamed here by name, beside the expressions. The `lhs` is precisely
 what a renaming merge deletes — an affect still writing `B.x` writes to an
 unknown the flattened system no longer declares, which the solver reports far
 downstream, if at all.
@@ -1174,9 +1174,9 @@ A dict-shaped connector equation that is neither (no `transform`, and no parsed
 `ASTExpr` `lhs`/`rhs`) is NOT silently degraded into a bogus placeholder
 equation; it is recorded in `opaque_refs` (the `metadata.opaque_coupling_refs`
 channel used for the other couplings the flattener cannot lower) so callers can
-see the entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
-cross-language parity) has no matching typed error, and adding a ninth is
-forbidden — the opaque-refs channel is the designated fallback.
+see the entry was skipped. The flatten error taxonomy (esm-libraries-spec
+§4.7.6) has no typed error for this case; the opaque-refs channel is the
+designated fallback.
 """
 function _apply_couple!(
         equations::Vector{Equation},

@@ -91,8 +91,11 @@ function print_math(expr, names, format::Symbol)::String
         end
     end
     sym = DocumentFormats.MExpr.Sym(String[String(n) for n in names], Tuple{String, Vector{String}}[])
-    return format === :markdown ? DocumentFormats.DMath.print_latex(sym, e) :
-        DocumentFormats.DMath.print_typst(sym, e)
+    # In a reading scope of its own, as `DSource.print_md` is.
+    return DocumentFormats.DSource._printing() do
+        format === :markdown ? DocumentFormats.DMath.print_latex(sym, e) :
+            DocumentFormats.DMath.print_typst(sym, e)
+    end
 end
 
 """

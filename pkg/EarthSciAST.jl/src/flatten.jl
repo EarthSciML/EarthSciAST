@@ -31,11 +31,11 @@ Provenance metadata for a flattened system.
 
 Fields:
 - `source_systems::Vector{String}`: names of the component systems that were
-  flattened (sorted for determinism).
+  flattened, in document order (models, then reaction systems).
 - `coupling_rules_applied::Vector{String}`: human-readable summary of each
   coupling entry applied.
-- `dimension_promotions_applied::Vector{NamedTuple}`: records of each dimension
-  promotion — e.g. `(variable="Chem.O3", source_domain=nothing, target_domain="grid2d", kind=:broadcast)`.
+- `dimension_promotions_applied::Vector{NamedTuple}`: always empty; no flatten
+  pass records into it.
 - `opaque_coupling_refs::Vector{String}`: opaque runtime references recorded
   for `operator_apply` and `callback` couplings.
 - `merged_variable_renames::OrderedDict{String,String}`: every state spelling an
@@ -1165,35 +1165,6 @@ end
 # ========================================
 
 """
-    _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry}) -> EsmFile
-
-Return a copy of `file` with its `coupling` vector replaced. Used to splice
-`coupling_import`-expanded edges into the document the rest of `flatten`
-consumes.
-
-Carries the fields `flatten` reads plus `solver` (esm-spec §2.2), which is
-document-scoped configuration a caller may read back off the returned file, and
-the `document_base` its `external` resolves against (§2.2.6). The
-LOAD-TIME fields — `expression_templates`, `metaparameters`,
-`component_templates`, `coupling_roles` — and `coordinates` are deliberately not
-rebuilt: nothing downstream of `flatten` consults them, and the result never
-escapes `flatten`.
-"""
-_with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
-    EsmFile(
-    file.esm, file.metadata;
-    models = file.models,
-    reaction_systems = file.reaction_systems,
-    data_sources = file.data_sources,
-    coupling = coupling,
-    domain = file.domain,
-    enums = file.enums,
-    index_sets = file.index_sets,
-    solver = file.solver,
-    document_base = file.document_base
-)
-
-"""
     _check_flattened_record_shapes(file::EsmFile) -> Dict{String, Int}
 
 esm-spec §8.5.1 "When rules 2 and 3 are checked", at `flatten`, on the document
@@ -1267,7 +1238,7 @@ function flatten(
     # lift exactly as inline edges would. A file with no imports is unchanged.
     expanded = expand_coupling_imports(file; base_path = base_path, load_ref = load_ref)
     if expanded !== file.coupling
-        file = _with_coupling(file, expanded)
+        file = reconstruct(file; coupling = expanded)
     end
     # esm-spec §8.5.1 "When rules 2 and 3 are checked": a record shape
     # validation could not decide arrives with the expanded coupling sequence,
@@ -1499,12 +1470,15 @@ function flatten(
         )
         resolved.transform isa ASTExpr && continue
         push!(map_rewritten_names, resolved.to)
-        # A bound naming the replaced parameter follows the replacement the
-        # equations just took (esm-libraries-spec §4.7.5).
+        # A bound, an update rule and an event naming the replaced parameter
+        # follow the replacement the equations just took (esm-libraries-spec
+        # §4.7.5).
         rw = _variable_map_rewrite(resolved)
-        states = _map_variable_bounds_all(states, rw)
-        params = _map_variable_bounds_all(params, rw)
-        observeds = _map_variable_bounds_all(observeds, rw)
+        states = _map_variable_bounds_all(_lower_variable_updates(states, rw), rw)
+        params = _map_variable_bounds_all(_lower_variable_updates(params, rw), rw)
+        observeds = _map_variable_bounds_all(_lower_variable_updates(observeds, rw), rw)
+        continuous_events = _map_event_exprs(rw, continuous_events)
+        discrete_events = _map_event_exprs(rw, discrete_events)
     end
 
     # An `operator_compose` merge DELETES a name the same way a `variable_map`
@@ -1565,10 +1539,7 @@ function flatten(
     target_domain = file_domain
 
     # §4.7.5 step 4 (Ordering, normative): components in the order the FILE
-    # declares them. This list was previously sorted "for determinism" — but
-    # document order is equally deterministic and is the order the spec fixes,
-    # and a sorted list silently disagrees with `parameters` / `state_variables`
-    # about which component came first.
+    # declares them, the order `parameters` / `state_variables` follow.
     metadata = FlattenMetadata(
         collect(source_systems),
         coupling_rules_applied;
@@ -1596,12 +1567,15 @@ function flatten(
 
     # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
     # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
-    equations, contribs, field_ics, continuous_events, discrete_events =
-        _normalize_angle_arguments(
+    states, params, observeds, equations, contribs, field_ics,
+        continuous_events, discrete_events = _normalize_angle_arguments(
         states, params, observeds,
         equations, contribs, lifted_shapes, field_ics,
         continuous_events, discrete_events
     )
+    algebraic_variables = _resubset(algebraic_variables, states, observeds)
+    brownian = _resubset(brownian, params)
+    discrete_params = _resubset(discrete_params, params)
 
     # Step 9: write each elementwise template application (esm-spec §9.6.11),
     # in an equation or a field initial condition, as its per-cell `faq`,
@@ -1660,7 +1634,7 @@ function _normalize_angle_arguments(
         angle_normalization_factor(parse_units(u)) !== nothing
             for u in values(var_units)
     ) || return (
-        equations, contribs, field_ics,
+        states, params, observeds, equations, contribs, field_ics,
         continuous_events, discrete_events,
     )
 
@@ -1676,33 +1650,17 @@ function _normalize_angle_arguments(
     equations = Equation[first(r) for r in rewritten]
     contribs = Vector{Contribution}[last(r) for r in rewritten]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
-    # Events are rewritten too: this binding exports the flattened form to
-    # ModelingToolkit, which DOES run events, so leaving a `sin(theta [deg])` in
-    # an event condition unconverted would put the defect back in the one place
-    # a binding still evaluates it.
-    affect(a) = AffectEquation(a.lhs, rewrite(a.rhs))
-    continuous_events = ContinuousEvent[
-        ContinuousEvent(
-            ASTExpr[rewrite(c) for c in ev.conditions],
-            AffectEquation[affect(a) for a in ev.affects];
-            affect_neg = ev.affect_neg === nothing ? nothing :
-                AffectEquation[affect(a) for a in ev.affect_neg],
-            root_find = ev.root_find, reinitialize = ev.reinitialize,
-            description = ev.description, name = ev.name
-        )
-            for ev in continuous_events
-    ]
-    discrete_events = DiscreteEvent[
-        DiscreteEvent(
-            ev.trigger isa ConditionTrigger ?
-                ConditionTrigger(rewrite(ev.trigger.expression)) : ev.trigger,
-            AffectEquation[affect(a) for a in ev.affects];
-            reinitialize = ev.reinitialize, description = ev.description,
-            name = ev.name
-        )
-            for ev in discrete_events
-    ]
-    return (equations, contribs, field_ics, continuous_events, discrete_events)
+    # Events and update rules are evaluated expressions too, so they are
+    # rewritten the same way.
+    continuous_events = _map_event_exprs(rewrite, continuous_events)
+    discrete_events = _map_event_exprs(rewrite, discrete_events)
+    states = _lower_variable_updates(states, rewrite)
+    params = _lower_variable_updates(params, rewrite)
+    observeds = _lower_variable_updates(observeds, rewrite)
+    return (
+        states, params, observeds, equations, contribs, field_ics,
+        continuous_events, discrete_events,
+    )
 end
 
 # Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a scale
@@ -1755,36 +1713,6 @@ end
 # FlattenedSystem → runnable single-model ESM document
 # ========================================
 
-"""
-    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
-
-Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
-(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
-array system, or `discretize(doc)` first when it carries a spatial PDE.
-
-A native dict — not a typed `EsmFile` — is the target on purpose: the value-
-invention front-door (RFC §6.1, geometry / derived index sets) and the
-`discretize` entry both dispatch on `AbstractDict`, and only the raw document
-carries the index-set vocabulary the typed IR doesn't surface.
-
-The single model collects:
-- all three variable partitions (states, parameters, observeds) — observeds keep
-  their defining `expression`, which the geometry materializer reads directly;
-- every flattened equation (state ODEs + the synthesized observed definitions),
-  so the evaluator's own observed-equation synthesis is a no-op (it skips any
-  observed already defined by an equation — no double definition);
-- the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
-  top level so the regridders' `ranges.from` / `from_faq` / producer `id`
-  references resolve.
-
-This is the monolithic path the staged camp-fire run previously could not take,
-because a lossy `flatten` dropped the geometry `manifold` data and the
-index-set registry. With those preserved (canonical `reconstruct` + the registry
-fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
-
-`equation_contributions` is NOT carried: the `.esm` format has no slot for
-per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
-"""
 # esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
 # their free variable references resolve in the owning component's namespace,
 # exactly as the expand-at-load image does (load-time expansion splices the body
@@ -1902,6 +1830,36 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
     return nothing
 end
 
+"""
+    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
+
+Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
+(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
+array system, or `discretize(doc)` first when it carries a spatial PDE.
+
+A native dict — not a typed `EsmFile` — is the target on purpose: the value-
+invention front-door (RFC §6.1, geometry / derived index sets) and the
+`discretize` entry both dispatch on `AbstractDict`, and only the raw document
+carries the index-set vocabulary the typed IR doesn't surface.
+
+The single model collects:
+- all three variable partitions (states, parameters, observeds) — observeds keep
+  their defining `expression`, which the geometry materializer reads directly;
+- every flattened equation (state ODEs + the synthesized observed definitions),
+  so the evaluator's own observed-equation synthesis is a no-op (it skips any
+  observed already defined by an equation — no double definition);
+- the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
+  top level so the regridders' `ranges.from` / `from_faq` / producer `id`
+  references resolve.
+
+This is the monolithic path the staged camp-fire run previously could not take,
+because a lossy `flatten` dropped the geometry `manifold` data and the
+index-set registry. With those preserved (canonical `reconstruct` + the registry
+fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
+
+`equation_contributions` is NOT carried: the `.esm` format has no slot for
+per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
+"""
 function flattened_to_esm(
         flat::FlattenedSystem;
         name::AbstractString = "Flattened",
@@ -2007,3 +1965,36 @@ function _lower_variable_updates(vars::OrderedDict{String, ModelVariable}, f)
     end
     return lowered === nothing ? vars : lowered
 end
+
+# Every expression of each event mapped through `f`: a continuous event's
+# conditions, a condition trigger's expression, and the right-hand side of every
+# affect. An affect's target (`lhs`, a variable name) is left as written.
+_map_affects(f, affects::Vector{AffectEquation}) =
+    AffectEquation[AffectEquation(a.lhs, f(a.rhs)) for a in affects]
+_map_affects(f, ::Nothing) = nothing
+
+_map_event_exprs(f, events::Vector{ContinuousEvent}) = ContinuousEvent[
+    ContinuousEvent(
+        ASTExpr[f(c) for c in ev.conditions], _map_affects(f, ev.affects);
+        affect_neg = _map_affects(f, ev.affect_neg),
+        root_find = ev.root_find, reinitialize = ev.reinitialize,
+        description = ev.description, name = ev.name
+    )
+        for ev in events
+]
+
+_map_event_exprs(f, events::Vector{DiscreteEvent}) = DiscreteEvent[
+    DiscreteEvent(
+        ev.trigger isa ConditionTrigger ?
+            ConditionTrigger(f(ev.trigger.expression)) : ev.trigger,
+        _map_affects(f, ev.affects);
+        reinitialize = ev.reinitialize, description = ev.description,
+        name = ev.name
+    )
+        for ev in events
+]
+
+# The §6.3.1 subset maps re-read from their parents after a pass rewrote the
+# parents' variables, so a subset never holds a stale copy.
+_resubset(subset::OrderedDict{String, ModelVariable}, parents::OrderedDict{String, ModelVariable}...) =
+    _in_document_order(Set{String}(keys(subset)), parents...)

@@ -270,28 +270,7 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
     found === nothing || throw(_removed_construct_error(found..., source_version))
 
     # Marker-only bump: every other field is carried across by reference.
-    # `EsmFile`'s keyword constructor defaults every optional block, so a field
-    # added to the struct and not listed here would be silently dropped — the
-    # round-trip assertion in test/migration_test.jl walks `fieldnames(EsmFile)`
-    # to catch exactly that.
-    return EsmFile(
-        String(target_version), file.metadata;
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
-        expression_templates = file.expression_templates,
-        metaparameters = file.metaparameters,
-        component_templates = file.component_templates,
-        coordinates = file.coordinates,
-        # esm-spec §2.2. A migration on the additive line is a no-op MARKER
-        # bump; dropping a field here would make it a lossy rewrite.
-        solver = file.solver,
-        document_base = file.document_base
-    )
+    return reconstruct(file; esm = String(target_version))
 end
 
 function migrate(doc::AbstractDict, target_version::AbstractString)::Dict{String, Any}

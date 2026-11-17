@@ -855,20 +855,18 @@ end
 # operand gathers where that is decisive (`_lift_axis_names`), else by matching
 # extents — producing the species' new shape axes (`gaxes`) and the aggregate
 # loop `ranges`, each `{"from": <axis>}`. A synthetic axis is added to
-# `registry` (the flattened `index_sets`) when one is given.
+# `registry` (the flattened `index_sets`). `reg` is the template registry.
 function _pointwise_lift_axes(
         ma::OpExpr, loops::Vector{String},
         size_to_names::Dict{Int, Vector{String}},
         species::String, rank::Int;
-        mas::Union{Vector{OpExpr}, Nothing} = nothing,
-        var_shapes::Union{Dict{String, Vector{String}}, Nothing} = nothing,
-        index_sets = nothing, reg = nothing,
-        registry::Union{AbstractDict{String, IndexSet}, Nothing} = nothing
+        mas::Vector{OpExpr},
+        var_shapes::Dict{String, Vector{String}},
+        index_sets, reg,
+        registry::AbstractDict{String, IndexSet}
     )
     extents = _makearray_extents(ma)
-    named = (mas === nothing || var_shapes === nothing || index_sets === nothing) ?
-        Union{String, Nothing}[nothing for _ in 1:rank] :
-        _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
+    named = _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
     gaxes = String[]
     ranges = Dict{String, Any}()
     for d in 1:rank
@@ -898,8 +896,7 @@ function _pointwise_lift_axes(
             # self-describing name the same in every binding
             # (esm-libraries-spec §4.7.5, "Pointwise lift: index sets").
             axname = "_liftdim$(d)_$(extents[d])"
-            registry === nothing ||
-                _register_synthetic_index_set!(registry, axname, extents[d], d, species)
+            _register_synthetic_index_set!(registry, axname, extents[d], d, species)
             push!(gaxes, axname)
             ranges[loops[d]] = IndexSetRef(axname)
         end

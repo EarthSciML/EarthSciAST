@@ -461,16 +461,6 @@ function item_t(it::RItem)
     return out
 end
 
-"""`Typ.eqnLabeled`: a display equation with a label after it."""
-function eqn_labeled(raw::AbstractString, label)
-    out = collect(Char, O_EQ)
-    append!(out, raw)
-    push!(out, ' ', '$')
-    append!(out, label)
-    push!(out, '\n')
-    return out
-end
-
 """`Typ.labelOK`: nothing, or `<id>`, with spaces around."""
 function label_ok(sl::Chars)
     _, t = take_while(sl, c -> c == ' ')
@@ -703,15 +693,11 @@ rxn_ok(x::Rxn) =
 """`Typ.declOK`."""
 decl_ok(d::Decl) = name_ok(d.name) && !('$' in name_typ(d.name)) && all(arg_ok, d.attrs)
 
-"""`Typ.Seg`: a piece of a Typst document: a construct, a labelled equation or
-prose."""
+"""`Typ.Seg`: a piece of a Typst document: a construct or prose. The Lean
+type's labelled-equation case is never built here."""
 abstract type Seg end
 struct SegItem <: Seg
     it::RItem
-end
-struct SegLabeled <: Seg
-    raw::String
-    label::Vector{Char}
 end
 struct SegProse <: Seg
     p::Vector{Char}
@@ -719,7 +705,6 @@ end
 
 """`Typ.segText`."""
 seg_text(s::SegItem) = item_t(s.it)
-seg_text(s::SegLabeled) = eqn_labeled(s.raw, s.label)
 seg_text(s::SegProse) = s.p
 
 """`Typ.render`."""

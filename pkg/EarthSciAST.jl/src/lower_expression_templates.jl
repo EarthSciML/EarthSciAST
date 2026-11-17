@@ -268,9 +268,8 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
         end
         # A body MAY reference other match-less in-scope templates via
         # apply_expression_template nodes (esm-spec §9.7.3); those are checked
-        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and inlined at
-        # registration by `_compose_template_bodies!` — the old any-nesting
-        # rejection is now cycle-only (`apply_expression_template_recursive_body`).
+        # (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) at registration by
+        # `_check_template_body_graph` and are not inlined.
 
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
@@ -1659,7 +1658,7 @@ function lower_expression_templates(raw_data)
                 # validate the body-reference DAG (acyclic, depth-bounded,
                 # references resolve to match-less templates). Bodies are NOT
                 # inlined — references are preserved (§9.6.4).
-                _compose_template_bodies!(templates, "$compkind.$(string(cname))")
+                _check_template_body_graph(templates, "$compkind.$(string(cname))")
                 decl_index = 0
                 for (tname, decl) in templates
                     decl_index += 1
@@ -1732,29 +1731,19 @@ function lower_expression_templates(raw_data)
     # receiving component, where a regridding library import (§9.7) lives.
     # The transform is rewritten to fixpoint exactly as a field of that
     # component would be (named templates + auto `match` rules, §9.6.3).
-    coupling = get(root, "coupling", nothing)
-    if coupling isa AbstractVector
-        for (i, entry) in enumerate(coupling)
-            _is_object(entry) || continue
-            get(entry, "type", nothing) == "variable_map" || continue
-            tr = get(entry, "transform", nothing)
-            _is_object(tr) || continue
-            target = get(entry, "to", nothing)
-            target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit = 2)))
-            reg = get(registries, comp_name, nothing)
-            reg === nothing && continue
-            entry["transform"] = _rewrite_to_fixpoint(
-                tr, reg.named,
-                reg.match_rules,
-                "coupling[$(i)].transform", reg.shape_env,
-                reg.target_bearing
-            )
-            _check_surviving_refs(
-                entry["transform"], reg.named,
-                "coupling[$(i)].transform"
-            )
-        end
+    for (i, entry, tr, comp_name) in _variable_map_transforms(root)
+        reg = get(registries, comp_name, nothing)
+        reg === nothing && continue
+        entry["transform"] = _rewrite_to_fixpoint(
+            tr, reg.named,
+            reg.match_rules,
+            "coupling[$(i)].transform", reg.shape_env,
+            reg.target_bearing
+        )
+        _check_surviving_refs(
+            entry["transform"], reg.named,
+            "coupling[$(i)].transform"
+        )
     end
 
     # esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
@@ -2406,11 +2395,7 @@ file with no surviving references comes back by identity.
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
     out = _expand_refs!(deepcopy(file))
-    return _with_declarations(
-        out, out.expression_templates, out.metaparameters;
-        component_templates = nothing, esm = out.esm,
-        coordinates = out.coordinates
-    )
+    return reconstruct(out; component_templates = nothing)
 end
 
 
@@ -2502,28 +2487,22 @@ end
 
 The shared "Expand at your boundary" utility for `FlattenedSystem` consumers
 (esm-spec §9.6.4 rule 2, RFC out-of-line-expression-templates §7.7): expand
-every surviving `apply_expression_template` reference in the flattened
-equations and observed expressions against the merged `template_registry`,
-returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
-when the registry is empty (no references survived). `flatten` ALWAYS carries
-references, so a consumer with no template handling calls this at its entry —
-the MTK `System` constructor does; the tree-walk build
-does NOT (it expands at its own entry with site recording, the compile-once
-tier).
+every surviving `apply_expression_template` reference against the merged
+`template_registry`, returning an Expanded copy, bit-identical to the
+Expand-at-load image. A no-op when the registry is empty (no references
+survived). `flatten` ALWAYS carries references, so a consumer with no template
+handling calls this at its entry — the ModelingToolkit `System` constructor does; the
+tree-walk build does NOT (it expands at its own entry with site recording).
 
-Every expression-bearing position ON A VARIABLE is expanded too, not only the
-equations. In esm 1.0.0 an observed unknown's body is its defining EQUATION, so
-the declaration itself carries no expression; what remains on a variable is a
-parameter update's `when` trigger and its `expression` value form (esm-spec
-§5.4). The flattener namespaces those for every variable before partitioning it
-into `state_variables` / `parameters` / `observed_variables`, so any of the
-three buckets can legally carry an `apply_expression_template` inside an
-`update`. Expanding only the equations left an Option-B node in a parameter's
-update for a consumer that had been promised an Option-A image.
+Expanded positions: the equations, the field initial conditions, every event
+expression (conditions, condition triggers, affect right-hand sides), and each
+variable's parameter-update `when` and `expression` (esm-spec §5.4) in all three
+variable buckets. The three subset maps (`algebraic_variables`,
+`brownian_parameters`, `discrete_parameters`) are re-read from the expanded
+buckets, so they hold the same expanded variables.
 
-`memo` is the shared expansion memo (`_expand_model_refs!`'s default, ~34% of
-build wall time on the 7×7×7 transport fixture when absent): structurally
-identical apply sites expand once and share the result. Pass `nothing` for the
+`memo` is the shared expansion memo (`_expand_model_refs!`'s default):
+structurally identical apply sites expand once and share the result. Pass `nothing` for the
 per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
@@ -2538,14 +2517,20 @@ function expand_flattened_refs(
     # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
     # reference whose body is a sum expands into terms that all inherit the
     # contribution's origins.
-    neweqs, newcontribs = _rewrite_flat_equations(
-        e -> _expand_expr_refs(e, reg, nothing, memo), flat
-    )
+    expand = e -> _expand_expr_refs(e, reg, nothing, memo)
+    neweqs, newcontribs = _rewrite_flat_equations(expand, flat)
+    states = _expand_vars_refs(flat.state_variables, reg, memo)
+    params = _expand_vars_refs(flat.parameters, reg, memo)
+    observeds = _expand_vars_refs(flat.observed_variables, reg, memo)
     return FlattenedSystem(
         flat; equations = neweqs, equation_contributions = newcontribs,
-        state_variables = _expand_vars_refs(flat.state_variables, reg, memo),
-        parameters = _expand_vars_refs(flat.parameters, reg, memo),
-        observed_variables = _expand_vars_refs(flat.observed_variables, reg, memo)
+        state_variables = states, parameters = params, observed_variables = observeds,
+        algebraic_variables = _resubset(flat.algebraic_variables, states, observeds),
+        brownian_parameters = _resubset(flat.brownian_parameters, params),
+        discrete_parameters = _resubset(flat.discrete_parameters, params),
+        field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(expand, flat.continuous_events),
+        discrete_events = _map_event_exprs(expand, flat.discrete_events)
     )
 end
 
@@ -2621,23 +2606,13 @@ function expand_document(loaded)
         end
     end
 
-    coupling = get(root, "coupling", nothing)
-    if coupling isa AbstractVector
-        for (i, entry) in enumerate(coupling)
-            _is_object(entry) || continue
-            get(entry, "type", nothing) == "variable_map" || continue
-            tr = get(entry, "transform", nothing)
-            _is_object(tr) || continue
-            target = get(entry, "to", nothing)
-            target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit = 2)))
-            named = get(
-                comp_named, ("models", comp_name),
-                get(comp_named, ("reaction_systems", comp_name), nothing)
-            )
-            named === nothing && continue
-            entry["transform"] = _expand_all(tr, named, "coupling[$(i)].transform")
-        end
+    for (i, entry, tr, comp_name) in _variable_map_transforms(root)
+        named = get(
+            comp_named, ("models", comp_name),
+            get(comp_named, ("reaction_systems", comp_name), nothing)
+        )
+        named === nothing && continue
+        entry["transform"] = _expand_all(tr, named, "coupling[$(i)].transform")
     end
 
     return root
@@ -2888,6 +2863,27 @@ function _merge_flat_registry(component_templates)
     return (merged, rename)
 end
 
+# Each `variable_map` coupling entry of the raw document `root` whose
+# `transform` is an expression object, as `(index, entry, transform,
+# receiving component)`: the receiving component is the first segment of `to`,
+# whose template registry the transform's references resolve against
+# (esm-spec §10.4/§10.5).
+function _variable_map_transforms(root)
+    out = Tuple{Int, Any, Any, String}[]
+    coupling = get(root, "coupling", nothing)
+    coupling isa AbstractVector || return out
+    for (i, entry) in enumerate(coupling)
+        _is_object(entry) || continue
+        get(entry, "type", nothing) == "variable_map" || continue
+        tr = get(entry, "transform", nothing)
+        _is_object(tr) || continue
+        target = get(entry, "to", nothing)
+        target isa AbstractString || continue
+        push!(out, (i, entry, tr, String(first(split(target, "."; limit = 2)))))
+    end
+    return out
+end
+
 """
     _expand_coupling_transform_refs!(root)
 
@@ -2899,16 +2895,7 @@ self-contained. Called by the typed load path before `_materialize_components!`
 strips the component registries.
 """
 function _expand_coupling_transform_refs!(root)
-    coupling = get(root, "coupling", nothing)
-    coupling isa AbstractVector || return
-    for entry in coupling
-        _is_object(entry) || continue
-        get(entry, "type", nothing) == "variable_map" || continue
-        tr = get(entry, "transform", nothing)
-        _is_object(tr) || continue
-        target = get(entry, "to", nothing)
-        target isa AbstractString || continue
-        comp_name = String(first(split(target, "."; limit = 2)))
+    for (_, entry, tr, comp_name) in _variable_map_transforms(root)
         named = nothing
         for ck in ("models", "reaction_systems")
             comps = get(root, ck, nothing)

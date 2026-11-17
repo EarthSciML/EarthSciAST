@@ -72,39 +72,6 @@ function _rebuild(
     )
 end
 
-function _rebuild(
-        file::EsmFile;
-        esm = file.esm,
-        metadata = file.metadata,
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain
-    )
-    return EsmFile(
-        esm, metadata;
-        models = models,
-        reaction_systems = reaction_systems,
-        data_sources = data_sources,
-        coupling = coupling,
-        domain = domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
-        # The verbatim top-level declaration blocks. This helper's whole
-        # premise is that a rebuild carries every field it does not replace,
-        # and these five were being reset to `nothing` — so an edit turned a
-        # template library, or a coupling library, into an ordinary document.
-        expression_templates = file.expression_templates,
-        metaparameters = file.metaparameters,
-        component_templates = file.component_templates,
-        coordinates = file.coordinates,
-        coupling_roles = file.coupling_roles,
-        solver = file.solver,
-        document_base = file.document_base,
-    )
-end
-
 # Variable operations (Section 4.1)
 
 """
@@ -189,7 +156,8 @@ function rename_variable(model::Model, old_name::String, new_name::String)::Mode
     new_equations = [
         Equation(
             substitute(eq.lhs, substitution),
-            substitute(eq.rhs, substitution)
+            substitute(eq.rhs, substitution);
+            _comment = eq._comment
         )
             for eq in model.equations
     ]
@@ -235,9 +203,11 @@ function remove_equation(model::Model, index::Int)::Model
 end
 
 function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
-    # Find equation with matching LHS
+    # The first equation whose LHS is structurally equal to the pattern: the
+    # two serialize to the same wire form.
+    want = serialize_expression(lhs_pattern)
     for (i, eq) in enumerate(model.equations)
-        if eq.lhs == lhs_pattern  # This requires ASTExpr equality to be defined
+        if eq.lhs === lhs_pattern || serialize_expression(eq.lhs) == want
             return remove_equation(model, i)
         end
     end
@@ -256,7 +226,8 @@ function substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr}):
     new_equations = [
         Equation(
             substitute(eq.lhs, bindings),
-            substitute(eq.rhs, bindings)
+            substitute(eq.rhs, bindings);
+            _comment = eq._comment
         )
             for eq in model.equations
     ]
@@ -417,7 +388,7 @@ function add_coupling(file::EsmFile, entry::CouplingEntry)::EsmFile
     new_coupling = copy(file.coupling)
     push!(new_coupling, entry)
 
-    return _rebuild(file; coupling = new_coupling)
+    return reconstruct(file; coupling = new_coupling)
 end
 
 """
@@ -434,7 +405,7 @@ function remove_coupling(file::EsmFile, index::Int)::EsmFile
     new_coupling = copy(file.coupling)
     deleteat!(new_coupling, index)
 
-    return _rebuild(file; coupling = new_coupling)
+    return reconstruct(file; coupling = new_coupling)
 end
 
 """
@@ -495,7 +466,7 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     # Merge other fields (file_b takes precedence)
     merged_metadata = file_b.metadata
 
-    return _rebuild(
+    return reconstruct(
         file_b;
         esm = file_b.esm,  # Use file_b's version
         metadata = merged_metadata,
@@ -561,7 +532,7 @@ function extract(file::EsmFile, component_name::String)::EsmFile
         end
     end
 
-    return _rebuild(
+    return reconstruct(
         file;
         models = extracted_models,
         reaction_systems = extracted_reaction_systems,

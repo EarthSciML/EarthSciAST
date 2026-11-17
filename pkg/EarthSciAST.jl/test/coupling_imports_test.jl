@@ -360,6 +360,14 @@ end
     @test flatten(file; base_path = joinpath("does", "not", "exist")) isa EarthSciAST.FlattenedSystem
     @test only(e for e in file.coupling if e isa CouplingImport).ref == "./rothermel_fuel.esm"
     @test occursin("\"./rothermel_fuel.esm\"", EarthSciAST.to_json(file))
+    # A copy or an edit of the document keeps its base: the base is a field of
+    # the document, not keyed on its `coupling` vector.
+    cd(mktempdir()) do
+        @test flatten(lower_enums(file)) isa EarthSciAST.FlattenedSystem
+        @test flatten(EarthSciAST.expanded_file(file)) isa EarthSciAST.FlattenedSystem
+        edited = remove_coupling(add_coupling(file, first(file.coupling)), length(file.coupling) + 1)
+        @test flatten(edited) isa EarthSciAST.FlattenedSystem
+    end
 end
 
 # A document with no location of its own — built in memory, or parsed from text
@@ -515,4 +523,72 @@ end
             delete!(ENV, var)
         end
     end
+end
+
+@testset "flatten keeps component templates when a coupling_import expands" begin
+    # A reaction system whose rates are template references survives load with
+    # its per-component template registry. Expanding a `coupling_import` rebuilds
+    # the document; the registry must come along, so the imported edge flattens
+    # exactly like the same edge written inline.
+    fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
+    f = EarthSciAST.load_path(fixture)
+    @test f.component_templates !== nothing
+    tlib = Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict{String, Any}("name" => "TempLib"),
+        "coupling_roles" => Dict{String, Any}(
+            "Src" => Dict{String, Any}("description" => "temperature source"),
+            "Dst" => Dict{String, Any}("description" => "chemistry"),
+        ),
+        "coupling" => Any[
+            Dict{String, Any}(
+                "type" => "variable_map", "from" => "Src.T",
+                "to" => "Dst.T", "transform" => "param_to_var"
+            ),
+        ],
+    )
+    env = Model(
+        Dict{String, ModelVariable}(
+            "T" => ModelVariable(ParameterVariable; default = 300.0, units = "K")
+        ),
+        Equation[]
+    )
+    imported = EarthSciAST.reconstruct(
+        f; models = Dict("Env" => env),
+        coupling = CouplingEntry[CouplingImport("lib.esm", Dict("Src" => "Env", "Dst" => "chem"))]
+    )
+    inline = EarthSciAST.reconstruct(
+        f; models = Dict("Env" => env),
+        coupling = CouplingEntry[CouplingVariableMap("Env.T", "chem.T", "param_to_var")]
+    )
+    se(x) = [EarthSciAST.serialize_equation(e) for e in x.equations]
+    flat_imported = flatten(imported; load_ref = (ref, base) -> tlib)
+    @test se(flat_imported) == se(flatten(inline))
+    @test any(e -> _uses_var(e.rhs, "Env.T"), flat_imported.equations)
+end
+
+@testset "a variable_map substitution reaches events and update rules" begin
+    file = assembly(
+        CouplingEntry[
+            CouplingVariableMap("FuelModelLookup.sigma", "RothermelFireSpread.sigma", "param_to_var"),
+        ]
+    )
+    spread = file.models["RothermelFireSpread"]
+    push!(
+        spread.discrete_events,
+        DiscreteEvent(
+            ConditionTrigger(_op(">", _v("sigma"), _n(1.0))),
+            AffectEquation[AffectEquation("rate", _v("sigma"))]
+        )
+    )
+    spread.variables["k"] = ModelVariable(
+        ParameterVariable; default = 0.0,
+        update = ParameterUpdate("condition"; when = _v("rate"), expression = _v("sigma"))
+    )
+    flat = flatten(file)
+    ev = only(flat.discrete_events)
+    @test _uses_var(ev.trigger.expression, "FuelModelLookup.sigma")
+    @test !_uses_var(ev.trigger.expression, "RothermelFireSpread.sigma")
+    @test _uses_var(only(ev.affects).rhs, "FuelModelLookup.sigma")
+    rule = only(flat.parameters["RothermelFireSpread.k"].update)
+    @test _uses_var(rule.expression, "FuelModelLookup.sigma")
 end

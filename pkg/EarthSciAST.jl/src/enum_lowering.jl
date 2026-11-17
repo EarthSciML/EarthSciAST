@@ -198,9 +198,11 @@ lower_enums(file::EsmFile)::EsmFile = lower_enums!(deepcopy(file))
 """
     lower_enums!(file::EsmFile)
 
-Walk every expression tree in `file` and replace each `enum` op with a
-`const` integer per the file's `enums` block. After this pass runs, no
-`enum`-op nodes remain in the in-memory representation.
+Replace each `enum` op with a `const` integer per the file's `enums` block, in
+these positions: a model's equations, initialization equations and parameter
+update rules (recursing into subsystems), a reaction system's rates and
+constraint equations (recursing into subsystems), and the expressions of
+`coupling` entries. Events, guesses and inline-test references are not walked.
 
 The in-place twin of [`lower_enums`](@ref), which documents the validation
 rules and the [`EnumLoweringError`](@ref) codes both raise.
@@ -251,31 +253,8 @@ function _lower_model_enums!(model::Model, enums::Dict{String, Dict{String, Int}
         end
         changed && (model.variables[name] = reconstruct(var; update = rules))
     end
-    new_eqs = Equation[]
-    for eq in model.equations
-        push!(
-            new_eqs, Equation(
-                _lower_expr_enums(eq.lhs, enums),
-                _lower_expr_enums(eq.rhs, enums);
-                _comment = eq._comment
-            )
-        )
-    end
-    empty!(model.equations)
-    append!(model.equations, new_eqs)
-
-    new_init_eqs = Equation[]
-    for eq in model.initialization_equations
-        push!(
-            new_init_eqs, Equation(
-                _lower_expr_enums(eq.lhs, enums),
-                _lower_expr_enums(eq.rhs, enums);
-                _comment = eq._comment
-            )
-        )
-    end
-    empty!(model.initialization_equations)
-    append!(model.initialization_equations, new_init_eqs)
+    _lower_equations_enums!(model.equations, enums)
+    _lower_equations_enums!(model.initialization_equations, enums)
 
     for (_, sub) in model.subsystems
         # An unresolved SubsystemRef carries no enums to lower.
@@ -283,6 +262,18 @@ function _lower_model_enums!(model::Model, enums::Dict{String, Dict{String, Int}
         _lower_model_enums!(sub, enums)
     end
     return
+end
+
+# Lower every `enum` op in both sides of each equation of `eqs`, in place.
+function _lower_equations_enums!(eqs::Vector{Equation}, enums::Dict{String, Dict{String, Int}})
+    for (i, eq) in enumerate(eqs)
+        eqs[i] = Equation(
+            _lower_expr_enums(eq.lhs, enums),
+            _lower_expr_enums(eq.rhs, enums);
+            _comment = eq._comment
+        )
+    end
+    return eqs
 end
 
 function _lower_reaction_system_enums!(
@@ -307,6 +298,7 @@ function _lower_reaction_system_enums!(
     end
     empty!(rs.reactions)
     append!(rs.reactions, new_reactions)
+    _lower_equations_enums!(rs.constraint_equations, enums)
     for (_, sub) in rs.subsystems
         _lower_reaction_system_enums!(sub, enums)
     end

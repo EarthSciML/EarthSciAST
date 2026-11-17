@@ -56,6 +56,20 @@ const _ENUM_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test rhs_of(file).value == 1
     end
 
+    @testset "a reaction system's constraint equations are lowered" begin
+        rs = ReactionSystem(
+            Species[Species("A")], Reaction[];
+            constraint_equations = Equation[Equation(VarExpr("A"), enum_expr())]
+        )
+        file = EsmFile(
+            "2.0.0", Metadata("Enums");
+            reaction_systems = Dict("R" => rs),
+            enums = Dict("Phase" => Dict("SOLID" => 0, "LIQUID" => 1))
+        )
+        rhs = lower_enums(file).reaction_systems["R"].constraint_equations[1].rhs
+        @test rhs isa OpExpr && rhs.op == "const" && rhs.value == 1
+    end
+
     @testset "every rejection is an EnumLoweringError, not a ParseError" begin
         undeclared = try
             lower_enums(_file(enums = Dict("Other" => Dict("A" => 0))))

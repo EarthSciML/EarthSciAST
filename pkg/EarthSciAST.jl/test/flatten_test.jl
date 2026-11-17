@@ -267,6 +267,8 @@ end
             e -> e.error_type == "conflicting_derivative" &&
                 occursin("SimpleOzone.O3", e.message), errs
         )
+        # Reported at the document root, which is "" (not "/").
+        @test all(e -> e.path == "", filter(e -> e.error_type == "conflicting_derivative", errs))
     end
 
     @testset "6. operator_compose across two models (summed RHS)" begin

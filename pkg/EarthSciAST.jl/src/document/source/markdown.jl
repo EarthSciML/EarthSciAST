@@ -948,40 +948,19 @@ function item_md(it::RItem)
     return out
 end
 
-"""`Md.eqnLabeled`: a display equation with an equation label after it."""
-function eqn_labeled(raw::AbstractString, label)
-    out = collect(Char, DD)
-    push!(out, '\n')
-    append!(out, raw)
-    push!(out, '\n')
-    append!(out, DD)
-    append!(out, label)
-    push!(out, '\n')
-    return out
-end
-
-"""`Md.Seg`: a piece of a Markdown document: a construct, a labelled equation,
-prose, or a code span."""
+"""`Md.Seg`: a piece of a Markdown document: a construct or prose. The Lean
+type's labelled-equation and code-span cases are never built here."""
 abstract type Seg end
 struct SegItem <: Seg
     it::RItem
 end
-struct SegLabeled <: Seg
-    raw::String
-    label::Vector{Char}
-end
 struct SegProse <: Seg
     p::Vector{Char}
-end
-struct SegCode <: Seg
-    body::Vector{Char}
 end
 
 """`Md.segText`."""
 seg_text(s::SegItem) = item_md(s.it)
-seg_text(s::SegLabeled) = eqn_labeled(s.raw, s.label)
 seg_text(s::SegProse) = s.p
-seg_text(s::SegCode) = vcat(Char['`'], s.body, Char['`'])
 
 """`Md.render`: the text of a document body."""
 function render(segs)

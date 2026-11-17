@@ -22,18 +22,6 @@ using ..MExpr: is_dig, is_greek, is_letter, let_run
 
 # ## Spelling
 
-"""`Latex.specials`: characters of a JSON string written as a hex escape."""
-const SPECIALS = ('%', '$', '#', '{', '}')
-
-"""`Latex.escCharB`: the JSON escape of one character, with the specials as hex
-escapes."""
-function esc_char_b(c::Char)
-    if c in SPECIALS
-        return Char['\\', 'u', DStrings.hex4(UInt32(c))...]
-    end
-    return DStrings.esc_char(false, c, Char[])
-end
-
 """`Latex.fixUs`: undo the `\\_` of `escCharL` up to the closing quote."""
 function fix_us(cs::Chars)
     out = Char[]
@@ -277,7 +265,7 @@ const CTRL_KW = Dict{String, Kw}(
     "prod" => KProd, "in" => KInn, "substack" => KSubstack, "limits" => KLimitsL,
 )
 
-"""`Latex.arrayCols`: after `\\begin`: `{array}{` and one or more `c`, then
+"""Not in Lean: after `\\begin`: `{array}{` and one or more `c`, then
 `}`: the opener of a wide constant matrix, with its column count."""
 function array_cols(r::Chars)
     r2 = drop_p("{array}{", r)

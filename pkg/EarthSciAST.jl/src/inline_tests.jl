@@ -82,14 +82,8 @@ struct InlineTestError <: EarthSciASTError
 end
 Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.msg)
 
-# `PdeAssertionResult` used to be aliased here, back when this runner's results
-# were a distinct struct. Both inline-test runners have long shared ONE result
-# type — [`AssertionResult`](@ref), defined in run_tests.jl, with one JUnit
-# emitter — so the alias named nothing of its own, and its "Pde" was the same
-# too-narrow word this file's rename removed. Deleted rather than kept: a second
-# spelling for one type is exactly what makes a reader think there are two.
-#
-# For results this runner produces, `container_kind` is `:model` or
+# Both inline-test runners share one result type, [`AssertionResult`](@ref)
+# (run_tests.jl), with one JUnit emitter. For results this runner produces, `container_kind` is `:model` or
 # `:reaction_system` after the component the test hangs off (both carry
 # `tests`); `file` is the document's path whenever the document came from one —
 # on an assertion row as well as on the `<load>` row a batch emits for an
@@ -100,22 +94,20 @@ Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.ms
 # the resolved §6.6.4 tolerances.
 
 # ============================================================
-# wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
+# OPTIONAL BLAS accelerator for the linear mat-vec observed
 # ============================================================
 #
-# The Phase C compile-once evaluator folds the contraction `conc[out…] =
-# Σ_c A[c,out…]·E[c]` SEQUENTIALLY per output cell (a type-stable
-# `_NK_CONTRACTION`, ~47 µs/cell, zero per-cell alloc). For this SPECIAL linear
+# The compile-once evaluator folds the contraction `conc[out…] =
+# Σ_c A[c,out…]·E[c]` SEQUENTIALLY per output cell. For this SPECIAL linear
 # sum-product shape the entire field is one matrix product `conc = A' · E`, which
-# a single BLAS `mul!` evaluates far faster. This layer recognises that shape and
-# takes the BLAS path; it FALLS BACK (returns `nothing`) to Phase C — the
-# bit-identical-to-oracle baseline — for everything else, and is engaged only via
-# the opt-in `evaluate_cellwise(…; blas_accel=true)` flag.
+# a single BLAS `mul!` evaluates. This layer recognises that shape and takes the
+# BLAS path; it FALLS BACK (returns `nothing`) to the compile-once evaluator, the
+# bit-exact baseline, for everything else, and is engaged only via the opt-in
+# `evaluate_cellwise(…; blas_accel=true)` flag.
 #
-# HONEST correctness: BLAS sums each dot product in a blocked/SIMD order that
-# differs from Phase C's sequential fold, so the result is NOT bit-identical — it
-# agrees to a few ULPs (machine precision), which the Phase D tests pin at
-# rtol 1e-10. Phase C remains the bit-exact baseline.
+# BLAS sums each dot product in a blocked/SIMD order that differs from the
+# sequential fold, so the result is NOT bit-identical: it agrees to a few ULPs,
+# which the tests pin at rtol 1e-10.
 #
 # Reuse: the SEMIRING guard (`_pd_oplus == ("+",0)`) and the body-shape predicate
 # (`_pd_matvec_factors`) are the SAME ones the pushdown auto-rewrite (`_pd_detect`,
@@ -215,11 +207,11 @@ end
 """
     _evaluate_cellwise_blas(expr, cells, const_arrays, registered_functions, params)
 
-The wall2 Phase D BLAS fast path. Returns the evaluated field `Vector{Float64}`
+The BLAS fast path. Returns the evaluated field `Vector{Float64}`
 when `expr` is (or elementwise-wraps) the linear sum-product mat-vec
 `conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays `A`/`E`, else `nothing` (⇒ the
-caller falls back to the Phase C compile-once path). Rank-1 and rank-≥2 output are
-both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to Phase C — see
+caller falls back to the compile-once path). Rank-1 and rank-≥2 output are
+both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to the compile-once path — see
 the module note — but agrees to machine precision.
 """
 function _evaluate_cellwise_blas(
@@ -239,7 +231,7 @@ function _evaluate_cellwise_blas(
     agg = aggs[1]
 
     # SEMIRING GUARD — the additive (+,0) monoid ONLY (mirrors `_pd_detect`; a
-    # max/min-semiring contraction of the same shape is left to Phase C).
+    # max/min-semiring contraction of the same shape is left to the compile-once path).
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing
     # A PLAIN contraction only — no relational join / filter / value-invention.
@@ -273,7 +265,7 @@ function _evaluate_cellwise_blas(
     out_sizes = size(A)[2:end]
 
     # Contracted range → concrete UNIT range within 1:N_c. A stepped range would
-    # not map to one contiguous gemv slice ⇒ bail to Phase C.
+    # not map to one contiguous gemv slice ⇒ bail to the compile-once path.
     rspec = ranges[c_sym]
     (rspec isa AbstractVector && _is_const_int_range(rspec)) || return nothing
     crange = _expand_int_range(rspec)
@@ -294,8 +286,8 @@ function _evaluate_cellwise_blas(
 
     # WRAPPED elementwise form `f(conc[out…])`: replace the aggregate with a gather
     # of the precomputed `conc`, then evaluate the (now array-producer-free) wrapper
-    # per cell via the Phase C compile-once path, binding the aggregate's OWN output
-    # symbols. A collision with a param / the time symbol ⇒ bail to Phase C.
+    # per cell via the compile-once path, binding the aggregate's OWN output
+    # symbols. A collision with a param / the time symbol ⇒ bail to the compile-once path.
     for s in out_syms
         (s == "t" || haskey(params, s)) && return nothing
     end
@@ -320,10 +312,10 @@ function _evaluate_cellwise_blas(
 end
 
 # ============================================================
-# Phase E — the JOIN-GATED aggregate, still on ONE compile
+# The JOIN-GATED aggregate, still on ONE compile
 # ============================================================
 #
-# Phase C keeps the OUTPUT index symbolic and compiles the observed body once.
+# The compile-once path keeps the OUTPUT index symbolic and compiles the observed body once.
 # It cannot do that for an aggregate carrying `join_gates`: which contracted
 # tuples contribute is decided per output cell by a build-time join index (the
 # §5.5.6 overlap broad phase, the §5.5.8 `on` match set), so the admitted term
@@ -407,7 +399,7 @@ end
 """
     _evaluate_cellwise_gated(expr, cells, const_arrays, registered_functions, params, t)
 
-Phase E. Returns the evaluated field `Vector{Float64}` when `expr` is — or
+The join-gated path. Returns the evaluated field `Vector{Float64}` when `expr` is — or
 elementwise wraps — a single `faq` carrying resolved `join_gates`, else
 `nothing` (⇒ the caller falls through to the per-cell walk it always had).
 """
@@ -423,7 +415,7 @@ function _evaluate_cellwise_gated(
     (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
 
     # Exactly one reduction anywhere in the (otherwise elementwise) tree, and it
-    # must be the gated one — an ungated aggregate is Phase C's business and has
+    # must be the gated one — an ungated aggregate is the compile-once path's business and has
     # already had its turn by the time this runs.
     aggs = _blas_collect_aggregates!(OpExpr[], expr)
     length(aggs) == 1 || return nothing
@@ -502,7 +494,7 @@ function _evaluate_cellwise_gated(
 
     # WRAPPED elementwise form `f(agg[out…])`: materialize the aggregate's whole
     # field once, substitute a gather of it for the aggregate, and compile the
-    # (now array-producer-free) wrapper once through Phase C — the same shape
+    # (now array-producer-free) wrapper once through the compile-once path — the same shape
     # the BLAS accelerator above uses, and for the same reason.
     for s in out_syms
         (s == "t" || haskey(params, s)) && return nothing
@@ -576,13 +568,13 @@ function evaluate_cellwise(
         t::Float64 = 0.0
     )::Vector{Float64}
     isempty(cells) && return Float64[]
-    # OPT-IN BLAS accelerator (wall2 Phase D): when `blas_accel=true` and the
+    # OPT-IN BLAS accelerator: when `blas_accel=true` and the
     # observed is (or elementwise-wraps) the linear sum-product mat-vec
     # `conc[out…] = Σ_c A[c,out…]·E[c]` over const arrays, evaluate the WHOLE field
-    # with one BLAS `mul!` (`conc = A' * E`) instead of the Phase C per-cell
-    # contraction. It is a PURE OPTIMISATION layered on Phase C: it returns
+    # with one BLAS `mul!` (`conc = A' * E`) instead of the compile-once per-cell
+    # contraction. It is a PURE OPTIMISATION layered on the compile-once path: it returns
     # `nothing` (⇒ falls through to the compile-once path below, byte-identical)
-    # on ANY shape it does not recognise, and its result agrees with Phase C to
+    # on ANY shape it does not recognise, and its result agrees with the compile-once path to
     # machine precision (BLAS sums in a different order — NOT bit-identical).
     # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
     if blas_accel
@@ -592,7 +584,7 @@ function evaluate_cellwise(
         )
         blas === nothing || return blas
     end
-    # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
+    # Compile-once fast path: resolve+compile the
     # observed body ONCE with the output indices bound as parameters, then evaluate
     # each cell by rebinding only those params. Applies only when every cell shares
     # one output rank; it is a pure optimisation and returns `nothing` (→ per-cell
@@ -614,7 +606,7 @@ function evaluate_cellwise(
         # The GATED aggregate the plain compile-once form cannot keep symbolic:
         # its admitted terms are chosen per output cell by a build-time join
         # index, so one compiled body with the output index bound as a parameter
-        # cannot express it. Phase E compiles the aggregate's TERM once instead —
+        # cannot express it. The join-gated path compiles the aggregate's TERM once instead —
         # every loop symbol, output and contracted alike, bound as a parameter —
         # and walks the gate's own admitted key sequence. Still one compile for
         # the whole field; `nothing` on any shape it does not recognise.
@@ -705,34 +697,22 @@ function field_reduce(
 end
 
 # Collect the (cell-index-tuple, flat-slot) pairs of one array state from a
-# var_map. Flattening may prefix element names with the owning model
+# var_map. Flattening prefixes element names with the owning model
 # ("Heat.u[3]"); a name matches when its element stem equals `model.variable`
-# qualified, or `variable` bare. Sorted by cell tuple so callers get a
-# deterministic pairing.
-#
-# Model-qualified-first, exactly like `_scalar_slot`: two sibling components
-# sharing an array field name (each a `u`) both bare-match `variable`, so a
-# single OR-pass would MIS-COLLECT the union of both models' cells. We therefore
-# collect the exact qualified / exact-bare stems first, and only fall back to
-# the bare-suffix match when no exact stem is present (a bare-keyed single-model
-# build). Same qualified-first hardening as the Python `state_cells`.
+# qualified, or `variable` bare (a bare-keyed single-model build). Sorted by cell
+# tuple so callers get a deterministic pairing. As in `_scalar_slot`, a stem of
+# another component that shares the bare name never matches.
 function _state_cells(
         var_map::StateLayout, variable::AbstractString,
         model::AbstractString
     )
-    # The same two-pass match, over the layout's blocks rather than its keys.
     qualified = String(model) * "." * String(variable)
-    exact = _ArrayBlock[]
-    fallback = _ArrayBlock[]
-    for b in _layout_blocks(var_map)
-        if b.name == qualified || b.name == String(variable)
-            push!(exact, b)
-        else
-            bare = occursin('.', b.name) ? String(split(b.name, '.'; limit = 2)[2]) : b.name
-            bare == String(variable) && push!(fallback, b)
-        end
-    end
-    return _block_cell_pairs(isempty(exact) ? fallback : exact)
+    return _block_cell_pairs(
+        _ArrayBlock[
+            b for b in _layout_blocks(var_map)
+                if b.name == qualified || b.name == String(variable)
+        ]
+    )
 end
 
 # Every `(cell, slot)` of `blocks`, in slot order and then sorted by cell — the
@@ -753,24 +733,47 @@ function _state_cells(
         model::AbstractString
     )
     qualified = String(model) * "." * String(variable)
-    exact = Tuple{Vector{Int}, Int}[]
-    fallback = Tuple{Vector{Int}, Int}[]
+    out = Tuple{Vector{Int}, Int}[]
     for (name, slot) in var_map
         # `_parse_cell_key` (tree_walk.jl) is the single inverse of
         # `_cell_key`'s "name[i,j]" encoding — no local regex.
         parsed = _parse_cell_key(String(name))
         parsed === nothing && continue
         stem, cell = parsed
-        if stem == qualified || stem == String(variable)
-            push!(exact, (cell, Int(slot)))
-        else
-            bare = occursin('.', stem) ? String(split(stem, '.'; limit = 2)[2]) : stem
-            bare == String(variable) && push!(fallback, (cell, Int(slot)))
-        end
+        (stem == qualified || stem == String(variable)) && push!(out, (cell, Int(slot)))
     end
-    out = isempty(exact) ? fallback : exact
     sort!(out; by = first)
     return out
+end
+
+# The state rows of OTHER components whose name, after the component prefix,
+# is `variable`: the candidates an unmatched unscoped assertion lists. Cell keys
+# are reported once, by their stem.
+function _assertion_candidates(var_map, variable::AbstractString)
+    names = var_map isa StateLayout ?
+        vcat(_layout_scalar_names(var_map), String[b.name for b in _layout_blocks(var_map)]) :
+        String[String(k) for k in keys(var_map)]
+    out = Set{String}()
+    for n in names
+        parsed = _parse_cell_key(n)
+        stem = parsed === nothing ? n : first(parsed)
+        occursin('.', stem) || continue
+        String(split(stem, '.'; limit = 2)[2]) == String(variable) && push!(out, stem)
+    end
+    return sort!(collect(out))
+end
+
+# An unscoped assertion whose variable has no exact match in the component
+# under test, as a state or as an observed, is refused; a same-named variable
+# of another component is named as a candidate, never read.
+function _refuse_unmatched_assertion(var_map, a, owner::AbstractString, loc::AbstractString, kind::String)
+    cands = _assertion_candidates(var_map, loc)
+    msg = "$kind '$(a.variable)' not found in component '$owner'"
+    isempty(cands) || (
+        msg *= "; a variable of that name exists in another component: " *
+            join(cands, ", ") * " (scope the assertion to read it)"
+    )
+    throw(InlineTestError(msg))
 end
 
 # Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
@@ -1113,15 +1116,12 @@ end
 # from both, the DEAD case of #176 — the component's own defining equation
 # (`_authored_observed_body`).
 #
-# ONE DIAGNOSTIC CHANGES, deliberately (CONFORMANCE_SPEC §5.27.3). A declared
-# observed whose defining equation cannot be evaluated here — it names something
-# the document never declares, a provider array not yet fetched — used to fall
-# out of this function as `nothing` and be reported by the caller as
-# "array state '<v>' has no cells in var_map". It now reaches the evaluator and
-# raises `E_TREEWALK_UNBOUND_VARIABLE: <name>`, which `run_tests.jl` turns into
-# the same ERROR verdict with the unresolved operand named. An UNDECLARED
-# variable is unaffected: it never gets this far (`observed_unknowns` gate
-# above) and still earns the var_map message.
+# A declared observed whose defining equation cannot be evaluated here (it names
+# something the document never declares, or a provider array not yet fetched)
+# reaches the evaluator and raises `E_TREEWALK_UNBOUND_VARIABLE: <name>`, which
+# `run_tests.jl` turns into an ERROR verdict naming the unresolved operand
+# (CONFORMANCE_SPEC §5.27.3). An UNDECLARED variable never gets this far (the
+# `observed_unknowns` gate above); this function returns `nothing` for it.
 #
 # Cells are enumerated from the declared shape's interval index sets. Returns
 # `(field, cells)` or `nothing` when the variable is not such an observed.
@@ -1465,7 +1465,8 @@ function _observed_field(
                     cells,
                 )
             end
-        catch
+        catch err
+            err isa InterruptException && rethrow()
             # fall through to the inlined form below; whatever the abandoned
             # attempt walked per cell served nothing
             _percell_restore!(n0)
@@ -1806,7 +1807,8 @@ function _materialized_obs_scope(
             cand === nothing && continue
             vals = try
                 evaluate_cellwise(cand, cells; const_arrays = ca, params = params, t = t)
-            catch
+            catch err
+                err isa InterruptException && rethrow()
                 nothing
             end
             vals === nothing || break
@@ -1825,19 +1827,15 @@ function _materialized_obs_scope(
     return materialized == 0 ? base : ca
 end
 
-# Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
-# (preferred) or bare name; 0 if absent.
+# Flat slot of a SCALAR state by model-qualified name, or by bare name in a
+# bare-keyed (single-model) build; 0 if absent.
 #
 # Flattening qualifies every element with its owning model ("arrh.k"), and a
-# coupled build routinely reuses the same bare observed/state name across
-# sibling components — several reaction-rate coefficients all named `k`. So the
-# model-qualified name MUST win: a lone bare-name match returns whichever `k`
-# happens to come first in `var_map` iteration (NON-DETERMINISTIC for a `Dict`),
-# reading the WRONG component's value for every model's `k` assertion. We
-# therefore do two passes — an exact qualified / exact-bare match first, then a
-# bare-suffix fallback (reached only when no exact element is present, e.g. a
-# bare-keyed single-model build). Byte-identical selection to the Python
-# `_scalar_slot`.
+# coupled build routinely reuses the same bare name across sibling components —
+# several reaction-rate coefficients all named `k`. An unscoped assertion names
+# a variable of the component under test, so only an exact match counts: a row
+# of another component that happens to share the bare name never answers it
+# (see `_refuse_unmatched_assertion`).
 function _scalar_slot(
         var_map::AbstractDict, variable::AbstractString,
         model::AbstractString,
@@ -1852,12 +1850,7 @@ function _scalar_slot(
         s = String(name)
         (s == qualified || s == String(variable)) && return Int(slot)
     end
-    for (name, slot) in names
-        s = String(name)
-        bare = occursin('.', s) ? String(split(s, '.'; limit = 2)[2]) : s
-        bare == String(variable) && return Int(slot)
-    end
-    # A THIRD pass, for a name an `operator_compose` renaming match DELETED
+    # A second pass, for a name an `operator_compose` renaming match DELETED
     # (§4.7.1 step 4). A test is written against the component that owns it, and
     # a merge can fold that component's state onto another's — the quantity the
     # assertion names still exists, under the survivor's spelling. LAST, so a
@@ -2264,14 +2257,8 @@ function _evaluate_assertion(
             _scalar_slot(var_map, loc, owner, renames)
         slot == 0 || return state[slot]
         # Not an ODE state — so an OBSERVED, a variable the document defines by
-        # an algebraic equation rather than a time derivative. esm-spec §6.6
-        # names no such restriction: `V = n*R*T/P` is as assertable as the state
-        # it is computed from, the Rust CLI's `observed_field(prob, name)`
-        # returns it, and this path refused every one of them with "scalar state
-        # '<v>' not found" — 10 of 10 assertions in
-        # `tests/valid/units_propagation.esm`, every assertion in
-        # `units_conversions.esm`, 2 of 5 in
-        # `tests/conformance/rhs_time_derivative/fixtures/tendency_resolution.esm`.
+        # an algebraic equation rather than a time derivative, which esm-spec
+        # §6.6 makes as assertable as a state (`tests/valid/units_propagation.esm`).
         #
         # `_observed_field` already answers for one: it treats a SHAPELESS
         # observed as rank 0 (one empty cell index) precisely so a contracted
@@ -2283,8 +2270,7 @@ function _evaluate_assertion(
             insp, eval_file, owner, loc; ctx = ctx, u = state,
             t = Float64(sim.t[ti]), var_map = var_map
         )
-        obs === nothing &&
-            throw(InlineTestError("scalar state '$(a.variable)' not found"))
+        obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "scalar state")
         field, cell_tuples = obs
         # A SHAPED observed named by a bare assertion is a different error from
         # an absent one: §6.6.5 says pick a cell with `coords` or collapse the
@@ -2330,11 +2316,7 @@ function _evaluate_assertion(
             insp, eval_file, owner, loc; ctx = ctx, u = state,
             t = Float64(sim.t[ti]), var_map = var_map
         )
-        obs === nothing && throw(
-            InlineTestError(
-                "array state '$(a.variable)' has no cells in var_map"
-            )
-        )
+        obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "array state")
         field, cell_tuples = obs
     end
 
@@ -2583,7 +2565,8 @@ function _scope_to_component(overrides, mname, target)
             ),
             flat.metadata.merged_variable_renames,
         )
-    catch
+    catch err
+        err isa InterruptException && rethrow()
         return overrides   # let `esm_problem` report the real failure
     end
     # `Any`-valued: esm-spec §6.6.2 admits a scalar or INLINE ARRAY DATA (a

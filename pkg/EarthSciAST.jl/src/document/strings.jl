@@ -63,16 +63,6 @@ function esc_char(braces::Bool, c::Char, out::Vector{Char})
     return out
 end
 
-"""`Strings.escape`: the escaped characters of a string, without the quotes."""
-function escape(braces::Bool, cs)
-    out = Char[]
-    sizehint!(out, length(cs))
-    for c in cs
-        esc_char(braces, c, out)
-    end
-    return out
-end
-
 """`Strings.quote`: a double-quoted string literal."""
 function quote_str(braces::Bool, s)
     out = Char['"']

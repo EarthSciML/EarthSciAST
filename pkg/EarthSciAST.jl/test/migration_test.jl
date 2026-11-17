@@ -304,6 +304,24 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                     getfield(migrated, f) == getfield(source, f)
             end
         end
+
+        # A coupling library is identified only by its `coupling_roles` block
+        # (esm-spec §10.9), so a migration must carry it across. The fixture
+        # above has none; this document sets it.
+        roles = Dict{String, Any}("Fuel" => Dict{String, Any}("description" => "fuel"))
+        library = EsmFile(
+            "1.0.0", Metadata("lib");
+            coupling_roles = roles,
+            metaparameters = Dict{String, Any}("N" => Dict{String, Any}()),
+            coordinates = Dict{String, Any}("x" => Dict{String, Any}()),
+            document_base = "/somewhere"
+        )
+        migrated = migrate(library, _MIG_SCHEMA_VERSION)
+        @test migrated.esm == _MIG_SCHEMA_VERSION
+        @test migrated.coupling_roles === roles
+        @test migrated.metaparameters === library.metaparameters
+        @test migrated.coordinates === library.coordinates
+        @test migrated.document_base == "/somewhere"
     end
 
     @testset "canonical fixture spec: 0.x sources are refused" begin

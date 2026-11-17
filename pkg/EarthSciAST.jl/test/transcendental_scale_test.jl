@@ -270,6 +270,26 @@ end
                 end
             end
             @test (converted, untouched) == (3, 1)
+
+            # An update rule's expression is converted too, and the subset map
+            # holds the same converted variable as `parameters`.
+            file = EarthSciAST.load_path(path)
+            file.models["AngleUnits"].variables["p"] = EarthSciAST.ModelVariable(
+                EarthSciAST.ParameterVariable; default = 0.0, units = "1",
+                update = EarthSciAST.ParameterUpdate(
+                    "condition";
+                    when = EarthSciAST.VarExpr("theta_deg"),
+                    expression = EarthSciAST.OpExpr(
+                        "sin", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("theta_deg")]
+                    )
+                )
+            )
+            flat = EarthSciAST.flatten(file)
+            p = flat.parameters["AngleUnits.p"]
+            arg = only(p.update).expression.args[1]
+            @test arg isa EarthSciAST.OpExpr && arg.op == "*"
+            @test arg.args[2] isa EarthSciAST.NumExpr && arg.args[2].value == pi / 180
+            @test get(flat.discrete_parameters, "AngleUnits.p", p) === p
         end
     end
 

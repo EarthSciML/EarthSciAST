@@ -154,6 +154,19 @@ _d_index(arr::AbstractString, idxs...) =
         shapes_off = infer_array_shapes([eq_off])
         @test shapes_off["u"] == [1:10]
 
+        # Reflected offset: u[11 - i] over i in 1:8 reads u[3:10], not u[-10:-3].
+        eq_refl = ESM2.Equation(
+            _faq1d(_d_index("v", _var("i")), "i", 1, 8),
+            _faq1d(_idx("u", _op("-", _num(11), _var("i"))), "i", 1, 8)
+        )
+        @test infer_array_shapes([eq_refl])["u"] == [3:10]
+        # ... and u[i - 1] over the same range reads u[0:7].
+        eq_back = ESM2.Equation(
+            _faq1d(_d_index("v", _var("i")), "i", 1, 8),
+            _faq1d(_idx("u", _op("-", _var("i"), _num(1))), "i", 1, 8)
+        )
+        @test infer_array_shapes([eq_back])["u"] == [0:7]
+
         # 2D: u[i,j] over i in 1:4, j in 1:3 → shape [1:4, 1:3].
         eq_2d = ESM2.Equation(
             _faq2d(

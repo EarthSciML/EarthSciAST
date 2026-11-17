@@ -7,8 +7,10 @@
 # builds each container from its WHOLE DOCUMENT (§6.6: a test declared on a
 # component the document itself declares "is built from the document it lives
 # in, coupling and all" — see `_compile_model_in_document`),
-# simulates each InlineTest on the resulting MTK system, samples each Assertion via
-# the solution interpolant, and compares to the declared expected value with
+# simulates each InlineTest on the resulting ModelingToolkit system (the
+# `MtkTestEngine` here; `run_inline_tests` in inline_tests.jl runs the same
+# assertion frame through `esm_problem` with `SimulateTestEngine`), samples each
+# Assertion via the solution interpolant, and compares to the declared expected value with
 # the tolerance resolved per spec §6.6.4 — PER FIELD over four levels
 # (assertion > test > model > the implementation default `rel=1e-6`), each of
 # `rel` and `abs` taken from the innermost level that declares it.
@@ -1041,7 +1043,8 @@ function _mounted_components(path::AbstractString)
     edges = String[]
     raw = try
         JSON3.read(read(path, String))
-    catch
+    catch err
+        err isa InterruptException && rethrow()
         return edges
     end
     (raw isa AbstractDict || raw isa JSON3.Object) || return edges

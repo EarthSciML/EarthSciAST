@@ -25,7 +25,7 @@ using OrderedCollections: OrderedDict
 
 export JNull, JNULL, JNum, JInt, JDec, JArr, JObj, Kvs, Json, Chars,
     EOFC, at, drop, starts, strip_prefix, chars, fieldeq, in_int64, look,
-    jstr, jint, sort_keys, keys_distinct, wfb
+    sort_keys, keys_distinct, wfb
 
 # ## Character slices
 
@@ -112,9 +112,6 @@ Base.hash(a::JObj, h::UInt) = hash(a.kvs, hash(:JObj, h))
 
 """A document value: `JNull`, `Bool`, `JNum`, `String`, `JArr` or `JObj`."""
 const Json = Any
-
-jstr(s::AbstractString) = String(s)
-jint(z::Integer) = JInt(Int128(z))
 
 # ## Numbers
 

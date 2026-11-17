@@ -914,10 +914,6 @@ end
 """`Math.bases`."""
 bases(e) = bases_j(e, String[])
 
-"""`Math.RedK`: the reductions with a native spelling (`:sum`, `:prod`, `:max`,
-`:min`)."""
-const RedK = Symbol
-
 """`Math.RedK.kw`."""
 redk_kw(r::Symbol) = r === :sum ? KSum : r === :prod ? KProd : r === :max ? KMax : KMin
 
@@ -1333,13 +1329,15 @@ function mk_out_t(c::Ctx, m::MkForm)
     return mk_out(10, tc(MAT_HEAD, rows, (kw(KRp),), mk_sub(c, m.out)))
 end
 
-"""`Math.callFormHead`: the operator `o` with the fields `fs` has the call form:
+"""Not in Lean: part of `Math.callCond` (its call-form, name and template
+conditions). The operator `o` with the fields `fs` has the call form:
 [`call_form_ok`](@ref), a name `\\operatorname` can spell, and no template of
 that name in scope."""
 call_form_head(c::Ctx, o::AbstractString, fs) =
     call_form_ok(o, fs) && opn_ok(o) && tparams(c.s, o) === nothing
 
-"""`Math.callForm`: [`pr_opn`](@ref) prints the operator `o` with the fields
+"""Not in Lean: part of `Math.callCond` with `Math.fieldsOK`.
+[`pr_opn`](@ref) prints the operator `o` with the fields
 `fs` in the call form: [`call_form_head`](@ref) and every key an identifier."""
 call_form(c::Ctx, o::AbstractString, fs) =
     call_form_head(c, o, fs) && all(kv -> key_ok(kv.first), fs)
@@ -1439,7 +1437,8 @@ function pr(c::Ctx, e)
     return pr_opn(c, kvs)
 end
 
-"""`Math.constForm`: the parts of a `const` node with a native spelling: its
+"""Not in Lean: the `const` arms of `Math.nativeK`. The parts of a `const` node
+with a native spelling: its
 array form (`nothing` for a quantity) and its unit (`nothing` when it has none);
 `nothing` when the node has no native spelling (it then prints in the call
 form)."""
@@ -1463,7 +1462,8 @@ function const_form(sf::Sf, kvs)
     return af === nothing ? nothing : (af, u)
 end
 
-"""`Math.constOut`: the native spelling of a `const` node: an array as a matrix
+"""Not in Lean (the `const` arm of `Math.pr`): the native spelling of a `const`
+node: an array as a matrix
 or column vector, a quantity, an array with its unit ([`const_form`](@ref))."""
 function const_out(sf::Sf, kvs)
     q = const_form(sf, kvs)
@@ -1474,19 +1474,22 @@ function const_out(sf::Sf, kvs)
     return mk_out(7, tc(arr_toks(sf, af), unit_toks(factors_of(u))))
 end
 
-"""`Math.nativeFaq`: the parts of a `faq` node that prints natively."""
+"""Not in Lean: the `faq` arm of `Math.nativeK`. The parts of a `faq` node that
+prints natively."""
 function native_faq(kvs)
     f = faq_form(kvs)
     return (f !== nothing && faq_ok(f)) ? f : nothing
 end
 
-"""`Math.nativeMk`: the parts of a `makearray` node that prints natively."""
+"""Not in Lean: the `makearray` arm of `Math.nativeK`. The parts of a
+`makearray` node that prints natively."""
 function native_mk(kvs)
     m = mk_form(kvs)
     return (m !== nothing && mk_ok(m)) ? m : nothing
 end
 
-"""`Math.callFormNode`: the node is one [`pr`](@ref) gives the call form with
+"""Not in Lean: `Math.callCond` over a whole node. The node is one [`pr`](@ref)
+gives the call form with
 named fields: [`call_form_head`](@ref) holds and no native spelling of a
 `const`, `faq` or `makearray` applies. The reader accepts the call form with `;`
 only for such a node. Keys are not checked: a key the printer would not write

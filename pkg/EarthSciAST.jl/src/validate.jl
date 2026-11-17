@@ -25,16 +25,11 @@ end
 Represents a structural validation error with detailed information.
 Contains path, message, error type, and machine-readable `details`.
 
-`details` is the MACHINE-READABLE half of the error, and Julia was the only
-binding without it (CONFORMANCE_SPEC row (j)). A conformance pin asserts code,
-path AND `details` under REQUIRED-SUBSET semantics (§7.1.2): every key the pin
-names must be present with the pinned value, and extra keys are fine. Without the
-field Julia cannot satisfy the 134 pins that carry one — it would be red in the
-harness for a structural reason rather than a real disagreement.
-
-It defaults to empty, so the three-positional-argument construction used
-throughout keeps working; sites that name a variable populate `details["variable"]`
-(the settled spelling), plus whatever else is locally meaningful.
+`details` is the machine-readable half of the error. A conformance pin asserts
+code, path and `details` under required-subset semantics (CONFORMANCE_SPEC
+§7.1.2): every key the pin names must be present with the pinned value, and extra
+keys are fine. It defaults to empty; a site that names a variable populates
+`details["variable"]`, plus whatever else is locally meaningful.
 """
 struct StructuralError
     path::String
@@ -66,15 +61,15 @@ Fields and their JSON spellings match Go's `UnitWarning`
   document root being `""` (the same addressing as `StructuralError.path`).
 * `code` — the finding kind, decided AT THE POINT the finding was raised and
   never recovered from the prose, so rewording a message can never silently
-  reclassify it. This is the SECOND, smaller unit vocabulary — the one Go's
+  reclassify it. This is the SECOND, smaller unit vocabulary, the one Go's
   `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
-  `UnitWarning['code']` union share: `dimensional_mismatch` (a PROVABLE
-  inconsistency), `unparseable_unit` (a declared unit string denoting no real
-  unit), `analysis` (the checker could not DETERMINE a dimension), and the
-  warning `units_dimensionless_literal_mismatch`
-  ([`UNIT_FINDING_DIMENSIONLESS_LITERAL`](@ref), esm-spec §4.8.6). It is NOT
-  the `unit_inconsistency` / `unit_parse_error` pair, which names the
-  STRUCTURAL error each finding is promoted to.
+  `UnitWarning['code']` union share. This binding puts two of its codes on the
+  field: `dimensional_mismatch` (a PROVABLE inconsistency, promoted to a
+  `unit_inconsistency` structural error) and the warning
+  `units_dimensionless_literal_mismatch`
+  ([`UNIT_FINDING_DIMENSIONLESS_LITERAL`](@ref), esm-spec §4.8.6). An
+  unresolvable unit string is reported only as a `unit_parse_error`
+  structural error, not here.
 * `message` — human-readable description (binding-local prose).
 * `lhs_units` / `rhs_units` — the inferred units of each side, `""` when the
   raise site does not know them. Julia's units engine (`model_unit_findings`)
@@ -104,18 +99,6 @@ struct UnitWarning
         String(path), String(code), String(message),
         String(lhs_units), String(rhs_units)
     )
-end
-
-# The promoted STRUCTURAL error code -> the `UnitWarning.code` finding kind.
-# Two vocabularies, deliberately: `unit_inconsistency` / `unit_parse_error` name
-# what the finding was promoted TO, while `dimensional_mismatch` /
-# `unparseable_unit` / `analysis` name the finding itself and are the values
-# every other binding puts on this field. Mapping here rather than at the
-# `StructuralError` raise site keeps `structural_errors` byte-identical.
-function _unit_finding_code(error_type::AbstractString)::String
-    error_type == ERROR_CODES.UNIT_INCONSISTENCY && return ERROR_CODES.DIMENSIONAL_MISMATCH
-    error_type == ERROR_CODES.UNIT_PARSE_ERROR   && return ERROR_CODES.UNPARSEABLE_UNIT
-    return ERROR_CODES.ANALYSIS
 end
 
 """
@@ -178,17 +161,6 @@ const ESM_SCHEMA = if isfile(SCHEMA_PATH)
 else
     @warn "ESM schema file not found at $SCHEMA_PATH"
     nothing
-end
-
-# JSONSchema.jl formats issue paths as "[a][b][3]"; convert to a
-# JSON-Pointer-style "/a/b/3". The DOCUMENT ROOT is the empty string "" (the
-# cross-language wire contract — NOT "/", "$", or "(root)" — CONFORMANCE_SPEC
-# §7.1.2). Retained for any caller still speaking the bracket form.
-function _issue_pointer(path::AbstractString)::String
-    isempty(path) && return ""
-    segments = [String(m.captures[1]) for m in eachmatch(r"\[([^\]]*)\]", path)]
-    isempty(segments) && return ""
-    return "/" * join(segments, "/")
 end
 
 # ── Schema-error collection (AJV-parity leaf enumeration) ───────────────────
@@ -639,6 +611,7 @@ function validate_schema(data::Any)::Vector{SchemaError}
         native = _to_native_json(data)
         _schema_walk!(errors, native, _compiled_schema(ESM_SCHEMA.data), "", _jsonschema_root_path())
     catch e
+        e isa InterruptException && rethrow()
         return [SchemaError("", "Schema validation error: $(e)", "error")]
     end
     return _dedup_schema_errors(errors)
@@ -681,15 +654,10 @@ end
 function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{StructuralError}
     errors = StructuralError[]
 
-    # 1. Validate model equation-unknown balance.
-    #
-    # (e) A COUPLED model is skipped ENTIRELY. Its states may be supplied from
-    # outside — by a `variable_map`, or by the system it is
-    # composed onto — so its own equations need not balance its own unknowns.
-    # Demanding a defining equation for every declared state rejected three
-    # perfectly good fixtures. The narrower `check_excess=false` carve-out that
-    # used to stand in for this was only half the rule: it forgave the EXTRA
-    # equations and still demanded the MISSING ones.
+    # 1. Validate model equation-unknown balance. A COUPLED model is skipped
+    # entirely: its states may be supplied from outside, by a `variable_map` or
+    # by the system it is composed onto, so its own equations need not balance
+    # its own unknowns.
     if file.models !== nothing
         coupled = _coupled_system_names(file)
         composed = _operator_composed_systems(file)
@@ -828,11 +796,8 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
             )
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
-            # Dimensional analysis over equations and variable definitions. This
-            # is the ONLY caller of the units engine in the validation path; it
-            # was missing entirely until the 2026-07-14 audit (finding J1), which
-            # is why `validate()` accepted every dimensionally-inconsistent
-            # fixture in the shared corpus.
+            # Dimensional analysis over equations and variable definitions:
+            # the units engine's entry into the validation path.
             append!(
                 errors, validate_model_unit_consistency(
                     units.models[model_name], "/models/$model_name";
@@ -841,9 +806,6 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
             )
         end
     end
-
-    # 5. Validate multi-domain consistency
-    append!(errors, validate_multi_domain(file))
 
     # 5b. Coupling-cycle detection (§3.2). A dependency cycle among top-level
     # systems means no evaluation order exists.
@@ -910,15 +872,14 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # 6. Conflicting derivative detection (§4.7.5 item E). A species cannot
     # have both an explicit D(X, t) = ... equation and a reaction contribution.
     # `_find_conflicting_derivatives` is defined in flatten.jl. The conflict
-    # spans TWO top-level blocks (a model equation AND a reaction), so there is
-    # no single JSON location; per this function's JSON-Pointer path contract
-    # the root pointer "/" is used as the documented sentinel (the offending
-    # species name is in the message).
+    # spans TWO top-level blocks (a model equation AND a reaction), so it is
+    # reported at the document root, `""` (the offending species name is in the
+    # message).
     conflicting = _find_conflicting_derivatives(file)
     for name in conflicting
         push!(
             errors, StructuralError(
-                "/",
+                "",
                 "Species '$name' has both an explicit derivative equation and a reaction contribution",
                 ERROR_CODES.CONFLICTING_DERIVATIVE,
             )
@@ -952,15 +913,12 @@ function validate(file::EsmFile)::ValidationResult
     schema_errors = validate_schema(data)
     units = _UnitsInputs(file)
     structural_errors = _validate_structural(file, units)
-    # Mirror the TS binding (validate.ts): unit findings are surfaced both as
-    # `unit_warnings` records and as promoted `unit_inconsistency` structural
-    # errors, so neither channel is dead. The SET and ORDER of findings is
-    # exactly what it has always been — only the element type gained structure
-    # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
-    # the old `Vector{String}` byte for byte.
+    # As in the TS binding (validate.ts): a provable unit mismatch is surfaced
+    # both as a `unit_warnings` record and as a promoted `unit_inconsistency`
+    # structural error.
     unit_warnings = UnitWarning[
         UnitWarning(
-            e.path, _unit_finding_code(e.error_type), e.message,
+            e.path, ERROR_CODES.DIMENSIONAL_MISMATCH, e.message,
             string(get(e.details, "lhs_units", "")),
             string(get(e.details, "rhs_units", ""))
         )
@@ -1156,9 +1114,8 @@ model_subsystems(model::Model) =
     _equation_lhs_names(lhs::ASTExpr) -> Set{String}
 
 The names an equation's LHS *solves for*. The LHS is not always a bare variable:
-the corpus spells the same "define `u`" in five shapes, and a balance check that
-only understands two of them manufactures false `missing_equation` errors on
-~20 valid fixtures (bug audit 2026-07-14).
+the corpus spells the same "define `u`" in five shapes, and a balance check
+must understand all of them or it reports a false `missing_equation`.
 
 Recognised shapes, in the order they nest:
 
@@ -2164,7 +2121,7 @@ function _walk_aggregates!(
         _check_join_sides!(errors, expr, anchor, var_shapes)
         _check_relational_in_continuous!(errors, expr, anchor, state_vars)
     end
-    for c in _expr_children(expr)
+    for c in child_exprs(expr)
         _walk_aggregates!(errors, file, c, anchor, state_vars, registry, var_shapes)
     end
     return errors
@@ -2287,7 +2244,7 @@ function _faq_bare_walk!(found, e::ASTExpr, shaped, bound::Set{String}, visited,
             end
         end
     end
-    for c in _expr_children(e)
+    for c in child_exprs(e)
         _faq_bare_walk!(found, c, shaped, bound, visited, opaque)
     end
     return found
@@ -2629,8 +2586,9 @@ function validate_broadcast_semantics(file::EsmFile)::Vector{StructuralError}
 end
 
 # Per-model driver for `validate_broadcast_semantics`: the `fn` contract over
-# EVERY expression-bearing field, plus the element-wise axis check wherever the
-# expression has a declared array RESULT shape. Recurses into Model subsystems.
+# the equations, initialization equations and guesses (not update rules, events
+# or inline tests), plus the element-wise axis check wherever an equation has a
+# declared array RESULT shape. Recurses into Model subsystems.
 function _check_model_broadcasts!(
         errors::Vector{StructuralError}, model::Model,
         path::String
@@ -2650,9 +2608,9 @@ function _check_model_broadcasts!(
         tgt === nothing ||
             _check_broadcast_axes!(errors, eq.rhs, tgt[1], tgt[2], var_shapes, anchor)
     end
-    # esm 1.0.0: an observed unknown's defining expression is an equation, so
-    # the equation loop above already covers it (its bare-variable LHS gives
-    # `_wholearray_result_axes` the same target axes this loop used to supply).
+    # An observed unknown's defining expression is an equation, so the loop
+    # above covers it (its bare-variable LHS gives `_wholearray_result_axes`
+    # the target axes).
     for (i, eq) in enumerate(model.initialization_equations)
         _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs")
         _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs")
@@ -2695,7 +2653,7 @@ function _walk_broadcast_fns!(
             )
         end
     end
-    for c in _expr_children(expr)
+    for c in child_exprs(expr)
         _walk_broadcast_fns!(errors, c, anchor)
     end
     return errors
@@ -2874,9 +2832,6 @@ the document holding `model`, lets a scoped reference into a top-level
 component be typed from its target's declaration (esm-spec §4.8.4); `toplevel`
 is that document-wide map already built (`_toplevel_scoped_units`), in place of
 `file`.
-
-This is what wires the units engine into `validate()`. Before the 2026-07-14
-audit the engine had no caller outside its own test file.
 """
 function validate_model_unit_consistency(
         model::Model, path::String;
@@ -3554,7 +3509,7 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
     # Expanding reads the library from disk; without the base the loader recorded
     # for the document, the ref would resolve against the working directory, so a
     # document with no known location is left to flatten.
-    base = get(_COUPLING_IMPORT_BASE, file.coupling, nothing)
+    base = file.coupling_import_base
     base === nothing && return errors
     for (i, entry) in enumerate(file.coupling)
         entry isa CouplingImport || continue
@@ -3564,7 +3519,9 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
                 _default_coupling_load_ref(entry.ref, base),
                 entry.ref, entry.bind, file
             )
-        catch
+        catch e
+            # A library that does not load or bind is flatten's diagnostic.
+            e isa InterruptException && rethrow()
             continue
         end
         for edge in edges
@@ -3619,15 +3576,6 @@ function _equation_lhs_target(eq::Equation)::Union{String, Nothing}
     return nothing
 end
 
-# Every expression-bearing child of an operator node — the SHARED generated
-# traversal (`child_exprs`, expression.jl, generated from OPEXPR_FIELD_TABLE),
-# so this can never drift from the set `_check_expression_references!` descends
-# (`foreach_child_with_path`, same generator). Historically this was a
-# hand-rolled copy that missed dense `ranges` bounds while the expression.jl
-# copy missed `bindings` — a walker that misses a sidecar is exactly how a
-# whole class of references went unchecked (finding (h)).
-_expr_children(e::OpExpr)::Vector{ASTExpr} = child_exprs(e)
-
 """
     _indep_var(file::EsmFile) -> String
 
@@ -3663,7 +3611,7 @@ function _coordinate_names(file::EsmFile)::Set{String}
     function walk(e::OpExpr)
         e.dim !== nothing && !isempty(e.dim) && push!(coords, e.dim)
         e.wrt !== nothing && !isempty(e.wrt) && e.wrt != indep && push!(coords, e.wrt)
-        for c in _expr_children(e)
+        for c in child_exprs(e)
             walk(c)
         end
         return nothing
@@ -3837,8 +3785,10 @@ function validate_model_references(
     # participating systems' scopes, so a cross-system bare reference is
     # legitimate, while a name declared nowhere is still an `undefined_variable`
     # (F-1). Mirrors Python's `global_symbols` and TS `documentDeclaredNames`.
-    scope = is_coupled ? _document_declared_names(file) : Set{String}(keys(model.variables))
-    is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
+    # The model's own variables are in scope either way: a subsystem's are not
+    # among the document-wide (top-level) names.
+    scope = Set{String}(keys(model.variables))
+    is_coupled && union!(scope, _document_declared_names(file), (_OPERATOR_PLACEHOLDER_VAR,))
     union!(scope, keys(file.index_sets))
     for eq in model.equations
         target = _equation_lhs_target(eq)
@@ -3881,24 +3831,10 @@ function validate_model_references(
         append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))
     end
 
-    # ---------------------------------------------------------------------
-    # EVERY OTHER EXPRESSION-BEARING FIELD (audit finding (h)).
-    #
-    # Reference integrity used to run on `equations` (and reaction `rate`) and
-    # NOTHING ELSE. The expression WALKER was complete — it descends every
-    # sidecar (`expr`, `filter`, `key`, `lower`/`upper`, `values`, `axes`,
-    # `bindings`) — but it was only ever CALLED from those two places, so an
-    # undefined name anywhere else was simply never looked at. That is a silent
-    # false negative: nothing catches it, and no fixture pinned it.
-    #
-    # The events were the subtler half: they WERE walked, but with `scope`
-    # defaulted to `nothing`, which switches the bare-variable check off
-    # (`_check_bare_variable!` returns immediately). They descended the tree and
-    # then declined to look at it.
-    #
-    # Julia accepted 10 of the corpus's 11 pinned fixtures for this before this
-    # change.
-    # ---------------------------------------------------------------------
+    # The other expression-bearing fields of the model: parameter update rules,
+    # initialization equations, guesses, inline-test references and events, each
+    # walked with the same `scope`. (Not every check in this file walks all of
+    # them; the faq and broadcast checks do not.)
 
     # 1. A parameter update's expression-bearing fields (esm-spec §5.4): the
     #    `when` trigger and the `expression` value form. An observed unknown's
@@ -3963,7 +3899,13 @@ function validate_model_references(
 
     # Recursively check subsystems (already expanded in the view)
     for (subsys_name, subsys) in model_subsystems(view)
-        append!(errors, validate_model_references(file, subsys, "$path/subsystems/$subsys_name"))
+        # A subsystem of a coupled model is composed along with its parent, so
+        # it is checked with the parent's scope rule.
+        append!(
+            errors, validate_model_references(
+                file, subsys, "$path/subsystems/$subsys_name"; is_coupled = is_coupled
+            )
+        )
     end
 
     return errors
@@ -3984,22 +3926,6 @@ literal by test/op_registry_test.jl.
 """
 const _BUILTIN_FUNCTION_NAMES = _ops_with(:builtin_fn)
 
-"""
-    _bound_index_symbols(op::OpExpr) -> Vector{String}
-
-The index / iteration symbols an operator node BINDS for its own child
-expressions — loop positions and invented keys, NOT declared variables. They
-are in scope for the node's descended children (an aggregate body, a filter
-predicate, a grouping key, integral bounds) so a bound loop index such as the
-`i` in `index(u, i)` is not mis-reported as undefined.
-
-Mirrors Rust `bound_index_symbols` (structural.rs) and Go `boundIndexSymbols`
-(validate.go). Binder sources: `output_idx` (aggregate surviving indices),
-`ranges` keys (contraction loop variables), `int_var` (integral integration
-variable, wire `var`), the positional element indices of an
-`index(array, i, j, …)` node, and `bindings` keys (`apply_expression_template`
-formal parameters).
-"""
 # Every bare name inside a SUBSCRIPT expression. `index(u, i+1)` is index space,
 # so `i` is a loop index; the arithmetic around it is the stencil offset.
 function _collect_index_names!(syms::Vector{String}, e::ASTExpr)
@@ -4021,6 +3947,22 @@ end
 # the `binds_scope` flag in OPEXPR_FIELD_TABLE). `_bound_symbols` answers the
 # narrower "does this node bind this symbol?" for dependency analysis, where
 # widening would hide real free variables. Both must stay.
+"""
+    _bound_index_symbols(op::OpExpr) -> Vector{String}
+
+The index / iteration symbols an operator node BINDS for its own child
+expressions — loop positions and invented keys, NOT declared variables. They
+are in scope for the node's descended children (an aggregate body, a filter
+predicate, a grouping key, integral bounds) so a bound loop index such as the
+`i` in `index(u, i)` is not mis-reported as undefined.
+
+Mirrors Rust `bound_index_symbols` (structural.rs) and Go `boundIndexSymbols`
+(validate.go). Binder sources: `output_idx` (aggregate surviving indices),
+`ranges` keys (contraction loop variables), `int_var` (integral integration
+variable, wire `var`), the positional element indices of an
+`index(array, i, j, …)` node, and `bindings` keys (`apply_expression_template`
+formal parameters).
+"""
 function _bound_index_symbols(op::OpExpr)::Vector{String}
     syms = String[]
     if op.output_idx !== nothing
@@ -4256,7 +4198,8 @@ function _check_connector_expressions(
         raw === nothing && continue
         expr = try
             expression_from_json(raw)
-        catch
+        catch e
+            e isa InterruptException && rethrow()
             continue    # a malformed expression is the schema's business
         end
         epath = "$path/connector/equations/$(i - 1)/expression"
@@ -4686,6 +4629,23 @@ function validate_reaction_rate_units(
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
     scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
 
+    # An unresolvable unit string on a species or parameter is a defect in the
+    # file (esm-spec §4.8.4), reported at its declaration as a model
+    # variable's is.
+    for (block, decls) in (("species", rs.species), ("parameters", rs.parameters))
+        for decl in decls, (field, str) in (("units", decl.units), ("default_units", decl.default_units))
+            (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
+            push!(
+                errors, StructuralError(
+                    "$path/$block/$(_ptr_escape(decl.name))",
+                    "Unit string '$str' is not a recognised unit " *
+                        "($(block == "species" ? "species" : "parameter") '$(decl.name)', field '$field')",
+                    ERROR_CODES.UNIT_PARSE_ERROR
+                )
+            )
+        end
+    end
+
     # Build name → unit-string map using ONLY explicitly declared units.
     # Mirrors Python's conservative scope: skip when any relevant unit is
     # absent, so we do not surface false positives on partially-annotated
@@ -4754,7 +4714,6 @@ function validate_reaction_rate_units(
         end
         fractional_substrate && continue
         (!resolvable || species_dim === nothing) && continue
-        time_unit === nothing && continue
 
         # Skip when the reference concentration unit is dimensionless
         # (mol/mol, ppm, …) — mass-action convention is ambiguous there.
@@ -4791,15 +4750,11 @@ function validate_reaction_rate_units(
     return errors
 end
 
-# NOTE: the bespoke `grad`/`div`/`laplacian` gradient-units rule
-# (`validate_model_gradient_units` and helpers) was REMOVED (esm-spec §4.2 /
-# §4.8.3 / §4.8.4). These sugar ops are ordinary open-tier rewrite-target ops
-# with NO dimensional rule — "any other op ⇒ UNDETERMINABLE" — so the units
-# engine (units.jl) reports their dimension as unknown and skips the enclosing
-# check, exactly as it does for any unregistered op. A binding must NOT re-add a
-# coordinate-divided gradient rule (guarded by
-# `tests/invalid/units_gradient_operator_mismatch.esm`, whose sole pinned
-# finding is now the genuine `m + kg` addition mismatch).
+# `grad` / `div` / `laplacian` have no dimensional rule (esm-spec §4.2, §4.8.3,
+# §4.8.4): they are open-tier rewrite-target ops, so the units engine reports
+# their dimension as undeterminable and skips the enclosing check. Pinned by
+# `tests/invalid/units_gradient_operator_mismatch.esm`, whose one finding is
+# the `m + kg` addition.
 
 """
     system_exists_in_file(file::EsmFile, system_name::String) -> Bool
@@ -4895,24 +4850,22 @@ function validate_event_consistency(
     return errors
 end
 
+# The §6.4 operator placeholder. In an operator-composed / coupled model `_var`
+# stands for each matching state variable of the system this one is composed
+# with, and it is substituted at composition — so an event affect that ASSIGNS to
+# it is legal, exactly as an equation that differentiates it is
+# (tests/valid/full_coupled.esm).
+const _OPERATOR_PLACEHOLDER_VAR = "_var"
+
+_is_declared_event_target(model::Model, name::AbstractString, is_coupled::Bool)::Bool =
+    haskey(model.variables, name) || (is_coupled && name == _OPERATOR_PLACEHOLDER_VAR)
+
 """
     validate_single_event_consistency(model::Model, event::EventType, event_path::String;
                                       is_coupled=false) -> Vector{StructuralError}
 
 Validate consistency of a single event.
 """
-# The §6.4 operator placeholder. In an operator-composed / coupled model `_var`
-# stands for each matching state variable of the system this one is composed
-# with, and it is substituted at composition — so an event affect that ASSIGNS to
-# it is legal, exactly as an equation that differentiates it is. Reporting `_var`
-# as an undeclared event target while the very same document's equations were
-# exempt from the reference check was internally inconsistent, and it rejected the
-# valid tests/valid/full_coupled.esm (finding (b)).
-const _OPERATOR_PLACEHOLDER_VAR = "_var"
-
-_is_declared_event_target(model::Model, name::AbstractString, is_coupled::Bool)::Bool =
-    haskey(model.variables, name) || (is_coupled && name == _OPERATOR_PLACEHOLDER_VAR)
-
 function validate_single_event_consistency(
         model::Model, event::EventType, event_path::String;
         is_coupled::Bool = false
@@ -4939,12 +4892,6 @@ function validate_single_event_consistency(
         _check_event_affects_unknowns!(errors, model, event, event_path, "continuous")
 
     elseif isa(event, DiscreteEvent)
-        # For condition triggers, ensure expression could produce boolean
-        if isa(event.trigger, ConditionTrigger)
-            # In practice, we'd need more sophisticated analysis to ensure boolean result
-            # For now, accept all expressions as they could evaluate to boolean
-        end
-
         # Validate affect targets. Same pin as the continuous case:
         # `event_var_undeclared` at the affect's `lhs` field.
         for (j, affect) in enumerate(event.affects)
@@ -5135,7 +5082,7 @@ function _check_event_affects_unknowns!(
             "event_type" => event_kind,
             "remedy" => _event_affect_remedy(event, affect.lhs)
         )
-        ename = _event_name(event)
+        ename = event.name
         ename === nothing || (details["event_name"] = ename)
         tkind = _event_trigger_kind(event)
         tkind === nothing || (details["trigger_type"] = tkind)
@@ -5153,7 +5100,6 @@ function _check_event_affects_unknowns!(
     return errors
 end
 
-_event_name(event)::Union{String, Nothing} = event.name
 
 function _event_trigger_kind(event)::Union{String, Nothing}
     isa(event, DiscreteEvent) || return nothing
@@ -5184,23 +5130,6 @@ function _event_affect_remedy(event, name::AbstractString)::String
             "on '$(name)' (esm-spec 5.4)"
     end
     return "declare the change as the parameter's own update (esm-spec 5.4)"
-end
-
-# ============================================================================
-# Multi-Domain Validation
-# ============================================================================
-
-"""
-    validate_multi_domain(file::EsmFile) -> Vector{StructuralError}
-
-Multi-domain / interface consistency checks were retired in esm-spec v0.8.0:
-a document now has a single shared `domain` (no map of named domains), no
-`interfaces` block, and cross-grid coupling is an ordinary regridding
-`transform` expression. Nothing here to validate; retained as a no-op so the
-top-level validator (`validate_structural`) keeps a stable call surface.
-"""
-function validate_multi_domain(file::EsmFile)::Vector{StructuralError}
-    return StructuralError[]
 end
 
 """

@@ -189,29 +189,6 @@ function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
 end
 
 """
-    serialize_event(event::EventType) -> Dict{String,Any}
-
-Serialize EventType to JSON-compatible format.
-"""
-function serialize_event(event::EventType)::Dict{String, Any}
-    if isa(event, ContinuousEvent)
-        result = Dict{String, Any}(
-            "conditions" => [serialize_expression(c) for c in event.conditions],
-            "affects" => [serialize_affect_equation(a) for a in event.affects]
-        )
-        if event.description !== nothing
-            result["description"] = event.description
-        end
-        return result
-    elseif isa(event, DiscreteEvent)
-        return serialize_discrete_event(event)
-    else
-        throw(ArgumentError("Unknown EventType: $(typeof(event))"))
-    end
-end
-
-
-"""
     _serialize_subsystem(v) -> Dict{String,Any}
 
 Serialize a single model subsystem value: a child `Model`, or an unresolved

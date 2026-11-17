@@ -1290,4 +1290,16 @@ using Unitful
         end
     end
 
+    @testset "a mismatch inside a derivative equation's right-hand side" begin
+        # `D(y) = x[m] + z[kg]`: the sides cannot be compared (the right side has
+        # no dimension), but the sum inside it is provably inconsistent.
+        E = EarthSciAST.ASTExpr
+        eq = Equation(
+            OpExpr("D", E[VarExpr("y")]; wrt = "t"),
+            OpExpr("+", E[VarExpr("x"), VarExpr("z")])
+        )
+        found = EarthSciAST.equation_unit_findings(eq, Dict("y" => "kg/s", "x" => "m", "z" => "kg", "t" => "s"))
+        @test !isempty(found)
+    end
+
 end

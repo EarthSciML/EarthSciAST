@@ -454,3 +454,15 @@ end
         @test JSON3.write(serialize_esm_file(second)) == emitted
     end
 end
+
+@testset "a top-level mount stub with a non-string ref is a schema error" begin
+    doc = """{"esm": "1.0.0", "metadata": {"name": "bad_ref"},
+    "models": {"M": {"ref": 42}}}"""
+    err = try
+        EarthSciAST.load_string(doc)
+        nothing
+    catch e
+        e
+    end
+    @test err isa EarthSciAST.SchemaValidationError
+end

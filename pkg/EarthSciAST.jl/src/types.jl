@@ -469,12 +469,7 @@ mutable struct OpExpr <: ASTExpr
         id = nothing,
         distinct = nothing, key = nothing,
         bindings = nothing,
-        expect_cadence = nothing, attrs = nothing, template_origin = nothing,
-        # `handler_id` was the v0.2.x field for the now-removed `call`
-        # op (esm-spec §9.2 closure). Accept and ignore on construction
-        # so internal helpers that still pass it through don't break
-        # mid-migration; the field is no longer stored or serialized.
-        handler_id = nothing
+        expect_cadence = nothing, attrs = nothing, template_origin = nothing
     ) =
         _new_typed(
         OpExpr, op, args, wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce,
@@ -508,7 +503,7 @@ the struct's fields IS, from which every field-generic consumer is derived
 - [`reconstruct(::OpExpr)`](@ref) (generated below),
 - the expression walkers `child_exprs` / `foreach_child` /
   `_foreach_subexpr_children` / `map_children` / `foreach_child_with_path`
-  (expression.jl, generated), and validate.jl's `_expr_children`.
+  (expression.jl, generated).
 
 One row per struct field, in exact struct-field order (asserted at load).
 Columns:
@@ -524,10 +519,7 @@ Columns:
     - `:expr_map`  — `Dict{String,ASTExpr}` (values traversed in sorted-key
                      order). NOTE: `bindings` (template parameter →
                      argument-expression map) IS traversed like any other
-                     expression-bearing field — historically `child_exprs`
-                     skipped it (while validate's `_expr_children` skipped
-                     `ranges`), leaving `free_variables`/`substitute`/
-                     `contains` blind to names inside binding values.
+                     expression-bearing field.
     - `:ranges`    — the `ranges` map: `IndexSetRef` or dense bound vectors
                      whose entries MAY be expression-valued (only those
                      `ASTExpr` entries are traversed),
@@ -1332,13 +1324,13 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
     depth = length(idx)
     if v isa AbstractArray
         depth < length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: an array appears where a number is expected " *
                     "(esm-spec §6.3)"
             )
         )
         length(v) == dims[depth + 1] || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: axis $(depth + 1) has both $(dims[depth + 1]) " *
                     "and $(length(v)) elements (esm-spec §6.3)"
             )
@@ -1348,7 +1340,7 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
         end
     else
         depth == length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: a number appears at nesting depth $(depth) " *
                     "where an array of $(dims[depth + 1]) elements is expected (esm-spec §6.3)"
             )
@@ -2545,6 +2537,13 @@ struct EsmFile
     # at call time.
     document_base::Union{String, Nothing}
 
+    # The directory a relative `coupling_import` ref resolves against (esm-spec
+    # §10.10 -> §4.7: "relative to the directory of the referencing file"),
+    # recorded at load only when the caller gave a base (`load_path` always
+    # has one) and the document has a `coupling_import`. `nothing` leaves
+    # `flatten`'s `base_path` in charge. NOT a wire field; never emitted.
+    coupling_import_base::Union{String, Nothing}
+
     # Constructor with optional parameters
     EsmFile(
         esm::String, metadata::Metadata;
@@ -2561,7 +2560,8 @@ struct EsmFile
         coordinates = nothing,
         coupling_roles = nothing,
         solver = nothing,
-        document_base = nothing
+        document_base = nothing,
+        coupling_import_base = nothing
     ) =
         new(
         esm, metadata,
@@ -2574,8 +2574,27 @@ struct EsmFile
         expression_templates, metaparameters,
         component_templates === nothing ? nothing :
             OrderedDict{String, Any}(component_templates),
-        coordinates, coupling_roles, solver, document_base
+        coordinates, coupling_roles, solver, document_base, coupling_import_base
     )
+end
+
+"""
+    reconstruct(file::EsmFile; <any EsmFile field>=…) -> EsmFile
+
+Rebuild an `EsmFile`, copying every field from `file` and overriding only the
+keywords passed. The `EsmFile` analogue of [`reconstruct(::ModelVariable)`](@ref):
+every copy-with-changes of a document goes through it, so a field added to the
+struct is carried across instead of reset to its default.
+"""
+function reconstruct(file::EsmFile; kwargs...)
+    fields = Dict{Symbol, Any}(f => getfield(file, f) for f in fieldnames(EsmFile))
+    for (k, v) in kwargs
+        haskey(fields, k) || throw(ArgumentError("EsmFile has no field `$k`"))
+        fields[k] = v
+    end
+    esm = pop!(fields, :esm)
+    metadata = pop!(fields, :metadata)
+    return EsmFile(esm, metadata; fields...)
 end
 
 # ========================================
@@ -2861,14 +2880,14 @@ _stable_json(x::AbstractString) = repr(String(x))
 _stable_json(x) = string(x)
 
 """
-    Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr; reversible=false) -> Reaction
+    Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr) -> Reaction
 
 Convenience constructor that creates a reaction with an
 auto-generated, content-derived id: the same reactants, products, and rate
 always produce the same id (deterministic across sessions and Julia versions,
 unlike `Base.hash`).
 """
-function Reaction(reactants::AbstractDict{String, <:Real}, products::AbstractDict{String, <:Real}, rate::ASTExpr; reversible = false)
+function Reaction(reactants::AbstractDict{String, <:Real}, products::AbstractDict{String, <:Real}, rate::ASTExpr)
     # Content-derived id: sorted species:stoichiometry lists plus a
     # deterministic rendering of the rate AST, digested with FNV-1a.
     fmt(d) = join(sort!(["$(k):$(Float64(v))" for (k, v) in d]), ",")
@@ -2931,13 +2950,7 @@ raw_products(r::Reaction) = getfield(r, :products)
 # `r.products` reach the stored ORDERED `Vector{StoichiometryEntry}` fields
 # directly. Use `raw_substrates` / `raw_products` for that ordered view and
 # `get_reactants_dict` / `get_products_dict` for the unordered
-# `Dict{String,Float64}` species→coefficient view. (A legacy shim that mapped
-# `.reactants` / `.products` to the Dict view, and `.reversible` to `false`,
-# was removed.)
-
-# NOTE: `Model` has no `getproperty` override — the legacy `model.events`
-# combined-vector shim was removed; use `model.discrete_events` /
-# `model.continuous_events` directly.
+# `Dict{String,Float64}` species→coefficient view.
 # ========================================
 # 15. Record wire-mapping tables
 # ========================================
