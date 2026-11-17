@@ -327,15 +327,21 @@ end
 
 """
     _esm_version(doc) -> Union{Nothing, Tuple{Int,Int,Int}}
+    _parse_esm_version(v::AbstractString) -> Union{Nothing, Tuple{Int,Int,Int}}
 
-The `(major, minor, patch)` a document declares in `esm`, or `nothing` when it
-declares none in the schema's `MAJOR.MINOR.PATCH` form. The one version reader
-of the load-time gates.
+The `(major, minor, patch)` a document declares in `esm` (or a version string
+spells), or `nothing` when it is not in the schema's `MAJOR.MINOR.PATCH` form
+or a part does not fit an `Int`. The one version reader of the load-time
+gates.
 """
 function _esm_version(doc)
     _is_object(doc) || return nothing
     v = _get_field(doc, :esm, nothing)
     v isa AbstractString || return nothing
+    return _parse_esm_version(v)
+end
+
+function _parse_esm_version(v::AbstractString)
     m = match(r"^(\d+)\.(\d+)\.(\d+)$", v)
     m === nothing && return nothing
     parts = map(c -> tryparse(Int, c), m.captures)

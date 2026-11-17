@@ -259,16 +259,10 @@ document to `0.9.0`, whose schema does not describe it at all: 1.0.0 declares
 """
 function _esm_stamp_floor(declared)
     declared isa AbstractString || return TEMPLATE_MACHINERY_MIN_ESM
-    parse_v(v) = try
-        Tuple(parse(Int, p) for p in split(split(String(v), '-')[1], '.'))
-    catch err
-        _is_resource_error(err) && rethrow()
-        nothing
-    end
-    d = parse_v(declared)
-    f = parse_v(TEMPLATE_MACHINERY_MIN_ESM)
-    (d === nothing || f === nothing) && return TEMPLATE_MACHINERY_MIN_ESM
-    return d >= f ? String(declared) : TEMPLATE_MACHINERY_MIN_ESM
+    d = _parse_esm_version(declared)
+    d === nothing && return TEMPLATE_MACHINERY_MIN_ESM
+    return d >= _parse_esm_version(TEMPLATE_MACHINERY_MIN_ESM) ? String(declared) :
+        TEMPLATE_MACHINERY_MIN_ESM
 end
 
 """
