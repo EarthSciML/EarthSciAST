@@ -187,12 +187,25 @@ end
             v = ESM._eval_node(node, Float64[], nothing, 0.0)
             @test v isa Float64
         end
-        # The variadic `-` the interpreter accepted still folds (left fold).
+        # `-` is unary or binary: a third operand is refused, never folded.
         e3 = OpExpr("-", ESM.ASTExpr[NumExpr(9.0), NumExpr(3.0), NumExpr(2.0)])
-        @test ESM._eval_node(
-            ESM._geo_compile(e3, _geo_test_ctx()),
-            Float64[], nothing, 0.0
-        ) == 4.0
+        let err = try
+                ESM._geo_compile(e3, _geo_test_ctx())
+            catch e
+                e
+            end
+            @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_ARITY"
+        end
+        # A setup-time indicator count (`:geo_count`) walks too, not only when
+        # `_geo_kernel` emits the body: the walker reaches it when the emitter
+        # declines a body or the count sits in a walked top-level filter.
+        let cnt = ESM._mknode(
+                kind = ESM._NK_OP, op = :geo_count,
+                children = ESM._Node[ESM._mknode(kind = ESM._NK_LITERAL, literal = 2.5)],
+                payload = ESM._GeoCountSpec([1.0, 2.0, 3.0], 3, :<=, false)
+            )
+            @test ESM._eval_node(cnt, Float64[], nothing, 0.0) === 2.0
+        end
         # And an op outside the vocabulary still raises the explicit
         # setup-geometry error — now at COMPILE time (before the sweep).
         err = try

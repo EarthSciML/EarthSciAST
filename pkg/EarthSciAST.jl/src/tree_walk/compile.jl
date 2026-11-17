@@ -2408,8 +2408,8 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
         _expect_arity_n(op, c, 1)
         return _eval_node(c[1], u, p, t, T)
 
-    elseif op === :geo_gather || op === :geo_agg || op === :cellmemo ||
-            op === :geomemo
+    elseif op === :geo_gather || op === :geo_agg || op === :geo_count ||
+            op === :cellmemo || op === :geomemo
         # Compiled setup-time GEOMETRY nodes (tree_walk/geometry_compile.jl).
         # These exist only in build-time compiled geometry bodies — `u` is a
         # small loop-index frame there, never the ODE state — so this arm is
