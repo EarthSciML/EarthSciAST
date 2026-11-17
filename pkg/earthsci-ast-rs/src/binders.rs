@@ -91,13 +91,6 @@ impl ExpressionNode {
         out
     }
 
-    /// Whether this node binds `name` as one of the given kinds.
-    pub(crate) fn binds(&self, kinds: Binders, name: &str) -> bool {
-        let mut found = false;
-        self.for_each_binder(kinds, |n| found |= n == name);
-        found
-    }
-
     /// Whether this node carries any binder of the given kinds (a field that is
     /// present counts even when it is empty).
     pub(crate) fn carries_binders(&self, kinds: Binders) -> bool {
@@ -190,20 +183,33 @@ pub(crate) fn rename_free_names(
     rename: &dyn Fn(&str) -> Option<String>,
 ) -> Expr {
     let mut bound: Vec<String> = Vec::new();
-    rename_walk(expr, kinds, rename, &mut bound)
+    rename_walk(expr, kinds, rename, false, &mut bound)
+}
+
+/// [`rename_free_names`], leaving a reference alone where the name it would
+/// become is bound there: an enclosing node binding `i` keeps `M.i` as
+/// written rather than let it become, and be captured as, the loop symbol.
+pub(crate) fn rename_free_names_uncaptured(
+    expr: &Expr,
+    kinds: Binders,
+    rename: &dyn Fn(&str) -> Option<String>,
+) -> Expr {
+    let mut bound: Vec<String> = Vec::new();
+    rename_walk(expr, kinds, rename, true, &mut bound)
 }
 
 fn rename_walk(
     expr: &Expr,
     kinds: Binders,
     rename: &dyn Fn(&str) -> Option<String>,
+    uncaptured: bool,
     bound: &mut Vec<String>,
 ) -> Expr {
     let renamed = |n: &str, bound: &[String]| {
         if bound.iter().any(|b| b == n) {
             None
         } else {
-            rename(n)
+            rename(n).filter(|to| !uncaptured || !bound.iter().any(|b| b == to))
         }
     };
     match expr {
@@ -211,7 +217,8 @@ fn rename_walk(
         Expr::Operator(node) => {
             let depth = bound.len();
             node.for_each_binder(kinds, |n| bound.push(n.to_string()));
-            let mut out = node.map_children(&mut |c| rename_walk(c, kinds, rename, bound));
+            let mut out =
+                node.map_children(&mut |c| rename_walk(c, kinds, rename, uncaptured, bound));
             if let Some(join) = &out.join {
                 out.join = Some(
                     join.iter()

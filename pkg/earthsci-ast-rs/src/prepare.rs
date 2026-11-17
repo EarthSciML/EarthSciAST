@@ -1552,7 +1552,7 @@ impl<'o> BuildState<'o> {
             base_path: opts.problem.base_path.clone(),
             metaparameters,
         };
-        let file = crate::parse::load_string_with_options(&text, &load_opts)
+        let mut file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
         let index_sets: HashMap<String, IndexSet> = file
             .index_sets
@@ -1572,7 +1572,7 @@ impl<'o> BuildState<'o> {
             None => Spelling::Qualified,
         };
         let (normalized, flattened, bound_inputs) = match &spelling {
-            Spelling::ModelLocal(n) => (Self::authored_model(models, n, index_sets)?, None, None),
+            Spelling::ModelLocal(n) => (Self::model_alone(&mut file, n, index_sets)?, None, None),
             Spelling::Qualified => {
                 let (flat, index_sets) = Self::whole_document(&file, index_sets)?;
                 crate::compile_error::refuse_reserved_lifting(&flat)
@@ -1635,29 +1635,51 @@ impl<'o> BuildState<'o> {
         })
     }
 
-    /// The model `name` as authored, normalized
-    /// ([`crate::simulate_array::normalize`]): its subsystems mounted, a
-    /// self-qualified `M.a` resolved to `a`, a right-hand-side `D` to the
-    /// tendency it names (or a refusal, never a `NaN`), a `sin` of a `deg`
-    /// angle taking radians, and an unshaped variable whose `ifelse` arms
-    /// differ in rank taking the array arm's shape.
+    /// The model `name` built alone: the document with that model as its one
+    /// component flattened, so its subsystems are mounted, a self-qualified
+    /// `M.a` resolves to `a`, a right-hand-side `D` to the tendency it names
+    /// (or a refusal, never a `NaN`) and a `sin` of a `deg` angle takes
+    /// radians, as in every other build; then normalized
+    /// ([`crate::simulate_array::normalize`]) with its names model-local.
     ///
-    /// Names resolve in this model's scope, model-locally: an explicit
-    /// selection builds that model alone, so a name another top-level model
-    /// declares is not in scope (see [`Self::whole_document`]).
-    fn authored_model(
-        models: &IndexMap<String, Model>,
+    /// Names resolve in this model's scope: an explicit selection builds that
+    /// model alone, so a name another top-level model declares is not in
+    /// scope (see [`Self::whole_document`]).
+    fn model_alone(
+        file: &mut crate::EsmFile,
         name: &str,
-        index_sets: HashMap<String, IndexSet>,
+        mut index_sets: HashMap<String, IndexSet>,
     ) -> Result<NormalizedModel, SimulateError> {
-        let model = models
-            .get(name)
+        let model = file
+            .models
+            .as_ref()
+            .and_then(|m| m.get(name))
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
             .clone();
+        // The document without its components, cloned, then given the one.
+        let models = file.models.take();
+        let systems = file.reaction_systems.take();
+        let coupling = file.coupling.take();
+        let mut alone = file.clone();
+        file.models = models;
+        file.reaction_systems = systems;
+        file.coupling = coupling;
+        alone.models = Some(IndexMap::from([(name.to_string(), model)]));
+        let flat = crate::flatten::flatten(&alone).map_err(|e| {
+            if e.code().is_some() {
+                SimulateError::Compile(CompileError::Flatten(e))
+            } else {
+                err(format!("model '{name}': {e}"))
+            }
+        })?;
+        drop(alone);
+        for (k, v) in &flat.index_sets {
+            index_sets.entry(k.clone()).or_insert_with(|| v.clone());
+        }
         crate::simulate_array::normalize(
-            BuildInput::Authored {
-                model: Box::new(model),
-                name: Some(name),
+            BuildInput::Local {
+                flat: &flat,
+                model: name,
             },
             index_sets,
         )

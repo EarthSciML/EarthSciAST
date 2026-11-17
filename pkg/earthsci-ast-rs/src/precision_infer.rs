@@ -346,8 +346,8 @@ fn annotate_model_with(
 /// Annotate the equations of one inline subsystem, and of its own subsystems
 /// at any depth.
 ///
-/// A build mounts a subsystem (`crate::simulate_array::mount_subsystems`, and
-/// `flatten`'s subsystem lowering) by splicing its equations into the model
+/// A build mounts a subsystem (`flatten`'s subsystem lowering) by splicing its
+/// equations into the model
 /// with every sibling name prefixed. The markers this pass writes are ordinary
 /// operator nodes, so they survive that splice, and the mounted rule `Sub.var`
 /// is armed at `precision::of_variable("Sub.var")`.

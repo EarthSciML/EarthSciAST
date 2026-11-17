@@ -1,8 +1,7 @@
 //! The front half every build into the array runtime shares: one function,
-//! [`normalize`], turns what a build reads — a flattened system, or the one
-//! authored model the build pipeline's model-local build reads — into the
-//! model it compiles, with every subsystem mounted, `flatten`'s rewrites made,
-//! each recurrence group stacked and the shape of every unshaped mixed-rank
+//! [`normalize`], turns the flattened system a build reads — the whole
+//! document's, or one model's built alone — into the model it compiles, each
+//! recurrence group stacked and the shape of every unshaped mixed-rank
 //! `ifelse` decided.
 //!
 //! The compile path ([`ArrayCompiled`]'s constructors, which always build from
@@ -11,8 +10,7 @@
 //! product, [`NormalizedModel`], is the only input the later stages accept.
 
 use super::compile::{
-    VariableAxes, apply_authored_flatten_rewrites, apply_shape_rewrites, model_from_flattened,
-    mount_subsystems, resolve_model_self_references, set_declared_shapes,
+    VariableAxes, apply_shape_rewrites, model_from_flattened, set_declared_shapes,
 };
 use super::recurrence_group::lower_recurrence_groups;
 use super::{HashMap, IndexSet};
@@ -22,13 +20,14 @@ use crate::types::Model;
 
 /// What a build reads.
 pub(crate) enum BuildInput<'a> {
-    /// One authored document model, owned, as the build pipeline's
-    /// model-local build reads it. `name` is its key in the document: with a
-    /// name, a self-qualified reference (`M.x`, `M.sub.x`) resolves to its
-    /// local spelling once the subsystems are mounted.
-    Authored {
-        model: Box<Model>,
-        name: Option<&'a str>,
+    /// The flattened system of one model built alone (`model`, its key in
+    /// the document), its names shown model-locally: the `model.` every name
+    /// of the model begins with is dropped, so a variable `x` is `x` and a
+    /// mounted one `Sub.x`, as the build pipeline's model-local build names
+    /// them.
+    Local {
+        flat: &'a FlattenedSystem,
+        model: &'a str,
     },
     /// A flattened system: every name dot-namespaced, the coupling applied.
     /// `inherited` declares the shapes a system this one was cut from decided
@@ -57,12 +56,8 @@ pub(crate) struct NormalizedModel {
 /// Normalize `input` against the document's `index_sets` registry. The stages
 /// run in this order, and each needs the one before it:
 ///
-/// 1. for authored input only (a flattened system has had all three):
-///    mount the subsystems, so every later stage sees a subsystem's variables
-///    and equations under their mounted names; resolve self-qualified
-///    references, which can only be recognized once the names they spell are
-///    mounted; and make `flatten`'s right-hand-side `D` and angle rewrites
-///    ([`apply_authored_flatten_rewrites`]);
+/// 1. the system's variables merged into one registry
+///    ([`model_from_flattened`]), shown model-locally for a model built alone;
 /// 2. the shape rewrites ([`apply_shape_rewrites`]): the elementwise lift and
 ///    the shapes of unshaped mixed-rank `ifelse` variables, then the
 ///    bare-array-operand check on the lifted equations;
@@ -72,13 +67,9 @@ pub(crate) fn normalize(
     mut index_sets: HashMap<String, IndexSet>,
 ) -> Result<NormalizedModel, CompileError> {
     let (mut model, inherited) = match input {
-        BuildInput::Authored { model, name } => {
-            let mut model = *model;
-            mount_subsystems(&mut model)?;
-            if let Some(name) = name {
-                resolve_model_self_references(&mut model, name);
-            }
-            apply_authored_flatten_rewrites(&mut model)?;
+        BuildInput::Local { flat, model: local } => {
+            let mut model = model_from_flattened(flat);
+            unqualify(&mut model, local);
             (model, None)
         }
         BuildInput::Flattened { flat, inherited } => {
@@ -104,4 +95,27 @@ pub(crate) fn normalize(
         shapes,
         axes,
     })
+}
+
+/// Drop `local.` from every name of `model` that begins with it: its
+/// variables, and every free reference of its equations and initialization
+/// equations, except one an enclosing node binds the shorter name of.
+pub(super) fn unqualify(model: &mut Model, local: &str) {
+    let prefix = format!("{local}.");
+    let strip = |n: &str| n.strip_prefix(prefix.as_str()).map(str::to_string);
+    model.variables = std::mem::take(&mut model.variables)
+        .into_iter()
+        .map(|(n, v)| (strip(&n).unwrap_or(n), v))
+        .collect();
+    let rename = |e: &crate::types::Expr| {
+        crate::binders::rename_free_names_uncaptured(e, crate::binders::Binders::BODY, &strip)
+    };
+    for eq in model
+        .equations
+        .iter_mut()
+        .chain(model.initialization_equations.iter_mut().flatten())
+    {
+        eq.lhs = rename(&eq.lhs);
+        eq.rhs = rename(&eq.rhs);
+    }
 }
