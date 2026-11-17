@@ -1029,7 +1029,8 @@ const _AFFINE_STABLE_GUARD = 8
 const _AFFINE_MAX_DELTA_SEGS = 16
 
 # Cut START indices per loop dim. For each dim, hold the OTHER dims at every
-# low/mid/high probe and record where the per-cell signature changes — but scan
+# low/mid/high probe (and at each of their region starts) and record where the
+# per-cell signature changes — but scan
 # INWARD FROM BOTH ENDS rather than across the whole range, stopping once the
 # signature has been stable for `_AFFINE_STABLE_GUARD` cells. Because a stencil
 # operator's transitions are all within its half-width of an end, this finds every
@@ -1056,6 +1057,16 @@ function _affine_cut_points(
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
     region_cands, full = _region_cut_candidates(body, idx_names)
+    # A region bounded in several dims is seen on a dim's probe lines only if
+    # one of them crosses it, so each dim's region starts join its probe values
+    # when the other dims are scanned. A dim whose every cell is a candidate
+    # (`full`) adds none: its probe lines stay low / mid / high.
+    probe_extra = Vector{Vector{Int}}(undef, D)
+    for d in 1:D
+        rng = ranges[d]
+        probe_extra[d] = full[d] ? Int[] :
+            sort!(Int[c for c in region_cands[d] if first(rng) <= c <= last(rng)])
+    end
     for d in 1:D
         full[d] && union!(region_cands[d], (first(ranges[d]) + 1):last(ranges[d]))
     end
@@ -1087,7 +1098,14 @@ function _scan_dim_cuts(
     starts = Set{Int}(); push!(starts, lo)
     otherdims = Int[dd for dd in 1:D if dd != d]
     probesets = isempty(otherdims) ? [()] :
-        collect(Iterators.product((_probe_values(ranges[dd]) for dd in otherdims)...))
+        collect(
+            Iterators.product(
+                (
+                    unique!(vcat(_probe_values(ranges[dd]), probe_extra[dd]))
+                    for dd in otherdims
+                )...
+            )
+        )
     loop = Vector{Int}(undef, D)
     # Two key buffers, alternated: `ck` fills the one `prev` does not hold.
     kb1 = Int[]; kb2 = Int[]
