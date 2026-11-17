@@ -16,8 +16,8 @@ using Unitful
 # nonsense (`kmolec`, `nppb`) and make the set of legal unit strings unbounded
 # and un-pinnable across five language bindings.
 #
-# This replaces a `Unitful.uparse` call. `uparse` is the wrong tool for a
-# CROSS-BINDING contract for three reasons, each of which bit us:
+# `Unitful.uparse` is not used: it is the wrong tool for a cross-binding
+# contract for three reasons:
 #
 #   * it has an open SI-prefix mechanism, so the accepted set is not the
 #     spec's set (and cannot be, since Julia's prefix table is Julia's);
@@ -869,28 +869,21 @@ end
 #   * PROVABLY INCONSISTENT    → push a message onto `findings`, return `nothing`
 #   * UNKNOWN / indeterminate  → return `nothing`, push NOTHING
 #
-# Before this was fixed, every rule signalled a provable inconsistency by
-# `@warn`-ing and returning `nothing` — the *same* value it returns for an
-# undeclared variable or an operator with no rule — so a violation could not be
-# distinguished from ignorance and `validate_equation_dimensions` counted both
-# as consistent. A violation was structurally incapable of becoming an error.
-#
-# Callers therefore learn "this expression is provably wrong" by checking
+# Callers learn "this expression is provably wrong" by checking
 # whether `findings` GREW, never by checking the returned value against
 # `nothing`. `nothing` alone always means "cannot say".
 #
 # Corollary (conservatism): a rule that cannot determine ALL of its operands'
 # dimensions must return `nothing` rather than guess, because a guessed
 # dimension propagates upward and can manufacture a FALSE inconsistency at an
-# enclosing node. `_product_rule` used to skip unknown factors and return the
-# product of the known ones — a wrong dimension, presented as a known one.
+# enclosing node.
 #
 # Each rule is `(expr::OpExpr, var_units, findings::Vector{String}) -> Union{Unitful.Units, Nothing}`,
 # dispatched through the const `_DIMENSION_RULES` table below.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# IMPLICIT UNITS ON NUMERIC LITERALS — FABRICATION #1.
+# IMPLICIT UNITS ON NUMERIC LITERALS.
 #
 # A bare number has an INDETERMINATE dimension, not a dimensionless one. Nothing
 # in the AST says whether `273.15` is a pure number or a temperature offset,
@@ -1577,9 +1570,8 @@ _minmax_rule(expr, var_units, findings) =
 )
 
 # "*": multiply dimensions. A SINGLE indeterminate factor makes the whole
-# product indeterminate — FABRICATION #2. Skipping the unknown factor and
-# returning the product of the known ones silently asserts the unknown one is
-# dimensionless, which is exactly wrong for the implicit-unit constants the
+# product indeterminate. Skipping the unknown factor and returning the product
+# of the known ones would assert the unknown one is dimensionless, which is wrong for the implicit-unit constants the
 # corpus multiplies by: `conc_ppb * 1.23` is a ppb→µg/m³ conversion, and
 # reporting its dimension as "ppb" manufactures a mismatch against the declared
 # µg/m³. See the conservatism corollary above.
@@ -1620,7 +1612,7 @@ end
 # dimensionless — a provable inconsistency when its dimension is known and
 # non-trivial.
 #
-# FABRICATION #4: a SYMBOLIC exponent (`x^alpha` — a fitted reaction order is
+# A SYMBOLIC exponent (`x^alpha` — a fitted reaction order is
 # ordinary chemistry) makes the result's dimension depend on alpha's RUNTIME
 # VALUE, so it is genuinely undeterminable. Assuming the base's dimension
 # manufactures a clean `1/s` for `k2 * x^alpha * z^beta` and then reports a
@@ -1904,13 +1896,13 @@ end
 # "D": derivative — the differentiated variable's dimension over the `wrt`
 # variable's dimension.
 #
-# FABRICATION #3: an UNDECLARED independent variable has an unknown dimension,
+# An UNDECLARED independent variable has an unknown dimension,
 # so the derivative's dimension is unknown too. Defaulting `t` to SECONDS is a
 # false-positive factory: in a nondimensionalized model (state and RHS both
 # declared "1", `t` undeclared) it manufactures `1/s` on the left against `1` on
 # the right and reports a mismatch in a perfectly well-formed file.
 #
-# No coverage is lost. The EQUATION-level rule (`equation_unit_findings`) still
+# The EQUATION-level rule (`equation_unit_findings`) still
 # rejects a derivative equation that no choice of time unit could reconcile,
 # which is what the invalid corpus actually pins.
 function _derivative_rule(expr, var_units, findings)
@@ -2135,7 +2127,7 @@ end
 # as it does. OFF (any other environment) is today's behaviour.
 #
 # At this stage the rule only drives the `units_dimensionless_literal_mismatch`
-# WARNING (`dimensionless_literal_findings`); validity is decided by the
+# WARNING (`_dimensionless_literal_findings`); validity is decided by the
 # current, neutral-literal rule alone.
 # ---------------------------------------------------------------------------
 struct _LiteralRuleEnv{K, V, D <: AbstractDict{K, V}} <: AbstractDict{K, V}
@@ -2757,29 +2749,21 @@ function _nonzero_literals(exprs)::Vector{String}
     return out
 end
 
-"""
-    dimensionless_literal_findings(file::EsmFile) -> Vector{Tuple{String, String}}
-
-The esm-spec §4.8.6 warnings: every check site whose verdict is a provable
-mismatch when bare numeric literals are read as dimensionless at scale 1 (zero
-excepted), but not under the current neutral-literal rule. Returns
-`(json_pointer, message)` pairs, models before reaction systems, each sorted by
-name.
-
-The sites are every model's `equations` and `initialization_equations` and
-every reaction system's `constraint_equations` and reaction rates, in the
-top-level components and in their inline subsystems at any depth
-(`/models/<M>/subsystems/<S>/equations/<i>`, …). Each component is typed in the
-unit environment its own unit checks use, with its surviving template
-references expanded, and each site is judged under both rules by the one site
-check those unit checks use. A site the current rule already rejects carries no
-warning: it is an error already.
-"""
-dimensionless_literal_findings(file::EsmFile)::Vector{Tuple{String, String}} =
-    _dimensionless_literal_findings(_UnitsInputs(file))
-
-# `dimensionless_literal_findings` over the units inputs a `validate` pass has
-# already built (validate.jl).
+# The esm-spec §4.8.6 warnings, over the units inputs a `validate` pass has
+# already built (validate.jl): every check site whose verdict is a provable
+# mismatch when bare numeric literals are read as dimensionless at scale 1 (zero
+# excepted), but not under the current neutral-literal rule. Returns
+# `(json_pointer, message)` pairs, models before reaction systems, each sorted
+# by name.
+#
+# The sites are every model's `equations` and `initialization_equations` and
+# every reaction system's `constraint_equations` and reaction rates, in the
+# top-level components and in their inline subsystems at any depth. Each
+# component is typed in the unit environment its own unit checks use, with its
+# surviving template references expanded, and each site is judged under both
+# rules by `_site_findings`. A site whose findings are not empty under the
+# current rule gets no warning. That is not the same as being an error: the
+# structural unit checks do not visit every one of these sites.
 function _dimensionless_literal_findings(units)::Vector{Tuple{String, String}}
     out = Tuple{String, String}[]
     file, toplevel = units.file, units.toplevel
