@@ -646,6 +646,7 @@ function derive_output_meta(doc::AbstractDict)
         model = models[mn]
         vars = model isa AbstractDict ? get(model, "variables", nothing) : nothing
         vars isa AbstractDict || continue
+        observed = _output_observed_names(model)
         for vn in sort!(String[String(k) for k in keys(vars)])
             v = vars[vn]
             v isa AbstractDict || continue
@@ -664,7 +665,7 @@ function derive_output_meta(doc::AbstractDict)
             # unconditionally. An unknown DEFINED by a bare-variable-LHS
             # equation is the observed one.
             vt = get(v, "type", nothing)
-            vt = (vt == "unknown" && vn in _output_observed_names(model)) ?
+            vt = (vt == "unknown" && vn in observed) ?
                 "observed" : (vt === nothing ? nothing : String(vt))
 
             for key in keys_for_var
@@ -682,17 +683,12 @@ end
     _output_observed_names(model) -> Set{String}
 
 The OBSERVED unknowns of a RAW (unparsed) model dict: those an equation defines
-with a bare-variable LHS (esm-spec §6.3.1). Memoised on the model dict, because
-`derive_output_meta` asks once per variable.
+with a bare-variable LHS (esm-spec §6.3.1). `model` is not modified.
 
-This is the raw-JSON twin of `observed_unknowns`; `derive_output_meta` walks the
-document rather than the typed IR (it needs the `coordinates` registry and the
-index-set sizes the typed IR does not surface), so it cannot call the typed
-classification directly.
+This is the raw-JSON twin of `observed_unknowns`, for `derive_output_meta`,
+which walks the raw document rather than the typed IR.
 """
 function _output_observed_names(model)
-    cached = get(model, "_output_observed", nothing)
-    cached === nothing || return cached
     vars = get(model, "variables", nothing)
     out = Set{String}()
     if vars isa AbstractDict
@@ -705,7 +701,6 @@ function _output_observed_names(model)
             push!(out, String(lhs))
         end
     end
-    model isa AbstractDict && (model["_output_observed"] = out)
     return out
 end
 
