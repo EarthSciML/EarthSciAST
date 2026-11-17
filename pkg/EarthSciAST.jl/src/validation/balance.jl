@@ -1,0 +1,174 @@
+# Equation-unknown balance and the left-hand-side names it counts.
+
+# ============================================================================
+# Helper Functions for Structural Validation
+# ============================================================================
+
+"""
+    model_subsystems(model::Model)
+
+Iterator over the `(name, subsystem)` pairs of `model.subsystems` whose value
+is itself a `Model`. Model subsystems may also hold an unresolved `SubsystemRef`,
+which carries no model semantics for the model-specific validators — this helper
+skips it once, instead of every recursion site repeating the
+`subsys isa Model || continue` boilerplate.
+"""
+model_subsystems(model::Model) =
+    (pair for pair in model.subsystems if pair.second isa Model)
+
+"""
+    _equation_lhs_names(lhs::ASTExpr) -> Set{String}
+
+The names an equation's LHS *solves for*. The LHS is not always a bare variable:
+the corpus spells the same "define `u`" in five shapes, and a balance check
+must understand all of them or it reports a false `missing_equation`.
+
+Recognised shapes, in the order they nest:
+
+| LHS | solves for |
+|---|---|
+| `"u"` (bare) | `u` |
+| `D(u, t)` | `u` |
+| `index(u, i)` / `index(D(u), i)` | `u` (an element assignment defines the array) |
+| `aggregate{output_idx: [i], expr: D(index(u,i))}` | `u` (a vectorised ODE) |
+| `H*H*SO4 = Ksp` (implicit/algebraic) | every bare variable on the LHS |
+
+`ic(u)` is deliberately NOT a defining equation — an initial condition
+constrains `u`'s value at t₀, it does not supply `u`'s dynamics — so it returns
+the empty set and cannot satisfy a state variable's balance obligation.
+
+Dotted (cross-system) names are excluded: they are the qualified-reference
+resolver's business, not this model's balance.
+"""
+function _equation_lhs_names(lhs::ASTExpr)::Set{String}
+    names = Set{String}()
+    _collect_lhs_names!(names, lhs)
+    return names
+end
+
+function _collect_lhs_names!(names::Set{String}, e::ASTExpr)
+    if e isa VarExpr
+        occursin('.', e.name) || push!(names, e.name)
+    elseif e isa OpExpr
+        if e.op == "ic"
+            # Initial condition: constrains a value, does not define dynamics.
+            return names
+        elseif e.op in ("D", "index") && !isempty(e.args)
+            # Structural wrappers: the solved-for name is the head operand.
+            _collect_lhs_names!(names, e.args[1])
+        elseif e.op == "faq" && e.expr_body !== nothing
+            # Vectorised equation: the body is the real LHS.
+            _collect_lhs_names!(names, e.expr_body)
+        else
+            # Implicit / algebraic LHS (`H*H*SO4 = Ksp`): any bare variable on
+            # the LHS is a candidate unknown this equation constrains.
+            for a in e.args
+                _collect_lhs_names!(names, a)
+            end
+        end
+    end
+    return names
+end
+
+"""
+    validate_model_balance(model::Model, path::String) -> Vector{StructuralError}
+
+Validate the equation/unknown balance of a model (esm-spec §4.9.4).
+
+From esm 1.0.0 the balance is stated over UNKNOWNS and EQUATIONS, not over a
+declared `state` type: an unknown's behaviour is given by the equations and
+nowhere else, so a model is well-determined exactly when it writes one equation
+per unknown. An equation counts whichever LHS form it takes — a derivative
+(`D(u,t)`), a bare variable (`y ~ f(…)`), or an expression (`H*H*SO4 ~ Ksp`) —
+because all three determine the unknowns they name. An `ic` LHS prescribes an
+initial value rather than dynamics and does not count.
+
+That single rule replaces three 0.x checks: the "state variable with no
+defining equation" direction, the "excess equation" direction, and the separate
+square-ness rule that `system_kind: "nonlinear"` used to need. It also absorbs
+the retired `missing_observed_expr` diagnostic — an observed unknown with
+nothing defining it is no longer a malformed declaration but an unbalanced
+system, and `missing_equations_for` names exactly the unknowns that code used
+to name.
+
+Reported at the MODEL's pointer (`/models/<M>`) under `equation_count_mismatch`
+— a balance is a property of the model, not of any one equation.
+
+Two exemptions carry over, and both are one-directional:
+
+- A model **with subsystems** is exempt from the SHORTFALL direction: its
+  dynamics may live in a subsystem (`tests/valid/scoped_refs_coupling.esm`
+  declares unknowns and `equations: []` for exactly this reason).
+- `check_excess=false` exempts the SURPLUS direction. It is passed for a model
+  participating in an `operator_compose` coupling: such a model is an OPERATOR,
+  and its equations act on the unknowns of the system it is composed onto, not
+  on unknowns of its own. `tests/valid/minimal_chemistry.esm` is the canonical
+  shape — `Advection` declares only parameters and writes `D(u) ~ …`, where `u`
+  is the advected field the composition supplies.
+"""
+function validate_model_balance(
+        model::Model, path::String;
+        check_excess::Bool = true
+    )::Vector{StructuralError}
+    errors = StructuralError[]
+
+    unknown_list = unknowns(model)
+    n_unknowns = length(unknown_list)
+
+    # An `ic` equation prescribes an initial value, not a determining equation,
+    # so it does not count toward the balance.
+    n_eqs = count(eq -> !(eq.lhs isa OpExpr && eq.lhs.op == "ic"), model.equations)
+
+    # Names credited by the model's own equation left-hand sides.
+    equation_vars = Set{String}()
+    for eq in model.equations
+        union!(equation_vars, _equation_lhs_names(eq.lhs))
+    end
+    missing_for = String[u for u in unknown_list if !(u in equation_vars)]
+
+    has_subsystems = !isempty(model.subsystems)
+    shortfall = n_unknowns - n_eqs
+
+    report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
+    if report
+        details = Dict{String, Any}("unknowns" => unknown_list, "equations" => n_eqs)
+        isempty(missing_for) || (details["missing_equations_for"] = missing_for)
+        push!(
+            errors, StructuralError(
+                path,
+                "Number of equations ($n_eqs) does not match number of unknowns ($n_unknowns)",
+                ERROR_CODES.EQUATION_COUNT_MISMATCH,
+                details
+            )
+        )
+    elseif !has_subsystems && !isempty(missing_for)
+        # Square by COUNT but not by assignment: some unknown has nothing
+        # crediting it while some equation credits a name the model does not
+        # declare. Same defect class, same code — the count alone cannot say it.
+        push!(
+            errors, StructuralError(
+                path,
+                "Model declares unknown '$(first(missing_for))' but has no defining " *
+                    "equation for it",
+                ERROR_CODES.EQUATION_COUNT_MISMATCH,
+                Dict{String, Any}(
+                    "unknowns" => unknown_list, "equations" => n_eqs,
+                    "missing_equations_for" => missing_for
+                )
+            )
+        )
+    end
+
+    # Recursively check subsystems. The operator exemption is inherited: a
+    # subsystem of an operator is still acting on the composed system's state.
+    for (subsys_name, subsys) in model_subsystems(model)
+        append!(
+            errors, validate_model_balance(
+                subsys, "$path/subsystems/$subsys_name";
+                check_excess = check_excess
+            )
+        )
+    end
+
+    return errors
+end
