@@ -3,186 +3,22 @@
 # ========================================================================
 #
 # The two pieces of the compiled scalar IR that every consumer of a build shares:
-# the ladder that turns an `_NK_OP` node into a value, and the resolver that
-# turns a gather subscript into a build-time integer. A compiled backend folds
-# constant subtrees through the ladder at Float64, in the arm order
-# test/scalar_ops_test.jl pins against the scalar walker, so a folded subtree
-# matches what `f!` computes for it.
+# the ladder that turns an `_NK_OP` node over host values into a value, and the
+# resolver that turns a gather subscript into a build-time integer.
 
-# ---- The shared op ladder ---------------------------------------------------
+# ---- The host op ladder ------------------------------------------------------
 #
-# The mechanical unary arms (`sin` … `ceil`), GENERATED from the op-registry table
-# exactly as `_eval_acc_op`'s matching arms (access_kernel.jl) are, so a unary op added
-# to the registry reaches every ladder (scalar / shared / access-kernel) at once.
-# `nothing` ⇒ not a mechanical unary op ⇒ the caller's ladder falls through. The
-# comparison / binary / min-max probes below follow the same protocol from their
-# own registry tables.
-let arms = :(return nothing)
-    for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 1)
-                return $(row.sym).(c[1])
-            end,
-            arms
+# Apply `op` to already-evaluated `Float64` operands: the generated ladder of
+# `_eval_node_op` (`_op_ladder`, tree_walk/op_ladder.jl) with each operand read
+# from `c`. A compiled backend folds a constant subtree through it, so the folded
+# value is bit-identical to what `f!` computes for that subtree.
+@eval function _scalar_op(op::Symbol, c::AbstractVector)::Float64
+    $(
+        _op_ladder(
+            i -> :(c[$i]), :(length(c)),
+            :(throw(_unevaluable_operator(op, "the host op ladder has no arm for it")))
         )
-    end
-    @eval @inline function _unary_elementwise(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# The comparison arms (`<` … `!=` → 1/0 in the value type), GENERATED from
-# `_COMPARISON_ELEMENTWISE_OPS` the same way. A comparison is piecewise
-# constant, so `one(T)`/`zero(T)` carry the correct (zero) derivative under AD.
-# `$(fnsym).(a, b)` is broadcast sugar for the hand-written infix `a .< b`, so
-# the fused blend is unchanged.
-let arms = :(return nothing)
-    for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 2)
-                return ifelse.($(row.fnsym).(c[1], c[2]), one(T), zero(T))
-            end,
-            arms
-        )
-    end
-    @eval @inline function _comparison(
-            op::Symbol, c::AbstractVector,
-            ::Type{T}
-        ) where {T}
-        $arms
-    end
-end
-
-# The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
-# `_BINARY_ELEMENTWISE_OPS`. A literal exponent stays a host `Float64` (the
-# leaves are never converted to `T`), so a Dual walk keeps the power rule.
-let arms = :(return nothing)
-    for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                _expect_arity_n(op, c, 2)
-                return $(row.fnsym).(c[1], c[2])
-            end,
-            arms
-        )
-    end
-    @eval @inline function _binary_elementwise(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# The n-ary `min`/`max` folds (arity ≥ 2), GENERATED from `_NARY_MINMAX_OPS` —
-# same guard and fold order as the in-place ladders.
-let arms = :(return nothing)
-    for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(
-            :if, :(op === $(QuoteNode(row.sym))),
-            quote
-                length(c) < 2 && throw(
-                    TreeWalkError(
-                        "E_TREEWALK_ARITY",
-                        $(row.name * " needs ≥2 args")
-                    )
-                )
-                r = $(row.fnsym).(c[1], c[2])
-                for i in 3:length(c)
-                    r = $(row.fnsym).(r, c[i])
-                end
-                return r
-            end,
-            arms
-        )
-    end
-    @eval @inline function _minmax(op::Symbol, c::AbstractVector)
-        $arms
-    end
-end
-
-# Apply `op` to already-evaluated children. Every arm broadcasts, so `c` may hold
-# scalars (the scalar walker), arrays (the access-kernel lane walker), or a mix — and the
-# fold ORDER matches `_eval_node_op` / `_eval_acc_op` arm for arm, which is what
-# keeps a Float64 run of this emitter bit-identical to `f!`.
-function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
-    if op === :+
-        length(c) == 1 && return c[1]
-        r = c[1] .+ c[2]
-        for i in 3:length(c)
-            r = r .+ c[i]
-        end
-        return r
-    elseif op === :*
-        length(c) == 1 && return c[1]
-        r = c[1] .* c[2]
-        for i in 3:length(c)
-            r = r .* c[i]
-        end
-        return r
-    elseif op === :-
-        length(c) == 1 && return .-c[1]
-        length(c) == 2 && return c[1] .- c[2]
-        throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
-    elseif op === :neg
-        _expect_arity_n(op, c, 1)
-        return .-c[1]
-        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
-        # registry (`_binary_elementwise` above). The probe sits where `/` sat.
-    elseif (bin = _binary_elementwise(op, c)) !== nothing
-        return bin
-
-        # Comparisons → 1/0 in the value type — GENERATED from the registry
-        # (`_comparison` above, where the piecewise-constant AD note lives).
-    elseif (cmp = _comparison(op, c, T)) !== nothing
-        return cmp
-
-        # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
-        # is evaluated either way, so the values agree with the scalar arm too.
-    elseif op === :and
-        length(c) >= 2 || _throw_min_arity(op, c, 2)
-        r = one(T)
-        for a in eachindex(c)
-            r = ifelse.((r .!= 0) .& (c[a] .!= 0), one(T), zero(T))
-        end
-        return r
-    elseif op === :or
-        length(c) >= 2 || _throw_min_arity(op, c, 2)
-        r = zero(T)
-        for a in eachindex(c)
-            r = ifelse.((r .!= 0) .| (c[a] .!= 0), one(T), zero(T))
-        end
-        return r
-    elseif op === :not
-        _expect_arity_n(op, c, 1)
-        return ifelse.(c[1] .== 0, one(T), zero(T))
-    elseif op === :ifelse
-        _expect_arity_n(op, c, 3)
-        return ifelse.(c[1] .!= 0, c[2], c[3])
-
-    elseif (unary = _unary_elementwise(op, c)) !== nothing
-        return unary
-    elseif op === :atan
-        length(c) == 1 && return atan.(c[1])
-        length(c) == 2 && return atan.(c[1], c[2])
-        throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-        # n-ary min/max (arity ≥ 2) — GENERATED from the registry (`_minmax`
-        # above). (`atan2` is handled by the binary probe near the ladder top.)
-    elseif (mm = _minmax(op, c)) !== nothing
-        return mm
-
-    elseif op === :pi || op === :π
-        return T(pi)
-    elseif op === :e
-        return T(ℯ)
-    elseif op === :Pre
-        _expect_arity_n(op, c, 1)
-        return c[1]
-    else
-        throw(_unevaluable_operator(op, "the shared op ladder has no arm for it"))
-    end
+    )
 end
 
 # Evaluate an INDEX subtree to a concrete `Int`.

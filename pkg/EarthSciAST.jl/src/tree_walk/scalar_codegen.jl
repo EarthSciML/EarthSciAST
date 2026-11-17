@@ -1233,30 +1233,10 @@ function _scalar_walk_license(
     )
 end
 
-# The operator arities the registry declares (esm-spec §4.2), by node op.
-const _SC_OP_ARITY = Dict{Symbol, UnitRange{Int}}(
-    Symbol(s.name) => s.arity for s in _OP_TABLE if s.arity !== nothing
-)
-
 # Throw the walker's `E_TREEWALK_ARITY` for the first operator node in `nd`
-# whose child count the registry does not allow.
+# whose child count the registry does not allow (`_check_op_arity`).
 function _sc_check_arity(nd::_Node)
-    if nd.kind === _NK_OP
-        ar = get(_SC_OP_ARITY, nd.op, nothing)
-        n = length(nd.children)
-        if ar !== nothing && !(n in ar)
-            want = first(ar) == last(ar) ? "$(first(ar))" :
-                last(ar) == typemax(Int) ? "at least $(first(ar))" :
-                last(ar) == first(ar) + 1 ? "$(first(ar)) or $(last(ar))" :
-                "$(first(ar)) to $(last(ar))"
-            throw(
-                TreeWalkError(
-                    "E_TREEWALK_ARITY",
-                    "$(nd.op) expects $want args, got $n"
-                )
-            )
-        end
-    end
+    nd.kind === _NK_OP && _check_op_arity(nd.op, length(nd.children))
     foreach(_sc_check_arity, nd.children)
     return nothing
 end

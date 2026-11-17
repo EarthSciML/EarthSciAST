@@ -403,10 +403,10 @@ function _geo_reduce_fold(reduce_spec, semiring_spec)
     else
         "+"   # unspecified → additive fold (§5.1 note 1)
     end
-    oplus == "+"   && return (_OPLUS_IDENTITY["+"], +)
-    oplus == "min" && return (_OPLUS_IDENTITY["min"], min)
-    oplus == "max" && return (_OPLUS_IDENTITY["max"], max)
-    oplus == "*"   && return (_OPLUS_IDENTITY["*"], *)
+    if _is_numeric_reducer(oplus)
+        r = _REDUCER_INDEX[Symbol(oplus)]
+        return (r.zerobar, r.fn)
+    end
     throw(
         TreeWalkError(
             "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",

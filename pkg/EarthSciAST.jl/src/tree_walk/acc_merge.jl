@@ -36,7 +36,7 @@
 
 # Does this spine carry an op whose scalar evaluation is lazy?
 _acc_node_has_lazy(n::_Node) =
-    (n.kind === _NK_OP && (n.op === :ifelse || n.op === :and || n.op === :or)) ||
+    (n.kind === _NK_OP && _op_lazy_from(n.op) > 0) ||
     _anyof(_acc_node_has_lazy, n.children)
 
 # ---- DIRECT CLASS EMISSION switch
@@ -125,20 +125,19 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, ')')
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
-        # Defensive: a runtime contraction loop (ess-runtime-contraction) or a
-        # ragged loop is CONFINED to scalar contexts and never reaches the
-        # array-equation merge. Should one ever arrive, key it by object
-        # identity so DISTINCT loops can never be wrongly merged into one kernel
-        # (fail-safe: no merge, not a silent miscompile); a ragged loop's
-        # `[body, lo, hi]` children would otherwise read as an n-ary op's. The
-        # codegen emitter then declines it and the cell falls back to the
-        # per-cell scalar walk.
+        # A runtime contraction loop or a ragged loop is CONFINED to scalar
+        # contexts: a cell holding one is walked by the scalar walker and never
+        # reaches the array-equation merge. Should one arrive, it is keyed by
+        # object identity so DISTINCT loops never share a group, and
+        # `_acc_merge_nodes` then refuses it by name (`_unknown_kind`).
         print(io, "CL:", objectid(n))
-    else  # _NK_OP
+    elseif k === _NK_OP
         print(io, "O:", n.op)
         print(io, '(')
         _sig_children!(io, n.children)
         print(io, ')')
+    else
+        _unknown_kind(n, "the per-cell merge signature")
     end
     return io
 end
@@ -207,7 +206,7 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
             kind = _NK_CONTRACTION, op = n1.op, literal = n1.literal,
             children = ch
         )
-    else  # _NK_OP
+    elseif k === _NK_OP
         pay = n1.payload
         m = length(n1.children)
         ch = _Node[
@@ -216,6 +215,7 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
         ]
         return _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
     end
+    return _unknown_kind(n1, "the per-cell merge")
 end
 
 # Group an array equation's per-cell `(du_slot, node)` entries by structure and

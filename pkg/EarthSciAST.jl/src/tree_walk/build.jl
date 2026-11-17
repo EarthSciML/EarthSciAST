@@ -6193,7 +6193,7 @@ function _affine_reduce_form(
     )
     isempty(contract_names) && return nothing
     agg_gates === nothing || return nothing
-    (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") || return nothing
+    _is_numeric_reducer(oplus) || return nothing
     rngs = UnitRange{Int}[]
     for c in contract_const
         (c === nothing || isempty(c)) && return nothing
@@ -6208,7 +6208,7 @@ end
 # Which of `_affine_reduce_form`'s conditions a join-free contraction fails, in
 # words, for a refusal to name the construct it actually refuses.
 function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplus::String)
-    oplus in ("+", "*", "max", "min") ||
+    _is_numeric_reducer(oplus) ||
         return "its ⊕ must be +, *, max or min, and this one is `$(oplus)`"
     for (name, c) in zip(contract_names, contract_const)
         (c === nothing || isempty(c)) && continue
@@ -6990,7 +6990,7 @@ function _compile_faq_equation!(
         agg_gates === nothing || return "it has a join gate"
         agg_filter === nothing || return "it has a filter"
         all(c -> c !== nothing, contract_const) || return "a contracted bound is not constant"
-        (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") ||
+        _is_numeric_reducer(rhs_oplus) ||
             return "its ⊕ is `$(rhs_oplus)`, and the loop folds only +, *, max or min"
         isempty(range_iters) && return "it has no output index"
         prod(length(c) for c in contract_const) >= _contraction_loop_min() ||
@@ -7339,7 +7339,7 @@ function _compile_faq_equation!(
             )
         elseif !isempty(contract_names) && agg_gates === nothing && agg_filter === nothing &&
                 all(c -> c !== nothing, contract_const) &&
-                (rhs_oplus == "+" || rhs_oplus == "*" || rhs_oplus == "max" || rhs_oplus == "min") &&
+                _is_numeric_reducer(rhs_oplus) &&
                 prod(length(c) for c in contract_const) >= _array_contraction_min()
             ac = _try_compile_array_contraction(lhs_body, rhs_body, covered; ac_kwargs...)
         end

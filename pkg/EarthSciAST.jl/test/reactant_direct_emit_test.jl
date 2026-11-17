@@ -130,26 +130,49 @@ function _de_forced(N)
     )
 end
 
-# The hard-error fixture. It used to be `log10`, which the ladder now lowers as
-# `log(x)/ln(10)` — and with that there is no REGISTRY OPERATOR left for this
-# fixture to use: the ladder covers the whole closed evaluable-core scalar set
-# (esm-spec §4.2), so a well-formed document cannot reach `_de_op`'s
-# fallthrough any more. That is the intended state and not a gap in this test,
-# so the fixture moves to the refusal a malformed node still reaches: `/` is
-# binary in the IR, and a three-argument one is refused by BOTH ladders — the
-# interpreter's `_expect_arity_n` at evaluation, this emitter's arity arm at
-# emission. What the test is about is unchanged: the message must name the
-# construct in the IR's own vocabulary AND the rule it came from.
+# The hard-error fixture. A well-formed document cannot reach `_de_op`'s
+# refusals: the ladder covers every operator the registry gives a shape, and the
+# build refuses an operand count outside the registry arity before any back end
+# sees the node (`_check_op_arity`). So the fixture builds `neg(y / 2)` and the
+# test then gives the compiled `/` node a third operand (`_de_malform_divide!`),
+# the malformed IR the emitter's registry arity check exists for. What the test
+# is about is unchanged: the message must name the construct in the IR's own
+# vocabulary AND the rule it came from.
 function _de_unsupported_op()
     return _de_doc(
         "U", Dict{String, Any}("y" => _de_state(default = 2.0)),
         Any[
             Dict{String, Any}(
                 "lhs" => _de_Dt("y"),
-                "rhs" => _de_o("neg", _de_o("/", "y", 2.0, 3.0))
+                "rhs" => _de_o("neg", _de_o("/", "y", 2.0))
             ),
         ]
     )
+end
+
+# Push a third operand onto every compiled `/` node reachable from `x`.
+function _de_malform_divide!(x, seen = IdDict{Any, Nothing}())
+    (isbits(x) || x isa Module || x isa DataType || haskey(seen, x)) && return 0
+    seen[x] = nothing
+    n = 0
+    if x isa EarthSciAST._Node
+        if x.kind === EarthSciAST._NK_OP && x.op === :/ && length(x.children) == 2
+            push!(x.children, EarthSciAST._mknode(kind = EarthSciAST._NK_LITERAL, literal = 3.0))
+            n += 1
+        end
+        for c in x.children
+            n += _de_malform_divide!(c, seen)
+        end
+    elseif x isa Union{AbstractArray, Tuple, NamedTuple, AbstractDict}
+        for v in (x isa AbstractDict ? values(x) : x)
+            n += _de_malform_divide!(v, seen)
+        end
+    elseif !(x isa Function) && isstructtype(typeof(x))
+        for f in fieldnames(typeof(x))
+            isdefined(x, f) && (n += _de_malform_divide!(getfield(x, f), seen))
+        end
+    end
+    return n
 end
 
 # `log10`, which the ladder lowers as `log(x)/ln(10)`.
@@ -1199,6 +1222,7 @@ end
 
     @testset "the hard-error path names the construct and the rule" begin
         fo, u0, p, _, vmap = EarthSciAST._build_evaluator(_de_unsupported_op(); form = :oop)
+        @test _de_malform_divide!(fo) >= 1
         d = EXT_DE.direct_rhs(fo; var_map = vmap)
         ur = RX_DE.ConcreteRArray(copy(u0))
         tr = RX_DE.ConcreteRNumber(0.0)

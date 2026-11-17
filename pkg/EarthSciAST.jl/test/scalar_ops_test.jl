@@ -39,7 +39,7 @@ const ESM = EarthSciAST
         for row in ESM._UNARY_ELEMENTWISE_OPS
             x = row.sym in (:sqrt, :log, :log10, :acosh) ? 1.7 :
                 row.sym in (:asin, :acos, :atanh) ? 0.4 : 0.6
-            @test ESM._scalar_op(row.sym, [x], Float64) == scalar(row.sym, [x])
+            @test ESM._scalar_op(row.sym, [x]) == scalar(row.sym, [x])
         end
 
         # The structurally distinct arms, including every arity that has its own path.
@@ -60,7 +60,7 @@ const ESM = EarthSciAST
             (:pi, Float64[]), (:e, Float64[]), (:Pre, [4.25]),
         ]
         for (op, vals) in cases
-            @test ESM._scalar_op(op, vals, Float64) == scalar(op, vals)
+            @test ESM._scalar_op(op, vals) == scalar(op, vals)
         end
     end
 
@@ -70,7 +70,7 @@ const ESM = EarthSciAST
             node = ESM._mknode(kind = ESM._NK_OP, op = o, children = ESM._Node[lit(1.0)])
             for f in (
                     () -> ESM._eval_node(node, Float64[], NamedTuple(), 0.0),
-                    () -> ESM._scalar_op(o, [1.0], Float64),
+                    () -> ESM._scalar_op(o, [1.0]),
                 )
                 err = try
                     f(); nothing

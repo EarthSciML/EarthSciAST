@@ -107,8 +107,7 @@ function _de_semiring_fn(ctx::_DECtx, op::Symbol)
 end
 
 _de_semiring_jl(ctx::_DECtx, op::Symbol) =
-    op === :+ ? (+) : op === :* ? (*) : op === :max ? max :
-    op === :min ? min : _de_semiring_fn(ctx, op)
+    _E._is_numeric_reducer(op) ? _E._REDUCER_INDEX[op].fn : _de_semiring_fn(ctx, op)
 
 # One `stablehlo.reduce` over `terms`, seeded from `zbar`. The terms are
 # concatenated into a `tensor<(L*n)xf64>`, reshaped to `(L, n)` — column `j` is
@@ -161,11 +160,12 @@ end
 #
 # `_DE_OPS` maps every operator a `_Node` can carry to its emitter
 # `(ctx, op, c) -> _DEVal`, `c` being the already-emitted operands. Its keys are
-# checked at load against the tree walk's own operator set
-# (`EarthSciAST._TREE_WALK_RULE_OPS`, the set `_compile_op` admits), so an
-# operator the interpreter evaluates and this table was not taught fails at
-# package load rather than at emission. The same keys are the host const-fold's
-# operator set (`_de_static`).
+# checked at load against the operator registry's shaped rows
+# (`EarthSciAST._SHAPED_OP_SYMS`, the set `_compile_op` admits), so an operator
+# the interpreter evaluates and this table was not taught fails at package load
+# rather than at emission. The same keys are the host const-fold's operator set
+# (`_de_static`). `_de_op` checks the registry arity before an entry runs, so no
+# entry restates it.
 #
 # n-ary `+`/`*`/`max`/`min` left-fold in the interpreter's association order
 # (`_eval_node_op`), so every intermediate has broadcast's shape and the same
@@ -186,60 +186,29 @@ end
 #     exponent is the common case and both lower it by repeated multiplication.
 const _DE_OPS = Dict{Symbol, Function}()
 
-function _de_arity(ctx::_DECtx, op::Symbol, c::Vector{_DEVal}, n::Int, what::String)
-    length(c) == n && return nothing
-    return _de_refuse(ctx, "$what `$op` with $(length(c)) arguments", "`$op` takes $n.")
-end
-
 let T = _DE_OPS
     for (op, f) in ((:+, _hlo.add), (:*, _hlo.multiply), (:max, _hlo.maximum), (:min, _hlo.minimum))
         T[op] = (ctx, _, c) -> _de_chain(ctx, f, c)
     end
-    T[:-] = function (ctx, _, c)
-        n = length(c)
-        n == 1 && return _de_un(ctx, _hlo.negate, c[1])
-        n == 2 && return _de_bin(ctx, _hlo.subtract, c[1], c[2])
-        return _de_refuse(ctx, "`-` with $n arguments", "the IR's `-` is unary or binary.")
-    end
+    T[:-] = (ctx, _, c) -> length(c) == 1 ? _de_un(ctx, _hlo.negate, c[1]) :
+        _de_bin(ctx, _hlo.subtract, c[1], c[2])
     T[:neg] = (ctx, _, c) -> _de_un(ctx, _hlo.negate, c[1])
-    T[:/] = (ctx, op, c) -> (
-        _de_arity(ctx, op, c, 2, "binary");
-        _de_bin(ctx, _hlo.divide, c[1], c[2])
-    )
+    T[:/] = (ctx, op, c) -> _de_bin(ctx, _hlo.divide, c[1], c[2])
     for op in (:^, :pow)
-        T[op] = (ctx, op, c) -> (
-            _de_arity(ctx, op, c, 2, "binary");
-            _de_bin(ctx, _hlo.power, c[1], c[2])
-        )
+        T[op] = (ctx, op, c) -> _de_bin(ctx, _hlo.power, c[1], c[2])
     end
-    T[:atan2] = (ctx, op, c) -> (
-        _de_arity(ctx, op, c, 2, "binary");
-        _de_bin(ctx, _hlo.atan2, c[1], c[2])
-    )
-    T[:log10] = (ctx, op, c) -> (
-        _de_arity(ctx, op, c, 1, "unary");
-        _de_log10(ctx, c[1])
-    )
+    T[:atan2] = (ctx, op, c) -> _de_bin(ctx, _hlo.atan2, c[1], c[2])
+    T[:log10] = (ctx, op, c) -> _de_log10(ctx, c[1])
     for tbl in (_DE_UNARY, _DE_UNARY_CHLO), (op, f) in tbl
-        T[op] = (ctx, op, c) -> (
-            _de_arity(ctx, op, c, 1, "unary");
-            _de_un(ctx, f, c[1])
-        )
+        T[op] = (ctx, op, c) -> _de_un(ctx, f, c[1])
     end
     # The registry spells the two-argument arctangent both ways.
-    T[:atan] = function (ctx, op, c)
-        length(c) == 2 && return _de_bin(ctx, _hlo.atan2, c[1], c[2])
-        _de_arity(ctx, op, c, 1, "unary")
-        return _de_un(ctx, _chlo.atan, c[1])
-    end
+    T[:atan] = (ctx, _, c) -> length(c) == 2 ? _de_bin(ctx, _hlo.atan2, c[1], c[2]) :
+        _de_un(ctx, _chlo.atan, c[1])
     for (op, dir) in _DE_COMPARE
-        T[op] = (ctx, op, c) -> (
-            _de_arity(ctx, op, c, 2, "comparison");
-            _de_cmp(ctx, dir, c[1], c[2])
-        )
+        T[op] = (ctx, op, c) -> _de_cmp(ctx, dir, c[1], c[2])
     end
     T[:ifelse] = function (ctx, op, c)
-        _de_arity(ctx, op, c, 3, "ternary")
         pred, L = _de_nonzero(ctx, c[1])
         L2 = max(L, c[2].len, c[3].len)
         if L2 != L
@@ -258,22 +227,32 @@ let T = _DE_OPS
             return r
         end
     end
-    T[:pi] = T[:π] = (ctx, _, c) -> _de_const(ctx, Float64(pi))
-    T[:e] = (ctx, _, c) -> _de_const(ctx, Float64(ℯ))
+    for r in _E._SHAPED_OPS
+        r.spec.shape === :constant || continue
+        v = r.spec.value::Float64
+        T[r.sym] = (ctx, _, c) -> _de_const(ctx, v)
+    end
     T[:Pre] = (ctx, _, c) -> c[1]
 end
 
-Set(keys(_DE_OPS)) == _E._TREE_WALK_RULE_OPS || error(
-    "the direct emitter's operator table and the tree walk's operator set " *
-        "disagree: the emitter lacks $(sort!(collect(setdiff(_E._TREE_WALK_RULE_OPS, keys(_DE_OPS))))) " *
-        "and has no tree-walk rule for $(sort!(collect(setdiff(keys(_DE_OPS), _E._TREE_WALK_RULE_OPS))))"
+Set(keys(_DE_OPS)) == _E._SHAPED_OP_SYMS || error(
+    "the direct emitter's operator table and the operator registry " *
+        "disagree: the emitter lacks $(sort!(collect(setdiff(_E._SHAPED_OP_SYMS, keys(_DE_OPS))))) " *
+        "and has no registry row for $(sort!(collect(setdiff(keys(_DE_OPS), _E._SHAPED_OP_SYMS))))"
 )
 
 _de_op(ctx::_DECtx, nd::_E._Node, c::Vector{_DEVal})::_DEVal = _de_op(ctx, nd.op, c)
 
 function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     f = get(_DE_OPS, op, nothing)
-    f === nothing || return f(ctx, op, c)::_DEVal
+    if f !== nothing
+        ar = _E._OP_SYM_INDEX[op].arity::UnitRange{Int}
+        length(c) in ar || return _de_refuse(
+            ctx, "`$op` with $(length(c)) arguments",
+            "`$op` takes $(_E._arity_words(ar)) (esm-spec §4.2)."
+        )
+        return f(ctx, op, c)::_DEVal
+    end
     # Not `unevaluable_operator` (esm-spec §9.6.6): `_compile_op` refuses an op
     # outside the evaluable core while the evaluator is BUILT, and the load-time
     # check above keeps this table equal to what it admits. What reaches here is
@@ -377,7 +356,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
     # interpreter's (`_eval_node_op`) by test/scalar_ops_test.jl, so a folded
     # subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
-    return Float64(_E._scalar_op(nd.op, c, Float64))
+    return _E._scalar_op(nd.op, c)
 end
 
 # Fold if we can; `nothing` if the subtree is not host data.

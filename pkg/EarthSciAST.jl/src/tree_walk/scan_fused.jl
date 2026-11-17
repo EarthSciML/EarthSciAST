@@ -257,8 +257,7 @@ end
 # `nothing` or `(Kc, ix, delta, store)` (see above).
 function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer = nothing)
     op = S.oplus
-    opsym = op === :+ ? :+ : op === :* ? :* : op === :max ? :max :
-        op === :min ? :min : nothing
+    opsym = _is_numeric_reducer(op) ? _reducer_fnsym(op) : nothing
     opsym === nothing && return nothing
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     acc = _cg_name(ctx, "acc")
@@ -590,8 +589,7 @@ end
 # `(K, reads, store)` from `_colscan_consumer`.
 function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer = nothing)
     op = S.oplus
-    opsym = op === :+ ? :+ : op === :* ? :* : op === :max ? :max :
-        op === :min ? :min : nothing
+    opsym = _is_numeric_reducer(op) ? _reducer_fnsym(op) : nothing
     opsym === nothing && return nothing
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
     nlanes = length(sh.r1)

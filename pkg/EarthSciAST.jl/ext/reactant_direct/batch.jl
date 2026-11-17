@@ -120,7 +120,7 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
         return s
     end
     c = Any[_de_bhostval(ctx, ch, l) for ch in b.children]
-    return Float64(_E._scalar_op(b.op, c, Float64))
+    return _E._scalar_op(b.op, c)
 end
 
 function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing, _DEVal}

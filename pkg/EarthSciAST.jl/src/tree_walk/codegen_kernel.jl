@@ -737,12 +737,6 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
     throw(_CodegenDecline(:unsupported_desc))
 end
 
-# ---- Op-symbol tables (the same registry rows the four eval ladders use) ----
-const _CG_UNARY_FN = Dict{Symbol, Symbol}(row.sym => row.sym for row in _UNARY_ELEMENTWISE_OPS)
-const _CG_BINARY_FN = Dict{Symbol, Symbol}(row.sym => row.fnsym for row in _BINARY_ELEMENTWISE_OPS)
-const _CG_CMP_FN = Dict{Symbol, Symbol}(row.sym => row.fnsym for row in _COMPARISON_ELEMENTWISE_OPS)
-const _CG_MINMAX_FN = Dict{Symbol, Symbol}(row.sym => row.fnsym for row in _NARY_MINMAX_OPS)
-
 # Left-nested binary fold `((e1 op e2) op e3)…` — the interpreters' exact
 # `acc = ev(c1); acc = op(acc, ev(ci))` association.
 #
@@ -857,10 +851,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             push!(exprs, _cg_emit(ctx, kc, c))
         end
         op = nd.op
-        fnsym = op === :+ ? :+ : op === :* ? :* :
-            op === :max ? :max : op === :min ? :min :
-            op === :or ? :_or_combine :
-            throw(_CodegenDecline(:unsupported_op))
+        fnsym = _reducer_fnsym(op)
         return _cg_foldl(fnsym, exprs)
     elseif k === _NK_SUBCALL
         return _cg_emit_subcall(ctx, kc, nd.payload::_AccKernel)
@@ -943,77 +934,66 @@ function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     return Expr(:block, stmts..., spine)
 end
 
-# ---- Op application (mirrors `_eval_acc_op` arm for arm) --------------------
-# `kc` is left unannotated here and on `_cg_emit_fn`: the op ladder is the op
-# REGISTRY rendered as expressions and reads nothing off the evaluation context
-# but the recursion, so the scalar-spine emitter (array_contraction.jl)
-# shares these two rather than restating every registry row.
+# ---- Op application -----------------------------------------------------------
+#
+# `_op_expr` is the expression form of the generated ladder (`_op_ladder`,
+# tree_walk/op_ladder.jl): the same registry shapes, the same fold association,
+# the same short-circuit set, the same `1.0`/`0.0` truth values, so emitted code
+# computes what the walkers compute. `operands` holds one expression per operand,
+# with every conditionally evaluated operand (`_op_arg_conditional`) already
+# wrapped as a region of its own by the caller.
+function _op_expr(s::_OpSpec, operands::Vector{Any})
+    sh = s.shape
+    n = length(operands)
+    if sh === :fold
+        n == 1 && return operands[1]
+        return _cg_foldl(_op_fnsym(s), operands)
+    elseif sh === :minmax
+        return _cg_foldl(_op_fnsym(s), operands)
+    elseif sh === :minus
+        n == 1 && return :(-$(operands[1]))
+        return :($(operands[1]) - $(operands[2]))
+    elseif sh === :negate
+        return :(-$(operands[1]))
+    elseif sh === :binary
+        return Expr(:call, _op_fnsym(s), operands[1], operands[2])
+    elseif sh === :compare
+        return :($(Expr(:call, _op_fnsym(s), operands[1], operands[2])) ? 1.0 : 0.0)
+    elseif sh === :and || sh === :or
+        cond = _cg_chain(sh === :and ? :&& : :||, Any[:($o != 0) for o in operands])
+        return :($cond ? 1.0 : 0.0)
+    elseif sh === :not
+        return :($(operands[1]) == 0 ? 1.0 : 0.0)
+    elseif sh === :select
+        return :($(operands[1]) != 0 ? $(operands[2]) : $(operands[3]))
+    elseif sh === :unary
+        return Expr(:call, _op_fnsym(s), operands[1])
+    elseif sh === :atan
+        n == 1 && return :(atan($(operands[1])))
+        return :(atan($(operands[1]), $(operands[2])))
+    elseif sh === :constant
+        return s.value::Float64
+    elseif sh === :passthrough
+        return operands[1]
+    end
+    error("_op_expr: no template for shape $sh")
+end
+
+# `kc` is left unannotated here and on `_cg_emit_fn`: the op ladder reads nothing
+# off the evaluation context but the recursion, so the scalar-spine emitter
+# (array_contraction.jl) shares it. An op outside the registry's shaped rows, or
+# an operand count outside its arity, declines.
 function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     op = nd.op
     ch = nd.children
-    ev(x) = _cg_emit(ctx, kc, x)
-    # A lazily evaluated operand is a region of its own (`_cg_emit_region`).
-    lz(x) = _cg_emit_region(ctx, kc, x)
-    if op === :+ || op === :*
-        isempty(ch) && throw(_CodegenDecline(:unsupported_op))
-        length(ch) == 1 && return ev(ch[1])
-        return _cg_foldl(op, Any[ev(c) for c in ch])
-    elseif op === :-
-        length(ch) == 1 && return :(-$(ev(ch[1])))
-        length(ch) == 2 && return :($(ev(ch[1])) - $(ev(ch[2])))
+    s = get(_OP_SYM_INDEX, op, nothing)
+    (s === nothing || s.shape === nothing || !(length(ch) in s.arity)) &&
         throw(_CodegenDecline(:unsupported_op))
-    elseif op === :neg
-        length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
-        return :(-$(ev(ch[1])))
-    elseif op === :and
-        # `ev(x) == 0 && return 0.0` per child, else 1.0 — as an `&&` chain:
-        # same child order, same short-circuit set, same 1.0/0.0 result.
-        isempty(ch) && throw(_CodegenDecline(:unsupported_op))
-        cond = _cg_chain(:&&, Any[:($(j == 1 ? ev(c) : lz(c)) != 0) for (j, c) in enumerate(ch)])
-        return :($cond ? 1.0 : 0.0)
-    elseif op === :or
-        isempty(ch) && throw(_CodegenDecline(:unsupported_op))
-        cond = _cg_chain(:||, Any[:($(j == 1 ? ev(c) : lz(c)) != 0) for (j, c) in enumerate(ch)])
-        return :($cond ? 1.0 : 0.0)
-    elseif op === :not
-        length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
-        return :($(ev(ch[1])) == 0 ? 1.0 : 0.0)
-    elseif op === :ifelse
-        length(ch) == 3 || throw(_CodegenDecline(:unsupported_op))
-        return :($(ev(ch[1])) != 0 ? $(lz(ch[2])) : $(lz(ch[3])))
-    elseif op === :atan
-        length(ch) == 1 && return :(atan($(ev(ch[1]))))
-        length(ch) == 2 && return :(atan($(ev(ch[1])), $(ev(ch[2]))))
-        throw(_CodegenDecline(:unsupported_op))
-    elseif op === :pi || op === :π
-        return Float64(pi)
-    elseif op === :e
-        return Float64(ℯ)
-    elseif op === :Pre
-        length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
-        return ev(ch[1])
-    end
-    fnsym = get(_CG_BINARY_FN, op, nothing)
-    if fnsym !== nothing
-        length(ch) == 2 || throw(_CodegenDecline(:unsupported_op))
-        return Expr(:call, fnsym, ev(ch[1]), ev(ch[2]))
-    end
-    fnsym = get(_CG_CMP_FN, op, nothing)
-    if fnsym !== nothing
-        length(ch) == 2 || throw(_CodegenDecline(:unsupported_op))
-        return :($(Expr(:call, fnsym, ev(ch[1]), ev(ch[2]))) ? 1.0 : 0.0)
-    end
-    fnsym = get(_CG_UNARY_FN, op, nothing)
-    if fnsym !== nothing
-        length(ch) == 1 || throw(_CodegenDecline(:unsupported_op))
-        return Expr(:call, fnsym, ev(ch[1]))
-    end
-    fnsym = get(_CG_MINMAX_FN, op, nothing)
-    if fnsym !== nothing
-        length(ch) >= 2 || throw(_CodegenDecline(:unsupported_op))
-        return _cg_foldl(fnsym, Any[ev(c) for c in ch])
-    end
-    throw(_CodegenDecline(:unsupported_op))
+    operands = Any[
+        _op_arg_conditional(op, j) ? _cg_emit_region(ctx, kc, c) : _cg_emit(ctx, kc, c)
+            for (j, c) in enumerate(ch)
+    ]
+    return _op_expr(s, operands)
 end
 
 # ---- Invariant tier → prologue locals (mirrors `_fill_invariant!`) ----------
@@ -1420,8 +1400,7 @@ function _cg_fuse_leading(K::_AccKernel)
     _cellset_slab(cs, 1) && return K
     for a in K.acc
         k = a.kind
-        if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX ||
-                k === _AK_ARR_TBL_BOX
+        if _ak_box_addressed(k)
             a.s2 == len1 * a.s1 || return K
         elseif k === _AK_LOOP_IDX
             a.dim <= 2 && return K
@@ -1445,8 +1424,7 @@ function _cg_fuse_leading(K::_AccKernel)
     acc = _AccDesc[]
     for a in K.acc
         k = a.kind
-        if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX ||
-                k === _AK_ARR_TBL_BOX
+        if _ak_box_addressed(k)
             n1, n2, n3, nx = shift(a.s1, a.s2, a.s3, a.sx)
             push!(
                 acc, _AccDesc(
@@ -1762,8 +1740,7 @@ function _cg_reduce_strides_favor_cells(K::_AccKernel, body::_Node, rdim::Int)
     function visit(n::_Node)
         if n.kind === _NK_ACCESS
             a = K.acc[n.idx]
-            if a.kind === _AK_STATE_TBL_BOX || a.kind === _AK_CONST_BOX ||
-                    a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_TBL_BOX
+            if _ak_box_addressed(a.kind)
                 so = stride(a, 1)
                 sk = stride(a, rdim)
                 near(so) && !near(sk) && (gain += 1)
