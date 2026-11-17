@@ -1388,9 +1388,9 @@ pub(crate) struct ConditionalShapes {
 /// slot can hold, and a gather `X[i]` that faults on one arm. Julia gives such
 /// a variable its array arm's shape in `promote_downstream_shapes`, when it
 /// builds from the flattened system. This is that step, run where Rust builds,
-/// in ONE place: `simulate_array::promote_conditional_shapes`, which every
+/// in ONE place: `simulate_array::apply_shape_rewrites`, which every
 /// build route calls on the model it builds and whose result the compiled
-/// model keeps (`ArrayCompiled::conditional_shapes`), so a later reader of a
+/// model keeps (`simulate_array::ShapeTable`), so a later reader of a
 /// variable's shape — a restricted `RhsProgram`, the tile layout, the static
 /// observeds — takes it from there rather than inferring it again from a
 /// system that may no longer decide it. It is NOT written into any document or
@@ -7459,12 +7459,12 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+        let built = crate::simulate_array::apply_shape_rewrites(&mut model, &index_sets, None)
             .expect("promote");
         let cell = vec!["cell".to_string()];
-        assert_eq!(built.built.get("M.X"), Some(&cell));
-        assert_eq!(built.built.get("M.Y"), Some(&cell));
-        assert_eq!(built.built.get("M.S"), None);
+        assert_eq!(built.built_axes("M.X"), Some(cell.as_slice()));
+        assert_eq!(built.built_axes("M.Y"), Some(cell.as_slice()));
+        assert_eq!(built.built_axes("M.S"), None);
         assert_eq!(model.variables["M.X"].shape.as_ref(), Some(&cell));
         assert_eq!(model.variables["M.Y"].shape.as_ref(), Some(&cell));
         // The flattened system round-trips through JSON with no `shape` on X/Y.
