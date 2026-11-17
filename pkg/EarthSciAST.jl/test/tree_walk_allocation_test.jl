@@ -187,81 +187,96 @@ end
 # (see the header note).
 const _SERIAL_PIN = ("ESS_THREADS_MIN_CELLS" => string(typemax(Int)),)
 
-withenv(_SERIAL_PIN...) do
-    @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
+# Set in the two-thread child the threaded testset below launches from a
+# one-thread session: the child runs only that testset.
+const _TWALLOC_CHILD = get(ENV, "ESS_TWALLOC_CHILD", "") == "1"
 
-        @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
-            # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
-            # every size (a per-cell leak would grow the byte count with N).
-            for N in (64, 256, 1024, 2500)
-                ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-                @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics) == 0
-            end
-        end
+if !_TWALLOC_CHILD
+    withenv(_SERIAL_PIN...) do
+        @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
 
-        @testset "vectorized reduction (sum_product) RHS: 0 bytes" begin
-            for M in (3, 16, 64)
-                A = reshape(collect(1.0:(2.0 * M)), 2, M)
-                ics = Dict{String, Float64}("y[1]" => 0.0, "y[2]" => 0.0)
-                for k in 1:M
-                    ics["x[$k]"] = 0.5k
+            @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
+                # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
+                # every size (a per-cell leak would grow the byte count with N).
+                for N in (64, 256, 1024, 2500)
+                    ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                    @test built_rhs_alloc_bytes(_stencil_model(N); initial_conditions = ics) == 0
                 end
+            end
+
+            @testset "vectorized reduction (sum_product) RHS: 0 bytes" begin
+                for M in (3, 16, 64)
+                    A = reshape(collect(1.0:(2.0 * M)), 2, M)
+                    ics = Dict{String, Float64}("y[1]" => 0.0, "y[2]" => 0.0)
+                    for k in 1:M
+                        ics["x[$k]"] = 0.5k
+                    end
+                    @test built_rhs_alloc_bytes(
+                        _contraction_model(M);
+                        initial_conditions = ics, const_arrays = Dict("A" => A)
+                    ) == 0
+                end
+            end
+
+            @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent (ess-14f.3)" begin
+                # Two+ grid sizes — the per-RHS allocation must be EXACTLY 0 at every size
+                # (a per-cell leak in the live forcing read would grow with N). Mirrors the
+                # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
+                for N in (64, 256, 1024)
+                    ics = Dict("u[$k]" => 0.1k for k in 1:N)
+                    forcing = collect(1.0:Float64(N))
+                    @test built_rhs_alloc_bytes(
+                        _forcing_gather_model(N);
+                        initial_conditions = ics, param_arrays = Dict("forcing" => forcing)
+                    ) == 0
+                end
+            end
+
+            @testset "CSE'd scalar forcing gather RHS: 0 bytes (ess-qic)" begin
+                # The CSE prelude now hoists expressions built over a live forcing buffer.
+                # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
+                # zero-allocation discipline has to hold through the prelude too.
                 @test built_rhs_alloc_bytes(
-                    _contraction_model(M);
-                    initial_conditions = ics, const_arrays = Dict("A" => A)
+                    _cse_forcing_scalar_model();
+                    param_arrays = Dict("F" => [5.0, 6.0])
                 ) == 0
             end
-        end
 
-        @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent (ess-14f.3)" begin
-            # Two+ grid sizes — the per-RHS allocation must be EXACTLY 0 at every size
-            # (a per-cell leak in the live forcing read would grow with N). Mirrors the
-            # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
-            for N in (64, 256, 1024)
-                ics = Dict("u[$k]" => 0.1k for k in 1:N)
-                forcing = collect(1.0:Float64(N))
-                @test built_rhs_alloc_bytes(
-                    _forcing_gather_model(N);
-                    initial_conditions = ics, param_arrays = Dict("forcing" => forcing)
-                ) == 0
+            @testset "scalar contraction :+ fold is allocation-free (line fix)" begin
+                # Directly pin the scalar `_eval_contraction` `:+` arm (the old
+                # `@tullio s = …` site, ~80 B/reduced cell): a hand-built
+                # `_NK_CONTRACTION` node summed via `_eval_node` must be 0-alloc and
+                # equal to the seeded fold, bit-identical to the prior Tullio sum.
+                # Two lengths, so the property is fold-length-independent the way the
+                # rest of this file is grid-size-independent.
+                for n in (6, 600)
+                    bytes, got, want = _contract_fold_alloc(n)
+                    @test got == want
+                    @test bytes == 0
+                end
             end
         end
-
-        @testset "CSE'd scalar forcing gather RHS: 0 bytes (ess-qic)" begin
-            # The CSE prelude now hoists expressions built over a live forcing buffer.
-            # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
-            # zero-allocation discipline has to hold through the prelude too.
-            @test built_rhs_alloc_bytes(
-                _cse_forcing_scalar_model();
-                param_arrays = Dict("F" => [5.0, 6.0])
-            ) == 0
-        end
-
-        @testset "scalar contraction :+ fold is allocation-free (line fix)" begin
-            # Directly pin the scalar `_eval_contraction` `:+` arm (the old
-            # `@tullio s = …` site, ~80 B/reduced cell): a hand-built
-            # `_NK_CONTRACTION` node summed via `_eval_node` must be 0-alloc and
-            # equal to the seeded fold, bit-identical to the prior Tullio sum.
-            # Two lengths, so the property is fold-length-independent the way the
-            # rest of this file is grid-size-independent.
-            for n in (6, 600)
-                bytes, got, want = _contract_fold_alloc(n)
-                @test got == want
-                @test bytes == 0
-            end
-        end
-    end
-end  # withenv(_SERIAL_PIN...)
+    end  # withenv(_SERIAL_PIN...)
+end  # if !_TWALLOC_CHILD
 
 # The chunked cell axis on its own terms. Only reachable when the threaded tier
-# is actually armed (`nthreads() > 1`), so it is skipped in a one-thread run
-# of this file.
+# is armed (`nthreads() > 1`), so a one-thread session runs this testset in a
+# two-thread child process of this file.
 #
 # A threaded call allocates nothing, exactly like a serial one, at every N.
-@testset "threaded cell axis: a threaded call allocates nothing (ess-9cc)" begin
+@testset "threaded cell axis: a threaded call allocates nothing" begin
     if !EarthSciAST._threads_available()
-        @info "skipping threaded-tier allocation test: threaded tier not armed " *
-            "(needs nthreads() > 1; nthreads=$(Threads.nthreads()))"
+        @test !_TWALLOC_CHILD   # the child was started with two threads
+        if !_TWALLOC_CHILD
+            env = copy(ENV)
+            for k in collect(keys(env))
+                startswith(k, "ESS_") && delete!(env, k)
+            end
+            env["ESS_TWALLOC_CHILD"] = "1"
+            env["JULIA_PROJECT"] = Base.active_project()
+            cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 2 $(@__FILE__)`, env)
+            @test success(run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr)))
+        end
     else
         # Small min-cells so every N below genuinely chunks; read once per
         # section and cached, so it adds no per-call allocation.
