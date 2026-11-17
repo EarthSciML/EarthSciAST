@@ -389,7 +389,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             end
             @test du[vmap["AggregateDemo.total"]] == 15.0
         else
-            @warn "fixture not found; skipping" path
+            @test isfile(path)
         end
     end
 end

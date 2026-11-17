@@ -200,7 +200,7 @@ const ONE_EQ_VARIANTS = Ref(0)
             )
             _xeq_oracle(build)
         else
-            @info "proxy27.esm not found; skipping" P27
+            @test isfile(P27)
         end
     end
 end

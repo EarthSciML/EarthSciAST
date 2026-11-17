@@ -15,7 +15,7 @@
 #
 #   1. a `@test…` / `@inferred` macro          ⇒ `using Test`
 #   2. `include("testutils.jl")`               ⇒ `using Test` ABOVE that line —
-#      the prelude expands a `@test_skip` of its own as it is included, so this
+#      the prelude expands a `@test` of its own as it is included, so this
 #      one is an ordering requirement, not just a presence one
 #   3. a name testutils.jl defines             ⇒ `include("testutils.jl")`
 #   4. `SomeModule.something`, where the name
@@ -247,7 +247,7 @@ land in the includer's scope: a file that includes the prelude and then writes
 `JSON3.read` is not borrowing anything it has no claim to.
 
 `Test` is deliberately NOT in this set even though testutils.jl imports it.
-testutils.jl expands a `@test_skip` of its own, and macro expansion happens when
+testutils.jl expands a `@test` of its own, and macro expansion happens when
 the file is INCLUDED — so `Test` has to be in scope BEFORE the include, which
 makes it a precondition of the prelude rather than something the prelude
 supplies. (This is the hazard api_surface_test.jl's header already documents.)
@@ -297,7 +297,7 @@ function _missing_prelude(
             push!(
             missing_lines,
             "using Test   # MOVE it above the testutils.jl include on " *
-                "line $(itu); the include expands a `@test_skip`"
+                "line $(itu); the include expands a `@test`"
         )
     end
 

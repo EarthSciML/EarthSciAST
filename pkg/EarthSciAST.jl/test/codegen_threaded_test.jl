@@ -372,9 +372,9 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         end
 
         @testset "dual numbers thread: threaded ≡ serial, partials included" begin
-            if Base.find_package("ForwardDiff") === nothing
-                @info "ForwardDiff not in the active environment; skipping"
-            else
+            # ForwardDiff is a test dependency: missing, this fails.
+            @test Base.find_package("ForwardDiff") !== nothing
+            if Base.find_package("ForwardDiff") !== nothing
                 @eval using ForwardDiff
                 fA, uA, pA, _ = _cgt_build(model, ics)
                 fS, _, pS, _ = _cgt_serial(model, ics)

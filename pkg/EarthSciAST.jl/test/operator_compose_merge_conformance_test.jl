@@ -26,10 +26,10 @@
 # that is `@warn` (captured with `Test.collect_test_logs`) and the three error
 # types.
 
-# `using Test` MUST precede the testutils include: testutils.jl uses `@test_skip`
+# `using Test` MUST precede the testutils include: testutils.jl uses `@test`
 # at top level, so `Test` has to be in scope in `Main` already. Including it
 # first only works when some earlier file in runtests.jl happened to import Test
-# — running this file standalone then fails with `UndefVarError: @test_skip`.
+# — running this file standalone then fails with `UndefVarError: @test`.
 using Test
 using EarthSciAST
 using JSON3

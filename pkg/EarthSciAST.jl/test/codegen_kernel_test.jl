@@ -264,9 +264,8 @@ end
             TESTUTILS_REPO_ROOT, "tests", "bench",
             "transport_3axis_7cubed_fullrank.esm"
         )
-        if !isfile(FIX)
-            @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
-        else
+        @test isfile(FIX)
+        if isfile(FIX)
             flat = ESM.flatten(ESM.load_path(FIX))
             function build(codegen)
                 f!, u0, p, _, _, rep = ESM.Internal.build(

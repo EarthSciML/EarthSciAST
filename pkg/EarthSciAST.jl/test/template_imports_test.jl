@@ -541,7 +541,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # was legal on disk and illegal the instant it was loaded and re-emitted.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             f = EarthSciAST.load_path(src)
 
             # The declarations SURVIVE the load...
@@ -595,7 +595,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # TypeScript `§9.6.4 rule 5: a template library round-trips to itself`.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             authored = JSON3.read(read(src, String))
             resolved = resolve_template_machinery(authored, dirname(src))
             @test resolved !== nothing
