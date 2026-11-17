@@ -92,8 +92,11 @@ include("elementwise_lift.jl")
 # raw-JSON traversal helpers
 include("json_walk.jl")
 include("enum_lowering.jl")
-include("lower_expression_templates.jl")
+include("templates/rewrite.jl")
 include("template_imports.jl")
+include("templates/expand_typed.jl")
+include("templates/emit.jl")
+include("templates/flat_registry.jl")
 # Document-scoped solver hints (esm-spec §2.2): the version gate and the §2.2.2
 # tolerance resolution order. After template_imports.jl, whose raw-JSON helpers
 # and ExpressionTemplateError it shares.
