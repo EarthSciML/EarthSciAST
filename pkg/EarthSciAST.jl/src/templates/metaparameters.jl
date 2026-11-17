@@ -682,18 +682,11 @@ function _check_metaparam_name_conflicts(
     )
     isempty(doc_meta) && return
     visible = Set{String}(String[string(k) for k in keys(doc_isets)])
-    for compkind in _COMPONENT_KINDS
-        comps = get(root, compkind, nothing)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            for blk in ("variables", "species", "parameters")
-                b = get(comp, blk, nothing)
-                (b !== nothing && _is_object(b)) || continue
-                for (vn, _) in pairs(b)
-                    push!(visible, string(vn))
-                end
-            end
+    for (_, _, comp) in _components(root), blk in ("variables", "species", "parameters")
+        b = get(comp, blk, nothing)
+        (b !== nothing && _is_object(b)) || continue
+        for (vn, _) in pairs(b)
+            push!(visible, string(vn))
         end
     end
     for name in keys(doc_meta)
@@ -722,21 +715,14 @@ function _substitute_closed_metaparams!(
         values::Dict{String, Int64}
     )
     isempty(values) && return doc_isets
-    for compkind in _COMPONENT_KINDS
-        comps = get(root, compkind, nothing)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            for k in collect(keys(comp))
-                if k == "expression_templates" && _is_object(comp[k])
-                    tpl = comp[k]
-                    for (tn, td) in collect(pairs(tpl))
-                        tpl[tn] = _substitute_metaparams_decl(td, values)
-                    end
-                else
-                    comp[k] = _substitute_metaparams_field(k, comp[k], values)
-                end
+    for (_, _, comp) in _components(root), k in collect(keys(comp))
+        if k == "expression_templates" && _is_object(comp[k])
+            tpl = comp[k]
+            for (tn, td) in collect(pairs(tpl))
+                tpl[tn] = _substitute_metaparams_decl(td, values)
             end
+        else
+            comp[k] = _substitute_metaparams_field(k, comp[k], values)
         end
     end
     for (tn, td) in collect(pairs(top_templates))
@@ -765,13 +751,8 @@ function _fold_closed_document!(
         doc_isets::OrderedDict{String, Any};
         strict::Bool = true
     )
-    for compkind in _COMPONENT_KINDS
-        comps = get(root, compkind, nothing)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            _fold_structural_sites!(comp, "$compkind.$(string(cname))")
-        end
+    for (compkind, cname, comp) in _components(root)
+        _fold_structural_sites!(comp, "$compkind.$cname")
     end
     for (tn, td) in pairs(top_templates)
         _fold_structural_sites!(td, "document.expression_templates.$tn")

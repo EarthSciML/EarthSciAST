@@ -67,6 +67,21 @@ _raw_get(x, key::String) = get(x, key, nothing)
 _raw_haskey(x, key::String) = haskey(x, key)
 
 """
+    _components(root)
+
+The components of a raw document, as `(kind, name::String, comp)` for each
+object under `root["models"]` and then `root["reaction_systems"]`, in document
+order. Entries that are not objects are skipped; a `root` that is not an
+object has none.
+"""
+_components(root) = (
+    (kind, string(name), comp)
+        for kind in (_is_object(root) ? ("models", "reaction_systems") : ())
+        for comps in (_raw_get(root, kind),) if comps !== nothing && _is_object(comps)
+        for (name, comp) in pairs(comps) if _is_object(comp)
+)
+
+"""
     _to_ordered(x)
 
 Deep-normalize any JSON carrier (a `JSON3.Object`/`JSON3.Array` straight off

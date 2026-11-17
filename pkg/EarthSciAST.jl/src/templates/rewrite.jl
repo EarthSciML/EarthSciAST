@@ -300,33 +300,10 @@ against a cycle the checker somehow missed (an in-progress node is treated as
 non-contributing — acyclicity is enforced earlier).
 """
 function _transitive_op_flags(templates::AbstractDict, pred)::Dict{String, Bool}
-    flags = Dict{String, Bool}()
-    inprogress = Set{String}()
-    function visit(name::String)::Bool
-        haskey(flags, name) && return flags[name]
-        name in inprogress && return false
-        decl = get(templates, name, nothing)
-        decl === nothing && (flags[name] = false; return false)
-        push!(inprogress, name)
-        body = _raw_get(decl, "body")
-        res = body !== nothing && _direct_op_hit(body, pred)
-        if !res
-            for r in _collect_apply_names!(String[], body)
-                haskey(templates, r) || continue
-                if visit(r)
-                    res = true
-                    break
-                end
-            end
-        end
-        delete!(inprogress, name)
-        flags[name] = res
-        return res
+    return _flagged(_template_graph(templates)) do name
+        body = _raw_get(templates[name], "body")
+        body !== nothing && _direct_op_hit(body, pred)
     end
-    for name in keys(templates)
-        visit(string(name))
-    end
-    return flags
 end
 
 """
@@ -822,17 +799,9 @@ no template expansion (returned unchanged, by identity).
 function _has_template_machinery(raw_data)
     raw_data === nothing && return false
     _is_object(raw_data) || return false
-    for compkind in ("models", "reaction_systems")
-        comps = _raw_get(raw_data, compkind)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            tpl = _raw_get(comp, "expression_templates")
-            if _is_object(tpl) && length(collect(pairs(tpl))) > 0
-                return true
-            end
-        end
+    for (_, _, comp) in _components(raw_data)
+        tpl = _raw_get(comp, "expression_templates")
+        _is_object(tpl) && !isempty(tpl) && return true
     end
     return _has_apply_op(raw_data)
 end
@@ -947,16 +916,9 @@ function reject_expression_templates_pre_v04(raw_data)
     !is_pre_v04 && return
 
     offences = String[]
-    for compkind in ("models", "reaction_systems")
-        comps = _raw_get(raw_data, compkind)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            if _raw_haskey(comp, "expression_templates")
-                push!(offences, "/$compkind/$(string(cname))/expression_templates")
-            end
-        end
+    for (compkind, cname, comp) in _components(raw_data)
+        _raw_haskey(comp, "expression_templates") &&
+            push!(offences, "/$compkind/$cname/expression_templates")
     end
     _find_apply_paths!(offences, raw_data, "")
 
@@ -1094,101 +1056,95 @@ function lower_expression_templates(raw_data)
     # reaction system never overwrites a same-named model.
     registries = Dict{String, _ComponentRegistry}()
 
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, compraw) in pairs(comps)
-            _is_object(compraw) || continue
-            comp = compraw::OrderedDict{String, Any}
-            # Static shape environment for `where` constraint evaluation
-            # (esm-spec §9.6.1): declared variable shapes only.
-            shape_env = _component_shape_env(comp)
-            tplraw = get(comp, "expression_templates", nothing)
-            # `named`       — every template keyed by name, consulted by
-            #                 `apply_expression_template` (order-independent).
-            # `match_rules` — the auto-applied `match` rules, in template
-            #                 DECLARATION order (esm-spec §9.6.3).
-            named = Dict{String, Any}()
-            match_rules = _RewriteRule[]
-            if _is_object(tplraw)
-                # `root` is order-preserving (`_to_ordered`), so this map's key
-                # order IS the authored declaration order — the `match`-rule
-                # precedence tie-break (esm-spec §9.6.3) reads straight off it.
-                templates = OrderedDict{String, Any}()
-                for (tname, tdecl) in pairs(tplraw)
-                    templates[string(tname)] = tdecl
-                end
-                _validate_templates(templates, "$compkind.$(string(cname))")
-                # Registration-time body CHECKING (esm-spec §9.7.3, Option B):
-                # validate the body-reference DAG (acyclic, depth-bounded,
-                # references resolve to match-less templates). Bodies are NOT
-                # inlined — references are preserved (§9.6.4).
-                _check_template_body_graph(templates, "$compkind.$(string(cname))")
-                decl_index = 0
-                for (tname, decl) in templates
-                    decl_index += 1
-                    named[tname] = decl
-                    m = _raw_get(decl, "match")
-                    if m !== nothing
-                        params_raw = _raw_get(decl, "params")
-                        params = Set{String}(
-                            string(p) for p in
-                                something(params_raw, String[])
-                        )
-                        body = _raw_get(decl, "body")
-                        # `where` registration: normalize constraints and
-                        # resolve every referenced index-set name against the
-                        # consuming document's registry (esm-spec §9.6.1;
-                        # `template_constraint_unknown_index_set`).
-                        where_c = _registered_where(
-                            decl, iset_names,
-                            "$compkind.$(string(cname))", tname
-                        )
-                        push!(
-                            match_rules,
-                            _RewriteRule(
-                                tname, m, params, body,
-                                _rule_priority(decl), decl_index,
-                                where_c
-                            )
-                        )
-                    end
-                end
-                # Deterministic selection order (esm-spec §9.6.3): highest
-                # `priority` first, ties broken by declaration order (earliest
-                # wins). `_rewrite_pass` then takes the FIRST matching rule.
-                sort!(match_rules, by = r -> (-r.priority, r.decl_index))
+    for (compkind, cname, compraw) in _components(root)
+        comp = compraw::OrderedDict{String, Any}
+        # Static shape environment for `where` constraint evaluation
+        # (esm-spec §9.6.1): declared variable shapes only.
+        shape_env = _component_shape_env(comp)
+        tplraw = get(comp, "expression_templates", nothing)
+        # `named`       — every template keyed by name, consulted by
+        #                 `apply_expression_template` (order-independent).
+        # `match_rules` — the auto-applied `match` rules, in template
+        #                 DECLARATION order (esm-spec §9.6.3).
+        named = Dict{String, Any}()
+        match_rules = _RewriteRule[]
+        if _is_object(tplraw)
+            # `root` is order-preserving (`_to_ordered`), so this map's key
+            # order IS the authored declaration order — the `match`-rule
+            # precedence tie-break (esm-spec §9.6.3) reads straight off it.
+            templates = OrderedDict{String, Any}()
+            for (tname, tdecl) in pairs(tplraw)
+                templates[string(tname)] = tdecl
             end
-            # Target-bearing flags (esm-spec §9.6.4 rule 3): drive the eager
-            # pre-pass and the surviving-reference leaf semantics.
-            target_bearing = _template_target_bearing(named)
-            # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
-            # non-template field (esm-spec §9.6.3): fires auto `match` rules and
-            # eagerly expands target-bearing references; NON-eager references
-            # survive (§9.6.4 rule 4).
-            cscope = "$compkind.$(string(cname))"
-            for k in collect(keys(comp))
-                k == "expression_templates" && continue
-                comp[k] = _rewrite_to_fixpoint(
-                    comp[k], named, match_rules,
-                    "$cscope.$k", shape_env, target_bearing
-                )
-                # Call-site checks on surviving references (§9.6.9): unknown
-                # name / bindings mismatch. Known surviving references are the
-                # new normal (Option B) — no longer an error.
-                _check_surviving_refs(comp[k], named, "$cscope.$k")
+            _validate_templates(templates, "$compkind.$cname")
+            # Registration-time body CHECKING (esm-spec §9.7.3, Option B):
+            # validate the body-reference DAG (acyclic, depth-bounded,
+            # references resolve to match-less templates). Bodies are NOT
+            # inlined — references are preserved (§9.6.4).
+            _check_template_body_graph(templates, "$compkind.$cname")
+            decl_index = 0
+            for (tname, decl) in templates
+                decl_index += 1
+                named[tname] = decl
+                m = _raw_get(decl, "match")
+                if m !== nothing
+                    params_raw = _raw_get(decl, "params")
+                    params = Set{String}(
+                        string(p) for p in
+                            something(params_raw, String[])
+                    )
+                    body = _raw_get(decl, "body")
+                    # `where` registration: normalize constraints and
+                    # resolve every referenced index-set name against the
+                    # consuming document's registry (esm-spec §9.6.1;
+                    # `template_constraint_unknown_index_set`).
+                    where_c = _registered_where(
+                        decl, iset_names,
+                        "$compkind.$cname", tname
+                    )
+                    push!(
+                        match_rules,
+                        _RewriteRule(
+                            tname, m, params, body,
+                            _rule_priority(decl), decl_index,
+                            where_c
+                        )
+                    )
+                end
             end
-            # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
-            # `expression_templates` block — it is the retained registered
-            # registry that emit materializes (§9.6.4 rule 5) and Expand
-            # consumes (§9.6.4 rule 2).
-            haskey(registries, string(cname)) ||
-                (
-                registries[string(cname)] =
-                    _ComponentRegistry(named, match_rules, shape_env, target_bearing)
-            )
+            # Deterministic selection order (esm-spec §9.6.3): highest
+            # `priority` first, ties broken by declaration order (earliest
+            # wins). `_rewrite_pass` then takes the FIRST matching rule.
+            sort!(match_rules, by = r -> (-r.priority, r.decl_index))
         end
+        # Target-bearing flags (esm-spec §9.6.4 rule 3): drive the eager
+        # pre-pass and the surviving-reference leaf semantics.
+        target_bearing = _template_target_bearing(named)
+        # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+        # non-template field (esm-spec §9.6.3): fires auto `match` rules and
+        # eagerly expands target-bearing references; NON-eager references
+        # survive (§9.6.4 rule 4).
+        cscope = "$compkind.$cname"
+        for k in collect(keys(comp))
+            k == "expression_templates" && continue
+            comp[k] = _rewrite_to_fixpoint(
+                comp[k], named, match_rules,
+                "$cscope.$k", shape_env, target_bearing
+            )
+            # Call-site checks on surviving references (§9.6.9): unknown
+            # name / bindings mismatch. Known surviving references are the
+            # new normal (Option B) — no longer an error.
+            _check_surviving_refs(comp[k], named, "$cscope.$k")
+        end
+        # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
+        # `expression_templates` block — it is the retained registered
+        # registry that emit materializes (§9.6.4 rule 5) and Expand
+        # consumes (§9.6.4 rule 2).
+        haskey(registries, cname) ||
+            (
+            registries[cname] =
+                _ComponentRegistry(named, match_rules, shape_env, target_bearing)
+        )
     end
 
     # Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):

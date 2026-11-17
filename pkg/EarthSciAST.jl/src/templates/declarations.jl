@@ -182,29 +182,77 @@ function _collect_apply_names!(out::Vector{String}, x)
     return out
 end
 
-"""
-    _check_template_body_graph(templates, scope)
+# A component's `expression_templates` block as `name => raw declaration`
+# (empty when it declares none).
+function _component_templates(comp)::Dict{String, Any}
+    tpl = _raw_get(comp, "expression_templates")
+    _is_object(tpl) || return Dict{String, Any}()
+    return Dict{String, Any}(string(n) => d for (n, d) in pairs(tpl))
+end
 
-Registration-time body checking (esm-spec §9.7.3):
-template bodies MAY reference other in-scope MATCH-LESS templates via
-`apply_expression_template` nodes. Builds the body-reference graph, rejects
-cycles (`apply_expression_template_recursive_body`), references to undeclared
-or `match`-bearing templates (`apply_expression_template_unknown_template`),
-and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
-(`template_body_expansion_too_deep`).
-
-Bodies are not inlined: the references are preserved and denote their
-expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
-separately by [`_template_target_bearing`](@ref). This runs BEFORE the §9.6.3
-fixpoint ever consults a `match` rule.
 """
+    _TemplateGraph
+
+The template reference graph: each template's name with the names its body
+calls (`apply_expression_template` nodes, in document order), esm-spec
+§9.7.3. Built from a registry by [`_template_graph`](@ref); read by
+[`_reachable`](@ref), [`_flagged`](@ref) and the acyclicity check.
+"""
+struct _TemplateGraph
+    refs::OrderedDict{String, Vector{String}}
+end
+
+# The graph of a registry `templates` (name => raw declaration).
+_template_graph(templates::AbstractDict) = _TemplateGraph(
+    OrderedDict{String, Vector{String}}(
+        string(n) => _collect_apply_names!(String[], _is_object(d) ? _raw_get(d, "body") : nothing)
+            for (n, d) in templates
+    )
+)
+
+"""
+    _reachable(g, roots; through = _ -> true) -> Set{String}
+
+The names reachable from `roots` along `g`'s edges, `roots` included: only
+names that are in `g` and satisfy `through` are entered or followed.
+"""
+function _reachable(g::_TemplateGraph, roots; through = _ -> true)::Set{String}
+    out = Set{String}()
+    stack = collect(String, roots)
+    while !isempty(stack)
+        n = pop!(stack)
+        (n in out || !haskey(g.refs, n) || !through(n)) && continue
+        push!(out, n)
+        append!(stack, g.refs[n])
+    end
+    return out
+end
+
+"""
+    _flagged(direct, g) -> Dict{String,Bool}
+
+For every name in `g`: whether `direct(name)` holds for it or for a name it
+reaches. Exact on a graph with cycles.
+"""
+function _flagged(direct, g::_TemplateGraph)::Dict{String, Bool}
+    callers = Dict{String, Vector{String}}()
+    for (n, rs) in g.refs, r in rs
+        push!(get!(callers, r, String[]), n)
+    end
+    flags = Dict{String, Bool}(n => false for n in keys(g.refs))
+    stack = String[n for n in keys(g.refs) if direct(n)]
+    while !isempty(stack)
+        n = pop!(stack)
+        flags[n] && continue
+        flags[n] = true
+        append!(stack, get(callers, n, String[]))
+    end
+    return flags
+end
+
 function _check_template_body_graph(templates::AbstractDict{String, Any}, scope::String)
     isempty(templates) && return
-    refs = Dict{String, Vector{String}}()
-    for (name, decl) in templates
-        body = _raw_get(decl, "body")
-        refs[name] = _collect_apply_names!(String[], body)
-    end
+    refs = _template_graph(templates).refs
     any(!isempty, values(refs)) || return
 
     for name in sort(collect(keys(refs)))

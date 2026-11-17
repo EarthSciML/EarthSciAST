@@ -134,26 +134,10 @@ function flatten_template_registries(loaded)
     root = _to_ordered(loaded)::OrderedDict{String, Any}
     # (path, compkind, cname, comp, named)
     comps = Tuple{String, String, String, OrderedDict{String, Any}, Dict{String, Any}}[]
-    for compkind in ("models", "reaction_systems")
-        cs = get(root, compkind, nothing)
-        (cs !== nothing && _is_object(cs)) || continue
-        for (cname, comp) in pairs(cs)
-            _is_object(comp) || continue
-            named = Dict{String, Any}()
-            tpl = get(comp, "expression_templates", nothing)
-            if _is_object(tpl)
-                for (n, d) in pairs(tpl)
-                    _raw_get(d, "match") === nothing || continue  # match rules not merged
-                    named[string(n)] = d
-                end
-            end
-            push!(
-                comps, (
-                    string(cname), compkind, string(cname),
-                    comp::OrderedDict{String, Any}, named,
-                )
-            )
-        end
+    for (compkind, cname, comp) in _components(root)
+        # Match rules are not merged.
+        named = filter(((_, d),) -> _raw_get(d, "match") === nothing, _component_templates(comp))
+        push!(comps, (cname, compkind, cname, comp::OrderedDict{String, Any}, named))
     end
 
     # Group each template name across components (preserving first-seen path).

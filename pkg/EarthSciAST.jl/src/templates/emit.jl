@@ -23,38 +23,17 @@ function expand_document(loaded)
     root = _to_ordered(loaded)::OrderedDict{String, Any}
 
     # Capture each component's named registry BEFORE stripping the blocks.
-    comp_named = Dict{Tuple{String, String}, Dict{String, Any}}()
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            named = Dict{String, Any}()
-            tpl = get(comp, "expression_templates", nothing)
-            if _is_object(tpl)
-                for (n, d) in pairs(tpl)
-                    named[string(n)] = d
-                end
-            end
-            comp_named[(compkind, string(cname))] = named
+    comp_named = Dict{Tuple{String, String}, Dict{String, Any}}(
+        (compkind, cname) => _component_templates(comp)
+            for (compkind, cname, comp) in _components(root)
+    )
+    for (compkind, cname, comp) in _components(root)
+        named = comp_named[(compkind, cname)]
+        for k in collect(keys(comp))
+            (k == "expression_templates" || k == "expression_template_imports") && continue
+            comp[k] = _expand_all(comp[k], named, "$compkind.$cname.$k")
         end
-    end
-
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            named = comp_named[(compkind, string(cname))]
-            scope = "$compkind.$(string(cname))"
-            for k in collect(keys(comp))
-                (k == "expression_templates" || k == "expression_template_imports") && continue
-                comp[k] = _expand_all(comp[k], named, "$scope.$k")
-            end
-            haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
-        end
+        haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
     end
 
     for (i, entry, tr, comp_name) in _variable_map_transforms(root)
@@ -88,21 +67,8 @@ The transitive closure of the templates named by `refnames` (surviving-reference
 names), following references inside materialized bodies, keeping only MATCH-LESS
 entries (esm-spec §9.6.4 rule 5: match rules are never materialized).
 """
-function _ref_closure(refnames, named::AbstractDict)::Set{String}
-    out = Set{String}()
-    stack = collect(String, refnames)
-    while !isempty(stack)
-        n = pop!(stack)
-        (n in out || !haskey(named, n)) && continue
-        decl = named[n]
-        _raw_get(decl, "match") === nothing || continue  # match rules not materialized
-        push!(out, n)
-        for r in _collect_apply_names!(String[], _raw_get(decl, "body"))
-            push!(stack, r)
-        end
-    end
-    return out
-end
+_ref_closure(refnames, named::AbstractDict)::Set{String} =
+    _reachable(_template_graph(named), refnames; through = n -> _raw_get(named[n], "match") === nothing)
 
 """
     _authored_template_names(raw_source) -> Dict{String,Vector{String}}
@@ -113,22 +79,12 @@ Per-component MATCH-LESS template names authored in-file in `raw_source`
 """
 function _authored_template_names(raw_source)::Dict{String, Vector{String}}
     authored = Dict{String, Vector{String}}()
-    (raw_source === nothing || !_is_object(raw_source)) && return authored
-    for compkind in ("models", "reaction_systems")
-        comps = _raw_get(raw_source, compkind)
-        (comps === nothing || !_is_object(comps)) && continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            tpl = _raw_get(comp, "expression_templates")
-            (tpl !== nothing && _is_object(tpl)) || continue
-            names = String[]
-            for (n, d) in pairs(tpl)
-                _is_object(d) || continue
-                _raw_get(d, "match") === nothing || continue
-                push!(names, string(n))
-            end
-            authored["$compkind.$(string(cname))"] = names
-        end
+    for (compkind, cname, comp) in _components(raw_source)
+        tpl = _raw_get(comp, "expression_templates")
+        (tpl !== nothing && _is_object(tpl)) || continue
+        authored["$compkind.$cname"] = String[
+            string(n) for (n, d) in pairs(tpl) if _is_object(d) && _raw_get(d, "match") === nothing
+        ]
     end
     return authored
 end
@@ -150,56 +106,44 @@ materialized entry remains → §9.6.4 rule 8 version stamp). Shared by
 function _materialize_components!(root, authored::Dict{String, Vector{String}})
     # ORDERED by component: `_merge_flat_registry` consumes this map positionally
     # (esm-libraries-spec §4.7.5 step 4 makes the merged registry document-
-    # ordered), and `pairs(comps)` below walks the raw document's own order.
+    # ordered), and `_components` walks the raw document's own order.
     blocks = OrderedDict{String, OrderedDict{String, Any}}()
     bump = false
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            key = "$compkind.$(string(cname))"
-            tpl = get(comp, "expression_templates", nothing)
-            named = Dict{String, Any}()
-            if _is_object(tpl)
-                for (n, d) in pairs(tpl)
-                    named[string(n)] = d
-                end
+    for (compkind, cname, comp) in _components(root)
+        key = "$compkind.$cname"
+        named = _component_templates(comp)
+        refnames = Set{String}()
+        for (k, v) in comp
+            (
+                string(k) == "expression_templates" ||
+                    string(k) == "expression_template_imports"
+            ) && continue
+            for r in _collect_apply_names!(String[], v)
+                push!(refnames, r)
             end
-            refnames = Set{String}()
-            for (k, v) in comp
-                (
-                    string(k) == "expression_templates" ||
-                        string(k) == "expression_template_imports"
-                ) && continue
-                for r in _collect_apply_names!(String[], v)
-                    push!(refnames, r)
-                end
-            end
-            isempty(refnames) || (bump = true)
-            materialized = _ref_closure(refnames, named)
-            authored_here = get(authored, key, String[])
-            authored_set = Set(authored_here)
-
-            emit_block = OrderedDict{String, Any}()
-            for n in authored_here
-                haskey(named, n) && (emit_block[n] = named[n])
-            end
-            for n in sort(collect(setdiff(materialized, authored_set)))
-                emit_block[n] = named[n]
-                bump = true
-            end
-
-            if isempty(emit_block)
-                haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
-            else
-                comp["expression_templates"] = emit_block
-                blocks[key] = emit_block
-            end
-            haskey(comp, "expression_template_imports") &&
-                delete!(comp, "expression_template_imports")
         end
+        isempty(refnames) || (bump = true)
+        materialized = _ref_closure(refnames, named)
+        authored_here = get(authored, key, String[])
+        authored_set = Set(authored_here)
+
+        emit_block = OrderedDict{String, Any}()
+        for n in authored_here
+            haskey(named, n) && (emit_block[n] = named[n])
+        end
+        for n in sort(collect(setdiff(materialized, authored_set)))
+            emit_block[n] = named[n]
+            bump = true
+        end
+
+        if isempty(emit_block)
+            haskey(comp, "expression_templates") && delete!(comp, "expression_templates")
+        else
+            comp["expression_templates"] = emit_block
+            blocks[key] = emit_block
+        end
+        haskey(comp, "expression_template_imports") &&
+            delete!(comp, "expression_template_imports")
     end
     haskey(root, "expression_template_imports") && delete!(root, "expression_template_imports")
     return (blocks, bump)
@@ -232,29 +176,19 @@ A consequence worth relying on: a name left OUT of the returned set never
 references a name inside it, so deduped entries need no reference rewriting.
 """
 function _registry_collision_names(byname::AbstractDict)::Set{String}
-    collide = Set{String}()
-    refs = Dict{String, Set{String}}()
+    refs = OrderedDict{String, Vector{String}}()
     for (name, occ) in byname
-        all(o -> _json_equal(occ[1][2], o[2]), occ) || push!(collide, name)
-        s = Set{String}()
+        s = String[]
         for (_, decl) in occ
-            union!(s, _collect_apply_names!(String[], decl))
+            _collect_apply_names!(s, decl)
         end
-        refs[name] = s
+        refs[name] = unique!(s)
     end
-    # Close under the reference edges (monotone; terminates in ≤ |byname| rounds).
-    changed = true
-    while changed
-        changed = false
-        for (name, _) in byname
-            name in collide && continue
-            if any(r -> r in collide, refs[name])
-                push!(collide, name)
-                changed = true
-            end
-        end
+    flags = _flagged(_TemplateGraph(refs)) do name
+        occ = byname[name]
+        !all(o -> _json_equal(occ[1][2], o[2]), occ)
     end
-    return collide
+    return Set{String}(n for (n, f) in flags if f)
 end
 
 # Each `variable_map` coupling entry of the raw document `root` whose
@@ -290,19 +224,13 @@ strips the component registries.
 """
 function _expand_coupling_transform_refs!(root)
     for (_, entry, tr, comp_name) in _variable_map_transforms(root)
-        named = nothing
-        for ck in ("models", "reaction_systems")
-            comps = get(root, ck, nothing)
-            comps isa AbstractDict || continue
-            comp = get(comps, comp_name, nothing)
-            comp isa AbstractDict || continue
-            tpl = get(comp, "expression_templates", nothing)
-            if _is_object(tpl)
-                named = Dict{String, Any}(string(n) => d for (n, d) in pairs(tpl))
-            end
-            break
+        comp = nothing
+        for (_, cname, c) in _components(root)
+            cname == comp_name && (comp = c; break)
         end
-        named === nothing && continue
+        comp === nothing && continue
+        _is_object(_raw_get(comp, "expression_templates")) || continue
+        named = _component_templates(comp)
         entry["transform"] = _expand_all(tr, named, "coupling.transform")
     end
     return
