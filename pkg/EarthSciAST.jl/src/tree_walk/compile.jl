@@ -2357,13 +2357,16 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     elseif (cmp = _eval_node_comparison(op, c, u, p, t, T)) !== nothing
         return cmp
 
-        # Logical
+        # Logical: `and`/`or` take two or more operands (esm-spec §4.2), the
+        # arity the strict compiler's probe (`_sc_check_arity`) holds them to.
     elseif op === :and
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         for child in c
             _eval_node(child, u, p, t, T) == 0 && return 0.0
         end
         return 1.0
     elseif op === :or
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         for child in c
             _eval_node(child, u, p, t, T) != 0 && return 1.0
         end
@@ -2418,10 +2421,14 @@ function _eval_node_op(n::_Node, u, p, t, ::Type{T}) where {T}
     end
 end
 
-# `c` holds ALREADY-EVALUATED children, not nodes: scalars on the scalar path and a
-# mix of scalars and lane vectors on the access-kernel path, hence the untyped
-# `AbstractVector`. Only its length is read, and the error-message interpolation
-# happens solely on the throw branch, so the happy path stays allocation-free.
+# `c` is an operator's operand list: the child nodes on the scalar walk
+# (`_eval_node_op`), evaluated scalars or lane vectors on the shared op ladder
+# (`_scalar_op`), hence the untyped `AbstractVector`. Only its length is read,
+# and the error message is built solely on the throw branch, so the happy path
+# stays allocation-free.
+@noinline _throw_min_arity(op::Symbol, c::AbstractVector, n::Int) = throw(
+    TreeWalkError("E_TREEWALK_ARITY", "$op expects at least $n args, got $(length(c))")
+)
 @inline function _expect_arity_n(op::Symbol, c::AbstractVector, n::Int)
     length(c) == n ||
         throw(

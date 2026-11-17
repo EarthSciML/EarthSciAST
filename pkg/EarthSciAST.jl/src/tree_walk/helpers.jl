@@ -1607,16 +1607,21 @@ function _eval_const_int(
     elseif op == "/"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "/ in index needs 2 args"))
         return div(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
-    elseif op == "floor"
-        # `floor` in an index position wraps an already-integer subexpression (the
-        # `/` case above is truncating integer `div`, == `floor` for the
-        # non-negative cell subscripts a loader reindex forms). So it is a
-        # pass-through here, matching the build-once geometry path where
-        # `floor((c-1)/GX)` folds to the same integer. Keeping it lets a loader
-        # reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the LIVE gather
-        # path (a discrete-cadence loader field), not only build-once.
-        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "floor in index needs 1 arg"))
-        return _eval_const_int(c[1], idx_env, const_arrays)
+    elseif op == "floor" || op == "ceil"
+        # A rounded quotient (`floor((c - 1) / NX)`) rounds the exact quotient
+        # (`fld`/`cld`), as the walker and `_index_int` do, so a negative
+        # numerator reads the same element on every path; over any other
+        # (already integer) subexpression the rounding is the identity. This lets
+        # a loader reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the
+        # LIVE gather path (a discrete-cadence loader field), not only build-once.
+        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "$(op) in index needs 1 arg"))
+        q = c[1]
+        if q isa OpExpr && q.op == "/" && length(q.args) == 2
+            a = _eval_const_int(q.args[1], idx_env, const_arrays)
+            b = _eval_const_int(q.args[2], idx_env, const_arrays)
+            return op == "floor" ? fld(a, b) : cld(a, b)
+        end
+        return _eval_const_int(q, idx_env, const_arrays)
     elseif op == "mod"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
         return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))

@@ -186,17 +186,8 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
         elseif op == "-" && length(expr.args) >= 3
-            # The interpreter's variadic `-`: left fold `((a-b)-c)…`, matching
-            # its 3-ary arm exactly. The runtime ladder's `-` is 1-or-2-ary
-            # (esm-spec), so the fold happens here at compile.
-            node = _geo_compile(expr.args[1], g)
-            for k in 2:length(expr.args)
-                node = _mknode(
-                    kind = _NK_OP, op = :-,
-                    children = _Node[node, _geo_compile(expr.args[k], g)]
-                )
-            end
-            return node
+            # `-` is unary or binary (esm-spec §4.2), here as in every ladder.
+            throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
         elseif op in _GEO_SCALAR_OPS
             children = _Node[_geo_compile(a, g) for a in expr.args]
             return _mknode(kind = _NK_OP, op = Symbol(op), children = children)

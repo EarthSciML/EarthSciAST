@@ -145,12 +145,14 @@ function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
         # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
         # is evaluated either way, so the values agree with the scalar arm too.
     elseif op === :and
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         r = one(T)
         for a in eachindex(c)
             r = ifelse.((r .!= 0) .& (c[a] .!= 0), one(T), zero(T))
         end
         return r
     elseif op === :or
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         r = zero(T)
         for a in eachindex(c)
             r = ifelse.((r .!= 0) .| (c[a] .!= 0), one(T), zero(T))
@@ -242,9 +244,11 @@ function _index_int(n::_Node)::Int
             end
             return s
         elseif op === :-
+            # `-` is unary or binary (esm-spec §4.2), as in every other ladder.
             length(c) == 1 && return -_index_int(c[1])
-            return _index_int(c[1]) -
-                _index_int(c[2])
+            length(c) == 2 ||
+                throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
+            return _index_int(c[1]) - _index_int(c[2])
         elseif op === :*
             s = 1
             @inbounds for d in eachindex(c)

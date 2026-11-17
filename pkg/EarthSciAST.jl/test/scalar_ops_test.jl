@@ -64,6 +64,24 @@ const ESM = EarthSciAST
         end
     end
 
+    @testset "and / or take two or more operands on every ladder" begin
+        lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
+        for o in (:and, :or)
+            node = ESM._mknode(kind = ESM._NK_OP, op = o, children = ESM._Node[lit(1.0)])
+            for f in (
+                    () -> ESM._eval_node(node, Float64[], NamedTuple(), 0.0),
+                    () -> ESM._scalar_op(o, [1.0], Float64),
+                )
+                err = try
+                    f(); nothing
+                catch e
+                    e
+                end
+                @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_ARITY"
+            end
+        end
+    end
+
     @testset "a gather subscript resolves to a build-time integer, or says why not" begin
         lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
         op(o, cs...) = ESM._mknode(
@@ -74,6 +92,15 @@ const ESM = EarthSciAST
         @test ESM._index_int(op(:+, lit(2.0), lit(3.0), lit(1.0))) == 6
         @test ESM._index_int(op(:-, lit(7.0))) == -7
         @test ESM._index_int(op(:-, lit(7.0), lit(2.0))) == 5
+        # `-` is unary or binary: a third operand is refused, as the value
+        # ladder refuses it, never dropped.
+        let err = try
+                ESM._index_int(op(:-, lit(10.0), lit(2.0), lit(3.0)))
+            catch e
+                e
+            end
+            @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_ARITY"
+        end
         @test ESM._index_int(op(:*, lit(3.0), lit(4.0))) == 12
         # A quotient outside `floor`/`ceil` must be exact: the walk carries
         # 3.5 into the enclosing arithmetic, where an integer `div` would not.
