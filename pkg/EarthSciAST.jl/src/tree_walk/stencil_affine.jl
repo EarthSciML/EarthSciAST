@@ -2408,6 +2408,10 @@ function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args,
     end
 end
 
+# An equation the affine tier does not admit, with the reason recorded so a
+# strict refusal can name it.
+_affine_admission_decline(reason::Symbol) = (_note_decline!(:affine, reason); nothing)
+
 # Compile an array equation via the affine polyhedral build.
 # Returns `Vector{_AccKernel}`, or `nothing` to fall back to the per-cell chain.
 #
@@ -2443,13 +2447,14 @@ function _try_affine_stencil(
             lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
             !isempty((lhs_body.args[1]::OpExpr).args) &&
             (lhs_body.args[1]::OpExpr).args[1] isa VarExpr
-    ) || return nothing
+    ) || return _affine_admission_decline(:lhs_not_indexed_derivative)
 
     D = length(idx_names)
-    D >= 1 || return nothing
+    D >= 1 || return _affine_admission_decline(:no_output_index)
     ranges = UnitRange{Int}[]
     for r in range_iters
-        (length(r) >= 1 && _is_unit_run(r)) || return nothing
+        (length(r) >= 1 && _is_unit_run(r)) ||
+            return _affine_admission_decline(:range_not_unit_run)
         push!(ranges, first(r):last(r))
     end
 
@@ -2483,7 +2488,7 @@ function _try_affine_stencil(
     inner = lhs_body.args[1]::OpExpr
     lhs_var = (inner.args[1]::VarExpr).name
     lhs_idx_args = inner.args[2:end]
-    length(lhs_idx_args) == D || return nothing
+    length(lhs_idx_args) == D || return _affine_admission_decline(:lhs_subscript_count)
     # The loop dims: the output's, then (for a contraction kept as a loop) the
     # contracted ones.
     all_names = reduce === nothing ? idx_names : vcat(idx_names, reduce.names)
