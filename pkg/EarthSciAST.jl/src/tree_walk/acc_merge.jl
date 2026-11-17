@@ -27,10 +27,11 @@
 # with a lazy guard keeps per-cell guard semantics (the codegen tier emits the
 # same lazy semantics — ternaries and `&&`/`||` chains).
 #
-# The per-cell/invariant CSE tiers are SKIPPED on a lazy-bearing spine:
-# `_build_acc_cse` counts total occurrences (not unconditional ones), so
-# hoisting a subtree whose occurrences all sit under a guard into the
-# UNCONDITIONAL CSE prelude would evaluate what the lazy scalar walk skips.
+# The per-cell/invariant CSE tiers are SKIPPED on a lazy-bearing spine here.
+# `_build_acc_cse` itself only gives a slot to a value with an occurrence
+# outside every guarded operand, so a subtree whose occurrences all sit under
+# a guard never reaches the UNCONDITIONAL CSE prelude on any tier; the skip
+# is the stricter of the two rules.
 # ========================================================================
 
 # Does this spine carry an op whose scalar evaluation is lazy?

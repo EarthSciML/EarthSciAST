@@ -236,6 +236,30 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         @test terrs[1].error_type == "recurrence_not_wellfounded"
     end
 
+    # A build that skipped `validate()` refuses group members that fold along
+    # different axes with the validator's code, not as a disagreement inside
+    # the stacked recurrence.
+    @testset "group axis mismatch: the build's code is the validator's" begin
+        manifest_path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "recurrence", "rejections.json"
+        )
+        if _require_fixture(manifest_path)
+            manifest = JSON3.read(read(manifest_path, String))
+            case = only(c for c in manifest.cases if c.id == "group_axis_mismatch")
+            file = load_string(JSON3.write(case.document))
+            model = only(values(file.models))
+            err = try
+                EarthSciAST._stack_recurrence_groups(model, file.index_sets)
+                nothing
+            catch e
+                e
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "recurrence_group_axis_mismatch"
+        end
+    end
+
     # ── The SHARED rejection corpus ────────────────────────────────────────
     #
     # `tests/conformance/recurrence/rejections.json` drives every binding with

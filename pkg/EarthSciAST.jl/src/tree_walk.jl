@@ -6,7 +6,7 @@
 # the system size — the path is intended for discretized PDEs whose
 # scalar count exceeds MTK's tearing/codegen ceiling.
 #
-# Public API:
+# Internal entry (the exported ones are `build_evaluator` and `esm_problem`):
 #
 #     _build_evaluator(model::Model; kwargs...)
 #         → (f!, u0::Vector{Float64}, p::NamedTuple, tspan::Tuple{Float64,Float64},

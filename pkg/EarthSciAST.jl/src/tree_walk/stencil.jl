@@ -119,7 +119,7 @@ const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosin
 # ─────────────────────────────────────────────────────────────────────────────
 # CROSS-EQUATION VARIANT MEMOIZATION (perf plan A3). A `_SubVariant` is a pure
 # function of (root STRUCTURE, loop-index-name set, region-class branch key)
-# plus BUILD-level context: `var_map` / `param_sym_set` / `reg_funcs` /
+# plus BUILD-level context: `var_map` / `param_sym_set` /
 # `array_var_info` / `const_arrays` / `pgather` are the same objects for every
 # equation of one `build_evaluator` call (threaded unchanged from
 # `_build_compile_evaluator` through `_compile_derivative_equations`), and
@@ -149,9 +149,8 @@ const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosin
 # (`_lane_repl_key`), so a cache hit from another equation is byte-identical
 # to the variant that equation would have compiled itself.
 #
-# Off, the caches are per equation: no store is created, every `_TemplateCtx`
-# gets fresh dicts and every obs-inline a fresh memo.
-_xeq_disabled() = !_compiler_plan_now().xeq_variant
+# With the affine tier off (`compiler = :interpreter`) no store is created: the
+# store serves only that tier's template variants and obs-inline memo.
 
 struct _XEqStore
     variants::Dict{Tuple{UInt64, String, String}, _SubVariant}
@@ -191,7 +190,7 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # (cross-equation variants off, or a caller without a store). `gmemo` is the
 # shared `_refs_idxset` guard memo (per-equation: its answers depend on this
 # equation's idxset); `bio` a scratch buffer for body branch keys. The compile
-# inputs (`var_map`, `param_sym_set`, `reg_funcs`) ride along because variant
+# inputs (`var_map`, `param_sym_set`) ride along because variant
 # compilation happens mid-`_stencilize`, where they are out of scope; they are
 # build-level constants (see the A3 note above), which is what makes the
 # hoisted cache sound.
@@ -202,7 +201,6 @@ struct _TemplateCtx
     bio::IOBuffer
     var_map::AbstractDict{String, Int}
     param_sym_set::Any
-    reg_funcs::Any
     # Index-bound bodies for expansion roots that are ARRAY PRODUCERS (an
     # aggregate reached through `index(makearray → root, k…)` — the ESD stencil
     # shape): the producer's `expr_body` with its output indices substituted by
@@ -216,13 +214,10 @@ struct _TemplateCtx
     bound_bodies::IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}
     # This equation's loop-index-set key — the per-equation component of vkey.
     idxkey::String
-    # Node-count memo for the nested-boundary size gate (`_nested_site_big`):
-    # per expansion-root identity, computed once per equation.
-    szmemo::IdDict{OpExpr, Int}
 end
 function _TemplateCtx(
         sites::IdDict{OpExpr, OpExpr}, var_map::AbstractDict{String, Int},
-        param_sym_set, reg_funcs;
+        param_sym_set;
         idxkey::String = "", store::Union{Nothing, _XEqStore} = nothing
     )
     variants = store === nothing ? Dict{Tuple{UInt64, String, String}, _SubVariant}() :
@@ -232,71 +227,8 @@ function _TemplateCtx(
         store.bound_bodies
     return _TemplateCtx(
         sites, variants, IdDict{OpExpr, Bool}(), IOBuffer(),
-        var_map, param_sym_set, reg_funcs, bound, idxkey,
-        IdDict{OpExpr, Int}()
+        var_map, param_sym_set, bound, idxkey
     )
-end
-
-# ---- Nested compile-once boundaries (ess-nested-template-boundary) ----------
-# Historically compile-once boundaries were the OUTERMOST expansion roots only,
-# and every nested root fused into its enclosing variant — the right call for
-# small helper templates (per-call indirection would cost more than the sharing
-# saves), and catastrophically wrong for a big one: the duo momentum interior
-# template holds 186 nested physics-stencil applies, and fusing them built
-# ~127k-node variant bodies per region class (3.2e6 emitted nodes over one RHS,
-# a ~93-minute first-call compile). So a nested root now becomes its own
-# boundary exactly when its expansion clears a size floor: small helpers keep
-# fusing, big physics stencils compile once and are CALLED. The variant IR has
-# carried nested sub-call sites since the tier landed (`_SubVariant.subcalls`,
-# `_lower_subcall`'s local re-basing), so this only starts minting them.
-# EXPERIMENTAL, and it ships OFF: `ESS_NESTED_TEMPLATE_BOUNDARY=1` is the one
-# `ESS_*` variable that turns it on. It is not an oracle selector — no tier
-# stands down when it is unset, the tier simply does not exist in the default
-# build — and nothing in the corpus depends on it. Measured on the duo LMARS RHS
-# the nested boundaries mint correctly (89 sites) but deliver no emitted-node
-# reduction there (see the sub-kernel function tier's default note,
-# codegen_kernel.jl); outermost-only remains the default until an
-# affinely-gathering rule encoding gives the carved bodies real cross-class
-# sharing.
-_nested_boundary_disabled() =
-    get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY", "") != "1"
-# Size floor for minting a nested boundary: a refusal boundary under `native`,
-# since moving it changes which bodies are carved out and therefore what the
-# emitter is asked to compile.
-_nested_boundary_min_nodes() =
-    something(tryparse(Int, get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY_MIN_NODES", "")), 256)
-function _site_node_count(e::OpExpr, tctx::_TemplateCtx)
-    got = get(tctx.szmemo, e, nothing)
-    got === nothing || return got
-    n = Ref(0)
-    foreach_subexpr(_ -> (n[] += 1; nothing), e)
-    tctx.szmemo[e] = n[]
-    return n[]
-end
-_nested_site_big(e::OpExpr, tctx::_TemplateCtx) =
-    _site_node_count(e, tctx) >= _nested_boundary_min_nodes()
-
-# Does `expr` reference any of the output loop indices in `idxset`? EXHAUSTIVE
-# over every `ASTExpr`-typed field of `OpExpr` via the shared `child_exprs`
-# traversal (`foreach_subexpr`, expression.jl) — args / expr_body / lower /
-# upper / values / filter / key / ranges bounds — so a loop index
-# buried in an aggregate body or a reduction bound routes
-# that op to the fallback and is NEVER mis-seen as loop-invariant (a false
-# negative would return an unsubstituted loop var to resolve → a hard build
-# error instead of a fallback). Cold path — called once per branch template,
-# not per cell (the per-cell guard is the memoized `_refs_idxset`).
-# IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
-# path-multiplicity-insensitive, and the branch-template expressions scanned
-# here share subtrees by reference (`_sub_preserving`) — the per-path walk was
-# exponential on a doubling chain (ESS-0hh). The memo is per call, which is
-# per QUERY: `idxset` is fixed within a call, so a node's answer cannot change.
-function _refs_loop_var(e::ASTExpr, idxset::Set{String})
-    found = false
-    foreach_subexpr_once(e) do x
-        found || (x isa VarExpr && x.name in idxset && (found = true))
-        nothing
-    end
-    return found
 end
 
 # Select the `makearray` region covering `kvals` — LAST covering region wins,
@@ -340,28 +272,21 @@ struct _StencilCtx
     # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
     # per `_build_branch_template` because it references that call's lane recipes.
     smemo::IdDict{OpExpr, ASTExpr}
-    # Memoized per-node "refers to a loop index" flag for the guard, so
-    # `_stencilize`'s per-node check is an O(1) memo hit rather than an O(subtree)
-    # re-walk (`_refs_loop_var`) plus a boxed-capture closure at every node — and a
-    # Bool per node instead of a Set{String}.
+    # Memoized per-node "refers to a loop index" flag for the guard
+    # (`_refs_idxset`), so `_stencilize`'s per-node check is an O(1) memo hit
+    # rather than an O(subtree) re-walk.
     vsmemo::IdDict{OpExpr, Bool}
     # Compile-once template tier: the sub-kernel call sites this walk emitted
     # (sentinel j ↔ subcalls[j]), and the per-equation template context
     # (`nothing` on every reference-free build).
     subcalls::Vector{_SubCallSite}
     tctx::Union{Nothing, _TemplateCtx}
-    # True while walking a VARIANT BODY (inside `_stencilize_shared`): a nested
-    # expansion root met there becomes its own compile-once boundary only when
-    # its body clears `_nested_boundary_min_nodes()` — a small helper template
-    # (limiter, edge interpolant) still fuses, a big physics stencil does not
-    # (see the boundary note in `_stencilize_shared`).
-    nested::Bool
 end
 _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
     _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
     IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
-    _SubCallSite[], nothing, false
+    _SubCallSite[], nothing
 )
 _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
@@ -370,7 +295,7 @@ _StencilCtx(
     _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
     IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
-    _SubCallSite[], tctx, false
+    _SubCallSite[], tctx
 )
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
@@ -387,8 +312,8 @@ function _stencilize(e::VarExpr, ctx::_StencilCtx)
     return e
 end
 function _stencilize(e::OpExpr, ctx::_StencilCtx)
-    # Memoized guard (byte-for-byte the `_refs_loop_var` decision): probe the cached
-    # variable set instead of re-walking the subtree + allocating a closure per node.
+    # Memoized guard: does the subtree read a loop index? A subtree that does
+    # not is loop-invariant and is returned as it is.
     _refs_idxset(e, ctx.idxset, ctx.vsmemo) || return e
     # A shared subtree stencilizes identically every time it is reached (same
     # sentinel spine, same lane recipes), so dedupe by identity: the first visit
@@ -408,9 +333,7 @@ function _stencilize_op(e::OpExpr, ctx::_StencilCtx)
     # root still hoists whole, and a root reached twice through a shared observed
     # subtree reuses its cached sentinel exactly like any shared subtree.
     tctx = ctx.tctx
-    if tctx !== nothing && haskey(tctx.sites, e) &&
-            (!ctx.nested || _nested_site_big(e, tctx))
-        ctx.nested && _tally_cascade!(:nested_template_boundary)
+    if tctx !== nothing && haskey(tctx.sites, e)
         return _stencilize_site(e, ctx, tctx)
     end
     return _stencilize_op_core(e, ctx)
@@ -482,14 +405,13 @@ end
 # identity argument) — the table entries are bit-for-bit what the per-cell
 # reference computes for the same subtree.
 #
-# Off, the equation declines whole — the differential oracle
-# (test/stencil_subtree_tbl_test.jl).
-_subtree_tbl_disabled() = !_compiler_plan_now().subtree_tbl
+# `compiler = :interpreter`, which turns the whole affine tier off, is the
+# differential oracle (test/stencil_subtree_tbl_test.jl).
 
 # One rescued subtree: the expression, the loop-index binding ORDER (sorted —
 # deterministic, and consistent between compile and per-cell rebinding), and
-# the compiled `_CellEval` (attached by `_attach_exprtbl_evals!` once
-# `reg_funcs` is in scope — `_StencilCtx` does not carry it). Mutable so the
+# the compiled `_CellEval` (attached by `_attach_exprtbl_evals!` when the
+# recipe vector is finalized). Mutable so the
 # attach mutates the spec shared by every recipe vector that references it
 # (a variant's recipes are appended to parents by reference).
 mutable struct _ExprTblSpec
@@ -577,7 +499,6 @@ end
 # construct, so it counts rescue FIRINGS, not final cascade routing (that is
 # `:affine` / `:percell_acc`).
 function _try_exprtbl_lane(e::OpExpr, ctx::_StencilCtx)
-    _subtree_tbl_disabled() && return nothing
     _is_array_producer(e) && return nothing
     _exprtbl_evaluable(e, ctx.idxset, ctx.const_arrays) || return nothing
     names = sort!(collect(ctx.idxset))
@@ -593,8 +514,8 @@ end
 
 # Attach the compiled evaluator to every not-yet-attached `LANE_EXPRTBL`
 # recipe — called from the two places recipe vectors are finalized
-# (`_build_branch_template` and the variant compile in `_stencilize_shared`),
-# where `reg_funcs` is in scope. Loop indices bind as parameters; scalar
+# (`_build_branch_template` and the variant compile in `_stencilize_shared`).
+# Loop indices bind as parameters; scalar
 # params are deliberately ABSENT (`_EMPTY_PARAMS`) — the evaluability contract
 # is loop indices + literals + const arrays only. A compile failure (an op
 # `_compile` cannot evaluate, an unresolvable gather, a loop index named "t")
@@ -602,7 +523,7 @@ end
 # original decline, one hop later.
 function _attach_exprtbl_evals!(
         rs::Vector{_LaneRecipe},
-        const_arrays::AbstractDict, reg_funcs
+        const_arrays::AbstractDict
     )
     for r in rs
         r.kind == LANE_EXPRTBL || continue
@@ -610,7 +531,7 @@ function _attach_exprtbl_evals!(
         spec.ce === nothing || continue
         ce = _cellwise_compile_once_impl(
             spec.expr, length(spec.idx_names),
-            const_arrays, reg_funcs, _EMPTY_PARAMS;
+            const_arrays, _EMPTY_PARAMS;
             bind_syms = spec.idx_names
         )
         ce === nothing && throw(
@@ -655,31 +576,23 @@ function _stencilize_shared(
     if variant === nothing
         _BENCH_ON[] && (_BENCH_BODY_VARIANTS[] += 1)
         rs = _LaneRecipe[]
-        # The body walk carries `tctx` with `nested = true`: a nested expansion
-        # root — ESD's stencils are deeply factored into limiter/edge-interpolant
-        # helper templates AND large physics stencils — becomes its OWN
-        # compile-once boundary when it clears `_nested_boundary_min_nodes()`
-        # (ess-nested-template-boundary; see the tier note at the helpers), and
-        # compiles FUSED into this variant otherwise. Small helpers fusing keeps
-        # the variant count and per-call indirection bounded (the original
-        # reason boundaries were outermost-only, the RFC's "7 lon bodies"); big
-        # bodies becoming boundaries is what keeps ONE variant's emitted size
-        # bounded (the duo interior templates fused to ~127k-node bodies per
-        # region class otherwise). Nested region selections still reach the
+        # The body walk carries no template context: compile-once boundaries
+        # are the OUTERMOST expansion roots, and a nested root compiles FUSED
+        # into this variant, which keeps the variant count and the per-call
+        # indirection bounded. Nested region selections still reach the
         # variant key through `_branch_key!`, which descends everything
-        # identically. Without the opt-in, boundaries stay outermost-only.
+        # identically.
         subctx = _StencilCtx(
             ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,
             ctx.const_arrays, ctx.pgather,
             IdDict{OpExpr, ASTExpr}(), tctx.gmemo,
-            _SubCallSite[],
-            _nested_boundary_disabled() ? nothing : tctx, true
+            _SubCallSite[], nothing
         )
         spine = bypass ? _stencilize_op_core(node, subctx) : _stencilize(node, subctx)
         # Rescued-subtree lanes need their compile-once evaluator before any
         # box materializes them; the variant path finalizes recipes here, not
         # in `_build_branch_template` (which never sees a variant's rs).
-        _attach_exprtbl_evals!(rs, ctx.const_arrays, tctx.reg_funcs)
+        _attach_exprtbl_evals!(rs, ctx.const_arrays)
         vm_ext = _ext_var_map(tctx.var_map, rs, subctx.subcalls)
         bmemo = _BuildMemo()
         tmpl = _compile(
@@ -687,7 +600,7 @@ function _stencilize_shared(
                 spine, ctx.array_var_info, vm_ext,
                 ctx.const_arrays, ctx.pgather, bmemo
             ),
-            vm_ext, tctx.param_sym_set, tctx.reg_funcs, bmemo
+            vm_ext, tctx.param_sym_set, bmemo
         )
         variant = _SubVariant(tmpl, rs, subctx.subcalls, Dict{String, Any}())
         tctx.variants[vkey] = variant
@@ -723,9 +636,8 @@ function _stencilize_bound_site(
         # The substitution rebuilds every subtree that references a bound index,
         # which detaches NESTED expansion roots from `tctx.sites` by identity —
         # exactly the drift `_translate_sites_lockstep!` exists for (an OpExpr's
-        # expression slots are preserved under leaf substitution). Without this,
-        # every nested root inside an index-bound body silently fuses and the
-        # nested-boundary tier (ess-nested-template-boundary) never sees it.
+        # expression slots are preserved under leaf substitution), so a root
+        # inside the bound body stays recognized by identity.
         _translate_sites_lockstep!(tctx.sites, body, sub_body)
         push!(entries, (ASTExpr[a for a in kargs], sub_body))
     end
@@ -880,7 +792,7 @@ end
 # name that is not a loop index) leaves `_eval_const_int` without a value.
 const _LANE_SUBSCRIPT_OPS = Set(
     [
-        "+", "-", "*", "/", "floor", "mod", "max", "min",
+        "+", "-", "*", "/", "floor", "ceil", "mod", "max", "min",
         "ifelse", "<", "<=", ">", ">=", "==", "neg",
     ]
 )
@@ -1008,9 +920,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     # sub-kernel over its index-bound body instead of being re-substituted and
     # re-fused into every branch spine.
     tctx = ctx.tctx
-    if tctx !== nothing && haskey(tctx.sites, producer) &&
-            (!ctx.nested || _nested_site_big(producer, tctx))
-        ctx.nested && _tally_cascade!(:nested_template_boundary)
+    if tctx !== nothing && haskey(tctx.sites, producer)
         return _stencilize_bound_site(producer, oi, kargs, body, ctx, tctx)
     end
     idx_exprs = Dict{String, ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
@@ -1018,20 +928,13 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     return _stencilize(sub_body, ctx)
 end
 
-# Memoized set of every variable name appearing anywhere in `e`, drawing
-# children from the SAME shared `child_exprs` traversal `_refs_loop_var` uses
-# (args / expr_body / lower / upper / filter / key / values / ranges) so `_refs_idxset` below is exactly equivalent to a fresh
-# `_refs_loop_var` call. Built lazily, once per node, and reused across every
-# cell — turning the per-cell branch-key guard from an O(subtree) re-walk into
-# an O(|idxset|) probe of the cached set. (Hand-rolled memoized recursion, not
-# `foreach_subexpr`: the per-OpExpr `memo` shares interior sets, which a flat
-# whole-subtree visitor cannot.)
-# `_refs_loop_var(e, idxset)` without re-walking `e` — and without the
-# `IdDict{OpExpr,Set{String}}` of every variable name it used to memoize (a Set per
-# node was the largest remaining build churn). The guard only asks a BOOLEAN — does
-# `e` reference any loop index in `idxset`? — so memoize THAT by node identity.
-# Short-circuits on the first hit; `idxset` is fixed per build, so the answer is a
-# pure function of the node. Byte-for-byte the same guard decision.
+# Does `e` reference any loop index in `idxset`? EXHAUSTIVE over every
+# expression-bearing field of `OpExpr` (args / expr_body / lower / upper /
+# filter / key / values / ranges bounds, the `child_exprs` field set), so a loop
+# index buried in an aggregate body or a reduction bound routes that op to the
+# fallback and is never mis-seen as loop-invariant. Memoized by node identity:
+# `idxset` is fixed per build, so the answer is a pure function of the node, and
+# a shared subtree is scanned once. Short-circuits on the first hit.
 _child_refs_idxset(x::VarExpr, idxset::Set{String}, ::IdDict{OpExpr, Bool}) = x.name in idxset
 _child_refs_idxset(::NumExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
 _child_refs_idxset(::IntExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
@@ -1404,19 +1307,6 @@ function _branch_key_indexed!(
     return print(io, '}')
 end
 
-# Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
-# maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which the box
-# processor's `_lower_to_access` decodes back to `recipes[k]`. Built ONCE per
-# equation (not per cell), as an overlay on `var_map` rather than a copy of it.
-function _lane_var_map(var_map::AbstractDict{String, Int}, recipes::Vector{_LaneRecipe})
-    isempty(recipes) && return var_map
-    ext = Dict{String, Int}()
-    for k in eachindex(recipes)
-        ext[_lane_name(k)] = -k
-    end
-    return _VarMapOverlay(ext, var_map)
-end
-
 # Lane sentinels plus sub-kernel call sentinels (compile-once tier): call site j
 # maps to the disjoint negative range `-(_SUBCALL_SENT_BASE + j)`, decoded by
 # `_lower_to_access`.
@@ -1538,7 +1428,7 @@ end
 
 const _IX_LIT, _IX_LOOP, _IX_ADD, _IX_SUB, _IX_NEG, _IX_MUL, _IX_DIV, _IX_MOD,
     _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
-    _IX_GATHER = Int8.(1:17)
+    _IX_GATHER, _IX_FLD, _IX_CLD = Int8.(1:19)
 
 struct _IdxNode
     kind::Int8
@@ -1603,7 +1493,14 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
             return _IdxNode(_IX_NEG, 0, xs)
         elseif op == "-" && n == 2
             return _IdxNode(_IX_SUB, 0, xs)
-        elseif op == "floor" && n == 1
+        elseif (op == "floor" || op == "ceil") && n == 1
+            # A rounded quotient rounds the exact quotient, as `_eval_const_int`
+            # does; over an integer subexpression the rounding is the identity.
+            q = c[1]
+            if q isa OpExpr && q.op == "/" && length(q.args) == 2
+                x = xs[1]
+                return _IdxNode(op == "floor" ? _IX_FLD : _IX_CLD, 0, x.args)
+            end
             return xs[1]
         elseif (op == "max" || op == "min") && n >= 1
             return _IdxNode(op == "max" ? _IX_MAX : _IX_MIN, 0, xs)
@@ -1657,9 +1554,11 @@ function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int, Bool}
     y, ok2 = _ix_eval(a[2], loop)
     (ok1 && ok2) || return (0, false)
     k === _IX_SUB && return (x - y, true)
-    if k === _IX_DIV || k === _IX_MOD
+    if k === _IX_DIV || k === _IX_MOD || k === _IX_FLD || k === _IX_CLD
         y == 0 && return (0, false)
-        return (k === _IX_DIV ? div(x, y) : mod(x, y), true)
+        v = k === _IX_DIV ? div(x, y) : k === _IX_MOD ? mod(x, y) :
+            k === _IX_FLD ? fld(x, y) : cld(x, y)
+        return (v, true)
     end
     b = k === _IX_LT ? x < y : k === _IX_LE ? x <= y : k === _IX_GT ? x > y :
         k === _IX_GE ? x >= y : x == y
@@ -1792,28 +1691,12 @@ function _lane_eval_state(le::_LaneEval, loop::Vector{Int})::Tuple{Int, Bool}
     return (s, s != 0)
 end
 
-# Ghost pattern of the STATE lanes, from slots ALREADY isolated into a
-# Vector{Int} (the affine sweep evaluates only those), encoded as a `String`
-# for a cheap, hashable signature component (`_cell_ckey!`'s base key).
-function _ghost_key_states(state_vals::Vector{Int})
-    isempty(state_vals) && return ""
-    io = IOBuffer()
-    @inbounds for v in state_vals
-        print(io, v == 0 ? '1' : '0')
-    end
-    return String(take!(io))
-end
-
 # One branch's spine entry: the compiled sentinel template, its lane recipes,
 # the recipe indices that are STATE gathers (the ghost-key columns), and the
 # sub-kernel call sites its spine references (empty on every reference-free
 # build and on the whole symbolic path).
 const _StencilBranch = Tuple{_Node, Vector{_LaneRecipe}, Vector{Int}, Vector{_SubCallSite}}
 
-# Build one branch's spine template. Sentinels pass through resolve untouched
-# and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
-# TreeWalkError here also fires in the fallback path, so it propagates rather
-# than falling back.
 # Derive + corner-verify a state var's affine slot map (cell indices → var_map
 # slot: `slot = base + Σ_d inds_d·strides_d`) so a gather resolves arithmetically.
 # Returns `nothing` if any probe cell is absent or the layout is not affine on the
@@ -1853,10 +1736,14 @@ function _derive_var_affine(
     return (base, strides)
 end
 
+# Build one branch's spine template. Sentinels pass through resolve untouched
+# and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
+# TreeWalkError here also fires in the fallback path, so it propagates rather
+# than falling back.
 function _build_branch_template(
         body::ASTExpr, ctx_proto::_StencilCtx,
         var_map::AbstractDict{String, Int},
-        param_sym_set, reg_funcs
+        param_sym_set
     )::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
@@ -1870,7 +1757,7 @@ function _build_branch_template(
         ctx_proto.idxset, rs, ctx_proto.idx_env,
         ctx_proto.array_var_info, ctx_proto.const_arrays,
         ctx_proto.pgather, IdDict{OpExpr, ASTExpr}(), ctx_proto.vsmemo,
-        _SubCallSite[], ctx_proto.tctx, false
+        _SubCallSite[], ctx_proto.tctx
     )
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
@@ -1893,10 +1780,10 @@ function _build_branch_template(
             r.arr, r.loop_name, aff
         )
     end
-    # Rescued-subtree lanes: compile each spec's `_CellEval` now that
-    # `reg_funcs` is in scope (once per branch template, cold; a compile
-    # failure restores the whole-equation decline).
-    _attach_exprtbl_evals!(rs, ctx.const_arrays, reg_funcs)
+    # Rescued-subtree lanes: compile each spec's `_CellEval` now (once per
+    # branch template, cold; a compile failure restores the whole-equation
+    # decline).
+    _attach_exprtbl_evals!(rs, ctx.const_arrays)
     vm_ext = _ext_var_map(var_map, rs, ctx.subcalls)
     # Identity memo so `_resolve_indices` + `_compile` carry the DAG that
     # `_stencilize` now preserves straight through to the compiled `_Node`
@@ -1908,7 +1795,7 @@ function _build_branch_template(
             spine, ctx.array_var_info, vm_ext,
             ctx.const_arrays, ctx.pgather, bmemo
         ),
-        vm_ext, param_sym_set, reg_funcs, bmemo
+        vm_ext, param_sym_set, bmemo
     )
     return (
         tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE],

@@ -190,6 +190,30 @@ end
     @test haskey(insp.const_arrays, "A_ij")     # setup arrays register as const arrays
     @test insp.observed_exprs isa Dict{String, EarthSciAST.ASTExpr}
 
+    # A field `ic` reads a setup array as the right-hand side does (the build's
+    # one storage precedence), not only the caller's arrays.
+    let doc2 = _bi_regrid_doc()
+        m = doc2["models"]["Regrid"]
+        m["variables"]["y"] = Dict("type" => "unknown", "shape" => Any["tgt_cells"])
+        push!(
+            m["equations"],
+            Dict{String, Any}(
+                "lhs" => Dict("op" => "ic", "args" => Any["y"]), "rhs" => "A_j"
+            ),
+            Dict{String, Any}(
+                "lhs" => _bi_agg(
+                    Any["j"], Dict{String, Any}("j" => Dict("from" => "tgt_cells")),
+                    Dict("op" => "D", "args" => Any[_bi_index("y", "j")], "wrt" => "t")
+                ),
+                "rhs" => _bi_agg(
+                    Any["j"], Dict{String, Any}("j" => Dict("from" => "tgt_cells")), 0.0
+                )
+            )
+        )
+        _, uy, _, _, vmy = EarthSciAST._build_evaluator(doc2)
+        @test all(j -> isapprox(uy[vmy["y[$j]"]], 2.25; atol = 1.0e-12), 1:4)
+    end
+
     # Observability is inert: the build without `inspect` is identical.
     f2!, u02, p2, tspan2, var_map2 = EarthSciAST._build_evaluator(_bi_regrid_doc())
     @test u02 == u0 && var_map2 == var_map && tspan2 == tspan

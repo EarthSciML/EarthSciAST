@@ -558,9 +558,19 @@ _ics_may_name_cells(ics::AbstractDict) =
     _apply_ics_by_slot!(set, L::StateLayout, ics)
 
 Call `set(slot, value)` for every entry of `ics` that names a state element of
-`L`, profiles before explicit keys so an explicit key wins.
+`L`, profiles before explicit keys so an explicit key wins. A key naming a whole
+array variable with a scalar value sets every cell of it (as `esm_problem`'s
+`u0` does), before any cell key.
 """
 function _apply_ics_by_slot!(set, L::StateLayout, ics::AbstractDict)
+    for (key, v) in ics
+        (key isa AbstractString && v isa Real) || continue
+        b = _layout_block(L, String(key))
+        b === nothing && continue
+        for s in (b.base):(b.base + b.len - 1)
+            set(s, v)
+        end
+    end
     for (key, v) in ics
         key isa AbstractString || continue
         s = get(L, key, 0)

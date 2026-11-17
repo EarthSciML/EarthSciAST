@@ -237,7 +237,6 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("scalar_codegen_test.jl")                # scalar equations + prelude as generated code, emitted by structure (interpreter oracle)
     include("codegen_threaded_test.jl")              # codegen threaded cell axis: chunk instances ≡ serial, disjointness, threaded subprocess
     include("codegen_body_split_test.jl")            # oversized kernel body split across @noinline helpers ≡ un-split (node-cap oracle)
-    include("codegen_subcall_fn_test.jl")            # template sub-kernels emitted ONCE as @noinline fns ≡ per-site inline (opt-in tier)
     include("stencil_indexed_contraction_test.jl")   # reduced-rank + contracted makearray region values fire affine ≡ per-cell (interpreter oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (corpus sweep)
     include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
@@ -375,7 +374,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("evaluate_cellwise_blas_accel_test.jl")  # evaluate_cellwise's opt-in BLAS mat-vec path
     include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
-    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
+    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == hand-computed arrays, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
     include("overlap_gated_template_test.jl")  # the ISRM binning shape: overlap-gated overlap_area_planar, native == interpreter
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep

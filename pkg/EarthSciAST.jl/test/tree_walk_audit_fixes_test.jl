@@ -131,8 +131,7 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         @test resolved.value isa ESM._PGatherRef
         @test (resolved.value::ESM._PGatherRef).lin == 2   # column-major (2,1)
         node = ESM._compile(
-            resolved, Dict{String, Int}(), Set{Symbol}(),
-            Dict{String, Any}()
+            resolved, Dict{String, Int}(), Set{Symbol}()
         )
         @test node.kind == ESM._NK_PARAM_GATHER
         @test ESM._eval_node(node, Float64[], NamedTuple(), 0.0) == 20.0

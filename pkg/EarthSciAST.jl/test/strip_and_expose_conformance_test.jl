@@ -125,6 +125,9 @@ end
         return x
     end
     @testset "remaining rhs: $(c.id)" for c in _SE.remaining_rhs
+        # The program of a stripped Problem does not depend on call order:
+        # `rhs_program` first sees the stripped classes as `compile_kernels` does.
+        @test rhs_program(_se_build(c.path, c.strip)) isa EarthSciAST.RhsProgram
         prob = _se_build(c.path, c.strip)
         ks = compile_kernels(prob, [Dict("name" => "rhs")])
         doc = strip_events!(JSON3.read(read(joinpath(_SE_DIR, c.path), String), Dict{String, Any}))
@@ -139,6 +142,19 @@ end
             kernel!(got, k, kernel_workspace(k), u, Float64[], parameter_vector(ks), Float64(probe.t), 0.0, default_forcing_set(ks))
             @test reinterpret(UInt64, got) == reinterpret(UInt64, want)
         end
+    end
+
+    # The post-value read check sees a bare read in every expression-bearing
+    # field, not only `args` and a `faq` body; a `Pre` read is not one.
+    @testset "affect bare reads reach every field" begin
+        E, V = EarthSciAST.ASTExpr, EarthSciAST.VarExpr
+        f = OpExpr(
+            "faq", E[]; output_idx = Any[], ranges = Dict("k" => Any[1, 3]),
+            expr_body = V("k"), filter = OpExpr(">", E[V("x"), OpExpr("Pre", E[V("y")])])
+        )
+        reads = EarthSciAST._bare_reads!(Set{String}(), f)
+        @test "x" in reads
+        @test !("y" in reads)
     end
 
     @testset "refusals: $(c.id)" for c in _SE.refusals

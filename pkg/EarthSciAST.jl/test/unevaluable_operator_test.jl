@@ -41,7 +41,7 @@ catch e
 end
 
 _uo_compile(e::_UO.ASTExpr) =
-    _UO._compile(e, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}())
+    _UO._compile(e, Dict{String, Int}(), Set{Symbol}())
 
 @testset "unevaluable_operator (esm-spec §9.6.6)" begin
 

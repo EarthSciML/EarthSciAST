@@ -11,34 +11,33 @@
 #
 # A semiring is the pair (⊕, ⊗) together with its two NORMATIVE identity
 # elements (0̄, 1̄): 0̄ is the value of an empty ⊕-reduction and 1̄ the value of
-# an empty ⊗-product. The `reduce` field on an aggregate names ⊕ only; the
-# matching ⊗ and BOTH identities come from this table, NEVER from the file.
-# The registry is closed and exhaustive — adding a semiring is a spec change.
+# an empty ⊗-product (CONFORMANCE_SPEC §5.6.1). An aggregate's body writes its
+# own ⊗ as ordinary operators, so what the evaluator takes from this table is ⊕
+# and 0̄; the `reduce` field names ⊕ only, and 0̄ comes from here, NEVER from the
+# file. The registry is closed and exhaustive — adding a semiring is a spec
+# change.
 struct _Semiring
-    name::String
     oplus::String      # ⊕ reduce spelling
     zerobar::Float64   # 0̄ : result of an empty ⊕-reduction
-    otimes::String     # ⊗ product spelling
-    onebar::Float64    # 1̄ : result of an empty ⊗-product
 end
 
 # ±∞ identities are represented per-binding (Julia: Inf/-Inf) and are the
 # *result* of an empty reduction — never written into a file (§5.1 note 2).
 const _SEMIRING_REGISTRY = Dict{String, _Semiring}(
-    "sum_product" => _Semiring("sum_product", "+", 0.0, "*", 1.0),
-    "max_product" => _Semiring("max_product", "max", -Inf, "*", 1.0),
-    "min_sum" => _Semiring("min_sum", "min", Inf, "+", 0.0),
-    "max_sum" => _Semiring("max_sum", "max", -Inf, "+", 0.0),
-    "bool_and_or" => _Semiring("bool_and_or", "or", 0.0, "and", 1.0),  # false / true
+    "sum_product" => _Semiring("+", 0.0),
+    "max_product" => _Semiring("max", -Inf),
+    "min_sum" => _Semiring("min", Inf),
+    "max_sum" => _Semiring("max", -Inf),
+    "bool_and_or" => _Semiring("or", 0.0),  # false
 )
 
-# ⊕-spelling → 0̄, the empty-⊕-reduction identity. Derived from (and consistent
-# with) the registry table; this is what the legacy `reduce`-only shorthand
-# resolves to when no `semiring` is given (⊕ = reduce, ⊗ = "*"; §5.1 note 1).
-# "*" is the legacy product-reduce: no registry semiring has ⊕=× (it appears
-# only as ⊗), but files predating the registry may carry reduce="*".
+# `reduce` spelling → 0̄, the empty-reduction identity: what the `reduce`
+# shorthand resolves to when no `semiring` is given (⊕ = reduce, ⊗ = "*";
+# §5.1 note 1). The keys are exactly the schema's `reduce` enum. "*" has no
+# registry semiring (× appears only as ⊗). Boolean `or` is reachable only as
+# `semiring: "bool_and_or"`; `reduce: "or"` is refused, as the schema refuses it.
 const _OPLUS_IDENTITY = Dict{String, Float64}(
-    "+" => 0.0, "max" => -Inf, "min" => Inf, "*" => 1.0, "or" => 0.0,
+    "+" => 0.0, "max" => -Inf, "min" => Inf, "*" => 1.0,
 )
 
 # Resolve an aggregate node's (⊕ spelling, 0̄ identity) — everything the
@@ -97,10 +96,12 @@ function _combine_with_reducer(
         oplus::String, zerobar::Float64, terms::Vector{ASTExpr};
         scalar::Bool = false
     )
-    isempty(terms) && return NumExpr(zerobar)
-    if oplus == "or" && scalar
+    if oplus == "or"
+        scalar || _throw_array_bool_and_or(oplus)
+        isempty(terms) && return NumExpr(zerobar)
         return OpExpr("or", ASTExpr[NumExpr(zerobar); terms])
     end
+    isempty(terms) && return NumExpr(zerobar)
     oplus == "+" && return OpExpr("+", ASTExpr[NumExpr(zerobar); terms])
     length(terms) == 1 && return terms[1]
     if oplus == "*"
@@ -118,19 +119,22 @@ function _combine_with_reducer(
         end
         return result
     else
-        # ⊕ ∈ {or} (bool_and_or) is index-set-producing (§5.5) — out of scope
-        # for the M1 array-producing tree-walk evaluator.
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
-                "array-producing aggregate with ⊕='$oplus' is not supported by the " *
-                    "tree-walk evaluator (M1); only numeric semirings (+, *, max, min) " *
-                    "reduce to an array — bool_and_or is index-set-producing (§5.5), and " *
-                    "only a scalar (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1)"
-            )
-        )
+        _throw_array_bool_and_or(oplus)
     end
 end
+
+# ⊕ = `or` (bool_and_or) is index-set-producing (§5.5): an array-valued
+# reduction with it is refused whatever its term count, and only a scalar
+# (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1).
+@noinline _throw_array_bool_and_or(oplus) = throw(
+    TreeWalkError(
+        "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
+        "array-producing aggregate with ⊕='$oplus' is not supported by the " *
+            "tree-walk evaluator (M1); only numeric semirings (+, *, max, min) " *
+            "reduce to an array — bool_and_or is index-set-producing (§5.5), and " *
+            "only a scalar (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1)"
+    )
+)
 
 # ============================================================
 # 5c-join. M2 — value-equality joins (RFC semiring-faq-unified-ir §5.3)
@@ -785,15 +789,14 @@ function _cc_values(
     # compiles a function of its own.
     cells = _row_major_cells(ext)
     out = Array{Float64}(undef, ext...)
-    ce = _cellwise_compile_once_impl(e, length(ext), ca, Dict{String, Any}(), used)
+    ce = _cellwise_compile_once_impl(e, length(ext), ca, used)
     if ce !== nothing
         for c in cells
             out[c...] = ce(c)
         end
     else
         fill = _setup_fill_array(
-            e, ext; const_arrays = ca, params = used,
-            reg_funcs = Dict{String, Any}()
+            e, ext; const_arrays = ca, params = used
         )
         if fill !== nothing
             out = fill
@@ -814,7 +817,7 @@ function _cc_values(
                         Dict{String, Int}(), ca
                     )
                     _eval_node(
-                        _compile(r, Dict{String, Int}(), psyms, Dict{String, Any}()),
+                        _compile(r, Dict{String, Int}(), psyms),
                         Float64[], pnt, 0.0
                     )
                 catch err
@@ -1180,39 +1183,63 @@ function _resolve_join_in_expr(
         expr::OpExpr, index_sets::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
         const_arrays::AbstractDict = Dict{String, Any}(),
         var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-        obs_defs::AbstractDict = Dict{String, ASTExpr}()
+        obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
     )
-    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_values = expr.values === nothing ? nothing :
-        ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
-    gates = (_is_faq_op(expr.op) && expr.join !== nothing) ?
-        _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) : expr.join_gates
-    return reconstruct(
-        expr; args = new_args, expr_body = new_body,
-        values = new_values, lower = new_lower, upper = new_upper,
-        filter = new_filter, join_gates = gates
-    )
+    # IDENTITY-MEMOIZED and IDENTITY-PRESERVING, as `_resolve_isr` is: a shared
+    # node resolves to one shared output node, and a subtree with no `join`
+    # below it is returned as it is, so a shared graph is neither walked once
+    # per path nor re-inflated into a tree.
+    cached = get(memo, expr, nothing)
+    cached === nothing || return cached
+    changed = false
+    res(x) = begin
+        r = _resolve_join_in_expr(
+            x, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo
+        )
+        r === x || (changed = true)
+        r
+    end
+    new_args = ASTExpr[res(a) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
+    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
+    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
+    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
+    own_join = _is_faq_op(expr.op) && expr.join !== nothing
+    out = if own_join || changed
+        gates = own_join ?
+            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) :
+            expr.join_gates
+        reconstruct(
+            expr; args = new_args, expr_body = new_body,
+            values = new_values, lower = new_lower, upper = new_upper,
+            filter = new_filter, join_gates = gates
+        )
+    else
+        expr
+    end
+    memo[expr] = out
+    return out
 end
 _resolve_join_in_expr(
     expr::ASTExpr, ::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
     const_arrays::AbstractDict = Dict{String, Any}(),
     var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-    obs_defs::AbstractDict = Dict{String, ASTExpr}()
+    obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
 ) = expr
 
 _resolve_join_in_eq(
     eq::Equation, index_sets::AbstractDict, vi_maps = _EMPTY_VI_MAPS,
     const_arrays::AbstractDict = Dict{String, Any}(),
     var_shapes::AbstractDict = Dict{String, Vector{String}}(),
-    obs_defs::AbstractDict = Dict{String, ASTExpr}()
+    obs_defs::AbstractDict = Dict{String, ASTExpr}(),
+    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
 ) =
     Equation(
-    _resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs),
-    _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs);
+    _resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo),
+    _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo);
     _comment = eq._comment
 )
 
@@ -1232,5 +1259,9 @@ function _resolve_join_gates(
         obs_defs::AbstractDict = Dict{String, ASTExpr}()
     )
     any(_eq_has_join, eqs) || return eqs
-    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for eq in eqs]
+    memo = IdDict{OpExpr, ASTExpr}()
+    return Equation[
+        _resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo)
+            for eq in eqs
+    ]
 end

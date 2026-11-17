@@ -145,6 +145,8 @@ function _resolve_one_index_set_ref(
 end
 
 # True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
+# Every expression-bearing field is searched (`filter` and an expression-valued
+# range bound included), as `_resolve_isr` rewrites them all.
 # Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
 # structurally-shared tree — the per-path recursion was exponential on a DAG.
 _has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr, Nothing}())
@@ -154,8 +156,14 @@ function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
     if expr.ranges !== nothing
         for v in values(expr.ranges)
             v isa IndexSetRef && return true
+            if v isa AbstractVector
+                for b in v
+                    b isa OpExpr && _has_index_set_ref(b, seen) && return true
+                end
+            end
         end
     end
+    expr.filter isa OpExpr && _has_index_set_ref(expr.filter::OpExpr, seen) && return true
     for a in expr.args
         a isa OpExpr && _has_index_set_ref(a, seen) && return true
     end
@@ -203,20 +211,29 @@ function _resolve_isr(
     new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
     new_lower = expr.lower === nothing ? nothing : res(expr.lower)
     new_upper = expr.upper === nothing ? nothing : res(expr.upper)
+    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
     new_ranges = expr.ranges
-    if expr.ranges !== nothing && any(v -> v isa IndexSetRef, values(expr.ranges))
-        changed = true
-        new_ranges = Dict{String, Any}()
+    if expr.ranges !== nothing
+        # A range bound may itself be an expression holding a reference; `res`
+        # marks `changed` when it rewrites one.
+        resolved = Dict{String, Any}()
         for (k, v) in expr.ranges
-            new_ranges[k] = v isa IndexSetRef ?
-                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
+            resolved[k] = if v isa IndexSetRef
+                changed = true
+                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope)
+            elseif v isa AbstractVector && any(b -> b isa OpExpr, v)
+                Any[b isa OpExpr ? res(b) : b for b in v]
+            else
+                v
+            end
         end
+        changed && (new_ranges = resolved)
     end
     result = changed ?
         reconstruct(
             expr; args = new_args, expr_body = new_body,
             values = new_values, lower = new_lower, upper = new_upper,
-            ranges = new_ranges
+            filter = new_filter, ranges = new_ranges
         ) : expr
     memo[expr] = result
     return result
@@ -1373,6 +1390,41 @@ function _contraction_loop_min()
     return (n === nothing || n < 1) ? 8 : n
 end
 
+# Resolve `body` with each of `names` replaced by a fresh reserved loop-var
+# name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
+# `extra_syms`: `(refs, resolved)`, one `Ref` per name in `names` order, or
+# `nothing` when the body does not resolve that way. Only a document-level
+# refusal (an `EarthSciASTError`) is such a decline: a resource error never is
+# (errors.jl) — the per-cell path a caller falls back to resolves the SAME body
+# once per output cell, so reading an exhausted heap as "this body will not
+# resolve symbolically" walks the build into a far larger allocation with the
+# cause erased — and a programming error would otherwise surface only as a
+# tier that declined. `memo` is `nothing` or one made for this symbolic resolve
+# alone, never the concrete RHS build's. The refs are published to
+# `_LOOPVAR_REFS`, so `_compile` lowers each surviving loop-var `VarExpr` to an
+# `_NK_LOOPVAR` reading its ref, only after a clean resolve.
+function _resolve_symbolic(
+        body::ASTExpr, names::Vector{String}, extra_syms::Set{String},
+        array_var_info, var_map, const_arrays, pgather::AbstractDict,
+        memo::_MaybeMemo = nothing
+    )
+    fresh = String[_fresh_loopvar_name() for _ in names]
+    refs = Base.RefValue{Int}[Ref(0) for _ in names]
+    subs = Dict{String, ASTExpr}(names[d] => VarExpr(fresh[d]) for d in eachindex(names))
+    subbed = _sub_preserving(body, subs)
+    bsyms = union(Set{String}(fresh), extra_syms)
+    resolved = try
+        _resolve_indices(subbed, array_var_info, var_map, const_arrays, pgather, memo, bsyms)
+    catch err
+        err isa EarthSciASTError || rethrow()
+        return nothing
+    end
+    for d in eachindex(fresh)
+        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
+    end
+    return refs, resolved
+end
+
 # Try to compile a uniform contraction to a single runtime loop node instead of
 # unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
 # ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
@@ -1389,30 +1441,11 @@ function _try_build_contraction_loop(
         # read (a reduction nested in the whole-array nest's term).
         outer_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    names = String[_fresh_loopvar_name() for _ in contract_names]
-    refs = Base.RefValue{Int}[Ref(0) for _ in contract_names]
-    subs = Dict{String, ASTExpr}(
-        contract_names[d] => VarExpr(names[d])
-            for d in eachindex(contract_names)
+    got = _resolve_symbolic(
+        body, contract_names, outer_syms, array_var_info, var_map, const_arrays, pgather
     )
-    subbed = _sub_preserving(body, subs)
-    bsyms = union(Set{String}(names), outer_syms)
-    resolved = try
-        # memo=nothing: the symbolic (bound-sym) resolution must never share the
-        # concrete RHS-build memo (same invariant the compile-once path relies on).
-        _resolve_indices(
-            subbed, array_var_info, var_map, const_arrays,
-            pgather, nothing, bsyms
-        )
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    # Publish the refs so `_compile` lowers each surviving loop-var `VarExpr` to an
-    # `_NK_LOOPVAR` reading that ref. (Registered only after a clean resolve.)
-    for d in eachindex(names)
-        _LOOPVAR_REFS[Symbol(names[d])] = refs[d]
-    end
+    got === nothing && return nothing
+    refs, resolved = got
     oplus_sym = Symbol(oplus)
     node::ASTExpr = resolved
     # Nest innermost-first: `contract_names[1]` varies FASTEST in the unroll's
@@ -1456,61 +1489,17 @@ function _array_contraction_min()
     return (n === nothing || n < 1) ? 1024 : n
 end
 
-# Resolve an array einsum's body ONCE with BOTH its output and its contracted
-# indices symbolic, so the whole equation compiles to a single node.
-#
-# `_try_build_contraction_loop` keeps only the CONTRACTED indices symbolic, which
-# still costs one resolve + `_compile` per OUTPUT CELL — the tier that fixed the
-# reduction length left the output extent to scale the build. Keeping the output
-# indices symbolic as well makes build IR O(1) in BOTH extents: the caller drives
-# the output loop counters at eval time and writes each cell's flat slot from a
-# precomputed vector (array_contraction.jl).
-#
-# The output symbols become reserved loop-var names like the contracted ones, so
-# the body's reads lower through the SAME runtime-gather machinery: a
-# const/provider array read at an output subscript becomes `_NK_CONST_GATHER`, a
-# state read `_NK_STATE_GATHER`, a bare output symbol `_NK_LOOPVAR`. Only the
-# contracted symbols get `__contract_loop` markers; the output refs are handed
-# back for the section runner to drive.
-#
-# Returns `(out_refs, marker)` in `out_names` order, or `nothing` when the body
-# does not resolve symbolically — the same "correctness first, fall back to the
-# existing cascade" contract `_try_build_contraction_loop` has.
-function _try_build_array_contraction(
-        body::ASTExpr, out_names::Vector{String},
-        contract_names::Vector{String}, contract_ranges::AbstractVector,
-        oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict
-    )
-    got = _resolve_array_contraction_term(
-        body, out_names, contract_names,
-        array_var_info, var_map, const_arrays, pgather
-    )
-    got === nothing && return nothing
-    out_refs, contract_refs, resolved = got
-    oplus_sym = Symbol(oplus)
-    node::ASTExpr = resolved
-    # Innermost-first over the contracted indices, matching the per-cell loop
-    # tier's nesting — so this tier's fold order IS that tier's fold order.
-    for d in eachindex(contract_names)
-        r = contract_ranges[d]
-        node = OpExpr(
-            "__contract_loop", ASTExpr[node];
-            value = _ContractLoopBuild(
-                contract_refs[d], first(r), last(r),
-                step(r), oplus_sym, zerobar
-            )
-        )
-    end
-    return (out_refs, node)
-end
-
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
 # `(out_refs, contract_refs, resolved)`, or `nothing` when the body does not
-# resolve that way. `_try_build_array_contraction` wraps it in the static
-# contraction loops; the table-driven form of the nest (array_contraction.jl)
-# drives the contracted refs from the admitted tuples instead.
+# resolve that way. Keeping the output indices symbolic as well as the
+# contracted ones makes the build O(1) in both extents: the body's reads lower
+# through the run-time gather machinery (a const read at an output subscript is
+# `_NK_CONST_GATHER`, a state read `_NK_STATE_GATHER`, a bare output symbol
+# `_NK_LOOPVAR`) and the caller drives the counters at eval time. The
+# whole-array nest (array_contraction.jl) drives the contracted refs from the
+# admitted tuples or its own loops; `_compile_init_once` (no contracted index)
+# compiles the term once for every output cell.
 function _resolve_array_contraction_term(
         body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
@@ -1525,35 +1514,13 @@ function _resolve_array_contraction_term(
         memo::_MaybeMemo = nothing
     )
     nout = length(out_names)
-    all_names = vcat(out_names, contract_names)
-    fresh = String[_fresh_loopvar_name() for _ in all_names]
-    refs = Base.RefValue{Int}[Ref(0) for _ in all_names]
-    subs = Dict{String, ASTExpr}(
-        all_names[d] => VarExpr(fresh[d])
-            for d in eachindex(all_names)
+    extra = nest_scalar_loops ? Set{String}((_NEST_SCALAR_LOOPS,)) : _EMPTY_BOUND_SYMS
+    got = _resolve_symbolic(
+        body, vcat(out_names, contract_names), extra,
+        array_var_info, var_map, const_arrays, pgather, memo
     )
-    subbed = _sub_preserving(body, subs)
-    bsyms = Set{String}(fresh)
-    nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
-    resolved = try
-        # Never the concrete RHS-build memo (as in `_try_build_contraction_loop`):
-        # `memo` is `nothing` or one made for this symbolic resolve alone.
-        _resolve_indices(
-            subbed, array_var_info, var_map, const_arrays,
-            pgather, memo, bsyms
-        )
-    catch err
-        # errors.jl: the three resource errors are never a tier decline. The
-        # per-cell path this returns to resolves the SAME body once per output
-        # cell, so reading an exhausted heap as "this body will not resolve
-        # symbolically" walks the build into a far larger allocation with the
-        # cause erased.
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    for d in eachindex(fresh)
-        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
-    end
+    got === nothing && return nothing
+    refs, resolved = got
     return (refs[1:nout], refs[(nout + 1):end], resolved)
 end
 
@@ -1719,17 +1686,6 @@ const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
 # invariant block next to `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_BOUND_SYMS = Set{String}()
 
-# True iff a subscript expression references any BOUND OUTPUT-INDEX symbol — the
-# predicate that classifies one gather subscript as runtime-varying (→ keep
-# symbolic, lower to `_NK_CONST_GATHER`) vs. build-time-constant (→ fold). Only
-# the plain arithmetic subscripts an `index` gather ever carries are walked
-# (`args`); an empty `bound_syms` makes this uniformly `false`, the fast exit on
-# every non-fast-path call.
-_refs_bound_sym(e::VarExpr, bound_syms::Set{String}) = e.name in bound_syms
-_refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
-    _anyof(a -> _refs_bound_sym(a, bound_syms), e.args)
-_refs_bound_sym(::ASTExpr, ::Set{String}) = false
-
 # True iff a subscript's value is known only at run time: it references a name
 # no integer environment binds here — a bound output-index symbol, or a
 # parameter, a state, an observed or `t` (esm-spec §4.3.2 lets a subscript be
@@ -1783,9 +1739,11 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 
 # True iff a run-time subscript is built only from loop counters — a bound
 # output-index symbol of a symbolic resolve, or a contraction loop variable
-# (`__esm_lv_*`) — integer literals, `+ - *` and `mod`, and a quotient that is
-# the DIRECT operand of `floor` or `ceil`: what a gather can evaluate from the
-# counters alone (`_index_int`). The rounded quotient is the cell-to-row
+# (`__esm_lv_*`) — integer literals, `+ - *`, and a quotient that is the DIRECT
+# operand of `floor` or `ceil`: what a gather can evaluate from the counters
+# alone (`_index_int`) and the walk can compile. (`mod` is no esm operator, so
+# the scalar compiler refuses it; admitting it here would refuse a subscript the
+# unrolled fold evaluates.) The rounded quotient is the cell-to-row
 # reindex a flattened loader field takes (`F[floor((c - 1) / NX) + 1, c - NX *
 # floor((c - 1) / NX)]`, reseact's NEI emissions, issue #665).
 #
@@ -1802,7 +1760,7 @@ _subscript_from_counters(::IntExpr, ::Set{String}) = true
 _subscript_from_counters(e::NumExpr, ::Set{String}) = isinteger(e.value)
 function _subscript_from_counters(e::OpExpr, bound_syms::Set{String})
     op = e.op
-    if op == "+" || op == "-" || op == "*" || (op == "mod" && length(e.args) == 2)
+    if op == "+" || op == "-" || op == "*"
         return all(a -> _subscript_from_counters(a, bound_syms), e.args)
     elseif (op == "floor" || op == "ceil") && length(e.args) == 1
         q = e.args[1]
@@ -1839,7 +1797,7 @@ function _guarded_read_taken(guards::_ResolveGuards)
         isempty(_referenced_var_names(c)) || return false
         v = try
             _eval_node(
-                _compile(c, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()),
+                _compile(c, Dict{String, Int}(), Set{Symbol}()),
                 Float64[], NamedTuple(), 0.0
             )
         catch err
@@ -1850,6 +1808,20 @@ function _guarded_read_taken(guards::_ResolveGuards)
     end
     return true
 end
+
+# Whether an out-of-range read under the current guards is left for run time:
+# some guard is in force and the build cannot show every one taken.
+function _guarded_oob_deferred()
+    guards = _resolve_guards()
+    return !isempty(guards) && !_guarded_read_taken(guards)
+end
+
+@noinline _throw_pgather_oob(name, ci, n, d) = throw(
+    TreeWalkError(
+        "E_TREEWALK_PGATHER_OOB",
+        "forcing array '$(name)' index $(ci) out of range [1, $(n)] on dim $(d)"
+    )
+)
 
 # A const read at constant subscripts the build may not raise for (see above):
 # the run-time gather, which resolves each subscript under the array's
@@ -1924,6 +1896,7 @@ function _resolve_const_array_gather(
     )
     if _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+        guards = _resolve_guards()
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
             if _subscript_is_runtime(a, const_arrays)
@@ -1933,7 +1906,17 @@ function _resolve_const_array_gather(
                 )
             else
                 ci = _const_subscript_int(a, const_arrays)
-                ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
+                # The guarded out-of-range rule, as for a read at constant
+                # subscripts only: under a guard the build cannot show taken,
+                # the out-of-range constant stays for the run-time gather,
+                # which raises if the read is ever evaluated.
+                if !isempty(guards) && !(1 <= ci <= size(vals, d)) &&
+                        _const_dim_boundary(vals, d) === :error &&
+                        !_guarded_read_taken(guards)
+                    memo === nothing || (memo.deferrals[] += 1)
+                else
+                    ci = _resolve_const_index(vals, name, d, ci, size(vals, d))
+                end
                 sub_nodes[d] = IntExpr(Int64(ci))
             end
         end
@@ -1984,7 +1967,7 @@ function _fold_faq_terms(e::ASTExpr, const_arrays::AbstractDict, memo::IdDict{Op
         t = _resolve_indices(
             e, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays
         )
-        NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()), Float64[], NamedTuple(), 0.0))
+        NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}()), Float64[], NamedTuple(), 0.0))
     else
         c = OpExpr(e.op, ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
         for f in fieldnames(OpExpr)
@@ -2038,7 +2021,7 @@ end
 # those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
 # index symbolic, so a state gather is never emitted on the normal RHS build or the
 # compile-once cellwise path (whose bound symbols use different names). Distinct
-# from `_refs_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+# from `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
 _refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
 _refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
 _refs_loopvar(::ASTExpr) = false
@@ -2478,13 +2461,10 @@ function _resolve_indices_op(
                         )
                     else
                         ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                        (1 <= ci <= pg.dims[d]) || throw(
-                            TreeWalkError(
-                                "E_TREEWALK_PGATHER_OOB",
-                                "forcing array '$(first_arg.name)' index $(ci) " *
-                                    "out of range [1, $(pg.dims[d])] on dim $(d)"
-                            )
-                        )
+                        # Out of range under a guard the build cannot show
+                        # taken: the run-time gather checks it if evaluated.
+                        (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred() ||
+                            _throw_pgather_oob(first_arg.name, ci, pg.dims[d], d)
                         sub_nodes[d] = IntExpr(Int64(ci))
                     end
                 end
@@ -2498,14 +2478,15 @@ function _resolve_indices_op(
                     for a in idx_args_expr
             ]
             for d in 1:length(pg.dims)
-                (1 <= int_indices[d] <= pg.dims[d]) ||
-                    throw(
-                    TreeWalkError(
-                        "E_TREEWALK_PGATHER_OOB",
-                        "forcing array '$(first_arg.name)' index $(int_indices[d]) " *
-                            "out of range [1, $(pg.dims[d])] on dim $(d)"
-                    )
+                (1 <= int_indices[d] <= pg.dims[d]) && continue
+                # The guarded out-of-range rule (above): a read the build
+                # cannot show evaluated becomes the run-time gather, which
+                # raises the same error if it is.
+                _guarded_oob_deferred() && return OpExpr(
+                    "index", ASTExpr[IntExpr(Int64(i)) for i in int_indices];
+                    value = _LiveGatherRef(pg.flat, pg.dims, first_arg.name)
                 )
+                _throw_pgather_oob(first_arg.name, int_indices[d], pg.dims[d], d)
             end
             lin = LinearIndices(Tuple(pg.dims))[int_indices...]
             return OpExpr(

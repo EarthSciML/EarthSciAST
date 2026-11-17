@@ -462,17 +462,22 @@ end
             end
         end
         @test !isempty(codes[1]) && all(==(codes[1]), codes)
-        # Once decomposed, the program evaluates a new workspace through the
-        # code its tiles share, to the same values, allocation-free.
-        alt = RRT._decomposed_form(prog)
-        @test alt isa RRT.TileProgram && _rrt_generated(alt.f!) == codes[1]
-        ws2 = rhs_workspace(prog)
+        # Decomposing a program does not change what its own workspaces run.
+        @test rhs_workspace(prog).shared === prog.shared
+        # A caller who wants the program and its tiles to run one compiled
+        # right-hand side restricts it to its whole domain: the same code as
+        # the tiles, the same values, allocation-free.
+        dom = ("x" => 1:nx, "y" => 1:ny)
+        whole = restrict(prog, dec; owned = dom, storage = dom)
+        @test _rrt_generated(whole.f!) == codes[1]
+        @test tile_layout(whole).n_u == L.n_u
+        ws2 = rhs_workspace(whole)
         du2 = fill(NaN, L.n_u)
-        rhs!(du2, prog, ws2, u, Float64[], prob.p, 0.0, fs)
+        rhs!(du2, whole, ws2, u, Float64[], prob.p, 0.0, fs)
         @test _rrt_bits.(du2) == _rrt_bits.(G)
         noaux = Float64[]
-        _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs)
-        @test _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs) == 0
+        _rrt_allocated(du2, whole, ws2, u, noaux, prob.p, fs)
+        @test _rrt_allocated(du2, whole, ws2, u, noaux, prob.p, fs) == 0
     end
 
     @testset "a tile emits a box it runs no cell of as every tile does" begin

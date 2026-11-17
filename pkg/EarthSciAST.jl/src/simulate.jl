@@ -708,7 +708,7 @@ function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     allunique(dims) || return nothing
     psyms = Symbol[Symbol(d) for d in dims]
     node = try
-        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms), Dict{String, Any}())
+        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms))
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
@@ -1214,7 +1214,7 @@ end
 # its per-term provenance, and the merged const arrays — is built on the first
 # `rhs_program` call (`_program_seed`) and kept from then on.
 struct _ProgramSeedRecipe
-    input::Any                        # the caller's document, before any rewrite
+    input::Any                        # the caller's document, after the pushdown rewrite
     pushdown::Bool
     metaparams::Dict{String, Int}
     base_path::String
@@ -1244,11 +1244,16 @@ struct _ProgramSeedRecipe
 end
 
 # The seed of `prob`'s programs, built once from its recipe; `nothing` for a
-# Problem `esm_problem` did not build.
+# Problem `esm_problem` did not build. The seed re-prepares the run document,
+# which refuses a coupling-level event unless its class was stripped, so the
+# Problem's stripped classes are in force while it does — whichever caller
+# (`rhs_program`, `compile_kernels`) asks first.
 function _program_seed(prob)
     r = prob.inspection.program_seed
     r isa _ProgramSeedRecipe || return r
-    return _recipe_seed(r, prob.param_buffers, prob.run_doc)
+    return task_local_storage(:_esm_strip_taken, stripped(prob).strip) do
+        _recipe_seed(r, prob.param_buffers, prob.run_doc)
+    end
 end
 
 # The seed of recipe `r` for a Problem whose live buffers are `param_buffers`
@@ -1266,11 +1271,8 @@ function _recipe_seed(
         r.memo[] === nothing || return r.memo[]
         flat = Ref{Any}(prepared)
         if prepared === nothing
-            input = r.pushdown ?
-                first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
-                r.input
             _prepare_run_doc(
-                input; metaparameters = r.metaparams, base_path = r.base_path,
+                r.input; metaparameters = r.metaparams, base_path = r.base_path,
                 supplied_names = r.supplied, flat_out = flat
             )
         end
@@ -1825,7 +1827,6 @@ function esm_problem(
     # never triggered from here — stays safe for direct callers.
     pd_gates = Dict{String, Any}()
     pd_coupling = Pair{String, String}[]
-    authored_input = input
     if pushdown_rewrite
         input, matched = _pushdown_input(input, model_name, metaparams, base_path)
         if matched
@@ -2016,12 +2017,14 @@ function esm_problem(
     # build creates.
     compiler === :xla && _xla_refuse_before_build(merged_param)
     # What `rhs_program` rebuilds its seed from, on its first call: the
-    # caller's own inputs, not the flattened system or the merged arrays, so a
-    # Problem no program is made from keeps nothing extra alive. A Problem
+    # caller's own inputs (the document after the pushdown rewrite, so the
+    # rewrite and its diagnostics run once per problem), not the flattened
+    # system or the merged arrays, so a Problem no program is made from keeps
+    # nothing extra alive. A Problem
     # built as its program (`program_build`) holds that program, and with it
     # the seed and the build it was made from.
     recipe = _ProgramSeedRecipe(
-        authored_input, pushdown_rewrite, metaparams,
+        input, pushdown_rewrite, metaparams,
         String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
         compiler, overrides, const_arrays, providers,
         Set{String}(keys(discovered)), provider_shapes, Set{String}(keys(pd_gates)),

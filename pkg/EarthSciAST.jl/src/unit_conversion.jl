@@ -67,7 +67,7 @@ function _unit_conversion_scale(conversion, variable_name::AbstractString)
     conversion isa Real && return Float64(conversion)
     isempty(free_variables(conversion)) || return nothing
     try
-        node = _compile(conversion, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}())
+        node = _compile(conversion, Dict{String, Int}(), Set{Symbol}())
         return _eval_node(node, Float64[], NamedTuple(), 0.0)
     catch e
         throw(
@@ -112,7 +112,7 @@ function apply_unit_conversion!(
         )
     )
     sym = Symbol(free[1])
-    node = _compile(conversion, Dict{String, Int}(), Set{Symbol}([sym]), Dict{String, Any}())
+    node = _compile(conversion, Dict{String, Int}(), Set{Symbol}([sym]))
     @inbounds for i in eachindex(values)
         values[i] = _eval_node(node, Float64[], NamedTuple{(sym,)}((values[i],)), 0.0)
     end

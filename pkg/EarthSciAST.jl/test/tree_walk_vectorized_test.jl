@@ -69,14 +69,10 @@ end
             @test length(u0) == N                 # state DOES grow with N …
             d
         end
-        # … but the compiled array-kernel structure does NOT. Affine access kernels
-        # are the default path, so count array kernels of either flavour (vec + acc)
-        # — the intent, "one whole-array kernel per structural box, N-independent",
-        # holds whichever path owns the equation.
-        akerns(d) = d.n_vec_kernels + d.n_acc_kernels
+        # … but the compiled array-kernel structure does NOT: one whole-array
+        # access kernel per structural box, N-independent.
+        akerns(d) = d.n_acc_kernels
         @test akerns(diags[1]) == akerns(diags[2]) == akerns(diags[3])
-        @test diags[1].template_node_count ==
-            diags[2].template_node_count == diags[3].template_node_count
         @test akerns(diags[1]) >= 1
         # The array equation produced ZERO per-cell scalar RHS entries: it is a
         # whole-array kernel, not an O(N) scalar node list.
@@ -126,7 +122,7 @@ end
         )
         # A constant-bound contraction is unrolled onto the affine path by default
         # (acc kernel); either array-kernel flavour satisfies the whole-array intent.
-        @test d.n_vec_kernels + d.n_acc_kernels >= 1
+        @test d.n_acc_kernels >= 1
         @test d.n_scalar_entries == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 6.0; rtol = 1.0e-12)

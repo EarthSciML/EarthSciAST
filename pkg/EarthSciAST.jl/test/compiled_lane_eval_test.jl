@@ -21,6 +21,8 @@ const ESM = EarthSciAST
         _op("/", _v("i"), _v("k")), _op("/", _v("i"), _op("-", _v("k"), _i(1))),
         _op("mod", _op("+", _v("i"), _i(5)), _i(7)), _op("mod", _v("i"), _op("-", _v("k"), _i(1))),
         _op("max", _i(1), _op("min", _i(3), _v("i"))), _op("floor", _op("/", _v("i"), _i(2))),
+        _op("floor", _op("/", _op("-", _v("i"), _i(2)), _i(3))),
+        _op("ceil", _op("/", _op("-", _v("i"), _i(2)), _i(3))), _op("ceil", _v("k")),
         _op("ifelse", _op("<", _v("i"), _i(3)), _v("k"), _op("*", _v("i"), _i(2))),
         _op("<=", _v("i"), _v("k")), _op(">", _v("i"), _v("k")), _op(">=", _v("i"), _i(2)),
         _op("==", _v("i"), _v("k")),
@@ -46,6 +48,14 @@ const ESM = EarthSciAST
                     !occursin("bad", sprint(show, e))
                 @test ok
             end
+        end
+    end
+    # A rounded quotient rounds the exact quotient (`fld` / `cld`), as the
+    # walker does, so a negative numerator reads the element the walk reads.
+    for (rnd, ref) in (("floor", fld), ("ceil", cld))
+        e = _op(rnd, _op("/", _op("-", _v("i"), _i(2)), _i(3)))
+        for i in -1:8
+            @test ESM._eval_const_int(e, Dict("i" => i, "k" => 0), const_arrays) == ref(i - 2, 3)
         end
     end
     for e in [

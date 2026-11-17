@@ -247,7 +247,6 @@ end
             initial_conditions = ics, const_arrays = ca
         )
         @test d.n_acc_kernels == 1                    # ONE kernel, not O(N) boxes
-        @test d.n_vec_kernels == 0
         du = fill(-1.0, length(u0)); f!(du, u0, p, 0.0)
         for i in 1:N
             @test du[vmap["y[$i]"]] == u0[vmap["u[$(perm[i])]"]]

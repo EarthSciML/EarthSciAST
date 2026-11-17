@@ -58,11 +58,8 @@ let arms = :(return nothing)
 end
 
 # The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
-# `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
-# malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# the walkers' literal-exponent arms (`_eval_node_op`, `_eval_acc_op`) and never
-# reaches the shared ladder: a literal exponent must stay a host `Float64` so a
-# Dual walk keeps the power rule.
+# `_BINARY_ELEMENTWISE_OPS`. A literal exponent stays a host `Float64` (the
+# leaves are never converted to `T`), so a Dual walk keeps the power rule.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(
@@ -145,12 +142,14 @@ function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
         # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
         # is evaluated either way, so the values agree with the scalar arm too.
     elseif op === :and
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         r = one(T)
         for a in eachindex(c)
             r = ifelse.((r .!= 0) .& (c[a] .!= 0), one(T), zero(T))
         end
         return r
     elseif op === :or
+        length(c) >= 2 || _throw_min_arity(op, c, 2)
         r = zero(T)
         for a in eachindex(c)
             r = ifelse.((r .!= 0) .| (c[a] .!= 0), one(T), zero(T))
@@ -242,9 +241,11 @@ function _index_int(n::_Node)::Int
             end
             return s
         elseif op === :-
+            # `-` is unary or binary (esm-spec §4.2), as in every other ladder.
             length(c) == 1 && return -_index_int(c[1])
-            return _index_int(c[1]) -
-                _index_int(c[2])
+            length(c) == 2 ||
+                throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
+            return _index_int(c[1]) - _index_int(c[2])
         elseif op === :*
             s = 1
             @inbounds for d in eachindex(c)
@@ -260,8 +261,6 @@ function _index_int(n::_Node)::Int
                 return op === :floor ? fld(a, b) : cld(a, b)
             end
             return _index_int(q)
-        elseif op === :mod && length(c) == 2
-            return mod(_index_int(c[1]), _index_int(c[2]))
         elseif op === :/ && length(c) == 2
             # A quotient not under `floor`/`ceil` (a const gather's subscript;
             # a live gather's never has one, `_subscript_from_counters`). The

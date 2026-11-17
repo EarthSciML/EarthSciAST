@@ -49,13 +49,12 @@ const IDX = Dict{String, Int}("X" => 5, "Y" => 4)
 # Materialize `json` both ways and return (fast, reference, hits, miss).
 function both_ways(json, env)
     rhs = EA.expression_from_json(json)
-    regfns = Dict{String, Function}()
     hits0, miss0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
-    fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
+    fast = EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
     hits = EA._SETUP_MAP_FASTPATH_HITS[] - hits0
     miss = EA._SETUP_MAP_FASTPATH_MISS[] - miss0
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-        EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX, regfns)
+        EA._materialize_setup_general_map(rhs, copy(env), nothing, IDX)
     end
     return fast, ref, hits, miss
 end
@@ -139,15 +138,13 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         rhs = EA.expression_from_json(j)
         h0, m0 = EA._SETUP_MAP_FASTPATH_HITS[], EA._SETUP_MAP_FASTPATH_MISS[]
         fast = EA._materialize_setup_general_map(
-            rhs, copy(ENV0), nothing, idx,
-            Dict{String, Function}()
+            rhs, copy(ENV0), nothing, idx
         )
         @test EA._SETUP_MAP_FASTPATH_HITS[] - h0 == 1
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 0
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, idx,
-                Dict{String, Function}()
+                rhs, copy(ENV0), nothing, idx
             )
         end
         @test bitsame(fast, ref)
@@ -170,8 +167,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         h0 = EA._SETUP_MAP_FASTPATH_HITS[]
         EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, IDX,
-                Dict{String, Function}()
+                rhs, copy(ENV0), nothing, IDX
             )
         end
         @test EA._SETUP_MAP_FASTPATH_MISS[] - m0 == 1   # forced onto the reference
@@ -235,7 +231,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
                 # The sweep the fill falls back to, on its own.
                 rhs = EA.expression_from_json(j)
                 ca, params = EA._setup_env_split(env)
-                ce = EA._setup_map_compile_once(rhs, 2, ca, Dict{String, Function}(), params)
+                ce = EA._setup_map_compile_once(rhs, 2, ca, params)
                 @test ce !== nothing
                 @test (pol, bitsame(EA._fill_map_fast(ce, [5, 4], 2), ref)) == (pol, true)
             end
@@ -253,13 +249,11 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         j["filter"] = _op(">", _v("k"), 1)
         rhs = EA.expression_from_json(j)
         fast = EA._materialize_setup_general_map(
-            rhs, copy(ENV0), nothing, IDX,
-            Dict{String, Function}()
+            rhs, copy(ENV0), nothing, IDX
         )
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_setup_general_map(
-                rhs, copy(ENV0), nothing, IDX,
-                Dict{String, Function}()
+                rhs, copy(ENV0), nothing, IDX
             )
         end
         @test bitsame(fast, ref)
@@ -277,7 +271,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
             for interp in (false, true)
                 mat() = EA._materialize_setup_general_map(
                     rhs, copy(ENV0), nothing,
-                    IDX, Dict{String, Function}()
+                    IDX
                 )
                 err = try
                     interp ?
@@ -302,11 +296,11 @@ end
     t2 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
     e = EA.OpExpr("+", EA.ASTExpr[t1, EA.OpExpr("-", EA.ASTExpr[t2, EA.VarExpr("c")])])
     params = Dict{String, Any}("a" => 0.3, "b" => -1.25, "c" => 7.0)
-    ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), params)
     @test ce_plain !== nothing
     # The same evaluator with the second copy of the term replaced by the
     # first, so one node has two parents.
-    ce0 = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), Dict{String, Function}(), params)
+    ce0 = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), params)
     root = ce0.node
     root.children[2].children[1] = root.children[1]
     syms, np, ni = typeof(ce0).parameters

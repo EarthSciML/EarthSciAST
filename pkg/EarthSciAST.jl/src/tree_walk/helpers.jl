@@ -811,7 +811,7 @@ function _parse_cell_key(key::AbstractString)
 end
 
 """
-    _field_ic_uniform(target, rhs, rank, const_arrays, registered_functions; params)
+    _field_ic_uniform(target, rhs, rank, const_arrays; params)
         -> ((tier, cell -> value) or nothing, attempts)
 
 Steps (1) and (2) of [`_resolve_field_ic`](@ref), the two forms whose value does
@@ -823,7 +823,7 @@ rank matches neither the grid nor a single element raises here.
 """
 function _field_ic_uniform(
         target::AbstractString, rhs::EarthSciAST.ASTExpr,
-        rank::Int, const_arrays, registered_functions;
+        rank::Int, const_arrays;
         params::AbstractDict = _EMPTY_PARAMS
     )
     # (1) Loaded field supplied as a const array over the lifted grid.
@@ -851,7 +851,7 @@ function _field_ic_uniform(
     # attached to the step-(4) diagnostic so the reason the form was rejected is
     # never silently swallowed.
     try
-        v = Float64(evaluate_expr(rhs, params; registered_functions = registered_functions))
+        v = Float64(evaluate_expr(rhs, params))
         return ((:setup_constant, _ -> v), String[])
     catch err
         # A resource error is not a reason to try the NEXT form — the next form
@@ -863,7 +863,7 @@ function _field_ic_uniform(
 end
 
 """
-    _resolve_field_ic(access, target, rhs, cell, const_arrays, registered_functions) -> Float64
+    _resolve_field_ic(access, target, rhs, cell, const_arrays) -> Float64
 
 Resolve one grid cell's initial value for a scoped-reference / array `ic`
 equation (spec §11.4.1). `cell` is the 1-based integer index tuple of the
@@ -890,11 +890,11 @@ or a refusal's one-cell probe (compiler.jl).
 function _resolve_field_ic(
         access::_PerCellAccess, target::AbstractString,
         rhs::EarthSciAST.ASTExpr,
-        cell::Vector{Int}, const_arrays, registered_functions;
+        cell::Vector{Int}, const_arrays;
         params::AbstractDict = _EMPTY_PARAMS,
         uniform = _field_ic_uniform(
             target, rhs, length(cell),
-            const_arrays, registered_functions;
+            const_arrays;
             params = params
         )
     )::Float64
@@ -912,7 +912,6 @@ function _resolve_field_ic(
         v = try
             _eval_cellwise(
                 access, rhs, cell; const_arrays = const_arrays,
-                registered_functions = registered_functions,
                 params = params
             )
         catch err
@@ -1025,7 +1024,6 @@ end
 function _eval_cellwise(
         ::_PerCellAccess, expr::EarthSciAST.ASTExpr, cell::Vector{Int};
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        registered_functions::AbstractDict = Dict{String, Function}(),
         params::AbstractDict = _EMPTY_PARAMS,
         t::Float64 = 0.0
     )::Float64
@@ -1043,12 +1041,11 @@ function _eval_cellwise(
         Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
         vmap, const_arrays, _EMPTY_PGATHER, bmemo
     )
-    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     psyms = Symbol[Symbol(k) for k in keys(params)]
     pvals = Float64[Float64(params[k]) for k in keys(params)]
     p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
     node = _cell_memoize!(
-        _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo), typeof(p_nt)
+        _compile(resolved, vmap, Set{Symbol}(psyms), bmemo), typeof(p_nt)
     )
     return _eval_node(node, Float64[], p_nt, t)
 end
@@ -1089,8 +1086,7 @@ end
 # `Float64` param equals that index folded to a `Float64` literal. Returns a
 # `(cell) -> Float64` closure, or `nothing` to signal the per-cell fallback.
 function _try_field_ic_fastpath(
-        rhs, params::AbstractDict,
-        registered_functions, const_arrays
+        rhs, params::AbstractDict, const_arrays
     )
     rhs isa OpExpr || return nothing
     (rhs.op == "faq") || return nothing
@@ -1111,14 +1107,13 @@ function _try_field_ic_fastpath(
     end
     _ic_body_is_closed_form(body) || return nothing
 
-    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     pkeys = collect(keys(params))
     psyms = Symbol[Symbol(k) for k in pkeys]
     for nm in oi
         push!(psyms, Symbol(nm))
     end
     node = try
-        _compile(body, Dict{String, Int}(), Set{Symbol}(psyms), reg)
+        _compile(body, Dict{String, Int}(), Set{Symbol}(psyms))
     catch err
         _is_resource_error(err) && rethrow()
         return nothing   # anything the closed-form guard missed → per-cell fallback
@@ -1218,14 +1213,12 @@ const _CELLWISE_FASTPATH_MISS = Ref{Int}(0)
 function _cellwise_compile_once(
         expr::EarthSciAST.ASTExpr, nidx::Int,
         const_arrays::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict;
         bind_syms::Union{Nothing, Vector{String}} = nothing,
         t::Float64 = 0.0
     )
     ce = _cellwise_compile_once_impl(
-        expr, nidx, const_arrays,
-        registered_functions, params;
+        expr, nidx, const_arrays, params;
         bind_syms = bind_syms, t = t
     )
     if ce === nothing
@@ -1323,7 +1316,6 @@ end
 function _cellwise_compile_once_impl(
         expr::EarthSciAST.ASTExpr, nidx::Int,
         const_arrays::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict;
         bind_syms::Union{Nothing, Vector{String}} = nothing,
         t::Float64 = 0.0
@@ -1353,7 +1345,6 @@ function _cellwise_compile_once_impl(
         push!(psyms, Symbol(s))
     end
     bound = Set{String}(syms_str)
-    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
         cellwise = _index_at_cell_sym(expr, syms_str)
         # One build memo for the resolve and the compile: a sub-tree shared by
@@ -1370,7 +1361,7 @@ function _cellwise_compile_once_impl(
             _EMPTY_PGATHER, bmemo, bound
         )
         _cell_memoize!(
-            _compile(resolved, vmap, Set{Symbol}(psyms), reg, bmemo),
+            _compile(resolved, vmap, Set{Symbol}(psyms), bmemo),
             NamedTuple{Tuple(psyms), NTuple{length(psyms), Float64}}
         )
     catch err
@@ -1403,7 +1394,6 @@ end
 function _scalarwise_compile_once(
         expr::EarthSciAST.ASTExpr, syms::Vector{String},
         const_arrays::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict; t::Float64 = 0.0
     )
     isempty(syms) && return nothing
@@ -1417,7 +1407,6 @@ function _scalarwise_compile_once(
         push!(psyms, Symbol(s))
     end
     bound = Set{String}(syms)
-    reg = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
         resolved = _resolve_indices(
             expr,
@@ -1425,7 +1414,7 @@ function _scalarwise_compile_once(
             Dict{String, Int}(), const_arrays,
             _EMPTY_PGATHER, nothing, bound
         )
-        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms), reg)
+        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms))
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
@@ -1607,16 +1596,21 @@ function _eval_const_int(
     elseif op == "/"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "/ in index needs 2 args"))
         return div(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))
-    elseif op == "floor"
-        # `floor` in an index position wraps an already-integer subexpression (the
-        # `/` case above is truncating integer `div`, == `floor` for the
-        # non-negative cell subscripts a loader reindex forms). So it is a
-        # pass-through here, matching the build-once geometry path where
-        # `floor((c-1)/GX)` folds to the same integer. Keeping it lets a loader
-        # reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the LIVE gather
-        # path (a discrete-cadence loader field), not only build-once.
-        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "floor in index needs 1 arg"))
-        return _eval_const_int(c[1], idx_env, const_arrays)
+    elseif op == "floor" || op == "ceil"
+        # A rounded quotient (`floor((c - 1) / NX)`) rounds the exact quotient
+        # (`fld`/`cld`), as the walker and `_index_int` do, so a negative
+        # numerator reads the same element on every path; over any other
+        # (already integer) subexpression the rounding is the identity. This lets
+        # a loader reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]` resolve on the
+        # LIVE gather path (a discrete-cadence loader field), not only build-once.
+        length(c) == 1 || throw(TreeWalkError("E_TREEWALK_ARITY", "$(op) in index needs 1 arg"))
+        q = c[1]
+        if q isa OpExpr && q.op == "/" && length(q.args) == 2
+            a = _eval_const_int(q.args[1], idx_env, const_arrays)
+            b = _eval_const_int(q.args[2], idx_env, const_arrays)
+            return op == "floor" ? fld(a, b) : cld(a, b)
+        end
+        return _eval_const_int(q, idx_env, const_arrays)
     elseif op == "mod"
         length(c) == 2 || throw(TreeWalkError("E_TREEWALK_ARITY", "mod in index needs 2 args"))
         return mod(_eval_const_int(c[1], idx_env, const_arrays), _eval_const_int(c[2], idx_env, const_arrays))

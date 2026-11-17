@@ -30,10 +30,7 @@ that remain are tuning thresholds — a node budget, a per-function size cap, a
 threading floor, a tier's admission floor — and under a strict `:native` each
 is a **refusal boundary**: crossing it produces `compiler_refused_rule` rather
 than a quiet demotion. Moving one off its default can therefore make `:native`
-refuse an in-scope document, which the conformance tiers report as a defect. Two
-experimental emission tiers ship off and are opted into by name
-(`ESS_CG_SUBCALL_FN`, `ESS_NESTED_TEMPLATE_BOUNDARY`); neither is an oracle,
-and nothing in the corpus depends on either.
+refuse an in-scope document, which the conformance tiers report as a defect.
 
 ModelingToolkit is reached BOTH ways: `compiler = :mtk` builds a problem
 through it, and the `ModelingToolkit.System` constructor remains

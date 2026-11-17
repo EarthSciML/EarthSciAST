@@ -1520,6 +1520,9 @@ function _try_codegen_array_contraction(
             :(return nothing)
         )
     )
+    # The split helpers (`ctx.helpers`, inner definitions) take the transport
+    # this Julia supports, as the kernel section's do (`_cg_split_transport`).
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
         @__MODULE__, @__MODULE__, ex
     )
@@ -1541,13 +1544,16 @@ function _try_codegen_array_contraction(
                 :(return nothing)
             )
         )
+        # The mask runs on the same `tabs`, so its helpers take the same
+        # transport as the main function's.
+        mex, _ = _cg_split_transport(mex, ngrp; by_value = fns !== nothing)
         mask = _ACMask(
             RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
                 @__MODULE__, @__MODULE__, mex
             ), _CSE_INVALID, 0
         )
     end
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     # Output slots are globally unique — each was claimed in `covered` at build,
     # which throws on a second claim — so the cell axis chunks like the kernel
     # section's, and for the same reason: every ⊕-fold is inside one cell.

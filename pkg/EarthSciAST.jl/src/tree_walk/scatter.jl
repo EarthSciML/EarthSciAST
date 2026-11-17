@@ -798,10 +798,13 @@ function _try_codegen_scatter(
             :(return nothing)
         )
     )
+    # The split helpers (`ctx.helpers`, inner definitions) take the transport
+    # this Julia supports, as the kernel section's do (`_cg_split_transport`).
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
         @__MODULE__, @__MODULE__, ex
     )
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     npts = points === nothing ? prod(length, contract_ranges; init = 1) : length(points[1])
     kw = _node_work(body)
     for k in keys
@@ -943,7 +946,7 @@ end
 # contracted counters, node)`, or `nothing` when it does not lower.
 function _scatter_symbolic(
         e::ASTExpr, resolved_obs, idx_names, contract_names, array_var_info,
-        var_map, const_registry, pgather, param_sym_set, reg_funcs
+        var_map, const_registry, pgather, param_sym_set
     )
     b = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
     got = _resolve_array_contraction_term(
@@ -952,9 +955,10 @@ function _scatter_symbolic(
     )
     got === nothing && return nothing
     nd = try
-        _compile(got[3], var_map, param_sym_set, reg_funcs)
+        _compile(got[3], var_map, param_sym_set)
     catch err
-        _is_resource_error(err) && rethrow()
+        # Only a document-level refusal is a decline (see resolve.jl).
+        err isa EarthSciASTError || rethrow()
         return nothing
     end
     return (got[1], got[2], nd)
@@ -971,13 +975,13 @@ function _try_compile_scatter(
         rhs_oplus::String, rhs_zerobar::Float64,
         resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, obs_nst::Int = 0
+        pgather::AbstractDict, param_sym_set, obs_nst::Int = 0
     )
     term = sc.rem === nothing ? rhs_body :
         OpExpr("ifelse", ASTExpr[sc.rem, rhs_body, NumExpr(rhs_zerobar)])
     sym(e) = _scatter_symbolic(
         e, resolved_obs, idx_names, contract_names, array_var_info,
-        var_map, const_registry, pgather, param_sym_set, reg_funcs
+        var_map, const_registry, pgather, param_sym_set
     )
     tgot = sym(term)
     if tgot === nothing

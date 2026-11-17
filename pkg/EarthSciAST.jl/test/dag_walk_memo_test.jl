@@ -396,12 +396,12 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
     end
 
     @testset "predicate walks are DAG-safe (miss case is the trigger)" begin
-        # `_refs_loop_var`: the NO-HIT scan must visit each node once.
+        # `_refs_idxset`: the NO-HIT scan must visit each node once.
         deep = _doubling_dag(_v("i"), 30)
-        t = @elapsed r = ESM._refs_loop_var(deep, Set{String}(["nope"]))
+        t = @elapsed r = ESM._refs_idxset(deep, Set{String}(["nope"]), IdDict{ESM.OpExpr, Bool}())
         @test t < 10
         @test !r
-        @test ESM._refs_loop_var(deep, Set{String}(["i"]))
+        @test ESM._refs_idxset(deep, Set{String}(["i"]), IdDict{ESM.OpExpr, Bool}())
         # `_has_param_indexed_gather`: same, over a shared gather chain.
         gath = _doubling_dag(_op("index", _v("F"), _op("+", _v("p0"), _i(1))), 30)
         t2 = @elapsed g = ESM._has_param_indexed_gather(gath, Set{String}(["q"]))

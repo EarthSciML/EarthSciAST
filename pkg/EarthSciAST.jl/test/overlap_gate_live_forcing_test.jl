@@ -413,7 +413,6 @@ end
         ctr[] = c
         @test EA._index_int(opn(:floor, q)) == floor(Int, (c - 1) / 2)
         @test EA._index_int(opn(:ceil, q)) == ceil(Int, (c - 1) / 2)
-        @test EA._index_int(opn(:mod, sub, lit(3))) == mod(c, 3)
     end
     # The same gather read by the walk (`_eval_node`) and by the traced
     # subscript evaluator (`_index_int`) at counters where flooring and
@@ -467,7 +466,7 @@ end
     for sub in (
             V("k"), O("-", I(4), V("k")), O("+", O("*", I(2), V("k")), I(-1)), O("-", V(lv), N(1.0)),
             O("+", O("floor", O("/", O("-", V("k"), I(1)), I(2))), I(1)),
-            O("ceil", O("/", V(lv), I(2))), O("+", O("mod", V("k"), I(3)), I(1)),
+            O("ceil", O("/", V(lv), I(2))),
         )
         r = res(sub)
         @test r isa EA.OpExpr && r.value isa EA._LiveGatherRef
@@ -475,6 +474,8 @@ end
     for sub in (
             O("+", V("k"), V("m")), O("+", V("k"), V("off")), O("+", V("k"), V("t")),
             O("index", V("conn"), V("k")), O("/", V("k"), I(1)),
+            # `mod` is no esm operator; the scalar compiler would refuse it.
+            O("+", O("mod", V("k"), I(3)), I(1)),
             O("floor", O("/", V("k"), V("m"))), O("floor", V("t")),
             # A quotient anywhere but directly under `floor`/`ceil`, and a
             # non-integer literal: the traced evaluator works in integers and

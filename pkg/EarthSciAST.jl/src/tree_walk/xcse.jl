@@ -66,10 +66,9 @@
 # prelude introduces no evaluation that was not already happening — no new
 # throw, no new NaN. That also makes the scalar-side rewrite of a GUARDED
 # occurrence safe: the slot is filled every call anyway, because a kernel needs
-# it; the rewrite removes work, it never adds any. (Kernels whose spine carries
-# a lazy guard have no CSE tiers at all — `_acc_from_cell_entries` skips
-# `_build_acc_cse` there — so nothing under a kernel-side guard ever becomes a
-# candidate.)
+# it; the rewrite removes work, it never adds any. (`_build_acc_cse` gives an
+# inv slot only to a value with an occurrence outside every guarded operand, so
+# nothing that occurs only under a kernel-side guard ever becomes a candidate.)
 #
 # BIT-EXACTNESS. A shared slot's value is produced by the SAME arithmetic the
 # per-kernel defs performed — the value number is exact over every field that

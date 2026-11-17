@@ -1192,7 +1192,8 @@ using Unitful
             n.key = OpExpr("floor", E[V("i")])
             @test D(n, vu) === nothing
         end
-        # No `expr`; unknown spellings.
+        # No `expr`; unknown spellings (`reduce: "or"` is outside the schema's
+        # `reduce` enum; boolean or is spelled `semiring: "bool_and_or"`).
         @test D(OpExpr("faq", E[V("x")]; output_idx = String[]), vu) === nothing
         @test D(faq(V("x"); semiring = "log_sum_exp"), vu) === nothing
         @test D(faq(V("x"); reduce = "or"), vu) === nothing

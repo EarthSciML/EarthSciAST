@@ -291,7 +291,7 @@ function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
         var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs
+        pgather::AbstractDict, param_sym_set
     )
     _check_recurrence_precision(name, var)
     (
@@ -356,7 +356,7 @@ function _compile_recurrence_sweep(
         )
     )
     out_refs, contract_refs, resolved = got
-    body = _compile(resolved, var_map, param_sym_set, reg_funcs)
+    body = _compile(resolved, var_map, param_sym_set)
     fold = nothing
     if !isempty(contract_names)
         contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
@@ -414,29 +414,21 @@ function _compile_recurrence_sweep(
             )
         )
     end
-    _note_recurrence!(:recurrence_sweep)
+    _tally_cascade!(:recurrence_sweep)
     return gen
 end
 
 # The walked form of a drafted sweep: the interpreter's, so it carries a license.
 function _walked_recurrence(d::_RecurrenceSweep{Nothing}, lic::_PerCellLicense)
-    _note_recurrence!(:recurrence_walk)
+    _tally_cascade!(:recurrence_walk)
     return _RecurrenceSweep(
         d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
         d.order, d.lo, d.dims, d.base, d.strides, d.ncells
     )
 end
 
-# The cascade tally and the compiler report row for one recurrence: `native`'s
-# emitted sweep is its own tier; the walked form is the interpreter's.
-function _note_recurrence!(k::Symbol)
-    lock(_CASCADE_TALLY_LOCK) do
-        _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
-    end
-    rec = _build_record()
-    rec === nothing || (rec.tally[k] = get(rec.tally, k, 0) + 1)
-    return nothing
-end
+# The compiler report row for one recurrence: `native`'s emitted sweep is its
+# own tier; the walked form is the interpreter's.
 _recurrence_tier(sw::_RecurrenceSweep) =
     sw.gen isa _PerCellLicense ? :interpreter : :recurrence_sweep
 

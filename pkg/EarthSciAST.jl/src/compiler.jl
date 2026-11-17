@@ -64,11 +64,6 @@ struct CompilerPlan
     stencil::Bool                 # the affine stencil tier
     array_contraction::Bool
     contraction_loop::Bool
-    subtree_tbl::Bool
-    state_box::Bool
-    obsref::Bool
-    lane_affine_key::Bool
-    xeq_variant::Bool
     join_on_gate::Bool
     # ---- kernel assembly ----
     oop_merge::Bool               # kernel-class merges (both spellings)
@@ -87,7 +82,6 @@ struct CompilerPlan
     # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
     # each takes its per-cell reference form.
     setup_map_compile_once::Bool
-    geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
 end
 
@@ -101,10 +95,10 @@ _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(
     name, strict,
     on, on, on, on, on, on, on, on, on,
-    on, on, on, on, on, on, on, on, on,
+    on, on, on, on,
     on, on, on, on, on, on,
     on, on,
-    on, on, on, on
+    on, on, on
 )
 
 # `plan` with the named fields replaced.
