@@ -2,24 +2,6 @@
 # Enum lowering — esm-spec §9.3
 # ============================================================
 
-"""
-    EnumLoweringError <: EarthSciASTError
-
-Raised when enum lowering (esm-spec §9.3) fails, carrying the stable diagnostic
-`code` as a structured field rather than interpolated into the message — the
-same error type the other bindings raise here (`EnumLoweringError` in
-TypeScript, Python and Rust; `DiagnosticError` in Go; API_SPEC.md §8 item 15).
-
-Codes: `enum_op_malformed`, `unknown_enum`, `unknown_enum_symbol`.
-"""
-struct EnumLoweringError <: EarthSciASTError
-    code::String
-    message::String
-end
-
-Base.showerror(io::IO, e::EnumLoweringError) =
-    print(io, "EnumLoweringError(", e.code, "): ", e.message)
-
 # esm-spec §9.3: within ONE enum the integer values are unique — `0` included —
 # and a duplicate is a defect of the block itself, raised whether or not any
 # `enum` op names either symbol and before any op resolves. Values may coincide

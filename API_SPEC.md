@@ -239,8 +239,8 @@ validation, §9.7 template machinery, typed coercion, and nested subsystem-ref
 resolution. `load_path` anchors relative refs at the file's own directory; the
 other two take `base_path`.
 
-In Julia the load errors `ParseError`, `ExpressionTemplateError` and
-`SubsystemRefError` lead with the same fields, in this order: `code`,
+In Julia the load errors `ParseError`, `ExpressionTemplateError`,
+`SubsystemRefError` and `EnumLoweringError` lead with the same fields, in this order: `code`,
 `message`, `path` (an RFC 6901 pointer into the document the error is about,
 `""` if none), `file` (that document's canonical path or URL, `""` for the
 root document) and `details`; each type's own fields follow

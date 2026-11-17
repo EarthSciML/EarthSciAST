@@ -1059,7 +1059,7 @@ document before the typed `validate()` pass runs, which would otherwise leave
 `structural_errors` empty although the document is invalid.
 
 Every load diagnostic (`ParseError`, `ExpressionTemplateError`,
-`SubsystemRefError`) with a non-empty `code` is rendered with its `code`,
+`SubsystemRefError`, `EnumLoweringError`) with a non-empty `code` is rendered with its `code`,
 `message`, `path` and `details`. A `SubsystemRefError` from the
 `subsystems.<k>` form is reported at its mount site,
 `/models/<parent>/subsystems/<sub>`, with `ref`, `subsystem` and `parent_model`

@@ -4,8 +4,8 @@
     _LoadDiagnostic <: EarthSciASTError
 
 Supertype of the errors a load raises about the document it is reading:
-[`ParseError`](@ref), [`ExpressionTemplateError`](@ref) and
-[`SubsystemRefError`](@ref). Each subtype leads with the same five fields, in
+[`ParseError`](@ref), [`ExpressionTemplateError`](@ref),
+[`SubsystemRefError`](@ref) and [`EnumLoweringError`](@ref). Each subtype leads with the same five fields, in
 this order, and puts anything of its own after them:
 
 | Field | Type | Meaning |
@@ -125,6 +125,36 @@ SubsystemRefError(
 
 Base.showerror(io::IO, e::SubsystemRefError) =
     print(io, "SubsystemRefError: ", e.message)
+
+"""
+    EnumLoweringError <: EarthSciASTError
+
+Raised when enum lowering (esm-spec §9.3) fails, the same error type the other
+bindings raise here (`EnumLoweringError` in TypeScript, Python and Rust;
+`DiagnosticError` in Go; API_SPEC.md §8 item 15). Codes:
+`enum_duplicate_value`, `enum_op_malformed`, `unknown_enum`,
+`unknown_enum_symbol`. Fields: the common ones of `_LoadDiagnostic`.
+
+    EnumLoweringError(code, message; path = "", file = "", details = Dict())
+"""
+struct EnumLoweringError <: _LoadDiagnostic
+    code::String
+    message::String
+    path::String
+    file::String
+    details::Dict{String, Any}
+end
+
+EnumLoweringError(
+    code::AbstractString, message::AbstractString;
+    path::AbstractString = "", file::AbstractString = "",
+    details::AbstractDict = Dict{String, Any}()
+) = EnumLoweringError(
+    String(code), String(message), String(path), String(file), Dict{String, Any}(details)
+)
+
+Base.showerror(io::IO, e::EnumLoweringError) =
+    print(io, "EnumLoweringError(", e.code, "): ", e.message)
 
 """
     _at(e; path = "", file = "") -> typeof(e)
