@@ -2654,7 +2654,9 @@ end
 # nothing)` to keep the inner definitions, or `(ex′, fns)`: `ex′` reads the
 # sub-function tuple from `tabs[ngrp + 1]` and calls `_cgfns[k]`, and `fns` are
 # the sub-functions' own definitions, in that tuple's order (`_cg_pack_fns`).
-function _cg_split_transport(ex::Expr, ngrp::Int)
+# `by_value` fixes the choice instead (a second generated function that shares
+# the first one's `tabs`, and so must take the transport the first one took).
+function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool} = nothing)
     body = ex.args[2]::Expr
     defs = Tuple{Symbol, Vector{Symbol}, Any}[]
     rest = Any[]
@@ -2669,7 +2671,7 @@ function _cg_split_transport(ex::Expr, ngrp::Int)
         end
     end
     isempty(defs) && return (ex, nothing)
-    _cg_carry_by_value(ex) || return (ex, nothing)
+    something(by_value, _cg_carry_by_value(ex)) || return (ex, nothing)
     left = Ref(0)
     fns = Expr[
         Expr(:function, Expr(:tuple, params..., _CG_FNS), _cg_calls_by_value(fb, idx, left))

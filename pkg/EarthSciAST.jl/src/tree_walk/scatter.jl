@@ -798,10 +798,13 @@ function _try_codegen_scatter(
             :(return nothing)
         )
     )
+    # The split helpers (`ctx.helpers`, inner definitions) take the transport
+    # this Julia supports, as the kernel section's do (`_cg_split_transport`).
+    ex, fns = _cg_split_transport(ex, ngrp)
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
         @__MODULE__, @__MODULE__, ex
     )
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
     npts = points === nothing ? prod(length, contract_ranges; init = 1) : length(points[1])
     kw = _node_work(body)
     for k in keys
