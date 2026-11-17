@@ -17,59 +17,59 @@
 
 module ClassificationConformanceAdapter
 
-    using EarthSciAST
+using EarthSciAST
 
-    """
-        classify_model(model::Model) -> Dict{String,Any}
+"""
+    classify_model(model::Model) -> Dict{String,Any}
 
-    The §6.3.1 report for one model node: the three unknown sets, the four
-    parameter sets, the derived `system_kind`, and the declared field.
+The §6.3.1 report for one model node: the three unknown sets, the four
+parameter sets, the derived `system_kind`, and the declared field.
 
-    The partition property is ASSERTED rather than assumed — the spec states it
-    normatively, and a binding whose sets silently overlap would still match a
-    golden that happened not to exercise the overlap.
-    """
-    function classify_model(model::Model)
-        assert_classification_partitions(model)
-        return Dict{String, Any}(
-            "ode_states" => ode_states(model),
-            "observed_unknowns" => observed_unknowns(model),
-            "algebraic_unknowns" => algebraic_unknowns(model),
-            "brownian_parameters" => brownian_parameters(model),
-            "discrete_parameters" => discrete_parameters(model),
-            "sampled_parameters" => sampled_parameters(model),
-            "constant_parameters" => constant_parameters(model),
-            "system_kind" => system_kind(model),
-            "declared_system_kind" => model.system_kind,
-        )
-    end
+The partition property is ASSERTED rather than assumed — the spec states it
+normatively, and a binding whose sets silently overlap would still match a
+golden that happened not to exercise the overlap.
+"""
+function classify_model(model::Model)
+    assert_classification_partitions(model)
+    return Dict{String, Any}(
+        "ode_states" => ode_states(model),
+        "observed_unknowns" => observed_unknowns(model),
+        "algebraic_unknowns" => algebraic_unknowns(model),
+        "brownian_parameters" => brownian_parameters(model),
+        "discrete_parameters" => discrete_parameters(model),
+        "sampled_parameters" => sampled_parameters(model),
+        "constant_parameters" => constant_parameters(model),
+        "system_kind" => system_kind(model),
+        "declared_system_kind" => model.system_kind,
+    )
+end
 
-    """
-        classify_document(file::EsmFile) -> Dict{String,Any}
+"""
+    classify_document(file::EsmFile) -> Dict{String,Any}
 
-    Every model NODE of `file`, keyed by its dot-path from the document root, so a
-    subsystem is `"Parent.Child"` and the names inside each list stay LOCAL to that
-    node. Classification is per model node, not per document: a binding that
-    flattens first and classifies once returns one merged answer where the golden
-    expects two scoped ones.
-    """
-    function classify_document(file::EsmFile)
-        models = Dict{String, Any}()
-        file.models === nothing && return models
-        function walk(name::String, m::Model)
-            models[name] = classify_model(m)
-            for (sub_name, sub) in m.subsystems
-                sub isa Model && walk("$(name).$(sub_name)", sub)
-            end
-            return
+Every model NODE of `file`, keyed by its dot-path from the document root, so a
+subsystem is `"Parent.Child"` and the names inside each list stay LOCAL to that
+node. Classification is per model node, not per document: a binding that
+flattens first and classifies once returns one merged answer where the golden
+expects two scoped ones.
+"""
+function classify_document(file::EsmFile)
+    models = Dict{String, Any}()
+    file.models === nothing && return models
+    function walk(name::String, m::Model)
+        models[name] = classify_model(m)
+        for (sub_name, sub) in m.subsystems
+            sub isa Model && walk("$(name).$(sub_name)", sub)
         end
-        for (mname, m) in file.models
-            m isa Model && walk(String(mname), m)
-        end
-        return models
+        return
     end
+    for (mname, m) in file.models
+        m isa Model && walk(String(mname), m)
+    end
+    return models
+end
 
-    classify_fixture(path::AbstractString) =
-        Dict{String, Any}("models" => classify_document(EarthSciAST.load_path(String(path))))
+classify_fixture(path::AbstractString) =
+    Dict{String, Any}("models" => classify_document(EarthSciAST.load_path(String(path))))
 
 end # module ClassificationConformanceAdapter
