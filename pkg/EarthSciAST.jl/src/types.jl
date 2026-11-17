@@ -2578,6 +2578,25 @@ struct EsmFile
     )
 end
 
+"""
+    reconstruct(file::EsmFile; <any EsmFile field>=…) -> EsmFile
+
+Rebuild an `EsmFile`, copying every field from `file` and overriding only the
+keywords passed. The `EsmFile` analogue of [`reconstruct(::ModelVariable)`](@ref):
+every copy-with-changes of a document goes through it, so a field added to the
+struct is carried across instead of reset to its default.
+"""
+function reconstruct(file::EsmFile; kwargs...)
+    fields = Dict{Symbol, Any}(f => getfield(file, f) for f in fieldnames(EsmFile))
+    for (k, v) in kwargs
+        haskey(fields, k) || throw(ArgumentError("EsmFile has no field `$k`"))
+        fields[k] = v
+    end
+    esm = pop!(fields, :esm)
+    metadata = pop!(fields, :metadata)
+    return EsmFile(esm, metadata; fields...)
+end
+
 # ========================================
 # 8. Reference Resolution System
 # ========================================

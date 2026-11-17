@@ -713,9 +713,10 @@ function _verbatim_decl(raw_data, key::Symbol)
     return d isa AbstractDict ? d : nothing
 end
 
-# Rebuild `file` carrying the verbatim declaration blocks and, from esm 0.9.0
-# (Option B), the per-component MATERIALIZED template registries + a possibly
-# version-stamped `esm`. `EsmFile` is immutable.
+# Rebuild `file` with the verbatim declaration blocks, the per-component
+# materialized template registries and a possibly version-stamped `esm`. Each
+# keyword replaces its field (`nothing` clears it), except `esm = nothing`, which
+# keeps `file.esm`. With every keyword `nothing`, `file` comes back as is.
 _with_declarations(
     file::EsmFile, templates, metaparams;
     component_templates = nothing, esm = nothing, coordinates = nothing
@@ -724,28 +725,13 @@ _with_declarations(
         templates === nothing && metaparams === nothing &&
         component_templates === nothing && esm === nothing && coordinates === nothing
     ) ? file :
-    EsmFile(
-        esm === nothing ? file.esm : esm, file.metadata;
-        models = file.models,
-        reaction_systems = file.reaction_systems,
-        data_sources = file.data_sources,
-        coupling = file.coupling,
-        domain = file.domain,
-        enums = file.enums,
-        index_sets = file.index_sets,
+    reconstruct(
+        file;
+        esm = esm === nothing ? file.esm : esm,
         expression_templates = templates,
         metaparameters = metaparams,
         component_templates = component_templates,
-        coordinates = coordinates,
-        # `coupling_roles` is read at the coercion boundary (no lowering
-        # pass rewrites it), so carry the already-coerced value across
-        # this rebuild rather than re-snapshotting it. `solver` (esm-spec
-        # §2.2) is read at the same boundary for the same reason and is
-        # carried the same way — dropping it here would delete the block on
-        # every document that goes through template lowering.
-        coupling_roles = file.coupling_roles,
-        solver = file.solver,
-        document_base = file.document_base
+        coordinates = coordinates
     )
 
 # ========================================
@@ -2087,7 +2073,7 @@ registry, or `file` itself when there are none.
 """
 _adopt_mounted_sources(file::EsmFile, mounted) =
     (mounted === nothing || isempty(mounted)) ? file :
-    _rebuild(file; data_sources = Dict{String, DataSource}(mounted))
+    reconstruct(file; data_sources = Dict{String, DataSource}(mounted))
 
 """
     _resolve_model_refs!(models_dict, name, model, base_path, visited, registry)

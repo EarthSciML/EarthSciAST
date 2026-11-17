@@ -2406,11 +2406,7 @@ file with no surviving references comes back by identity.
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
     out = _expand_refs!(deepcopy(file))
-    return _with_declarations(
-        out, out.expression_templates, out.metaparameters;
-        component_templates = nothing, esm = out.esm,
-        coordinates = out.coordinates
-    )
+    return reconstruct(out; component_templates = nothing)
 end
 
 
