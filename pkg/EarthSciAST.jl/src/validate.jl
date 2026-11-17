@@ -910,15 +910,14 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # 6. Conflicting derivative detection (§4.7.5 item E). A species cannot
     # have both an explicit D(X, t) = ... equation and a reaction contribution.
     # `_find_conflicting_derivatives` is defined in flatten.jl. The conflict
-    # spans TWO top-level blocks (a model equation AND a reaction), so there is
-    # no single JSON location; per this function's JSON-Pointer path contract
-    # the root pointer "/" is used as the documented sentinel (the offending
-    # species name is in the message).
+    # spans TWO top-level blocks (a model equation AND a reaction), so it is
+    # reported at the document root, `""` (the offending species name is in the
+    # message).
     conflicting = _find_conflicting_derivatives(file)
     for name in conflicting
         push!(
             errors, StructuralError(
-                "/",
+                "",
                 "Species '$name' has both an explicit derivative equation and a reaction contribution",
                 ERROR_CODES.CONFLICTING_DERIVATIVE,
             )
