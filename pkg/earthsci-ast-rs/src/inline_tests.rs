@@ -1069,7 +1069,7 @@ impl<'a> BuildView<'a> {
     /// The first entry of `map` under a spelling the build may key `variable`
     /// of the component at `owner` by ([`owner_spellings`]); the bare name too
     /// for an unscoped component, which a single-model build keeps bare.
-    fn lookup<'m, T>(
+    fn lookup<'m, T: ?Sized>(
         &self,
         map: impl Fn(&str) -> Option<&'m T>,
         owner: &str,
@@ -1084,10 +1084,10 @@ impl<'a> BuildView<'a> {
     /// The non-empty axes the build gave `variable` of the component at
     /// `owner`; `None` when the build made it a scalar or never built it.
     fn built(&self, owner: &str, variable: &str) -> Option<Vec<String>> {
-        let axes = &self.prob?.built_variables().axes;
-        self.lookup(|k| axes.get(k), owner, variable)
+        let built = self.prob?.built_variables();
+        self.lookup(|k| built.axes(k), owner, variable)
             .filter(|a| !a.is_empty())
-            .cloned()
+            .map(<[String]>::to_vec)
     }
 
     /// The axes the build gave `variable` when it is declared WITHOUT a

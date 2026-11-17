@@ -61,7 +61,6 @@ impl ArrayCompiled {
             rhs_rules: self.rhs_rules.clone(),
             n_states: self.n_states,
             declared_names: self.declared_names.clone(),
-            conditional_shapes: self.conditional_shapes.clone(),
             built_variables: self.built_variables.clone(),
             forcing: Default::default(),
             data_fed: self.data_fed.clone(),
@@ -153,10 +152,9 @@ impl ProgramModel {
             namespace: None,
             precision: self.precision.clone(),
             declared_names: self.declared_names.clone(),
-            // Read only by the build's downstream readers, which take it
-            // from the program (`ProgramInner::conditional_shapes`).
-            conditional_shapes: Default::default(),
-            // A tape-build shell is never asked for its variables by name.
+            // A tape-build shell is never asked for its variables by name;
+            // the build's downstream readers take its shapes from the
+            // program (`ProgramInner::shapes`).
             built_variables: Default::default(),
             #[cfg(feature = "solve")]
             field_ic_memo: std::cell::RefCell::new(None),

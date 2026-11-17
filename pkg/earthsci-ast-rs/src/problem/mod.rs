@@ -2416,7 +2416,7 @@ fn static_observed_fields(
             if arr.len() == 1 {
                 // A variable `flatten` left unshaped that the build gave an
                 // array shape (esm-spec §4.3.4) is not 0-D.
-                let built = compiled.conditional_shapes.get(&name);
+                let built = compiled.built_variables().shapes.built_axes(&name);
                 let shape = DeclaredRank::of_built(declared, built).scalar_shape();
                 let v = arr.iter().copied().next().expect("one element");
                 let arr = ArrayD::from_shape_vec(ndarray::IxDyn(shape), vec![v])
