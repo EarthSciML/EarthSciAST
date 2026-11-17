@@ -65,7 +65,7 @@ function _elemwise_array_chain_model(depth::Int)
 end
 
 const _CHAIN_INDEX_SETS = Dict("c" => ESM.IndexSet("interval"; size = 3))
-const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
+const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
 
 @testset "DAG-memoized subexpression walk (ESS-1p5)" begin
 
@@ -109,7 +109,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         @test ESM._referenced_var_names(resolved["o1"]) == Set(["x"])
     end
 
-    @testset "depth-32 doubling chain through build_evaluator" begin
+    @testset "depth-32 doubling chain through the build" begin
         # Same trigger driven through the full build path that previously
         # detonated inside `_split_observed_and_derivatives`. o32 = 2^32 · x,
         # so the RHS value is exactly checkable.
@@ -133,10 +133,10 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
         du_val = NaN
         t = @elapsed begin
-            f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(ESM.Model(vars, eqs))
+            f!, u0, p, _tspan, var_map = EarthSciAST.Internal.build(ESM.Model(vars, eqs))
             du = similar(u0)
             f!(du, u0, p, 0.0)
-            du_val = du[var_map["x"]]
+            du_val = du[var_map["M.x"]]
         end
         @test t < 120  # generous: post-fix ~3 s (mostly first-call JIT)
         @test du_val === 2.0^depth
@@ -152,20 +152,20 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         model = _elemwise_array_chain_model(3)
         _eqs2, folded = ESM._fold_elementwise_array_observeds(model.equations, model)
         @test folded == Set(["a", "b"])
-        f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(
+        f!, u0, p, _t, vmap = EarthSciAST.Internal.build(
             model;
             index_sets = _CHAIN_INDEX_SETS, initial_conditions = _CHAIN_ICS
         )
         # Folded observeds carry no ODE slots; values are exact powers of two.
-        @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
+        @test !any(k -> occursin(r"^M\.[ab]\[", k), keys(vmap))
         du = similar(u0)
         f!(du, u0, p, 0.0)
         for (i, ic) in zip(1:3, (1.0, 2.0, 3.0))
-            @test du[vmap["psi[$i]"]] === 2.0^4 * ic
+            @test du[vmap["M.psi[$i]"]] === 2.0^4 * ic
         end
     end
 
-    @testset "depth-32 elementwise ARRAY-observed chain through build_evaluator" begin
+    @testset "depth-32 elementwise ARRAY-observed chain through the build" begin
         # Pre-fix this detonated in `_fold_elementwise_array_observeds`
         # (per-path `free_variables` deps scan, then the non-memoized
         # `substitute` re-inflating the resolved body into a 2^32-node TREE)
@@ -174,11 +174,15 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
         # `_build_acc_cse`, …). Post-fix the whole build is O(depth).
         depth = 32
         model = _elemwise_array_chain_model(depth)
+        # Built from the typed model directly: the shared DAG exists only in
+        # memory, and `Internal.build`'s flatten-first route writes the model
+        # out as a document, which has no sharing (2^depth nodes).
         local du, vmap
         t = @elapsed begin
             f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(
                 model;
-                index_sets = _CHAIN_INDEX_SETS, initial_conditions = _CHAIN_ICS
+                index_sets = _CHAIN_INDEX_SETS,
+                initial_conditions = Dict(k[3:end] => v for (k, v) in _CHAIN_ICS)
             )
             du = similar(u0)
             f!(du, u0, p, 0.0)
@@ -191,7 +195,7 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
 
     @testset "_lower_broadcast is DAG-safe (the build-entry rewrite)" begin
         # `_lower_broadcast` runs over EVERY equation at the entry to
-        # `build_evaluator`. `map_children` already declined to REBUILD an
+        # the build. `map_children` already declined to REBUILD an
         # unchanged node — which keeps a shared DAG shared on the way OUT — but
         # the walk itself was per-PATH, so a node reachable by 2^d paths was
         # re-entered 2^d times even when nothing changed. That single pass was
@@ -342,12 +346,12 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
                 _op("ifelse", _op(">", _v("x"), _n(0.0)), S, _n(0.0))
             ),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_obs_slots == 0     # guard-only → demoted
-        @test diag.n_obs_inlined == 1
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_obs_slots == 0     # guard-only → demoted
+        @test rep.stats.n_obs_inlined == 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === 2 * (0.5 * 2.0)
+        @test du[vm["M.x"]] === 2 * (0.5 * 2.0)
 
         # One additional UNCONDITIONAL reader through the SAME shared subtree
         # flips it to a slot (unconditional multiplicity ≥ 1).
@@ -361,14 +365,13 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
             ),
             ESM.Equation(_D("y"), S),
         ]
-        f2!, u02, p2, _ts2, vm2, diag2 =
-            ESM._build_evaluator_impl(ESM.Model(vars2, eqs2))
-        @test diag2.n_obs_slots == 1
-        @test diag2.n_obs_inlined == 0
+        f2!, u02, p2, _ts2, vm2, rep2 = ESM.Internal.build(ESM.Model(vars2, eqs2))
+        @test rep2.stats.n_obs_slots == 1
+        @test rep2.stats.n_obs_inlined == 0
         du2 = similar(u02)
         f2!(du2, u02, p2, 0.0)
-        @test du2[vm2["x"]] === 2 * (0.5 * 2.0)
-        @test du2[vm2["y"]] === 2 * (0.5 * 2.0)
+        @test du2[vm2["M.x"]] === 2 * (0.5 * 2.0)
+        @test du2[vm2["M.y"]] === 2 * (0.5 * 2.0)
     end
 
     @testset "_obs_structural_refs! (node, mode) memo keeps structural hits" begin

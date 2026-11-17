@@ -4,7 +4,7 @@
 # / `_NK_PARAM_GATHER`). These tests pin the J1 surface that drives it: a
 # `PresetTimeCallback` whose `affect!` samples a Provider, regrids, and writes
 # the SAME buffer object in place at each cadence anchor. They exercise the full
-# user wiring — `build_evaluator` + `build_refresh_callback` + an honest
+# user wiring — the build + `build_refresh_callback` + an honest
 # `solve(prob, Tsit5(); callback, tstops)` (the solver is the test-only dep; ESS
 # ships none) — and assert every acceptance clause:
 #   • build_refresh_callback returns (cb, tstops);
@@ -59,9 +59,9 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))]
         )
         buf = [2.0]                       # setup-time materialize for the first segment [0,1)
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0), param_arrays = Dict("forcing" => buf)
+            initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
 
         prov = MockProvider(
@@ -82,7 +82,7 @@ struct _BareSource end
         sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops)
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
         # ∫ = 2·[0,1) + 5·[1,2) + (-1)·[2,3] = 2 + 5 - 1 = 6
-        @test isapprox(sol.u[end][vm["y"]], 6.0; atol = 1.0e-8)
+        @test isapprox(sol.u[end][vm["M.y"]], 6.0; atol = 1.0e-8)
         # The buffer ends holding the LAST refreshed value (in place, not realloc).
         @test buf == [-1.0]
     end
@@ -106,9 +106,9 @@ struct _BareSource end
         ]
         model = ESM.Model(vars, eqs)
         buf = [2.0]
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0), param_arrays = Dict("forcing" => buf)
+            initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
 
         prov = MockProvider(
@@ -124,7 +124,7 @@ struct _BareSource end
 
         prob = ODE.ODEProblem(f!, u0, (0.0, 3.0), p)
         sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops)
-        @test isapprox(sol.u[end][vm["y"]], 12.0; atol = 1.0e-8)   # 2·6
+        @test isapprox(sol.u[end][vm["M.y"]], 12.0; atol = 1.0e-8)   # 2·6
     end
 
     @testset "CONST provider: materialize-once, no tstops, never refreshed" begin
@@ -135,9 +135,9 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))]
         )
         buf = [4.0]
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0), param_arrays = Dict("forcing" => buf)
+            initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
 
         const_prov = MockProvider(Float64[], Dict{Float64, Dict{String, Vector{Float64}}}())
@@ -151,7 +151,7 @@ struct _BareSource end
         prob = ODE.ODEProblem(f!, u0, (0.0, 2.0), p)
         sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops)
         @test const_prov.nsamples == 0                         # never sampled
-        @test isapprox(sol.u[end][vm["y"]], 8.0; atol = 1.0e-8)    # 4·2, buffer never changed
+        @test isapprox(sol.u[end][vm["M.y"]], 8.0; atol = 1.0e-8)    # 4·2, buffer never changed
     end
 
     @testset "several variables sharing one provider are sampled once per boundary" begin
@@ -162,9 +162,9 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _op("+", _idx("a", _i(1)), _idx("b", _i(1))))]
         )
         abuf = [1.0]; bbuf = [1.0]
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0),
+            initial_conditions = Dict("M.y" => 0.0),
             param_arrays = Dict("a" => abuf, "b" => bbuf)
         )
 
@@ -180,7 +180,7 @@ struct _BareSource end
         @test prov.nsamples == 1                               # one sample, two buffers filled
         @test abuf == [10.0] && bbuf == [100.0]
         # ∫ = (1+1)·[0,1) + (10+100)·[1,2] = 2 + 110 = 112
-        @test isapprox(sol.u[end][vm["y"]], 112.0; atol = 1.0e-8)
+        @test isapprox(sol.u[end][vm["M.y"]], 112.0; atol = 1.0e-8)
     end
 
     @testset "RHS stays zero-alloc within a segment after a refresh" begin
@@ -201,8 +201,8 @@ struct _BareSource end
             ]
         )
         buf = collect(1.0:Float64(N))
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing" => buf)
         )

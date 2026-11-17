@@ -106,15 +106,14 @@ end
 
 const _CF_NOFOLD = _CF._plan_with(_CF._compiler_plan(:native); count_fold = false)
 
-# `(f!, u0, p, vmap, tally)` under `compiler` (a vocabulary value or a plan).
+# `(f!, u0, p, vmap, counts)` under `compiler` (a vocabulary value or a plan).
+# The document's model is `M`; `ics` is keyed by its local names.
 function _cf_build(doc, ics, compiler)
-    _CF._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler) :
-        _CF._with_compiler_plan(compiler) do
-            _CF._build_evaluator_dict(doc; initial_conditions = ics, compiler = compiler)
-    end
-    return (f!, u0, p, vm, copy(_CF._CASCADE_TALLY))
+    f!, u0, p, _, vm, rep = EarthSciAST.Internal.build(
+        doc; initial_conditions = Dict{String, Any}("M." * k => v for (k, v) in ics),
+        compiler = compiler
+    )
+    return (f!, u0, p, vm, rep.counts)
 end
 
 # `du` at the initial state, keyed by variable name so builds compare by name.
@@ -153,7 +152,7 @@ end
         # wrong answer.
         z = _cf_axis(N)
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), z))
+            dn["M.q[$i]"] === Float64(count(<=(x), z))
                 for (i, x) in enumerate(_cf_queries(N))
         )
     end
@@ -178,7 +177,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test _cf_fired(tn) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), ax))
+            dn["M.q[$i]"] === Float64(count(<=(x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -191,7 +190,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, :count_fold_search, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(<=(x), ax))
+            dn["M.q[$i]"] === Float64(count(<=(x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -219,7 +218,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, kind, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(v -> f(v, x), ax))
+            dn["M.q[$i]"] === Float64(count(v -> f(v, x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -236,7 +235,7 @@ end
         tn, dn = _cf_agree(doc, ics)
         @test get(tn, kind, 0) >= 1
         @test all(
-            dn["q[$i]"] === Float64(count(v -> !f(v, x), ax))
+            dn["M.q[$i]"] === Float64(count(v -> !f(v, x), ax))
                 for (i, x) in enumerate(_cf_queries(59))
         )
     end
@@ -271,7 +270,7 @@ end
         ics = Dict{String, Any}("s$j" => qs[j] for j in 1:6)
         tn, dn = _cf_agree(doc, ics)
         @test _cf_fired(tn) >= 1
-        @test all(dn["s$j"] === Float64(count(<=(qs[j]), ax)) for j in 1:6)
+        @test all(dn["M.s$j"] === Float64(count(<=(qs[j]), ax)) for j in 1:6)
     end
 
     # Every near miss keeps the fold: the rewrite does not fire, and the answer

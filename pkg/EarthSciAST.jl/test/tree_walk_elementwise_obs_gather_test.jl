@@ -41,8 +41,7 @@ const ESM_EOG = EarthSciAST
 
     @testset "fixture builds and evaluates" begin
         @test isfile(fixture)
-        file = ESM_EOG.load_path(fixture)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(file; model_name = "Column")
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(fixture)
         du = similar(u0)
         f!(du, u0, p, 0.0)
 
@@ -50,11 +49,11 @@ const ESM_EOG = EarthSciAST
         # elementwise-defined array observed reached only through `index(h, j)`.
         expected = cumsum(hvals)
         for i in 1:4
-            @test du[vmap["u[$(i)]"]] ≈ expected[i]
+            @test du[vmap["Column.u[$(i)]"]] ≈ expected[i]
         end
         # `total = Σ_j f[j]` — the same shape through a SCALAR reduction, whose
         # only reference to `f` is the gather (so `zc` is reachable no other way).
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["Column.s"]] ≈ sum(fvals)
     end
 
     # ---- The two working spellings the issue names, as differential oracles ----
@@ -114,9 +113,9 @@ const ESM_EOG = EarthSciAST
                 expr_body = body
             )
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["M.s"]] ≈ sum(fvals)
     end
 
     @testset "elementwise spelling agrees" begin
@@ -137,9 +136,9 @@ const ESM_EOG = EarthSciAST
             ]
         )
         model = _column_model(body)
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(model)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(model)
         du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["s"]] ≈ sum(fvals)
+        @test du[vmap["M.s"]] ≈ sum(fvals)
     end
 
     # ---- The predicate itself -------------------------------------------------
