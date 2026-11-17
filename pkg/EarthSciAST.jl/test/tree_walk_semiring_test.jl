@@ -45,6 +45,17 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test ESM._aggregate_oplus_identity("min_sum", "+") == ("min", Inf)
         # Unregistered semiring → clear error (closed registry, §5.1).
         @test_throws ESM.TreeWalkError ESM._aggregate_oplus_identity("tropical_max", nothing)
+        # `reduce` takes only the schema's enum (+, *, max, min); boolean `or`
+        # is reachable only as `semiring: "bool_and_or"`.
+        let err = try
+                ESM._aggregate_oplus_identity(nothing, "or")
+            catch e
+                e
+            end
+            @test err isa ESM.TreeWalkError
+            @test err.code == "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE"
+        end
+        @test ESM._aggregate_oplus_identity("bool_and_or", nothing) == ("or", 0.0)
     end
 
     # ------------------------------------------------------------------
@@ -60,6 +71,11 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test (ESM._combine_with_reducer("*", 1.0, empty)).value == 1.0
         # bool_and_or (⊕=or) is index-set-producing (§5.5) — out of M1 scope.
         @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[_n(1.0), _n(0.0)])
+        # …whatever the term count: one term or none is not a value either.
+        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[_n(1.0)])
+        @test_throws ESM.TreeWalkError ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[])
+        # A scalar (rank-0) bool_and_or folds crisply from false.
+        @test ESM._combine_with_reducer("or", 0.0, ESM.ASTExpr[]; scalar = true).value == 0.0
     end
 
     # ------------------------------------------------------------------

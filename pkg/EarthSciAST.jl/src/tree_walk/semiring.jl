@@ -25,20 +25,20 @@ end
 # ±∞ identities are represented per-binding (Julia: Inf/-Inf) and are the
 # *result* of an empty reduction — never written into a file (§5.1 note 2).
 const _SEMIRING_REGISTRY = Dict{String, _Semiring}(
-    "sum_product" => _Semiring("sum_product", "+", 0.0, "*", 1.0),
-    "max_product" => _Semiring("max_product", "max", -Inf, "*", 1.0),
-    "min_sum" => _Semiring("min_sum", "min", Inf, "+", 0.0),
-    "max_sum" => _Semiring("max_sum", "max", -Inf, "+", 0.0),
-    "bool_and_or" => _Semiring("bool_and_or", "or", 0.0, "and", 1.0),  # false / true
+    "sum_product" => _Semiring("+", 0.0),
+    "max_product" => _Semiring("max", -Inf),
+    "min_sum" => _Semiring("min", Inf),
+    "max_sum" => _Semiring("max", -Inf),
+    "bool_and_or" => _Semiring("or", 0.0),  # false
 )
 
-# ⊕-spelling → 0̄, the empty-⊕-reduction identity. Derived from (and consistent
-# with) the registry table; this is what the legacy `reduce`-only shorthand
-# resolves to when no `semiring` is given (⊕ = reduce, ⊗ = "*"; §5.1 note 1).
-# "*" is the legacy product-reduce: no registry semiring has ⊕=× (it appears
-# only as ⊗), but files predating the registry may carry reduce="*".
+# `reduce` spelling → 0̄, the empty-reduction identity: what the `reduce`
+# shorthand resolves to when no `semiring` is given (⊕ = reduce, ⊗ = "*";
+# §5.1 note 1). The keys are exactly the schema's `reduce` enum. "*" has no
+# registry semiring (× appears only as ⊗). Boolean `or` is reachable only as
+# `semiring: "bool_and_or"`; `reduce: "or"` is refused, as the schema refuses it.
 const _OPLUS_IDENTITY = Dict{String, Float64}(
-    "+" => 0.0, "max" => -Inf, "min" => Inf, "*" => 1.0, "or" => 0.0,
+    "+" => 0.0, "max" => -Inf, "min" => Inf, "*" => 1.0,
 )
 
 # Resolve an aggregate node's (⊕ spelling, 0̄ identity) — everything the
@@ -97,10 +97,12 @@ function _combine_with_reducer(
         oplus::String, zerobar::Float64, terms::Vector{ASTExpr};
         scalar::Bool = false
     )
-    isempty(terms) && return NumExpr(zerobar)
-    if oplus == "or" && scalar
+    if oplus == "or"
+        scalar || _throw_array_bool_and_or(oplus)
+        isempty(terms) && return NumExpr(zerobar)
         return OpExpr("or", ASTExpr[NumExpr(zerobar); terms])
     end
+    isempty(terms) && return NumExpr(zerobar)
     oplus == "+" && return OpExpr("+", ASTExpr[NumExpr(zerobar); terms])
     length(terms) == 1 && return terms[1]
     if oplus == "*"
@@ -118,19 +120,22 @@ function _combine_with_reducer(
         end
         return result
     else
-        # ⊕ ∈ {or} (bool_and_or) is index-set-producing (§5.5) — out of scope
-        # for the M1 array-producing tree-walk evaluator.
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
-                "array-producing aggregate with ⊕='$oplus' is not supported by the " *
-                    "tree-walk evaluator (M1); only numeric semirings (+, *, max, min) " *
-                    "reduce to an array — bool_and_or is index-set-producing (§5.5), and " *
-                    "only a scalar (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1)"
-            )
-        )
+        _throw_array_bool_and_or(oplus)
     end
 end
+
+# ⊕ = `or` (bool_and_or) is index-set-producing (§5.5): an array-valued
+# reduction with it is refused whatever its term count, and only a scalar
+# (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1).
+@noinline _throw_array_bool_and_or(oplus) = throw(
+    TreeWalkError(
+        "E_TREEWALK_ARRAYOP_UNSUPPORTED_SEMIRING",
+        "array-producing aggregate with ⊕='$oplus' is not supported by the " *
+            "tree-walk evaluator (M1); only numeric semirings (+, *, max, min) " *
+            "reduce to an array — bool_and_or is index-set-producing (§5.5), and " *
+            "only a scalar (rank-0) bool_and_or faq runs (CONFORMANCE_SPEC §5.6.1)"
+    )
+)
 
 # ============================================================
 # 5c-join. M2 — value-equality joins (RFC semiring-faq-unified-ir §5.3)
