@@ -177,22 +177,16 @@ across Julia, Rust and Python.
 """
 canonical_json(s::StrippedConstructs) = (io = IOBuffer(); _write_canonical(io, _stripped_json(s)); String(take!(io)))
 
+# Numbers, booleans and strings print as the package's canonical value
+# emitter prints them (`_emit_canonical_value`), so an integral float has one
+# cut-off for printing as an integer token everywhere.
 function _write_canonical(io::IO, v)
     if v === nothing
         print(io, "null")
-    elseif v isa Bool
-        print(io, v ? "true" : "false")
-    elseif v isa Integer
-        print(io, string(v))
+    elseif v isa Union{Bool, Integer, AbstractFloat, AbstractString}
+        print(io, _emit_canonical_value(v))
     elseif v isa Real
-        x = Float64(v)
-        if isinteger(x) && abs(x) < 9.2e18
-            print(io, string(Int64(x)))
-        else
-            print(io, format_canonical_float(x))
-        end
-    elseif v isa AbstractString
-        print(io, _json_string(String(v)))
+        print(io, _emit_canonical_value(Float64(v)))
     elseif v isa Symbol
         print(io, _json_string(String(v)))
     elseif v isa AbstractDict
@@ -853,7 +847,7 @@ function compile_kernels(prob::EsmProblem, specs)
     znames = String[b.name for b in s.z_layout]
     all_states = Set{String}(keys(flat.state_variables))
     unames = Set{String}(n for n in all_states if !(n in znames))
-    rhsprog = _whole_program(seed, flat, unames, all_states, :all, :all)
+    rhsprog = _whole_program(seed, flat, unames, all_states)
     ulay = state_layout(rhsprog)
     zlay = StateBlock[StateBlock(b.name, b.base, Int[length(r) for r in b.storage]) for b in rhsprog.layout.aux]
     kernels = OrderedDict{String, Kernel}()
@@ -1058,7 +1052,7 @@ function _value_or_map_kernel(kname, dtp, outs, seed, flat, rhs, s, ulay, zlay)
         equations = eqs, equation_contributions = contribs
     )
     W = Set{String}(x[1] for x in synth)
-    prog = _whole_program(seed, kflat, W, Set{String}(keys(states)), :all, :all)
+    prog = _whole_program(seed, kflat, W, Set{String}(keys(states)))
     # ---- copy plans ----
     aux_plan = NTuple{4, Int}[]
     for b in prog.layout.aux

@@ -144,7 +144,6 @@ struct RhsProgram{F}
     writes::Vector{String}          # W, flat-layout order
     aux_names::Vector{String}       # R \ W, flat-layout order
     flat::FlattenedSystem           # the selected flattened system
-    doc::Dict{String, Any}           # its run document
     front::Any                      # (file, model_name, keywords) of the front door
     f!::F
     internal::StateLayout           # the slot space `f!` addresses
@@ -164,9 +163,6 @@ An operator restricted to one tile of a [`Decomposition`](@ref)
 """
 struct TileProgram{F}
     op::RhsProgram
-    dec::Decomposition
-    owned::Dict{String, UnitRange{Int}}
-    storage::Dict{String, UnitRange{Int}}
     f!::F
     internal::StateLayout
     layout::TileLayout
@@ -195,9 +191,6 @@ end
 # ============================================================================
 # §2 Selection (API_SPEC §5.8, "Selection")
 # ============================================================================
-
-_origin_eq(a::TermOrigin, b::TermOrigin) =
-    a.component == b.component && a.coupling == b.coupling
 
 _origin_str(o::TermOrigin) = o.component !== nothing ? "{component: $(o.component)}" :
     "{coupling: $(o.coupling)}"
@@ -262,7 +255,7 @@ function _select_flat(
         end
     end
     keep(c::Contribution) = terms === :all ||
-        any(o -> any(t -> _origin_eq(o, t), terms), c.origins)
+        any(o -> o in terms, c.origins)
     eqs = Equation[]
     contribs = Vector{Contribution}[]
     for (eq, cs) in zip(flat.equations, flat.equation_contributions)
@@ -384,7 +377,6 @@ _range_observed_box(::_RangeSpec, name, dims) = (ones(Int, length(dims)), copy(d
 _range_fill_equations(::_RangeSpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 _range_front_door_done(::_RangeSpec, file, model_name, kwd) = nothing
-_range_build_epoch(::_RangeSpec, epoch) = nothing
 _range_shared_code(::_RangeSpec) = false
 _range_affine_view(::_RangeSpec, var, clipped, var_map, avi, xeq) = nothing
 _range_fixed_ident(::_RangeSpec, acc, i) = nothing
@@ -450,10 +442,10 @@ function _program_build(
                 model_name = seed.model_name, parameter_overrides = seed.overrides,
                 const_arrays = seed.const_arrays, param_arrays = pa,
                 _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
-                _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
+                _runtime_array_parameters = seed.runtime_array_parameters,
                 _live_fed_parameters = true,
-                _ic_t0 = get(seed, :ic_t0, seed.sample_time),
-                _ic_data = get(seed, :ic_data, Dict{String, Any}()),
+                _ic_t0 = seed.ic_t0,
+                _ic_data = seed.ic_data,
                 inspect = inspect, _param_classes = param_classes
             )
         end
@@ -650,15 +642,15 @@ function _copy_maps(
 end
 
 _whole_program(
-    seed, flat::FlattenedSystem, W::Set{String}, R::Set{String}, writes, terms;
+    seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
     parent = nothing
-) = first(_whole_program_built(seed, flat, W, R, writes, terms; parent = parent))
+) = first(_whole_program_built(seed, flat, W, R; parent = parent))
 
 # `_whole_program`, with the build's sinks `inspect` and `param_classes` filled
 # and its initial state and parameters: `(prog, u0, p)`.
 function _whole_program_built(
-        seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
-        writes, terms; parent = nothing, inspect = nothing, param_classes = nothing
+        seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
+        parent = nothing, inspect = nothing, param_classes = nothing
     )
     init = seed.init
     live = union(W, R)
@@ -685,7 +677,7 @@ function _whole_program_built(
     layout = TileLayout(ublocks, ablocks, nu, na)
     maps = _copy_maps(layout, internal, (n, d, x) -> x)
     prog = RhsProgram(
-        seed, seed.compiler, unames, anames, flat, doc, front, f!,
+        seed, seed.compiler, unames, anames, flat, front, f!,
         internal, shapes, layout, maps,
         parent === nothing ?
             _program_shared(seed, p, pa, f!, length(internal), cap) :
@@ -737,7 +729,7 @@ end
 function _problem_program(seed; inspect = nothing, param_classes = nothing)
     flat, W, R = _select_flat(seed.flat, :all, :all)
     return _whole_program_built(
-        seed, flat, W, R, :all, :all; inspect = inspect, param_classes = param_classes
+        seed, flat, W, R; inspect = inspect, param_classes = param_classes
     )
 end
 
@@ -794,7 +786,7 @@ function select(prog::RhsProgram; writes = :all, terms = :all)
     # system: its contributions are the ones the first selection kept, and its
     # writable variables are the first selection's `writes`.
     flat, W, R = _select_flat(prog.flat, writes, t, Set{String}(prog.writes))
-    return _whole_program(prog.seed, flat, W, R, writes, t; parent = prog.shared)
+    return _whole_program(prog.seed, flat, W, R; parent = prog.shared)
 end
 
 """
@@ -978,27 +970,6 @@ end
 _iset_intersect(a::_ISet, b::_ISet) =
     foldl(_iset_union, (_iset_intersect(a, r) for r in b.ivs); init = _ISet())
 
-function _iset_setdiff(a::_ISet, b::_ISet)
-    out = UnitRange{Int}[]
-    for x in a.ivs
-        pieces = UnitRange{Int}[x]
-        for r in b.ivs
-            nxt = UnitRange{Int}[]
-            for p in pieces
-                lo = first(p):min(last(p), first(r) - 1)
-                hi = max(first(p), last(r) + 1):last(p)
-                isempty(lo) || push!(nxt, lo)
-                isempty(hi) || push!(nxt, hi)
-            end
-            pieces = nxt
-        end
-        append!(out, pieces)
-    end
-    return _iset_points(Iterators.flatten(out))   # re-normalize
-end
-
-_iset_shift(a::_ISet, k::Int) = _ISet(UnitRange{Int}[(first(r) + k):(last(r) + k) for r in a.ivs])
-
 # One loop variable's binding: the global cells it ranges over; the cut axis
 # it is aligned with ("" for none); its offsets relative to the reading output
 # cell (`dlo > dhi` when unknown); whether it is a contraction index; whether
@@ -1032,7 +1003,6 @@ struct _AxisModel
 end
 
 _axis_domain(m::_AxisModel, axis::String, face::Bool) = 1:(m.N[axis] + (face ? 1 : 0))
-_axis_period(m::_AxisModel, axis::String) = m.period[axis]
 
 # The offset `δ` as its nearest periodic image.
 @inline function _wrap_offset(m::_AxisModel, axis::String, δ::Int)
@@ -1087,7 +1057,6 @@ mutable struct _NeedCtx
     shapes::Dict{String, Vector{String}}       # array variable → index sets
     extents::Dict{String, Vector{Int}}         # array variable → extents
     states::Set{String}                       # array states
-    scalar_states::Set{String}
     obs_defs::Dict{String, ASTExpr}            # array observeds
     scalar_defs::Dict{String, ASTExpr}         # scalar observeds
     mat_obs::Set{String}
@@ -1098,7 +1067,6 @@ mutable struct _NeedCtx
     reads::Set{String}
     obs_need::Dict{String, Vector{_Bind}}
     work::Vector{String}
-    obs_rule::Dict{String, String}
     scalar_stack::Set{String}
     # Seam crossings (tile mode): `(axis, face)` → its seam; the walk's current
     # context (`("", ())` for the state equations, `(observed, sides)` for an
@@ -1112,14 +1080,14 @@ mutable struct _NeedCtx
 end
 
 _NeedCtx(
-    mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+    mode, axes, owned, storage, shapes, extents, states, obs_defs,
     scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need, work,
-    obs_rule, scalar_stack
+    scalar_stack
 ) =
     _NeedCtx(
-    mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+    mode, axes, owned, storage, shapes, extents, states, obs_defs,
     scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
-    work, obs_rule, scalar_stack, Dict{Tuple{String, Bool}, _Seam}(), ("", ()),
+    work, scalar_stack, Dict{Tuple{String, Bool}, _Seam}(), ("", ()),
     Any[], IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}()
 )
 
@@ -1689,7 +1657,6 @@ function _need_observed!(ctx::_NeedCtx, n::String, binds::Vector{_Bind}, rule::S
     )
     if grew
         ctx.obs_need[n] = merged
-        haskey(ctx.obs_rule, n) || (ctx.obs_rule[n] = rule)
         n in ctx.work || push!(ctx.work, n)
     end
     return nothing
@@ -2010,14 +1977,12 @@ function _need_context(
             Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
         )
     states = Set{String}(n for n in keys(spec.shapes))
-    scalar_states = Set{String}(n for n in parts.state_var_names if !(n in states))
     ctx = _NeedCtx(
         spec.mode, spec.axes, spec.owned, spec.storage, shapes, extents,
-        states, scalar_states, obs_defs, scalar_defs,
+        states, obs_defs, scalar_defs,
         Set{String}(cls.mat_array_vars), params, ca, arrays,
         Dict{Tuple{String, String}, Tuple{Int, Int}}(), Set{String}(),
-        Dict{String, Vector{_Bind}}(), String[], Dict{String, String}(),
-        Set{String}()
+        Dict{String, Vector{_Bind}}(), String[], Set{String}()
     )
     if spec.mode === :tile
         for (a, P) in spec.axes.period
@@ -2631,7 +2596,7 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
     foreach(sort!, values(extra))
     maps = _copy_maps(layout, internal, to_internal, extra)
     return TileProgram(
-        op, dec, ow, st, f!, internal, layout, maps,
+        op, f!, internal, layout, maps,
         _derived_shared(op.shared, f!, length(internal), cap, pa)
     )
 end
@@ -2682,7 +2647,6 @@ distinct workspaces: each [`rhs_workspace`](@ref) owns its lane buffers.
 """
 struct LaneProgram{F}
     op::RhsProgram
-    kind::Symbol
     sets::Vector{String}
     C::Int
     f!::F
@@ -2727,12 +2691,9 @@ mutable struct _LaneSpec <: _RangeSpec
     obs_shapes::Dict{String, Vector{String}}
     params::Dict{String, Int}
     ext::Dict{String, Int}
-    epoch::Any                                 # the build's forcing epoch
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
-
-_range_build_epoch(spec::_LaneSpec, epoch) = (spec.epoch = epoch; nothing)
 
 _lane_box_dim(spec::_LaneSpec, shape::Vector{String}, d::Int) =
     shape[d] in spec.sets ?
@@ -2955,10 +2916,6 @@ function _range_restrict_parts(
     for (k, v) in parts.param_scope
         (v isa Real && isfinite(v) && isinteger(v)) && (spec.params[String(k)] = Int(v))
     end
-    extent = Dict{String, Int}()
-    for (k, is) in index_sets
-        is.size === nothing || (extent[String(k)] = is.size)
-    end
     states = Set{String}(parts.state_var_names)
     defs = Dict{String, ASTExpr}()
     for eq in parts.equations
@@ -3004,14 +2961,13 @@ function _range_restrict_parts(
             Dict{String, Union{Nothing, Int}}()
         ), Dict{String, UnitRange{Int}}(),
         Dict{String, UnitRange{Int}}(), Dict{String, Vector{String}}(),
-        Dict{String, Vector{Int}}(), Set{String}(), Set{String}(),
+        Dict{String, Vector{Int}}(), Set{String}(),
         Dict{String, ASTExpr}(), Dict{String, ASTExpr}(), Set{String}(),
         spec.params, arrays, Set{String}(), Dict{Tuple{String, String}, Tuple{Int, Int}}(),
-        Set{String}(), Dict{String, Vector{_Bind}}(), String[],
-        Dict{String, String}(), Set{String}()
+        Set{String}(), Dict{String, Vector{_Bind}}(), String[], Set{String}()
     )
     livein = Set{String}(String(k) for k in keys(param_arrays))
-    ctx = (; arrays, live, livein, extent, need = needctx)
+    ctx = (; arrays, live, livein, need = needctx)
     eqs = Equation[]
     for eq in parts.equations
         tgt = _d_target(eq.lhs)
@@ -3181,7 +3137,7 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
         )
     end
     return LaneProgram(
-        op, kind, S, chunk, inst.f!, internal, layout, inst.index_bufs,
+        op, S, chunk, inst.f!, internal, layout, inst.index_bufs,
         inst.gathers, gslots, uplan, aplan, inst.params,
         _derived_shared(
             op.shared, inst.f!, length(internal), inst.cap,
@@ -3197,7 +3153,7 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     spec = _LaneSpec(
         kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
         Set{String}(), Dict{String, Vector{String}}(), Dict{String, Int}(),
-        _program_sets(op), nothing
+        _program_sets(op)
     )
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, _ = op.front
@@ -3216,11 +3172,9 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
             end
         end
     end
-    spec.epoch isa _ForcingEpoch || error("lanes: the build did not report its forcing epoch")
     return (;
         f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
-        gathers = spec.gathers, params = spec.params, epoch = spec.epoch::_ForcingEpoch,
-        cap, pa,
+        gathers = spec.gathers, params = spec.params, cap, pa,
     )
 end
 

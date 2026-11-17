@@ -394,20 +394,6 @@ const _OOP_ACC_FALLBACK =
     _AccKernel[], _OopAccPlan[], Int[], _OopAccPlan[]
 )
 
-# Identity lookup of a sub-kernel in the parent plan's flat transitive list.
-@inline function _oop_sub_index(subs::Vector{_AccKernel}, S::_AccKernel)
-    @inbounds for j in eachindex(subs)
-        subs[j] === S && return j
-    end
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_ACC_SUBCALL_UNKNOWN",
-            "vectorized oop: a _NK_SUBCALL references a sub-kernel absent from the " *
-                "parent's transitive K.subs list — a `_collect_subkernels` invariant break."
-        )
-    )
-end
-
 # Lane enumeration mirroring `_run_acc_kernel!` / `_run_box_kernel!` order:
 # the out slot of every lane, and the lane's loop multi-index as one vector per
 # dim (at least three, the padded dims all 1s — the runners' padded `midx`).

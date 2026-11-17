@@ -5011,7 +5011,6 @@ function _build_compile_evaluator(
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
         materialize_out.epoch
     _register_forcing_buffers!(forcing_epoch, values(param_arrays))
-    _range_build_epoch(_range_spec_now(), forcing_epoch)
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
