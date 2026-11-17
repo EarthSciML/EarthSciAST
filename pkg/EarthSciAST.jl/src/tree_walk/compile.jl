@@ -10,22 +10,18 @@
 # 3. Compiled-IR — one-shot compilation to a compact, type-stable tree
 # ============================================================
 #
-# `_eval` below walks the raw `OpExpr` tree. That's correct but every
-# op dispatch is an O(N) chain of String comparisons, and every
-# VarExpr lookup does a Dict probe. For 4096-equation models the
-# overhead dominates. `_compile` walks the expression once at build
-# time and produces `_Node` trees where:
+# Walking the raw `OpExpr` tree would make every op dispatch a chain of
+# String comparisons and every VarExpr lookup a Dict probe. `_compile` walks
+# the expression once at build time and produces `_Node` trees where:
 #
 #   * op is a `Symbol` (pointer compare, not byte compare)
 #   * state refs have their u-index baked in
 #   * parameter refs have their `Val{sym}` type param baked in for
 #     `getfield(p, Val)` — monomorphic NamedTuple access
 #   * literals are pre-promoted to Float64
-#   * registered-function handlers are looked up and captured once
 #
-# The compiled tree keeps semantics identical to walking `OpExpr`
-# directly; `_eval` stays available for the unit-test helper which
-# exercises the fallback path.
+# The compiled tree keeps the semantics of the expression it was compiled
+# from; `_eval_node` walks it.
 
 # _NKind encodes what a node is. Keeping it as a Bare integer (UInt8)
 # gives a fast `kind === K_*` dispatch inside `_eval_node`.
@@ -329,7 +325,7 @@ const _STATE_SLOT_TABLES = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
 # SAME resolve context (array_var_info / var_map / const_arrays / pgather) and
-# compile context (var_map / param_syms / reg_funcs), so `_resolve_indices` and
+# compile context (var_map / param_syms), so `_resolve_indices` and
 # `_compile` are pure functions of the input expression OBJECT. A subexpression shared across cells — every state-independent
 # subtree is the SAME object across cells, thanks to the `_sub_preserving` /
 # `_resolve_indices` identity short-circuits — is then resolved and compiled ONCE
@@ -491,13 +487,13 @@ end
 @inline _param_index(ps::AbstractDict{Symbol, Int}, sym::Symbol) = get(ps, sym, 0)
 @inline _param_index(_, ::Symbol) = 0
 
-function _compile(expr::NumExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+function _compile(expr::NumExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     return _mknode(kind = _NK_LITERAL, literal = expr.value)
 end
-function _compile(expr::IntExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+function _compile(expr::IntExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     return _mknode(kind = _NK_LITERAL, literal = Float64(expr.value))
 end
-function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     name = expr.name
     if name == "t"
         return _mknode(kind = _NK_TIME)
@@ -526,13 +522,13 @@ function _compile(expr::VarExpr, var_map, param_syms, reg_funcs, memo::_MaybeMem
     end
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
-function _compile(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo = nothing)
+function _compile(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     _BENCH_ON[] && (_BENCH_COMPILE_CALLS[] += 1)   # §12 node-lowering counter (off by default)
-    memo === nothing && return _compile_op(expr, var_map, param_syms, reg_funcs, nothing)
+    memo === nothing && return _compile_op(expr, var_map, param_syms, nothing)
     m = memo.compile
     r = get(m, expr, nothing)
     r === nothing || return r
-    r = _compile_op(expr, var_map, param_syms, reg_funcs, memo)
+    r = _compile_op(expr, var_map, param_syms, memo)
     m[expr] = r
     return r
 end
@@ -546,7 +542,7 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
         "evaluator: $(why) (esm-spec §4.2 / §9.6.6)."
 )
 
-function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeMemo)
+function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
     # Runtime contraction loop marker (ess-runtime-contraction): the loop body is
     # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
@@ -556,7 +552,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # where the unroll fallback would have succeeded.
     if op_sym === :__contract_loop
         lb = expr.value::_ContractLoopBuild
-        body = _compile(expr.args[1], var_map, param_syms, reg_funcs, memo)
+        body = _compile(expr.args[1], var_map, param_syms, memo)
         return _mknode(
             kind = _NK_CONTRACTION_LOOP, op = lb.oplus, literal = lb.zerobar,
             payload = _ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
@@ -565,7 +561,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     end
     if op_sym === :__ragged_loop
         lb = expr.value::_RaggedLoopBuild
-        kids = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        kids = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
         return _mknode(
             kind = _NK_RAGGED_LOOP, op = lb.oplus, literal = lb.zerobar,
             payload = _RaggedLoop(lb.ref, lb.step, lb.reach), children = kids
@@ -577,7 +573,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # `_NK_CONST_GATHER`); the slot table + bounds ride on `.value`.
     if op_sym === :__state_gather
         ref = expr.value::_StateGatherRef
-        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        subs = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
         return _mknode(
             kind = _NK_STATE_GATHER,
             payload = _StateGather(
@@ -592,12 +588,12 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
     # compile as children, the published-cell check rides on `.value`.
     if op_sym === :__recur_read
         ref = expr.value::_RecurGatherRef
-        subs = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        subs = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
         return _mknode(kind = _NK_RECUR_GATHER, payload = ref.gather, children = subs)
     end
 
     children = _Node[
-        _compile(a, var_map, param_syms, reg_funcs, memo)
+        _compile(a, var_map, param_syms, memo)
             for a in expr.args
     ]
     if op_sym === :const
@@ -627,17 +623,6 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                 "`enum` must be lowered to `const` at load — call `lower_enums!` before compile"
             )
         )
-    elseif op_sym === :call
-        # Removed in v0.3.0 (esm-spec §9 closure). `expression_from_json` already
-        # rejects file-loaded `call` ops; reaching this arm means a caller
-        # constructed a `call` OpExpr programmatically.
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_UNSUPPORTED_OP",
-                "`call` op was removed in v0.3.0 — write the computation as AST " *
-                    "equations or an expression template (esm-spec §9.6)"
-            )
-        )
     elseif op_sym === :D
         # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
@@ -664,7 +649,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
                 "ic(...) only allowed in equation LHS"
             )
         )
-    elseif op_sym === :faq || op_sym === :aggregate
+    elseif op_sym === :faq
         # If _resolve_indices ran, scalar aggregate (empty output_idx) was
         # already expanded to a plain arithmetic tree and never reaches here.
         # Reaching this branch means an array-producing aggregate (non-empty
@@ -1745,9 +1730,9 @@ end
 # but with each operand lowered through `_compile_cse` so a shared operand
 # becomes a `_NK_CACHED` ref. Every hoistable op is a plain `_NK_OP` whose
 # operands are all scalar.
-function _cse_rebuild(expr::OpExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+function _cse_rebuild(expr::OpExpr, var_map, param_syms, ctx::_CSEContext)
     children = _Node[
-        _compile_cse(a, var_map, param_syms, reg_funcs, ctx)
+        _compile_cse(a, var_map, param_syms, ctx)
             for a in expr.args
     ]
     return _mknode(kind = _NK_OP, op = Symbol(expr.op), children = children)
@@ -1757,7 +1742,7 @@ end
 # in `ctx.cached` into the prelude and replacing it with a `_NK_CACHED` ref.
 # Falls back to plain `_compile` for leaves and opaque ops, so the result is
 # identical to `_compile` wherever nothing is hoisted.
-function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSEContext)
+function _compile_cse(expr::ASTExpr, var_map, param_syms, ctx::_CSEContext)
     # A named scalar-observed reference reads its prelude slot (ess-obs-slots).
     # Checked FIRST: an observed name is neither a state, a parameter, nor `t`,
     # so plain `_compile` would (rightly) reject it as unbound. Observed names
@@ -1766,10 +1751,10 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     if expr isa VarExpr
         s = get(ctx.obs_slot, expr.name, 0)
         s != 0 && return _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
-        return _compile(expr, var_map, param_syms, reg_funcs)
+        return _compile(expr, var_map, param_syms)
     end
     (expr isa OpExpr && _cse_hoistable(expr)) ||
-        return _compile(expr, var_map, param_syms, reg_funcs)
+        return _compile(expr, var_map, param_syms)
 
     # Identity memo: the lowering of a node is a pure function of the node for
     # a fixed build context, so a subtree shared under many parents (template
@@ -1791,7 +1776,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
             # slots, keeping `defs` topologically ordered), reserve this slot,
             # register the def, and return a ref. Every later occurrence hits
             # the `s != 0` path.
-            defnode = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
+            defnode = _cse_rebuild(expr, var_map, param_syms, ctx)
             s = length(ctx.defs) + 1
             ctx.slot[key] = s
             push!(ctx.defs, defnode)
@@ -1800,7 +1785,7 @@ function _compile_cse(expr::ASTExpr, var_map, param_syms, reg_funcs, ctx::_CSECo
     else
         # Not cached: reconstruct the same `_Node` `_compile` would, but with
         # hoisted children.
-        out = _cse_rebuild(expr, var_map, param_syms, reg_funcs, ctx)
+        out = _cse_rebuild(expr, var_map, param_syms, ctx)
     end
     ctx.compiled[expr] = out
     return out
@@ -1817,7 +1802,7 @@ end
 # fail, and a hole that fails closed is exactly the bug this argument exists to fix.
 function _cse_compile_scalar(
         entries::Vector{Tuple{Int, ASTExpr}},
-        var_map, param_syms, reg_funcs; has_pgather::Bool,
+        var_map, param_syms; has_pgather::Bool,
         # Named scalar-observed defs (ess-obs-slots), in
         # dependency order, already `_resolve_indices`d.
         # Each compiles ONCE as a prelude def; readers
@@ -1862,7 +1847,7 @@ function _cse_compile_scalar(
     # counted >= 2) is ALIASED onto that slot rather than duplicated.
     n_obs_own = 0
     for (name, e) in obs_defs
-        node = _compile_cse(e, var_map, param_syms, reg_funcs, ctx)
+        node = _compile_cse(e, var_map, param_syms, ctx)
         if node.kind === _NK_CACHED && node.payload === cache
             ctx.obs_slot[name] = node.idx
         else
@@ -1873,7 +1858,7 @@ function _cse_compile_scalar(
     end
     rhs_list = Tuple{Int, _Node}[]
     for (idx, e) in entries
-        push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, reg_funcs, ctx)))
+        push!(rhs_list, (idx, _compile_cse(e, var_map, param_syms, ctx)))
     end
     # Size the scratch to the number of slots. `cache` is the SAME object the
     # `_NK_CACHED` nodes captured, so this in-place resize is visible to them.

@@ -80,12 +80,10 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
 
                 # The fast path must actually be the thing under test here.
                 @test ESM._cellwise_compile_once(
-                    conc, 1, ca,
-                    Dict{String, Function}(), Dict{String, Float64}()
+                    conc, 1, ca, Dict{String, Float64}()
                 ) !== nothing
                 @test ESM._cellwise_compile_once(
-                    deaths, 1, ca,
-                    Dict{String, Function}(), Dict{String, Float64}()
+                    deaths, 1, ca, Dict{String, Float64}()
                 ) !== nothing
             end
         end
@@ -104,8 +102,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
                 fast = ESM.evaluate_cellwise(conc2, cells; const_arrays = ca)
                 @test fast == _percell(conc2, cells; ca = ca)
                 @test ESM._cellwise_compile_once(
-                    conc2, 2, ca,
-                    Dict{String, Function}(), Dict{String, Float64}()
+                    conc2, 2, ca, Dict{String, Float64}()
                 ) !== nothing
             end
         end
@@ -125,8 +122,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
         fast = ESM.evaluate_cellwise(deaths_p, cells; const_arrays = ca, params = params)
         @test fast == _percell(deaths_p, cells; ca = ca, params = params)
         @test ESM._cellwise_compile_once(
-            deaths_p, 1, ca,
-            Dict{String, Function}(), params
+            deaths_p, 1, ca, params
         ) !== nothing
     end
 
@@ -140,8 +136,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
 
         for expr in (make_conc(N_src), make_deaths(N_src; k = 1.0e-3))
             ce = ESM._cellwise_compile_once(
-                expr, 1, ca,
-                Dict{String, Function}(), Dict{String, Float64}()
+                expr, 1, ca, Dict{String, Float64}()
             )
             @test ce !== nothing
             ce(cell)                  # warmup / JIT
@@ -152,8 +147,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
         # Parameter-dependent closure is zero-alloc too (params captured once).
         deaths_p = _op("-", _op("exp", _op("*", _v("k"), make_conc(N_src))), _num(1.0))
         cep = ESM._cellwise_compile_once(
-            deaths_p, 1, ca,
-            Dict{String, Function}(), Dict{String, Float64}("k" => 1.0e-3)
+            deaths_p, 1, ca, Dict{String, Float64}("k" => 1.0e-3)
         )
         @test cep !== nothing
         cep(cell)
@@ -178,8 +172,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
         )
         # It must DECLINE the fast path…
         @test ESM._cellwise_compile_once(
-            aggf, 1, ca,
-            Dict{String, Function}(), Dict{String, Float64}()
+            aggf, 1, ca, Dict{String, Float64}()
         ) === nothing
         # …and `evaluate_cellwise` must fall back to the per-cell path, bit-exactly.
         @test ESM.evaluate_cellwise(aggf, cells; const_arrays = ca) ==

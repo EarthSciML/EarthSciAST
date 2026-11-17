@@ -10,8 +10,7 @@ const ESM = EarthSciAST
 # unit tests exercise the same code path as real ODE solves.
 function _eval1(
         expr::ESM.ASTExpr; u_vals = Dict{String, Float64}(),
-        p_vals = Dict{String, Float64}(), t = 0.0,
-        registered_functions = Dict{String, Function}()
+        p_vals = Dict{String, Float64}(), t = 0.0
     )
     vars = Dict{String, ModelVariable}()
     # Include all free variables (except "t") either as states or
@@ -39,8 +38,7 @@ function _eval1(
     eq = ESM.Equation(_D("_probe"), expr)
     model = ESM.Model(vars, [eq])
     f!, u0, p, _tspan, var_map = EarthSciAST._build_evaluator(
-        model;
-        registered_functions = registered_functions
+        model
     )
     # Override state values from u_vals
     for (k, v) in u_vals

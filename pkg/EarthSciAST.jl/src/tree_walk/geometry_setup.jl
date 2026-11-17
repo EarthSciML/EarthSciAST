@@ -1164,13 +1164,12 @@ end
 # back to the byte-identical reference path.
 function _setup_map_compile_once(
         rhs::OpExpr, nd::Int, ca::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict
     )
     nd >= 1 || return nothing
     _setup_map_compile_once_disabled() && return nothing
     _subscripts_int_exact(rhs) || return nothing
-    return _cellwise_compile_once(rhs, nd, ca, registered_functions, params)
+    return _cellwise_compile_once(rhs, nd, ca, params)
 end
 
 # Materialize a build-once NON-GEOMETRY MAP aggregate by evaluating its body once
@@ -1183,8 +1182,7 @@ end
 # `output_idx`/`ranges` extents instead of a makearray's regions.
 function _materialize_setup_general_map(
         rhs::OpExpr, env::AbstractDict,
-        index_sets, derived_extents,
-        registered_functions::AbstractDict
+        index_sets, derived_extents
     )
     out = String[String(s) for s in rhs.output_idx if s isa AbstractString]
     exts = Int[_geo_index_extent(rhs.ranges[v], index_sets, derived_extents) for v in out]
@@ -1195,8 +1193,7 @@ function _materialize_setup_general_map(
     # A decline, or a run that raises, leaves the compile-once sweep and the
     # per-cell reference below exactly as they were.
     filled = _setup_fill_array(
-        rhs, exts; const_arrays = ca, params = params,
-        reg_funcs = registered_functions
+        rhs, exts; const_arrays = ca, params = params
     )
     if filled !== nothing
         _SETUP_MAP_FASTPATH_HITS[] += 1
@@ -1208,7 +1205,7 @@ function _materialize_setup_general_map(
     # parameters, then walk the cells rebinding only those. Any decline (⇒
     # `nothing`) or ANY eval-time error keeps the untouched per-cell loop below,
     # so both the values and the error behaviour stay exactly as before.
-    ce = _setup_map_compile_once(rhs, nd, ca, registered_functions, params)
+    ce = _setup_map_compile_once(rhs, nd, ca, params)
     # The cell the compiled sweep failed at, if it failed: the one cell a strict
     # compiler checks against the per-cell reference before refusing.
     failed_at = Ref{Union{Nothing, Vector{Int}}}(nothing)
@@ -1246,12 +1243,12 @@ function _materialize_setup_general_map(
         probe = pr -> all(>(0), exts) &&
             _eval_cellwise(
             pr, rhs, something(failed_at[], ones(Int, length(exts)));
-            const_arrays = ca, registered_functions = registered_functions,
+            const_arrays = ca,
             params = params
         )
     )
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
-    return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
+    return _fill_map_percell(lic, rhs, exts, ca, params)
 end
 
 # Compile-once cell sweep: one preallocated `cell` buffer, rebound per cell. On
@@ -1281,14 +1278,13 @@ end
 # the compile-once tier off runs.
 function _fill_map_percell(
         lic::_PerCellLicense, rhs::OpExpr, exts::Vector{Int},
-        ca::AbstractDict, registered_functions::AbstractDict,
+        ca::AbstractDict,
         params::AbstractDict
     )
     arr = zeros(Float64, exts...)
     for I in CartesianIndices(Tuple(exts))
         arr[I] = _eval_cellwise(
             lic, rhs, Int[Tuple(I)...]; const_arrays = ca,
-            registered_functions = registered_functions,
             params = params
         )
     end
@@ -1393,8 +1389,7 @@ end
 function _materialize_setup_wholearray(
         rhs::OpExpr, env::AbstractDict,
         index_sets, derived_extents,
-        shape_sets::Vector{String},
-        registered_functions::AbstractDict
+        shape_sets::Vector{String}
     )
     exts = _setup_wholearray_extents(rhs, shape_sets, index_sets, derived_extents)
     if rhs.op == "reshape"
@@ -1405,8 +1400,7 @@ function _materialize_setup_wholearray(
             )
         )
         src = _setup_source_array(
-            rhs.args[1], env, index_sets, derived_extents,
-            registered_functions
+            rhs.args[1], env, index_sets, derived_extents
         )
         length(src) == prod(exts) || throw(
             TreeWalkError(
@@ -1422,8 +1416,7 @@ function _materialize_setup_wholearray(
     # `index(makearray, …)` in the right-hand side gets, region selection
     # included.
     arr = _setup_fill_array(
-        rhs, exts; const_arrays = ca, params = params,
-        reg_funcs = registered_functions
+        rhs, exts; const_arrays = ca, params = params
     )
     if arr !== nothing
         _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
@@ -1438,20 +1431,18 @@ function _materialize_setup_wholearray(
         "the whole-array setup materializer", prod(exts); one_cell = true,
         probe = pr -> all(>(0), exts) &&
             _eval_cellwise(
-            pr, rhs, ones(Int, length(exts)); const_arrays = ca,
-            registered_functions = registered_functions, params = params
+            pr, rhs, ones(Int, length(exts)); const_arrays = ca, params = params
         )
     )
     _record_rule!(_current_rule_label(), :setup_array, :setup_percell)
-    return _fill_map_percell(lic, rhs, exts, ca, registered_functions, params)
+    return _fill_map_percell(lic, rhs, exts, ca, params)
 end
 
 # The dense source array of a setup-time `reshape`: a bare reference to an
 # already-materialized setup / const array in `env`, or an inline array producer
 # (an aggregate map / a nested makearray) materialized in place.
 function _setup_source_array(
-        src, env, index_sets, derived_extents,
-        registered_functions
+        src, env, index_sets, derived_extents
     )
     if src isa VarExpr && haskey(env, src.name) && env[src.name] isa AbstractArray
         return env[src.name]
@@ -1461,7 +1452,7 @@ function _setup_source_array(
     elseif src isa OpExpr && _is_setup_wholearray_op(src)
         return _materialize_setup_wholearray(
             src, env, index_sets, derived_extents,
-            String[], registered_functions
+            String[]
         )
     end
     throw(
@@ -1815,8 +1806,7 @@ function _materialize_geometry_setup(
         index_sets, derived_extents;
         vi_maps = Dict{String, Any}(),
         param_overrides = Dict{String, Float64}(),
-        const_obs_arrays = Dict{String, Array{Float64}}(),
-        registered_functions = Dict{String, Function}()
+        const_obs_arrays = Dict{String, Array{Float64}}()
     )
     out = Dict{String, AbstractArray{Float64}}()
     isempty(setup) && return out
@@ -1849,7 +1839,7 @@ function _materialize_geometry_setup(
             # general build-time array pipeline against the materialized `env`.
             _materialize_setup_wholearray(
                 rhs, env, index_sets, derived_extents,
-                get(var_shapes, n, String[]), registered_functions
+                get(var_shapes, n, String[])
             )
         elseif _is_setup_general_map(rhs)
             # A promoted PER-CELL PHYSICS lookup (fuel/moisture/wind over the fire
@@ -1861,8 +1851,7 @@ function _materialize_geometry_setup(
             # a reindex — all `_GEO_EVAL_OPS`) fails `_is_setup_general_map` and falls
             # through to the compiled geometry materializer below.
             _materialize_setup_general_map(
-                rhs, env, index_sets, derived_extents,
-                registered_functions
+                rhs, env, index_sets, derived_extents
             )
         else
             _materialize_geom_array(
@@ -1945,8 +1934,7 @@ end
 # never materialised and never becomes an index target. Returns name → values.
 function _derive_binning_coords(
         model, index_sets, const_arrays_kw, param_overrides,
-        vi_index_targets = Set{String}(),
-        registered_functions::AbstractDict = Dict{String, Function}()
+        vi_index_targets = Set{String}()
     )
     out = Dict{String, Vector{Float64}}()
     # The shared setup env (see `_build_setup_env` for the precedence proof that
@@ -2023,8 +2011,7 @@ function _derive_binning_coords(
             _open_rule!(n, :setup_array)
             env[n] = if _body_needs_general_eval(e)
                 _materialize_setup_general_map(
-                    e, env, index_sets, derived_extents,
-                    registered_functions
+                    e, env, index_sets, derived_extents
                 )
             else
                 _materialize_geom_array(e, env, index_sets, derived_extents, var_shapes)
@@ -2109,8 +2096,7 @@ end
 
 function _derive_overlap_env_factors(
         model, index_sets, const_arrays_kw, param_overrides,
-        vi_extents,
-        registered_functions::AbstractDict = Dict{String, Function}()
+        vi_extents
     )
     out = Dict{String, Vector{Float64}}()
     want = _overlap_env_factor_names(model)
@@ -2149,8 +2135,7 @@ function _derive_overlap_env_factors(
             ok || continue
             _open_rule!(n, :setup_array)
             arr = _materialize_setup_general_map(
-                e, env, index_sets, derived_extents,
-                registered_functions
+                e, env, index_sets, derived_extents
             )
             env[n] = arr
             out[n] = vec(Array{Float64}(arr))

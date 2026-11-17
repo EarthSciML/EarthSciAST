@@ -125,8 +125,7 @@ emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.section, :
         EA._cellset_push_box!(cs, [0], [4], "u")
         @test native(
             () -> EA._field_ic_fill(
-                coord_ic(4), cs, Dict("A" => 1.0, "dx" => 0.25),
-                Dict{String, Function}(), Dict{String, Any}()
+                coord_ic(4), cs, Dict("A" => 1.0, "dx" => 0.25), Dict{String, Any}()
             )
         ) === nothing
         # An expression with no array producer is the cell-independent forms'.
@@ -135,15 +134,13 @@ emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.section, :
         @test native(
             () -> EA._field_ic_fill(
                 _expr("""{"op": "*", "args": ["A", 2]}"""), cs2,
-                Dict("A" => 1.0), Dict{String, Function}(),
-                Dict{String, Any}()
+                Dict("A" => 1.0), Dict{String, Any}()
             )
         ) === nothing
         # Off under the interpreter, whose per-cell reference must stay untouched.
         interp = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._field_ic_fill(
-                coord_ic(4), cs2, Dict("A" => 1.0, "dx" => 0.25), Dict{String, Function}(),
-                Dict{String, Any}()
+                coord_ic(4), cs2, Dict("A" => 1.0, "dx" => 0.25), Dict{String, Any}()
             )
         end
         @test interp === nothing

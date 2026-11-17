@@ -119,7 +119,7 @@ const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosin
 # ─────────────────────────────────────────────────────────────────────────────
 # CROSS-EQUATION VARIANT MEMOIZATION (perf plan A3). A `_SubVariant` is a pure
 # function of (root STRUCTURE, loop-index-name set, region-class branch key)
-# plus BUILD-level context: `var_map` / `param_sym_set` / `reg_funcs` /
+# plus BUILD-level context: `var_map` / `param_sym_set` /
 # `array_var_info` / `const_arrays` / `pgather` are the same objects for every
 # equation of one `build_evaluator` call (threaded unchanged from
 # `_build_compile_evaluator` through `_compile_derivative_equations`), and
@@ -190,7 +190,7 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # (cross-equation variants off, or a caller without a store). `gmemo` is the
 # shared `_refs_idxset` guard memo (per-equation: its answers depend on this
 # equation's idxset); `bio` a scratch buffer for body branch keys. The compile
-# inputs (`var_map`, `param_sym_set`, `reg_funcs`) ride along because variant
+# inputs (`var_map`, `param_sym_set`) ride along because variant
 # compilation happens mid-`_stencilize`, where they are out of scope; they are
 # build-level constants (see the A3 note above), which is what makes the
 # hoisted cache sound.
@@ -201,7 +201,6 @@ struct _TemplateCtx
     bio::IOBuffer
     var_map::AbstractDict{String, Int}
     param_sym_set::Any
-    reg_funcs::Any
     # Index-bound bodies for expansion roots that are ARRAY PRODUCERS (an
     # aggregate reached through `index(makearray → root, k…)` — the ESD stencil
     # shape): the producer's `expr_body` with its output indices substituted by
@@ -218,7 +217,7 @@ struct _TemplateCtx
 end
 function _TemplateCtx(
         sites::IdDict{OpExpr, OpExpr}, var_map::AbstractDict{String, Int},
-        param_sym_set, reg_funcs;
+        param_sym_set;
         idxkey::String = "", store::Union{Nothing, _XEqStore} = nothing
     )
     variants = store === nothing ? Dict{Tuple{UInt64, String, String}, _SubVariant}() :
@@ -228,8 +227,7 @@ function _TemplateCtx(
         store.bound_bodies
     return _TemplateCtx(
         sites, variants, IdDict{OpExpr, Bool}(), IOBuffer(),
-        var_map, param_sym_set, reg_funcs, bound, idxkey,
-        IdDict{OpExpr, Int}()
+        var_map, param_sym_set, bound, idxkey
     )
 end
 
@@ -412,8 +410,8 @@ end
 
 # One rescued subtree: the expression, the loop-index binding ORDER (sorted —
 # deterministic, and consistent between compile and per-cell rebinding), and
-# the compiled `_CellEval` (attached by `_attach_exprtbl_evals!` once
-# `reg_funcs` is in scope — `_StencilCtx` does not carry it). Mutable so the
+# the compiled `_CellEval` (attached by `_attach_exprtbl_evals!` when the
+# recipe vector is finalized). Mutable so the
 # attach mutates the spec shared by every recipe vector that references it
 # (a variant's recipes are appended to parents by reference).
 mutable struct _ExprTblSpec
@@ -516,8 +514,8 @@ end
 
 # Attach the compiled evaluator to every not-yet-attached `LANE_EXPRTBL`
 # recipe — called from the two places recipe vectors are finalized
-# (`_build_branch_template` and the variant compile in `_stencilize_shared`),
-# where `reg_funcs` is in scope. Loop indices bind as parameters; scalar
+# (`_build_branch_template` and the variant compile in `_stencilize_shared`).
+# Loop indices bind as parameters; scalar
 # params are deliberately ABSENT (`_EMPTY_PARAMS`) — the evaluability contract
 # is loop indices + literals + const arrays only. A compile failure (an op
 # `_compile` cannot evaluate, an unresolvable gather, a loop index named "t")
@@ -525,7 +523,7 @@ end
 # original decline, one hop later.
 function _attach_exprtbl_evals!(
         rs::Vector{_LaneRecipe},
-        const_arrays::AbstractDict, reg_funcs
+        const_arrays::AbstractDict
     )
     for r in rs
         r.kind == LANE_EXPRTBL || continue
@@ -533,7 +531,7 @@ function _attach_exprtbl_evals!(
         spec.ce === nothing || continue
         ce = _cellwise_compile_once_impl(
             spec.expr, length(spec.idx_names),
-            const_arrays, reg_funcs, _EMPTY_PARAMS;
+            const_arrays, _EMPTY_PARAMS;
             bind_syms = spec.idx_names
         )
         ce === nothing && throw(
@@ -594,7 +592,7 @@ function _stencilize_shared(
         # Rescued-subtree lanes need their compile-once evaluator before any
         # box materializes them; the variant path finalizes recipes here, not
         # in `_build_branch_template` (which never sees a variant's rs).
-        _attach_exprtbl_evals!(rs, ctx.const_arrays, tctx.reg_funcs)
+        _attach_exprtbl_evals!(rs, ctx.const_arrays)
         vm_ext = _ext_var_map(tctx.var_map, rs, subctx.subcalls)
         bmemo = _BuildMemo()
         tmpl = _compile(
@@ -602,7 +600,7 @@ function _stencilize_shared(
                 spine, ctx.array_var_info, vm_ext,
                 ctx.const_arrays, ctx.pgather, bmemo
             ),
-            vm_ext, tctx.param_sym_set, tctx.reg_funcs, bmemo
+            vm_ext, tctx.param_sym_set, bmemo
         )
         variant = _SubVariant(tmpl, rs, subctx.subcalls, Dict{String, Any}())
         tctx.variants[vkey] = variant
@@ -1745,7 +1743,7 @@ end
 function _build_branch_template(
         body::ASTExpr, ctx_proto::_StencilCtx,
         var_map::AbstractDict{String, Int},
-        param_sym_set, reg_funcs
+        param_sym_set
     )::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
     rs = _LaneRecipe[]
@@ -1782,10 +1780,10 @@ function _build_branch_template(
             r.arr, r.loop_name, aff
         )
     end
-    # Rescued-subtree lanes: compile each spec's `_CellEval` now that
-    # `reg_funcs` is in scope (once per branch template, cold; a compile
-    # failure restores the whole-equation decline).
-    _attach_exprtbl_evals!(rs, ctx.const_arrays, reg_funcs)
+    # Rescued-subtree lanes: compile each spec's `_CellEval` now (once per
+    # branch template, cold; a compile failure restores the whole-equation
+    # decline).
+    _attach_exprtbl_evals!(rs, ctx.const_arrays)
     vm_ext = _ext_var_map(var_map, rs, ctx.subcalls)
     # Identity memo so `_resolve_indices` + `_compile` carry the DAG that
     # `_stencilize` now preserves straight through to the compiled `_Node`
@@ -1797,7 +1795,7 @@ function _build_branch_template(
             spine, ctx.array_var_info, vm_ext,
             ctx.const_arrays, ctx.pgather, bmemo
         ),
-        vm_ext, param_sym_set, reg_funcs, bmemo
+        vm_ext, param_sym_set, bmemo
     )
     return (
         tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE],

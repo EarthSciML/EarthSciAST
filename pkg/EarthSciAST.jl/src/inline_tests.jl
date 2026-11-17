@@ -213,7 +213,7 @@ function _blas_gather(conc::AbstractArray, cells::AbstractVector, out_sizes::Tup
 end
 
 """
-    _evaluate_cellwise_blas(expr, cells, const_arrays, registered_functions, params)
+    _evaluate_cellwise_blas(expr, cells, const_arrays, params)
 
 The wall2 Phase D BLAS fast path. Returns the evaluated field `Vector{Float64}`
 when `expr` is (or elementwise-wraps) the linear sum-product mat-vec
@@ -226,7 +226,6 @@ function _evaluate_cellwise_blas(
         expr::ASTExpr,
         cells::AbstractVector{<:AbstractVector{<:Integer}},
         const_arrays::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict,
         t::Float64 = 0.0
     )
@@ -312,7 +311,7 @@ function _evaluate_cellwise_blas(
     aug = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     aug[concname] = conc
     ce = _cellwise_compile_once(
-        expr2, nidx, aug, registered_functions, params;
+        expr2, nidx, aug, params;
         bind_syms = out_syms, t = t
     )
     ce === nothing && return nothing
@@ -405,7 +404,7 @@ function _gated_field(
 end
 
 """
-    _evaluate_cellwise_gated(expr, cells, const_arrays, registered_functions, params, t)
+    _evaluate_cellwise_gated(expr, cells, const_arrays, params, t)
 
 Phase E. Returns the evaluated field `Vector{Float64}` when `expr` is — or
 elementwise wraps — a single `faq` carrying resolved `join_gates`, else
@@ -415,7 +414,6 @@ function _evaluate_cellwise_gated(
         expr::ASTExpr,
         cells::AbstractVector{<:AbstractVector{<:Integer}},
         const_arrays::AbstractDict,
-        registered_functions::AbstractDict,
         params::AbstractDict,
         t::Float64 = 0.0
     )
@@ -489,8 +487,7 @@ function _evaluate_cellwise_gated(
     allsyms = String[out_syms...]
     append!(allsyms, contract_names)
     ce = _scalarwise_compile_once(
-        term, allsyms, const_arrays,
-        registered_functions, params; t = t
+        term, allsyms, const_arrays, params; t = t
     )
     ce === nothing && return nothing
 
@@ -534,7 +531,7 @@ function _evaluate_cellwise_gated(
     aug = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     aug[concname] = conc
     ce2 = _cellwise_compile_once(
-        expr2, nidx, aug, registered_functions, params;
+        expr2, nidx, aug, params;
         bind_syms = out_syms, t = t
     )
     ce2 === nothing && return nothing
@@ -542,7 +539,7 @@ function _evaluate_cellwise_gated(
 end
 
 """
-    evaluate_cellwise(expr, cells; const_arrays=Dict(), registered_functions=Dict(),
+    evaluate_cellwise(expr, cells; const_arrays=Dict(),
                       params=Dict()) -> Vector{Float64}
 
 Evaluate an array-valued expression (elementwise ops over array-producing
@@ -570,7 +567,6 @@ correctly away from the start of the span.
 function evaluate_cellwise(
         expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
         const_arrays::AbstractDict = Dict{String, Any}(),
-        registered_functions::AbstractDict = Dict{String, Function}(),
         params::AbstractDict = Dict{String, Float64}(),
         blas_accel::Bool = false,
         t::Float64 = 0.0
@@ -587,8 +583,7 @@ function evaluate_cellwise(
     # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
     if blas_accel
         blas = _evaluate_cellwise_blas(
-            expr, cells, const_arrays,
-            registered_functions, params, t
+            expr, cells, const_arrays, params, t
         )
         blas === nothing || return blas
     end
@@ -607,7 +602,7 @@ function evaluate_cellwise(
     nidx = length(first(cells))
     if all(c -> length(c) == nidx, cells)
         ce = _cellwise_compile_once(
-            expr, nidx, const_arrays, registered_functions,
+            expr, nidx, const_arrays,
             params; t = t
         )
         ce === nothing || return _eval_cells(ce, cells)
@@ -619,8 +614,7 @@ function evaluate_cellwise(
         # and walks the gate's own admitted key sequence. Still one compile for
         # the whole field; `nothing` on any shape it does not recognise.
         gated = _evaluate_cellwise_gated(
-            expr, cells, const_arrays,
-            registered_functions, params, t
+            expr, cells, const_arrays, params, t
         )
         gated === nothing || return gated
     end
@@ -636,7 +630,6 @@ function evaluate_cellwise(
         probe = pr -> _eval_cellwise(
             pr, expr, collect(Int, first(cells));
             const_arrays = const_arrays,
-            registered_functions = registered_functions,
             params = params, t = t
         )
     )
@@ -644,7 +637,6 @@ function evaluate_cellwise(
         _eval_cellwise(
             lic, expr, collect(Int, c);
             const_arrays = const_arrays,
-            registered_functions = registered_functions,
             params = params, t = t
         )
             for c in cells
@@ -1595,7 +1587,7 @@ function _authored_via_programs!(
         body = any(n -> n in targets, keys(subs)) ? _align_bare_reads(body, subs) :
             _sub_preserving(body, subs)
     end
-    ce = _cellwise_compile_once(body, nidx, ca, Dict{String, Any}(), params; t = t)
+    ce = _cellwise_compile_once(body, nidx, ca, params; t = t)
     ce === nothing && return nothing
     return Float64[ce(c) for c in cells]
 end

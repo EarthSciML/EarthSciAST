@@ -1091,8 +1091,7 @@ end
             resolved_obs = Dict{String, _PR.ASTExpr}(),
             array_var_info = Dict("u" => ([1], [1])),
             var_map = Dict("u[1]" => 1), const_registry = Dict{String, Any}(),
-            pgather = Dict{String, Any}(), param_sym_set = Dict{Symbol, Int}(),
-            reg_funcs = Dict{String, Any}()
+            pgather = Dict{String, Any}(), param_sym_set = Dict{Symbol, Int}()
         )
         @test diag(nothing, 8) === :cell
         @test diag(nothing, K) === :part
@@ -1124,7 +1123,7 @@ end
                 () -> run(
                     () -> _PR._materialize_setup_general_map(
                         map_oob,
-                        copy(env), nothing, idx, Dict{String, Function}()
+                        copy(env), nothing, idx
                     )
                 )
             )
@@ -1144,7 +1143,7 @@ end
                 () -> run(
                     () -> _PR._materialize_setup_wholearray(
                         mk, copy(env),
-                        nothing, idx, ["X"], Dict{String, Function}()
+                        nothing, idx, ["X"]
                     )
                 )
             )
@@ -1168,8 +1167,7 @@ end
             )
         )
         mat() = _PR._materialize_setup_wholearray(
-            ok, copy(env), nothing, idx, ["X"],
-            Dict{String, Function}()
+            ok, copy(env), nothing, idx, ["X"]
         )
         insp = _PR._BuildRecord(_PR._compiler_plan(:native))
         an = native(() -> _PR._with_build_record(mat, insp))
@@ -1199,7 +1197,6 @@ end
         e = err_of(
             () -> _PR._resolve_field_ic(
                 _PR._PerCellLicense(), "u", rhs, [1], Dict{String, Any}(),
-                Dict{String, Any}();
                 uniform = (nothing, ["as constant: SENTINEL"])
             )
         )

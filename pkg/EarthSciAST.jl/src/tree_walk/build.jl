@@ -2028,7 +2028,6 @@ struct _IcPlan
     order::Vector{Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}}
     # The unknowns a scalar `ic` right-hand side reads, for its diagnostic.
     unknowns::Set{String}
-    registered_functions::AbstractDict
     reads_start::Bool
 end
 
@@ -2036,8 +2035,7 @@ function _ic_plan(
         model::Model, scalar_ics, field_ics;
         param_scope::AbstractDict, base_arrays::AbstractDict,
         param_arrays::AbstractDict, index_sets::AbstractDict,
-        derived_extents::AbstractDict, factor_scope::AbstractDict,
-        registered_functions::AbstractDict, vi_vars
+        derived_extents::AbstractDict, factor_scope::AbstractDict, vi_vars
     )
     params = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in param_scope)
     bound_fields = Tuple{String, ASTExpr}[(n, _ic_bind_start_time(r)) for (n, r) in field_ics]
@@ -2045,7 +2043,7 @@ function _ic_plan(
         collect(Tuple{String, ASTExpr}, scalar_ics), bound_fields, params,
         Dict{String, Any}(), Dict{String, Any}(), Set{String}(),
         Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}[], Set{String}(),
-        registered_functions, false
+        false
     )
     (isempty(scalar_ics) && isempty(field_ics)) && return empty_plan()
     scalar_param(n) = (
@@ -2148,7 +2146,7 @@ function _ic_plan(
     return _IcPlan(
         collect(Tuple{String, ASTExpr}, scalar_ics), bound_fields, params, arrays, fed,
         Set{String}(k for k in keys(fed) if scalar_param(k)), steps, unknowns,
-        registered_functions, reads_start
+        reads_start
     )
 end
 
@@ -2166,38 +2164,35 @@ function _ic_evaluate(plan::_IcPlan, t0::Float64, data::AbstractDict)
             haskey(plan.arrays, k) || (arrays[k] = at0)
         end
     end
-    rf = plan.registered_functions
     for (n, def, exts) in plan.order
         in_scope = _ic_field_arrays(plan.arrays, arrays)
         if exts !== nothing
             # Column-major, so the values reshape onto the field's own array.
             cells = vec(Vector{Int}[collect(Int, Tuple(I)) for I in CartesianIndices(Tuple(exts))])
             vals = evaluate_cellwise(
-                def, cells; const_arrays = in_scope,
-                registered_functions = rf, params = scalars, t = t0
+                def, cells; const_arrays = in_scope, params = scalars, t = t0
             )
             arrays[n] = reshape(vals, exts...)
         else
-            scalars[n] = _ic_eval_scalar(def, scalars, in_scope, rf, t0)
+            scalars[n] = _ic_eval_scalar(def, scalars, in_scope, t0)
         end
     end
     s = _IcStart(t0, scalars, arrays, plan.reads_start)
-    e = _fold_scalar_ics(plan.scalar_ics, plan.unknowns, s, plan.arrays, rf)
+    e = _fold_scalar_ics(plan.scalar_ics, plan.unknowns, s, plan.arrays)
     return s, e, plan.field_ics
 end
 
 # One scalar value in the start-of-run scope: the scalar evaluator when the
 # expression reads no array of the scope, else the build-time field evaluator
 # over the single cell of a rank-0 field.
-function _ic_eval_scalar(e::ASTExpr, scalars, arrays, registered_functions, t0)
+function _ic_eval_scalar(e::ASTExpr, scalars, arrays, t0)
     reads_array = any(n -> !haskey(scalars, n) && haskey(arrays, n), _referenced_var_names(e))
     reads_array || return Float64(
-        evaluate_expr(e, scalars; registered_functions = registered_functions)
+        evaluate_expr(e, scalars)
     )
     return only(
         evaluate_cellwise(
-            e, [Int[]]; const_arrays = arrays,
-            registered_functions = registered_functions, params = scalars, t = t0
+            e, [Int[]]; const_arrays = arrays, params = scalars, t = t0
         )
     )
 end
@@ -2206,15 +2201,14 @@ end
 # Each scalar `ic` right-hand side evaluated in the start-of-run scope (see
 # `_ic_start_scope`, which has already refused a state read).
 function _fold_scalar_ics(
-        scalar_ics, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict,
-        registered_functions::AbstractDict
+        scalar_ics, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict
     )
     eq_ics = Dict{String, Float64}()
     isempty(scalar_ics) && return eq_ics
     arrays = _ic_field_arrays(base_arrays, s)
     for (vn, rhs) in scalar_ics
         eq_ics[vn] = try
-            _ic_eval_scalar(_ic_bind_start_time(rhs), s.scalars, arrays, registered_functions, s.t0)
+            _ic_eval_scalar(_ic_bind_start_time(rhs), s.scalars, arrays, s.t0)
         catch err
             # Running out of memory or stack is not a statement about this RHS,
             # and a `TreeWalkError` saying it is would be swallowed as an
@@ -2313,7 +2307,6 @@ end
 function _fold_field_ics!(
         set, field_ics, array_cells, layout::StateLayout,
         param_scope::AbstractDict,
-        registered_functions::AbstractDict,
         const_arrays::AbstractDict
     )
     for (target, rhs) in field_ics
@@ -2333,7 +2326,7 @@ function _fold_field_ics!(
         # cell; failing both, the per-cell resolve+compile below. With the
         # construction-time compile-once forms off (`compiler = :interpreter`)
         # only the per-cell path runs.
-        filled = _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+        filled = _field_ic_fill(rhs, cells, param_scope, const_arrays)
         if filled !== nothing
             sf, buf = filled
             _record_rule!("ic($(target))", :equation, :setup_codegen)
@@ -2341,7 +2334,7 @@ function _fold_field_ics!(
             continue
         end
         fast = _setup_compile_once_enabled() ?
-            _try_field_ic_fastpath(rhs, param_scope, registered_functions, const_arrays) :
+            _try_field_ic_fastpath(rhs, param_scope, const_arrays) :
             nothing
         if fast !== nothing
             _record_rule!("ic($(target))", :equation, :setup_compiled)
@@ -2355,8 +2348,7 @@ function _fold_field_ics!(
         # covers goes per cell, handed this verdict so no cell re-runs the
         # failed constant attempt.
         uniform = _field_ic_uniform(
-            target, rhs, cells.rank, const_arrays,
-            registered_functions; params = param_scope
+            target, rhs, cells.rank, const_arrays; params = param_scope
         )
         hit = uniform[1]
         if hit !== nothing
@@ -2371,8 +2363,7 @@ function _fold_field_ics!(
         # which "your compiler cannot run this" would misname.
         seed_cell(access, idxs) =
             _resolve_field_ic(
-            access, target, rhs, copy(idxs), const_arrays,
-            registered_functions; params = param_scope, uniform = uniform
+            access, target, rhs, copy(idxs), const_arrays; params = param_scope, uniform = uniform
         )
         lic = _percell_evaluation_license(
             "ic($(target))",
@@ -2926,7 +2917,7 @@ function _seed_faq_init_u0!(
         initial_conditions::AbstractDict,
         var_map::AbstractDict{String, Int}, array_var_info,
         const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, p;
+        pgather::AbstractDict, param_sym_set, p;
         skip_slots::Set{Int} = Set{Int}()
     )
     pp = isnothing(p) ? NamedTuple() : p
@@ -2974,7 +2965,7 @@ function _seed_faq_init_u0!(
             rhs_op,
             [_expand_int_range(ranges_dict[n]) for n in idx_names],
             var_map, const_arrays,
-            pgather, param_sym_set, reg_funcs, p;
+            pgather, param_sym_set, p;
             u0 = u0, target = var_name
         )
         if filled !== nothing
@@ -2998,7 +2989,7 @@ function _seed_faq_init_u0!(
             )
             sub_body = _sub_preserving(body, idx_exprs)
             body_r = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
-            node = _compile(body_r, var_map, param_sym_set, reg_funcs)
+            node = _compile(body_r, var_map, param_sym_set)
             _eval_node(node, u0, pp, 0.0)
         end
         lic = _percell_license(
@@ -3019,7 +3010,7 @@ function _seed_faq_init_u0!(
         once = _setup_compile_once_enabled() ?
             _compile_init_once(
                 body, idx_names, array_var_info, var_map,
-                const_arrays, pgather, param_sym_set, reg_funcs
+                const_arrays, pgather, param_sym_set
             ) :
             nothing
         if once !== nothing
@@ -3053,17 +3044,16 @@ end
 function _compile_init_once(
         body::ASTExpr, idx_names::Vector{String}, array_var_info,
         var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs
+        pgather::AbstractDict, param_sym_set
     )
     isempty(idx_names) && return nothing
-    built = _try_build_array_contraction(
-        body, idx_names, String[], Any[], "+", 0.0,
-        array_var_info, var_map, const_arrays, pgather
+    got = _resolve_array_contraction_term(
+        body, idx_names, String[], array_var_info, var_map, const_arrays, pgather
     )
-    built === nothing && return nothing
-    refs, resolved = built
+    got === nothing && return nothing
+    refs, _, resolved = got
     node = try
-        _compile(resolved, var_map, param_sym_set, reg_funcs)
+        _compile(resolved, var_map, param_sym_set)
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
@@ -3293,7 +3283,7 @@ function _build_discrete_materializer!(
         mut::DiscreteMaterializer,
         discrete_vars, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
         array_var_info, var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, p, n_states::Int
+        pgather::AbstractDict, param_sym_set, p, n_states::Int
     )
     isempty(discrete_vars) && return nothing
     order = _discrete_fill_order(discrete_vars, discrete_defs)
@@ -3360,7 +3350,7 @@ function _build_discrete_materializer!(
             push!(
                 fills, _compile_discrete_fill(
                     name, rop, Int[length(r) for r in rngs],
-                    cvec, resolved_obs, const_arrays, pgather, param_sym_set, reg_funcs
+                    cvec, resolved_obs, const_arrays, pgather, param_sym_set
                 )
             )
             continue
@@ -3370,7 +3360,7 @@ function _build_discrete_materializer!(
         if isempty(idx_names)
             node = _discrete_cell_node(
                 name, rop_res, (), array_var_info, var_map,
-                const_arrays, pgather, param_sym_set, reg_funcs
+                const_arrays, pgather, param_sym_set
             )
             push!(fills, _scalar_discrete_fill(cvec, node, uz))
             _record_rule!(name, :observed, :scalar)
@@ -3385,7 +3375,7 @@ function _build_discrete_materializer!(
         ncells = prod(dims)
         cell_node(idx_tuple) = _discrete_cell_node(
             name, rop_res, idx_tuple,
-            array_var_info, var_map, const_arrays, pgather, param_sym_set, reg_funcs
+            array_var_info, var_map, const_arrays, pgather, param_sym_set
         )
         lic = _percell_license(
             name,
@@ -3492,7 +3482,7 @@ end
 function _discrete_cell_node(
         name::String, rop_res::OpExpr, idx_tuple,
         array_var_info, var_map, const_arrays, pgather,
-        param_sym_set, reg_funcs
+        param_sym_set
     )
     gather = OpExpr(
         "index", ASTExpr[
@@ -3501,7 +3491,7 @@ function _discrete_cell_node(
         ]
     )
     g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
-    node = _compile(g_r, var_map, param_sym_set, reg_funcs)
+    node = _compile(g_r, var_map, param_sym_set)
     _check_discrete_fill_state_free(node, name)
     return node
 end
@@ -3594,7 +3584,7 @@ end
 function _compile_discrete_fill(
         name::String, def::OpExpr, dims::Vector{Int},
         cvec::Vector{Float64}, resolved_obs, const_arrays,
-        pgather, param_sym_set, reg_funcs
+        pgather, param_sym_set
     )
     nd = length(dims)
     blk = name => (ones(Int, nd), copy(dims))
@@ -3607,7 +3597,7 @@ function _compile_discrete_fill(
         _with_rule_alias(name, name) do
             _compile_derivative_equations(
                 feqs, resolved_obs, avi, L,
-                const_arrays, pgather, param_sym_set, reg_funcs, length(cvec)
+                const_arrays, pgather, param_sym_set, length(cvec)
             )
         end
     end
@@ -3619,7 +3609,7 @@ function _compile_discrete_fill(
     end
     scal = Tuple{Int, _Node}[]
     for (slot, ex) in se
-        push!(scal, (slot, _compile(ex, L, param_sym_set, reg_funcs)))
+        push!(scal, (slot, _compile(ex, L, param_sym_set)))
     end
     append!(scal, pcs)
     merged, _ = _merge_acc_kernel_classes(aks)
@@ -4427,9 +4417,8 @@ function _build_partition_and_materialize(
         model::Model, cls;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
-        param_arrays::AbstractDict, parameter_overrides::AbstractDict,
-        registered_functions::AbstractDict, vi_vars, vi_extents::AbstractDict,
-        vi_maps, has_value_invention::Bool,
+        param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars, vi_extents::AbstractDict,
+        vi_maps,
         # Build-time parameter-read sink (see `_PARAM_READS`): the two consumers
         # below (`_materialize_geometry_setup`, the `ic` evaluation) record the
         # names they resolve, which is what makes a parameter STRUCTURAL.
@@ -4482,8 +4471,7 @@ function _build_partition_and_materialize(
                 cls.geom_setup_vars,
                 cls.geom_defs, model, const_arrays, index_sets, derived_extents;
                 vi_maps = vi_maps.maps, param_overrides = parameter_overrides,
-                const_obs_arrays = cls.const_obs_arrays,
-                registered_functions = registered_functions
+                const_obs_arrays = cls.const_obs_arrays
             )
         end
     end
@@ -4629,8 +4617,7 @@ function _build_partition_and_materialize(
             model, scalar_ics, raw_field_ics;
             param_scope = param_scope, base_arrays = join_key_arrays,
             param_arrays = param_arrays, index_sets = index_sets,
-            derived_extents = derived_extents, factor_scope = factor_scope,
-            registered_functions = registered_functions, vi_vars = vi_vars
+            derived_extents = derived_extents, factor_scope = factor_scope, vi_vars = vi_vars
         )
         (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
@@ -4690,7 +4677,7 @@ function (r::_IcReseed)(t0::Float64, data::AbstractDict)
     end
     _fold_field_ics!(
         (slot, v) -> (slot == 0 || (u0[slot] = v); nothing), fics, r.cells, r.layout,
-        s.scalars, r.plan.registered_functions, _ic_field_arrays(r.const_arrays, s)
+        s.scalars, _ic_field_arrays(r.const_arrays, s)
     )
     n_scalar = length(_layout_scalar_names(r.layout))
     _apply_ics_by_slot!(
@@ -4707,8 +4694,7 @@ end
 # `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
 function _build_state_layout(
         model::Model, cls, parts;
-        initial_conditions::AbstractDict, index_sets::AbstractDict,
-        registered_functions::AbstractDict, const_arrays::AbstractDict, vi_vars,
+        initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars,
         # Build-time parameter-read sink (see `_PARAM_READS`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
         param_reads::Union{Nothing, Set{String}} = nothing,
@@ -4776,7 +4762,7 @@ function _build_state_layout(
         set -> _with_param_reads(param_reads) do
             _fold_field_ics!(
                 set, parts.field_ics, array_cells, var_map,
-                parts.ic_start.scalars, registered_functions,
+                parts.ic_start.scalars,
                 _ic_field_arrays(const_arrays, parts.ic_start)
             )
         end; unvalued = unvalued
@@ -4886,8 +4872,7 @@ end
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(
         model::Model, cls, parts, layout;
-        index_sets::AbstractDict = Dict{String, Any}(),
-        registered_functions::AbstractDict, const_arrays::AbstractDict,
+        index_sets::AbstractDict = Dict{String, Any}(), const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, inspect, materialize_out,
         form::Symbol,
@@ -4917,14 +4902,8 @@ function _build_compile_evaluator(
         Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     )
 
-    # ---- Registered-function handlers ----
-    reg_funcs = Dict{String, Any}(
-        String(k) => v
-            for (k, v) in registered_functions
-    )
-
     # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
-    const_registry = @_bench :const_registry _register_const_arrays(
+    const_registry = _register_const_arrays(
         const_arrays, const_array_boundaries,
         parts.geom_setup_arrays, cls.const_obs_arrays
     )
@@ -5017,10 +4996,10 @@ function _build_compile_evaluator(
     # valid there (a name that reaches one keeps the inline path — see
     # `_collect_materialized_array_obs`).
     discrete_refill = materialize_out === nothing ? nothing :
-        @_bench :discrete_mat _build_discrete_materializer!(
+        _build_discrete_materializer!(
             materialize_out, cls.discrete_vars,
             parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
-            const_registry, pgather, param_sym_set, reg_funcs, p, n_states
+            const_registry, pgather, param_sym_set, p, n_states
         )
 
     # ---- The compiled observed program's context (observed_program.jl) ----
@@ -5031,7 +5010,7 @@ function _build_compile_evaluator(
         inspect.observed_ctx = _ObsProgramCtx(
             model, cls, parts, index_sets,
             layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
-            const_registry, pgather, reg_funcs, template_sites,
+            const_registry, pgather, template_sites,
             materialize_out === nothing ? Dict{String, Array{Float64}}() :
                 materialize_out.caches,
             merge(Dict{String, ASTExpr}(raw_obs), mat_defs),
@@ -5044,10 +5023,10 @@ function _build_compile_evaluator(
     # A caller's u0 override (esm_problem's `u0`, through `_with_caller_u0`) is
     # part of the state the equations read, and a cell it names keeps it.
     caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations)
-    @_bench :seed_u0 _seed_faq_init_u0!(
+    _seed_faq_init_u0!(
         u0, parts.init_equations, initial_conditions, layout.var_map,
         layout.array_var_info, const_registry, pgather,
-        param_sym_set, reg_funcs, p; skip_slots = caller_slots
+        param_sym_set, p; skip_slots = caller_slots
     )
 
     # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
@@ -5193,7 +5172,7 @@ function _build_compile_evaluator(
                         name, mat_defs[name],
                         layout.mat_dims[name], get(model.variables, name, nothing),
                         resolved_obs, array_var_info, var_map, const_registry,
-                        pgather, param_sym_set, reg_funcs
+                        pgather, param_sym_set
                     )
                     _record_rule!(name, :observed, _recurrence_tier(sw))
                     inspect === nothing ||
@@ -5209,7 +5188,7 @@ function _build_compile_evaluator(
                 se, pcs, aks, sfs, acs = _compile_derivative_equations(
                     feqs,
                     resolved_obs, array_var_info, var_map, const_registry,
-                    pgather, param_sym_set, reg_funcs, n_total;
+                    pgather, param_sym_set, n_total;
                     template_sites = template_sites,
                     rhs_list_compiled = form === :oop,
                     obs_nst = form === :inplace ? n_states : 0
@@ -5217,7 +5196,7 @@ function _build_compile_evaluator(
                 for (slot, ex) in se
                     push!(
                         lvl_scalars,
-                        (slot, _compile(ex, var_map, param_sym_set, reg_funcs))
+                        (slot, _compile(ex, var_map, param_sym_set))
                     )
                 end
                 append!(lvl_scalars, pcs)
@@ -5261,10 +5240,10 @@ function _build_compile_evaluator(
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
     scalar_entries, percell_scalar, acc_kernels_pre, scan_folds, array_contractions =
-        @_bench :compile_deriv_eqs _compile_derivative_equations(
+        _compile_derivative_equations(
         derivative_eqs,
         resolved_obs, array_var_info, var_map, const_registry, pgather,
-        param_sym_set, reg_funcs, n_states; template_sites = template_sites,
+        param_sym_set, n_states; template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
         rhs_list_compiled = form === :oop,
         obs_nst = (form === :inplace && n_total > n_states) ? n_states : 0
@@ -5355,8 +5334,8 @@ function _build_compile_evaluator(
     # `pgather` holds BOTH the raw `param_arrays` buffers and the discrete-cadence
     # caches, which is why this is read after `_build_discrete_materializer!` ran.
     rhs_list, scalar_prelude, scalar_cache, cse_diag =
-        @_bench :cse_scalar _cse_compile_scalar(
-        scalar_entries, var_map, param_sym_set, reg_funcs;
+        _cse_compile_scalar(
+        scalar_entries, var_map, param_sym_set;
         has_pgather = !isempty(pgather), obs_defs = obs_defs
     )
     scalar_cache.epoch = forcing_epoch
@@ -5620,7 +5599,6 @@ function _build_evaluator_impl_inner(
         initial_conditions::AbstractDict = Dict{String, Float64}(),
         parameter_overrides::AbstractDict = Dict{String, Float64}(),
         tspan::Union{Nothing, Tuple{<:Real, <:Real}} = nothing,
-        registered_functions::AbstractDict = Dict{String, Function}(),
         const_arrays::AbstractDict = Dict{String, Vector{Float64}}(),
         # Live forcing buffers bound BY REFERENCE (ess-14f.3, JL-J0).
         # Each value MUST be a dense `Array{Float64}`; its `index(…)`
@@ -5934,10 +5912,9 @@ function _build_evaluator_impl_inner(
         model, cls;
         template_sites = _template_sites,
         index_sets = index_sets, const_arrays = const_arrays,
-        param_arrays = param_arrays, parameter_overrides = parameter_overrides,
-        registered_functions = registered_functions, vi_vars = _vi_vars,
+        param_arrays = param_arrays, parameter_overrides = parameter_overrides, vi_vars = _vi_vars,
         vi_extents = _vi_extents, vi_maps = _vi_maps,
-        has_value_invention = _has_value_invention, param_reads = param_reads,
+        param_reads = param_reads,
         ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan, model)[1] : Float64(_ic_t0),
         ic_data = _ic_data
     )
@@ -5950,27 +5927,21 @@ function _build_evaluator_impl_inner(
 
     # ---- Phase 3: array-cell discovery + flat state layout + u0/p ----
     # The build-time ARRAY scope a field `ic` resolves against (esm-spec §6.6.5
-    # "Build-time evaluation scope"): the caller's const arrays OVERLAID on the
-    # STATE-FREE array observeds this build already materialized
-    # (`cls.const_obs_arrays` — a `const`-op gather, a shaped parameter's inline
+    # "Build-time evaluation scope"): the same storage the right-hand side and
+    # the scalar `ic` fold read, by the one precedence rule of
+    # `_overlay_build_time_arrays!` — the caller's const arrays, the setup
+    # arrays this build materialized, and the STATE-FREE array observeds
+    # (`cls.const_obs_arrays`: a `const`-op gather, a shaped parameter's inline
     # column, a bare-alias re-exposure). Such a field is resolvable before the
     # simulation runs, so §11.4.1 admits it as an `ic` right-hand side alongside
-    # a loaded field, a constant and a coordinate expression — which is what
-    # lets a column test seed `u` from a `const` gather instead of minting a
-    # per-regime rewrite-rule library. Caller-supplied data still wins.
-    ic_const_arrays = if isempty(cls.const_obs_arrays)
-        const_arrays
-    else
-        merged = Dict{String, Any}(String(n) => a for (n, a) in cls.const_obs_arrays)
-        for (k, v) in const_arrays
-            merged[String(k)] = v
-        end
-        merged
-    end
-    layout = @_bench :state_layout _build_state_layout(
+    # a loaded field, a constant and a coordinate expression.
+    ic_const_arrays = _overlay_build_time_arrays!(
+        Dict{String, Any}(String(k) => v for (k, v) in const_arrays),
+        parts.geom_setup_arrays, cls.const_obs_arrays
+    )
+    layout = _build_state_layout(
         model, cls, parts;
-        initial_conditions = initial_conditions, index_sets = index_sets,
-        registered_functions = registered_functions, const_arrays = ic_const_arrays,
+        initial_conditions = initial_conditions, index_sets = index_sets, const_arrays = ic_const_arrays,
         vi_vars = _vi_vars, param_reads = param_reads,
         unvalued = inspect === nothing ? nothing : empty!(inspect.unvalued_slots)
     )
@@ -6016,8 +5987,7 @@ function _build_evaluator_impl_inner(
     # ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
     return _build_compile_evaluator(
         model, cls, parts, layout;
-        index_sets = index_sets,
-        registered_functions = registered_functions, const_arrays = const_arrays,
+        index_sets = index_sets, const_arrays = const_arrays,
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
         initial_conditions = initial_conditions, tspan = tspan, inspect = inspect,
         materialize_out = materialize_out, form = form,
@@ -6042,7 +6012,7 @@ function _compile_derivative_equations(
         derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, n_states::Int;
+        pgather::AbstractDict, param_sym_set, n_states::Int;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
         # observeds compiled as named prelude slots, so a slot reference stays a
@@ -6131,7 +6101,7 @@ function _compile_derivative_equations(
                 percell_scalar, acc_kernels, scan_folds,
                 array_contractions, covered, eq, resolved_obs,
                 array_var_info, var_map, const_registry,
-                pgather, param_sym_set, reg_funcs;
+                pgather, param_sym_set;
                 template_sites = template_sites, xeq = xeq,
                 pooled_cells = pooled_cells,
                 rhs_list_compiled = rhs_list_compiled,
@@ -6873,7 +6843,7 @@ function _compile_faq_equation!(
         eq::Equation, resolved_obs::Dict{String, ASTExpr},
         array_var_info, var_map::AbstractDict{String, Int},
         const_registry::AbstractDict, pgather::AbstractDict,
-        param_sym_set, reg_funcs;
+        param_sym_set;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         # `nothing` or an `_XEqStore` (untyped: stencil.jl defines the type and
         # is included after this file; `_try_affine_stencil` checks it).
@@ -7098,7 +7068,7 @@ function _compile_faq_equation!(
         rhs_zerobar = rhs_zerobar, resolved_obs = resolved_obs,
         array_var_info = array_var_info, var_map = var_map,
         const_registry = const_registry, pgather = pgather,
-        param_sym_set = param_sym_set, reg_funcs = reg_funcs, obs_nst = obs_nst,
+        param_sym_set = param_sym_set, obs_nst = obs_nst,
     )
     # The compile-once forms offered this equation, in order — what a refusal
     # below says declined it.
@@ -7143,7 +7113,7 @@ function _compile_faq_equation!(
                 _compile_faq_equation!(
                     percell_scalar, acc_kernels, scan_folds,
                     array_contractions, covered, peq, resolved_obs, array_var_info,
-                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    var_map, const_registry, pgather, param_sym_set;
                     template_sites = template_sites, xeq = xeq, pooled_cells = pooled_cells,
                     rhs_list_compiled = rhs_list_compiled, obs_nst = obs_nst,
                     rule_label = plabel, rule_declines = declines
@@ -7185,12 +7155,12 @@ function _compile_faq_equation!(
             _try_affine_stencil(
                 b, idx_names, iters, lhs_body, resolved_obs,
                 array_var_info, var_map, const_registry, pgather,
-                param_sym_set, reg_funcs, covered; xeq = xeq, kw...
+                param_sym_set, covered; xeq = xeq, kw...
             ) :
             _try_affine_stencil(
                 b, idx_names, rview[2], lhs_body, resolved_obs,
                 rview[1].avi, rview[1].vm, const_registry, pgather,
-                param_sym_set, reg_funcs, covered; xeq = rview[1].xeq,
+                param_sym_set, covered; xeq = rview[1].xeq,
                 view = rview[1], run_iters = range_iters, kw...
             )
         # A contraction the affine tier would UNROLL is offered to it as a loop
@@ -7319,7 +7289,7 @@ function _compile_faq_equation!(
                 _compile_faq_equation!(
                     percell_scalar, acc_kernels, scan_folds,
                     array_contractions, covered, peq, resolved_obs, array_var_info,
-                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    var_map, const_registry, pgather, param_sym_set;
                     template_sites = template_sites, xeq = xeq, pooled_cells = pooled_cells,
                     rhs_list_compiled = rhs_list_compiled, obs_nst = obs_nst,
                     rule_label = plabel, rule_declines = declines
@@ -7394,7 +7364,7 @@ function _compile_faq_equation!(
             long_contraction = long_contraction, has_fold_form = areduce0 !== nothing,
             resolved_obs = resolved_obs, array_var_info = array_var_info,
             var_map = var_map, const_registry = const_registry, pgather = pgather,
-            param_sym_set = param_sym_set, reg_funcs = reg_funcs
+            param_sym_set = param_sym_set
         )
     # A non-strict in-place build reaches here too, and a LONG contraction must
     # not unroll in it either: the per-cell build would write every one of its
@@ -7435,7 +7405,7 @@ function _compile_faq_equation!(
         rhs_zerobar = rhs_zerobar, agg_gates = agg_gates, agg_filter = agg_filter,
         resolved_obs = resolved_obs, array_var_info = array_var_info,
         var_map = var_map, const_registry = const_registry, pgather = pgather,
-        param_sym_set = param_sym_set, reg_funcs = reg_funcs,
+        param_sym_set = param_sym_set,
         contraction_loop = use_contraction_loop, pooled_cells = pooled_cells
     )
     return nothing
@@ -7661,7 +7631,7 @@ function _faq_percell_license(
         offered::Vector{Symbol}; idx_names, range_iters, contract_names, contract_ranges,
         contract_const, rhs_oplus, rhs_zerobar, agg_gates, agg_filter,
         long_contraction::Bool, has_fold_form::Bool, resolved_obs, array_var_info,
-        var_map, const_registry, pgather, param_sym_set, reg_funcs
+        var_map, const_registry, pgather, param_sym_set
     )
     probe(pr) = _faq_diagnostic_cell(
         pr, lhs_body, rhs_body; idx_names = idx_names,
@@ -7669,8 +7639,7 @@ function _faq_percell_license(
         contract_ranges = contract_ranges, contract_const = contract_const,
         rhs_zerobar = rhs_zerobar, agg_gates = agg_gates, agg_filter = agg_filter,
         resolved_obs = resolved_obs, array_var_info = array_var_info, var_map = var_map,
-        const_registry = const_registry, pgather = pgather, param_sym_set = param_sym_set,
-        reg_funcs = reg_funcs
+        const_registry = const_registry, pgather = pgather, param_sym_set = param_sym_set
     )
     return _percell_license(
         label, evaluated -> begin
@@ -7733,7 +7702,7 @@ function _faq_diagnostic_cell(
         idx_names,
         range_iters, contract_names, contract_ranges, contract_const, rhs_zerobar,
         agg_gates, agg_filter, resolved_obs, array_var_info, var_map, const_registry,
-        pgather, param_sym_set, reg_funcs
+        pgather, param_sym_set
     )
     idx_env = Dict{String, Int}(
         idx_names[d] => first(range_iters[d])
@@ -7771,7 +7740,7 @@ function _faq_diagnostic_cell(
         t = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
         _compile(
             _resolve_indices(t, array_var_info, var_map, const_registry, pgather, memo),
-            var_map, param_sym_set, reg_funcs, memo
+            var_map, param_sym_set, memo
         )
         nothing
     end
@@ -7835,7 +7804,7 @@ function _try_compile_array_contraction(
         rhs_oplus::String, rhs_zerobar::Float64,
         resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs,
+        pgather::AbstractDict, param_sym_set,
         # Join gates, a filter, and each contracted range's constant iterator
         # (`nothing` for a ragged, per-cell bound). With gates or a ragged bound
         # the admitted tuples become data (the TABLE form of `_ACFold`); a
@@ -7854,7 +7823,7 @@ function _try_compile_array_contraction(
         rhs_zerobar = rhs_zerobar, resolved_obs = resolved_obs,
         array_var_info = array_var_info, var_map = var_map,
         const_registry = const_registry, pgather = pgather,
-        param_sym_set = param_sym_set, reg_funcs = reg_funcs, obs_nst = obs_nst
+        param_sym_set = param_sym_set, obs_nst = obs_nst
     )
     # With no contracted index the equation is elementwise: the cell's value is
     # its term, written as it is with no fold and no seed (a pointwise filter is
@@ -7889,7 +7858,7 @@ function _try_compile_array_contraction(
     end
     out_refs, contract_refs, marker = got
     node = try
-        _compile(marker, var_map, param_sym_set, reg_funcs, smemo)
+        _compile(marker, var_map, param_sym_set, smemo)
     catch err
         # errors.jl: running out of memory, blowing the stack or being
         # interrupted says nothing about whether this tier can model the
@@ -8118,7 +8087,7 @@ function _compile_faq_percell!(
         rhs_oplus::String, rhs_zerobar::Float64, agg_gates, agg_filter,
         resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs,
+        pgather::AbstractDict, param_sym_set,
         contraction_loop::Bool = false,
         pooled_cells = nothing
     )   # `nothing` or `Vector{Tuple{Int,_Node}}` — see above
@@ -8186,7 +8155,7 @@ function _compile_faq_percell!(
                 sub_rhs = isempty(resolved_obs) ? sub_rhs_outer :
                     _sub_preserving(sub_rhs_outer, resolved_obs)
                 rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, const_registry, pgather, cell_memo)
-                push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo)))
+                push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, cell_memo)))
             elseif contraction_loop
                 # Runtime contraction loop (ess-runtime-contraction): compile the inner
                 # reduction ONCE into an `_NK_CONTRACTION_LOOP` for THIS output cell —
@@ -8217,8 +8186,7 @@ function _compile_faq_percell!(
                 push!(
                     cell_entries, (
                         idx, _compile(
-                            marker, var_map, param_sym_set,
-                            reg_funcs, cell_memo
+                            marker, var_map, param_sym_set, cell_memo
                         ),
                     )
                 )
@@ -8260,7 +8228,7 @@ function _compile_faq_percell!(
                     term = isempty(resolved_obs) ? term :
                         _sub_preserving(term, resolved_obs)
                     rhs_r = _resolve_indices(term, array_var_info, var_map, const_registry, pgather, cell_memo)
-                    push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, reg_funcs, cell_memo))
+                    push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, cell_memo))
                 end
                 if isempty(k_nodes)
                     # A per-cell dynamic bound can be empty (e.g. an isolated
@@ -8355,17 +8323,15 @@ end
 
 """
     _build_evaluator(model::Model; initial_conditions=Dict(),
-                    parameter_overrides=Dict(), tspan=nothing,
-                    registered_functions=Dict(), kwargs...)
+                    parameter_overrides=Dict(), tspan=nothing, kwargs...)
 
-Build a tree-walk ODE RHS evaluator for `model`. Public entry point —
-returns `(f!, u0, p, tspan, var_map)`. Thin wrapper over
-`_build_evaluator_impl`, which additionally returns build diagnostics
-consumed by the ess-dhq N-independence property test.
+Build a tree-walk ODE RHS evaluator for `model` (internal; the exported
+entries are `build_evaluator` and `esm_problem`). Returns `(f!, u0, p, tspan,
+var_map)`. Thin wrapper over `_build_evaluator_impl`, which additionally
+returns build diagnostics.
 
-All state variables must be scalar (shape === nothing) — the walker
-assumes equations have already been scalarized by the discretize
-pipeline. `faq` and `makearray` are supported in expression
+State variables may be scalar or array-shaped; an array state is laid out as
+one block of cells (`StateLayout`). `faq` and `makearray` are supported in expression
 position: scalar `faq` (empty `output_idx`) is expanded inline;
 `index(faq(...), k...)` and `index(makearray(...), k...)` are
 resolved at build time, and so are `index(reshape|transpose|concat(...), k...)`
@@ -8407,8 +8373,6 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
   `nothing`, the first inline `tests` block's `time_span` is used; if
   the model has no tests, the null default `(0.0, 1.0)` is returned.
-* `registered_functions::Dict{String,<:Function}` — handlers for
-  `call` ops, keyed by `handler_id`.
 * `form::Symbol` — what to return in the RHS slot (`:inplace`, the
   default, or `:oop`). `:inplace` gives the `f!(du, u, p, t)` above:
   zero-allocation at Float64 AND eltype-generic, so it both solves and
@@ -9033,15 +8997,13 @@ function _build_evaluator_dict(
         # TEMPLATE-CONSTRUCTED (aggregate-valued) coordinate is admissible as a
         # key index target (not only a const-supplied / reduce-over-const one).
         _vi_targets = _vi_index_targets(model)
-        # Thread the model's registered functions so a coordinate whose body needs
-        # the GENERAL build-time evaluator (an LCC projection's trig/`^`/`fn`
-        # expansion — ops outside the setup-time geometry vocabulary) is projected
-        # HERE, before value-invention, and its `X`/`Y` fed into `const_arrays`.
-        _regfns = get(kwd, :registered_functions, Dict{String, Function}())
+        # A coordinate whose body needs the GENERAL build-time evaluator (an LCC
+        # projection's trig/`^` expansion — ops outside the setup-time geometry
+        # vocabulary) is projected HERE, before value-invention, and its `X`/`Y`
+        # fed into `const_arrays`.
         _derived = _with_param_reads(_preads) do
             _derive_binning_coords(
-                model, file.index_sets, _ca, _params,
-                _vi_targets, _regfns
+                model, file.index_sets, _ca, _params, _vi_targets
             )
         end
         if !isempty(_derived)
@@ -9101,7 +9063,7 @@ function _build_evaluator_dict(
         _envf = _with_param_reads(_preads) do
             _derive_overlap_env_factors(
                 model, file.index_sets, _ca, _params,
-                (_vi === nothing ? Dict{String, Int}() : _vi.extents), _regfns
+                (_vi === nothing ? Dict{String, Int}() : _vi.extents)
             )
         end
         if !isempty(_envf)
@@ -9224,8 +9186,7 @@ function _select_model_or_nothing(file::EsmFile, model_name)
 end
 
 """
-    evaluate_expr(expr::ASTExpr, bindings::AbstractDict;
-                  registered_functions::AbstractDict=Dict{String,Function}())::Float64
+    evaluate_expr(expr::ASTExpr, bindings::AbstractDict)::Float64
 
 Evaluate a single AST expression at the supplied numeric `bindings` by
 running it through the same compile + walker pipeline as
@@ -9240,8 +9201,7 @@ in `bindings` and is not the time variable; other failures surface as
 [`TreeWalkError`](@ref).
 """
 function evaluate_expr(
-        expr::ASTExpr, bindings::AbstractDict;
-        registered_functions::AbstractDict = Dict{String, Function}()
+        expr::ASTExpr, bindings::AbstractDict
     )::Float64
     var_map = Dict{String, Int}()
     u = Vector{Float64}(undef, length(bindings))
@@ -9252,9 +9212,8 @@ function evaluate_expr(
         var_map[sname] = i
         u[i] = Float64(bindings[name])
     end
-    reg_funcs = Dict{String, Any}(String(k) => v for (k, v) in registered_functions)
     node = try
-        _compile(expr, var_map, Set{Symbol}(), reg_funcs)
+        _compile(expr, var_map, Set{Symbol}())
     catch e
         if e isa TreeWalkError && e.code == "E_TREEWALK_UNBOUND_VARIABLE"
             throw(

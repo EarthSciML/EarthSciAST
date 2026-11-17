@@ -291,7 +291,7 @@ function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
         var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
         var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs
+        pgather::AbstractDict, param_sym_set
     )
     _check_recurrence_precision(name, var)
     (
@@ -356,7 +356,7 @@ function _compile_recurrence_sweep(
         )
     )
     out_refs, contract_refs, resolved = got
-    body = _compile(resolved, var_map, param_sym_set, reg_funcs)
+    body = _compile(resolved, var_map, param_sym_set)
     fold = nothing
     if !isempty(contract_names)
         contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]

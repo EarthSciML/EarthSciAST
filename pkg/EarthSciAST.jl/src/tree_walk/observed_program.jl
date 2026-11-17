@@ -45,7 +45,6 @@ mutable struct _ObsProgramCtx
     param_sym_set::Any
     const_registry::AbstractDict
     pgather::AbstractDict
-    reg_funcs::AbstractDict
     template_sites::Any
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
@@ -261,8 +260,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                             _compile_recurrence_sweep(
                                 m, mat_defs[m], mat_dims[m],
                                 get(model.variables, m, nothing), resolved_obs, avi, vm,
-                                ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                                ctx.reg_funcs
+                                ctx.const_registry, ctx.pgather, ctx.param_sym_set
                             )
                         end
                     )
@@ -272,16 +270,14 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
                     _compile_derivative_equations(
                         feqs, resolved_obs, avi, vm,
-                        ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                        ctx.reg_funcs, n_total; template_sites = ctx.template_sites
+                        ctx.const_registry, ctx.pgather, ctx.param_sym_set, n_total; template_sites = ctx.template_sites
                     )
                 end
                 for (slot, ex) in se
                     push!(
                         lvl_scalars, (
                             slot, _compile(
-                                ex, vm, ctx.param_sym_set,
-                                ctx.reg_funcs
+                                ex, vm, ctx.param_sym_set
                             ),
                         )
                     )
@@ -316,7 +312,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         st |= s1; tm |= t1
         scalar = _compile(
             _resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
-            vm, ctx.param_sym_set, ctx.reg_funcs
+            vm, ctx.param_sym_set
         )
     end
     return _ObservedProgram(

@@ -86,8 +86,7 @@ function _setup_fill_loops(def::ASTExpr, nd::Int)
 end
 
 """
-    _compile_setup_fill(def, lo, hi; const_arrays, p, param_sym_set, pgather,
-                        reg_funcs) -> Union{_SetupFill,Nothing}
+    _compile_setup_fill(def, lo, hi; const_arrays, p, param_sym_set, pgather) -> Union{_SetupFill,Nothing}
 
 Compile the fill of the field expression `def` over the box `lo:hi` (see the
 file header), or return `nothing` when no whole-array compiled form serves it.
@@ -100,8 +99,7 @@ reference untouched.
 function _compile_setup_fill(
         def::ASTExpr, lo::Vector{Int}, hi::Vector{Int};
         const_arrays::AbstractDict, p, param_sym_set,
-        pgather::AbstractDict = Dict{String, _PGatherArray}(),
-        reg_funcs::AbstractDict = Dict{String, Any}()
+        pgather::AbstractDict = Dict{String, _PGatherArray}()
     )
     nd = length(lo)
     (nd >= 1 && length(hi) == nd && all(d -> lo[d] <= hi[d], 1:nd)) || return nothing
@@ -122,8 +120,6 @@ function _compile_setup_fill(
     avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}(_SETUP_FILL_NAME => box)
     layout = StateLayout(String[], [_SETUP_FILL_NAME => box])
     n = length(layout)
-    reg = reg_funcs isa Dict{String, Any} ? reg_funcs :
-        Dict{String, Any}(String(k) => v for (k, v) in reg_funcs)
     # A record of its own: the fill's cascade rows and refusals belong to the
     # fill, not to the rule the caller files, and the caller's report gets one
     # row for it (`_record_rule!`, at the call site).
@@ -133,7 +129,7 @@ function _compile_setup_fill(
             se, pcs, aks, sfs, acs = _compile_derivative_equations(
                 Equation[eq],
                 Dict{String, ASTExpr}(), avi, layout, const_arrays, pgather,
-                param_sym_set, reg, n
+                param_sym_set, n
             )
             (isempty(se) && isempty(pcs)) || return nothing
             tiers = Symbol[r.tier for r in rec.rules]
@@ -212,7 +208,7 @@ end
 end
 
 """
-    _setup_fill_array(def, exts; const_arrays, params, reg_funcs) ->
+    _setup_fill_array(def, exts; const_arrays, params) ->
         Union{Array{Float64},Nothing}
 
 The dense array a setup-time materializer produces for `def` over `1:exts`,
@@ -221,16 +217,14 @@ setup scope's scalar name → value map.
 """
 function _setup_fill_array(
         def::ASTExpr, exts::Vector{Int};
-        const_arrays::AbstractDict, params::AbstractDict,
-        reg_funcs::AbstractDict
+        const_arrays::AbstractDict, params::AbstractDict
     )
     _setup_compile_once_enabled() || return nothing
     (!isempty(exts) && all(>(0), exts)) || return nothing
     p, psyms = _setup_fill_params(params)
     sf = _compile_setup_fill(
         def, ones(Int, length(exts)), copy(exts);
-        const_arrays = const_arrays, p = p, param_sym_set = psyms,
-        reg_funcs = reg_funcs
+        const_arrays = const_arrays, p = p, param_sym_set = psyms
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)
@@ -238,7 +232,7 @@ function _setup_fill_array(
 end
 
 """
-    _field_ic_fill(rhs, cells, param_scope, registered_functions, const_arrays)
+    _field_ic_fill(rhs, cells, param_scope, const_arrays)
         -> Union{Tuple{_SetupFill,Vector{Float64}},Nothing}
 
 A field `ic`'s coordinate expression filled over its target's cells, as the
@@ -250,8 +244,7 @@ at least 1): the fill computes every cell of its box, and a cell the target
 does not have must not be evaluated.
 """
 function _field_ic_fill(
-        rhs::ASTExpr, cells::_DiscoveredCells, param_scope::AbstractDict,
-        registered_functions::AbstractDict, const_arrays::AbstractDict
+        rhs::ASTExpr, cells::_DiscoveredCells, param_scope::AbstractDict, const_arrays::AbstractDict
     )
     (rhs isa OpExpr && _setup_compile_once_enabled() && !isempty(cells)) || return nothing
     _has_array_producer(rhs) || return nothing
@@ -261,7 +254,7 @@ function _field_ic_fill(
     p, psyms = _setup_fill_params(param_scope)
     sf = _compile_setup_fill(
         rhs, lo, hi; const_arrays = const_arrays, p = p,
-        param_sym_set = psyms, reg_funcs = registered_functions
+        param_sym_set = psyms
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)
@@ -272,7 +265,7 @@ _colmajor_strides(hi::Vector{Int}) = Int[prod(hi[1:(d - 1)]; init = 1) for d in 
 
 """
     _init_equation_fill(agg, range_iters, var_map, const_arrays, pgather,
-                        param_sym_set, reg_funcs, p)
+                        param_sym_set, p)
         -> Union{Tuple{_SetupFill,Vector{Float64}},Nothing}
 
 A `faq`-valued initialization equation's aggregate `agg` filled over its own
@@ -287,7 +280,7 @@ target is not among them. Any other state read is left to the caller's route.
 """
 function _init_equation_fill(
         agg::OpExpr, range_iters, var_map, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs, p;
+        pgather::AbstractDict, param_sym_set, p;
         u0::Union{Nothing, Vector{Float64}} = nothing,
         target::AbstractString = ""
     )
@@ -318,8 +311,7 @@ function _init_equation_fill(
     hi = Int[last(r) for r in range_iters]
     sf = _compile_setup_fill(
         agg, lo, hi; const_arrays = const_arrays, p = p,
-        param_sym_set = param_sym_set, pgather = pgather,
-        reg_funcs = reg_funcs
+        param_sym_set = param_sym_set, pgather = pgather
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)

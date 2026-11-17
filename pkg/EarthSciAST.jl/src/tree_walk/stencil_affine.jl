@@ -598,7 +598,7 @@ end
 # (the state-recipe evals of lines below + a second `String`).
 function _cell_bkey!(
         sig::_AffineSig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
+        var_map, param_sym_set
     )
     env = ctx_proto.idx_env
     empty!(env)
@@ -619,7 +619,7 @@ function _cell_bkey!(
     bkey = String(take!(sig.bio))
     branch = get(sig.branch_cache, bkey, nothing)
     if branch === nothing
-        branch = _build_branch_template(body, ctx_proto, var_map, param_sym_set, reg_funcs)
+        branch = _build_branch_template(body, ctx_proto, var_map, param_sym_set)
         sig.branch_cache[bkey] = branch
     end
     return bkey, branch
@@ -668,19 +668,16 @@ end
 
 function _cell_ckey!(
         key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs,
+        var_map, param_sym_set,
         okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing,
         ranges::Union{Nothing, Vector{UnitRange{Int}}} = nothing
     )
-    _BENCH_ON[] && (_BENCH_PHASE_N[:cell_ckey] = get(_BENCH_PHASE_N, :cell_ckey, 0) + 1)
-    # The closed form gives the same key wherever it applies; the lane-affine
-    # key off keys slot deltas instead, which it does not model.
+    # The closed form gives the same key wherever it applies.
     fk = sig.fast_key
-    fk isa _FastKey && (okey === nothing || !fk.lane_affine_key_off) &&
-        loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
+    fk isa _FastKey && loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
     bkey, branch = _cell_bkey!(
         sig, loop, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
+        var_map, param_sym_set
     )
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
     _tmpl, recipes, state_ks, _subcalls = branch
@@ -1031,19 +1028,20 @@ const _AFFINE_MAX_DELTA_SEGS = 16
 # millions of cells). The interior between the two converged fronts is a single
 # uniform segment. Mid-domain makearray REGION boundaries — which need not lie near
 # an end — are harvested structurally up front (`_region_cut_candidates`) and
-# probed explicitly, so they are never missed. Anything neither scan nor candidate
-# reaches is still caught by per-box verification in `_derive_lane_repl` (→ an
-# exact table): at the corners for a structurally affine subscript, at every cell
-# otherwise. Correctness depends on that verification being exact, never on cut
-# completeness, which only buys speed.
+# probed explicitly. A lane access neither scan nor candidate reaches is still
+# caught by per-box verification in `_derive_lane_repl` (→ an exact table): at
+# the corners for a structurally affine subscript, at every cell otherwise.
+# Region SELECTION is not verified per box — a box takes its first cell's
+# template (`_process_affine_box!`) — so the region cuts must be complete, which
+# is what the harvest and the region-start probe lines are for.
 #
-# `okey` is the verified output affine map; the first scan of each dim keys state
-# lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
-# segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the
-# indirect-table derivation owns it instead).
+# `okey` is the verified output affine map; its presence selects the strong
+# (lane-affine) key for the first scan of each dim, falling back to the base key
+# when that scan's segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured
+# gather → the indirect-table derivation owns it instead).
 function _affine_cut_points(
         sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-        var_map, param_sym_set, reg_funcs,
+        var_map, param_sym_set,
         okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing
     )
     D = length(idx_names)
@@ -1065,12 +1063,12 @@ function _affine_cut_points(
     for d in 1:D
         starts = _scan_dim_cuts(
             sig, body, idx_names, ranges, ctx_proto, var_map,
-            param_sym_set, reg_funcs, region_cands, d, okey
+            param_sym_set, region_cands, d, okey, probe_extra
         )
         if okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
             starts = _scan_dim_cuts(
                 sig, body, idx_names, ranges, ctx_proto, var_map,
-                param_sym_set, reg_funcs, region_cands, d, nothing
+                param_sym_set, region_cands, d, nothing, probe_extra
             )
         end
         cuts[d] = sort!(collect(starts))
@@ -1082,8 +1080,9 @@ end
 # set of segment-start indices for dim `d` under the signature strength `okey`.
 function _scan_dim_cuts(
         sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
-        okey::Union{Nothing, Tuple{Int, Vector{Int}}}
+        var_map, param_sym_set, region_cands, d::Int,
+        okey::Union{Nothing, Tuple{Int, Vector{Int}}},
+        probe_extra::Vector{Vector{Int}} = [Int[] for _ in idx_names]
     )
     D = length(idx_names)
     rng = ranges[d]; lo, hi = first(rng), last(rng)
@@ -1105,7 +1104,7 @@ function _scan_dim_cuts(
         loop[d] = iv;
         _cell_ckey!(
             prev === kb1 ? kb2 : kb1, sig, loop, idx_names, body,
-            ctx_proto, var_map, param_sym_set, reg_funcs, okey, ranges
+            ctx_proto, var_map, param_sym_set, okey, ranges
         )
     )
     # Region boundaries in this dim, kept only where they open a real segment
@@ -2130,7 +2129,7 @@ end
 function _process_affine_box!(
         kernels, spine_cache, flat_cache, box, idx_names,
         body, ctx_proto, var_map, const_arrays,
-        param_sym_set, reg_funcs, base, strides,
+        param_sym_set, base, strides,
         lhs_var, lhs_idx_args, sig::_AffineSig,
         reduce::Union{Nothing, _AffineReduce} = nothing;
         out_ranges = nothing, cbox = box, view = nothing
@@ -2142,7 +2141,7 @@ function _process_affine_box!(
     corners = _box_corners(box)
     bkey, branch = _cell_bkey!(
         sig, rep, idx_names, body, ctx_proto,
-        var_map, param_sym_set, reg_funcs
+        var_map, param_sym_set
     )
     tmpl, recipes, _state_ks, subcalls = branch
 
@@ -2398,7 +2397,7 @@ function _try_affine_stencil(
         resolved_obs::Dict{String, ASTExpr},
         array_var_info, var_map::AbstractDict{String, Int},
         const_arrays::AbstractDict, pgather::AbstractDict,
-        param_sym_set, reg_funcs, covered::_Covered;
+        param_sym_set, covered::_Covered;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         # A3: the per-BUILD cross-equation store (variant +
         # bound-body caches, shared obs-inline memo).
@@ -2467,7 +2466,7 @@ function _try_affine_stencil(
 
     tctx = sites === nothing ? nothing :
         _TemplateCtx(
-            sites, var_map, param_sym_set, reg_funcs;
+            sites, var_map, param_sym_set;
             idxkey = _idxset_key(all_names), store = xeq
         )
     ctx_proto = _StencilCtx(
@@ -2479,9 +2478,9 @@ function _try_affine_stencil(
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
         # The output slot does not move along a contracted dim.
         all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
-        cuts = @_bench :affine_cuts _affine_cut_points(
+        cuts = _affine_cut_points(
             sig, body, all_names, all_ranges, ctx_proto,
-            var_map, param_sym_set, reg_funcs,
+            var_map, param_sym_set,
             (base, all_strides)
         )
         for d in (D + 1):Dall
@@ -2507,10 +2506,10 @@ function _try_affine_stencil(
                     d <= D ? _clip_run(box[d], run[d]) : box[d]
                     for d in eachindex(box)
                 ]
-            @_bench :affine_box _process_affine_box!(
+            _process_affine_box!(
                 kernels, spine_cache, flat_cache, box, all_names,
                 body, ctx_proto, var_map, const_arrays,
-                param_sym_set, reg_funcs, base, all_strides,
+                param_sym_set, base, all_strides,
                 lhs_var, lhs_idx_args, sig, reduce;
                 out_ranges = ranges, cbox = cbox, view = view
             )

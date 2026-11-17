@@ -211,7 +211,7 @@ end
         Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
             "raw" => _DM_ESS._PGatherArray(raw, [4])
         ),
-        Set{Symbol}(), Dict{String, Any}(), nothing, 4
+        Set{Symbol}(), nothing, 4
     )
 
     @testset "a state-reading fill throws E_TREEWALK_DISCRETE_MATERIALIZE" begin
@@ -254,7 +254,7 @@ end
             Dict{String, _DM_ESS._PGatherArray}(
                 "raw" => _DM_ESS._PGatherArray(raw, [4])
             ),
-            Set{Symbol}(), Dict{String, Any}(), nothing, 4
+            Set{Symbol}(), nothing, 4
         )
         @test dm.caches["Fcache"] == raw       # initial fill reads the live buffer
         raw .= [9.0, 9.0, 9.0, 9.0]

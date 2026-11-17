@@ -708,7 +708,7 @@ function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     allunique(dims) || return nothing
     psyms = Symbol[Symbol(d) for d in dims]
     node = try
-        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms), Dict{String, Any}())
+        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms))
     catch err
         _is_resource_error(err) && rethrow()
         return nothing

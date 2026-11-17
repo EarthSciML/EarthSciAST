@@ -789,15 +789,14 @@ function _cc_values(
     # compiles a function of its own.
     cells = _row_major_cells(ext)
     out = Array{Float64}(undef, ext...)
-    ce = _cellwise_compile_once_impl(e, length(ext), ca, Dict{String, Any}(), used)
+    ce = _cellwise_compile_once_impl(e, length(ext), ca, used)
     if ce !== nothing
         for c in cells
             out[c...] = ce(c)
         end
     else
         fill = _setup_fill_array(
-            e, ext; const_arrays = ca, params = used,
-            reg_funcs = Dict{String, Any}()
+            e, ext; const_arrays = ca, params = used
         )
         if fill !== nothing
             out = fill
@@ -818,7 +817,7 @@ function _cc_values(
                         Dict{String, Int}(), ca
                     )
                     _eval_node(
-                        _compile(r, Dict{String, Int}(), psyms, Dict{String, Any}()),
+                        _compile(r, Dict{String, Int}(), psyms),
                         Float64[], pnt, 0.0
                     )
                 catch err

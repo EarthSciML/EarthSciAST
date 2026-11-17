@@ -58,8 +58,7 @@ function _ot_node(op::String)
     )
     args = ESM.ASTExpr[NumExpr(_ot_argval(op)) for _ in 1:_OT_ARITY[op]]
     return ESM._compile(
-        OpExpr(op, args), Dict{String, Int}(), Set{Symbol}(),
-        Dict{String, Any}()
+        OpExpr(op, args), Dict{String, Int}(), Set{Symbol}()
     )
 end
 

@@ -1797,7 +1797,7 @@ function _guarded_read_taken(guards::_ResolveGuards)
         isempty(_referenced_var_names(c)) || return false
         v = try
             _eval_node(
-                _compile(c, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()),
+                _compile(c, Dict{String, Int}(), Set{Symbol}()),
                 Float64[], NamedTuple(), 0.0
             )
         catch err
@@ -1967,7 +1967,7 @@ function _fold_faq_terms(e::ASTExpr, const_arrays::AbstractDict, memo::IdDict{Op
         t = _resolve_indices(
             e, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays
         )
-        NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}()), Float64[], NamedTuple(), 0.0))
+        NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}()), Float64[], NamedTuple(), 0.0))
     else
         c = OpExpr(e.op, ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
         for f in fieldnames(OpExpr)

@@ -68,7 +68,7 @@ _percell(expr, cells; ca, params = Dict{String, Float64}()) =
 ]
 # Does the BLAS recogniser engage on this shape?
 _engages(expr, cells, ca; params = Dict{String, Float64}()) =
-    ESM._evaluate_cellwise_blas(expr, cells, ca, Dict{String, Function}(), params) !== nothing
+    ESM._evaluate_cellwise_blas(expr, cells, ca, params) !== nothing
 
 # max |a-b| / |b| over the field (atol=0 relative agreement; A/E>0 ⇒ b≠0).
 _maxreldiff(a, b) = maximum(abs.(a .- b) ./ abs.(b))
