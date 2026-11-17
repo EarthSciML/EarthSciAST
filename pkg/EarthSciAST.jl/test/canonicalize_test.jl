@@ -174,6 +174,28 @@ const ESM_Expr = EarthSciAST.ASTExpr
         @test err isa CanonicalizeError
         @test err.code == "E_CANONICAL_UNSUPPORTED_FIELD"
 
+        # `+` and `*` are rebuilt from their sorted operands; every other field
+        # of the node survives, so an annotated sum still refuses to emit.
+        for op in ("+", "*")
+            annotated = OpExpr(
+                op, ESM_Expr[VarExpr("b"), VarExpr("a")];
+                id = "n1", expect_cadence = "slow"
+            )
+            c = canonicalize(annotated)
+            @test c.op == op
+            @test c.args == ESM_Expr[VarExpr("a"), VarExpr("b")]
+            @test c.id == "n1"
+            @test c.expect_cadence == "slow"
+            err = try
+                canonical_json(annotated)
+                nothing
+            catch e
+                e
+            end
+            @test err isa CanonicalizeError
+            @test err.code == "E_CANONICAL_UNSUPPORTED_FIELD"
+        end
+
         # Emissible field set is untouched: wrt/dim/fn/name/value still emit.
         d = OpExpr("D", ESM_Expr[VarExpr("u")]; wrt = "t")
         @test canonical_json(d) == "{\"args\":[\"u\"],\"op\":\"D\",\"wrt\":\"t\"}"

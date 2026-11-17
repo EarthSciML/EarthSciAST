@@ -135,7 +135,7 @@ function _canon_add(node::OpExpr)
         return others[1]
     end
     _sort_args!(others)
-    return OpExpr("+", others)
+    return reconstruct(node; args = others)
 end
 
 function _canon_mul(node::OpExpr)
@@ -160,7 +160,7 @@ function _canon_mul(node::OpExpr)
         return others[1]
     end
     _sort_args!(others)
-    return OpExpr("*", others)
+    return reconstruct(node; args = others)
 end
 
 function _canon_sub(node::OpExpr)
