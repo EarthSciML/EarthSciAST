@@ -31,14 +31,99 @@ const _SEMIRING_REGISTRY = Dict{String, _Semiring}(
     "bool_and_or" => _Semiring("or", 0.0),  # false
 )
 
+# ============================================================
+# The reducer table: every ⊕ an aggregate can fold with
+# ============================================================
+#
+# A reducer is a value, not a name compared at each use: its symbol (what
+# `_Node.op` and the build carry), its 0̄ identity, the Julia function a fold
+# applies (and an emitter splices, by name), and whether it is NUMERIC — may run
+# as a loop and produce an array. `or` (bool_and_or's ⊕) is index-set-producing
+# (§5.5): it folds only in a scalar (rank-0) faq. Adding a reducer is one row;
+# the run-time step `_oplus`, the whitelist `_is_numeric_reducer` and the emitted
+# function `_reducer_fnsym` all read it.
+struct _Reducer
+    sym::Symbol
+    zerobar::Float64
+    fn::Function
+    numeric::Bool
+end
+
+const _REDUCERS = (
+    _Reducer(:+, 0.0, +, true),
+    _Reducer(:*, 1.0, *, true),
+    _Reducer(:max, -Inf, max, true),
+    _Reducer(:min, Inf, min, true),
+    _Reducer(:or, 0.0, _or_combine, false),
+)
+
+const _REDUCER_INDEX = Dict{Symbol, _Reducer}(r.sym => r for r in _REDUCERS)
+
+for _r in _REDUCERS
+    getfield(@__MODULE__, nameof(_r.fn)) === _r.fn ||
+        error("semiring: reducer $(_r.sym) does not resolve to its function in module scope")
+end
+for (_n, _sr) in _SEMIRING_REGISTRY
+    _rr = get(_REDUCER_INDEX, Symbol(_sr.oplus), nothing)
+    (_rr !== nothing && _rr.zerobar === _sr.zerobar) ||
+        error("semiring: '$_n' names ⊕ '$(_sr.oplus)' with a 0̄ the reducer table does not have")
+end
+
 # `reduce` spelling → 0̄, the empty-reduction identity: what the `reduce`
 # shorthand resolves to when no `semiring` is given (⊕ = reduce, ⊗ = "*";
-# §5.1 note 1). The keys are exactly the schema's `reduce` enum. "*" has no
-# registry semiring (× appears only as ⊗). Boolean `or` is reachable only as
-# `semiring: "bool_and_or"`; `reduce: "or"` is refused, as the schema refuses it.
+# §5.1 note 1). The keys are exactly the schema's `reduce` enum, the numeric
+# reducers. Boolean `or` is reachable only as `semiring: "bool_and_or"`;
+# `reduce: "or"` is refused, as the schema refuses it.
 const _OPLUS_IDENTITY = Dict{String, Float64}(
-    "+" => 0.0, "max" => -Inf, "min" => Inf, "*" => 1.0,
+    String(r.sym) => r.zerobar for r in _REDUCERS if r.numeric
 )
+
+"""
+    _is_numeric_reducer(oplus) -> Bool
+
+True for a ⊕ (a `String` or `Symbol`) that may run as a loop and produce an
+array: `+`, `*`, `max`, `min`. False for `or` and for any unknown name.
+"""
+_is_numeric_reducer(oplus::Symbol) =
+    (r = get(_REDUCER_INDEX, oplus, nothing); r !== nothing && r.numeric)
+_is_numeric_reducer(oplus::AbstractString) = _is_numeric_reducer(Symbol(oplus))
+
+@noinline _throw_unknown_reducer(op) = throw(
+    TreeWalkError(
+        "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+        "unknown reducer ⊕ '$(op)'; the reducers are " *
+            join((String(r.sym) for r in _REDUCERS), ", ")
+    )
+)
+
+"""
+    _reducer_fnsym(op::Symbol) -> Symbol
+
+The module-scope name of the function a fold with ⊕ `op` applies, for an
+emitter to splice (`:+`, `:*`, `:max`, `:min`, `:_or_combine`). Declines
+(`_CodegenDecline(:unsupported_op)`) for an unknown ⊕.
+"""
+function _reducer_fnsym(op::Symbol)
+    r = get(_REDUCER_INDEX, op, nothing)
+    r === nothing && throw(_CodegenDecline(:unsupported_op))
+    return nameof(r.fn)
+end
+
+# One ⊕ step, generated from the table as a compare chain over `op` (no table
+# lookup at run time). `_oplus` covers every reducer; `_oplus_numeric` only the
+# numeric ones, so its result type is the operands' (`or` maps any operand type
+# to `Float64`, which would make a `Dual` fold's accumulator a union). An unknown
+# `op` raises; no arm stands in for another reducer.
+for (fname, rows) in (
+        (:_oplus, _REDUCERS),
+        (:_oplus_numeric, filter(r -> r.numeric, collect(_REDUCERS))),
+    )
+    chain = :(_throw_unknown_reducer(op))
+    for r in reverse(rows)
+        chain = Expr(:if, :(op === $(QuoteNode(r.sym))), :($(nameof(r.fn))(a, b)), chain)
+    end
+    @eval @inline $fname(op::Symbol, a, b) = $chain
+end
 
 # Resolve an aggregate node's (⊕ spelling, 0̄ identity) — everything the
 # evaluator needs to fold a reduction and to value an empty one. `semiring`

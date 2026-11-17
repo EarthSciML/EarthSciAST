@@ -185,10 +185,8 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
             return _mknode(kind = _NK_LITERAL, literal = 0.0)
         elseif op == "faq"
             return _geo_compile_agg(expr, g)
-        elseif op == "-" && length(expr.args) >= 3
-            # `-` is unary or binary (esm-spec §4.2), here as in every ladder.
-            throw(TreeWalkError("E_TREEWALK_ARITY", "- expects 1 or 2 args"))
         elseif op in _GEO_SCALAR_OPS
+            _check_op_arity(Symbol(op), length(expr.args))
             children = _Node[_geo_compile(a, g) for a in expr.args]
             return _mknode(kind = _NK_OP, op = Symbol(op), children = children)
         end
@@ -273,7 +271,7 @@ function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
     filt = expr.filter === nothing ? nothing : _geo_compile(expr.filter, inner)
     body = _geo_compile(expr.expr_body, inner)
     oplus, zero = _aggregate_oplus_identity(expr.semiring, expr.reduce)
-    oplus in ("+", "*", "max", "min") || throw(
+    _is_numeric_reducer(oplus) || throw(
         TreeWalkError(
             "E_TREEWALK_GEOMETRY_SETUP",
             "a nested `faq` reducing with '$(oplus)' has no setup-time geometry form"
@@ -535,7 +533,7 @@ function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
             _eval_node(filt, u, p, t, T) != 0.0 || continue
         end
         v = _eval_node(body, u, p, t, T)
-        acc = op === :+ ? acc + v : op === :max ? max(acc, v) : op === :min ? min(acc, v) : acc * v
+        acc = _oplus_numeric(op, acc, v)
     end
     return acc
 end
@@ -914,8 +912,8 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
         push!(resets, :($(Symbol(m, :_set)) = false))
     end
     sets = Any[:(u[$(sp.slots[i])] = Float64($(ks[i]))) for i in eachindex(ks)]
-    fold = sp.op === :+ ? :($acc = $acc + _v) : sp.op === :max ? :($acc = max($acc, _v)) :
-        sp.op === :min ? :($acc = min($acc, _v)) : :($acc = $acc * _v)
+    _is_numeric_reducer(sp.op) || throw(_GeoCGDecline())
+    fold = :($acc = $(_reducer_fnsym(sp.op))($acc, _v))
     inner = quote
         $(sets...)
         $(resets...)

@@ -36,7 +36,7 @@
 
 # Does this spine carry an op whose scalar evaluation is lazy?
 _acc_node_has_lazy(n::_Node) =
-    (n.kind === _NK_OP && (n.op === :ifelse || n.op === :and || n.op === :or)) ||
+    (n.kind === _NK_OP && _op_lazy_from(n.op) > 0) ||
     _anyof(_acc_node_has_lazy, n.children)
 
 # ---- DIRECT CLASS EMISSION switch
@@ -123,22 +123,27 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, "C:", n.op, '(')
         _sig_children!(io, n.children)
         print(io, ')')
+    elseif k === _NK_CONST_GATHER
+        # A computed-subscript table read: cells merge only when they read the
+        # SAME array (`payload` object), at subscripts of one structure.
+        print(io, "G:", objectid(n.payload), '(')
+        _sig_children!(io, n.children)
+        print(io, ')')
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
-        # Defensive: a runtime contraction loop (ess-runtime-contraction) or a
-        # ragged loop is CONFINED to scalar contexts and never reaches the
-        # array-equation merge. Should one ever arrive, key it by object
-        # identity so DISTINCT loops can never be wrongly merged into one kernel
-        # (fail-safe: no merge, not a silent miscompile); a ragged loop's
-        # `[body, lo, hi]` children would otherwise read as an n-ary op's. The
-        # codegen emitter then declines it and the cell falls back to the
-        # per-cell scalar walk.
+        # A runtime contraction loop or a ragged loop is CONFINED to scalar
+        # contexts: a cell holding one is walked by the scalar walker and never
+        # reaches the array-equation merge. Should one arrive, it is keyed by
+        # object identity so DISTINCT loops never share a group, and
+        # `_acc_merge_nodes` then refuses it by name (`_unknown_kind`).
         print(io, "CL:", objectid(n))
-    else  # _NK_OP
+    elseif k === _NK_OP
         print(io, "O:", n.op)
         print(io, '(')
         _sig_children!(io, n.children)
         print(io, ')')
+    else
+        _unknown_kind(n, "the per-cell merge signature")
     end
     return io
 end
@@ -163,6 +168,8 @@ end
 #   PARAM_GATHER all-equal → ARR_FIXED (live); varying → ARR_TBL_BOX (live)
 #   CONTRACTION children merged element-wise (the signature pins the width)
 #   OP        children merged
+#   CONST_GATHER / LIVE_GATHER  children merged, as an operator node with no
+#             operator carrying the gather (same array, by the signature)
 # The ordinal tables use box-local addressing `s1=1, off=1` — the outs runner
 # threads the cell ordinal through `midx[1]`.
 function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})::_Node
@@ -207,7 +214,12 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
             kind = _NK_CONTRACTION, op = n1.op, literal = n1.literal,
             children = ch
         )
-    else  # _NK_OP
+    elseif k === _NK_OP || k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
+        # An operator's children merge element-wise. A table read at a computed
+        # subscript (`_NK_CONST_GATHER`, `_NK_LIVE_GATHER`) is carried on the
+        # access spine as an operator node with no operator holding the
+        # `_ConstGatherArray`, the encoding the direct emitter reads as a table
+        # read (`_de_is_cgather`, ext/reactant_direct/closed.jl).
         pay = n1.payload
         m = length(n1.children)
         ch = _Node[
@@ -216,6 +228,7 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
         ]
         return _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
     end
+    return _unknown_kind(n1, "the per-cell merge")
 end
 
 # Group an array equation's per-cell `(du_slot, node)` entries by structure and

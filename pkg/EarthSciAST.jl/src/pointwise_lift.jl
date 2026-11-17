@@ -144,7 +144,7 @@ end
 # The ops that restructure a WHOLE array (esm-spec §4.3.5). Inside a lifted
 # right-hand side there is no per-cell reading of their operands, so an array
 # operand beneath one is refused rather than gathered per cell.
-const _LIFT_WHOLE_ARRAY_OPS = ("reshape", "transpose", "concat")
+const _LIFT_WHOLE_ARRAY_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
 
 # The grid a lifted equation is rewritten over: its loop variables, the index
 # set each loop runs over (positionally parallel to `loops`), every declared

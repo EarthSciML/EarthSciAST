@@ -530,12 +530,14 @@ end
                 "an operator the lowering has no arm for",
                 () -> begin
                     m = _mtkc_decay_model(1.0, 0.5)
+                    # `not` has the registry's 1.0/0.0 truth value, which a
+                    # Symbolics comparison does not, so the lowering leaves it out.
                     m["equations"][1]["rhs"] = Dict{String, Any}(
-                        "op" => "sign", "args" => Any["x"]
+                        "op" => "not", "args" => Any["x"]
                     )
                     esm_problem(_mtkc_doc(["M" => m]), (0.0, 1.0); compiler = :mtk)
                 end,
-                "`sign`", true,
+                "`not`", true,
             ),
         ]
         for (what, build, needle, points_elsewhere) in cases

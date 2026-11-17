@@ -814,7 +814,7 @@ function _resolve_ragged_faq_loop(
     length(contract_names) == 1 || decline("more than one contracted index")
     (faq_expr.join_gates === nothing && faq_expr.filter === nothing) ||
         decline("a join or a filter")
-    oplus in ("+", "*", "max", "min") || decline("⊕ = $(oplus)")
+    _is_numeric_reducer(oplus) || decline("⊕ = $(oplus)")
     rspec = ranges_dict[contract_names[1]]
     rspec isa AbstractVector && length(rspec) in (2, 3) || decline("range arity")
     step = 1
@@ -1124,7 +1124,7 @@ end
 # inserts or drops unit axes, a `concat` subscript off the joined axis); any
 # other symbolic remap needs integer division or a per-cell operand choice and
 # is refused by name.
-const _SHAPE_REMAP_OPS = ("reshape", "transpose", "concat")
+const _SHAPE_REMAP_OPS = Tuple(sort!(collect(_ops_with(:shape_remap))))
 
 _try_const_int(a::ASTExpr, const_arrays) =
 try
@@ -1583,7 +1583,7 @@ function _resolve_scalar_faq(
     #     returns `nothing` otherwise → unroll).
     if _contraction_loop_enabled() && _ARRAY_CELL_DEPTH[] == 0 &&
             isempty(bound_syms) && gates === nothing && filt0 === nothing &&
-            (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+            _is_numeric_reducer(oplus) &&
             all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
         ranges = [_expand_int_range(ranges_dict[n]) for n in contract_names]
         total = isempty(ranges) ? 0 : prod(length(r) for r in ranges)
@@ -1604,7 +1604,7 @@ function _resolve_scalar_faq(
     # by the outer index.
     if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
             filt0 === nothing && length(contract_names) == 1 &&
-            (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+            _is_numeric_reducer(oplus) &&
             _is_const_int_range(ranges_dict[contract_names[1]])
         r = _expand_int_range(ranges_dict[contract_names[1]])
         if length(r) >= _contraction_loop_min()

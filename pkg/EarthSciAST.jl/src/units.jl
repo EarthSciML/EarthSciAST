@@ -2032,11 +2032,9 @@ end
 # * `broadcast(fn=F, args)` — the unit of `{op: F, args}`.
 # * `faq` — its `filter`, `expr` and operands are always walked for findings;
 #   its own unit is decided by its ⊕ (`_faq_unit`).
+# The registry's array and aggregate categories.
 const _ARRAY_ELEMENT_OPS = Set(
-    [
-        "faq", "makearray", "index", "reshape",
-        "transpose", "concat", "broadcast",
-    ]
+    s.name for s in _OP_TABLE if s.category === :array || s.category === :aggregate
 )
 
 function _array_element_rule(expr, var_units, findings)

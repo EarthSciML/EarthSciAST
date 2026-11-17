@@ -1,7 +1,7 @@
 # Cross-tier op/payload capability audit.
 #
 # The tree-walk engine evaluates the same spine through two tiers —
-# the scalar interpreter (`_eval_acc`, access_kernel.jl) and the B1 codegen
+# the scalar interpreter (`_eval_acc`, access_kernel.jl) and the Julia codegen
 # tier (`_cg_emit_op`, codegen_kernel.jl) — plus the xcse cost gate.
 # Capability drift between them is never an ERROR at runtime (the codegen
 # tier declines and falls back), which is exactly why it goes unnoticed: an op
@@ -22,38 +22,23 @@ const ESM = EarthSciAST
     # Every registered op name, as Symbols (spine node ops are Symbols).
     regops = Set{Symbol}(Symbol(name) for name in keys(ESM._OP_INDEX))
 
-    # The four registry-derived mechanical ladder tables, with the arity each
-    # tier is probed at (a representative legal arity per table).
-    ladder_tables = [
-        ("_UNARY_ELEMENTWISE_OPS", ESM._UNARY_ELEMENTWISE_OPS, 1),
-        ("_BINARY_ELEMENTWISE_OPS", ESM._BINARY_ELEMENTWISE_OPS, 2),
-        ("_COMPARISON_ELEMENTWISE_OPS", ESM._COMPARISON_ELEMENTWISE_OPS, 2),
-        ("_NARY_MINMAX_OPS", ESM._NARY_MINMAX_OPS, 2),
-    ]
-
-    # ---- Expected-decline manifests (ops) -----------------------------------
-    # op => one-line reason. EMPTY today: the codegen
-    # dicts map every op in all four registry tables (they consume the tables
-    # directly). If a future registry op is DELIBERATELY unsupported by the
-    # tier, list it here with the reason; an unlisted gap fails below.
-    CG_UNARY_DECLINES = Dict{Symbol, String}()
-    CG_BINARY_DECLINES = Dict{Symbol, String}()
-    CG_CMP_DECLINES = Dict{Symbol, String}()
-    CG_MINMAX_DECLINES = Dict{Symbol, String}()
-
-    @testset "codegen dicts map every registry ladder op (else add to CG_*_DECLINES)" begin
-        for (tname, table, dict, manifest) in [
-                ("_UNARY_ELEMENTWISE_OPS", ESM._UNARY_ELEMENTWISE_OPS, ESM._CG_UNARY_FN, CG_UNARY_DECLINES),
-                ("_BINARY_ELEMENTWISE_OPS", ESM._BINARY_ELEMENTWISE_OPS, ESM._CG_BINARY_FN, CG_BINARY_DECLINES),
-                ("_COMPARISON_ELEMENTWISE_OPS", ESM._COMPARISON_ELEMENTWISE_OPS, ESM._CG_CMP_FN, CG_CMP_DECLINES),
-                ("_NARY_MINMAX_OPS", ESM._NARY_MINMAX_OPS, ESM._CG_MINMAX_FN, CG_MINMAX_DECLINES),
-            ]
-            gaps = Symbol[
-                row.sym for row in table
-                    if !haskey(dict, row.sym) && !haskey(manifest, row.sym)
-            ]
-            @testset "$tname" begin
-                @test gaps == Symbol[]
+    # The Julia emitter's operator arms are `_op_expr`, one template per registry
+    # shape, so every shaped op has one by construction. Pin that each emitted
+    # expression computes what the host ladder computes, bit for bit, at a
+    # representative arity of every shaped row.
+    @testset "the emitter's expression for every shaped op equals the host ladder" begin
+        argval(sym) = sym in (:acosh,) ? 1.5 : 0.5
+        for r in ESM._SHAPED_OPS
+            ar = r.spec.arity
+            for n in unique([first(ar), min(first(ar) + 1, last(ar)), min(3, last(ar))])
+                n in ar || continue
+                vals = [argval(r.sym) + 0.25 * (i - 1) for i in 1:n]
+                r.spec.shape === :select && (vals[1] = 1.0)
+                want = ESM._scalar_op(r.sym, vals)
+                got = Core.eval(ESM, ESM._op_expr(r.spec, Any[v for v in vals]))
+                @testset "$(r.name)/$n" begin
+                    @test isequal(got, want)
+                end
             end
         end
     end

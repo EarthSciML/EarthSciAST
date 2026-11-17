@@ -56,13 +56,7 @@
 # The name is historical (the pass landed :oop-only); it runs for BOTH emitters.
 _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 
-_oop_mergeable_acc_kind(k) =
-    k in (
-    _AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED,
-    _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-    _AK_CONST_CELL, _AK_LOOP_IDX, _AK_ARR_FIXED,
-    _AK_FORCING_BOX, _AK_ARR_TBL_BOX,
-)
+_oop_mergeable_acc_kind(k) = (a = _ak_addr(k); a !== :edge && a !== :conn)
 
 # Signature equal for two kernels iff they can be evaluated in LOCKSTEP: same
 # tree shape and op/payload structure, with per-lane-varying leaves (state
@@ -79,9 +73,9 @@ function _oop_merge_sig!(
     if k === _NK_ACCESS
         a = K.acc[n.idx]
         _oop_mergeable_acc_kind(a.kind) || (why[] = :acc_kind)
-        if a.kind in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
+        if _oop_x_statefam(a.kind)
             print(io, "AS")
-        elseif a.kind in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
+        elseif _oop_x_forcfam(a.kind)
             print(io, "AF", "b", objectid(a.arr))
         else
             print(io, "AC")
@@ -256,7 +250,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 return _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_ACCESS
                 akind = Kof(1).acc[r.idx].kind
-                if akind in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
+                if _oop_x_statefam(akind)
                     tbl = Vector{Int}(undef, L); q = 0
                     for i in 1:m
                         lk = Ls[i]; idx = nodes[i].idx
@@ -310,7 +304,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                     push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
                 end
                 return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            else # _NK_OP / _NK_CONTRACTION: payload rides from the rep
+            else # any other kind (operator, contraction, reduce): kind and payload ride from the rep
                 pay = r.payload
                 ch = Vector{_Node}(undef, length(r.children))
                 for ci in eachindex(r.children)
@@ -587,12 +581,11 @@ end
 
 _oop_merge_expand_disabled() = !_compiler_plan_now().oop_merge_expand
 
-_oop_x_statefam(k) = k in (_AK_STATE_AFFINE, _AK_STATE_TBL_BOX, _AK_STATE_FIXED)
-_oop_x_forcfam(k) = k in (_AK_ARR_FIXED, _AK_FORCING_BOX, _AK_ARR_TBL_BOX)
-_oop_x_constfam(k) = k in (
-    _AK_SCALAR, _AK_CONST_AFFINE, _AK_CONST_BOX,
-    _AK_CONST_CELL, _AK_LOOP_IDX,
-)
+# The lockstep-mergeable kinds by what they read (`_ak_source`).
+_oop_x_statefam(k) = _oop_mergeable_acc_kind(k) && _ak_source(k) === :state
+_oop_x_forcfam(k) = _oop_mergeable_acc_kind(k) && _ak_source(k) === :forcing
+_oop_x_constfam(k) = _oop_mergeable_acc_kind(k) &&
+    (s = _ak_source(k); s === :const || s === :value || s === :loop)
 
 # Resolve a node through the OWNING kernel's CSE tiers: an own-scratch
 # `_NK_CACHED` read IS its recipe, structurally. Foreign-scratch reads (xcse

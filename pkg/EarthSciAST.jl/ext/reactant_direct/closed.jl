@@ -380,7 +380,7 @@ function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
             v === nothing && return nothing
             push!(c, v)
         end
-        return Float64(_E._scalar_op(nd.op, c, Float64))
+        return _E._scalar_op(nd.op, c)
     end
     return nothing
 end

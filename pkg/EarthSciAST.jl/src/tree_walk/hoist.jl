@@ -127,7 +127,7 @@ function _hoist_walk(
         return r === nothing ? o : r
     end
     _hoist_plain(o) || return o
-    eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
+    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
     new = o.args
     for j in 1:min(eager, length(o.args))
         a = o.args[j]
@@ -323,7 +323,7 @@ function _hoist_split_operands!(
         return out
     end
     _hoist_plain(o) || return out
-    eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
+    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
     for j in 1:min(eager, length(o.args))
         _hoist_split_operands!(out, o.args[j], dims, seen)
     end
@@ -413,7 +413,7 @@ function _hoist_operand_walk(
     _hoist_plain(o) || return o
     hit = get(memo, o, nothing)
     hit === nothing || return hit
-    eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
+    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
     new = o.args
     for j in 1:min(eager, length(o.args))
         a = o.args[j]
