@@ -452,10 +452,10 @@ end
     x = Symbolics.variable(:x)
     u = Symbolics.variable(:u)
     Dx = Symbolics.Differential(x)
-    e = ext._symbolic_to_esm_export(Dx(u), Set(["u"]))
+    e = ext._symbolic_to_esm_export(Symbolics.unwrap(Dx(u)), Set(["u"]))
     @test e isa OpExpr && e.op == "D" && e.wrt == "x"
     @test e.args[1] isa VarExpr && e.args[1].name == "u"
-    e2 = ext._symbolic_to_esm_export(Dx(Dx(u)), Set(["u"]))
+    e2 = ext._symbolic_to_esm_export(Symbolics.unwrap(Dx(Dx(u))), Set(["u"]))
     @test e2.op == "D" && e2.wrt == "x"
     @test e2.args[1] isa OpExpr && e2.args[1].op == "D" && e2.args[1].wrt == "x"
 end

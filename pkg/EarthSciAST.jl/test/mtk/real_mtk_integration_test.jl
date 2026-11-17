@@ -261,9 +261,8 @@ import Symbolics
         lower(e) = ext._esm_to_symbolic(e, vd, t, dd)
         A = EarthSciAST.ASTExpr
         # Two-operand atan is atan(y, x), not atan(y).
-        e = lower(OpExpr("atan", A[VarExpr("y"), VarExpr("x")]))
-        v = Symbolics.value(Symbolics.substitute(e, Dict(y => 1.0, x => -1.0)))
-        @test Float64(Symbolics.SymbolicUtils.unwrap_const(v)) ≈ atan(1.0, -1.0)
+        @test isequal(lower(OpExpr("atan", A[VarExpr("y"), VarExpr("x")])), atan(y, x))
+        @test lower(OpExpr("atan", A[NumExpr(1.0), NumExpr(-1.0)])) ≈ atan(1.0, -1.0)
         @test isequal(
             lower(OpExpr("atan", A[VarExpr("y")])), atan(y)
         )

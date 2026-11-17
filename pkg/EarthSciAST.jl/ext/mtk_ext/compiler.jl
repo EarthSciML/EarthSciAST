@@ -224,27 +224,16 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # parameter. No compiler in this binding integrates an SDE, so the message
     # points at none.
     # A PARAMETER RECOMPUTED BY ITS OWN UPDATE RULE: a symbolic `expression`
-    # under `schedule`/`condition`/`crossing` (esm-spec §5.4), or a value loaded
-    # `from` a data source. The lowering reads every parameter as a constant, so
-    # either would run frozen at its default.
+    # under `schedule`/`condition`/`crossing` (esm-spec §5.4). The lowering reads
+    # every parameter as a constant, so it would run frozen at its default.
     for name in sort!(collect(keys(flat.discrete_parameters)))
-        v = flat.discrete_parameters[name]
-        for rule in EarthSciAST._update_rules(v)
-            if rule.kind != "wiener" && rule.expression !== nothing
-                _mtk_refuse(
-                    name,
-                    "its `$(rule.kind)` update recomputes it from an expression, and " *
-                        "this compiler has no lowering of a parameter update: it would " *
-                        "hold the parameter at its default. $_MTK_TRY_INSTEAD"
-                )
-            elseif rule.from !== nothing || rule.kind == "data"
-                _mtk_refuse(
-                    name,
-                    "it is a DATA-FED parameter (a `data` update), and this compiler " *
-                        "has no loader seam: it would hold the parameter at its default. " *
-                        _MTK_TRY_INSTEAD
-                )
-            end
+        for rule in EarthSciAST._update_rules(flat.discrete_parameters[name])
+            rule.kind != "wiener" && rule.expression !== nothing && _mtk_refuse(
+                name,
+                "its `$(rule.kind)` update recomputes it from an expression, and " *
+                    "this compiler has no lowering of a parameter update: it would " *
+                    "hold the parameter at its default. $_MTK_TRY_INSTEAD"
+            )
         end
     end
 
@@ -260,16 +249,6 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     end
 
     for eq in flat.equations
-        # AN OPERATOR THE LOWERING HAS NO ARM FOR, named here with its equation
-        # rather than raised from inside `ModelingToolkit.System`.
-        for side in (eq.lhs, eq.rhs)
-            op = _mtk_unlowered_op(side)
-            op === nothing || _mtk_refuse(
-                _mtk_equation_label(eq),
-                "it uses the operator `$(op)`, which this compiler has no lowering " *
-                    "for. $_MTK_TRY_INSTEAD"
-            )
-        end
         # `D(<expression>)`. esm-spec calls an equation whose LHS is a time
         # derivative of an EXPRESSION implicit, not a derivative (it credits no
         # state), and `mtkcompile` rejects it outright: "Differential(t)(a + b)
@@ -321,6 +300,31 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         end
     end
     _mtk_refuse_ic_outside_start_scope(flat)
+
+    # A DATA-FED parameter (a `data` update) with no provider passed — one
+    # passed is refused before the load. This compiler has no loader seam, so
+    # it would hold the parameter at its default. After the `ic` check, which
+    # names the more specific rule when an initial value reads one.
+    for name in sort!(collect(keys(flat.parameters)))
+        EarthSciAST._is_data_fed(flat.parameters[name]) && _mtk_refuse(
+            name,
+            "it is a DATA-FED parameter (a `data` update), and this compiler has " *
+                "no loader seam: it would hold the parameter at its default. " *
+                _MTK_TRY_INSTEAD
+        )
+    end
+
+    # AN OPERATOR THE LOWERING HAS NO ARM FOR, named with its equation rather
+    # than raised from inside `ModelingToolkit.System`. Last, so every refusal
+    # above that names a more specific rule keeps precedence.
+    for eq in flat.equations, side in (eq.lhs, eq.rhs)
+        op = _mtk_unlowered_op(side)
+        op === nothing || _mtk_refuse(
+            _mtk_equation_label(eq),
+            "it uses the operator `$(op)`, which this compiler has no lowering " *
+                "for. $_MTK_TRY_INSTEAD"
+        )
+    end
     return nothing
 end
 

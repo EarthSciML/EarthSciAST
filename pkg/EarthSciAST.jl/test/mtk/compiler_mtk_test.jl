@@ -482,22 +482,37 @@ end
                 "a parameter recomputed by a schedule update",
                 () -> begin
                     m = _mtkc_decay_model(1.0, 0.5)
-                    m["variables"]["k"]["update"] = Any[
-                        Dict{String, Any}(
-                            "kind" => "schedule", "times" => Any[0.5],
-                            "expression" => 2.0
-                        ),
-                    ]
+                    m["variables"]["k"]["update"] = Dict{String, Any}(
+                        "kind" => "schedule", "times" => Any[0.5],
+                        "expression" => 2.0
+                    )
+                    m["variables"]["k"]["shape"] = Any[]
                     esm_problem(_mtkc_doc(["M" => m]), (0.0, 1.0); compiler = :mtk)
                 end,
                 "`schedule` update", true,
             ),
             (
                 "a data-fed parameter with no provider",
-                () -> esm_problem(
-                    _mtkc_fixture("valid", "data_sources_ingest_and_select.esm"),
-                    (0.0, 1.0); compiler = :mtk
-                ),
+                () -> begin
+                    m = _mtkc_decay_model(1.0, 0.5)
+                    k = m["variables"]["k"]
+                    delete!(k, "default")
+                    k["update"] = Dict{String, Any}(
+                        "kind" => "data", "source" => "S",
+                        "from" => Dict{String, Any}("file_variable" => "K")
+                    )
+                    doc = _mtkc_doc(["M" => m])
+                    doc["data_sources"] = Dict{String, Any}(
+                        "S" => Dict{String, Any}(
+                            "kind" => "grid",
+                            "source" => Dict{String, Any}(
+                                "url_template" => "file:///nonexistent/k.nc"
+                            ),
+                            "metadata" => Dict{String, Any}("esio_format" => "netcdf")
+                        )
+                    )
+                    esm_problem(doc, (0.0, 1.0); compiler = :mtk)
+                end,
                 "DATA-FED", true,
             ),
             (
