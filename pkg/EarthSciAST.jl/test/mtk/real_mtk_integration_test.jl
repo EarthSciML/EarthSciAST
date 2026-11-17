@@ -251,4 +251,39 @@ import Symbolics
         end
         @test has_ref
     end
+
+    @testset "lowering checks registry arity instead of truncating operands" begin
+        ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
+        t = Symbolics.variable(:t)
+        y, x = Symbolics.variable(:y), Symbolics.variable(:x)
+        vd = Dict{String, Any}("y" => y, "x" => x)
+        dd = Dict{String, Any}("t" => t)
+        lower(e) = ext._esm_to_symbolic(e, vd, t, dd)
+        A = EarthSciAST.ASTExpr
+        # Two-operand atan is atan(y, x), not atan(y).
+        e = lower(OpExpr("atan", A[VarExpr("y"), VarExpr("x")]))
+        v = Symbolics.value(Symbolics.substitute(e, Dict(y => 1.0, x => -1.0)))
+        @test Float64(Symbolics.SymbolicUtils.unwrap_const(v)) ≈ atan(1.0, -1.0)
+        @test isequal(
+            lower(OpExpr("atan", A[VarExpr("y")])), atan(y)
+        )
+        for bad in (
+                OpExpr("-", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("/", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("^", A[VarExpr("y")]),
+                OpExpr("sin", A[VarExpr("y"), VarExpr("x")]),
+                OpExpr("atan", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("max", A[VarExpr("y")]),
+                OpExpr("ifelse", A[VarExpr("y"), VarExpr("x")]),
+            )
+            err = try
+                lower(bad)
+                nothing
+            catch err
+                err
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "E_TREEWALK_ARITY"
+        end
+    end
 end

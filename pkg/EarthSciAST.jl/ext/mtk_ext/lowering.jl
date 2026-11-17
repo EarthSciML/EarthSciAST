@@ -2,11 +2,10 @@
 # ESM ASTExpr → Symbolics conversion
 # ========================================
 
-# The mechanical unary ops the ODE/PDE lowering accepts. Deliberately NOT the
-# registry's `_UNARY_ELEMENTWISE_OPS` (which also carries sign/floor/ceil/
-# asinh/… this arm never accepted, and excludes the 1-or-2-ary `atan` this
-# arm has always treated as unary), and deliberately wider than the Catalyst
-# rate interpreter's set — membership is behavior, so it stays explicit.
+# The elementwise functions the ODE lowering accepts, each applied to all of
+# its operands after the registry arity check (so `atan` takes one or two).
+# Narrower than the registry's `_UNARY_ELEMENTWISE_OPS` (no sign/floor/ceil/
+# asinh/…) and wider than the Catalyst rate interpreter's set.
 const _MTK_UNARY_SCALAR_OPS = (
     "exp", "log", "log10", "sin", "cos", "tan",
     "sinh", "cosh", "tanh", "asin", "acos", "atan",
@@ -77,16 +76,11 @@ function _mtk_extended_op(
         dim_dict::Dict{String, Any}
     )
     if op == "neg"
-        # The CANONICAL unary minus (`src/canonicalize.jl` rewrites `{"op":"-"}`
-        # with one argument to it), so every canonicalized document that negates
-        # anything arrives here. Its absence made `ModelingToolkit.System` throw
-        # "Unsupported operator: neg" on `tests/valid/solver_block.esm` — a
-        # two-line scalar decay — while the un-canonicalized `-` spelling built
-        # fine, which is the same operator wearing a different name.
+        # `neg` and `pow` are the deprecated word spellings of unary `-` and
+        # `^` (`_DEPRECATED_OPS`, src/op_registry.jl). The loader rewrites them
+        # away; an AST built in code can still carry them.
         return -_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     elseif op == "pow"
-        # `pow(a, b)` is the registry's named spelling of `a ^ b` (op_registry
-        # `_op("pow"; fn=(^))`), the twin of the `neg`/`-` pair above.
         return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
             _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
     elseif op == "D"
