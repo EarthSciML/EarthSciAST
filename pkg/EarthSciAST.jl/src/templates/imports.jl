@@ -1326,42 +1326,27 @@ function _resolve_template_machinery(
     doc_isets = _substitute_closed_metaparams!(root, top_templates, doc_isets, values)
     # `mounted_leaf` says a MOUNTING document's registry will receive these
     # index sets and close them (§4.7 "Index-set merge"), so an axis this scope
-    # cannot size stays symbolic instead of being `metaparameter_unbound` here.
-    # Without it, whether a mounted leaf accepted an assembler-scoped axis
-    # turned on `_has_import_machinery` — a WHOLE-DOCUMENT boolean — so adding
-    # one `expression_template_imports` entry for a library the leaf never
-    # calls changed whether the leaf's shape resolved at all (§4.7: "a
-    # component's shape is not allowed to stop resolving because a shared
-    # expression was factored into a library it imports and never calls").
+    # cannot size stays symbolic instead of being `metaparameter_unbound` here,
+    # whether or not the leaf imports anything (§4.7: "a component's shape is not
+    # allowed to stop resolving because a shared expression was factored into a
+    # library it imports and never calls").
     _fold_closed_document!(root, top_templates, doc_isets; strict = !mounted_leaf)
 
-    # --- phase 7: root library file — compose bodies (VALIDATION only), consume
-    #     the import EDGE, restore the DECLARATIONS verbatim ---
+    # --- phase 7: root library file — check the body graph, consume the
+    #     import EDGE, restore the DECLARATIONS verbatim ---
     #
-    # esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE
-    # DECLARATIONS. `expression_template_imports` IS an import edge — a directive
-    # consumed by the fixpoint — and correctly does not survive `parse → emit`.
-    # But a top-level `expression_templates` registry and a top-level
-    # `metaparameters` block (§9.7.1) are DECLARATIONS, peers of `index_sets`:
-    # both survive `parse → emit` VERBATIM, and a template LIBRARY must
-    # round-trip to ITSELF (§9.7.6 "Ordering within load").
+    # esm-spec §9.6.4 rule 5: Option A expands call sites, it does not delete
+    # declarations. `expression_template_imports` is an import edge, consumed
+    # here, and does not survive `parse → emit`. A top-level
+    # `expression_templates` registry and a top-level `metaparameters` block
+    # (§9.7.1) are declarations: both survive `parse → emit` verbatim, so a
+    # template library round-trips to itself (§9.7.6 "Ordering within load"),
+    # in the resolved document as in the `EsmFile`.
     #
-    # This stripped both from the resolved tree. The typed load path papered over
-    # it — `_lower_and_coerce` snapshots the two blocks off the RAW document and
-    # `serialize_esm_file` writes the snapshot back — so an `EsmFile` round-trip
-    # looked right while the RESOLVED DOCUMENT (what `emit_document` and every
-    # raw-tree consumer see) still lost them, emitting `{esm, metadata,
-    # index_sets}`: none of the five top-level payload keys, which the schema's
-    # top-level `anyOf` rejects.
-    #
-    # The authored SNAPSHOTS are restored, not the working copies: `top_templates`
-    # has had its bodies composed and its metaparameters substituted, and emitting
-    # that would round-trip a library to a DIFFERENT (expanded) library. Verbatim
-    # means verbatim — and it is the SAME verbatim block the `EsmFile` carries, so
-    # the two paths agree rather than disagreeing about what a library is.
-    #
-    # Assignment (never delete-then-insert) keeps each block in its authored key
-    # position in the `OrderedDict`.
+    # The authored snapshots are restored, not the working copies, whose bodies
+    # are composed and metaparameters substituted; they are the same blocks the
+    # `EsmFile` carries. Assignment keeps each block in its authored key
+    # position.
     if is_library
         _check_template_body_graph(top_templates, "document")
     end

@@ -5,8 +5,7 @@
 # expanded from the process environment before resolution — an OPTIONAL loader
 # capability (like URL refs). An UNSET variable is left literal, so the ref
 # simply fails to resolve (`template_import_unresolved` / the subsystem error)
-# rather than silently misresolving. Bindings without this capability treat
-# `${VAR}` as a literal path segment, i.e. the same unresolved failure.
+# rather than silently misresolving.
 # `${VAR}` with the variable name as capture group 1.
 const _ENV_REF_RE = r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
 

@@ -15,8 +15,7 @@ source entry is preserved for round-trip; only the flattened system carries the
 expanded edges.
 
 All diagnostics are raised as [`ExpressionTemplateError`](@ref) carrying the
-stable §10.11 codes so they are machine-checkable across bindings. Mirrors the
-TypeScript reference `pkg/earthsci-ast-ts/src/coupling-imports.ts`.
+stable §10.11 codes.
 """
 
 # Payload keys a coupling-library file MUST NOT declare (esm-spec §10.9).

@@ -378,8 +378,7 @@ const _ClockDomain = Union{Domain, AbstractDict, AbstractString, AbstractVector,
 
 # `_time_origin`, for the accessors: a raw `domain` that is neither an object
 # nor `nothing` has no origin to read, so it is refused rather than read as the
-# epoch, as in the other bindings. (The load-time check leaves that `domain` to
-# the schema.)
+# epoch. (The load-time check leaves that `domain` to the schema.)
 function _accessor_origin(domain::_ClockDomain)
     (domain === nothing || domain isa Domain || _is_object(domain)) ||
         return _TimeSpanFault(
@@ -448,8 +447,7 @@ such even when the origin is also unreadable.
 timestamp_to_seconds(file::EsmFile, timestamp) = timestamp_to_seconds(file.domain, timestamp)
 
 function timestamp_to_seconds(domain::_ClockDomain, timestamp)
-    # A non-string timestamp is a caller error, not a `MethodError`, reported
-    # with the same code as in the other bindings.
+    # A non-string timestamp is a caller error, not a `MethodError`.
     timestamp isa AbstractString || throw(
         _time_span_accessor_error(
             _TimeSpanFault(
