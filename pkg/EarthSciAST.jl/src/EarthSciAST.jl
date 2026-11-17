@@ -92,6 +92,8 @@ include("elementwise_lift.jl")
 # raw-JSON traversal helpers
 include("json_walk.jl")
 include("enum_lowering.jl")
+# Reference spelling and location: `${VAR}`, the bundled standard library, URLs.
+include("ref_location.jl")
 include("templates/declarations.jl")
 include("templates/rewrite.jl")
 include("templates/metaparameters.jl")
@@ -99,6 +101,9 @@ include("templates/imports.jl")
 include("templates/expand_typed.jl")
 include("templates/emit.jl")
 include("templates/flat_registry.jl")
+# esm-spec §4.7 mount helpers (mount-declared metaparameters, data-source
+# `extent` check, mount-edge index-set rename).
+include("mounts.jl")
 # Document-scoped solver hints (esm-spec §2.2): the version gate and the §2.2.2
 # tolerance resolution order. After template_imports.jl, whose raw-JSON helpers
 # and ExpressionTemplateError it shares.
