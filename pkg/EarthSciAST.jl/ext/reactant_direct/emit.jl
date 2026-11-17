@@ -177,9 +177,9 @@ _de_akindname(k::UInt8) = get(_DE_AKINDS, k, "access descriptor kind $(Int(k))")
 # The per-call runtime for a kernel's template SUB-KERNELS: the parent plan's
 # FLAT transitive sub list
 # with its aligned lane plans, and one CSE tier per sub. The invariant tier is
-# emitted once per kernel by the prologue (as the interpreter's runner fills it
-# once per call); the per-cell tier is re-emitted at each subcall site, which is
-# what the interpreter's re-fill is in SSA form.
+# emitted once per kernel by the prologue (as the host evaluator fills it once
+# per call); the per-cell tier is re-emitted at each subcall site, which is the
+# host evaluator's per-cell re-fill in SSA form.
 struct _DESubRT
     subs::Vector{_E._AccKernel}
     plans::Vector{_E._OopAccPlan}

@@ -52,15 +52,11 @@ _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 # count-locate: `Σ_k [cmp(knots[k], q)]`, WITHOUT a `stablehlo.reduce`.
 #
 # WHY NOT THE REDUCE. The obvious lowering — broadcast the knot row against the
-# query column, select 1.0/0.0, `reduce` along the knot axis — is five ops and was
-# the first thing here. Locating elementwise instead has measured faster on the one
-# real chemistry mechanism it was compared on, bit-exact against the reduce form,
-# for a small increase in emitted ops. That is the whole case for it.
-#
-# It is NOT a fusion-boundary argument. An earlier version of this comment claimed
-# reductions were hard fusion boundaries whose removal would collapse the step's
-# fusion count; removing every locate reduction moved it by ~2%. Do not cite that
-# model here, and do not extend this lowering on its strength.
+# query column, select 1.0/0.0, `reduce` along the knot axis — is five ops.
+# Locating elementwise instead is bit-exact against the reduce form and measured
+# faster on the one real chemistry mechanism it was compared on, for a small
+# increase in emitted ops. That is the whole case for it; it is not an argument
+# about fusion boundaries.
 #
 # So the count is computed elementwise instead, in one of three tiers. All three
 # return the SAME Float64 lane value as the ladder in `tree_walk/knot_count.jl` — the

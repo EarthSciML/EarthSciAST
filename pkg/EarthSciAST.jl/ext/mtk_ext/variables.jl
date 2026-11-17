@@ -353,12 +353,6 @@ expresses it.
 MTK's `SymbolicContinuousCallback` takes `conditions::Vector{Equation}`, not a
 scalar expression: an entry `lhs ~ rhs` names the zero-crossing function
 `lhs - rhs`, and the integrator winds back to the instant it crosses zero.
-Passing the raw `Num` that `_esm_to_symbolic` produces is what broke every
-continuous event —
-
-    MethodError: no method matching SymbolicContinuousCallback(::Num, ::Vector{Equation})
-
-so the whole `continuous_events` feature failed at System() construction time.
 
 An ESM condition (esm-spec §5) is a zero-crossing FUNCTION, so the mapping is:
 

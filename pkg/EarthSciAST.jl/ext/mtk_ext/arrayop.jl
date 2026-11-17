@@ -450,7 +450,7 @@ end
 # and interior-only stencils with separate scalar boundary equations.
 #
 # Three LHS forms are recognized:
-#   1. arrayop  — output_idx+ranges give a rectangular region
+#   1. faq      — output_idx+ranges give a rectangular region
 #   2. D(u[k])  — scalar differential with a concrete integer index
 #   3. index(u, k1, k2, ...) — direct indexed LHS
 #
@@ -463,14 +463,7 @@ function _lhs_arrayop_shapes(
     for eq in equations
         lhs = eq.lhs
         lhs isa OpExpr || continue
-        # The ESM WIRE TAG, which is `faq` from esm 1.1.0 — not SymbolicUtils'
-        # `ArrayOp`, whose vocabulary this file otherwise keeps. Dispatching on
-        # the old spellings here made this whole loop dead: the loader rejects
-        # `arrayop` and normalizes `aggregate`, and every internal construction
-        # site emits `faq`, so `shapes` came back empty and the
-        # `merge!(inferred_shapes, lhs_shapes)` in `variables.jl` silently
-        # stopped overriding ghost-widened shapes with the authoritative LHS
-        # grid (docs/content/rfcs/faq-node-rename.md §4.1).
+        # The ESM wire tag `faq`, not SymbolicUtils' `ArrayOp`.
         if lhs.op == "faq"
             lhs.ranges === nothing && continue
             lhs.output_idx === nothing && continue
