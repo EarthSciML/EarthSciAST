@@ -69,17 +69,10 @@ struct _ProgramMemo
     flats::IdDict{Any, Vector{Float64}}  # a const array → its flat copy
     inline::Dict{Any, Any}               # a shaped parameter's broadcast value
     verdicts::Dict{Any, Any}             # an affine-tier box check → its answer
-    # The first decomposition the program was asked about (`halo`,
-    # `restrict`), and the tile over its whole domain under it, through which
-    # a workspace made after that evaluates the program (`_decomposed_form`):
-    # `missing` until a workspace asks, `nothing` where there is none.
-    dec::Base.RefValue{Any}
-    form::Base.RefValue{Any}
 end
 _ProgramMemo() = _ProgramMemo(
     ReentrantLock(), IdDict{Any, Any}(),
-    IdDict{Any, Vector{Float64}}(), Dict{Any, Any}(),
-    Dict{Any, Any}(), Ref{Any}(nothing), Ref{Any}(missing)
+    IdDict{Any, Vector{Float64}}(), Dict{Any, Any}(), Dict{Any, Any}()
 )
 
 # The memo this build reads (`nothing` for none), and whether it is the

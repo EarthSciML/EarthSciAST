@@ -153,9 +153,6 @@ struct RhsProgram{F}
     maps::_CopyMaps
     shared::_RhsShared
     memo::_ProgramMemo              # what its re-lowerings reuse from its build
-    # The layout, copy maps and workspace factory of its decomposed form
-    # (`_decomposed_form`), for `rhs!` to read without a dynamic lookup.
-    form::Base.RefValue{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}
 end
 
 """
@@ -693,7 +690,7 @@ function _whole_program_built(
         parent === nothing ?
             _program_shared(seed, p, pa, f!, length(internal), cap) :
             _derived_shared(parent, f!, length(internal), cap, pa),
-        memo, Ref{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}(nothing)
+        memo
     )
     return prog, u0, p
 end
@@ -762,17 +759,11 @@ function _current_program(r::_ProgramSeedRecipe, live::AbstractDict)
             haskey(live, s.name) ? vec(copy(live[s.name])) : d.bufs[k]
                 for (k, s) in enumerate(sh.slots)
         ]
-        m = prog.memo
-        # Its decomposed form (`_decomposed_form`) derives from the new set,
-        # so it is built afresh; the re-lowering caches are shared.
-        memo = _ProgramMemo(
-            m.lock, m.arrays, m.flats, m.inline, m.verdicts, Ref{Any}(nothing), Ref{Any}(missing)
-        )
         cur = RhsProgram(
-            prog.seed, prog.compiler, prog.writes, prog.aux_names, prog.flat, prog.doc,
+            prog.seed, prog.compiler, prog.writes, prog.aux_names, prog.flat,
             prog.front, prog.f!, prog.internal, prog.shapes, prog.layout, prog.maps,
             _RhsShared(sh.params, sh.slots, ForcingSet(sh.slots, bufs, _next_set_epoch()), sh.factory),
-            memo, Ref{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}(nothing)
+            prog.memo
         )
         r.program[] = cur
         return cur
@@ -875,14 +866,6 @@ function rhs!(
         du::AbstractVector, x::Union{RhsProgram, TileProgram}, ws::RhsWorkspace,
         u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet
     )
-    if x isa RhsProgram && ws.shared !== x.shared
-        # A workspace of the program's decomposed form (`rhs_workspace`), set
-        # before the workspace was made.
-        alt = x.form[]
-        if alt !== nothing && ws.shared === alt[3]
-            return _rhs_eval!(du, alt[1], alt[2], alt[3], ws, u, aux, p, t, fs)
-        end
-    end
     return _rhs_eval!(du, x.layout, x.maps, x.shared, ws, u, aux, p, t, fs)
 end
 
@@ -2538,7 +2521,6 @@ with `compiler = :native`.
 function halo(op::RhsProgram, dec::Decomposition)
     _require_native(op, "halo")
     m = _axis_model(op, dec)
-    _note_decomposition!(op, dec)
     spec = _TileSpec(
         :halo, m, Dict{String, UnitRange{Int}}(), Dict{String, UnitRange{Int}}(),
         _array_shapes(op), Set(op.writes), nothing, op.memo
@@ -2606,7 +2588,6 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
             )
         )
     end
-    _note_decomposition!(op, dec)
     shapes = _array_shapes(op)
     spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo)
     f!, internal, cap, pa = _relower(op, spec)
