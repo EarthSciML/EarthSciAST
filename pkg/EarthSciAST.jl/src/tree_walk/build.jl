@@ -2930,6 +2930,11 @@ function _seed_faq_init_u0!(
         ranges_dict = _ranges_dict(rhs_op)
         body = rhs_op.expr_body
         body === nothing && continue
+        # An array-valued observed: a numeric evaluator refuses ⊕ = `or` there
+        # (CONFORMANCE_SPEC §5.6.1).
+        isempty(idx_names) ||
+            _is_numeric_reducer(first(_aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce))) ||
+            _throw_array_bool_and_or("or")
         # A POINTWISE filter (no contracted index): a cell whose predicate is
         # false is the semiring's 0̄ (esm-schema `filter`). It goes on the body as
         # the `ifelse` guard the array-equation path builds for it
@@ -6905,6 +6910,9 @@ function _compile_faq_equation!(
         rhs_op = rhs_expr::OpExpr
         rhs_oplus, rhs_zerobar =
             _aggregate_oplus_identity(rhs_op.semiring, rhs_op.reduce)
+        # An array equation's right-hand side is array-valued: a numeric
+        # evaluator refuses ⊕ = `or` there (CONFORMANCE_SPEC §5.6.1).
+        _is_numeric_reducer(rhs_oplus) || _throw_array_bool_and_or(rhs_oplus)
         agg_gates = rhs_op.join_gates
         agg_filter = rhs_op.filter
         rhs_ranges = _ranges_dict(rhs_op)
