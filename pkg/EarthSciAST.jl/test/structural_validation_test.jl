@@ -1239,7 +1239,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             ]
         )
         paths = String[]
-        EarthSciAST._foreach_model_expression(model, "/models/M", nothing) do _, p, _
+        EarthSciAST.foreach_expression(model, "/models/M") do _, p, _
             push!(paths, p)
             nothing
         end

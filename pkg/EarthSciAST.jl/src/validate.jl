@@ -2022,22 +2022,21 @@ function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{St
 end
 
 # The `undefined_index_set` check of `_check_undefined_index_set!` on every
-# expression field of `model` (`_foreach_model_expression`: equations,
-# initialization equations, parameter updates, guesses, events, inline tests,
-# subsystem models) that calls a template, read from the expanded `view`. A
+# expression site of `model` and its subsystem models (`foreach_expression`)
+# that calls a template, read from the expanded `view`. A
 # field the view leaves unexpanded is expanded here against `reg`.
 function _check_template_index_sets!(
         errors::Vector{StructuralError}, model::Model, view::Model,
         path::String, registry::Set{String}, reg
     )
     templated = Set{String}()
-    _foreach_model_expression(model, path, nothing) do e, anchor, _
+    foreach_expression(model, path) do e, anchor, _
         _contains_template_reference(e) && push!(templated, anchor)
         nothing
     end
     isempty(templated) && return errors
     memo = _ExpandCache()
-    _foreach_model_expression(view, path, nothing) do e, anchor, _
+    foreach_expression(view, path) do e, anchor, _
         anchor in templated || return nothing
         any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
             return nothing

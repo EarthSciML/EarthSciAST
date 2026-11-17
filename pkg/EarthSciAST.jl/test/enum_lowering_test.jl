@@ -70,6 +70,59 @@ const _ENUM_REPO_ROOT = TESTUTILS_REPO_ROOT
         @test rhs isa OpExpr && rhs.op == "const" && rhs.value == 1
     end
 
+    @testset "events, guesses, bounds, inline tests and update rules are lowered" begin
+        cmp(e) = OpExpr(">", EarthSciAST.ASTExpr[VarExpr("x"), e])
+        model = Model(
+            Dict(
+                "x" => ModelVariable(EarthSciAST.UnknownVariable; lb = enum_expr()),
+                "p" => ModelVariable(
+                    EarthSciAST.ParameterVariable; default = 0.0,
+                    update = ParameterUpdate("condition"; when = cmp(enum_expr()), expression = enum_expr())
+                ),
+            ),
+            [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt = "t"), VarExpr("p"))];
+            continuous_events = [
+                ContinuousEvent(
+                    EarthSciAST.ASTExpr[cmp(enum_expr())],
+                    [AffectEquation("x", enum_expr())]
+                ),
+            ],
+            discrete_events = [
+                DiscreteEvent(ConditionTrigger(cmp(enum_expr())), [AffectEquation("x", enum_expr())]),
+            ],
+            guesses = Dict{String, Union{Float64, EarthSciAST.ASTExpr}}("x" => enum_expr()),
+            tests = [
+                EarthSciAST.InlineTest(
+                    "t", EarthSciAST.TimeSpan(0.0, 1.0),
+                    [EarthSciAST.Assertion("x", 1.0, 0.0; reduce = "L2_error", reference = enum_expr())]
+                ),
+            ]
+        )
+        file = EsmFile(
+            "2.0.0", Metadata("Enums"); models = Dict("M" => model),
+            enums = Dict("Phase" => Dict("SOLID" => 0, "LIQUID" => 1))
+        )
+        lowered = lower_enums(file)
+        sites = String[]
+        enum_sites = String[]
+        EarthSciAST.foreach_expression(lowered) do e, p, _
+            push!(sites, p)
+            EarthSciAST.foreach_subexpr_once(e) do s
+                s isa OpExpr && s.op == "enum" && push!(enum_sites, p)
+                nothing
+            end
+        end
+        @test length(sites) == 11
+        @test isempty(enum_sites)
+        m = lowered.models["M"]
+        @test m.guesses["x"].op == "const" && m.guesses["x"].value == 1
+        @test m.variables["x"].lb.op == "const"
+        @test m.discrete_events[1].trigger.expression.args[2].op == "const"
+        @test m.tests[1].assertions[1].reference.op == "const"
+        # The input still holds its `enum` ops.
+        @test file.models["M"].guesses["x"].op == "enum"
+    end
+
     @testset "every rejection is an EnumLoweringError, not a ParseError" begin
         undeclared = try
             lower_enums(_file(enums = Dict("Other" => Dict("A" => 0))))

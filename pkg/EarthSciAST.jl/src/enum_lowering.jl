@@ -198,11 +198,15 @@ lower_enums(file::EsmFile)::EsmFile = lower_enums!(deepcopy(file))
 """
     lower_enums!(file::EsmFile)
 
-Replace each `enum` op with a `const` integer per the file's `enums` block, in
-these positions: a model's equations, initialization equations and parameter
-update rules (recursing into subsystems), a reaction system's rates and
-constraint equations (recursing into subsystems), and the expressions of
-`coupling` entries. Events, guesses and inline-test references are not walked.
+Replace each `enum` op with a `const` integer per the file's `enums` block, at
+every expression site of the file ([`EXPRESSION_SITE_KINDS`](@ref), walked by
+[`map_expressions!`](@ref)): a model's equations, initialization equations,
+expression guesses, parameter update rules, expression bounds, events and
+inline-test references (recursing into subsystems); a reaction system's
+rates, parameter update rules, constraint equations, events and inline-test
+references (recursing into subsystems); and the expressions of `coupling`
+entries (a `variable_map` transform, an `event`'s conditions, trigger and
+affects, a `couple` connector equation's typed expression).
 
 The in-place twin of [`lower_enums`](@ref), which documents the validation
 rules and the [`EnumLoweringError`](@ref) codes both raise.
@@ -212,144 +216,21 @@ Mutates `file` in place; returns the file for convenience.
 function lower_enums!(file::EsmFile)::EsmFile
     enums = file.enums === nothing ? Dict{String, Dict{String, Int}}() : file.enums
     _check_enum_values_unique(enums)
-    if file.models !== nothing
-        for (_, m) in file.models
-            _lower_model_enums!(m, enums)
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (_, rs) in file.reaction_systems
-            _lower_reaction_system_enums!(rs, enums)
-        end
-    end
-    if file.coupling !== nothing
-        for ce in file.coupling
-            _lower_coupling_entry_enums!(ce, enums)
-        end
-    end
-    return file
-end
-
-function _lower_model_enums!(model::Model, enums::Dict{String, Dict{String, Int}})
-    # esm 1.0.0: a variable carries no defining expression, so the only
-    # per-variable expression positions left are a parameter update's `when`
-    # trigger and its `expression` value form (esm-spec §5.4).
-    for (name, var) in model.variables
-        var.update === nothing && continue
-        rules = ParameterUpdate[]
-        changed = false
-        for r in var.update
-            nw = r.when === nothing ? nothing : _lower_expr_enums(r.when, enums)
-            ne = r.expression === nothing ? nothing : _lower_expr_enums(r.expression, enums)
-            (nw !== r.when || ne !== r.expression) && (changed = true)
-            push!(
-                rules, ParameterUpdate(
-                    r.kind; times = r.times, interval = r.interval,
-                    initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                    source = r.source, hook = r.hook, expression = ne, from = r.from,
-                    handler = r.handler
-                )
-            )
-        end
-        changed && (model.variables[name] = reconstruct(var; update = rules))
-    end
-    _lower_equations_enums!(model.equations, enums)
-    _lower_equations_enums!(model.initialization_equations, enums)
-
-    for (_, sub) in model.subsystems
-        # An unresolved SubsystemRef carries no enums to lower.
-        sub isa Model || continue
-        _lower_model_enums!(sub, enums)
-    end
-    return
-end
-
-# Lower every `enum` op in both sides of each equation of `eqs`, in place.
-function _lower_equations_enums!(eqs::Vector{Equation}, enums::Dict{String, Dict{String, Int}})
-    for (i, eq) in enumerate(eqs)
-        eqs[i] = Equation(
-            _lower_expr_enums(eq.lhs, enums),
-            _lower_expr_enums(eq.rhs, enums);
-            _comment = eq._comment
-        )
-    end
-    return eqs
-end
-
-function _lower_reaction_system_enums!(
-        rs::ReactionSystem,
-        enums::Dict{String, Dict{String, Int}}
-    )
-    new_reactions = Reaction[]
-    for r in rs.reactions
-        # `raw_substrates`/`raw_products`: the ordered StoichiometryEntry
-        # fields (`get_reactants_dict`/`get_products_dict` give the unordered
-        # `Dict{String,Float64}` view instead).
-        push!(
-            new_reactions, Reaction(
-                r.id,
-                raw_substrates(r),
-                raw_products(r),
-                _lower_expr_enums(r.rate, enums);
-                name = r.name,
-                reference = r.reference
-            )
-        )
-    end
-    empty!(rs.reactions)
-    append!(rs.reactions, new_reactions)
-    _lower_equations_enums!(rs.constraint_equations, enums)
-    for (_, sub) in rs.subsystems
-        _lower_reaction_system_enums!(sub, enums)
-    end
-    return
-end
-
-function _lower_coupling_entry_enums!(
-        ce::CouplingEntry,
-        enums::Dict{String, Dict{String, Int}}
-    )
-    return if ce isa CouplingCouple && haskey(ce.connector, "equations")
-        eqs = ce.connector["equations"]
-        if eqs isa AbstractVector
-            for (i, e) in enumerate(eqs)
-                if e isa AbstractDict && haskey(e, "expression")
-                    expr_obj = e["expression"]
-                    if expr_obj isa ASTExpr
-                        e["expression"] = _lower_expr_enums(expr_obj, enums)
-                    end
-                end
-            end
-        end
-    end
+    memo = IdDict{OpExpr, ASTExpr}()
+    return map_expressions!(e -> _lower_expr_enums(e, enums, memo), file)
 end
 
 # Recursive enum-op lowering. Returns a new tree only if a substitution
 # occurred; otherwise returns the input unchanged so identity-based caching
 # upstream still works.
-function _lower_expr_enums(e::NumExpr, _)
-    return e
-end
-function _lower_expr_enums(e::IntExpr, _)
-    return e
-end
-function _lower_expr_enums(e::VarExpr, _)
-    return e
-end
-
-# Identity-memoized entry: enum lowering is a pure, context-free function of
-# the node, so a subtree shared under many parents (template expansion stores
-# the expanded AST as a shared DAG) is lowered ONCE and the shared result
-# respliced — keeping this pass linear in UNIQUE nodes instead of exponential
-# in paths, and preserving the sharing for downstream consumers (the
-# build-time `IdDict` memo caches in tree_walk/compile.jl key on it).
-function _lower_expr_enums(
-        e::OpExpr,
-        enums::Dict{String, Dict{String, Int}}
-    )::ASTExpr
-    return _lower_expr_enums(e, enums, IdDict{OpExpr, ASTExpr}())
-end
-
+#
+# Identity-memoized: enum lowering is a pure, context-free function of the
+# node, so a subtree shared under many parents (template expansion stores the
+# expanded AST as a shared DAG, and one memo serves the whole file) is lowered
+# ONCE and the shared result respliced — keeping this pass linear in UNIQUE
+# nodes instead of exponential in paths, and preserving the sharing for
+# downstream consumers (the build-time `IdDict` memo caches in
+# tree_walk/compile.jl key on it).
 _lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr, ASTExpr}) = e
 
 function _lower_expr_enums(

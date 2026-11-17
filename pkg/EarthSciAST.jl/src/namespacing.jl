@@ -288,36 +288,6 @@ end
 # Per-system collection
 # ========================================
 
-"""
-    _namespace_variable_update(var, _ns) -> ModelVariable
-
-Rewrite the expression-bearing fields of a parameter's `update` rules (§5.4)
-through the namespacing map `_ns`, returning `var` unchanged when it declares
-no update. `when` and `expression` are ordinary expression positions whose free
-names resolve in the DECLARING component's scope, so they must follow the same
-renaming every equation does — otherwise a condition-triggered parameter stops
-seeing the state it watches once its model is flattened under a prefix.
-"""
-function _namespace_variable_update(var::ModelVariable, _ns)::ModelVariable
-    var.update === nothing && return var
-    rules = ParameterUpdate[]
-    changed = false
-    for r in var.update
-        nw = r.when === nothing ? nothing : _ns(r.when)
-        ne = r.expression === nothing ? nothing : _ns(r.expression)
-        (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(
-            rules, ParameterUpdate(
-                r.kind; times = r.times, interval = r.interval,
-                initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                source = r.source, hook = r.hook, expression = ne, from = r.from,
-                handler = r.handler
-            )
-        )
-    end
-    return changed ? reconstruct(var; update = rules) : var
-end
-
 # Namespace a component's events into the flatten accumulators. Shared by
 # `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
 # system carry their events into the flattened system by the SAME rule.
@@ -449,9 +419,10 @@ function _collect_model!(
     _inlineable_here = _inlineable_observed_unknowns(model)
     for (name, var) in model.variables
         namespaced = "$(prefix).$(name)"
-        # A bound reference is namespaced exactly as an equation's reference is
-        # (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
-        v = _map_variable_bounds(_namespace_variable_update(var, _ns), _ns)
+        # A variable's update rules and bounds are namespaced exactly as an
+        # equation's references are (esm-libraries-spec §4.7.5, "Bounds follow
+        # the renaming"): they resolve in the declaring component's scope.
+        v = _map_variable_sites(_ns, var)
         if v.type == ParameterVariable
             params[namespaced] = v
         elseif name in _observed_here
