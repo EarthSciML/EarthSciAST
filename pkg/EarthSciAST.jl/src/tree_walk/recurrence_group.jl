@@ -48,6 +48,27 @@ end
 
 _group_refuse(msg) = throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE", msg))
 
+# The frame position a member's offset reads of the group fold along: the first
+# axis on which some read `index(g, …)` of a member `g` is offset by a constant
+# (`k - c`), or 0 when none is. Only the axis is decided here; whether each read
+# is well founded is `_recurrence_axis`'s question on the stacked recurrence.
+function _group_member_axis(body, members::Vector{String}, idx_names::Vector{String})
+    env = Dict{String, Tuple{Int, Int}}()
+    reads = Vector{ASTExpr}[]
+    for g in members
+        _collect_self_read_args!(reads, body, g)
+    end
+    for args in reads
+        length(args) == length(idx_names) || continue
+        for (d, arg) in enumerate(args)
+            aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
+            (aff === nothing || aff[1] != 1 || aff[2] === nothing) && continue
+            aff[2] == (0, 0) || return d
+        end
+    end
+    return 0
+end
+
 function _stack_one_group!(
         variables::OrderedDict{String, ModelVariable},
         equations::Vector{Equation},
@@ -143,6 +164,26 @@ function _stack_one_group!(
                     "cell frame (esm-spec §4.3.1.2)"
             )
         )
+    end
+    # One recurrence axis for the whole group (esm-spec §4.3.1.2): a member
+    # whose offset reads fold along another axis is the validator's
+    # `recurrence_group_axis_mismatch`, here too, before the stacked recurrence
+    # would report it as a disagreement inside one definition.
+    axis1, axis1_of = 0, ""
+    for (m, (idx, _, body)) in zip(members, frames)
+        a = _group_member_axis(body, members, idx)
+        a == 0 && continue
+        if axis1 == 0
+            axis1, axis1_of = a, m
+        elseif a != axis1
+            throw(
+                TreeWalkError(
+                    ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
+                    "'$m' and '$axis1_of' form a recurrence group but fold along different " *
+                        "axes ('$(idx[a])' and '$(idx_names[axis1])'; esm-spec §4.3.1.2)"
+                )
+            )
+        end
     end
     RECURRENCE_MEMBER_SYM in idx_names && _group_refuse(
         "'$RECURRENCE_MEMBER_SYM' is reserved for the member axis of a recurrence group"
