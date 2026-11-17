@@ -1935,7 +1935,7 @@ end
 # than requiring a dimensionless one. The union adds the spec-adjacent
 # spellings this rule has always accepted (`ln`, `log2`, `expm1`) — they have
 # NO registry row on purpose: an op absent from the registry is classified by
-# `_op_in_T` (lower_expression_templates.jl) as an open-namespace rewrite
+# `_op_in_T` (templates/rewrite.jl) as an open-namespace rewrite
 # target, and giving these spellings rows would silently change that.
 const _TRANSCENDENTAL_OPS = union(
     _ops_with_dim_class(:transcendental),
@@ -2879,25 +2879,10 @@ end
 Reject declared `units` on any expression node in a document declaring `esm` <
 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node. Runs on the raw
 JSON before schema validation, like [`reject_solver_pre_v11`](@ref).
+The rule is the `const_units` row of [`_VERSION_GATES`](@ref).
 """
-function reject_const_units_pre_v12(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return
-    (parse(Int, m.captures[1]), parse(Int, m.captures[2])) >= (1, 2) && return
-    path = _find_units_bearing_node(raw_data, "")
-    path === nothing && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
-            "declared `units` on an expression node require esm >= 1.2.0; " *
-                "file declares $(string(esm_raw)). Offending path: $path"
-        )
-    )
-end
+reject_const_units_pre_v12(raw_data) =
+    _check_version_gate(_VERSION_GATES.const_units, raw_data)
 
 _find_units_bearing_node(node, at::String) =
     _find_json_path(n -> _raw_haskey(n, "op") && _raw_haskey(n, "units"), node, at)

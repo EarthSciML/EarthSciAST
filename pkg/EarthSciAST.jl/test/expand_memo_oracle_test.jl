@@ -1,5 +1,5 @@
 # Differential oracle for the expression-template expansion memo (perf plan A4,
-# src/lower_expression_templates.jl `_expand_expr_refs`): build the SAME
+# src/templates/expand_typed.jl `_expand_expr_refs`): build the SAME
 # template-reference model three ways and require identical state maps /
 # initial states and BIT-identical du.
 #

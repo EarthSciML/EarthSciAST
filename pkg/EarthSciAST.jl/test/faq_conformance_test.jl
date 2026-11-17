@@ -500,3 +500,75 @@ end
         @test any(m -> occursin("index(parentMember, i, j)", m), msgs)
     end
 end
+
+# The faq and broadcast checks reach every expression site of the document
+# (`foreach_expression`): events, initialization equations, guesses, update
+# rules, bounds, inline tests, reaction systems and coupling entries, each
+# reported at its own pointer.
+@testset "faq and broadcast checks reach every expression site" begin
+    E = EarthSciAST
+    A(xs...) = E.ASTExpr[xs...]
+    ghost() = OpExpr(
+        "faq", A(); expr_body = VarExpr("x"), reduce = "+",
+        ranges = Dict{String, Any}("i" => E.IndexSetRef("ghost"))
+    )
+    bare() = OpExpr(
+        "faq", A(); expr_body = VarExpr("w"), reduce = "+",
+        ranges = Dict{String, Any}("i" => E.IndexSetRef("cells"))
+    )
+    nofn() = OpExpr("broadcast", A(VarExpr("x"), VarExpr("x")))
+    site(e) = OpExpr("+", A(VarExpr("x"), e))
+    gt(e) = OpExpr(">", A(e, NumExpr(0.0)))
+    function file_with(mk)
+        model = Model(
+            Dict(
+                "x" => ModelVariable(E.UnknownVariable; default = 0.0, ub = site(mk())),
+                "w" => ModelVariable(E.ParameterVariable; default = 1.0, shape = ["cells"]),
+                "p" => ModelVariable(
+                    E.ParameterVariable; default = 0.0,
+                    update = ParameterUpdate("condition"; when = gt(site(mk())), expression = site(mk()))
+                ),
+            ),
+            [Equation(OpExpr("D", A(VarExpr("x")); wrt = "t"), NumExpr(0.0))];
+            continuous_events = [ContinuousEvent(A(site(mk())), [AffectEquation("x", site(mk()))])],
+            discrete_events = [DiscreteEvent(ConditionTrigger(gt(site(mk()))), [AffectEquation("x", NumExpr(0.0))])],
+            initialization_equations = [Equation(VarExpr("x"), site(mk()))],
+            guesses = Dict{String, Union{Float64, E.ASTExpr}}("x" => site(mk())),
+            tests = [
+                E.InlineTest(
+                    "t", E.TimeSpan(0.0, 1.0),
+                    [E.Assertion("x", 1.0, 0.0; reduce = "L2_error", reference = site(mk()))]
+                ),
+            ]
+        )
+        rs = ReactionSystem(
+            [Species("A")], [Reaction("r", [E.StoichiometryEntry("A", 1)], nothing, site(mk()))];
+            parameters = [
+                Parameter("k", 1.0; update = ParameterUpdate("condition"; when = gt(site(mk())), expression = NumExpr(1.0))),
+            ]
+        )
+        return EsmFile(
+            "2.0.0", Metadata("Sites"); models = Dict("M" => model),
+            reaction_systems = Dict("R" => rs),
+            coupling = E.CouplingEntry[E.CouplingVariableMap("M.x", "R.k", site(mk()))],
+            index_sets = Dict("cells" => E.IndexSet("interval"; size = 3))
+        )
+    end
+    pointers = [
+        "/models/M/initialization_equations/0/rhs", "/models/M/guesses/x",
+        "/models/M/variables/p/update/when", "/models/M/variables/p/update/expression",
+        "/models/M/variables/x/ub", "/models/M/continuous_events/0/conditions/0",
+        "/models/M/continuous_events/0/affects/0/rhs",
+        "/models/M/discrete_events/0/trigger/expression",
+        "/models/M/tests/0/assertions/0/reference", "/reaction_systems/R/reactions/0/rate",
+        "/reaction_systems/R/parameters/k/update/when", "/coupling/0/transform",
+    ]
+    at(errs, code) = Set(e.path for e in errs if e.error_type == code)
+    agg = E.validate_aggregate_semantics(file_with(ghost))
+    @test at(agg, "undefined_index_set") == Set(pointers)
+    agg = E.validate_aggregate_semantics(file_with(bare))
+    # `w` is the model's array; a reaction system or coupling entry has no `w`.
+    @test at(agg, "faq_bare_array_operand") == Set(p for p in pointers if startswith(p, "/models/"))
+    bc = E.validate_broadcast_semantics(file_with(nofn))
+    @test at(bc, "invalid_broadcast_fn") == Set(pointers)
+end

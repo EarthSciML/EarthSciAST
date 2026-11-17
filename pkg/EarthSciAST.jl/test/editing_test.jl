@@ -143,6 +143,83 @@ end
         @test haskey(m.variables, "x")
     end
 
+    @testset "rename_variable reaches every expression site and every name" begin
+        x = VarExpr("x")
+        gt(e) = OpExpr(">", ESS.ASTExpr[e, NumExpr(1.0)])
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "y" => ModelVariable(UnknownVariable; default = 0.0, lb = "x", ub = gt(x)),
+            "p" => ModelVariable(
+                ParameterVariable; default = 0.0,
+                update = ParameterUpdate("condition"; when = gt(x), expression = x)
+            ),
+        )
+        sub = Model(
+            Dict("x" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[_make_eq("x", 1.0)]
+        )
+        m = Model(
+            vars, Equation[_make_eq("x", 2.0), _make_eq("y", 1.0)];
+            continuous_events = [
+                ContinuousEvent(ESS.ASTExpr[gt(x)], [AffectEquation("x", x)]; affect_neg = [AffectEquation("x", x)]),
+            ],
+            discrete_events = [DiscreteEvent(ConditionTrigger(gt(x)), [AffectEquation("x", x)])],
+            initialization_equations = Equation[Equation(x, NumExpr(2.0))],
+            guesses = Dict{String, Union{Float64, ESS.ASTExpr}}("x" => 1.0, "y" => x),
+            tests = [
+                ESS.InlineTest(
+                    "t", ESS.TimeSpan(0.0, 1.0),
+                    [ESS.Assertion("x", 1.0, 1.0; reduce = "L2_error", reference = x)];
+                    initial_conditions = Dict("x" => 3.0), parameter_overrides = Dict("p" => 1.0)
+                ),
+            ],
+            subsystems = Dict("S" => sub)
+        )
+        r = rename_variable(m, "x", "z")
+        # No expression site still reads `x`, outside the subsystem's own scope.
+        leftovers = String[]
+        ESS.foreach_expression(r, ""; subsystems = false) do e, p, _
+            "x" in ESS.free_variables(e) && push!(leftovers, p)
+        end
+        @test isempty(leftovers)
+        @test r.variables["y"].lb == "z"
+        @test r.continuous_events[1].affects[1].lhs == "z"
+        @test r.continuous_events[1].affect_neg[1].lhs == "z"
+        @test r.discrete_events[1].affects[1].lhs == "z"
+        @test r.initialization_equations[1].lhs == VarExpr("z")
+        @test haskey(r.guesses, "z") && !haskey(r.guesses, "x")
+        @test r.guesses["y"] == VarExpr("z")
+        t = r.tests[1]
+        @test t.assertions[1].variable == "z" && t.assertions[1].reference == VarExpr("z")
+        @test haskey(t.initial_conditions, "z") && !haskey(t.initial_conditions, "x")
+        @test t.parameter_overrides == Dict{String, Any}("p" => 1.0)
+        # A subsystem is its own scope: its `x` is another variable.
+        @test r.subsystems["S"].equations[1].lhs.args[1] == VarExpr("x")
+        # The input is untouched.
+        @test m.continuous_events[1].affects[1].lhs == "x"
+        @test m.variables["y"].lb == "x"
+        @test haskey(m.guesses, "x")
+        @test m.tests[1].assertions[1].variable == "x"
+
+        # A name in an update handler's `read_vars` / `read_params` follows too.
+        hp = ModelVariable(
+            ParameterVariable; default = 0.0,
+            update = ParameterUpdate(
+                "schedule"; times = [1.0],
+                handler = FunctionalUpdate("h"; read_vars = ["x"], read_params = ["k"])
+            )
+        )
+        m3 = Model(
+            Dict(
+                "x" => ModelVariable(UnknownVariable; default = 0.0),
+                "k" => ModelVariable(ParameterVariable; default = 1.0), "h" => hp
+            ),
+            Equation[]
+        )
+        u = rename_variable(rename_variable(m3, "x", "z"), "k", "q").variables["h"].update[1].handler
+        @test u.read_vars == ["z"] && u.read_params == ["q"]
+    end
+
     @testset "rename_variable and substitute_in_equations keep equation comments" begin
         eq = _make_eq("x", 2.0)
         m = Model(
