@@ -10,9 +10,10 @@
 # BUILD-TIME BENCHMARK COUNTERS (RFC out-of-line-expression-templates §12).
 #
 # The RFC's headline metric is "node-lowerings" — distinct objects `_compile`
-# lowers — and "spine templates" — `_build_branch_template` calls. These two
-# `Ref`s let a benchmark script (`scripts/bench-out-of-line.jl`) count them
-# without a bespoke instrument. OFF by default: `_BENCH_ON[]` is a single Ref
+# lowers — and "spine templates" — `_build_branch_template` calls. These
+# `Ref`s let a benchmark script (`scripts/bench-out-of-line.jl`) and the tests
+# that assert build work does not grow with the grid count them without a
+# bespoke instrument. OFF by default: `_BENCH_ON[]` is a single Ref
 # read per call on the COLD build path (never per RHS evaluation), so the effect
 # on a normal build is negligible and on a normal solve is zero. A benchmark
 # sets `_BENCH_ON[] = true`, zeroes the counters, builds, and reads them back.

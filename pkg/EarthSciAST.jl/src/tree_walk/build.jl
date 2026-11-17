@@ -4478,7 +4478,7 @@ function _build_partition_and_materialize(
     geom_setup_arrays = Dict{String, AbstractArray{Float64}}()
     if !isempty(cls.geom_setup_vars)
         geom_setup_arrays = _with_param_reads(param_reads) do
-            @_bench :geometry_setup _materialize_geometry_setup(
+            _materialize_geometry_setup(
                 cls.geom_setup_vars,
                 cls.geom_defs, model, const_arrays, index_sets, derived_extents;
                 vi_maps = vi_maps.maps, param_overrides = parameter_overrides,
@@ -4910,7 +4910,7 @@ function _build_compile_evaluator(
     mat_vars = Set{String}(keys(layout.mat_dims))
 
     # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs, raw_obs, mat_defs = @_bench :split_obs _split_observed_and_derivatives(
+    derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
         parts.equations,
         parts.observed_names, cls.geom_setup_vars,
         cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
@@ -4998,7 +4998,7 @@ function _build_compile_evaluator(
 
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
-    pgather = @_bench :build_pgather _build_pgather(param_arrays)
+    pgather = _build_pgather(param_arrays)
     _ws_note_pgather!(pgather)
     # This build's forcing epoch: the problem's (its discrete sink carries it),
     # bumped by a refresh of any buffer the build reads.
@@ -5338,7 +5338,7 @@ function _build_compile_evaluator(
         acc_kernels_pre, scan_folds, state_fused_scans =
             _detach_fused_scans(acc_kernels_pre, scan_folds; nst = obs_nst)
     end
-    acc_kernels, class_merge_diag = @_bench :class_merge _merge_acc_kernel_classes(
+    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(
         acc_kernels_pre;
         keep_affine = form === :inplace
     )
@@ -5408,13 +5408,11 @@ function _build_compile_evaluator(
     # compiled backend. The per-cell reference entries past `n_scalar_rhs` stay
     # walked. Their report rows move to the `*_codegen` tiers here.
     scalar_section = form === :inplace ?
-        @_bench(
-            :scalar_codegen, _build_scalar_section(
-                rhs_list, n_scalar_rhs,
-                scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
-                acc_kernels; rule_of = s -> var_map isa StateLayout ?
-                _slot_key(var_map, s) : "state slot $s"
-            )
+        _build_scalar_section(
+            rhs_list, n_scalar_rhs,
+            scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
+            acc_kernels; rule_of = s -> var_map isa StateLayout ?
+            _slot_key(var_map, s) : "state slot $s"
         ) :
         nothing
     scalar_section === nothing ||
@@ -5464,7 +5462,7 @@ function _build_compile_evaluator(
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as
         # ARGUMENTS (`_OopRHS`) — the binding a compiled backend needs.
-        @_bench :make_rhs_oop _make_rhs_oop(
+        _make_rhs_oop(
             rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
             scan_folds, Tuple(mat_levels_oop), n_total,
             array_contractions
@@ -7212,7 +7210,7 @@ function _compile_faq_equation!(
             loop_body = agg_filter === nothing ? rhs_body :
                 OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
             affine_kernels =
-                @_bench :affine_tier affine(
+                affine(
                 loop_body, range_iters;
                 template_sites = template_sites, reduce = areduce
             )
@@ -7247,7 +7245,7 @@ function _compile_faq_equation!(
         term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
         if affine_kernels === nothing
             affine_kernels = affine_body === nothing ? nothing :
-                @_bench :affine_tier affine(
+                affine(
                     affine_body, term_iters;
                     template_sites = template_sites
                 )
@@ -9067,7 +9065,7 @@ function _build_evaluator_dict(
     end
     _vi = model === nothing ? nothing :
         _with_param_reads(_preads) do
-            @_bench :value_invention materialize_value_invention(
+            materialize_value_invention(
                 model, file.index_sets,
                 _vi_ca, _params
             )

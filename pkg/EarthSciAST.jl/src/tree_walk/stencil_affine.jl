@@ -1395,10 +1395,7 @@ function _materialize_state_tbl(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_state_tbl, _t0)
-    return r
+    return _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_state_tbl_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -1429,10 +1426,7 @@ function _materialize_pgather_tbl(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_pgather_tbl, _t0)
-    return r
+    return _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_pgather_tbl_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -1461,10 +1455,7 @@ function _materialize_const_box(
         rec::_LaneRecipe, idx_names, box, D,
         var_map, const_arrays, run = box
     )
-    _t0 = time_ns()
-    r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
-    _bench_phase!(:mat_const_box, _t0)
-    return r
+    return _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
 end
 function _materialize_const_box_inner(
         rec::_LaneRecipe, idx_names, box, D,
@@ -2177,7 +2168,7 @@ function _process_affine_box!(
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = try
-            @_bench :lane_repl _derive_lane_repl(
+            _derive_lane_repl(
                 recipes[k], idx_names, rep, corners, thin,
                 oln_rep, base, strides, D, var_map,
                 const_arrays, flat_cache, box,
@@ -2197,7 +2188,7 @@ function _process_affine_box!(
     end
 
     view === nothing || _range_real_repls!(view, lane_repl, recipes)
-    spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse, subs = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
         if reduce !== nothing
@@ -2527,7 +2518,7 @@ function _try_affine_stencil(
         end
         # Only after every box is verified: mark covered (untouched on fallback).
         for box in boxes
-            @_bench :mark_covered _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
+            _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
         end
         view === nothing || _range_real_fixed!(view, kernels)
         return kernels

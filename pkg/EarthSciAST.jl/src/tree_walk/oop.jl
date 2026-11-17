@@ -633,10 +633,7 @@ function _build_oop_reduce_desc_vectors(
 end
 
 function _build_oop_acc_plan(K::_AccKernel)
-    _t0 = time_ns()
-    r = _build_oop_acc_plan_inner(K)
-    _bench_phase!(:oop_plan, _t0)
-    return r
+    return _build_oop_acc_plan_inner(K)
 end
 # Whether `K` has a vectorized lane plan (else `_build_oop_acc_plan` returns
 # `_OOP_ACC_FALLBACK`): a structural test, with no lane built.
