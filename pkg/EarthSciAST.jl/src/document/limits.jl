@@ -101,8 +101,9 @@ end
     end
     st.depth += 1
     out = f(args...)
-    # A refusal never throws, so this always runs within a read; a read that
-    # throws restores the state in `reading`.
+    # Every call runs within `reading` (a read, or a print's trial reads), and
+    # a refusal never throws; a read that throws discards this state in
+    # `reading`.
     st.depth -= 1
     return out
 end

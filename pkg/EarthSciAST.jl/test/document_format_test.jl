@@ -556,3 +556,18 @@ end
         end
     end
 end
+
+@testset "printing leaves no reader state in the caller's task" begin
+    # A template with parameters makes the Markdown printer try the math parser
+    # on its header; that trial read must not leave its state behind.
+    path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
+    doc = JSON.parse(read(path, String))
+    key = EarthSciAST.DocumentFormats.DLimits.KEY
+    for print_fn in (print_markdown, print_typst)
+        haskey(task_local_storage(), key) && delete!(task_local_storage(), key)
+        @test !isempty(print_fn(doc))
+        @test !haskey(task_local_storage(), key)
+    end
+    print_math(Dict("op" => "+", "args" => Any["a", 1]), ["a"], :markdown)
+    @test !haskey(task_local_storage(), key)
+end
