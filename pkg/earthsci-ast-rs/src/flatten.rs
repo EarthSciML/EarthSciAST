@@ -1361,15 +1361,12 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
     }
 }
 
-/// The shape each unshaped mixed-rank-`ifelse` variable is BUILT at
-/// (esm-spec §4.3.4), by variable name. See [`conditional_shape_promotions`].
-pub(crate) type BuiltShapes = HashMap<String, Vec<String>>;
-
 /// What [`conditional_shape_promotions`] decides.
 #[derive(Debug, Default)]
 pub(crate) struct ConditionalShapes {
-    /// The variables whose shape the declarations decide: their index sets.
-    pub(crate) built: BuiltShapes,
+    /// The variables whose shape the declarations decide: the index sets
+    /// each is BUILT at (esm-spec §4.3.4).
+    pub(crate) built: HashMap<String, Vec<String>>,
     /// The variables whose only arrays are unshaped data-fed parameters: the
     /// names of those parameters (sorted). Such a variable takes the one shape
     /// their data has, which the build reads where the data is bound

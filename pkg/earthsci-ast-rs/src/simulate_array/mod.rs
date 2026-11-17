@@ -407,7 +407,7 @@ enum AlgebraicRule {
     /// `data_shaped` names, for a variable declared with no `shape` whose
     /// body is elementwise down to a scalar-condition `ifelse` whose only
     /// arrays are unshaped data-fed parameters, those parameters (esm-spec
-    /// §4.3.4, [`crate::flatten::ConditionalShapes::data_shaped`]). With no
+    /// §4.3.4, [`ShapeTable::data_shaped`]). With no
     /// `declared_shape` it takes the shape their data has, read where the
     /// data is bound ([`AlgebraicRule::fill_shape`]), so both arms have it.
     Scalar {
