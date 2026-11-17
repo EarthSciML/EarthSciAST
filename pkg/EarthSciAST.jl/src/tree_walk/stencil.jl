@@ -274,10 +274,9 @@ struct _StencilCtx
     # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
     # per `_build_branch_template` because it references that call's lane recipes.
     smemo::IdDict{OpExpr, ASTExpr}
-    # Memoized per-node "refers to a loop index" flag for the guard, so
-    # `_stencilize`'s per-node check is an O(1) memo hit rather than an O(subtree)
-    # re-walk (`_refs_loop_var`) plus a boxed-capture closure at every node — and a
-    # Bool per node instead of a Set{String}.
+    # Memoized per-node "refers to a loop index" flag for the guard
+    # (`_refs_idxset`), so `_stencilize`'s per-node check is an O(1) memo hit
+    # rather than an O(subtree) re-walk.
     vsmemo::IdDict{OpExpr, Bool}
     # Compile-once template tier: the sub-kernel call sites this walk emitted
     # (sentinel j ↔ subcalls[j]), and the per-equation template context
@@ -315,8 +314,8 @@ function _stencilize(e::VarExpr, ctx::_StencilCtx)
     return e
 end
 function _stencilize(e::OpExpr, ctx::_StencilCtx)
-    # Memoized guard (byte-for-byte the `_refs_loop_var` decision): probe the cached
-    # variable set instead of re-walking the subtree + allocating a closure per node.
+    # Memoized guard: does the subtree read a loop index? A subtree that does
+    # not is loop-invariant and is returned as it is.
     _refs_idxset(e, ctx.idxset, ctx.vsmemo) || return e
     # A shared subtree stencilizes identically every time it is reached (same
     # sentinel spine, same lane recipes), so dedupe by identity: the first visit
@@ -931,20 +930,13 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     return _stencilize(sub_body, ctx)
 end
 
-# Memoized set of every variable name appearing anywhere in `e`, drawing
-# children from the SAME shared `child_exprs` traversal `_refs_loop_var` uses
-# (args / expr_body / lower / upper / filter / key / values / ranges) so `_refs_idxset` below is exactly equivalent to a fresh
-# `_refs_loop_var` call. Built lazily, once per node, and reused across every
-# cell — turning the per-cell branch-key guard from an O(subtree) re-walk into
-# an O(|idxset|) probe of the cached set. (Hand-rolled memoized recursion, not
-# `foreach_subexpr`: the per-OpExpr `memo` shares interior sets, which a flat
-# whole-subtree visitor cannot.)
-# `_refs_loop_var(e, idxset)` without re-walking `e` — and without the
-# `IdDict{OpExpr,Set{String}}` of every variable name it used to memoize (a Set per
-# node was the largest remaining build churn). The guard only asks a BOOLEAN — does
-# `e` reference any loop index in `idxset`? — so memoize THAT by node identity.
-# Short-circuits on the first hit; `idxset` is fixed per build, so the answer is a
-# pure function of the node. Byte-for-byte the same guard decision.
+# Does `e` reference any loop index in `idxset`? EXHAUSTIVE over every
+# expression-bearing field of `OpExpr` (args / expr_body / lower / upper /
+# filter / key / values / ranges bounds, the `child_exprs` field set), so a loop
+# index buried in an aggregate body or a reduction bound routes that op to the
+# fallback and is never mis-seen as loop-invariant. Memoized by node identity:
+# `idxset` is fixed per build, so the answer is a pure function of the node, and
+# a shared subtree is scanned once. Short-circuits on the first hit.
 _child_refs_idxset(x::VarExpr, idxset::Set{String}, ::IdDict{OpExpr, Bool}) = x.name in idxset
 _child_refs_idxset(::NumExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
 _child_refs_idxset(::IntExpr, ::Set{String}, ::IdDict{OpExpr, Bool}) = false
@@ -1315,19 +1307,6 @@ function _branch_key_indexed!(
     print(io, 'S', length(segs), '{')
     write(io, take!(sub))
     return print(io, '}')
-end
-
-# Extend `var_map` with the lane sentinels → a negative slot marker. `_compile`
-# maps `VarExpr(lane_name(k))` to `_NK_STATE(idx = -k)`, which the box
-# processor's `_lower_to_access` decodes back to `recipes[k]`. Built ONCE per
-# equation (not per cell), as an overlay on `var_map` rather than a copy of it.
-function _lane_var_map(var_map::AbstractDict{String, Int}, recipes::Vector{_LaneRecipe})
-    isempty(recipes) && return var_map
-    ext = Dict{String, Int}()
-    for k in eachindex(recipes)
-        ext[_lane_name(k)] = -k
-    end
-    return _VarMapOverlay(ext, var_map)
 end
 
 # Lane sentinels plus sub-kernel call sentinels (compile-once tier): call site j
@@ -1714,28 +1693,12 @@ function _lane_eval_state(le::_LaneEval, loop::Vector{Int})::Tuple{Int, Bool}
     return (s, s != 0)
 end
 
-# Ghost pattern of the STATE lanes, from slots ALREADY isolated into a
-# Vector{Int} (the affine sweep evaluates only those), encoded as a `String`
-# for a cheap, hashable signature component (`_cell_ckey!`'s base key).
-function _ghost_key_states(state_vals::Vector{Int})
-    isempty(state_vals) && return ""
-    io = IOBuffer()
-    @inbounds for v in state_vals
-        print(io, v == 0 ? '1' : '0')
-    end
-    return String(take!(io))
-end
-
 # One branch's spine entry: the compiled sentinel template, its lane recipes,
 # the recipe indices that are STATE gathers (the ghost-key columns), and the
 # sub-kernel call sites its spine references (empty on every reference-free
 # build and on the whole symbolic path).
 const _StencilBranch = Tuple{_Node, Vector{_LaneRecipe}, Vector{Int}, Vector{_SubCallSite}}
 
-# Build one branch's spine template. Sentinels pass through resolve untouched
-# and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
-# TreeWalkError here also fires in the fallback path, so it propagates rather
-# than falling back.
 # Derive + corner-verify a state var's affine slot map (cell indices → var_map
 # slot: `slot = base + Σ_d inds_d·strides_d`) so a gather resolves arithmetically.
 # Returns `nothing` if any probe cell is absent or the layout is not affine on the
@@ -1775,6 +1738,10 @@ function _derive_var_affine(
     return (base, strides)
 end
 
+# Build one branch's spine template. Sentinels pass through resolve untouched
+# and compile to `_NK_STATE(idx = -k)` via the extended var-map; a real
+# TreeWalkError here also fires in the fallback path, so it propagates rather
+# than falling back.
 function _build_branch_template(
         body::ASTExpr, ctx_proto::_StencilCtx,
         var_map::AbstractDict{String, Int},
