@@ -125,6 +125,9 @@ end
         return x
     end
     @testset "remaining rhs: $(c.id)" for c in _SE.remaining_rhs
+        # The program of a stripped Problem does not depend on call order:
+        # `rhs_program` first sees the stripped classes as `compile_kernels` does.
+        @test rhs_program(_se_build(c.path, c.strip)) isa EarthSciAST.RhsProgram
         prob = _se_build(c.path, c.strip)
         ks = compile_kernels(prob, [Dict("name" => "rhs")])
         doc = strip_events!(JSON3.read(read(joinpath(_SE_DIR, c.path), String), Dict{String, Any}))

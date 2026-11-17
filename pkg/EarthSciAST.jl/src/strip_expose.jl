@@ -845,7 +845,7 @@ function compile_kernels(prob::EsmProblem, specs)
             ERROR_CODES.COMPILER_UNAVAILABLE
         )
     )
-    seed = task_local_storage(() -> _program_seed(prob), :_esm_strip_taken, stripped(prob).strip)
+    seed = _program_seed(prob)
     seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed"))
     flat = seed.flat
     s = stripped(prob)

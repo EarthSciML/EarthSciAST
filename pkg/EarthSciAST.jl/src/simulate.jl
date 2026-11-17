@@ -1244,11 +1244,16 @@ struct _ProgramSeedRecipe
 end
 
 # The seed of `prob`'s programs, built once from its recipe; `nothing` for a
-# Problem `esm_problem` did not build.
+# Problem `esm_problem` did not build. The seed re-prepares the run document,
+# which refuses a coupling-level event unless its class was stripped, so the
+# Problem's stripped classes are in force while it does — whichever caller
+# (`rhs_program`, `compile_kernels`) asks first.
 function _program_seed(prob)
     r = prob.inspection.program_seed
     r isa _ProgramSeedRecipe || return r
-    return _recipe_seed(r, prob.param_buffers, prob.run_doc)
+    return task_local_storage(:_esm_strip_taken, stripped(prob).strip) do
+        _recipe_seed(r, prob.param_buffers, prob.run_doc)
+    end
 end
 
 # The seed of recipe `r` for a Problem whose live buffers are `param_buffers`
