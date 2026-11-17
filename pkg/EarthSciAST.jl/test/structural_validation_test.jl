@@ -1024,12 +1024,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     # Ragged inline array data is a document error, reported as a ParseError.
     @testset "ragged inline array data (§6.3)" begin
         doc = """{"esm": "1.0.0", "metadata": {"name": "ragged"},
-            "index_sets": {"x": {"kind": "interval", "size": 2},
-                           "y": {"kind": "interval", "size": 2}},
-            "models": {"M": {"variables": {
-                "k": {"type": "parameter", "shape": ["x", "y"],
-                      "default": [[1.0, 2.0], [3.0]]}},
-                "equations": []}}}"""
+        "index_sets": {"x": {"kind": "interval", "size": 2},
+                       "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {"variables": {
+            "k": {"type": "parameter", "shape": ["x", "y"],
+                  "default": [[1.0, 2.0], [3.0]]}},
+            "equations": []}}}"""
         @test_throws EarthSciAST.ParseError EarthSciAST.load_string(doc)
     end
 

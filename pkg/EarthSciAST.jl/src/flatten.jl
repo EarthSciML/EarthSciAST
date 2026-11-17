@@ -1984,22 +1984,22 @@ _map_affects(f, ::Nothing) = nothing
 
 _map_event_exprs(f, events::Vector{ContinuousEvent}) = ContinuousEvent[
     ContinuousEvent(
-            ASTExpr[f(c) for c in ev.conditions], _map_affects(f, ev.affects);
-            affect_neg = _map_affects(f, ev.affect_neg),
-            root_find = ev.root_find, reinitialize = ev.reinitialize,
-            description = ev.description, name = ev.name
-        )
+        ASTExpr[f(c) for c in ev.conditions], _map_affects(f, ev.affects);
+        affect_neg = _map_affects(f, ev.affect_neg),
+        root_find = ev.root_find, reinitialize = ev.reinitialize,
+        description = ev.description, name = ev.name
+    )
         for ev in events
 ]
 
 _map_event_exprs(f, events::Vector{DiscreteEvent}) = DiscreteEvent[
     DiscreteEvent(
-            ev.trigger isa ConditionTrigger ?
-                ConditionTrigger(f(ev.trigger.expression)) : ev.trigger,
-            _map_affects(f, ev.affects);
-            reinitialize = ev.reinitialize, description = ev.description,
-            name = ev.name
-        )
+        ev.trigger isa ConditionTrigger ?
+            ConditionTrigger(f(ev.trigger.expression)) : ev.trigger,
+        _map_affects(f, ev.affects);
+        reinitialize = ev.reinitialize, description = ev.description,
+        name = ev.name
+    )
         for ev in events
 ]
 

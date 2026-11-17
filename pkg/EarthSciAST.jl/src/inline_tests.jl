@@ -769,8 +769,10 @@ end
 function _refuse_unmatched_assertion(var_map, a, owner::AbstractString, loc::AbstractString, kind::String)
     cands = _assertion_candidates(var_map, loc)
     msg = "$kind '$(a.variable)' not found in component '$owner'"
-    isempty(cands) || (msg *= "; a variable of that name exists in another component: " *
-        join(cands, ", ") * " (scope the assertion to read it)")
+    isempty(cands) || (
+        msg *= "; a variable of that name exists in another component: " *
+            join(cands, ", ") * " (scope the assertion to read it)"
+    )
     throw(InlineTestError(msg))
 end
 
