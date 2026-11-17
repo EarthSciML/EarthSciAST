@@ -5893,6 +5893,11 @@ function _build_evaluator_impl_inner(
     # seeds from. Both are no-ops (and the registries byte-identical) for a
     # document that declares no shaped parameter.
     const_arrays = _normalize_const_array_keys(model, const_arrays; model_name = _model_name)
+    # A boundary policy is keyed by the same caller spelling as its array, so it
+    # resolves by the same rule: the policy reaches the name the equations read.
+    const_array_boundaries = _normalize_const_array_keys(
+        model, const_array_boundaries; model_name = _model_name
+    )
     # A derived index set value invention has already sized (the front door
     # ran it) resolves a declared shape here too, keyed by the SET's name.
     vi_set_extents = isempty(_vi_extents) ? _EMPTY_DERIVED_EXTENTS :
@@ -8962,6 +8967,12 @@ function _build_evaluator_dict(
         else
             _reject_unlowered_operators(model)
         end
+    end
+    if model !== nothing && haskey(kwd, :const_array_boundaries)
+        kwd[:const_array_boundaries] = _normalize_const_array_keys(
+            model, kwd[:const_array_boundaries];
+            model_name = (model_name === nothing ? _sole_model_name(file) : String(model_name))
+        )
     end
 
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
