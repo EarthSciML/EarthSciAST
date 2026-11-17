@@ -209,24 +209,12 @@ end
 # Ref loading (synchronous, mirrors the §9.7 template resolver)
 # ---------------------------------------------------------------------------
 
-"""
-    _COUPLING_IMPORT_BASE
-
-The directory a loaded document's relative `coupling_import` refs resolve
-against (esm-spec §10.10 -> §4.7: "relative to the directory of the referencing
-file"), keyed by the document's `coupling` vector. `flatten` never learns where a
-document came from, so the loader records the base here and
-[`expand_coupling_imports`](@ref) prefers it over its `base_path` keyword. Kept
-beside the document rather than in a struct field so the `coupling_import` entry
-round-trips verbatim (§10.10.3) and the record field tables need no change; weak,
-so an unreachable document's entry is collected with it.
-"""
-const _COUPLING_IMPORT_BASE = WeakKeyDict{Vector{CouplingEntry}, String}()
-
-function _record_coupling_import_base!(file::EsmFile, base_path::AbstractString)
+# Record `base_path` as the directory `file`'s relative `coupling_import` refs
+# resolve against ([`EsmFile`](@ref)'s `coupling_import_base`); a document with
+# no `coupling_import` comes back unchanged.
+function _record_coupling_import_base(file::EsmFile, base_path::AbstractString)::EsmFile
     any(e -> e isa CouplingImport, file.coupling) || return file
-    _COUPLING_IMPORT_BASE[file.coupling] = String(base_path)
-    return file
+    return reconstruct(file; coupling_import_base = String(base_path))
 end
 
 """
@@ -525,7 +513,8 @@ splicing them in the position of the import entry (esm-spec §10.10.3). Returns
 the effective coupling vector; a file with no `coupling_import` entries returns
 `file.coupling` unchanged (same object, so no reload) and needs no options.
 
-`base_path` anchors the import `ref`s. `load_ref` is an optional resolver
+The import `ref`s resolve against `file.coupling_import_base`, the directory
+the loader recorded for the document, and otherwise against `base_path`. `load_ref` is an optional resolver
 `(ref, base_path) -> raw JSON doc` (tests supply an in-memory resolver); it
 defaults to [`_default_coupling_load_ref`](@ref).
 """
@@ -544,7 +533,7 @@ function expand_coupling_imports(
         end
         local lib
         try
-            lib = loader(entry.ref, get(_COUPLING_IMPORT_BASE, coupling, String(base_path)))
+            lib = loader(entry.ref, something(file.coupling_import_base, String(base_path)))
         catch e
             e isa ExpressionTemplateError && rethrow(e)
             throw(

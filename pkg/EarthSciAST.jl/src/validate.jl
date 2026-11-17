@@ -3554,7 +3554,7 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
     # Expanding reads the library from disk; without the base the loader recorded
     # for the document, the ref would resolve against the working directory, so a
     # document with no known location is left to flatten.
-    base = get(_COUPLING_IMPORT_BASE, file.coupling, nothing)
+    base = file.coupling_import_base
     base === nothing && return errors
     for (i, entry) in enumerate(file.coupling)
         entry isa CouplingImport || continue

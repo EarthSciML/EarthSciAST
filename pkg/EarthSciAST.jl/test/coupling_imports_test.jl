@@ -360,6 +360,14 @@ end
     @test flatten(file; base_path = joinpath("does", "not", "exist")) isa EarthSciAST.FlattenedSystem
     @test only(e for e in file.coupling if e isa CouplingImport).ref == "./rothermel_fuel.esm"
     @test occursin("\"./rothermel_fuel.esm\"", EarthSciAST.to_json(file))
+    # A copy or an edit of the document keeps its base: the base is a field of
+    # the document, not keyed on its `coupling` vector.
+    cd(mktempdir()) do
+        @test flatten(lower_enums(file)) isa EarthSciAST.FlattenedSystem
+        @test flatten(EarthSciAST.expanded_file(file)) isa EarthSciAST.FlattenedSystem
+        edited = remove_coupling(add_coupling(file, first(file.coupling)), length(file.coupling) + 1)
+        @test flatten(edited) isa EarthSciAST.FlattenedSystem
+    end
 end
 
 # A document with no location of its own — built in memory, or parsed from text

@@ -279,7 +279,7 @@ function _load_document(
     # base the caller really gave is recorded (`load_path` always has one); a
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
-    record_import_base && _record_coupling_import_base!(file, base_path)
+    record_import_base && (file = _record_coupling_import_base(file, base_path))
     # esm-spec §8.5.1: the deprecated `records_per_sample`, ONE warning per load.
     # Here, on the mounted document, because only the public entry points reach
     # `_load_document`; a ref-mounted child loads through `_load_parsed` and so

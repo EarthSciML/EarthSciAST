@@ -2545,6 +2545,13 @@ struct EsmFile
     # at call time.
     document_base::Union{String, Nothing}
 
+    # The directory a relative `coupling_import` ref resolves against (esm-spec
+    # §10.10 -> §4.7: "relative to the directory of the referencing file"),
+    # recorded at load only when the caller gave a base (`load_path` always
+    # has one) and the document has a `coupling_import`. `nothing` leaves
+    # `flatten`'s `base_path` in charge. NOT a wire field; never emitted.
+    coupling_import_base::Union{String, Nothing}
+
     # Constructor with optional parameters
     EsmFile(
         esm::String, metadata::Metadata;
@@ -2561,7 +2568,8 @@ struct EsmFile
         coordinates = nothing,
         coupling_roles = nothing,
         solver = nothing,
-        document_base = nothing
+        document_base = nothing,
+        coupling_import_base = nothing
     ) =
         new(
         esm, metadata,
@@ -2574,7 +2582,7 @@ struct EsmFile
         expression_templates, metaparameters,
         component_templates === nothing ? nothing :
             OrderedDict{String, Any}(component_templates),
-        coordinates, coupling_roles, solver, document_base
+        coordinates, coupling_roles, solver, document_base, coupling_import_base
     )
 end
 
