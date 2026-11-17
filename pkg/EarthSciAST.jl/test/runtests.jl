@@ -434,7 +434,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("template_array_args_test.jl")  # §9.6.11 a template applied elementwise over an array
 
     # ---- Expression templates & scoped imports
-    #      (src/lower_expression_templates.jl, template_imports.jl) ----
+    #      (src/templates/) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
     include("stdlib_refs_test.jl")       # §4.7 esm:std/ refs to the bundled lib/
