@@ -133,68 +133,61 @@ function _census_one(M, path::AbstractString)
     err_code = nothing
     err_msg = nothing
 
-    M._reset_cascade_tally!()
     t0 = time()
-    try
-        redirect_stderr(errio) do
-            with_logger(ConsoleLogger(errio)) do
-                # Front door first: `esm_problem` flattens, resolves coupling and
-                # runs the same tree-walk build, so it exercises the cascade the
-                # way a simulation does. `tspan` is the only argument it needs
-                # that a document does not carry.
-                try
-                    prob = M.esm_problem(String(path), (0.0, 1.0); compiler = CENSUS_COMPILER)
-                    entry = "esm_problem"
-                    ok = true
+    _, counts = M.Internal.counting() do
+        try
+            redirect_stderr(errio) do
+                with_logger(ConsoleLogger(errio)) do
+                    # Front door first: `esm_problem` flattens, resolves coupling and
+                    # runs the same tree-walk build, so it exercises the cascade the
+                    # way a simulation does. `tspan` is the only argument it needs
+                    # that a document does not carry.
                     try
-                        tiers = Dict{String, Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
-                    catch
+                        prob = M.esm_problem(String(path), (0.0, 1.0); compiler = CENSUS_COMPILER)
+                        entry = "esm_problem"
+                        ok = true
+                        try
+                            tiers = Dict{String, Int}(String(k) => v for (k, v) in M.tier_histogram(M.compiler_report(prob)))
+                        catch
+                        end
+                        nstate = length(prob.u0)
+                        try
+                            du = similar(prob.u0); fill!(du, 0.0)
+                            t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_first = time() - t1
+                            t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
+                            rhs_ok = true
+                        catch er
+                            # A stack overflow or an out-of-memory error in the
+                            # right-hand side is that call failing, and is recorded
+                            # as such; only an interrupt stops the census.
+                            er isa InterruptException && rethrow()
+                            rhs_ok = false
+                            rhs_err = first(sprint(showerror, er), 400)
+                        end
+                    catch e1
+                        M._is_resource_error(e1) && rethrow()
+                        err1_type = string(typeof(e1))
+                        err1_code = hasproperty(e1, :code) ? string(getproperty(e1, :code)) : nothing
+                        err1_msg = first(sprint(showerror, e1), 600)
+                        # A document `esm_problem` refuses for want of providers or
+                        # metaparameters still reaches the tree-walk build through
+                        # the internal build entry.
+                        M.Internal.build(String(path); compiler = CENSUS_COMPILER)
+                        entry = "Internal.build"
+                        ok = true
                     end
-                    nstate = length(prob.u0)
-                    try
-                        du = similar(prob.u0); fill!(du, 0.0)
-                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_first = time() - t1
-                        t1 = time(); prob.f!(du, copy(prob.u0), prob.p, prob.tspan[1]); rhs_second = time() - t1
-                        rhs_ok = true
-                    catch er
-                        # A stack overflow or an out-of-memory error in the
-                        # right-hand side is that call failing, and is recorded
-                        # as such; only an interrupt stops the census.
-                        er isa InterruptException && rethrow()
-                        rhs_ok = false
-                        rhs_err = first(sprint(showerror, er), 400)
-                    end
-                catch e1
-                    M._is_resource_error(e1) && rethrow()
-                    err1_type = string(typeof(e1))
-                    err1_code = hasproperty(e1, :code) ? string(getproperty(e1, :code)) : nothing
-                    err1_msg = first(sprint(showerror, e1), 600)
-                    # Documents that need providers, metaparameters or a model
-                    # selection `esm_problem` cannot guess still reach the
-                    # tree-walk build through the typed entry point.
-                    M._reset_cascade_tally!()
-                    file = M.load_path(String(path))
-                    names = file.models === nothing ? String[] :
-                        sort!(String[String(k) for k in keys(file.models)])
-                    if length(names) <= 1
-                        M._build_evaluator(file; compiler = CENSUS_COMPILER)
-                    else
-                        M._build_evaluator(file; model_name = names[1], compiler = CENSUS_COMPILER)
-                    end
-                    entry = "_build_evaluator"
-                    ok = true
                 end
             end
+        catch err
+            err_type = string(typeof(err))
+            err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
+            err_msg = first(sprint(showerror, err), 600)
         end
-    catch err
-        err_type = string(typeof(err))
-        err_code = hasproperty(err, :code) ? string(getproperty(err, :code)) : nothing
-        err_msg = first(sprint(showerror, err), 600)
     end
     t_build = time() - t0
     close(errio)
 
-    tally = Dict{String, Int}(String(k) => v for (k, v) in M._CASCADE_TALLY)
+    tally = Dict{String, Int}(String(k) => v for (k, v) in counts)
 
     percell_build = sum(get(tally, k, 0) for k in PERCELL_BUILD_KEYS)
     cg_decl = Dict{String, Int}()
@@ -312,7 +305,6 @@ function _warmup(M)
             first(sprint(showerror, err), 200)
         )
     end
-    M._reset_cascade_tally!()
     return nothing
 end
 

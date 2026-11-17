@@ -13,9 +13,9 @@ once, and hand back a Problem whose `f!` is the compiled program — and it pick
 the client off `EARTHSCI_JULIA_XLA_DEVICE` (`cpu` / `gpu`). This page is for the
 caller who needs the emitted callable ITSELF: to shard the state across several
 devices, or to compose it into a larger traced program of their own.
-`EarthSciAST._build_evaluator(doc; form = :oop)` is how you get the
-intermediate representation for that — the private builder behind `esm_problem`
-(`build_evaluator` has been retired; see `API_SPEC.md` §8 item 23) — and it
+`EarthSciAST.Internal.build(doc; form = :oop)` is how you get the
+intermediate representation for that — the internal build entry, which builds
+what `esm_problem` builds and is not public API (`API_SPEC.md` §8 item 23) — and it
 returns the build product a backend consumes, not a host evaluator: host
 evaluation is the default in-place `f!`. Nothing in the emitted program names a
 device: the same module compiles on a host CPU or on
@@ -39,7 +39,7 @@ the helpers so that they land on the client you asked for, rather than on
 whatever Reactant's default happens to be:
 
 ```julia
-fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
+fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
 
 d  = ext.direct_rhs(fo; var_map = vmap, client = :gpu)
 ur = ext.direct_state(d, u0)      # ConcreteRArray on that client

@@ -71,42 +71,15 @@
 # loaded; `parse_args` below is still the validating read, and a value this one
 # does not recognise simply falls through to the slim env and then to that
 # error.
-#
-# Manifest.toml is gitignored repo-wide, so on a fresh checkout — for ANY of
-# the three — we re-establish the local dev path then instantiate; on warm runs
-# this is a fast resolve check.
-import Pkg
-const COMPILER_ARG = let c = ""
-    for i in eachindex(ARGS)
-        ARGS[i] == "--compiler" && i < length(ARGS) && (c = ARGS[i + 1])
-    end
-    c
-end
-let env = joinpath(
+include(joinpath(@__DIR__, "adapter_support.jl"))
+const COMPILER_ARG = flag_value(ARGS, "--compiler", "")
+activate_adapter_env(
+    joinpath(
         @__DIR__, COMPILER_ARG == "mtk" ? "compiler_agreement_mtk_env" :
             COMPILER_ARG == "xla" ? "compiler_agreement_reactant_env" :
             "compiler_agreement_env"
-    ),
-        manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # A Manifest.toml is a machine-local CACHE that can lag a Project.toml
-        # that has moved on and then contradict it; one that cannot instantiate
-        # has no value, so rebuild rather than fail the gate. `Pkg.develop` only
-        # writes the Manifest here — EarthSciAST is already in the Project's
-        # [deps], so the tracked Project.toml is not touched.
-        @warn "$(basename(env)) did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+    )
+)
 
 using EarthSciAST
 using JSON3
@@ -115,11 +88,6 @@ import OrdinaryDiffEqRosenbrock
 import SciMLBase
 
 const BINDING = "julia"
-
-# API_SPEC §5.8's closed vocabulary, checked here as well as in the runner. A
-# value outside it is a broken invocation rather than a compiler this binding
-# happens not to have, and the two must not arrive at the same answer.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 
 # The runtime a compiler needs in the session, loaded for that compiler alone.
 # `:mtk` needs ModelingToolkit (the extension that implements it) plus a
@@ -180,11 +148,7 @@ function parse_args(args)
     manifest === nothing && error("--manifest is required")
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return (manifest, output, compiler)
 end
 
@@ -362,20 +326,6 @@ function solver_alg(doc)
     return OrdinaryDiffEqTsit5.Tsit5()
 end
 
-# The saved point at `t`. `saveat` puts a point ON each requested time, so this
-# is an exact hit up to the solver's own float arithmetic; taking the nearest
-# saved index rather than the dense interpolant reports the value the solver
-# actually saved.
-function time_index(times, t)
-    best = firstindex(times)
-    bestd = abs(times[best] - t)
-    for i in eachindex(times)
-        d = abs(times[i] - t)
-        d < bestd && (bestd = d; best = i)
-    end
-    return best
-end
-
 function fixture_trajectory(fx, base, compiler)
     # `observed` carries one series per name in `trajectory.observed`, and `{}`
     # when the fixture names none — which is every fixture today. A fixture that
@@ -415,7 +365,7 @@ function fixture_trajectory(fx, base, compiler)
 
     state = Dict{String, Any}()
     for t in saveat
-        ti = time_index(sol.t, t)
+        ti = nearest_index(sol.t, t)
         state[tkey(t)] = Dict{String, Float64}(
             name => Float64(sol.u[ti][idx])
                 for (idx, name) in slots
