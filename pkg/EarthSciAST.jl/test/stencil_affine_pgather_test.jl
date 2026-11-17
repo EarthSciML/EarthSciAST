@@ -99,7 +99,6 @@ end
         b = _pg_build_both(_pg_pure_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-2.0 + 0.9k for k in 1:N]          # in-place refresh
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])
@@ -113,7 +112,6 @@ end
         b = _pg_build_both(_pg_1d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-3.0 + 0.7k for k in 1:N]
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])
@@ -136,7 +134,6 @@ end
         b = _pg_build_both(_pg_2d_model(N), ics, buf)
         du_a = _pg_eval(b[:aff]); du_r = _pg_eval(b[:ref])
         @test b[:aff][4].n_acc_kernels >= 1
-        @test b[:aff][4].n_vec_kernels == 0
         @test du_a == du_r
         buf .= Float64[-1.0 + 0.05i * j for i in 1:N, j in 1:N]   # in-place refresh
         du_a2 = _pg_eval(b[:aff]); du_r2 = _pg_eval(b[:ref])

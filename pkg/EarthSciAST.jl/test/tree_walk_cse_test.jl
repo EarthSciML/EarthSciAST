@@ -739,9 +739,9 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         @test diag.n_const_slots == 5
         @test diag.n_time_slots == 0
         @test diag.n_dynamic_slots == 0
-        # The three counters partition the FINAL prelude (CSE slots + invariant slots).
+        # The three counters partition the FINAL prelude (its CSE slots).
         @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
-            diag.n_cse_slots + diag.n_invariant_slots
+            diag.n_cse_slots
 
         # Bit-exact — `===`, not `≈`. Skipping the const refill must not perturb a
         # single bit of the arithmetic the untiered prelude did.

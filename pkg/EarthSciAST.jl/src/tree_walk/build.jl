@@ -4264,8 +4264,7 @@ end
 function _build_lower_and_classify(
         model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
-        vi_vars, has_value_invention::Bool, materialize_out,
-        form::Symbol = :inplace, index_sets = nothing
+        vi_vars, materialize_out, index_sets = nothing
     )
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
@@ -4354,7 +4353,7 @@ function _build_lower_and_classify(
     # ---- const-op array observeds (in-file polygon rings / source fields) ----
     const_obs_vars, const_obs_arrays = _collect_const_obs_arrays(
         model,
-        const_arrays, geo.has_setup_geometry || has_value_invention
+        const_arrays, geo.has_setup_geometry || !isempty(vi_vars)
     )
 
     # ---- bare-alias array observeds (keyed-factor re-exposure, esm-spec §4.6) ----
@@ -4372,13 +4371,10 @@ function _build_lower_and_classify(
     # under `compiler=:interpreter` and for any model with no promoted array
     # observed.
     #
-    # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
-    # out-of-place build had no buffer to fill. That made inlining MANDATORY
-    # there, and inlining is superlinear: a reader spliced with a reduction body
-    # pays the whole body per output cell. On a real chemistry model that is the
-    # difference between a build that fits in memory and one that exhausts the
-    # host, so a compiled build was not merely slower, it was impossible. Both
-    # forms now carry the same materialized-observed fill levels.
+    # BOTH EMITTERS (`:inplace` and `:oop`) carry the same materialized-observed
+    # fill levels: inlining is superlinear (a reader spliced with a reduction
+    # body pays the whole body per output cell), so making it mandatory for one
+    # form would make large models impossible to build in it.
     skipped = Dict{String, String}()
     mat_array_vars = _collect_materialized_array_obs(
         model, equations,
@@ -4392,10 +4388,9 @@ function _build_lower_and_classify(
 
     return (;
         equations, folded_array_obs,
-        has_setup_geometry = geo.has_setup_geometry,
         geom_setup_vars = geo.setup_vars,
         geom_defs = geo.defs, geom_inline_vars, array_inline_vars,
-        discrete_vars, const_obs_vars, const_obs_arrays, mat_array_vars, recur_vars,
+        discrete_vars, const_obs_vars, const_obs_arrays, mat_array_vars,
         gated_geom_vars,
     )
 end
@@ -4473,6 +4468,7 @@ function _build_partition_and_materialize(
     # re-points a binning aggregate onto `pd_support__<C>`, and when that
     # aggregate's weight is an overlap-area template the body is setup-time
     # geometry — so `_geo_index_extent` must be able to resolve the derived extent.
+    has_value_invention = !isempty(vi_vars)
     derived_extents = has_value_invention ?
         Dict{String, Int}(String(k) => Int(v) for (k, v) in vi_extents) :
         _EMPTY_DERIVED_EXTENTS
@@ -4871,15 +4867,13 @@ function _build_state_layout(
     # position in `p_syms``. `p_syms` came from the already-sorted
     # `parts.param_names`, so this position is stable across builds of the same
     # document and is the SAME position the value has in the `p` NamedTuple —
-    # which is the whole point. The order existed before this map; it just was
-    # not exposed, so a `_NK_PARAM` node could name a parameter but not locate
-    # one. (`param_map` below is this map keyed by NAME, the public form.)
+    # which is the whole point: a `_NK_PARAM` node both names a parameter and
+    # locates it. (The public `param_map(p)` is this map keyed by NAME.)
     param_index = Dict{Symbol, Int}(s => i for (i, s) in enumerate(p_syms))
-    param_map = Dict{String, Int}(String(s) => i for (i, s) in enumerate(p_syms))
 
     return (;
         n_states = length(var_map), var_map, u0, p,
-        param_sym_set = param_index, param_map, array_var_info,
+        param_sym_set = param_index, array_var_info,
         var_map_ext, array_var_info_ext, mat_dims,
         n_total = length(var_map_ext), ic_reseed,
     )
@@ -5494,11 +5488,6 @@ function _build_compile_evaluator(
     # it additionally skips while `(p, t, forcing epoch)` stand still (the FD
     # Jacobian's same-`t` columns).
     #
-    # `n_vec_kernels`, `template_node_count` and the `n_invariant_*` / `n_vec_*`
-    # triples are RETAINED AS HARD ZEROS. They belonged to a separate array
-    # overlay that the access-kernel IR replaced; a large body of tests and
-    # downstream tooling asserts `n_vec_kernels == 0`, meaning "the unified IR
-    # owns every array equation", which is now true by construction.
     # `n_acc_kernels` (and the slot sums below) count the POST-class-merge
     # list — the kernels the emitted RHS actually carries — deliberately: the
     # N-independence property still holds (a class is a structural fact of the
@@ -5507,7 +5496,6 @@ function _build_compile_evaluator(
     # tier (value-identical ones keep a real inv tier), so `n_acc_inv_slots`
     # can shrink relative to a disabled-merge build.
     diag = (;
-        n_vec_kernels = 0,
         # ess-scan: forward cumulative (prefix) reductions rewritten into a
         # term pass + an O(N) accumulation (scan.jl). Zero on every model
         # without one; the per-equation cascade tally records `:scan`.
@@ -5541,7 +5529,6 @@ function _build_compile_evaluator(
         n_classmerge_failed = class_merge_diag === nothing ? 0 :
             class_merge_diag.n_failed,
         n_scalar_entries = length(rhs_list),
-        template_node_count = 0,
         n_cse_slots = cse_diag.n_slots,
         n_cse_occurrences = cse_diag.n_occurrences,
         # Named scalar-observed prelude slots (ess-obs-slots): observeds
@@ -5552,18 +5539,12 @@ function _build_compile_evaluator(
         # `n_cse_slots + n_obs_slots` minus aliases.
         n_obs_slots = cse_diag.n_obs_slots,
         n_obs_inlined = obs_plan.n_inlined,
-        n_invariant_slots = 0,
-        n_invariant_shared = 0,
-        n_invariant_scalar_shared = 0,
         # Cross-kernel CSE (plan B4; xcse.jl): shared prelude slots
         # minted by the pass / kernel inv defs rewritten to shared-slot
         # reads / scalar RHS sites rewritten onto new shared slots.
         n_xcse_slots = xcse_diag.n_xcse_slots,
         n_xcse_kernel_shared = xcse_diag.n_xcse_kernel_shared,
         n_xcse_scalar_shared = xcse_diag.n_xcse_scalar_shared,
-        n_vec_slots = 0,
-        n_vec_shared = 0,
-        n_vec_prelude_nodes = 0,
         n_const_slots = length(const_slots),
         n_time_slots = length(time_slots),
         n_dynamic_slots = length(dyn_slots),
@@ -5576,10 +5557,6 @@ function _build_compile_evaluator(
             length(mat_time_levels),
         n_mat_const_levels = length(mat_const_levels),
         n_mat_time_levels = length(mat_time_levels),
-        # Parameter NAME → position in a vector `p` — the build's own copy
-        # of what the public `param_map(p)` recomputes from the NamedTuple.
-        # Here so an internal consumer never has to re-derive the order.
-        param_map = layout.param_map,
     )
 
     # The PUBLIC map is the ODE layout only: the factored array-observed buffer
@@ -5894,7 +5871,6 @@ function _build_evaluator_impl_inner(
     # it builds the authored body.
     _array_obs_inline_forced() ||
         ((model, index_sets, _) = _hoist_nested_reductions(model, index_sets))
-    _has_value_invention = !isempty(_vi_vars)
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # A spec-spelled LOCAL override key (`pert_amp`) is rewritten onto the
     # flattening-qualified parameter name the build resolves (`M.pert_amp`)
@@ -5948,8 +5924,7 @@ function _build_evaluator_impl_inner(
     cls = _build_lower_and_classify(
         model;
         const_arrays = const_arrays, param_arrays = param_arrays, vi_vars = _vi_vars,
-        has_value_invention = _has_value_invention, materialize_out = materialize_out,
-        form = form, index_sets = index_sets
+        materialize_out = materialize_out, index_sets = index_sets
     )
 
     # The build-time parameter-read sink: continued from the front door (which

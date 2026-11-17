@@ -44,7 +44,6 @@ end
         du_a, _, vm, d = _ct_build(m, ics; affine = true, const_arrays = Dict("A" => A))
         du_r, _, _, _ = _ct_build(m, ics; affine = false, const_arrays = Dict("A" => A))
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
         @test du_a[vm["y[1]"]] == 6.0 && du_a[vm["y[2]"]] == 15.0
     end
@@ -59,7 +58,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 
@@ -73,7 +71,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 
@@ -102,7 +99,6 @@ end
         du_a, _, vm, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
         @test du_a[vm["w[1]"]] == 3.0     # 1·1 + 1·2 (k=3,4 filtered out)
     end
@@ -143,7 +139,6 @@ end
         du_a, _, _, d = _ct_build(m, ics; affine = true)
         du_r, _, _, _ = _ct_build(m, ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_a == du_r
     end
 end

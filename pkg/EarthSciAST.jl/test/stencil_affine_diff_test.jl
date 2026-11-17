@@ -184,7 +184,6 @@ end
         du_aff, _, _, d = _affine_build(_stencil_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1          # affine path fired, not a silent fallback
-        @test d.n_vec_kernels == 0          # …and it OWNED the equation
         @test du_aff == du_ref              # bit-identical
     end
 
@@ -208,7 +207,6 @@ end
         du_aff, _, _, d = _affine_build(_stencil2d_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_stencil2d_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_aff == du_ref                      # bit-identical, derived row-major layout
     end
 
@@ -226,7 +224,6 @@ end
         du_aff, _, _, d = _affine_build(_makearray_region_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_makearray_region_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_aff == du_ref              # bit-identical across region boundaries
     end
 
@@ -246,7 +243,6 @@ end
         du_aff, _, _, d = _affine_build(_const_coef_model(N), ics; affine = true, const_arrays = ca)
         du_ref, _, _, _ = _affine_build(_const_coef_model(N), ics; affine = false, const_arrays = ca)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test du_aff == du_ref              # bit-identical with per-cell const coefficient
     end
 
@@ -259,7 +255,6 @@ end
         du_aff, _, _, d = _affine_build(_guarded_stencil_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_guarded_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1          # affine path owned the guarded equation
-        @test d.n_vec_kernels == 0
         @test all(isfinite, du_aff)         # eager eval did not produce NaN from a throw
         @test du_aff == du_ref              # bit-identical to the lazy scalar reference
     end

@@ -44,7 +44,6 @@ const ESM = EarthSciAST
             const_array_boundaries = Dict("M" => [:clamp])
         )
         @test _diag.n_acc_kernels >= 1
-        @test _diag.n_vec_kernels == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 20.0; rtol = 1.0e-12)   # M[2], in range
         @test isapprox(du[vmap["y[3]"]], 40.0; rtol = 1.0e-12)   # M[4], in range
@@ -95,7 +94,6 @@ const ESM = EarthSciAST
             const_array_boundaries = Dict("conn" => [:clamp])
         )
         @test _diag.n_acc_kernels >= 1
-        @test _diag.n_vec_kernels == 0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test isapprox(du[vmap["y[1]"]], 30.0; rtol = 1.0e-12)   # conn[2]=3 -> u[3]
         @test isapprox(du[vmap["y[2]"]], 40.0; rtol = 1.0e-12)   # conn[3]=4 -> u[4]

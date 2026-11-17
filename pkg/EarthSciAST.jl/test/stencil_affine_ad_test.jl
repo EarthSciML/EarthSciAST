@@ -107,7 +107,6 @@ end
         f_aff, u0, p, _, d = _affine_f(_stencil_model(N), ics; affine = true)
         f_ref, _, _, _, _ = _affine_f(_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
-        @test d.n_vec_kernels == 0
         @test _jac_u(f_aff, u0, p) == _jac_u(f_ref, u0, p)
     end
 
