@@ -125,6 +125,25 @@ function _reject_impure_template_library(raw_data)
     )
 end
 
+"""
+Everything one template-library file exports after resolution in its OWN
+scope: its effective template sequence (imports depth-first post-order, then
+own declarations; esm-spec §9.7.4), its instantiated `index_sets`, and its
+still-open metaparameter declarations (re-exported to the importer,
+esm-spec §9.7.6 binding site 2). All three maps are ordered.
+"""
+mutable struct _TemplateScope
+    templates::OrderedDict{String, Any}
+    index_sets::OrderedDict{String, Any}
+    metaparams::OrderedDict{String, Any}
+end
+
+_TemplateScope() = _TemplateScope(
+    OrderedDict{String, Any}(),
+    OrderedDict{String, Any}(),
+    OrderedDict{String, Any}()
+)
+
 # ---------------------------------------------------------------------------
 # Import-edge renaming / namespacing + free-name rebinding (esm-spec §9.7.7)
 # ---------------------------------------------------------------------------
@@ -208,7 +227,7 @@ end
 
 # (`_RENAME_AXIS_KEYS` / `_RENAME_PROTECTED_KEYS` — the key sets `_rename_walk`
 # dispatches on — are derived from the canonical `_STRUCTURAL_FIELDS` table in
-# the metaparameters section above; register new structural fields THERE.)
+# templates/metaparameters.jl; register new structural fields THERE.)
 
 """
     _rename_walk(x, varmap, isetmap, tplmap)
@@ -423,9 +442,7 @@ so dedup and conflict detection operate on post-rename names. Pure load-time
 substitution: determinism, §9.6.3 ordering, and the expansion-depth bound are
 untouched.
 """
-# (`scope` is a `_TemplateScope`; the struct is declared in the import-graph
-# section below, so the argument is left unannotated.)
-function _apply_edge_renames!(scope, entry, origin::String, ref::String)
+function _apply_edge_renames!(scope::_TemplateScope, entry, origin::String, ref::String)
     ctx = "$origin: import of '$ref'"
     prefix_raw = _raw_get(entry, "prefix")
     rename = _name_map(_raw_get(entry, "rename"), "rename", ctx)
@@ -595,25 +612,6 @@ end
 # ---------------------------------------------------------------------------
 # Import-graph resolution (esm-spec §9.7.2 / §9.7.4 / §9.7.5)
 # ---------------------------------------------------------------------------
-
-"""
-Everything one template-library file exports after resolution in its OWN
-scope: its effective template sequence (imports depth-first post-order, then
-own declarations; esm-spec §9.7.4), its instantiated `index_sets`, and its
-still-open metaparameter declarations (re-exported to the importer,
-esm-spec §9.7.6 binding site 2). All three maps are ordered.
-"""
-mutable struct _TemplateScope
-    templates::OrderedDict{String, Any}
-    index_sets::OrderedDict{String, Any}
-    metaparams::OrderedDict{String, Any}
-end
-
-_TemplateScope() = _TemplateScope(
-    OrderedDict{String, Any}(),
-    OrderedDict{String, Any}(),
-    OrderedDict{String, Any}()
-)
 
 # An index-set declaration with `"records": false` dropped (JSON3 or Dict
 # carrier), so it compares equal to the same declaration without `records`.
