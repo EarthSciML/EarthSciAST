@@ -903,14 +903,11 @@ function _mtk_problem_impl(
     rev = _mtk_name_reversal(flat)
     resolved = _mtk_resolve_overrides(flat, overrides)
 
-    # ESM → ModelingToolkit, then the structural compile. `mtkcompile` is what
-    # the installed ModelingToolkit spells this; older versions called it
-    # `structural_simplify`, and both names are tried so the compiler tracks the
-    # package rather than one release of it. `model_name`, once selected above,
-    # names the compiled system, which is what ModelingToolkit's printing shows.
+    # ESM → ModelingToolkit, then the structural compile. `model_name`, once
+    # selected above, names the compiled system, which is what
+    # ModelingToolkit's printing shows.
     name = model_name === nothing ? :esm : Symbol(String(model_name))
-    system = ModelingToolkit.System(flat; name = name)
-    system = _mtk_compile(system)
+    system = ModelingToolkit.mtkcompile(ModelingToolkit.System(flat; name = name))
 
     # An `ic` on a variable the compile solved away is a GUESS, not a
     # constraint (see `_mtk_ics_to_guesses!`).
@@ -1006,25 +1003,6 @@ function _mtk_problem_impl(
     )
     prob_ref[] = prob
     return prob
-end
-
-# The structural compile, under whichever name the installed ModelingToolkit
-# gives it. `mtkcompile` is the current one; `structural_simplify` was it
-# through v9 and is still what a good deal of downstream code says.
-function _mtk_compile(system)
-    if isdefined(ModelingToolkit, :mtkcompile)
-        return getfield(ModelingToolkit, :mtkcompile)(system)
-    elseif isdefined(ModelingToolkit, :structural_simplify)
-        return getfield(ModelingToolkit, :structural_simplify)(system)
-    end
-    throw(
-        SimulateError(
-            "compiler=:mtk needs a structural compile, and the loaded " *
-                "ModelingToolkit ($(pkgversion(ModelingToolkit))) exports neither " *
-                "`mtkcompile` nor `structural_simplify`",
-            EarthSciAST.ERROR_CODES.COMPILER_UNAVAILABLE
-        )
-    )
 end
 
 # Flattened ESM name → the symbol the COMPILED system carries for it, for every
