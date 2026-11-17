@@ -1390,6 +1390,41 @@ function _contraction_loop_min()
     return (n === nothing || n < 1) ? 8 : n
 end
 
+# Resolve `body` with each of `names` replaced by a fresh reserved loop-var
+# name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
+# `extra_syms`: `(refs, resolved)`, one `Ref` per name in `names` order, or
+# `nothing` when the body does not resolve that way. Only a document-level
+# refusal (an `EarthSciASTError`) is such a decline: a resource error never is
+# (errors.jl) — the per-cell path a caller falls back to resolves the SAME body
+# once per output cell, so reading an exhausted heap as "this body will not
+# resolve symbolically" walks the build into a far larger allocation with the
+# cause erased — and a programming error would otherwise surface only as a
+# tier that declined. `memo` is `nothing` or one made for this symbolic resolve
+# alone, never the concrete RHS build's. The refs are published to
+# `_LOOPVAR_REFS`, so `_compile` lowers each surviving loop-var `VarExpr` to an
+# `_NK_LOOPVAR` reading its ref, only after a clean resolve.
+function _resolve_symbolic(
+        body::ASTExpr, names::Vector{String}, extra_syms::Set{String},
+        array_var_info, var_map, const_arrays, pgather::AbstractDict,
+        memo::_MaybeMemo = nothing
+    )
+    fresh = String[_fresh_loopvar_name() for _ in names]
+    refs = Base.RefValue{Int}[Ref(0) for _ in names]
+    subs = Dict{String, ASTExpr}(names[d] => VarExpr(fresh[d]) for d in eachindex(names))
+    subbed = _sub_preserving(body, subs)
+    bsyms = union(Set{String}(fresh), extra_syms)
+    resolved = try
+        _resolve_indices(subbed, array_var_info, var_map, const_arrays, pgather, memo, bsyms)
+    catch err
+        err isa EarthSciASTError || rethrow()
+        return nothing
+    end
+    for d in eachindex(fresh)
+        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
+    end
+    return refs, resolved
+end
+
 # Try to compile a uniform contraction to a single runtime loop node instead of
 # unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
 # ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
@@ -1406,30 +1441,11 @@ function _try_build_contraction_loop(
         # read (a reduction nested in the whole-array nest's term).
         outer_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    names = String[_fresh_loopvar_name() for _ in contract_names]
-    refs = Base.RefValue{Int}[Ref(0) for _ in contract_names]
-    subs = Dict{String, ASTExpr}(
-        contract_names[d] => VarExpr(names[d])
-            for d in eachindex(contract_names)
+    got = _resolve_symbolic(
+        body, contract_names, outer_syms, array_var_info, var_map, const_arrays, pgather
     )
-    subbed = _sub_preserving(body, subs)
-    bsyms = union(Set{String}(names), outer_syms)
-    resolved = try
-        # memo=nothing: the symbolic (bound-sym) resolution must never share the
-        # concrete RHS-build memo (same invariant the compile-once path relies on).
-        _resolve_indices(
-            subbed, array_var_info, var_map, const_arrays,
-            pgather, nothing, bsyms
-        )
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    # Publish the refs so `_compile` lowers each surviving loop-var `VarExpr` to an
-    # `_NK_LOOPVAR` reading that ref. (Registered only after a clean resolve.)
-    for d in eachindex(names)
-        _LOOPVAR_REFS[Symbol(names[d])] = refs[d]
-    end
+    got === nothing && return nothing
+    refs, resolved = got
     oplus_sym = Symbol(oplus)
     node::ASTExpr = resolved
     # Nest innermost-first: `contract_names[1]` varies FASTEST in the unroll's
@@ -1542,35 +1558,13 @@ function _resolve_array_contraction_term(
         memo::_MaybeMemo = nothing
     )
     nout = length(out_names)
-    all_names = vcat(out_names, contract_names)
-    fresh = String[_fresh_loopvar_name() for _ in all_names]
-    refs = Base.RefValue{Int}[Ref(0) for _ in all_names]
-    subs = Dict{String, ASTExpr}(
-        all_names[d] => VarExpr(fresh[d])
-            for d in eachindex(all_names)
+    extra = nest_scalar_loops ? Set{String}((_NEST_SCALAR_LOOPS,)) : _EMPTY_BOUND_SYMS
+    got = _resolve_symbolic(
+        body, vcat(out_names, contract_names), extra,
+        array_var_info, var_map, const_arrays, pgather, memo
     )
-    subbed = _sub_preserving(body, subs)
-    bsyms = Set{String}(fresh)
-    nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
-    resolved = try
-        # Never the concrete RHS-build memo (as in `_try_build_contraction_loop`):
-        # `memo` is `nothing` or one made for this symbolic resolve alone.
-        _resolve_indices(
-            subbed, array_var_info, var_map, const_arrays,
-            pgather, memo, bsyms
-        )
-    catch err
-        # errors.jl: the three resource errors are never a tier decline. The
-        # per-cell path this returns to resolves the SAME body once per output
-        # cell, so reading an exhausted heap as "this body will not resolve
-        # symbolically" walks the build into a far larger allocation with the
-        # cause erased.
-        _is_resource_error(err) && rethrow()
-        return nothing
-    end
-    for d in eachindex(fresh)
-        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
-    end
+    got === nothing && return nothing
+    refs, resolved = got
     return (refs[1:nout], refs[(nout + 1):end], resolved)
 end
 

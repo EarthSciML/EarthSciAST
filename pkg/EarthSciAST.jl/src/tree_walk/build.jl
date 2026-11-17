@@ -7924,8 +7924,9 @@ function _try_compile_array_contraction(
         # equation, and swallowing one here is worse than elsewhere — this is
         # the tier that exists because the per-cell alternative exhausts
         # memory, so the decline would send the build straight back into the
-        # allocation that just failed.
-        _is_resource_error(err) && rethrow()
+        # allocation that just failed. Nor is a programming error a decline:
+        # only a document-level refusal (an `EarthSciASTError`) is.
+        err isa EarthSciASTError || rethrow()
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
     end

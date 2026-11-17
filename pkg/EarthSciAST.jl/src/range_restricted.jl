@@ -853,61 +853,8 @@ program): a private instance of its compiled right-hand side — its own caches,
 scratch and forcing buffers; the generated code and every read-only table are
 the program's. One per concurrent caller; a workspace may move between threads
 but serves one call at a time.
-
-A workspace of a whole-domain program made after the program was decomposed
-([`halo`](@ref) or [`restrict`](@ref)) evaluates it through the code its tiles
-share (the program's tile over its whole domain), so the program and its tiles
-compile one right-hand side; the values are the same.
 """
-rhs_workspace(x::TileProgram) = _instantiate(x.shared)
-function rhs_workspace(x::RhsProgram)
-    alt = _decomposed_form(x)
-    return _instantiate(alt === nothing ? x.shared : alt.shared)
-end
-
-# Record that `op` was asked about decomposition `dec` (the first one counts).
-function _note_decomposition!(op::RhsProgram, dec::Decomposition)
-    memo = op.memo
-    lock(() -> (memo.dec[] === nothing && (memo.dec[] = dec)), memo.lock)
-    return nothing
-end
-
-# The tile of a decomposed program `op` over its whole domain, under the first
-# decomposition it was asked about, when that tile shares its code with the
-# other tiles and lays `u` and `aux` out as `op` does; else `nothing`. Built
-# once, when a workspace first asks for it. A whole-domain tile stores no
-# cell past the domain, so its storage crosses no seam.
-function _decomposed_form(op::RhsProgram)
-    memo = op.memo
-    return lock(memo.lock) do
-        memo.form[] === missing || return memo.form[]
-        dec = memo.dec[]
-        dec === nothing && return nothing
-        memo.form[] = nothing
-        m = _axis_model(op, dec)
-        dom = [a => 1:n for (a, n) in m.N]
-        alt = try
-            restrict(op, dec; owned = dom, storage = dom)
-        catch err
-            err isa EarthSciASTError || rethrow()
-            nothing
-        end
-        alt === nothing || _same_layout(alt.layout, op.layout) || (alt = nothing)
-        memo.form[] = alt
-        alt === nothing || (op.form[] = (alt.layout, alt.maps, alt.shared))
-        return alt
-    end
-end
-
-_same_layout(a::TileLayout, b::TileLayout) =
-    a.n_u == b.n_u && a.n_aux == b.n_aux && _same_blocks(a.u, b.u) && _same_blocks(a.aux, b.aux)
-_same_blocks(a, b) =
-    length(a) == length(b) &&
-    all(
-    ((x, y),) -> x.name == y.name && x.sets == y.sets && x.storage == y.storage &&
-        x.owned == y.owned && x.base == y.base && x.strides == y.strides,
-    zip(a, b)
-)
+rhs_workspace(x::Union{RhsProgram, TileProgram}) = _instantiate(x.shared)
 
 """
     rhs!(du, x, ws, u, aux, p, t, fs::ForcingSet) -> du
