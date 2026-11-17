@@ -22,7 +22,7 @@
 using Test
 using EarthSciAST
 using ForwardDiff
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase
 import OrdinaryDiffEqRosenbrock as ODERos
 include("testutils.jl")

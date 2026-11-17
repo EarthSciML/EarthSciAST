@@ -4,9 +4,7 @@
 Wires the EarthSciIO Julia `Provider` into EarthSciAST's data-provider seam
 ([`provider_refresh_times`](@ref) / [`provider_sample`](@ref)), loaded
 automatically whenever `EarthSciIO` is in the session alongside
-EarthSciAST. Before this extension existed the adapter shipped only as
-a doc comment on the seam (`data_refresh.jl`), so every run script had to repeat
-it; now `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
+EarthSciAST: `esm_problem(...; providers = Dict("<ModelPath>.<param>" => provider))`
 accepts an EarthSciIO provider with no per-script glue. The key is the CONSUMING
 PARAMETER's flattened name: from esm 1.0.0 a data source declares no variables of
 its own, so the parameter IS the loaded field (esm-spec §8.5).
@@ -23,8 +21,7 @@ in a coupling expression), exactly as it would be for any other provider. The
 one exception is the record axis of a two-record parameter (esm-spec §8.5.1),
 which the providers `providers_from_document` builds move to the first axis.
 
-Kept a `weakdep` extension (mirroring `MTKExt` / `DataRefreshExt`) so the base
-package carries no EarthSciIO dependency; without it loaded, the core seam throws
+Kept a weak-dependency extension so the base package carries no EarthSciIO dependency; without it loaded, the core seam throws
 a `RefreshError` naming what to load.
 """
 module EarthSciASTEarthSciIOExt

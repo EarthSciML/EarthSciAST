@@ -10,13 +10,12 @@
 # IS the trajectory store, so the solver is told `save_everystep=false` and peak
 # memory stops being `O(n_timepoints × length(u0))`.
 #
-# Principle `[[library-exposes-rhs-not-solver]]`: EarthSciAST returns the *pieces*
-# (`build_output_callback -> (cb, tstops)`); the USER attaches them to their own
-# `ODEProblem`/`solve`. EarthSciAST ships no `solve`, no `ODEProblem`, no solver.
-# The callback constructor itself lives in a package extension gated on
-# `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTDataOutputExt.jl) so the base
-# library never pulls a solver-adjacent stack into `[deps]` — identical to the
-# `DataRefreshExt` pattern.
+# EarthSciAST returns the *pieces* (`build_output_callback -> (cb, tstops)`); the
+# USER attaches them to their own `ODEProblem`/`solve`. EarthSciAST ships no
+# `solve`, no `ODEProblem`, no solver. The callback constructor itself lives in a
+# package extension gated on `DiffEqCallbacks` + `SciMLBase` (see
+# ext/EarthSciASTCallbacksExt.jl) so the base library never pulls a
+# solver-adjacent stack into `[deps]`.
 #
 # This file (core) owns the CONTRACT (the Sink protocol generics + a host-gather
 # `state_snapshot` seam); concrete sinks live OUTSIDE EarthSciAST, exactly like the
@@ -302,7 +301,7 @@ build_output_callback(args...; kwargs...) = throw(
     OutputError(
         "build_output_callback requires the DiffEqCallbacks + SciMLBase extension; " *
             "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-            "EarthSciASTDataOutputExt is active"
+            "EarthSciASTCallbacksExt is active"
     )
 )
 
@@ -1168,6 +1167,6 @@ function build_checkpoint_callback end
 build_checkpoint_callback(args...; kwargs...) = throw(
     OutputError(
         "build_checkpoint_callback requires the DiffEqCallbacks + SciMLBase extension; " *
-            "add `using DiffEqCallbacks, SciMLBase` so EarthSciASTDataOutputExt is active"
+            "add `using DiffEqCallbacks, SciMLBase` so EarthSciASTCallbacksExt is active"
     )
 )

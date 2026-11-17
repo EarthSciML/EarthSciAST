@@ -10,11 +10,11 @@
 # from a data Provider, regrids them, and writes them into the SAME buffer
 # objects — once per cadence boundary, never on the hot per-step path.
 #
-# Principle `[[library-exposes-rhs-not-solver]]`: EarthSciAST returns the *pieces*
+# EarthSciAST returns the *pieces*
 # (`build_refresh_callback -> (cb, tstops)`); the USER attaches them to their own
 # `ODEProblem`/`solve`. EarthSciAST ships no `solve`, no `ODEProblem`, no solver. The
 # callback constructor itself lives in a package extension gated on
-# `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTDataRefreshExt.jl)
+# `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTCallbacksExt.jl)
 # so the base library never pulls a solver-adjacent stack into `[deps]`.
 #
 # This file (core) owns two decoupled seams; concrete implementations live
@@ -543,7 +543,7 @@ build_refresh_callback(args...; kwargs...) = throw(
     RefreshError(
         "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
             "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-            "EarthSciASTDataRefreshExt is active"
+            "EarthSciASTCallbacksExt is active"
     )
 )
 
