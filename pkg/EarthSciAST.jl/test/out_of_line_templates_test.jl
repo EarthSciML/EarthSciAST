@@ -619,5 +619,30 @@ end
         )
         @test _ser(EarthSciAST.expand_flattened_refs(flat; memo = nothing)) ==
             _ser(EarthSciAST.expand_flattened_refs(flat))
+
+        # The model walk reaches every expression site too: events, guesses
+        # and expression bounds as well as equations and update rules.
+        m = EarthSciAST.Model(
+            Dict{String, EarthSciAST.ModelVariable}(
+                "c" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; ub = _apply("c")),
+            ),
+            EarthSciAST.Equation[EarthSciAST.Equation(EarthSciAST.VarExpr("c"), _apply("c"))];
+            continuous_events = EarthSciAST.ContinuousEvent[
+                EarthSciAST.ContinuousEvent(
+                    EarthSciAST.ASTExpr[_apply("c")],
+                    EarthSciAST.AffectEquation[EarthSciAST.AffectEquation("c", _apply("c"))]
+                ),
+            ],
+            guesses = Dict{String, Union{Float64, EarthSciAST.ASTExpr}}("c" => _apply("c"))
+        )
+        EarthSciAST._expand_model_refs!(m, reg)
+        @test !_hasapply(only(m.equations).rhs)
+        @test !_hasapply(m.variables["c"].ub)
+        @test !_hasapply(m.guesses["c"])
+        mev = only(m.continuous_events)
+        @test !_hasapply(only(mev.conditions)) && !_hasapply(only(mev.affects).rhs)
+        # One memo serves every site: the four identical applications share
+        # one expanded root.
+        @test only(m.equations).rhs === m.guesses["c"] === only(mev.conditions)
     end
 end
