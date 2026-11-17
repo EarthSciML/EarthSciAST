@@ -149,9 +149,8 @@ const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosin
 # (`_lane_repl_key`), so a cache hit from another equation is byte-identical
 # to the variant that equation would have compiled itself.
 #
-# Off, the caches are per equation: no store is created, every `_TemplateCtx`
-# gets fresh dicts and every obs-inline a fresh memo.
-_xeq_disabled() = !_compiler_plan_now().xeq_variant
+# With the affine tier off (`compiler = :interpreter`) no store is created: the
+# store serves only that tier's template variants and obs-inline memo.
 
 struct _XEqStore
     variants::Dict{Tuple{UInt64, String, String}, _SubVariant}
@@ -409,9 +408,8 @@ end
 # identity argument) — the table entries are bit-for-bit what the per-cell
 # reference computes for the same subtree.
 #
-# Off, the equation declines whole — the differential oracle
-# (test/stencil_subtree_tbl_test.jl).
-_subtree_tbl_disabled() = !_compiler_plan_now().subtree_tbl
+# `compiler = :interpreter`, which turns the whole affine tier off, is the
+# differential oracle (test/stencil_subtree_tbl_test.jl).
 
 # One rescued subtree: the expression, the loop-index binding ORDER (sorted —
 # deterministic, and consistent between compile and per-cell rebinding), and
@@ -504,7 +502,6 @@ end
 # construct, so it counts rescue FIRINGS, not final cascade routing (that is
 # `:affine` / `:percell_acc`).
 function _try_exprtbl_lane(e::OpExpr, ctx::_StencilCtx)
-    _subtree_tbl_disabled() && return nothing
     _is_array_producer(e) && return nothing
     _exprtbl_evaluable(e, ctx.idxset, ctx.const_arrays) || return nothing
     names = sort!(collect(ctx.idxset))

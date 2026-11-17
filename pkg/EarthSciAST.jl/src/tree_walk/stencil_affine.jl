@@ -218,7 +218,6 @@ struct _FastKey
     c::Vector{Vector{Vector{Int}}}          # per state lane, subscript and loop dim
     base::Vector{Int}                       # per state lane, its affine slot map
     strides::Vector{Vector{Int}}
-    lane_affine_key_off::Bool               # `_lane_affine_key_disabled()` at build
 end
 
 # `(c0, c)` with `e == c0 + Σ_d c[d]·loop[d]` for every cell, by the same integer
@@ -303,7 +302,7 @@ function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
         push!(los, rec.lo); push!(his, rec.hi); push!(c0s, c0); push!(cs, c)
         push!(bases, aff[1]); push!(strs, aff[2])
     end
-    return _FastKey(id, los, his, c0s, cs, bases, strs, _lane_affine_key_disabled())
+    return _FastKey(id, los, his, c0s, cs, bases, strs)
 end
 
 # `_cell_ckey!`'s key from the closed form: the branch number, then per state
@@ -440,8 +439,6 @@ end
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
 # looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
-# Off, the signature is the Δ-keyed one.
-_lane_affine_key_disabled() = !_compiler_plan_now().lane_affine_key
 
 # Is this subscript expression an AFFINE function of the loop indices — a sum of
 # integer literals and loop-index terms with integer coefficients? Such an
@@ -705,12 +702,6 @@ function _cell_ckey!(
         @inbounds for v in state_vals
             push!(key, v == 0 ? 1 : 0)
         end
-    elseif _lane_affine_key_disabled()
-        base, strides = okey
-        oln = _box_oln(base, strides, loop, length(idx_names))
-        @inbounds for v in state_vals
-            v == 0 ? (push!(key, 0); push!(key, 0)) : (push!(key, 1); push!(key, v - oln))
-        end
     else
         # LANE-AFFINE key (see `_lane_nonaffine_args!`): the ghost pattern, then
         # every lane subscript's DEVIATION from its own affine model of the loop
@@ -761,7 +752,7 @@ function _cell_ckey!(
         end
     end
     _const_fold_key!(key, recipes, env, ctx_proto.const_arrays)
-    fk === nothing && (okey === nothing || !_lane_affine_key_disabled()) &&
+    fk === nothing &&
         (
         sig.fast_key = _fast_key_model(
             sig, body, branch, key[1], idx_names,
@@ -1017,15 +1008,16 @@ end
 # a box that spans a cut, which per-box corner verification catches → fallback.
 const _AFFINE_STABLE_GUARD = 8
 
-# Δ-keyed cut cap, per dim. State-Δ keying (see `_cell_ckey!`) exists to give
-# wrap/fold transitions their own boxes — a handful of segments, bounded by the
-# operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a slot
-# indirect through a connectivity permutation) changes Δ at every cell; carving a
-# box per cell would trade the O(#groups) build for O(#cells) kernels. So when a
-# dim's Δ-keyed scan opens more segments than this cap, that dim's cuts are
-# recomputed with the BASE key (region × ghost × const-fold) and the non-uniform
-# lane is left for the box processor's indirect-table derivation
-# (`_derive_lane_repl`), which materializes a per-box slot table instead.
+# Strong-key cut cap, per dim. The lane-affine key (see `_cell_ckey!`) gives a
+# clamp / fold / wrap transition its own box — a handful of segments, bounded by
+# the operator's half-width at each end. A GENUINELY UNSTRUCTURED gather (a
+# slot indirect through a connectivity permutation) deviates from its affine
+# model at every cell; carving a box per cell would trade the O(#groups) build
+# for O(#cells) kernels. So when a dim's strong-key scan opens more segments
+# than this cap, that dim's cuts are recomputed with the BASE key (region ×
+# ghost × const-fold) and the non-uniform lane is left for the box processor's
+# indirect-table derivation (`_derive_lane_repl`), which materializes a per-box
+# slot table instead.
 const _AFFINE_MAX_DELTA_SEGS = 16
 
 # Cut START indices per loop dim. For each dim, hold the OTHER dims at every
@@ -1128,8 +1120,8 @@ function _scan_dim_cuts(
         for (ii, dd) in enumerate(otherdims)
             loop[dd] = probe[ii]
         end
-        # Over-cap early exit for a Δ-keyed scan: an unstructured gather changes
-        # Δ at EVERY cell, so without this the fronts would never stabilize and
+        # Over-cap early exit for a strong-key scan: an unstructured gather deviates
+        # from its affine model at EVERY cell, so without this the fronts would never stabilize and
         # the scan would walk the whole range before the caller's cap fallback.
         overcap() = okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
         # Scan up from the low end: a change at `iv` opens a segment there.
@@ -1166,7 +1158,7 @@ function _scan_dim_cuts(
         for C in cand_d
             (kc = ck(C - 1, nothing); ck(C, kc) != kc) && push!(starts, C)
         end
-        # A Δ-keyed scan past the cap is abandoned early — the caller redoes the
+        # A strong-key scan past the cap is abandoned early — the caller redoes the
         # dim with the base key, so finishing the sweep would be wasted work.
         okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS && break
     end
@@ -1323,9 +1315,7 @@ end
 # one dense contiguous run per array variable (`_enumerate_array_cell_names`
 # lays cells out column-major, contiguously), so the table is the range
 # `lo0:hi0` itself, never materialized.
-#
-# Off, every lane gets the dense per-box table.
-_state_box_disabled() = !_compiler_plan_now().state_box
+
 
 _state_slot_identity(lo0::Int, hi0::Int) = lo0:hi0
 
@@ -1417,12 +1407,6 @@ function _materialize_state_tbl_inner(
     tbl, s, off = _box_table(Int, rec, idx_names, box, run, D, var_map, const_arrays)
     return _AccRepl(_AccStateTblBox(tbl, s, off))
 end
-
-# Gate for the non-affine LIVE-forcing lane table lowering below (perf-plan A2,
-# prototypes/perf-gap-closure-plan.md). Off, the whole equation takes the
-# per-cell fallback — the differential oracle
-# (test/stencil_affine_pgather_tbl_test.jl).
-_obsref_disabled() = !_compiler_plan_now().obsref
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
 # into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
@@ -1586,7 +1570,7 @@ function _derive_lane_repl(
         # index affinity holds "BY CONSTRUCTION within a box", not by corner
         # agreement.) The motivating shapes — a lower-rank geometry column, a
         # staggered face field, a 2-D surface field — all pass this guard.
-        if !_state_box_disabled() && structural
+        if structural
             blk = _state_slot_block(rec)
             if blk !== nothing
                 lo0, hi0 = blk
@@ -1735,10 +1719,7 @@ function _derive_lane_repl(
         for cn in corners
             if (off + sum((cn[d] - 1) * s[d] for d in 1:D)) != ev(cn)
                 # Clamped/folded forcing subscript (non-affine across the box):
-                # materialize the per-box index table (perf-plan A2). The kill
-                # switch restores the pre-A2 whole-equation per-cell fallback.
-                _obsref_disabled() &&
-                    throw(_StencilFallback("pgather index non-affine in box"))
+                # materialize the per-box index table.
                 return _materialize_pgather_tbl(
                     rec, idx_names, box, D,
                     var_map, const_arrays, run
@@ -1751,8 +1732,6 @@ function _derive_lane_repl(
             ) do l
                 (off + sum((l[d] - 1) * s[d] for d in 1:D)) == ev(l)
             end
-            _obsref_disabled() &&
-                throw(_StencilFallback("pgather index non-affine in box"))
             return _materialize_pgather_tbl(
                 rec, idx_names, box, D,
                 var_map, const_arrays, run

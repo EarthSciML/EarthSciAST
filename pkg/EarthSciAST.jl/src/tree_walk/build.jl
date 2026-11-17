@@ -6102,7 +6102,7 @@ function _compile_derivative_equations(
     # move from per-equation to per-build (sound because every compile input
     # threaded below is the same object for every equation; see the _XEqStore
     # note in stencil.jl). Off, the caches are per equation.
-    xeq = _xeq_disabled() ? nothing : _XEqStore()
+    xeq = _compiler_plan_now().stencil ? _XEqStore() : nothing
     # Cross-equation direct class emission (acc_merge.jl): pool every per-cell
     # equation's cell entries here and run the scalarizer-level class emitter
     # ONCE, above the equation loop, so structurally identical cells arising in
