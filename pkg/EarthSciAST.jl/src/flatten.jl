@@ -31,11 +31,11 @@ Provenance metadata for a flattened system.
 
 Fields:
 - `source_systems::Vector{String}`: names of the component systems that were
-  flattened (sorted for determinism).
+  flattened, in document order (models, then reaction systems).
 - `coupling_rules_applied::Vector{String}`: human-readable summary of each
   coupling entry applied.
-- `dimension_promotions_applied::Vector{NamedTuple}`: records of each dimension
-  promotion — e.g. `(variable="Chem.O3", source_domain=nothing, target_domain="grid2d", kind=:broadcast)`.
+- `dimension_promotions_applied::Vector{NamedTuple}`: always empty; no flatten
+  pass records into it.
 - `opaque_coupling_refs::Vector{String}`: opaque runtime references recorded
   for `operator_apply` and `callback` couplings.
 - `merged_variable_renames::OrderedDict{String,String}`: every state spelling an
@@ -1722,36 +1722,6 @@ end
 # FlattenedSystem → runnable single-model ESM document
 # ========================================
 
-"""
-    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
-
-Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
-(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
-array system, or `discretize(doc)` first when it carries a spatial PDE.
-
-A native dict — not a typed `EsmFile` — is the target on purpose: the value-
-invention front-door (RFC §6.1, geometry / derived index sets) and the
-`discretize` entry both dispatch on `AbstractDict`, and only the raw document
-carries the index-set vocabulary the typed IR doesn't surface.
-
-The single model collects:
-- all three variable partitions (states, parameters, observeds) — observeds keep
-  their defining `expression`, which the geometry materializer reads directly;
-- every flattened equation (state ODEs + the synthesized observed definitions),
-  so the evaluator's own observed-equation synthesis is a no-op (it skips any
-  observed already defined by an equation — no double definition);
-- the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
-  top level so the regridders' `ranges.from` / `from_faq` / producer `id`
-  references resolve.
-
-This is the monolithic path the staged camp-fire run previously could not take,
-because a lossy `flatten` dropped the geometry `manifold` data and the
-index-set registry. With those preserved (canonical `reconstruct` + the registry
-fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
-
-`equation_contributions` is NOT carried: the `.esm` format has no slot for
-per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
-"""
 # esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
 # their free variable references resolve in the owning component's namespace,
 # exactly as the expand-at-load image does (load-time expansion splices the body
@@ -1869,6 +1839,36 @@ function _check_registry_coupling_rewrites(registry, rewritten::Set{String})
     return nothing
 end
 
+"""
+    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
+
+Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
+(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
+array system, or `discretize(doc)` first when it carries a spatial PDE.
+
+A native dict — not a typed `EsmFile` — is the target on purpose: the value-
+invention front-door (RFC §6.1, geometry / derived index sets) and the
+`discretize` entry both dispatch on `AbstractDict`, and only the raw document
+carries the index-set vocabulary the typed IR doesn't surface.
+
+The single model collects:
+- all three variable partitions (states, parameters, observeds) — observeds keep
+  their defining `expression`, which the geometry materializer reads directly;
+- every flattened equation (state ODEs + the synthesized observed definitions),
+  so the evaluator's own observed-equation synthesis is a no-op (it skips any
+  observed already defined by an equation — no double definition);
+- the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
+  top level so the regridders' `ranges.from` / `from_faq` / producer `id`
+  references resolve.
+
+This is the monolithic path the staged camp-fire run previously could not take,
+because a lossy `flatten` dropped the geometry `manifold` data and the
+index-set registry. With those preserved (canonical `reconstruct` + the registry
+fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
+
+`equation_contributions` is NOT carried: the `.esm` format has no slot for
+per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
+"""
 function flattened_to_esm(
         flat::FlattenedSystem;
         name::AbstractString = "Flattened",
