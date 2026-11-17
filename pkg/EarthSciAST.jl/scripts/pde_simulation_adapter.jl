@@ -39,14 +39,9 @@ let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manif
         bootstrap()
     catch err
         # Manifest.toml is a machine-local CACHE (gitignored), so it can lag a
-        # Project.toml that has moved on and then contradict it. Concretely: a
-        # Manifest generated before 02ddbef0e pins EarthSciIO to a local dev
-        # `path`, while the Project now sources it from git — and
-        # `Pkg.instantiate` dies on the contradiction with a bare
-        # `MethodError: joinpath(::Nothing)` (Pkg calls `isdir(source_path(...))`
-        # and `source_path` returns nothing for a repo-sourced package whose
-        # manifest entry carries no tree hash). The adapter then wrote no output
-        # and the Julia REFERENCE stage failed, which also fails the Rust and
+        # Project.toml that has moved on and then contradict it, and
+        # `Pkg.instantiate` then fails. The adapter would write no output and
+        # the Julia REFERENCE stage would fail, which also fails the Rust and
         # Python stages that compare against it.
         #
         # A cache that cannot instantiate has no value, so rebuild it rather
@@ -73,6 +68,10 @@ const ESS = EarthSciAST
 # changing what this tier measures.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
@@ -80,13 +79,13 @@ function parse_args(args)
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            manifest = _flag_value(args, i); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            output = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     manifest === nothing && error("--manifest is required")
@@ -112,7 +111,10 @@ function rhs_at(model, probe_state, t, compiler)
         model; initial_conditions = ics,
         compiler = Symbol(compiler)
     )
-    du = similar(u0)
+    # `zero`, not `similar`: a state with no `D` equation is never written by
+    # `f!`, so its slot must start at zero rather than hold whatever memory
+    # `similar` returned.
+    du = zero(u0)
     f!(du, u0, p, Float64(t))
     return Dict{String, Float64}(name => Float64(du[idx]) for (name, idx) in vmap)
 end

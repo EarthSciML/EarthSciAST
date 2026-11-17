@@ -34,7 +34,7 @@ Each library implementation is classified into tiers:
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
 | **Analysis** | Unit checking, stoichiometric matrix computation | All languages |
-| **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
+| **Simulation** | Convert to native ODE system and solve numerically; Julia converts the flattened system to an MTK `System` (ODE systems only; a system with a continuous spatial dimension is discretized first) | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
 
 > **Retracted from the Analysis tier: conservation-law detection and equation
@@ -1593,7 +1593,7 @@ TypeScript `camelCase`, others verbatim).
 
 | Field | Type | Contents |
 |---|---|---|
-| `independent_variables` | list of name | Computed by the §4.7.6 algorithm: `["t"]` for a 0D system, `["t", <spatial axes>]` for a PDE. This is what selects `ODESystem` vs `PDESystem` downstream. NOT always `["t"]`. |
+| `independent_variables` | list of name | Computed by the §4.7.6 algorithm: `["t"]` for a 0D system, `["t", <spatial axes>]` for a PDE. This is what tells a downstream constructor whether the system is an ODE or a PDE. NOT always `["t"]`. |
 | `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including each reaction-system species that step 1 derives a `D` equation for — which is not all of them: see §4.6.1 for the reservoir and no-reaction exceptions), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. A species §4.6.1 emits no equation for is still IN this map — it is solved for either way; what changes is which half it lands in. |
 | `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus every `variable_map` target (§4.7.3). |
 | `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation, bare-LHS or indexed-LHS (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; an arrayed observed materializes into a buffer and IS. |
@@ -1981,7 +1981,7 @@ A single `.esm` file may still combine systems living on different spatial dimen
 2. Scanning every equation for spatial operators (`grad`, `div`, `laplacian`, or `D` with `wrt ≠ "t"`) and adding each referenced spatial dimension.
 3. Scanning every `domains` entry in the file for spatial axes and adding them.
 
-The result is `[:t]` for purely 0D systems and `[:t, :x, :y, …]` for PDE systems. This is what determines whether the downstream constructor produces an `ODESystem` or a `PDESystem`.
+The result is `[:t]` for purely 0D systems and `[:t, :x, :y, …]` for PDE systems. This is what tells a downstream constructor whether it has an ODE or a PDE.
 
 ##### 4.7.6.6 Slice ODE-to-PDE Coupling Interpretation
 
@@ -2255,19 +2255,14 @@ using EarthSciAST, ModelingToolkit, Catalyst
 # ESM → FlattenedSystem (single intermediate, always-first step)
 flat = flatten(file)
 
-# FlattenedSystem → MTK System (pure-ODE path)
+# FlattenedSystem → MTK System (ODE systems only)
 sys = ModelingToolkit.System(flat; name=:SuperFast)
-# ArgumentError if flat.independent_variables includes spatial dims — the
-# error message explicitly redirects the user to ModelingToolkit.PDESystem.
+# ArgumentError if flat.independent_variables includes spatial dims: the
+# binding has no PDE constructor, so the spatial operators must be
+# discretized (a `faq` stencil over an index set) first.
 
-# FlattenedSystem → MTK PDESystem (PDE path)
-pde = ModelingToolkit.PDESystem(flat; name=:SuperFast)
-# ArgumentError if flat is a pure ODE (independent_variables == [:t]) —
-# the error message explicitly redirects the user to ModelingToolkit.System.
-
-# Convenience forms that flatten first:
-sys = ModelingToolkit.System(file.models["SuperFast"];    name=:SuperFast)
-pde = ModelingToolkit.PDESystem(file.models["Atmosphere"]; name=:Atmosphere)
+# Convenience form that flattens first:
+sys = ModelingToolkit.System(file.models["SuperFast"]; name=:SuperFast)
 
 # Catalyst
 rxn = Catalyst.ReactionSystem(file.reaction_systems["SimpleOzone"]; name=:Ozone)
@@ -2278,7 +2273,7 @@ rxn_m = EarthSciAST.ReactionSystem(rxn)
 
 # Simulate
 using OrdinaryDiffEq
-prob = ODEProblem(sys, [], tspan)     # or discretize() for PDESystem
+prob = ODEProblem(sys, [], tspan)
 sol = solve(prob, Tsit5())
 ```
 
@@ -2286,24 +2281,12 @@ sol = solve(prob, Tsit5())
 
 **Flattened system to MTK conversion details.**
 
-The constructor `ModelingToolkit.System(::FlattenedSystem)` handles the pure-ODE path; `ModelingToolkit.PDESystem(::FlattenedSystem)` handles the PDE path. The dispatch split is determined by `flat.independent_variables` (which is populated by `flatten` based on the hybrid-flattening rules in §4.7.6):
+The constructor `ModelingToolkit.System(::FlattenedSystem)` handles ODE systems only. Whether a system is one is read from `flat.independent_variables` (populated by `flatten` from the hybrid-flattening rules in §4.7.6):
 
-- `independent_variables == [:t]` → ODE path. Build an `ODESystem`/`System` with state variables depending on `t`, equations, continuous/discrete events.
-- `independent_variables` contains spatial dims (`:x`, `:y`, `:z`, ...) → PDE path. Build a `PDESystem` with state variables depending on `t` and the spatial dims, equations, boundary conditions, and initial conditions.
+- `independent_variables == [:t]` → build a `System` with state variables depending on `t`, equations, continuous/discrete events.
+- `independent_variables` contains spatial dims (`:x`, `:y`, `:z`, ...) → `ArgumentError`. The Julia binding has no PDE constructor: a document with a continuous spatial dimension must have its spatial operators discretized (a `faq` stencil over an index set) before it reaches the constructor, and then has no spatial independent variable. For the same reason the Julia binding makes no choice between the two slice-source interpretations of §4.7.6.6.
 
 The constructors always call `flatten` internally when invoked on a `Model` or `EsmFile`, so users do not need to flatten themselves unless they want to inspect the intermediate. There is a single source of truth for dimension and coupling resolution — the `flatten` step — and the extension code only deals with the already-canonical FlattenedSystem.
-
-**Surface-source → flux BC lowering (Julia-specific convention).**
-
-When the flattened system includes a state variable of the form `V.at_<dim>` that is produced by a `slice_variable` primitive and has a standalone ODE `D(V.at_<dim>, t) = f(...)`, AND the base variable `V` has a diffusive equation on the same spatial dimension, the Julia extension **lowers the slice-ODE to a flux boundary condition** on the base variable:
-
-```
-D_coeff * Differential(<dim>)(V)(t, <dim>_0) ~ f(...)
-```
-
-rather than emitting the slice-ODE as a pointwise source term in the lowest grid cell. This is the physically correct interpretation for surface deposition of a diffusing tracer (the surface deposition velocity has units of length/time and acts as a flux, not a volumetric source). §4.7.6.6 permits either interpretation at the spec level; the Julia library's choice is flux BC. Substitution rewrites references to `V.at_<dim>` in `f(...)` to reference the base variable `V` at the slice coordinate, so the resulting BC is self-contained.
-
-This lowering is implemented inside `EarthSciASTMTKExt`; the `EarthSciMLBase.slice_variable` primitive itself remains interpretation-agnostic.
 
 #### 5.1.4 Expression Mapping
 
@@ -2313,7 +2296,6 @@ This lowering is implemented inside `EarthSciASTMTKExt`; the `EarthSciMLBase.sli
 | `{"op": "+", "args": ["a", "b"]}` | `a + b` |
 | `{"op": "exp", "args": ["x"]}` | `exp(x)` |
 | `{"op": "Pre", "args": ["x"]}` | `Pre(x)` |
-| `{"op": "grad", "args": ["x"], "dim": "y"}` | `Differential(y)(x)` |
 | `{"op": "ifelse", "args": [cond, a, b]}` | `ifelse(cond, a, b)` |
 | `"O3"` (string) | `@variables O3(t)` |
 | `3.14` (number) | `3.14` (literal) |

@@ -1663,20 +1663,11 @@ end
 # around the same `getfield` compiles to the same code.
 @inline _read_param(p::NamedTuple, sym::Symbol, ::Int) = getfield(p, sym)
 
-# The vector container. `getfield(::ComponentVector, ::Symbol)` THROWS (a
-# ComponentArray's fields are `data`/`axes`, not its components), and its integer
-# `getindex` is ambiguous under tracing — so neither the symbol nor the
-# ComponentVector itself is the thing to index. Unwrap to the dense data vector
-# (`_param_data`), then read it by index (`_read_param_data`). Both halves are
-# seams because they are overridden by DIFFERENT extensions and compose:
-# ComponentArrays supplies the unwrap, Reactant supplies the traced read.
-@inline _read_param(p::AbstractVector, ::Symbol, idx::Int) =
-    _read_param_data(_param_data(p), idx)
-
-# Unwrap a parameter container to the dense vector its values actually live in.
-# Identity for a plain `Vector`; ext/EarthSciASTComponentArraysExt.jl adds the
-# `ComponentVector` method (`getdata`).
-@inline _param_data(p::AbstractVector) = p
+# The vector container (a plain `Vector`, or a `ComponentVector`, whose integer
+# `getindex` reads its data vector), read by position. Not by symbol:
+# `getfield(::ComponentVector, ::Symbol)` throws (a ComponentArray's fields are
+# `data`/`axes`, not its components).
+@inline _read_param(p::AbstractVector, ::Symbol, idx::Int) = _read_param_data(p, idx)
 
 # Read one scalar out of that dense vector. DELIBERATELY NOT `@inbounds`: a short
 # or misordered `p` is a caller error with no other detector (a NamedTuple `p`

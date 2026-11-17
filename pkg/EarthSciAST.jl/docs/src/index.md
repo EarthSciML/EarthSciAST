@@ -42,9 +42,7 @@ println("Model has $(length(model.variables)) variables")
 
 # Convert to ModelingToolkit via package extension (1.9+)
 using ModelingToolkit
-sys = ModelingToolkit.System(model; name=:AtmosphereModel)
-# Or, for models with spatial derivatives:
-# pde = ModelingToolkit.PDESystem(model; name=:AtmosphereModel)
+sys = ModelingToolkit.System(model; name=:AtmosphereModel)   # ODE systems only
 
 # Validate the model
 result = validate(esm_file)
@@ -75,7 +73,7 @@ characteristics, supported ops, and the public API.
 
 ModelingToolkit and Catalyst are **weak dependencies**. They are loaded only
 when the user `using`s them directly. The constructors for `ModelingToolkit.
-System`, `ModelingToolkit.PDESystem`, and `Catalyst.ReactionSystem` on ESM
+System` and `Catalyst.ReactionSystem` on ESM
 types are defined in package extensions (`EarthSciASTMTKExt`,
 `EarthSciASTCatalystExt`) that activate automatically.
 

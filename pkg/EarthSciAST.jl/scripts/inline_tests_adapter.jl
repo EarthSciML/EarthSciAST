@@ -102,22 +102,26 @@ const REFUSAL_CODES = (
 # first call, which a second process pays all over again, so
 # `scripts/test-conformance.sh` hands every tier to one launch per compiler
 # (CONFORMANCE_SPEC.md §5.45.5).
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     pairs = Vector{Vector{Union{Nothing, String}}}()
     compiler = nothing
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            push!(pairs, [args[i + 1], nothing]); i += 2
+            push!(pairs, [_flag_value(args, i), nothing]); i += 2
         elseif args[i] == "--output"
             isempty(pairs) && error("--output must follow the --manifest it belongs to")
             pairs[end][2] === nothing ||
                 error("--manifest $(pairs[end][1]) was given two --output paths")
-            pairs[end][2] = args[i + 1]; i += 2
+            pairs[end][2] = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     isempty(pairs) && error("--manifest is required")

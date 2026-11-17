@@ -1582,8 +1582,7 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
   (`compiler_refused_rule`) is the document content it cannot express: a
   parameter or field fed by LOADED DATA (a `providers` entry, a `const_arrays`
   / `param_arrays` argument, `pushdown_rewrite = true`), a CONTINUOUS spatial
-  dimension (a PDE, which needs `ModelingToolkit.PDESystem` and a
-  discretization), a geometry operator, and a time derivative of an expression.
+  dimension (a PDE, which must be discretized first), a geometry operator, and a time derivative of an expression.
   Two consequences a caller sees: every parameter classifies `:structural`
   (the value is read where `mtkcompile` can see it and is baked into the
   compiled problem, so `esm_problem(…; p = …)` sets it and `remake(prob; p = …)`

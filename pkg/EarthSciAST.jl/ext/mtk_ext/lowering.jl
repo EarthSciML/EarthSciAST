@@ -2,11 +2,10 @@
 # ESM ASTExpr → Symbolics conversion
 # ========================================
 
-# The mechanical unary ops the ODE/PDE lowering accepts. Deliberately NOT the
-# registry's `_UNARY_ELEMENTWISE_OPS` (which also carries sign/floor/ceil/
-# asinh/… this arm never accepted, and excludes the 1-or-2-ary `atan` this
-# arm has always treated as unary), and deliberately wider than the Catalyst
-# rate interpreter's set — membership is behavior, so it stays explicit.
+# The elementwise functions the ODE lowering accepts, each applied to all of
+# its operands after the registry arity check (so `atan` takes one or two).
+# Narrower than the registry's `_UNARY_ELEMENTWISE_OPS` (no sign/floor/ceil/
+# asinh/…) and wider than the Catalyst rate interpreter's set.
 const _MTK_UNARY_SCALAR_OPS = (
     "exp", "log", "log10", "sin", "cos", "tan",
     "sinh", "cosh", "tanh", "asin", "acos", "atan",
@@ -16,7 +15,8 @@ const _MTK_UNARY_SCALAR_OPS = (
 """
 Build a Symbolics.jl expression from an ESM `ASTExpr` tree, using the given
 variable dictionary (name → symbolic variable) and the time symbol `t_sym`.
-Spatial dimension symbols are created on demand and cached in `dim_dict`.
+`dim_dict` holds the time symbol plus the lowering context stored under the
+reserved keys of ext/mtk_ext/arrayop.jl.
 
 The extension-independent scalar arms live in the shared
 `_esm_to_symbolic_core` (ext/shared/esm_to_symbolic.jl); everything MTK-
@@ -50,7 +50,7 @@ function _int_promoted_number(v)
     end
 end
 
-# Unknown-variable policy of the ODE/PDE lowering: variables must already be
+# Unknown-variable policy of the ODE lowering: variables must already be
 # declared (state/parameter/observed dictionaries or a known dimension) —
 # THROW otherwise. The Catalyst rate lowering auto-creates instead; the
 # divergence is live behavior (see ext/shared/esm_to_symbolic.jl).
@@ -67,6 +67,19 @@ function _resolve_lowering_var(
     end
 end
 
+# Every operator `_esm_to_symbolic` lowers: the shared scalar arms, the
+# elementwise functions above, and the arms of `_mtk_extended_op` below. Keep
+# this in step with that ladder; `compiler = :mtk` reads it to refuse an
+# operator by name before the system is built.
+const _MTK_LOWERED_OPS = Set{String}(
+    [
+        "+", "-", "*", "/", "^", "min", "max", _MTK_UNARY_SCALAR_OPS...,
+        "neg", "pow", "D", "ifelse", "Pre", ">", "<", ">=", "<=", "==", "!=",
+        "faq", "makearray", "index", "broadcast", "reshape", "transpose",
+        "concat", "const",
+    ]
+)
+
 # The MTK-specific OpExpr arms: calculus operators, control flow,
 # comparisons and the array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op outside the
 # shared scalar arms.
@@ -76,46 +89,25 @@ function _mtk_extended_op(
         dim_dict::Dict{String, Any}
     )
     if op == "neg"
-        # The CANONICAL unary minus (`src/canonicalize.jl` rewrites `{"op":"-"}`
-        # with one argument to it), so every canonicalized document that negates
-        # anything arrives here. Its absence made `ModelingToolkit.System` throw
-        # "Unsupported operator: neg" on `tests/valid/solver_block.esm` — a
-        # two-line scalar decay — while the un-canonicalized `-` spelling built
-        # fine, which is the same operator wearing a different name.
+        # `neg` and `pow` are the deprecated word spellings of unary `-` and
+        # `^` (`_DEPRECATED_OPS`, src/op_registry.jl). The loader rewrites them
+        # away; an AST built in code can still carry them.
         return -_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     elseif op == "pow"
-        # `pow(a, b)` is the registry's named spelling of `a ^ b` (op_registry
-        # `_op("pow"; fn=(^))`), the twin of the `neg`/`-` pair above.
         return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
             _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
     elseif op == "D"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        # Only the time derivative lowers. A spatial `D` is a rewrite target
+        # that a discretization rule must replace before a system is built.
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
-        if wrt_name == "t"
-            return Differential(t_sym)(arg)
-        else
-            dim_sym = _get_or_make_dim(dim_dict, wrt_name)
-            return Differential(dim_sym)(arg)
-        end
-    elseif op == "grad"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        expr.dim === nothing && throw(ArgumentError("grad operator requires dim parameter"))
-        dim_sym = _get_or_make_dim(dim_dict, expr.dim)
-        return Differential(dim_sym)(arg)
-    elseif op == "div"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        expr.dim === nothing && throw(ArgumentError("div operator requires dim parameter"))
-        dim_sym = _get_or_make_dim(dim_dict, expr.dim)
-        return Differential(dim_sym)(arg)
-    elseif op == "laplacian"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        x_sym = _get_or_make_dim(dim_dict, "x")
-        y_sym = _get_or_make_dim(dim_dict, "y")
-        z_sym = _get_or_make_dim(dim_dict, "z")
-        Dx = Differential(x_sym)
-        Dy = Differential(y_sym)
-        Dz = Differential(z_sym)
-        return Dx(Dx(arg)) + Dy(Dy(arg)) + Dz(Dz(arg))
+        wrt_name == "t" || throw(
+            ArgumentError(
+                "D(wrt = \"$(wrt_name)\") is a spatial derivative with no " *
+                    "ModelingToolkit lowering: discretize it (a `faq` stencil over " *
+                    "an index set) before building the system"
+            )
+        )
+        return Differential(t_sym)(_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict))
     elseif op == "ifelse"
         cond = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         t_val = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
@@ -169,9 +161,8 @@ end
 
 # Walk an ESM expression tree looking for any spatial differential operator
 # (`grad`/`div`/`laplacian`). Returns the offending op name on the first
-# match, or `nothing` if none is present. Used by the ODE-path
-# `ModelingToolkit.System` constructor to enforce the canonical pipeline
-# contract (esm-i7b).
+# match, or `nothing` if none is present. Used by `ModelingToolkit.System` to
+# refuse an undiscretized spatial operator with a message that says so.
 function _find_spatial_op(expr::EsmExpr)::Union{String, Nothing}
     if expr isa OpExpr
         if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
@@ -568,13 +559,4 @@ function _build_concat(
     expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
     arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
     return cat(arrs...; dims = expr.axis + 1)
-end
-
-function _get_or_make_dim(dim_dict::Dict{String, Any}, name::AbstractString)
-    if haskey(dim_dict, name)
-        return dim_dict[name]
-    end
-    v = Symbolics.variable(Symbol(name))
-    dim_dict[String(name)] = v
-    return v
 end

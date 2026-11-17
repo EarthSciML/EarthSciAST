@@ -157,6 +157,10 @@ function load_compiler_runtime(compiler)
     return nothing
 end
 
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
@@ -164,13 +168,13 @@ function parse_args(args)
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            manifest = _flag_value(args, i); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            output = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     manifest === nothing && error("--manifest is required")
@@ -425,15 +429,15 @@ function fixture_trajectory(fx, base, compiler)
     )
 end
 
-# The refusal's `rule` and `reason`, off the message `_refuse_rule` builds:
-# `compiler=:<name> refuses '<rule>': <reason>`. The shape is the one
-# esm-libraries-spec §2.5.10 fixes and the one this tier reads back, so parsing
-# it is reading a contract rather than scraping a string; a message that does not
-# match is reported whole under an unnamed rule instead of being dropped.
-function refusal_parts(detail::AbstractString)
-    m = match(r"^compiler=:\w+ refuses '(.*?)': (.*)$"s, detail)
-    m === nothing && return ("(unnamed rule)", String(detail))
-    return (String(m.captures[1]), String(m.captures[2]))
+# The refusal's `rule` and `reason`. The rule is the error's own `rule` field;
+# the reason is the message after the `compiler=:<name> refuses '<rule>': `
+# prefix `_refuse_rule` writes (esm-libraries-spec §2.5.10), or the whole
+# message when it carries no such prefix. A refusal that names no rule is
+# reported under an unnamed rule instead of being dropped.
+function refusal_parts(err::TreeWalkError)
+    isempty(err.rule) && return ("(unnamed rule)", err.detail)
+    at = findfirst("refuses '$(err.rule)': ", err.detail)
+    return (err.rule, at === nothing ? err.detail : err.detail[(last(at) + 1):end])
 end
 
 function main()
@@ -459,7 +463,7 @@ function main()
                 break
             elseif err isa TreeWalkError &&
                     err.code == ERROR_CODES.COMPILER_REFUSED_RULE
-                rule, reason = refusal_parts(err.detail)
+                rule, reason = refusal_parts(err)
                 fixtures[id] = Dict(
                     "status" => "refused",
                     "rule" => rule, "reason" => reason

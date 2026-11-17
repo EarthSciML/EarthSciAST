@@ -8,9 +8,6 @@ because they require those packages to be loaded — this file only declares
 the stubs, the `GapReport` type used to collect unsupported-construct
 warnings, and the MTK-independent formatting helpers shared by both
 extensions.
-
-See `scripts/roundtrip.jl` for the validator CLI that exercises this path
-as the EarthSciModels migration acceptance gate.
 """
 
 """
@@ -68,7 +65,7 @@ function mtk2esm end
 mtk2esm(sys; kwargs...) = throw(
     ArgumentError(
         "mtk2esm requires a package extension: load ModelingToolkit (plus " *
-            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, or " *
+            "Symbolics) to activate EarthSciASTMTKExt, or " *
             "Catalyst to activate EarthSciASTCatalystExt, then retry"
     )
 )
@@ -86,7 +83,7 @@ function mtk2esm_gaps end
 mtk2esm_gaps(sys) = throw(
     ArgumentError(
         "mtk2esm_gaps requires a package extension: load ModelingToolkit (plus " *
-            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, " *
+            "Symbolics) to activate EarthSciASTMTKExt, " *
             "then retry"
     )
 )

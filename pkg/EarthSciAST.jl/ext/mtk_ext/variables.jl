@@ -99,9 +99,6 @@ end
 # Build symbolic variable dictionaries from a FlattenedSystem
 # ========================================
 
-# (The ODE-vs-PDE predicate `_has_spatial_ivs` lives in src/flatten.jl,
-# next to `FlattenedSystem`.)
-
 # Reduce the flattened system's index-set registry to `name => extent`.
 # Only sets whose extent is a concrete positive `size` land here; ragged /
 # derived sets (whose size is `nothing`) are simply absent, so a range that
@@ -153,15 +150,11 @@ end
 """
 Create Symbolics.jl variable/parameter symbols for every state, parameter, and
 observed variable in a flattened system. Returns `(var_dict, t_sym, dim_dict,
-states, parameters, observed, spatial_syms)` where `states`/`parameters`/
-`observed` are typed `Vector{Num}` and `spatial_syms` holds the non-time
-independent-variable symbols (empty for ODE systems).
+states, parameters, observed)` where `states`/`parameters`/`observed` are typed
+`Vector{Num}`. Every state and observed is a function of `t` alone: the caller
+has already refused a system with a spatial independent variable.
 
-For ODE systems, state variables are functions of `t` only. For PDE systems,
-state variables are functions of `t` and the spatial dimensions declared in
-`flat.independent_variables` (minus `:t`).
-
-When the flattened system contains `arrayop`/`makearray`/`index` nodes,
+When the flattened system contains `faq`/`makearray`/`index` nodes,
 shape inference is run first and any variable that appears inside an array
 operator is declared as a shaped `@variables (u(t))[1:N]` instead of a
 scalar `u(t)`. The `states`/`observed` vectors then contain the individual
@@ -170,10 +163,7 @@ scalar elements of those array variables (so `length(states) == M*N` for a
 `System(..., dvs, [])` in the MTK fork's native `@arrayop` tests.
 """
 function _build_var_dict(flat::FlattenedSystem)
-    is_pde = _has_spatial_ivs(flat)
-
-    # Independent variables
-    t_sym = _get_or_make_dim(Dict{String, Any}(), "t")
+    t_sym = Symbolics.variable(:t)
     dim_dict = Dict{String, Any}("t" => t_sym)
 
     # Document-scoped index-set extents (`name => size`), the only place an
@@ -183,15 +173,6 @@ function _build_var_dict(flat::FlattenedSystem)
     # Published on `dim_dict` for `_build_arrayop_sym` (see `_INDEX_EXTENTS_KEY`).
     extents = _index_set_extents(flat)
     isempty(extents) || (dim_dict[_INDEX_EXTENTS_KEY] = extents)
-
-    spatial_syms = Any[]
-    if is_pde
-        for iv in flat.independent_variables
-            iv == :t && continue
-            dim_sym = _get_or_make_dim(dim_dict, String(iv))
-            push!(spatial_syms, dim_sym)
-        end
-    end
 
     # Shape inference: scalar-only systems get an empty dict and pay nothing.
     # Use LHS arrayop output ranges as the authoritative shape when available:
@@ -210,20 +191,34 @@ function _build_var_dict(flat::FlattenedSystem)
     parameters = Vector{Num}()
     observed = Vector{Num}()
 
-    # Concrete IV symbol objects to pass to the @variables macro via our
-    # _make_dep_var helper (see the bindings trick inside that function).
+    # The IV symbol passed to the @variables macro by `_make_dep_var` (see the
+    # bindings trick inside that function).
     iv_syms_any = Any[t_sym]
-    for s in spatial_syms
-        push!(iv_syms_any, s)
-    end
 
     # Sanitize names for use as Julia symbols (dots in "System.var" would
-    # otherwise produce invalid symbols in the generated @variables call).
+    # otherwise produce invalid symbols in the generated @variables call). Two
+    # names that sanitize alike (`a.b` and `a_b`) would become ONE symbol, so
+    # that is refused rather than built.
+    sanitized = Dict{Symbol, String}()
+    for reg in (flat.state_variables, flat.parameters, flat.observed_variables),
+            name in keys(reg)
+        key = Symbol(replace(String(name), '.' => '_'))
+        prior = get(sanitized, key, nothing)
+        (prior === nothing || prior == name) || throw(
+            ArgumentError(
+                "variables '$(prior)' and '$(name)' both become the " *
+                    "ModelingToolkit symbol `$(key)` (a dot is not a Julia " *
+                    "identifier character and is replaced by an underscore); " *
+                    "rename one of them"
+            )
+        )
+        sanitized[key] = String(name)
+    end
     _san(s::AbstractString) = Symbol(replace(String(s), '.' => '_'))
 
     # Attach a default value to a Symbolics variable via VariableDefaultValue
     # metadata. MTK v11 uses this to wire initial conditions on states and
-    # parameter values into ODEProblem/PDESystem construction without
+    # parameter values into ODEProblem construction without
     # requiring the caller to pass u0/p maps manually.
     _with_default(v, val) =
         val === nothing ? v : Symbolics.setdefaultval(v, Float64(val))
@@ -300,7 +295,7 @@ function _build_var_dict(flat::FlattenedSystem)
         end
     end
 
-    return var_dict, t_sym, dim_dict, states, parameters, observed, spatial_syms
+    return var_dict, t_sym, dim_dict, states, parameters, observed
 end
 
 # ========================================
@@ -333,10 +328,14 @@ function _affect_to_eq(
         state_syms
     )
     if affect isa AffectEquation
-        if !haskey(var_dict, affect.lhs)
-            @warn "Target variable $(affect.lhs) not found for event affect"
-            return nothing
-        end
+        # An affect whose target is not a variable of the system would be
+        # dropped, and the event would fire without it.
+        haskey(var_dict, affect.lhs) || throw(
+            ArgumentError(
+                "event affect targets '$(affect.lhs)', which is not a variable " *
+                    "of the flattened system"
+            )
+        )
         target = var_dict[affect.lhs]
         rhs = _esm_to_symbolic(affect.rhs, var_dict, t_sym, dim_dict)
         rhs = _wrap_pre_states(rhs, state_syms)
@@ -354,12 +353,6 @@ expresses it.
 MTK's `SymbolicContinuousCallback` takes `conditions::Vector{Equation}`, not a
 scalar expression: an entry `lhs ~ rhs` names the zero-crossing function
 `lhs - rhs`, and the integrator winds back to the instant it crosses zero.
-Passing the raw `Num` that `_esm_to_symbolic` produces is what broke every
-continuous event —
-
-    MethodError: no method matching SymbolicContinuousCallback(::Num, ::Vector{Equation})
-
-so the whole `continuous_events` feature failed at System() construction time.
 
 An ESM condition (esm-spec §5) is a zero-crossing FUNCTION, so the mapping is:
 

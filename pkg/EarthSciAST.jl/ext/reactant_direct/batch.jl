@@ -15,9 +15,8 @@
 # oop.jl, ess-oop-batch) buckets the entries by a canonical structural signature
 # that wildcards exactly the lane-varying leaves, lowers each bucket ONCE to a
 # lane-batched tree (`_OopBatchNode`) and leaves everything it could not group
-# in `rest`. The interpreter runs a group as whole-lane operations over its lane
-# axis, landing through one scatter. This file is the emission twin: the same
-# groups, the same lane axis, `stablehlo` ops instead of broadcasts — so a state
+# in `rest`. This file emits each group as whole-lane operations over its lane
+# axis, landing through one scatter — so a state
 # leaf is ONE gather of L slots instead of L one-element slices, and the emitted
 # program is O(tree) per group rather than O(tree × cells).
 #

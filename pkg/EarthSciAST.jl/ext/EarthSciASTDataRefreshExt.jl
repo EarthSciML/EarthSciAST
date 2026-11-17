@@ -1,19 +1,18 @@
 """
     EarthSciASTDataRefreshExt
 
-The discrete-cadence loader-refresh callback constructor (ess-14f.4, JL-J1),
-loaded automatically when both `DiffEqCallbacks` and `SciMLBase` are in the
-session. It supplies the one method the core `build_refresh_callback` generic is
-missing: the body that builds a `PresetTimeCallback` whose `affect!` refreshes
-the live forcing buffers (`param_arrays` / `_NK_PARAM_GATHER`, ess-14f.3).
+The discrete-cadence loader-refresh callback constructor, loaded automatically
+when both `DiffEqCallbacks` and `SciMLBase` are in the session. It supplies the
+one method the core `build_refresh_callback` generic is missing: the body that
+builds a `PresetTimeCallback` whose `affect!` refreshes the live forcing buffers
+(`param_arrays` / `_NK_PARAM_GATHER`).
 
-Kept out of the base package per `[[library-exposes-rhs-not-solver]]` and R4 of
-the plan (mayor-dir esio-consumer-julia-plan-2026-06-26.md §6): returning a
-`PresetTimeCallback` needs `DiffEqCallbacks`, and `derivative_discontinuity!`
-(`u_modified!` before SciMLBase 3) needs `SciMLBase` — both solver-adjacent, so
-they stay `weakdeps`, mirroring the existing `MTKExt` / `CatalystExt` pattern.
-Without them loaded, the core fallback throws a `RefreshError` telling the user
-what to load.
+Kept out of the base package because the library exposes a right-hand side, not
+a solver: returning a `PresetTimeCallback` needs `DiffEqCallbacks`, and
+`derivative_discontinuity!` (`u_modified!` before SciMLBase 3) needs `SciMLBase`
+— both solver-adjacent, so they stay `weakdeps`, mirroring the `MTKExt` /
+`CatalystExt` pattern. Without them loaded, the core fallback throws a
+`RefreshError` telling the user what to load.
 """
 module EarthSciASTDataRefreshExt
 

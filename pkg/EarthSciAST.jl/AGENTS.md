@@ -12,8 +12,8 @@ each meets the workspace criteria.
 
 | Runner | Public API | Source | Use when |
 |---|---|---|---|
-| ModelingToolkit (MTK) | `ModelingToolkit.System(model::Model)` (`EarthSciASTMTKExt`) | `ext/EarthSciASTMTKExt/` | **Default.** Production runtime — full structural simplification, observed-variable handling, full SciML solver / sensitivity / event ecosystem. |
-| `tree_walk` | `esm_problem(input, tspan)` for the ODE right-hand side (`build_evaluator` is retired — API_SPEC §8 item 23), `evaluate_expr(expr, bindings)` for a single AST expression | `src/tree_walk.jl` | Very large discretized PDE systems whose scalar count exceeds MTK's `structural_simplify` / tearing / codegen ceiling. Build time is independent of system size; no symbolic simplification pass. `evaluate_expr` shares the runner's compile + walker pipeline, so per-expression callers (units fixture consumption, `simplify` constant folding) live on the same dispatch table — no shadow evaluator. |
+| `tree_walk` | `esm_problem(input, tspan)` for the ODE right-hand side (`build_evaluator` is retired — API_SPEC §8 item 23), `evaluate_expr(expr, bindings)` for a single AST expression | `src/tree_walk.jl` | **Default** (`compiler = :native`). Very large discretized PDE systems whose scalar count exceeds MTK's `mtkcompile` / tearing / codegen ceiling. Build time is independent of system size; no symbolic simplification pass. `evaluate_expr` shares the runner's compile + walker pipeline, so per-expression callers (units fixture consumption, `simplify` constant folding) live on the same dispatch table — no shadow evaluator. |
+| ModelingToolkit (MTK) | `esm_problem(input, tspan; compiler = :mtk)`, or `ModelingToolkit.System(model::Model)` for the symbolic system (`EarthSciASTMTKExt`) | `ext/EarthSciASTMTKExt.jl`, `ext/mtk_ext/` | A specialty compiler: the one runner that executes events and implicit equations, through structural simplification. ODE systems only. |
 
 The user-facing description (when to choose, performance characteristics,
 supported ops, error codes, public API surface) lives in

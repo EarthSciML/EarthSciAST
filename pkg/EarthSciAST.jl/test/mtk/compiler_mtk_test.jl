@@ -9,8 +9,10 @@
 #     tests name. Each is also asserted to REFUSE under `:native` in the same
 #     session, so what is measured is the compiler and not the document.
 #   * what it REFUSES BY NAME, which is the other half of "works only for some
-#     documents": data fed in at the call, the projection-pushdown rewrite, a
-#     continuous spatial dimension, and a time derivative of an expression.
+#     documents": data fed in at the call or declared by a `data` update, the
+#     projection-pushdown rewrite, a continuous spatial dimension, a time
+#     derivative of an expression, a parameter recomputed by its own update
+#     rule, a coupling-level event, and an operator it has no lowering for.
 #     Every one is `compiler_refused_rule` with the rule in the message — never
 #     a silent partial build and never a fallback.
 #   * AGREEMENT with `:interpreter`, the oracle that exists to check the other
@@ -475,6 +477,65 @@ end
                     (0.0, 1.0); compiler = :mtk
                 ),
                 "credits no state", false,
+            ),
+            (
+                "a parameter recomputed by a schedule update",
+                () -> begin
+                    m = _mtkc_decay_model(1.0, 0.5)
+                    m["variables"]["k"]["update"] = Dict{String, Any}(
+                        "kind" => "schedule", "times" => Any[0.5],
+                        "expression" => 2.0
+                    )
+                    m["variables"]["k"]["shape"] = Any[]
+                    esm_problem(_mtkc_doc(["M" => m]), (0.0, 1.0); compiler = :mtk)
+                end,
+                "`schedule` update", true,
+            ),
+            (
+                "a data-fed parameter with no provider",
+                () -> begin
+                    m = _mtkc_decay_model(1.0, 0.5)
+                    k = m["variables"]["k"]
+                    delete!(k, "default")
+                    k["update"] = Dict{String, Any}(
+                        "kind" => "data", "source" => "S",
+                        "from" => Dict{String, Any}("file_variable" => "K")
+                    )
+                    doc = _mtkc_doc(["M" => m])
+                    doc["data_sources"] = Dict{String, Any}(
+                        "S" => Dict{String, Any}(
+                            "kind" => "grid",
+                            "source" => Dict{String, Any}(
+                                "url_template" => "file:///nonexistent/k.nc"
+                            ),
+                            "metadata" => Dict{String, Any}("esio_format" => "netcdf")
+                        )
+                    )
+                    esm_problem(doc, (0.0, 1.0); compiler = :mtk)
+                end,
+                "DATA-FED", true,
+            ),
+            (
+                "a coupling-level event",
+                () -> esm_problem(
+                    _mtkc_fixture(
+                        "conformance", "strip_and_expose", "fixtures",
+                        "coupling_level_event.esm"
+                    ),
+                    (0.0, 1.0); compiler = :mtk
+                ),
+                "coupling-level", true,
+            ),
+            (
+                "an operator the lowering has no arm for",
+                () -> begin
+                    m = _mtkc_decay_model(1.0, 0.5)
+                    m["equations"][1]["rhs"] = Dict{String, Any}(
+                        "op" => "sign", "args" => Any["x"]
+                    )
+                    esm_problem(_mtkc_doc(["M" => m]), (0.0, 1.0); compiler = :mtk)
+                end,
+                "`sign`", true,
             ),
         ]
         for (what, build, needle, points_elsewhere) in cases

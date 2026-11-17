@@ -23,15 +23,21 @@
                           unary_ops, extended_op)
 
 Lower the extension-independent scalar arms of an ESM `ASTExpr` — integer /
-number / variable leaves; n-ary `+`/`-`/`*` and binary `/`/`^`; the
-mechanical unary elementwise ops in `unary_ops`; n-ary `min`/`max` — and
-recurse through children via `recurse(child)`. Every other `OpExpr` is
-delegated to `extended_op(op, expr)`.
+number / variable leaves; n-ary `+`/`*`, unary or binary `-`, binary `/`/`^`;
+the elementwise functions in `unary_ops` (each applied to all of its operands,
+so the two-operand `atan(y, x)` keeps both); n-ary `min`/`max` — and recurse
+through children via `recurse(child)`. Every other `OpExpr` is delegated to
+`extended_op(op, expr)`.
+
+Every `OpExpr` is first checked against the operator registry's arity
+(`src/op_registry.jl`): an operand count outside it raises `E_TREEWALK_ARITY`,
+the code the tree walk raises for the same node, instead of lowering a
+truncated expression.
 
 Hooks (see the file header for why each is a policy point):
 - `number_value(v)`: NumExpr-literal policy.
 - `resolve_var(name)`: VarExpr resolution policy (throw vs auto-create).
-- `unary_ops`: op names lowered as `getfield(Base, Symbol(op))(arg)`.
+- `unary_ops`: op names lowered as `getfield(Base, Symbol(op))(args...)`.
 - `extended_op(op, expr)`: all remaining `OpExpr` arms.
 """
 function _esm_to_symbolic_core(
@@ -49,6 +55,7 @@ function _esm_to_symbolic_core(
         return resolve_var(expr.name)
     elseif expr isa OpExpr
         op = expr.op
+        _check_registry_arity(op, length(expr.args))
         if op == "+"
             args = [recurse(a) for a in expr.args]
             return length(args) == 1 ? args[1] : sum(args)
@@ -59,31 +66,37 @@ function _esm_to_symbolic_core(
             args = [recurse(a) for a in expr.args]
             return length(args) == 1 ? args[1] : prod(args)
         elseif op == "/"
-            l = recurse(expr.args[1])
-            r = recurse(expr.args[2])
-            return l / r
+            return recurse(expr.args[1]) / recurse(expr.args[2])
         elseif op == "^"
-            l = recurse(expr.args[1])
-            r = recurse(expr.args[2])
-            return l^r
+            return recurse(expr.args[1])^recurse(expr.args[2])
         elseif op in unary_ops
-            arg = recurse(expr.args[1])
             fn = getfield(Base, Symbol(op))
-            return fn(arg)
+            return fn((recurse(a) for a in expr.args)...)
         elseif op == "min" || op == "max"
-            length(expr.args) < 2 && throw(
-                ArgumentError(
-                    "$op requires at least 2 arguments (esm-spec §4.2)"
-                )
-            )
-            args = [recurse(a) for a in expr.args]
             fn = op == "min" ? min : max
-            # Left fold, matching both pre-dedup copies (`foldl` in the MTK
-            # arm; `reduce` in the Catalyst arm — identical for a Vector).
-            return foldl(fn, args)
+            return foldl(fn, [recurse(a) for a in expr.args])
         else
             return extended_op(op, expr)
         end
     end
     error("Unknown expression type: $(typeof(expr))")
+end
+
+# Raise `E_TREEWALK_ARITY` when `nargs` is outside the registry arity of `op`.
+# Operators with no registry row, or whose row records no arity (the
+# structural ops), are left to the arm that lowers them.
+function _check_registry_arity(op::AbstractString, nargs::Int)
+    spec = EarthSciAST._op_spec(op)
+    (spec === nothing || spec.arity === nothing) && return nothing
+    r = spec.arity
+    nargs in r && return nothing
+    want = first(r) == last(r) ? string(first(r)) :
+        last(r) == typemax(Int) ? "at least $(first(r))" :
+        "$(first(r)) to $(last(r))"
+    throw(
+        EarthSciAST.TreeWalkError(
+            "E_TREEWALK_ARITY",
+            "$op expects $want operands, got $nargs"
+        )
+    )
 end

@@ -156,29 +156,65 @@ function _mtk_refuse_unsupported_inputs(;
     return nothing
 end
 
+# File-level constructs `flatten` does not carry into the `FlattenedSystem`
+# this compiler lowers, so building without a refusal would drop them.
+function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile)
+    # A coupling-level event (esm-spec §9.6.6): not an event of any model, so it
+    # never reaches the system's event lists.
+    for entry in EarthSciAST.expand_coupling_imports(file)
+        entry isa EarthSciAST.CouplingEvent || continue
+        _mtk_refuse(
+            entry.name === nothing ? "(unnamed coupling event)" : String(entry.name),
+            "it is a coupling-level $(entry.event_type) event, and this compiler " *
+                "lowers only the events a model declares. $_MTK_TRY_INSTEAD"
+        )
+    end
+    # A `faq`-valued initialization equation (esm-spec §6.2) seeds the cells of
+    # an array state; this compiler takes initial values from defaults and
+    # `ic` equations only.
+    init = EarthSciAST.Equation[]
+    for (mname, model) in something(file.models, ())
+        EarthSciAST._collect_initialization_faqs!(init, model, String(mname))
+    end
+    isempty(init) || _mtk_refuse(
+        _mtk_equation_label(first(init)),
+        "it is a `faq`-valued initialization equation, which this compiler has no " *
+            "lowering for: it would start the array from its default instead. " *
+            _MTK_TRY_INSTEAD
+    )
+    return nothing
+end
+
+# The first operator in `e` that `_esm_to_symbolic` has no arm for, or `nothing`.
+function _mtk_unlowered_op(e::EsmExpr)
+    found = Ref{Union{Nothing, String}}(nothing)
+    EarthSciAST.foreach_subexpr_once(e) do x
+        found[] === nothing && x isa OpExpr && !(x.op in _MTK_LOWERED_OPS) &&
+            (found[] = x.op)
+    end
+    return found[]
+end
+
 # Document-level constructs the ODE lowering cannot express. Each one is found
 # by looking for it, never by catching a failure: a refusal that is really a
 # swallowed bug would make this compiler look like it covers less than it does
 # while hiding that something is broken.
 function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # A CONTINUOUS SPATIAL DIMENSION. `ModelingToolkit.System` is the ODE
-    # constructor; a document with spatial independent variables is a PDE, which
-    # needs `ModelingToolkit.PDESystem` plus a discretizer (MethodOfLines) that
-    # this compiler does not run. A DISCRETIZED spatial document — one whose
-    # stencil is already `arrayop` over an index set — has no spatial IV and
-    # goes straight through. The predicate is `_has_spatial_ivs`, the one
-    # `ModelingToolkit.System(flat)` enforces; the list is only for the message.
+    # constructor and this binding has no PDE constructor. A DISCRETIZED spatial
+    # document — one whose stencil is already a `faq` over an index set — has no
+    # spatial IV and goes straight through. The predicate is `_has_spatial_ivs`,
+    # the one `ModelingToolkit.System(flat)` enforces; the list is only for the
+    # message.
     if _has_spatial_ivs(flat)
         ivs = [String(iv) for iv in flat.independent_variables if iv != :t]
         _mtk_refuse(
             _mtk_first_rule_label(flat),
             "the document declares the continuous spatial independent variable" *
                 (length(ivs) == 1 ? " " : "s ") * join(ivs, ", ") * ", so it is a PDE. " *
-                "This compiler builds the ODE `ModelingToolkit.System`; a continuous " *
-                "spatial dimension needs `ModelingToolkit.PDESystem` and a " *
-                "discretization, which it does not run. Discretize the document (an " *
-                "`arrayop` stencil over an index set), or hand the flattened system to " *
-                "`ModelingToolkit.PDESystem` yourself. $_MTK_TRY_INSTEAD"
+                "This compiler builds the ODE `ModelingToolkit.System` and has no PDE " *
+                "lowering. Discretize the document (a `faq` stencil over an index " *
+                "set) first. $_MTK_TRY_INSTEAD"
         )
     end
 
@@ -187,6 +223,20 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
     # `@brownians` form, so it would read the noise as an ordinary constant
     # parameter. No compiler in this binding integrates an SDE, so the message
     # points at none.
+    # A PARAMETER RECOMPUTED BY ITS OWN UPDATE RULE: a symbolic `expression`
+    # under `schedule`/`condition`/`crossing` (esm-spec §5.4). The lowering reads
+    # every parameter as a constant, so it would run frozen at its default.
+    for name in sort!(collect(keys(flat.discrete_parameters)))
+        for rule in EarthSciAST._update_rules(flat.discrete_parameters[name])
+            rule.kind != "wiener" && rule.expression !== nothing && _mtk_refuse(
+                name,
+                "its `$(rule.kind)` update recomputes it from an expression, and " *
+                    "this compiler has no lowering of a parameter update: it would " *
+                    "hold the parameter at its default. $_MTK_TRY_INSTEAD"
+            )
+        end
+    end
+
     if !isempty(flat.brownian_parameters)
         _mtk_refuse(
             String(first(keys(flat.brownian_parameters))),
@@ -250,6 +300,31 @@ function _mtk_refuse_unsupported_document(flat::FlattenedSystem)
         end
     end
     _mtk_refuse_ic_outside_start_scope(flat)
+
+    # A DATA-FED parameter (a `data` update) with no provider passed — one
+    # passed is refused before the load. This compiler has no loader seam, so
+    # it would hold the parameter at its default. After the `ic` check, which
+    # names the more specific rule when an initial value reads one.
+    for name in sort!(collect(keys(flat.parameters)))
+        EarthSciAST._is_data_fed(flat.parameters[name]) && _mtk_refuse(
+            name,
+            "it is a DATA-FED parameter (a `data` update), and this compiler has " *
+                "no loader seam: it would hold the parameter at its default. " *
+                _MTK_TRY_INSTEAD
+        )
+    end
+
+    # AN OPERATOR THE LOWERING HAS NO ARM FOR, named with its equation rather
+    # than raised from inside `ModelingToolkit.System`. Last, so every refusal
+    # above that names a more specific rule keeps precedence.
+    for eq in flat.equations, side in (eq.lhs, eq.rhs)
+        op = _mtk_unlowered_op(side)
+        op === nothing || _mtk_refuse(
+            _mtk_equation_label(eq),
+            "it uses the operator `$(op)`, which this compiler has no lowering " *
+                "for. $_MTK_TRY_INSTEAD"
+        )
+    end
     return nothing
 end
 
@@ -586,6 +661,13 @@ function _mtk_run_system(input; metaparameters, base_path, renames_out)
     coordinates = nothing
     solver_block = nothing
     if input isa EarthSciAST.EsmFile
+        # The document-level refusals every compiler applies (as
+        # `_prepare_run_doc` does for the others).
+        EarthSciAST._refuse_unsupported_major_version(input.esm)
+        EarthSciAST._refuse_reserved_declaration_names(input)
+        EarthSciAST._refuse_unregistered_callback_reads(input)
+        EarthSciAST._refuse_reference_integrity_errors(input)
+        _mtk_refuse_unsupported_file(input)
         coordinates = input.coordinates
         solver_block = input.solver
         EarthSciAST._refuse_reserved_liftings(input)
@@ -803,6 +885,10 @@ function _mtk_problem_impl(
     # the whole flattened system — so both compilers accept the same names and
     # raise the same error for any other.
     EarthSciAST._select_model(EarthSciAST.coerce_esm_file(doc), model_name)
+    # Expand surviving template references first, so the operator scan below
+    # sees what the lowering will (`System` expands too; a second call is a
+    # no-op).
+    flat = EarthSciAST.expand_flattened_refs(flat)
     _mtk_refuse_unsupported_document(flat)
 
     overrides = EarthSciAST._resolve_merged_renames(
@@ -821,14 +907,11 @@ function _mtk_problem_impl(
     rev = _mtk_name_reversal(flat)
     resolved = _mtk_resolve_overrides(flat, overrides)
 
-    # ESM → ModelingToolkit, then the structural compile. `mtkcompile` is what
-    # the installed ModelingToolkit spells this; older versions called it
-    # `structural_simplify`, and both names are tried so the compiler tracks the
-    # package rather than one release of it. `model_name`, once selected above,
-    # names the compiled system, which is what ModelingToolkit's printing shows.
+    # ESM → ModelingToolkit, then the structural compile. `model_name`, once
+    # selected above, names the compiled system, which is what
+    # ModelingToolkit's printing shows.
     name = model_name === nothing ? :esm : Symbol(String(model_name))
-    system = ModelingToolkit.System(flat; name = name)
-    system = _mtk_compile(system)
+    system = ModelingToolkit.mtkcompile(ModelingToolkit.System(flat; name = name))
 
     # An `ic` on a variable the compile solved away is a GUESS, not a
     # constraint (see `_mtk_ics_to_guesses!`).
@@ -924,25 +1007,6 @@ function _mtk_problem_impl(
     )
     prob_ref[] = prob
     return prob
-end
-
-# The structural compile, under whichever name the installed ModelingToolkit
-# gives it. `mtkcompile` is the current one; `structural_simplify` was it
-# through v9 and is still what a good deal of downstream code says.
-function _mtk_compile(system)
-    if isdefined(ModelingToolkit, :mtkcompile)
-        return getfield(ModelingToolkit, :mtkcompile)(system)
-    elseif isdefined(ModelingToolkit, :structural_simplify)
-        return getfield(ModelingToolkit, :structural_simplify)(system)
-    end
-    throw(
-        SimulateError(
-            "compiler=:mtk needs a structural compile, and the loaded " *
-                "ModelingToolkit ($(pkgversion(ModelingToolkit))) exports neither " *
-                "`mtkcompile` nor `structural_simplify`",
-            EarthSciAST.ERROR_CODES.COMPILER_UNAVAILABLE
-        )
-    )
 end
 
 # Flattened ESM name → the symbol the COMPILED system carries for it, for every

@@ -36,7 +36,7 @@ experimental emission tiers ship off and are opted into by name
 and nothing in the corpus depends on either.
 
 ModelingToolkit is reached BOTH ways: `compiler = :mtk` builds a problem
-through it, and the `ModelingToolkit.System` / `PDESystem` constructors remain
+through it, and the `ModelingToolkit.System` constructor remains
 the direct route for a caller who wants the symbolic system itself. Neither
 `:mtk` nor `:xla` is the default — a document run through `esm_problem` with no
 `compiler` is run by the tree-walk build.
@@ -283,13 +283,17 @@ and the reason for:
   `const_arrays` / `param_arrays` array handed in at the call, or
   `pushdown_rewrite = true`. A ModelingToolkit system carries symbols and
   equations; a loaded field has nowhere to land in it.
-* a CONTINUOUS spatial dimension. That is a PDE, and it needs
-  `ModelingToolkit.PDESystem` plus a discretizer this compiler does not run. A
-  document already discretized into a `faq` stencil has no spatial
-  independent variable and builds normally.
+* a CONTINUOUS spatial dimension. That is a PDE, and this binding has no PDE
+  constructor. A document already discretized into a `faq` stencil has no
+  spatial independent variable and builds normally.
 * `D(<expression>)` — a time derivative of an expression credits no state, so it
   is an implicit equation spelled wrong; ModelingToolkit rejects the system and
   this names the equation instead.
+* a parameter recomputed by its own `update` rule (`schedule`, `condition`,
+  `crossing` with an `expression`) or loaded by a `data` update, a
+  coupling-level event, a `faq`-valued initialization equation, and an
+  operator the lowering has no arm for. Each would otherwise be dropped or
+  fail inside ModelingToolkit.
 
 **Two differences from the other compilers, both deliberate.**
 
@@ -308,8 +312,9 @@ and the reason for:
    ModelingToolkit's own initialization, which reads that field back as a
    `System`.
 
-`ModelingToolkit.System(model)` / `ModelingToolkit.PDESystem(model)` remain the
-direct route to the symbolic system itself. See
+`ModelingToolkit.System(model)` remains the direct route to the symbolic system
+itself (ODE systems only; a system with a continuous spatial dimension is
+refused). See
 [ModelingToolkit / Catalyst integration](index.md#ModelingToolkit-/-Catalyst-integration)
 in the manual home page.
 

@@ -1,7 +1,6 @@
 using Test
 using EarthSciAST
 using JSON3
-using OrderedCollections: OrderedDict
 # Qualify ModelingToolkit and Symbolics so they don't collide with
 # EarthSciAST exports (e.g. `Equation`) in the shared Main scope
 # used by runtests.jl.
@@ -21,10 +20,13 @@ import Symbolics
             ModelingToolkit.System,
             Tuple{EarthSciAST.FlattenedSystem}
         )
-        @test hasmethod(
+        # There is no PDE constructor: a spatial system is refused by
+        # `System`, and `PDESystem` has no method for ESM types.
+        @test !hasmethod(
             ModelingToolkit.PDESystem,
             Tuple{EarthSciAST.FlattenedSystem}
         )
+        @test !hasmethod(ModelingToolkit.PDESystem, Tuple{EarthSciAST.Model})
     end
 
     @testset "ModelingToolkit.System(::Model) builds a real System" begin
@@ -62,7 +64,7 @@ import Symbolics
         @test any(occursin("k", n) for n in pn_names)
     end
 
-    @testset "ModelingToolkit.System(::Model) errors on PDE model with pointer to PDESystem" begin
+    @testset "ModelingToolkit.System refuses a system with a spatial independent variable" begin
         # The spatial dimension `z` is harvested STRUCTURALLY from the `dim="z"`
         # scalar field carried on the operator nodes (esm-spec §4.9.1(ii)) — by
         # field, not by op name; the `grad` sugar has no privilege (§4.2).
@@ -90,25 +92,15 @@ import Symbolics
         )
         flat = flatten(file)
         @test :z in flat.independent_variables
-        @test_throws ArgumentError ModelingToolkit.System(flat; name = :Diffuse)
-    end
-
-    @testset "ModelingToolkit.PDESystem(::FlattenedSystem) errors on pure-ODE input" begin
-        vars = Dict(
-            "x" => ModelVariable(UnknownVariable; default = 1.0),
-            "k" => ModelVariable(ParameterVariable; default = 0.5),
-        )
-        eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t"),
-            OpExpr(
-                "*", EarthSciAST.ASTExpr[
-                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
-                    VarExpr("x"),
-                ]
-            ),
-        )
-        flat = flatten(Model(vars, [eq]); name = "OnlyODE")
-        @test_throws ArgumentError ModelingToolkit.PDESystem(flat; name = :OnlyODE)
+        err = try
+            ModelingToolkit.System(flat; name = :Diffuse)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("no PDE constructor", err.msg)
+        @test !occursin("PDESystem", err.msg)
     end
 
     @testset "Round-trip: Model → System → Model" begin
@@ -141,76 +133,6 @@ import Symbolics
         ]
         @test length(state_vars) == 1
         @test length(param_vars) == 1
-    end
-
-    @testset "Slice-derived surface source lowers to flux BC" begin
-        # Spec §4.7.6.13 Example B: 1D vertical diffusion + 0D surface
-        # deposition coupled via a slice interface at z=0. The Julia
-        # extension is required to lower the slice-ODE to a flux BC on the
-        # diffusive PDE at z=0.
-        ivs = Symbol[:t, :z]
-        svars = OrderedDict{String, ModelVariable}(
-            "VertDiff.C" => ModelVariable(UnknownVariable; default = 1.0),
-            "VertDiff.C.at_z" => ModelVariable(UnknownVariable; default = 1.0),
-        )
-        ps = OrderedDict{String, ModelVariable}(
-            "VertDiff.D" => ModelVariable(ParameterVariable; default = 0.1),
-            "SurfaceDep.v_dep" => ModelVariable(ParameterVariable; default = 0.01),
-        )
-        obs = OrderedDict{String, ModelVariable}()
-
-        # dC/dt = D * grad(grad(C, z), z)
-        diff_eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], wrt = "t"),
-            OpExpr(
-                "*", EarthSciAST.ASTExpr[
-                    VarExpr("VertDiff.D"),
-                    OpExpr(
-                        "grad", EarthSciAST.ASTExpr[
-                            OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], dim = "z"),
-                        ], dim = "z"
-                    ),
-                ]
-            ),
-        )
-        # dC.at_z/dt = -v_dep * C.at_z   (slice-ODE — surface deposition)
-        slice_eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C.at_z")], wrt = "t"),
-            OpExpr(
-                "*", EarthSciAST.ASTExpr[
-                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("SurfaceDep.v_dep")]),
-                    VarExpr("VertDiff.C.at_z"),
-                ]
-            ),
-        )
-
-        flat = FlattenedSystem(
-            ivs, svars, ps, obs, [diff_eq, slice_eq],
-            ContinuousEvent[], DiscreteEvent[],
-            nothing,
-            FlattenMetadata()
-        )
-
-        pde = ModelingToolkit.PDESystem(flat; name = :VertDep)
-        @test occursin("PDESystem", string(typeof(pde)))
-        @test length(pde.bcs) >= 1
-        # The BC string should contain a z-derivative and reference the
-        # deposition velocity — i.e. the slice-ODE rewritten as a flux BC
-        # with the slice variable substituted by the base variable.
-        bc_strs = [string(bc) for bc in pde.bcs]
-        # Derivative w.r.t. z must appear. Symbolics renders it as either
-        # "Differential(z)" or "Differential(z, 1)" depending on version.
-        @test any(s -> occursin(r"Differential\(z\b", s), bc_strs)
-        @test any(s -> occursin("v_dep", s), bc_strs)
-        # The diffusion coefficient name must appear.
-        @test any(s -> occursin("VertDiff", s) && occursin("_D", s), bc_strs)
-        # And the slice-ODE must NOT appear as a standalone equation in the
-        # PDE's equation list — it should have been replaced by the BC.
-        eq_strs = [string(eq) for eq in pde.eqs]
-        @test !any(
-            s -> occursin(r"Differential\(t\b", s) && occursin("at_z", s),
-            eq_strs
-        )
     end
 
     @testset "A state no equation mentions survives into the compiled system" begin
@@ -328,5 +250,86 @@ import Symbolics
             end
         end
         @test has_ref
+    end
+
+    @testset "lowering checks registry arity instead of truncating operands" begin
+        ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
+        t = Symbolics.variable(:t)
+        y, x = Symbolics.variable(:y), Symbolics.variable(:x)
+        vd = Dict{String, Any}("y" => y, "x" => x)
+        dd = Dict{String, Any}("t" => t)
+        lower(e) = ext._esm_to_symbolic(e, vd, t, dd)
+        A = EarthSciAST.ASTExpr
+        # Two-operand atan is atan(y, x), not atan(y).
+        @test isequal(lower(OpExpr("atan", A[VarExpr("y"), VarExpr("x")])), atan(y, x))
+        @test lower(OpExpr("atan", A[NumExpr(1.0), NumExpr(-1.0)])) ≈ atan(1.0, -1.0)
+        @test isequal(
+            lower(OpExpr("atan", A[VarExpr("y")])), atan(y)
+        )
+        for bad in (
+                OpExpr("-", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("/", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("^", A[VarExpr("y")]),
+                OpExpr("sin", A[VarExpr("y"), VarExpr("x")]),
+                OpExpr("atan", A[VarExpr("y"), VarExpr("x"), NumExpr(1.0)]),
+                OpExpr("max", A[VarExpr("y")]),
+                OpExpr("ifelse", A[VarExpr("y"), VarExpr("x")]),
+            )
+            err = try
+                lower(bad)
+                nothing
+            catch err
+                err
+            end
+            @test err isa EarthSciAST.TreeWalkError
+            @test err.code == "E_TREEWALK_ARITY"
+        end
+    end
+
+    @testset "System refuses what it would build wrongly" begin
+        decay(name) = Model(
+            Dict(
+                name => ModelVariable(UnknownVariable; default = 1.0),
+                "k" => ModelVariable(ParameterVariable; default = 0.5),
+            ),
+            [
+                Equation(
+                    OpExpr("D", EarthSciAST.ASTExpr[VarExpr(name)], wrt = "t"),
+                    OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr(name)])
+                ),
+            ]
+        )
+        # `a.b_c` and `a_b.c` both sanitize to the symbol `a_b_c`.
+        file = EsmFile(
+            "2.0.0", Metadata("Collide");
+            models = Dict("a" => decay("b_c"), "a_b" => decay("c"))
+        )
+        flat = flatten(file)
+        @test haskey(flat.state_variables, "a.b_c")
+        @test haskey(flat.state_variables, "a_b.c")
+        err = try
+            ModelingToolkit.System(flat; name = :Collide)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("a_b_c", err.msg)
+
+        # An event affect whose target is not a variable is refused, not dropped.
+        flat1 = flatten(decay("x"); name = "D1")
+        ev = EarthSciAST.ContinuousEvent(
+            EarthSciAST.ASTExpr[OpExpr("-", EarthSciAST.ASTExpr[VarExpr("D1.x"), NumExpr(0.5)])],
+            [EarthSciAST.AffectEquation("D1.nope", NumExpr(1.0))]
+        )
+        push!(flat1.continuous_events, ev)
+        err = try
+            ModelingToolkit.System(flat1; name = :D1)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("D1.nope", err.msg)
     end
 end

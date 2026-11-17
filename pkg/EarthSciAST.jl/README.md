@@ -42,9 +42,7 @@ println("Model has $(length(model.variables)) variables")
 
 # Convert to ModelingToolkit (extension loads automatically when MTK is imported)
 using ModelingToolkit
-sys = ModelingToolkit.System(model; name=:AtmosphereModel)
-# Or, for models with spatial independent variables:
-# pde = ModelingToolkit.PDESystem(model; name=:AtmosphereModel)
+sys = ModelingToolkit.System(model; name=:AtmosphereModel)   # ODE systems only
 
 # Without ModelingToolkit loaded, flatten() and the MTK-free runtime still work:
 flat = flatten(esm_file)
@@ -75,8 +73,7 @@ dispatch on the foreign types:
 ```julia
 # Flatten first, then build a live symbolic system
 flat = flatten(esm_file)
-sys  = ModelingToolkit.System(flat; name=:Atmosphere)    # pure ODE
-pde  = ModelingToolkit.PDESystem(flat; name=:Atmosphere) # with spatial IVs
+sys  = ModelingToolkit.System(flat; name=:Atmosphere)    # ODE systems only
 rxn  = Catalyst.ReactionSystem(esm_file.reaction_systems["Chem"]; name=:Chem)
 
 # Reverse direction: live system → ESM Model

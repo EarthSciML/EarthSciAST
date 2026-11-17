@@ -27,3 +27,11 @@ OrdinaryDiffEqNonlinearSolve = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
 OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
 OrdinaryDiffEqTsit5 = "b1df2697-797e-41e3-8120-5422d3b24e4a"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
+
+[compat]
+# HELD BACK DELIBERATELY, for the reason pkg/EarthSciAST.jl/Project.toml's
+# [compat] gives: SymbolicUtils 4.46.0 makes ModelingToolkit fail to precompile.
+# A compat entry binds only the environment that lists the package, so the cap
+# is restated wherever ModelingToolkit is installed.
+SymbolicUtils = "4 - 4.45"

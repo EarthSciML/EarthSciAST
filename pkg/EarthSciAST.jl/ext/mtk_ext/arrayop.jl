@@ -1,9 +1,5 @@
-# ArrayOp construction primitives for the `arrayop` → Symbolics lowering path.
-# Relocated here from the former ext/grid_assembly_symbolic.jl when the dead
-# covariant-FV stencil assembly was retired (ess-4g1): that file (and its
-# numeric counterpart src/grid_assembly.jl) is gone, but these three
-# primitives stay load-bearing for the live `arrayop` node lowering — see the
-# ConstSR / get_idx_vars / SymReal uses below.
+# Lowering of the ESM `faq` node (and the shapes its left-hand sides imply) to
+# `SymbolicUtils.ArrayOp`.
 const SymReal = SymUtils.SymReal
 const ConstSR = SymUtils.Const{SymReal}
 
@@ -20,28 +16,37 @@ function get_idx_vars(ndim::Int)
 end
 
 # ========================================
-# Array op dispatch helpers (gt-vt3)
+# faq reduction helpers
 # ========================================
 
-# Map reduce-name string from the schema to the Julia reducer callable used
-# by the low-level `SymbolicUtils.ArrayOp` constructor. Membership is
-# BEHAVIOR (only these four reducers are supported); the name→function
-# mapping is delegated to the op registry, same pattern as `_BROADCAST_FNS`
-# in lowering.jl.
+# The ⊕ spellings this lowering folds with, mapped to the Julia reducer the
+# low-level `SymbolicUtils.ArrayOp` constructor takes (functions from the op
+# registry, same pattern as `_BROADCAST_FNS` in lowering.jl).
 const _REDUCE_FNS = Dict{String, Function}(
     name => EarthSciAST._op_spec(name).scalar_fn
         for name in ("+", "*", "max", "min")
 )
 
-function _reduce_fn(name::Union{Nothing, AbstractString})
-    name === nothing && return +
-    fn = get(_REDUCE_FNS, String(name), nothing)
-    fn === nothing && throw(ArgumentError("Unsupported arrayop reduce: $name"))
-    return fn
+# The reducer and the 0̄ identity of a `faq` node. `semiring`, when present,
+# supersedes `reduce` (esm-spec §4.3.1); both come from the same resolution the
+# tree walk uses (`_aggregate_oplus_identity`). The identity is what a
+# combination rejected by the node's `filter` contributes. `bool_and_or` (⊕ =
+# `or`) has no lowering here.
+function _faq_reduce(expr::OpExpr)
+    oplus, zerobar = EarthSciAST._aggregate_oplus_identity(expr.semiring, expr.reduce)
+    fn = get(_REDUCE_FNS, oplus, nothing)
+    fn === nothing && throw(
+        ArgumentError(
+            "faq reduction ⊕ = '$(oplus)'" *
+                (expr.semiring === nothing ? "" : " (semiring '$(expr.semiring)')") *
+                " has no ModelingToolkit lowering; the lowering folds +, *, max and min"
+        )
+    )
+    return fn, zerobar
 end
 
 # ========================================
-# Stencil boundary handling via numeric gather tables (ess-c59)
+# Stencil boundary handling via numeric gather tables
 # ========================================
 #
 # Background: an arrayop body for a discretized PDE stencil reads neighbor
@@ -65,8 +70,8 @@ end
 # stencil arrayop body is being built. Carries everything needed to materialize
 # a per-output-cell gather table for an indexed read.
 struct _GatherCtx
-    # output index var name => (pool var, physical-index lo, length N_d)
-    out_vars::Dict{String, Tuple{Any, Int, Int}}
+    # output index var name => (pool var, physical-index lo, length N_d, step)
+    out_vars::Dict{String, Tuple{Any, Int, Int, Int}}
     # ordered output var names (defines the table axis order = pool var order)
     out_order::Vector{String}
 end
@@ -76,7 +81,7 @@ end
 # The `_GatherCtx` is smuggled to `_build_index` through `dim_dict::Dict{
 # String,Any}` under this reserved key rather than as an explicit argument.
 # `_esm_to_symbolic` has dozens of call sites (every `_build_*` helper, the
-# System/PDESystem constructors, event and slice-BC lowering), all sharing
+# System constructor, event lowering), all sharing
 # the `(expr, var_dict, t_sym, dim_dict)` signature; adding a context
 # parameter would touch every one of them for the benefit of exactly one
 # producer (`_build_arrayop_sym`) and one consumer (`_build_index`). Until
@@ -85,8 +90,8 @@ end
 # Invariants that keep it safe:
 # - `_build_arrayop_sym` installs the ctx before evaluating an arrayop body
 #   and restores the previous value in a `finally` (nesting-safe).
-# - `_get_or_make_dim` can never collide: the key is not a valid dimension
-#   name and is only ever written by `_build_arrayop_sym`.
+# - The key is not a valid variable name and is only ever written by
+#   `_build_arrayop_sym`.
 # - `_build_index` type-checks (`ctx isa _GatherCtx`) before use.
 const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
 
@@ -100,19 +105,6 @@ const _INDEX_EXTENTS_KEY = "__esm_index_set_extents__"
 
 _extents(dim_dict::Dict{String, Any}) =
     get(dim_dict, _INDEX_EXTENTS_KEY, _NO_EXTENTS)::AbstractDict
-
-# The reduce semiring's additive identity — what a combination REJECTED by an
-# aggregate's `filter` contributes (esm-spec §4.3.1: "a combination for which
-# the predicate is false contributes the additive identity"; an all-rejected
-# window therefore yields the identity itself and is not an error).
-function _reduce_identity(name::Union{Nothing, AbstractString})
-    n = name === nothing ? "+" : String(name)
-    n == "+"   && return 0.0
-    n == "*"   && return 1.0
-    n == "max" && return -Inf
-    n == "min" && return Inf
-    throw(ArgumentError("Unsupported arrayop reduce: $n"))
-end
 
 # Gate a per-combination body value by an aggregate `filter` predicate.
 # A predicate over CONCRETE integer indices already folds to a `Bool` (the
@@ -167,7 +159,7 @@ function _index_args_gatherable(idx_args::Vector{<:EsmExpr}, ctx::_GatherCtx)
     # Probe with the lower-corner physical indices; `_eval_index_arg_int`
     # returns `nothing` structurally (independent of the concrete values) when
     # a non-output symbol or unsupported op appears, so one probe suffices.
-    binding = Dict{String, Int}(name => lo for (name, (_, lo, _)) in ctx.out_vars)
+    binding = Dict{String, Int}(name => lo for (name, (_, lo, _, _)) in ctx.out_vars)
     for a in idx_args
         _eval_index_arg_int(a, binding) === nothing && return false
     end
@@ -191,8 +183,8 @@ function _build_gather_read(arr, idx_args::Vector{<:EsmExpr}, ctx::_GatherCtx)
         binding = Dict{String, Int}()
         for d in 1:ndim_out
             name = ctx.out_order[d]
-            lo = ctx.out_vars[name][2]
-            binding[name] = lo + cell[d] - 1
+            _, lo, _, st = ctx.out_vars[name]
+            binding[name] = lo + (cell[d] - 1) * st
         end
         # Resolve each axis index of the read.
         resolved = ntuple(
@@ -212,8 +204,8 @@ end
 # Build an un-scalarized `Symbolics.wrap(ArrayOp)` for an ESM `arrayop` node.
 # All index variables are drawn from the shared `SymbolicUtils.idxs_for_arrayop`
 # pool; the body is built once with symbolic indices and handed to MTK's
-# `mtkcompile` to own scalarization. This requires all output ranges to be
-# 1-based (guaranteed by the ess-5kf canonicalization gate).
+# `mtkcompile` to own scalarization. The pool vars run over `1:length(r)`;
+# the body sees each range's physical index through `idx_body` below.
 #
 # Stencil neighbor reads that can leave the field bounds at a boundary cell are
 # materialized as numeric gather tables (see `_build_gather_read` above) so no
@@ -225,7 +217,7 @@ function _build_arrayop_sym(
     output_idx = expr.output_idx === nothing ? Any[] : expr.output_idx
     body = expr.expr_body
     body === nothing && throw(ArgumentError("arrayop node missing 'expr' body"))
-    reduce_fn = _reduce_fn(expr.reduce)
+    reduce_fn, identity_val = _faq_reduce(expr)
 
     expr.ranges === nothing && throw(
         ArgumentError(
@@ -240,10 +232,9 @@ function _build_arrayop_sym(
         )
     )
     extents = _extents(dim_dict)
-    ranges = Dict{String, UnitRange{Int}}()
+    ranges = Dict{String, StepRange{Int, Int}}()
     for (name, r) in expr.ranges
-        lo, hi = _range_bounds_int(r, extents)
-        ranges[name] = lo:hi
+        ranges[name] = _range_int(r, extents)
     end
 
     output_names = String[]
@@ -264,8 +255,7 @@ function _build_arrayop_sym(
     if isempty(output_names)
         return _arrayop_scalar_reduce(
             body, var_dict, t_sym, dim_dict, ranges,
-            reduce_fn, expr.filter,
-            _reduce_identity(expr.reduce)
+            reduce_fn, expr.filter, identity_val
         )
     end
 
@@ -276,20 +266,23 @@ function _build_arrayop_sym(
     n_named = length(all_named)
     pool = get_idx_vars(n_named + n_singletons)
     # idx_sym: raw pool vars, used as keys in output_idx_syms and ranges_sym.
-    # idx_body: offset-adjusted vars injected into var_dict for body evaluation.
-    # SymbolicUtils scalarizes by iterating the shape (1:length(r)) and
-    # substituting pool[k] = 1..N. For non-1-based ranges (e.g. i ∈ 2:4),
-    # we inject pool[k] + offset into the body so that when pool[k] = 1..3
-    # the body sees 2..4 (the actual physical indices).
+    # idx_body: the physical index as a function of the pool var, injected into
+    # var_dict for body evaluation. SymbolicUtils scalarizes by iterating the
+    # shape (1:length(r)) and substituting pool[k] = 1..N, so for a range
+    # `lo:st:hi` the body sees `lo + (pool[k] - 1) * st` (e.g. i ∈ 2:4 gives
+    # 2..4 for pool[k] = 1..3, and i ∈ 1:2:5 gives 1, 3, 5).
     idx_sym = Dict{String, Any}()
     idx_body = Dict{String, Any}()
     for (k, name) in enumerate(all_named)
         r = ranges[name]
         idx_sym[name] = pool[k]
-        offset = first(r) - 1
         # Use pool[k] directly (BasicSymbolic{SymReal}), not Symbolics.wrap(pool[k])
         # (Num), so that u[idx_body[i], idx_body[j]] dispatches correctly.
-        idx_body[name] = offset == 0 ? pool[k] : pool[k] + offset
+        idx_body[name] = if step(r) == 1
+            first(r) == 1 ? pool[k] : pool[k] + (first(r) - 1)
+        else
+            step(r) * pool[k] + (first(r) - step(r))
+        end
     end
     singleton_vars = [pool[n_named + s] for s in 1:n_singletons]
 
@@ -299,13 +292,13 @@ function _build_arrayop_sym(
     # keeps boundary/ghost reads within `1:N`. Reads referencing reduction-only
     # index vars are not gatherable and fall back to the symbolic-offset path
     # below (correct for in-bounds contractions, which was already passing).
-    out_vars = Dict{String, Tuple{Any, Int, Int}}()
+    out_vars = Dict{String, Tuple{Any, Int, Int, Int}}()
     out_order = String[]
     for entry in output_idx
         entry isa AbstractString || continue
         name = String(entry)
         r = ranges[name]
-        out_vars[name] = (pool[findfirst(==(name), all_named)], first(r), length(r))
+        out_vars[name] = (pool[findfirst(==(name), all_named)], first(r), length(r), step(r))
         push!(out_order, name)
     end
     gather_ctx = _GatherCtx(out_vars, out_order)
@@ -358,7 +351,7 @@ function _build_arrayop_sym(
         # test/mtk/array_ops_mtk_test.jl, where the cancellation case is `@test_broken`.
         if expr.filter !== nothing
             pred = _esm_to_symbolic(expr.filter, var_dict, t_sym, dim_dict)
-            b = _gate_by_filter(pred, b, _reduce_identity(expr.reduce))
+            b = _gate_by_filter(pred, b, identity_val)
         end
         b
     finally
@@ -457,7 +450,7 @@ end
 # and interior-only stencils with separate scalar boundary equations.
 #
 # Three LHS forms are recognized:
-#   1. arrayop  — output_idx+ranges give a rectangular region
+#   1. faq      — output_idx+ranges give a rectangular region
 #   2. D(u[k])  — scalar differential with a concrete integer index
 #   3. index(u, k1, k2, ...) — direct indexed LHS
 #
@@ -470,14 +463,7 @@ function _lhs_arrayop_shapes(
     for eq in equations
         lhs = eq.lhs
         lhs isa OpExpr || continue
-        # The ESM WIRE TAG, which is `faq` from esm 1.1.0 — not SymbolicUtils'
-        # `ArrayOp`, whose vocabulary this file otherwise keeps. Dispatching on
-        # the old spellings here made this whole loop dead: the loader rejects
-        # `arrayop` and normalizes `aggregate`, and every internal construction
-        # site emits `faq`, so `shapes` came back empty and the
-        # `merge!(inferred_shapes, lhs_shapes)` in `variables.jl` silently
-        # stopped overriding ghost-widened shapes with the authoritative LHS
-        # grid (docs/content/rfcs/faq-node-rename.md §4.1).
+        # The ESM wire tag `faq`, not SymbolicUtils' `ArrayOp`.
         if lhs.op == "faq"
             lhs.ranges === nothing && continue
             lhs.output_idx === nothing && continue
@@ -578,23 +564,34 @@ end
 #
 # Anything else is rejected with an `ArgumentError` naming the offending form —
 # never a `MethodError`.
+#
+# `_range_int` returns the iteration range itself (a stepped `[start, step,
+# stop]` keeps its step, esm-spec §4.3.1); `_range_bounds_int` returns the first
+# and last index that range visits.
 const _NO_EXTENTS = Dict{String, Int}()
 
-function _range_bounds_int(r::AbstractVector, extents::AbstractDict = _NO_EXTENTS)
+function _range_bounds_int(r, extents::AbstractDict = _NO_EXTENTS)
+    rr = _range_int(r, extents)
+    isempty(rr) && throw(ArgumentError("range $(r) is empty"))
+    return first(rr), last(rr)
+end
+
+function _range_int(r::AbstractVector, extents::AbstractDict = _NO_EXTENTS)
     all(x -> x isa Integer, r) || throw(
         ArgumentError(
             "expression-valued range bounds are not supported by the MTK evaluator path"
         )
     )
     if length(r) == 2
-        return Int(r[1]), Int(r[2])
+        return Int(r[1]):1:Int(r[2])
     elseif length(r) == 3
-        return Int(r[1]), Int(r[3])
+        Int(r[2]) == 0 && throw(ArgumentError("range $(r) has step 0"))
+        return Int(r[1]):Int(r[2]):Int(r[3])
     end
     throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
 end
 
-function _range_bounds_int(
+function _range_int(
         r::EarthSciAST.IndexSetRef,
         extents::AbstractDict = _NO_EXTENTS
     )
@@ -620,10 +617,10 @@ function _range_bounds_int(
             "index set '$(r.from)' has non-positive size $(n)"
         )
     )
-    return 1, Int(n)
+    return 1:1:Int(n)
 end
 
-_range_bounds_int(r, extents::AbstractDict = _NO_EXTENTS) = throw(
+_range_int(r, extents::AbstractDict = _NO_EXTENTS) = throw(
     ArgumentError(
         "unsupported `ranges` entry of type $(typeof(r)): the MTK evaluator path " *
             "accepts a dense `[lo, hi]`/`[lo, step, hi]` array or an index-set " *

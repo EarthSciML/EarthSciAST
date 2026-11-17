@@ -164,10 +164,9 @@ end
         # the right zero-crossing equation, and that it FIRES.
         "bouncing_ball.esm" => "driven by the explicit J2 continuous-event testset below",
         # PDE fixtures (spatial independent variables) — the System()
-        # constructor routes to ModelingToolkit.PDESystem, which this
-        # ODE-only runner does not drive. A parallel PDE runner is out
-        # of scope for the inline tests-block contract; schema + other
-        # bindings still consume these fixtures.
+        # constructor refuses them and this binding has no PDE
+        # constructor; schema + other bindings still consume these
+        # fixtures.
         "spatial_diffusion.esm" => "PDE (no ODE runner path)",
         "spatial_limitation.esm" => "PDE (no ODE runner path)",
     )

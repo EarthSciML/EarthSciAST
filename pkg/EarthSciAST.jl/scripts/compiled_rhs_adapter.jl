@@ -128,6 +128,10 @@ const BINDING = "julia"
 # changing what this tier measures.
 const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 
+# The value after the flag at `args[i]`; a flag at the end of the line has none.
+_flag_value(args, i) =
+    i < length(args) ? args[i + 1] : error("$(PROGRAM_FILE): $(args[i]) needs a value")
+
 function parse_args(args)
     manifest = nothing
     output = nothing
@@ -136,15 +140,15 @@ function parse_args(args)
     i = 1
     while i <= length(args)
         if args[i] == "--manifest"
-            manifest = args[i + 1]; i += 2
+            manifest = _flag_value(args, i); i += 2
         elseif args[i] == "--output"
-            output = args[i + 1]; i += 2
+            output = _flag_value(args, i); i += 2
         elseif args[i] == "--engine"
-            engine = args[i + 1]; i += 2
+            engine = _flag_value(args, i); i += 2
         elseif args[i] == "--compiler"
-            compiler = args[i + 1]; i += 2
+            compiler = _flag_value(args, i); i += 2
         else
-            i += 1
+            error("$(PROGRAM_FILE): unrecognised argument $(repr(args[i]))")
         end
     end
     manifest === nothing && error("--manifest is required")

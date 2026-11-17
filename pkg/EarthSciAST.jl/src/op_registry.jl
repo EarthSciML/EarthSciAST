@@ -86,7 +86,7 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:cse_opaque`         → `_CSE_OPAQUE_OPS`               (tree_walk/compile.jl)
 - `:stencil_elementwise`→ `_STENCIL_ELEMENTWISE_OPS`      (tree_walk/stencil.jl)
 - `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/geometry_setup.jl)
-- `:mtk_known`          → `_KNOWN_OPS`                    (ext/EarthSciASTMTKExt.jl)
+- `:mtk_known`          → `_KNOWN_OPS`                    (ext/mtk_ext/export.jl)
 - `:array_producer`     → `_ARRAY_PRODUCER_OPS`           (shape_promotion.jl)
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 - `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validate.jl)
@@ -115,8 +115,8 @@ hand:
 - `_GEO_EVAL_OPS` (src/tree_walk/geometry_setup.jl) — the exact vocabulary of
   the setup-time geometry language (compiled by `_geo_compile`,
   src/tree_walk/geometry_compile.jl).
-- `_KNOWN_OPS` (ext/EarthSciASTMTKExt.jl) — ops the MTK exporter recognizes;
-  anything else is flagged as a likely registered-function gap (gt-p3ep).
+- `_KNOWN_OPS` (ext/mtk_ext/export.jl) — ops the MTK exporter recognizes;
+  anything else is reported as an `unknown_operator` gap.
 - `_ARRAY_PRODUCER_OPS` / `_SELF_INDEXED_OPS` (src/shape_promotion.jl) —
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),

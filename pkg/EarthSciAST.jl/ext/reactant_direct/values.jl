@@ -26,21 +26,20 @@ const _DESlot = Union{Nothing, Tuple{_DEVal, Int}}
 # `_DE_SECTIONS` names them.
 #
 # The plan exists because a `nothing` entry means two different things, and only
-# one of them is a bug. Both readings start from the same fact: the interpreter
-# runs THESE units in THIS order over an extended vector that starts at zero
-# (the interpreter allocates it fresh per call), so at any point in the walk an
-# unwritten slot holds 0.0 on host.
+# one of them is a bug. The emitted program runs THESE units in THIS order over
+# an extended vector that starts at zero, so at any point in the walk an
+# unwritten slot holds 0.0.
 #
 #   A ZERO THIS SECTION IS ENTITLED TO — nothing writes the slot, or the only
-#   writer is this same section, which has not reached the write yet. The
-#   interpreter reads 0.0 there too, so the emitter must supply one. An
-#   in-place prefix scan is the standing example: at each step it READS its own
-#   slot and then overwrites it with the running accumulation, and the last step
-#   of a lane reads a position no term kernel ever fills.
+#   writer is this same section, which has not reached the write yet. The host
+#   evaluator reads 0.0 there too, so the emitter must supply one. An in-place
+#   prefix scan is the standing example: at each step it READS its own slot and
+#   then overwrites it with the running accumulation, and the last step of a
+#   lane reads a position no term kernel ever fills.
 #
 #   AN ORDERING VIOLATION — a LATER section writes the slot, i.e. a fill level
-#   reads a level above it. The level plan is then wrong: the out-of-place
-#   evaluator silently folds in a zero, the in-place one folds in the PREVIOUS
+#   reads a level above it. The level plan is then wrong: the emitted program
+#   would fold in a zero while the host evaluator `f!` folds in the PREVIOUS
 #   CALL's value out of its reused buffer, and the two stop agreeing. Refusing
 #   is the right answer, and the message names the section that writes it.
 #
@@ -457,89 +456,27 @@ const _DESlotSrc = Union{Nothing, _DEVal}
 
 # ---- the read cost model -----------------------------------------------------
 #
-# WHEN ONE GATHER BEATS A SLICE PER RUN. The slice path costs one op per run
-# plus one concatenate, and no index data; a gather costs one op plus an O(n)
-# i64 index constant (and, across producers, one concatenate of the producer
-# values, which is cached). So the decision is the AVERAGE RUN LENGTH, and
-# `_DE_RUN_WORTH` is the length at which they break even.
+# A read that decomposes into runs of consecutive positions is emitted either as
+# one slice per run plus a concatenate, or as one gather with an i64 index
+# constant. The rule: gather when the read has more than `_DE_GATHER_MIN_PIECES`
+# runs, or exactly that many and they average fewer than `_DE_RUN_WORTH`
+# positions; otherwise slice.
 #
-# THE RULE THIS REPLACES DECIDED SOMETHING ELSE. It asked whether the read had
-# more runs than HALF its positions — an average run shorter than two — and it
-# additionally required every run to lie in ONE producer and the read to contain
-# no structural zero. On a real transport stencil all three clauses miss: the
-# reads average two to four positions per run (so `> n ÷ 2` is false), and most
-# of the reads that reach a concatenate span more than one producer. The step
-# then arrives at XLA as slices alone, and the reverse-mode program with them
-# multiplied by the tape. See reseact.esm's COMPILE_COST.md for the
-# measurement.
+# Two costs set the numbers. The reverse of a slice is a pad-and-add that the
+# downstream optimizer turns back into more slices, and the slice deduplication
+# passes downstream are quadratic in the slice population (UPSTREAM_ISSUES.md),
+# so a read whose run count grows with the grid must gather; that is the cap. A
+# gather is an indexed copy where a slice is a contiguous one, so a read of a few
+# long runs keeps its slices; that is the floor, and the cap equals it.
 #
-# BOTH SIDES OF THE TRADE HAVE BEEN MEASURED on a stencil transport half and on
-# a chemistry half, and the gather wins or ties on both, which is why it is the
-# default: the stencil half's optimized module and its per-call cost both fall
-# and its reverse-mode program becomes tractable at all, while a half whose
-# reads are not shattered emits one gather either way and does not move.
-# `ESM_DIRECT_EMIT_READ=runs` restores the slice-per-run shape exactly, as the
-# negative control and as the escape if a model is ever found where the
-# concatenated base is the wrong trade.
-#
-# Neither setting changes a NUMBER: a gather of the same positions from the same
+# Neither form changes a NUMBER: a gather of the same positions from the same
 # values is bit-identical to slices-plus-concatenate of them.
 #
-# `ESM_DIRECT_EMIT_READ=always` is the third setting and it is a MEASUREMENT
-# LEVER, not a recommendation: it gathers every read that decomposes into more
-# than one run and lifts the base budget, which bounds from above what the read
-# form can buy and tells a measurement whether a threshold or the base budget is
-# the clause doing the declining.
-#
-# THE AVERAGE-RUN TEST IS NOT ENOUGH ON ITS OWN, because it prices a property of
-# the STENCIL against a cost that grows with the GRID. Average run length is
-# fixed by how a read walks its axis — a column read runs the model's level
-# count and nothing else — so a stencil whose runs are longer than the
-# break-even keeps the slice path at every grid size, while the NUMBER of runs
-# it decomposes into is proportional to cells. One read then costs an operation
-# for every run the grid gives it, and a module's slice population grows without
-# bound even though nothing about the model changed.
-#
-# So the test is two-sided. `_DE_GATHER_MAX_PIECES` is an ABSOLUTE CAP on what a
-# single read may cost in ops: past it the read gathers whatever its runs look
-# like, and no read costs more than the cap. Below the cap the average-run test
-# decides as before. `ESM_DIRECT_GATHER_MAX_PIECES` overrides the cap; setting
-# it to a large value restores the average-run test alone, as the negative
-# control.
-#
-# AND THE CAP IS SMALL, BECAUSE THE PRICE OF A SLICE IS NOT WHAT THE PRIMAL PAYS
-# FOR IT. Everything above prices one emitted operation against one emitted
-# index constant, on the module as the emitter writes it. That is the wrong
-# module. The program this emitter exists to make tractable is the REVERSE one,
-# and the two read forms are not alike there:
-#
-#   * the reverse of a `stablehlo.slice` is a pad-and-add, which the first
-#     `enzyme-hlo-opt` over the differentiated module rewrites back into MORE
-#     slices and concatenates than the primal had;
-#   * the reverse of a `stablehlo.gather` is ONE `stablehlo.scatter`, and a
-#     scatter joins no slice population at all.
-#
-# That matters because the two deduplication passes downstream — Enzyme-JAX's
-# `cse_slice` and, one layer down, XLA's own `HloCSE` — compare slices PAIRWISE
-# and are quadratic in how many there are (UPSTREAM_ISSUES.md has both). So an
-# operation the primal cost model prices as cheap is charged, downstream, at the
-# SQUARE of the population it joins, while the index constant it avoided is
-# linear and, since the index vectors are interned on their contents, mostly
-# shared.
-#
-# AND IT IS NOT SMALLER THAN EIGHT, BECAUSE THE PROGRAM ALSO HAS TO RUN. A
-# gather is an INDEXED copy and a slice is a CONTIGUOUS one, so the trade runs
-# the other way at execution time: past a certain width the slice path is what
-# the vector units want, and replacing it costs device time on every call for
-# ever. Driving the cap below the piece floor gathers reads of three to eight
-# long runs — the ones the slice path exists for — and that is measurably the
-# wrong side of the trade on a chemistry half, whose reads are not shattered and
-# which pays for the change without getting the compile back (reseact.esm
-# COMPILE_COST.md section 8 has both halves of it, and the rejected arm).
-#
-# So the cap is the piece floor: fewer than `_DE_GATHER_MIN_PIECES` runs and the
-# read is short enough to keep its slices, more and it gathers, and at exactly
-# the floor the average-run test decides. One number, two sides.
+# Switches: `ESM_DIRECT_EMIT_READ=runs` restores the slice-per-run shape (the
+# negative control); `=always` gathers every multi-run read and lifts the base
+# budget (a measurement lever, not a recommendation);
+# `ESM_DIRECT_GATHER_MAX_PIECES` overrides the cap. Pinned by
+# test/reactant_direct_emit_test.jl.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
 const _DE_GATHER_MAX_PIECES = _DE_GATHER_MIN_PIECES
@@ -859,11 +796,10 @@ end
         "$name is read while emitting $(_de_sectionname(section)), and " *
             "$(_de_sectionname(w)) writes it LATER. The ordering must come from " *
             "the fill levels, which are supposed to guarantee that a level reads " *
-            "only levels below it. On host the read takes whatever the extended " *
-            "buffer holds at that point — a zero from the out-of-place runner's " *
-            "fresh vector, the PREVIOUS CALL's value from the in-place runner's " *
-            "reused one — so the two interpreters no longer agree either, and it " *
-            "is the level plan that has to change."
+            "only levels below it. The emitted program would read a zero there " *
+            "while the host evaluator reads the PREVIOUS CALL's value out of its " *
+            "reused buffer, so the two would not agree; it is the level plan that " *
+            "has to change."
     )
 end
 

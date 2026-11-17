@@ -626,10 +626,9 @@ end
 # solution interpolant.
 # ---------------------------------------------------------------------------
 
-# For reaction_system containers, species and parameter defaults declared in
-# the ESM file are NOT propagated through the Catalyst.@species / @parameters
-# metadata by the EarthSciAST Catalyst extension (the Core.eval path builds
-# bare symbolics). Compensate by seeding u0 and p from the ESM defaults;
+# For reaction_system containers, seed u0 and p from the species and parameter
+# defaults declared in the ESM file (the Catalyst extension also attaches them
+# to its symbols; the explicit maps keep this runner independent of that);
 # returns `(defaults_u0, defaults_p)` (both empty for model containers).
 function _catalyst_default_maps(
         container_kind::Symbol, esm_container, simp,
@@ -854,7 +853,7 @@ function run_file_tests!(
     # A container in a document this engine cannot build gets that document's
     # failure, NOT a private per-container build that would paper over it. One
     # component's unlowered `grad` making the whole flatten spatial — which
-    # `ModelingToolkit.System` refuses, redirecting to `PDESystem` — refuses
+    # `ModelingToolkit.System` refuses, having no PDE constructor — refuses
     # every container in that document, which is what the Rust CLI already does
     # for the same file (`tests/valid/units_dimensional_analysis.esm`: 0 pass in
     # both). A document must not validate under one binding and fail under
