@@ -363,21 +363,21 @@ end
 # whole compiler-selection branch: the closed vocabulary, the strict tier report
 # and the native-versus-interpreter agreement, none of it run.
 #
-# The check is textual on purpose. An include guarded by a condition
-# (`ESM_TEST_REACTANT=1`) still NAMES its file, which is the property being
-# pinned — that the driver knows the file exists — and whether a given run takes
-# that branch is the guard's business, documented where the guard is.
+# The check is textual on purpose: a driver names each file as a string in its
+# `GROUPS` table. A group a run leaves out (`reactant` without
+# `ESM_TEST_REACTANT=1`) still NAMES its files, which is the property being
+# pinned — that the driver knows the file exists.
 #
 # Both suites, each against its own driver: test/runtests.jl (`Pkg.test()`) for
 # this directory, test/mtk/runtests.jl (the ModelingToolkit CI workflow) for
 # test/mtk/.
-@testset "runtests.jl includes every test file: $(suite)" for (suite, dir, prelude, at_least) in (
-        ("test/", _PRELUDE_TEST_DIR, "testutils.jl", 100),
-        ("test/mtk/", _PRELUDE_MTK_DIR, "../testutils.jl", 10),
+@testset "runtests.jl names every test file: $(suite)" for (suite, dir, at_least) in (
+        ("test/", _PRELUDE_TEST_DIR, 100),
+        ("test/mtk/", _PRELUDE_MTK_DIR, 10),
     )
     driver = read(joinpath(dir, "runtests.jl"), String)
-    named = Set{String}(m.captures[1] for m in eachmatch(r"include\(\"([^\"]+)\"\)", driver))
-    @test prelude in named                         # the driver was really read
+    named = Set{String}(m.captures[1] for m in eachmatch(r"\"([^\"/]+_test\.jl)\"", driver))
+    @test length(named) > at_least                 # the driver was really read
     files = sort!(filter(f -> endswith(f, "_test.jl"), readdir(dir)))
     @test length(files) > at_least                 # the sweep is not vacuous
     orphans = [f for f in files if !(f in named)]
