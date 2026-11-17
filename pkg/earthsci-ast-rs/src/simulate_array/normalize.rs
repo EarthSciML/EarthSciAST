@@ -68,6 +68,13 @@ pub(crate) fn normalize(
 ) -> Result<NormalizedModel, CompileError> {
     let (mut model, inherited) = match input {
         BuildInput::Local { flat, model: local } => {
+            // esm-spec §4.2: a right-hand-side `D` flatten could not resolve is
+            // refused here, as `from_flattened` refuses it on the other route.
+            if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
+                return Err(CompileError::UnloweredOperatorError {
+                    op: "D".to_string(),
+                });
+            }
             let mut model = model_from_flattened(flat);
             unqualify(&mut model, local);
             (model, None)

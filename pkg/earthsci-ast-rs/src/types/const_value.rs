@@ -477,6 +477,9 @@ mod tests {
         assert!(ConstValue::ptr_eq(&v, &w));
         assert!(Arc::ptr_eq(&v.array().unwrap(), &w.array().unwrap()));
         let j = ConstValue::from_json(json!([1, 2.5]));
-        assert!(Arc::ptr_eq(&j.array().unwrap(), &j.clone().array().unwrap()));
+        assert!(Arc::ptr_eq(
+            &j.array().unwrap(),
+            &j.clone().array().unwrap()
+        ));
     }
 }

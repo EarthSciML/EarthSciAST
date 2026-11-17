@@ -5615,7 +5615,10 @@ mod subsystem_ragged_and_inspection_tests {
     /// spells two ways must agree after the mount.
     #[test]
     fn mounting_carries_a_leafs_join_on_key_columns() {
-        let m = mounted(host_mounting_a_join_leaf(json!([["left_key", "right_key"]])));
+        let m = mounted(host_mounting_a_join_leaf(json!([[
+            "left_key",
+            "right_key"
+        ]])));
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;

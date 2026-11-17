@@ -61,9 +61,9 @@ pub use observed::*;
 pub use remake::*;
 use report::*;
 pub use solve::*;
-use supplied::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use supplied::provider_key_error;
+use supplied::*;
 
 // =============================================================================
 // Callbacks

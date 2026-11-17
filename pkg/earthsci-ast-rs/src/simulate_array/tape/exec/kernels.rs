@@ -665,9 +665,13 @@ pub(super) unsafe fn exec_gather(
 ) {
     // SAFETY: the caller's contract; every segment copy lies in both boxes.
     unsafe {
-        gather_with(plan, src, out, Zero::fill(!full_cover), |dst, dstr, s, sstr, shape| {
-            copy_strided(dst, dstr, s, sstr, shape)
-        })
+        gather_with(
+            plan,
+            src,
+            out,
+            Zero::fill(!full_cover),
+            |dst, dstr, s, sstr, shape| copy_strided(dst, dstr, s, sstr, shape),
+        )
     }
 }
 
