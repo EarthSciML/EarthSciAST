@@ -82,7 +82,6 @@ struct CompilerPlan
     # compile-once sweeps behind them (those, and `seed_expression_ic!`). Off,
     # each takes its per-cell reference form.
     setup_map_compile_once::Bool
-    geom_sweep_specialize::Bool
     geom_overlap_gate::Bool
 end
 

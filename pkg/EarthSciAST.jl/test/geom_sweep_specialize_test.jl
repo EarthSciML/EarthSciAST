@@ -1,35 +1,10 @@
-# Rank-specialized sweep of the compiled geometry materializer — BIT-EXACTNESS.
-#
-# `_materialize_geom_array` compiles its body ONCE per sweep, but its inner
-# loops were written against a `Vector{Int}` of extents:
-#
-#     for tup in Iterators.product((1:e for e in exts)...)
-#         ...; arr[tup...] = _eval_node(body, u, nothing, 0.0, Float64)
-#
-# Splatting a generator of statically-unknown length hides the product
-# iterator's type from inference, and `zeros(Float64, exts...)` is only ever an
-# `Array{Float64}` (rank-abstract), so every cell paid a dynamic `iterate`, a
-# boxed `tup` and a dynamically dispatched `setindex!` through the splat — on
-# top of the `_eval_node` walk. That per-cell tax, not the walk, was what made
-# a ReSEACT chemistry build's cost track the grid: the dominant sweeps are a
-# 137241 x NCOL overlap matrix and five 137241 x NCOL contractions, so the tax
-# is paid ~5e6 times per 36 columns. The sweeps now run in methods typed
-# `Array{Float64,N}` (one dynamic dispatch PER SWEEP), and the `:geo_gather`
-# evaluator arm narrows its `Any`-typed source payload with a concrete `isa`
-# before reading (tree_walk/geometry_compile.jl).
-#
-# The whole game is that this changes NOTHING numerically. `CartesianIndices`
-# visits a column-major product in EXACTLY the order `Iterators.product` does,
-# so the assignment order and — what actually matters — the CONTRACTION FOLD
-# ORDER are the same term sequence. Every case below materializes the same
-# array twice, once specialized and once with
-# `compiler=:interpreter` taking the rank-abstract reference,
-# and demands `isequal` cell for cell. `isequal`, never `≈` and never `==`:
-# `-0.0` must not pass for `+0.0` and `NaN` must match `NaN`.
-#
-# The engagement counters make the comparison non-vacuous: a case that silently
-# stopped taking the specialized sweep would compare the reference against
-# itself and pass, so each case asserts which path it took.
+# The geometry materializer's rank-specialized sweeps (`_geom_sweep_map!`,
+# `_geom_sweep_contract!`), checked against arrays computed by hand from the
+# same inputs. `CartesianIndices` visits a column-major product first index
+# fastest, so the assignment order and the CONTRACTION FOLD ORDER are the term
+# sequence the document defines; the expectations below fold in that order and
+# demand `isequal` cell for cell — never `≈` and never `==`: `-0.0` must not
+# pass for `+0.0` and `NaN` must match `NaN`.
 
 module GeomSweepSpecializeTests
 
@@ -70,18 +45,15 @@ const ENV0 = Dict{String, Any}(
 )
 const SHAPES = Dict{String, Vector{String}}("kI" => ["I"], "kJ" => ["J"])
 
-# Materialize `json` both ways and return (fast, reference, fastcount, refcount).
-function both_ways(json, env = ENV0, idx = IDX)
-    rhs = EA.expression_from_json(json)
-    f0, r0 = EA._GEOM_SWEEP_FAST[], EA._GEOM_SWEEP_REF[]
-    fast = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
-    nf = EA._GEOM_SWEEP_FAST[] - f0
-    nr = EA._GEOM_SWEEP_REF[] - r0
-    ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-        EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
-    end
-    return fast, ref, nf, nr
-end
+# Materialize `json` under the default compiler.
+materialize(json, env = ENV0, idx = IDX) =
+    EA._materialize_geom_array(EA.expression_from_json(json), copy(env), nothing, idx, SHAPES)
+
+# The contracted indices in the order the sweep nests them (first fastest).
+contracted(json) = (
+    rhs = EA.expression_from_json(json);
+    String[k for k in keys(rhs.ranges) if !(k in rhs.output_idx)]
+)
 
 # Bitwise array agreement — the correctness bar.
 function bitsame(a, b)
@@ -94,9 +66,10 @@ end
 
 @testset "geometry sweep rank specialization" begin
 
-    @testset "MAP sweeps are bit-identical at ranks 1, 2 and 3" begin
+    @testset "MAP sweeps at ranks 1, 2 and 3" begin
         Aij = _ix("A", "i", "j")
         Bij = _ix("B", "i", "j")
+        s, thr = 1.5, 0.0
         cases = Dict(
             # rank 2, signed zero out of the false arm of a gated branch
             "rank2_gated" => (
@@ -106,28 +79,23 @@ end
                         "ifelse", _op(">", Aij, "thr"),
                         _op("*", Aij, "s"), _op("*", -1.0, _op("*", 0.0, Bij))
                     )
-                ), IDX,
+                ),
+                [A[i, j] > thr ? A[i, j] * s : -1.0 * (0.0 * B[i, j]) for i in 1:5, j in 1:4],
             ),
             # rank 2, ±Inf where A is zero
             "rank2_inf" => (
-                _agg(
-                    ["i", "j"], ["i" => "I", "j" => "J"],
-                    _op("/", "s", Aij)
-                ), IDX,
+                _agg(["i", "j"], ["i" => "I", "j" => "J"], _op("/", "s", Aij)),
+                [s / A[i, j] for i in 1:5, j in 1:4],
             ),
             # rank 2, NaN (0/0) where A is zero
             "rank2_nan" => (
-                _agg(
-                    ["i", "j"], ["i" => "I", "j" => "J"],
-                    _op("/", Aij, Aij)
-                ), IDX,
+                _agg(["i", "j"], ["i" => "I", "j" => "J"], _op("/", Aij, Aij)),
+                [A[i, j] / A[i, j] for i in 1:5, j in 1:4],
             ),
             # rank 1
             "rank1" => (
-                _agg(
-                    ["i"], ["i" => "I"],
-                    _op("/", "s", _ix("A", "i", 2))
-                ), IDX,
+                _agg(["i"], ["i" => "I"], _op("/", "s", _ix("A", "i", 2))),
+                [s / A[i, 2] for i in 1:5],
             ),
             # rank 3 over a [pos, vert, coord] ring stack — the shape a
             # constructed cell ring materializes into
@@ -138,16 +106,16 @@ end
                         "+", _op("*", _ix("R", "i", "v", "c"), "s"),
                         _op("-", _ix("R", "i", "v", "c"), _ix("A", "i", 1))
                     )
-                ), IDX,
+                ),
+                [R[i, v, c] * s + (R[i, v, c] - A[i, 1]) for i in 1:5, v in 1:3, c in 1:2],
             ),
         )
         seen = Float64[]
-        for (nm, (j, idx)) in cases
-            fast, ref, nf, nr = both_ways(j, ENV0, idx)
-            @test (nm, nf, nr) == (nm, 1, 0)          # the specialized sweep engaged
-            @test (nm, bitsame(fast, ref)) == (nm, true)
-            @test (nm, length(unique(fast)) > 1) == (nm, true)
-            append!(seen, vec(fast))
+        for (nm, (j, want)) in cases
+            got = materialize(j)
+            @test (nm, bitsame(got, want)) == (nm, true)
+            @test (nm, length(unique(got)) > 1) == (nm, true)
+            append!(seen, vec(got))
         end
         @test any(isnan, seen)
         @test any(x -> !isfinite(x) && !isnan(x), seen)
@@ -158,18 +126,18 @@ end
         # A `-0.0` summand and a `NaN` summand both reach the accumulator here,
         # so a reordered or dropped term shows up as a bit difference.
         body = _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
-        for (nm, extra) in (
-                "sum" => Dict{String, Any}(),
-                "min" => Dict{String, Any}("reduce" => "min"),
-                "max" => Dict{String, Any}("reduce" => "max"),
-                "prod" => Dict{String, Any}("reduce" => "prod"),
+        for (nm, extra, init, f) in (
+                ("sum", Dict{String, Any}(), 0.0, +),
+                ("min", Dict{String, Any}("reduce" => "min"), Inf, min),
+                ("max", Dict{String, Any}("reduce" => "max"), -Inf, max),
+                ("prod", Dict{String, Any}("reduce" => "prod"), 1.0, *),
             )
             j = _agg(["j"], ["i" => "I", "j" => "J"], body)
             merge!(j, extra)
-            fast, ref, nf, nr = both_ways(j)
-            @test (nm, nf, nr) == (nm, 1, 0)
-            @test (nm, bitsame(fast, ref)) == (nm, true)
-            @test (nm, length(unique(fast)) > 1) == (nm, true)
+            want = [foldl(f, (A[i, jj] * B[i, jj] for i in 1:5); init = init) for jj in 1:4]
+            got = materialize(j)
+            @test (nm, bitsame(got, want)) == (nm, true)
+            @test (nm, length(unique(got)) > 1) == (nm, true)
         end
         # A NaN in the fold: `+` propagates it, so the contraction is not
         # vacuously finite.
@@ -179,79 +147,94 @@ end
                 _ix("A", "i", "j")
             )
         )
-        fast, ref, nf, nr = both_ways(jn)
-        @test (nf, nr) == (1, 0)
-        @test bitsame(fast, ref)
-        @test any(isnan, fast)
+        got = materialize(jn)
+        @test bitsame(got, [foldl(+, (A[i, jj] / A[i, jj] for i in 1:5); init = 0.0) for jj in 1:4])
+        @test any(isnan, got)
     end
 
     @testset "rank-2 output over TWO contracted indices" begin
-        # Two contracted vars exercise the M-dimensional inner `CartesianIndices`
-        # against the reference's nested `Iterators.product`.
+        # Two contracted vars: the inner `CartesianIndices` nests them first
+        # fastest, in the order the sweep lists them.
         body = _op("*", _ix("R", "i", "v", "c"), _ix("A", "i", "j"))
         j = _agg(["i", "j"], ["i" => "I", "j" => "J", "v" => "V", "c" => "C"], body)
-        fast, ref, nf, nr = both_ways(j)
-        @test (nf, nr) == (1, 0)
-        @test bitsame(fast, ref)
-        @test length(unique(fast)) > 1
+        ext = Dict("v" => 3, "c" => 2)
+        con = contracted(j)
+        term(i, jj, b) = R[i, b["v"], b["c"]] * A[i, jj]
+        want = [
+            foldl(
+                +, (
+                    term(i, jj, Dict(con[1] => x, con[2] => y))
+                        for y in 1:ext[con[2]] for x in 1:ext[con[1]]
+                ); init = 0.0
+            )
+                for i in 1:5, jj in 1:4
+        ]
+        got = materialize(j)
+        @test bitsame(got, want)
+        @test length(unique(got)) > 1
     end
 
-    @testset "join gate and filter still reject the same cells" begin
+    @testset "join gate and filter reject cells" begin
         # A bin-equality join over the output indices of a MAP: rejected cells
-        # must keep the zero-initialized 0̄ on BOTH paths. Under `native` such a
-        # gate drives the sweep from its key matches (geom_on_drive_test.jl);
-        # these cases turn that driver off so the DENSE specialized sweep is the
-        # one compared.
+        # keep the zero-initialized 0̄. Under `native` such a gate drives the
+        # sweep from its key matches (geom_on_drive_test.jl); these cases turn
+        # that driver off so the DENSE sweep is the one checked.
         dense = EA._plan_with(EA._compiler_plan(:native); strict = false, join_on_gate = false)
-        dense_ways(j) = EA._with_compiler_plan(() -> both_ways(j), dense)
+        dense_mat(j) = EA._with_compiler_plan(() -> materialize(j), dense)
         body = _op("+", _ix("A", "i", "j"), "s")
         j = _agg(
             ["i", "j"], ["i" => "I", "j" => "J"], body;
             join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])]
         )
-        fast, ref, nf, nr = dense_ways(j)
-        @test (nf, nr) == (1, 0)
-        @test bitsame(fast, ref)
-        @test any(iszero, fast)            # the gate really rejected something
-        @test !all(iszero, fast)
+        got = dense_mat(j)
+        @test bitsame(got, [KI[i] == KJ[jj] ? A[i, jj] + 1.5 : 0.0 for i in 1:5, jj in 1:4])
+        @test any(iszero, got)            # the gate really rejected something
+        @test !all(iszero, got)
         # ... and the same gate on the CONTRACTED index, with a filter on top.
         jc = _agg(
             ["j"], ["i" => "I", "j" => "J"], _ix("B", "i", "j");
             join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])],
             filter = _op(">", _ix("A", "i", "j"), "thr")
         )
-        fastc, refc, nfc, nrc = dense_ways(jc)
-        @test (nfc, nrc) == (1, 0)
-        @test bitsame(fastc, refc)
-        @test length(unique(fastc)) > 1
+        gotc = dense_mat(jc)
+        wantc = [
+            foldl(+, (B[i, jj] for i in 1:5 if KI[i] == KJ[jj] && A[i, jj] > 0.0); init = 0.0)
+                for jj in 1:4
+        ]
+        @test bitsame(gotc, wantc)
+        @test length(unique(gotc)) > 1
     end
 
     @testset "nested aggregate in the body" begin
         # `:geo_agg` allocates its own frame slots from the shared counter, so
-        # the specialized sweep must not disturb them.
+        # the sweep must not disturb them.
         inner = _agg(String[], ["v" => "V"], _ix("R", "i", "v", 1))
         j = _agg(
             ["i", "j"], ["i" => "I", "j" => "J"],
             _op("*", inner, _ix("A", "i", "j"))
         )
-        fast, ref, nf, nr = both_ways(j)
-        @test (nf, nr) == (1, 0)
-        @test bitsame(fast, ref)
-        @test length(unique(fast)) > 1
+        got = materialize(j)
+        want = [foldl(+, (R[i, v, 1] for v in 1:3); init = 0.0) * A[i, jj] for i in 1:5, jj in 1:4]
+        @test bitsame(got, want)
+        @test length(unique(got)) > 1
     end
 
     @testset "rank-0 output (a scalar reduction)" begin
-        # `out` empty ⇒ a 0-dimensional `Array{Float64,0}`. `CartesianIndices`
-        # yields exactly one empty index, as `Iterators.product()` yields one
-        # empty tuple — the arm must not fall over on N == 0.
+        # `out` empty ⇒ a 0-dimensional `Array{Float64,0}`; `CartesianIndices`
+        # yields exactly one empty index, so the arm must not fall over on N == 0.
         j = _agg(
             String[], ["i" => "I", "j" => "J"],
             _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
         )
-        fast, ref, nf, nr = both_ways(j)
-        @test (nf, nr) == (1, 0)
-        @test bitsame(fast, ref)
-        @test ndims(fast) == 0
+        con = contracted(j)
+        ext = Dict("i" => 5, "j" => 4)
+        terms = (
+            (b = Dict(con[1] => x, con[2] => y); A[b["i"], b["j"]] * B[b["i"], b["j"]])
+                for y in 1:ext[con[2]] for x in 1:ext[con[1]]
+        )
+        got = materialize(j)
+        @test ndims(got) == 0
+        @test isequal(got[], foldl(+, terms; init = 0.0))
     end
 
     @testset "narrowed and generic gather arms agree" begin
@@ -319,33 +302,14 @@ end
         j = _agg(["i", "j"], ["i" => "S", "j" => "T"], pia)
         idx = Dict{String, Int}("S" => 6, "T" => 3)
         rhs = EA.expression_from_json(j)
-        f0, r0 = EA._GEOM_SWEEP_FAST[], EA._GEOM_SWEEP_REF[]
         fast = EA._materialize_geom_array(
             rhs, copy(env), nothing, idx,
             Dict{String, Vector{String}}()
         )
-        @test (EA._GEOM_SWEEP_FAST[] - f0, EA._GEOM_SWEEP_REF[] - r0) == (1, 0)
-        ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(
-                rhs, copy(env), nothing, idx,
-                Dict{String, Vector{String}}()
-            )
-        end
-        @test bitsame(fast, ref)
+        @test bitsame(fast, [cld(p, 2) == q ? 0.25 : 0.0 for p in 1:6, q in 1:3])
         @test count(!iszero, fast) == 6          # each src square sits in one tgt
         @test any(iszero, fast)                  # ... and the rest are exact zero
         @test all(x -> !(x === -0.0), fast)
-    end
-
-    @testset "the interpreter keeps the rank-abstract reference available" begin
-        j = _agg(["i", "j"], ["i" => "I", "j" => "J"], _ix("A", "i", "j"))
-        rhs = EA.expression_from_json(j)
-        f0, r0 = EA._GEOM_SWEEP_FAST[], EA._GEOM_SWEEP_REF[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-        end
-        @test EA._GEOM_SWEEP_REF[] - r0 == 1     # forced onto the reference
-        @test EA._GEOM_SWEEP_FAST[] - f0 == 0
     end
 
 end

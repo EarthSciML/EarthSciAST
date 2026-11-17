@@ -418,23 +418,11 @@ end
 
 # ---- The RANK-SPECIALIZED sweep (the geometry materializer's inner loops) ----
 #
-# The sweeps below were once written inline in `_materialize_geom_array` as
-#
-#     for tup in Iterators.product((1:e for e in exts)...)
-#         ...; arr[tup...] = _eval_node(body, u, nothing, 0.0, Float64)
-#
-# with `exts::Vector{Int}`. Splatting a generator of statically-unknown length
-# leaves the product iterator's type — and so `tup`'s — unknown to inference, and
-# `zeros(Float64, exts...)` is rank-abstract. So every iteration paid a dynamic
-# `iterate`, a boxed heterogeneous `tup`, and a dynamically dispatched `setindex!`
-# through the splat: per-cell interpreter overhead that scales with the grid.
-#
-# The values are unchanged. `CartesianIndices` visits a column-major product in
-# EXACTLY the order `Iterators.product` does (first index fastest), so both the
+# The sweeps run in methods typed `Array{Float64,N}` over `CartesianIndices`:
+# one dynamic dispatch PER SWEEP, and a loop body with a statically known rank.
+# `CartesianIndices` visits a column-major product first index fastest, so the
 # assignment order and — what matters for bit-identity — the CONTRACTION FOLD
-# ORDER are the same term sequence as before. Passing the rank-abstract `arr` to a
-# method typed `Array{Float64,N}` costs one dynamic dispatch PER SWEEP and hands
-# the loop body a statically known rank.
+# ORDER are the term sequence the document defines.
 #
 # `_eval_node`/`_geo_gate_ok` calls stay OUTSIDE any `@inbounds` region: a geometry
 # gather's bounds check is load-bearing (a mis-derived extent must raise, not read
@@ -442,26 +430,12 @@ end
 # frame writes — whose indices come from `CartesianIndices` over the array being
 # written — are elided.
 #
-# That is half the fix. The other half is the `Any`-typed source payload each
-# `:geo_gather` node carries, which costs a dynamic dispatch per array read per
-# cell; it lives in the evaluator arms (`_geo_gather_value`, `_geo_ring_value` —
-# tree_walk/geometry_compile.jl) and is
-# pure dispatch narrowing: the SAME method with the SAME arguments, reached through
-# a concrete `isa` instead of a generic call. It has no kill switch because there
-# is no alternative code path to switch to; the value oracle below covers the loop
-# rewrite, and `geom_sweep_specialize_test.jl` compares the narrowed and generic
-# arms directly by feeding a source type that misses the narrowed ones.
-
-# Off (`compiler=:interpreter`), the sweep takes the original rank-abstract
-# loops, which is the differential oracle: the same array materialized by the
-# two compilers must be `isequal` cell for cell.
-_geom_sweep_specialize_disabled() = !_compiler_plan_now().geom_sweep_specialize
-
-# ENGAGEMENT DIAGNOSTICS. FAST counts sweeps run rank-specialized, REF those
-# run on the rank-abstract reference. Purely observational — reset (`[] = 0`)
-# around a build to attribute counts to one run.
-const _GEOM_SWEEP_FAST = Ref{Int}(0)
-const _GEOM_SWEEP_REF = Ref{Int}(0)
+# The `Any`-typed source payload each `:geo_gather` node carries is narrowed in
+# the evaluator arms (`_geo_gather_value`, `_geo_ring_value` —
+# tree_walk/geometry_compile.jl): the SAME method with the SAME arguments,
+# reached through a concrete `isa` instead of a generic call.
+# `geom_sweep_specialize_test.jl` checks the sweeps against hand-computed arrays
+# and the narrowed arms against a source type that misses them.
 
 # MAP sweep (no contracted indices), specialized on the output rank `N`.
 function _geom_sweep_map!(
@@ -507,52 +481,6 @@ function _geom_sweep_contract!(
             acc = fold(acc, _geo_body_eval(body, u))
         end
         @inbounds arr[I] = acc
-    end
-    return arr
-end
-
-# The REFERENCE sweeps — the original loops, verbatim, hoisted into functions.
-# They are what a build with the specialization off runs, and what the
-# differential compares against. Note what they are and are not: a VALUE oracle, not a
-# perf baseline. Hoisting the loops into a method lets Julia specialize on the
-# concrete `arr` it is handed, so these do not reproduce the old cost exactly —
-# they keep the `Iterators.product((1:e for e in exts)...)` splat (which is
-# where most of it lived) but not the rank-abstract `setindex!`. What matters
-# for their job is that the term sequence is the ORIGINAL one.
-function _geom_sweep_map_ref!(
-        arr, exts::Vector{Int}, body, gates, filt,
-        u::Vector{Float64}, nout::Int, ov = nothing
-    )
-    for tup in Iterators.product((1:e for e in exts)...)
-        @inbounds for k in 1:nout
-            u[k] = Float64(tup[k])
-        end
-        _geo_ov_ok(ov, u) || continue
-        _geo_gate_ok(gates, filt, u) || continue
-        arr[tup...] = _eval_node(body, u, nothing, 0.0, Float64)
-    end
-    return arr
-end
-
-function _geom_sweep_contract_ref!(
-        arr, exts::Vector{Int}, cexts::Vector{Int},
-        body, gates, filt, u::Vector{Float64},
-        nout::Int, ncon::Int, init, fold, ov = nothing
-    )
-    for tup in Iterators.product((1:e for e in exts)...)
-        @inbounds for k in 1:nout
-            u[k] = Float64(tup[k])
-        end
-        acc = init
-        for ct in Iterators.product((1:e for e in cexts)...)
-            @inbounds for k in 1:ncon
-                u[nout + k] = Float64(ct[k])
-            end
-            _geo_ov_ok(ov, u) || continue
-            _geo_gate_ok(gates, filt, u) || continue
-            acc = fold(acc, _eval_node(body, u, nothing, 0.0, Float64))
-        end
-        arr[tup...] = acc
     end
     return arr
 end
@@ -1042,13 +970,8 @@ function _materialize_geom_array(
     # A candidate-driven MAP writes only the cells its pairs reach.
     arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
-    # The sweep counters describe the DENSE sweeps only; a candidate-driven
-    # sweep runs neither of them and is counted by `_GEOM_OVERLAP_DRIVE`.
-    # The sweep-specialization gate therefore selects the loop SHAPE of a dense
-    # sweep; the overlap gate is what returns an overlap-gated array to the
-    # ungated dense path.
-    fast = !_geom_sweep_specialize_disabled()
-    bump() = fast ? (_GEOM_SWEEP_FAST[] += 1) : (_GEOM_SWEEP_REF[] += 1)
+    # A candidate-driven sweep is counted by `_GEOM_OVERLAP_DRIVE`; the overlap
+    # gate is what returns an overlap-gated array to the ungated dense path.
     if isempty(contract)
         if drive !== nothing
             rp = Tuple(drive.restpos)
@@ -1058,12 +981,8 @@ function _materialize_geom_array(
                 drive.pos_l, drive.pos_r, rp,
                 CartesianIndices(map(k -> exts[k], rp))
             )
-        elseif fast
-            bump()
-            _geom_sweep_map!(arr, body, gates, filt, u, ovdense)
         else
-            bump()
-            _geom_sweep_map_ref!(arr, exts, body, gates, filt, u, nout, ovdense)
+            _geom_sweep_map!(arr, body, gates, filt, u, ovdense)
         end
     else
         init, fold = _geo_reduce_fold(faq.reduce, faq.semiring)
@@ -1071,7 +990,6 @@ function _materialize_geom_array(
             _geo_index_extent(faq.ranges[c], index_sets, derived_extents)
                 for c in contract
         ]
-        ncon = length(contract)
         if drive !== nothing
             _geom_sweep_restrict_contract!(
                 arr, body, gates, filt, u,
@@ -1080,18 +998,11 @@ function _materialize_geom_array(
                 Tuple(cexts), drive.pos_r, nout,
                 Float64(init), fold
             )
-        elseif fast
-            bump()
+        else
             _geom_sweep_contract!(
                 arr, body, gates, filt, u,
                 CartesianIndices(Tuple(cexts)), Float64(init), fold,
                 ovdense
-            )
-        else
-            bump()
-            _geom_sweep_contract_ref!(
-                arr, exts, cexts, body, gates, filt, u,
-                nout, ncon, init, fold, ovdense
             )
         end
     end

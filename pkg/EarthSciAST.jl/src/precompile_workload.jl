@@ -228,7 +228,7 @@ const _WORKLOAD_DOCS = (
     _VI_ENUM_VISITS[] = 0
     _SETUP_MAP_FASTPATH_HITS[] = 0
     for r in (
-            _GEOM_SWEEP_FAST, _GEOM_SWEEP_REF, _GEOM_OVERLAP_DRIVE,
+            _GEOM_OVERLAP_DRIVE,
             _GEOM_OVERLAP_GATE_ONLY, _GEOM_OVERLAP_NONE, _GEOM_EQ_DRIVE,
         )
         r[] = 0

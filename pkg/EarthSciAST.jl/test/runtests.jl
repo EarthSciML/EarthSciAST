@@ -374,7 +374,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs reference areas
     include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
     include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
-    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
+    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == hand-computed arrays, bitwise
     include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
     include("overlap_gated_template_test.jl")  # the ISRM binning shape: overlap-gated overlap_area_planar, native == interpreter
     include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
