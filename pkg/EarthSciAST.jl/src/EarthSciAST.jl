@@ -92,6 +92,7 @@ include("elementwise_lift.jl")
 # raw-JSON traversal helpers
 include("json_walk.jl")
 include("enum_lowering.jl")
+include("templates/declarations.jl")
 include("templates/rewrite.jl")
 include("templates/metaparameters.jl")
 include("templates/imports.jl")

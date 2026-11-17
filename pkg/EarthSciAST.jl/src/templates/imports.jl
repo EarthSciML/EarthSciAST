@@ -30,14 +30,6 @@ stable §9.6.6 codes so they are machine-checkable across bindings.
 
 using OrderedCollections: OrderedDict
 
-"""
-Maximum template-body reference-chain depth (counted in templates along the
-longest chain, so a 33-template chain is rejected) before a file is rejected
-with `template_body_expansion_too_deep` (esm-spec §9.7.3). Pinned identically
-across all bindings.
-"""
-const MAX_TEMPLATE_EXPANSION_DEPTH = 32
-
 const _COMPONENT_KINDS = ("models", "reaction_systems")
 
 # A template-library file MUST NOT declare any of these (esm-spec §9.7.1).
@@ -131,116 +123,6 @@ function _reject_impure_template_library(raw_data)
                 " (esm-spec §9.7.1); templates declared there are visible to no component. Declare them in the component's own `expression_templates` block (§9.6.1), or move them to a template-library file and import it with `expression_template_imports` (§9.7.2)"
         )
     )
-end
-
-# ---------------------------------------------------------------------------
-# Registration-time body composition (esm-spec §9.7.3)
-# ---------------------------------------------------------------------------
-
-# The `name` of every `apply_expression_template` node in a template body
-# (document order) — the §9.7.3 body-reference edges.
-function _collect_apply_names!(out::Vector{String}, x)
-    _walk_json(x) do _, n
-        _is_array(n) && return _may_hold_object(n)
-        _is_object(n) || return true
-        op = _raw_get(n, "op")
-        if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-            nm = _raw_get(n, "name")
-            nm !== nothing && push!(out, string(nm))
-        end
-        return true
-    end
-    return out
-end
-
-"""
-    _check_template_body_graph(templates, scope)
-
-Registration-time body checking (esm-spec §9.7.3):
-template bodies MAY reference other in-scope MATCH-LESS templates via
-`apply_expression_template` nodes. Builds the body-reference graph, rejects
-cycles (`apply_expression_template_recursive_body`), references to undeclared
-or `match`-bearing templates (`apply_expression_template_unknown_template`),
-and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
-(`template_body_expansion_too_deep`).
-
-Bodies are not inlined: the references are preserved and denote their
-expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
-separately by [`_template_target_bearing`](@ref). This runs BEFORE the §9.6.3
-fixpoint ever consults a `match` rule.
-"""
-function _check_template_body_graph(templates::AbstractDict{String, Any}, scope::String)
-    isempty(templates) && return
-    refs = Dict{String, Vector{String}}()
-    for (name, decl) in templates
-        body = _raw_get(decl, "body")
-        refs[name] = _collect_apply_names!(String[], body)
-    end
-    any(!isempty, values(refs)) || return
-
-    for name in sort(collect(keys(refs)))
-        for r in refs[name]
-            tdecl = get(templates, r, nothing)
-            tdecl === nothing && throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                    "$scope.expression_templates.$name: body references undeclared template '$r' (esm-spec §9.7.3)"
-                )
-            )
-            if _raw_get(tdecl, "match") !== nothing
-                throw(
-                    ExpressionTemplateError(
-                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-                        "$scope.expression_templates.$name: body references '$r', a `match` " *
-                            "rewrite rule — only match-less templates are invocable by name (esm-spec §9.7.3)"
-                    )
-                )
-            end
-        end
-    end
-
-    # DFS over the reference graph: cycle detection and the chain-depth bound.
-    state = Dict{String, Int}()   # 1 = on stack, 2 = done
-    depth = Dict{String, Int}()   # templates on the longest chain from this node
-    chain = String[]
-    function visit(name::String)::Int
-        st = get(state, name, 0)
-        if st == 1
-            cyc = vcat(chain[findfirst(==(name), chain):end], [name])
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
-                    "$scope.expression_templates: template-body reference cycle " *
-                        "$(join(cyc, " -> ")) (esm-spec §9.7.3)"
-                )
-            )
-        end
-        st == 2 && return depth[name]
-        state[name] = 1
-        push!(chain, name)
-        d = 1
-        for r in refs[name]
-            d = max(d, 1 + visit(r))
-        end
-        pop!(chain)
-        state[name] = 2
-        depth[name] = d
-        d > MAX_TEMPLATE_EXPANSION_DEPTH && throw(
-            ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_BODY_EXPANSION_TOO_DEEP,
-                "$scope.expression_templates.$name: body-reference chain of $d templates " *
-                    "exceeds MAX_TEMPLATE_EXPANSION_DEPTH=$MAX_TEMPLATE_EXPANSION_DEPTH (esm-spec §9.7.3)"
-            )
-        )
-        return d
-    end
-    for name in sort(collect(keys(refs)))
-        visit(name)
-    end
-
-    # The bodies keep their `apply_expression_template` references; `Expand`
-    # (§9.6.4 rule 2) or the eager pre-pass (§9.6.4 rule 3) consume them later.
-    return
 end
 
 # ---------------------------------------------------------------------------
