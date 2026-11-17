@@ -289,17 +289,13 @@ pub struct PreparedBuild {
     /// document: several models and none selected, built as one
     /// dot-namespaced system whose names (`Model.var`) are already qualified.
     pub model_name: Option<String>,
-    /// The metaparameter bindings the build closed [`Self::doc`] with at
-    /// load: the caller's and the discovered loader extents, each one the
-    /// document still declares. Loading [`Self::doc`] again needs the same
-    /// bindings to size its index sets as the build sized them.
-    pub(crate) metaparameters: BTreeMap<String, i64>,
-    /// The whole-document build's flattened system, when the typed document
-    /// it was flattened from is exactly what loading [`Self::doc`] with no
-    /// loader-API metaparameters gives — the load the Problem makes next — so
-    /// the compile path may use it in place of flattening that document
-    /// again. `None` for a one-model build, and when the build bound
-    /// metaparameters at load.
+    /// [`Self::doc`] loaded, closed over the caller's metaparameters and the
+    /// discovered loader extents that it still declares: the one typed form
+    /// of the prepared document, which the Problem compiles.
+    pub(crate) file: crate::EsmFile,
+    /// The whole-document build's flattened system, flattened from
+    /// [`Self::file`], so the compile path may use it in place of flattening
+    /// that document again. `None` for a one-model build.
     pub(crate) flattened: Option<crate::flatten::FlattenedSystem>,
     /// What the Problem keeps of this build: the observed fields, the
     /// value-invention members and extents, the gated provider keys and the
@@ -1423,8 +1419,8 @@ struct BuildState<'o> {
     /// The built model's variable names, and the spelling's rule for
     /// mapping a caller key onto them.
     keys: KeyResolver,
-    /// See [`PreparedBuild::metaparameters`].
-    metaparameters: BTreeMap<String, i64>,
+    /// See [`PreparedBuild::file`].
+    file: crate::EsmFile,
     /// See [`PreparedBuild::flattened`].
     flattened: Option<crate::flatten::FlattenedSystem>,
     index_sets: HashMap<String, IndexSet>,
@@ -1552,10 +1548,9 @@ impl<'o> BuildState<'o> {
                 .filter(|(k, _)| declared.is_some_and(|d| d.contains_key(k)))
                 .collect()
         };
-        let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
             base_path: opts.problem.base_path.clone(),
-            metaparameters: metaparameters.clone(),
+            metaparameters,
         };
         let file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
@@ -1591,7 +1586,7 @@ impl<'o> BuildState<'o> {
                 )
                 .map_err(SimulateError::Compile)?;
                 let bound = flat.metadata.bound_inputs.clone();
-                (normalized, unbound_load.then_some(flat), Some(bound))
+                (normalized, Some(flat), Some(bound))
             }
         };
         let NormalizedModel {
@@ -1614,7 +1609,7 @@ impl<'o> BuildState<'o> {
             model,
             spelling,
             keys,
-            metaparameters,
+            file,
             flattened,
             index_sets,
             param_vals,
@@ -2672,7 +2667,7 @@ impl<'o> BuildState<'o> {
                 Spelling::ModelLocal(m) => Some(m),
                 Spelling::Qualified => None,
             },
-            metaparameters: self.metaparameters,
+            file: self.file,
             flattened: self.flattened,
             products: crate::problem::BuildProducts {
                 fields: self.fields,

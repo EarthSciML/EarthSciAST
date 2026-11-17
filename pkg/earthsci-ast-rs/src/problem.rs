@@ -2037,15 +2037,8 @@ fn build_problem(
     let mut flat_only: Option<&FlattenedSystem> = None;
     // `owned_json` is exactly what the parser made of the file's text, so it
     // nests within the parser's recursion limit (see stage (3)).
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut json_from_text = false;
-    // Whether the build pipeline rewrote the document. Only a rewritten one
-    // may fail the typed parse and still build (see stage (3)).
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut rewritten_by_pipeline = false;
-    // The metaparameters the build pipeline closed its load with; the load
-    // of the document it returns closes them again.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut pipeline_metaparameters: BTreeMap<String, i64> = BTreeMap::new();
 
     // The file's text, while `owned_json` is still exactly its parse.
     let mut source_text: Option<String> = None;
@@ -2269,11 +2262,13 @@ fn build_problem(
                 };
                 build_time_row(compiler, rule, r.kind, route)
             }));
+            // The pipeline loaded the document it prepared, closed over its
+            // metaparameters: that typed form is the one compiled below, and
+            // the raw form is kept for `EsmProblem::document`.
             *raw = prepared.doc;
+            owned_file = Some(prepared.file);
             json_from_text = false;
             source_text = None;
-            rewritten_by_pipeline = true;
-            pipeline_metaparameters = prepared.metaparameters;
             // The whole-document build (several models, none selected) keeps
             // `None`: its names are qualified already, as on the compile path.
             model_name = prepared.model_name;
@@ -2303,20 +2298,12 @@ fn build_problem(
             // number reads back as the value written -- except that the parser
             // refuses nesting past its recursion limit, so only a document
             // nested that deep still takes the round trip, to get the same
-            // refusal. A document parsed from a file's text and not rewritten
-            // since is within that limit already.
-            // The loader-API metaparameters close the AUTHORED document
-            // (esm-spec §9.7.6 site 4). A pipeline-rewritten one is closed
-            // with what the pipeline closed its own load with — the caller's
-            // bindings and the discovered loader extents that it still
-            // declares — so both loads size every index set alike.
+            // refusal. A document parsed from a file's text is within that
+            // limit already. The loader-API metaparameters close the authored
+            // document (esm-spec §9.7.6 site 4).
             let load_opts = crate::parse::LoadOptions {
                 base_path: opts.base_path.clone(),
-                metaparameters: if rewritten_by_pipeline {
-                    std::mem::take(&mut pipeline_metaparameters)
-                } else {
-                    opts.metaparameters.clone()
-                },
+                metaparameters: opts.metaparameters.clone(),
             };
             let loaded = if json_from_text && source_text.is_some() {
                 // The Problem keeps the file's text, so the loader may consume
@@ -2337,35 +2324,21 @@ fn build_problem(
                 })?;
                 crate::parse::load_string_with_options(&text, &load_opts)
             };
+            // A document failing to load — a schema violation, an unresolved
+            // import, a removed op, a version the library does not read — is
+            // fatal under every `Rhs` mode: esm-libraries-spec §2.1a says a
+            // library MUST NOT silently accept an invalid file, and a Problem
+            // built from one would answer for a document that does not load.
             match loaded {
                 Ok(f) => owned_file = Some(f),
                 Err(e) => {
-                    // The AUTHORED document failing to load — a schema
-                    // violation, an unresolved import, a removed op, a version
-                    // the library does not read — is fatal under every `Rhs`
-                    // mode: esm-libraries-spec §2.1a says a library MUST NOT
-                    // silently accept an invalid file, and a Problem built
-                    // from one would answer for a document that does not load.
-                    if !rewritten_by_pipeline {
-                        let details = format!("loading the document: {e}");
-                        return Err(SimulateError::Compile(match e.code() {
-                            Some(code) => {
-                                crate::compile_error::CompileError::coded_build_err(code, details)
-                            }
-                            None => crate::compile_error::CompileError::build_err(details),
-                        }));
-                    }
-                    // A document the build pipeline rewrote may no longer be a
-                    // *typed* ESM document (the pushdown desugar emits engine
-                    // constructs). Its build-time products are still valid, so
-                    // this is only fatal when the caller wanted a solve.
-                    if opts.rhs == Rhs::Always {
-                        return Err(SimulateError::Compile(
-                            crate::compile_error::CompileError::build_err(format!(
-                                "typed parse of the prepared document: {e}"
-                            )),
-                        ));
-                    }
+                    let details = format!("loading the document: {e}");
+                    return Err(SimulateError::Compile(match e.code() {
+                        Some(code) => {
+                            crate::compile_error::CompileError::coded_build_err(code, details)
+                        }
+                        None => crate::compile_error::CompileError::build_err(details),
+                    }));
                 }
             }
         }
