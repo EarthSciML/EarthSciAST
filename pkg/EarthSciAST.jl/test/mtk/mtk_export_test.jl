@@ -201,11 +201,10 @@ end
     walker(unknown_op, seen, gaps, "equations[0].rhs")
 
     @test !isempty(gaps)
-    @test gaps[1].bead_id == "gt-p3ep"
+    @test gaps[1].bead_id == "unknown_operator"
     @test occursin("sigmoid", gaps[1].description)
 
-    # And confirm the full mtk2esm emits TODO_GAP in reference.notes when
-    # a brownian-declared system is exported (uses the SDESystem path gap).
+    # And confirm the full mtk2esm folds the metadata into reference.notes.
     vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.0),
         "k" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.5),
@@ -339,7 +338,7 @@ end
 end
 
 # ---------------------------------------------------------------------
-# min/max operator round-trip — gt-p3ep gap resolution
+# min/max operator round-trip
 # ---------------------------------------------------------------------
 
 @testset "mtk2esm: min/max operators round-trip" begin
@@ -446,4 +445,27 @@ end
     inner_min = eq["rhs"]["args"][2]
     @test inner_min["op"] == "min"
     @test length(inner_min["args"]) == 2
+end
+
+@testset "mtk2esm: a derivative keeps the variable it differentiates in" begin
+    ext = Base.get_extension(ESM, :EarthSciASTMTKExt)
+    x = Symbolics.variable(:x)
+    u = Symbolics.variable(:u)
+    Dx = Symbolics.Differential(x)
+    e = ext._symbolic_to_esm_export(Dx(u), Set(["u"]))
+    @test e isa OpExpr && e.op == "D" && e.wrt == "x"
+    @test e.args[1] isa VarExpr && e.args[1].name == "u"
+    e2 = ext._symbolic_to_esm_export(Dx(Dx(u)), Set(["u"]))
+    @test e2.op == "D" && e2.wrt == "x"
+    @test e2.args[1] isa OpExpr && e2.args[1].op == "D" && e2.args[1].wrt == "x"
+end
+
+@testset "Model(sys) and mtk2esm build the same model" begin
+    sys = _toy_ode_system(:Same)
+    m = ESM.Model(sys)
+    out = mtk2esm(sys)
+    @test length(m.equations) == length(out["models"]["Same"]["equations"])
+    @test length(m.variables) == length(out["models"]["Same"]["variables"])
+    # Defaults reach the export from the system's initial conditions.
+    @test any(v -> v.default == 0.5, values(m.variables))
 end
