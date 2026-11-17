@@ -1804,7 +1804,7 @@ _subscript_from_counters(::IntExpr, ::Set{String}) = true
 _subscript_from_counters(e::NumExpr, ::Set{String}) = isinteger(e.value)
 function _subscript_from_counters(e::OpExpr, bound_syms::Set{String})
     op = e.op
-    if op == "+" || op == "-" || op == "*" || (op == "mod" && length(e.args) == 2)
+    if op == "+" || op == "-" || op == "*"
         return all(a -> _subscript_from_counters(a, bound_syms), e.args)
     elseif (op == "floor" || op == "ceil") && length(e.args) == 1
         q = e.args[1]

@@ -264,8 +264,6 @@ function _index_int(n::_Node)::Int
                 return op === :floor ? fld(a, b) : cld(a, b)
             end
             return _index_int(q)
-        elseif op === :mod && length(c) == 2
-            return mod(_index_int(c[1]), _index_int(c[2]))
         elseif op === :/ && length(c) == 2
             # A quotient not under `floor`/`ceil` (a const gather's subscript;
             # a live gather's never has one, `_subscript_from_counters`). The
