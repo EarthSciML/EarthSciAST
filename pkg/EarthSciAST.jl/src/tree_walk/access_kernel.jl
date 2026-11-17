@@ -1079,9 +1079,16 @@ _alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
 #   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
 #                               target the same `du` slot; the section never
 #                               chunks (see `_cg_covered_outs_disjoint`)
+#
+# Problems first called from different tasks tally concurrently, so every
+# write takes `_THREAD_TALLY_LOCK`.
 const _THREAD_TALLY = Dict{Symbol, Int}()
-_tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
-_reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
+const _THREAD_TALLY_LOCK = ReentrantLock()
+_tally_thread!(k::Symbol) = lock(_THREAD_TALLY_LOCK) do
+    _THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1
+    nothing
+end
+_reset_thread_tally!() = lock(() -> (empty!(_THREAD_TALLY); nothing), _THREAD_TALLY_LOCK)
 
 # The serial work floor: the least work, in node evaluations (the `work` of a
 # section's `_SecTCache`), one chunk of a thread dispatch must carry. A section
