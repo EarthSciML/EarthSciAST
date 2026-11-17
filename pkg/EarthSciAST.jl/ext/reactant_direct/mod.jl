@@ -47,6 +47,10 @@
 #               reaches back into the package's Problem surface.
 
 import EarthSciAST
+# The entry points are declared in src/compiler_xla.jl; the methods are here.
+import EarthSciAST: direct_rhs, direct_rhs_with_buffers, direct_state,
+    direct_params, direct_time, direct_buffers, direct_client, direct_devices,
+    direct_shard, direct_devicecount, direct_platform
 const _E = EarthSciAST
 const _MLIR = Reactant.MLIR
 const _hlo = Reactant.MLIR.Dialects.stablehlo

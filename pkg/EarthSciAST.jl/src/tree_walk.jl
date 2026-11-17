@@ -77,3 +77,4 @@ include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate r
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build
+include("tree_walk/ir_contract.jl")      #      what a back end may rely on in `_CompiledIR`

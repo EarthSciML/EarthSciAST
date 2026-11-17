@@ -86,7 +86,7 @@ mutable struct _DECtx
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing, _DEVal}}
-    static::IdDict{_E._Node, Bool}           # memoized "this subtree is host-computable"
+    static::_E._NodeMap{Bool}                # memoized "this subtree is host-computable"
     bstatic::IdDict{Any, Bool}               # the same, for a lane-batched subtree
     opts::DirectEmitOptions
     names::Dict{Int, String}                 # flat slot -> element name (for the rule text)
@@ -140,7 +140,7 @@ function _DECtx(
         n_states, p, t, ue, Dict{UInt64, _DEVal}(),
         Dict{Vector{Float64}, _DEVal}(), bufs, hostkeys,
         Union{Nothing, _DEVal}[nothing for _ in hostkeys],
-        IdDict{_E._Node, Bool}(), IdDict{Any, Bool}(),
+        _E._NodeMap{Bool}(), IdDict{Any, Bool}(),
         opts, names, "the right-hand side", String[],
         Dict{
             Tuple{Vector{_MLIR.IR.Value}, Bool},

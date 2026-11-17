@@ -61,7 +61,7 @@ direct StableHLO emitter, and return a callable `(u, p, t) -> du` to compile:
 
 ```julia
 fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
-d   = EarthSciASTReactantExt.direct_rhs(fo; var_map = vmap)
+d   = EarthSciAST.direct_rhs(fo; var_map = vmap)
 ur  = Reactant.ConcreteRArray(u0)
 pr  = NamedTuple{keys(p)}(map(Reactant.ConcreteRNumber, values(p)))
 tr  = Reactant.ConcreteRNumber(0.0)
@@ -110,7 +110,7 @@ function direct_rhs(
         end
     end
     cl = direct_client(client)
-    n_states = getfield(f.rhs, :n_states)::Int
+    n_states = f.rhs.n_states
     shard = _de_resolve_shard(sharding, cl, n_states, names)
     return _de_register_place!(
         DirectRHS{typeof(f), shard !== nothing}(f, names, Dict{Symbol, Int}()),
@@ -126,7 +126,7 @@ The explicit-buffers form:
 
 ```julia
 fo  = EarthSciAST._build_evaluator(model; form = :oop, param_arrays = forcing)[1]
-db  = EarthSciASTReactantExt.direct_rhs_with_buffers(fo)
+db  = EarthSciAST.direct_rhs_with_buffers(fo)
 dev = map(Reactant.ConcreteRArray, forcing_buffers(fo))
 xla = Reactant.@compile db(ur, pr, tr, dev)
 # at each cadence boundary, after the host refresh:
@@ -151,8 +151,8 @@ function _de_run(
         hostkeys::Vector{Vector{Float64}}
     )
     rhs = d.f.rhs
-    n_states = getfield(rhs, :n_states)::Int
-    n_total = getfield(rhs, :n_total)::Int
+    n_states = rhs.n_states
+    n_total = rhs.n_total
     length(u) == n_states ||
         _de_refuse_at(
         "the right-hand side",
