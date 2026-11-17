@@ -9,36 +9,6 @@ using JSON3
 using JSONSchema
 
 
-"""
-    ParseError
-
-Exception thrown when JSON parsing fails.
-"""
-struct ParseError <: EarthSciASTError
-    message::String
-    original_error::Union{Exception, Nothing}
-    # MACHINE-READABLE half, defaulting empty. A few parse/load-time rejections
-    # are ALSO pinned structural findings the conformance harness reports as
-    # `(code, path)` — `ic_in_reaction_system` at
-    # `/reaction_systems/<R>/constraint_equations/<i>` is the current one — so
-    # the throw carries everything `validate` needs to render that finding
-    # instead of only an opaque string. An empty `code` marks an ordinary
-    # parse failure with no pinned structural shape.
-    code::String
-    path::String
-    details::Dict{String, Any}
-
-    ParseError(
-        message::String, original_error = nothing;
-        code::AbstractString = "", path::AbstractString = "",
-        details::AbstractDict = Dict{String, Any}()
-    ) =
-        new(message, original_error, String(code), String(path), Dict{String, Any}(details))
-end
-
-Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
-
-
 # Recursively convert any JSON carrier into plain-`Dict{String,Any}` /
 # `Vector{Any}` containers — the UNORDERED deep-plain normalizer, kept (beside
 # the order-preserving `_to_ordered` in json_walk.jl) for two jobs where key

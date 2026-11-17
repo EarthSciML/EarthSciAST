@@ -575,7 +575,8 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
                 "[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(faq_at): the " *
                     "`faq` op arrives at esm 1.1.0; file declares $(declared). " *
                     "Raise the declared version. " *
-                    "See docs/content/rfcs/faq-node-rename.md."
+                    "See docs/content/rfcs/faq-node-rename.md.";
+                code = ERROR_CODES.FAQ_VERSION_TOO_OLD, path = faq_at
             )
         )
     end

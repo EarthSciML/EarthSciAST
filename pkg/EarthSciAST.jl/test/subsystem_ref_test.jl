@@ -9,8 +9,10 @@ end
 @testset "Subsystem Reference Resolution Tests" begin
 
     @testset "SubsystemRefError construction" begin
-        err = EarthSciAST.SubsystemRefError("test error")
+        err = EarthSciAST.SubsystemRefError("test error"; code = "unresolved_subsystem_ref")
         @test err.message == "test error"
+        @test err.code == "unresolved_subsystem_ref"
+        @test (err.path, err.file) == ("", "")
         @test err isa Exception
     end
 

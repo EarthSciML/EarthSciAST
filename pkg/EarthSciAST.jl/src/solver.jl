@@ -551,11 +551,8 @@ field, so the §2.2.2 chain holds however the problem was built. Returns
 document at all (the direct-`f!` construction paths).
 """
 function _document_solver(prob)
-    doc = try
-        getfield(prob, :run_doc)
-    catch
-        return nothing
-    end
+    isdefined(prob, :run_doc) || return nothing
+    doc = getfield(prob, :run_doc)
     doc isa AbstractDict || return nothing
     return coerce_solver(get(doc, "solver", nothing))
 end

@@ -352,6 +352,10 @@ const ERROR_CODES = (
     # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
+    # A document spells `"op": "faq"` while declaring esm below 1.1.0, the
+    # version `faq` arrives at; refused at the wire boundary (CONFORMANCE_SPEC
+    # §7, esm-spec §4.2 "The `faq` tag").
+    FAQ_VERSION_TOO_OLD = "faq_version_too_old",
     # A Markdown or Typst source text is not an ESM document: an unknown word,
     # an ambiguous juxtaposition, an unbalanced delimiter, an unclosed display,
     # container or directive, and every other malformed input the document

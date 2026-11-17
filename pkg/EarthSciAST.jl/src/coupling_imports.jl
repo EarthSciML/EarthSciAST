@@ -521,16 +521,11 @@ function expand_coupling_imports(
         lib = if load_ref === nothing
             _read_coupling_library(src, _ref_base(base), entry.ref)
         else
-            raw = try
+            raw = _rebrand(
+                ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
+                "coupling_import ref '$(entry.ref)' failed to load"
+            ) do
                 load_ref(entry.ref, base)
-            catch e
-                (e isa ExpressionTemplateError || _is_resource_error(e)) && rethrow()
-                throw(
-                    ExpressionTemplateError(
-                        ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,
-                        "coupling_import ref '$(entry.ref)' failed to load: $(e)"
-                    )
-                )
             end
             _library_wire_form(raw)
         end

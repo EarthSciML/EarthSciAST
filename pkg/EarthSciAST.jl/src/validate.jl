@@ -965,16 +965,12 @@ loading it.
 [`validate`](@ref) itself takes a TYPED document in every binding (API_SPEC.md
 §8 item 13); this is the file convenience, under a name that says it does I/O.
 
-An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
-pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
-`/models/<M>/subsystems/<S>` with `details` — but Julia could only ever raise it
-as an exception out of the loader, so `validate(load_path(path))` never ran and the
-finding was unreportable in the shape everyone else reports it (finding (f)).
-
-`load_path` still throws: a document whose mount does not resolve genuinely cannot be
-built, and callers that want the exception keep it. This entry point is the one
-the conformance harness wants — it renders the throw as the structural error it
-always was.
+A load-time refusal that carries a code (an unresolvable or ambiguous
+subsystem ref, which the corpus pins at `/models/<M>/subsystems/<S>`, a version
+gate, a template or import diagnostic) is returned as a structural finding
+([`load_failure_structural_error`](@ref)) instead of raised. `load_path` still
+throws, for callers that want the exception. A schema violation or malformed
+JSON still raises here.
 """
 function validate_path(path::AbstractString)::ValidationResult
     file = try
@@ -1014,8 +1010,8 @@ AND for malformed text, and neither raises — so three channels are rendered:
 - an ordinary `ParseError` (no `code`) is malformed JSON: not a schema
   violation of any node, so it becomes one `SchemaError` at the document root
   under the `parse` keyword, which is where Go and Python put it too;
-- a rejection carrying a `(code, path)` shape — an unresolvable `{ref}`, the
-  §11.4.1 `ic_in_reaction_system` case — becomes a `StructuralError`, through
+- a load diagnostic carrying a code (an unresolvable `{ref}`, the §11.4.1
+  `ic_in_reaction_system` case, a version gate) becomes a `StructuralError`, through
   the same [`load_failure_structural_error`](@ref) [`validate_path`](@ref)
   uses.
 
@@ -1057,41 +1053,42 @@ end
 """
     load_failure_structural_error(e) -> Union{StructuralError,Nothing}
 
-Render a LOAD/PARSE-time rejection that is ALSO a pinned structural finding as
-the `StructuralError` the conformance contract expects, or `nothing` for an
-ordinary failure that carries no `(code, path)` shape.
+Render a load-time rejection as the `StructuralError` the conformance contract
+expects, or `nothing` for a failure that carries no code. A load can refuse a
+document before the typed `validate()` pass runs, which would otherwise leave
+`structural_errors` empty although the document is invalid.
 
-Two rejections happen before the typed `validate()` pass can run, so they would
-otherwise leave `structural_errors` empty even though the document is invalid
-(brief §"Finding raised at LOAD time"):
+Every load diagnostic (`ParseError`, `ExpressionTemplateError`,
+`SubsystemRefError`) with a non-empty `code` is rendered with its `code`,
+`message`, `path` and `details`. A `SubsystemRefError` from the
+`subsystems.<k>` form is reported at its mount site,
+`/models/<parent>/subsystems/<sub>`, with `ref`, `subsystem` and `parent_model`
+in its details. A `ParseError` without a code (malformed JSON, a coercion
+failure) gives `nothing`.
 
-- a `SubsystemRefError` — an unresolvable / ambiguous `{ref}` mount — carries its
-  code and mount site (`/models/<parent>/subsystems/<sub>`);
-- a structured `ParseError` (`code` non-empty) — the §11.4.1
-  `ic_in_reaction_system` rejection, and the `removed_op` rejection of a
-  construct esm 2.0.0 removed — carries its own code, pointer and details.
-
-Both the file entry point [`validate_path`](@ref) and the
-conformance producer route load failures through here so the finding is reported
-in the same shape every other binding reports it.
+[`validate_path`](@ref), [`validate_text`](@ref) and the conformance producer
+route load failures through here.
 """
 function load_failure_structural_error(e)::Union{StructuralError, Nothing}
+    e isa _LoadDiagnostic || return nothing
+    isempty(e.code) && return nothing
     if e isa SubsystemRefError
         return StructuralError(
-            isempty(e.parent_model) ? "" :
+            isempty(e.parent_model) ? e.path :
                 "/models/$(e.parent_model)/subsystems/$(e.subsystem)",
             e.message,
             e.code,
-            Dict{String, Any}(
-                "ref" => e.ref,
-                "subsystem" => e.subsystem,
-                "parent_model" => e.parent_model
+            merge(
+                Dict{String, Any}(
+                    "ref" => e.ref,
+                    "subsystem" => e.subsystem,
+                    "parent_model" => e.parent_model
+                ),
+                e.details
             )
         )
-    elseif e isa ParseError && !isempty(e.code)
-        return StructuralError(e.path, e.message, e.code, e.details)
     end
-    return nothing
+    return StructuralError(e.path, e.message, e.code, e.details)
 end
 
 # ============================================================================

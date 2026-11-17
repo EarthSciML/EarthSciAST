@@ -1,39 +1,212 @@
-# The error type of the load pipeline (`ExpressionTemplateError`) and the
-# subset of `ERROR_CODES` it is raised with.
+# The error types of the load pipeline and the one shape they share.
+
+"""
+    _LoadDiagnostic <: EarthSciASTError
+
+Supertype of the errors a load raises about the document it is reading:
+[`ParseError`](@ref), [`ExpressionTemplateError`](@ref) and
+[`SubsystemRefError`](@ref). Each subtype leads with the same five fields, in
+this order, and puts anything of its own after them:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `code` | `String` | the diagnostic code from [`ERROR_CODES`](@ref); `""` only for a `ParseError` with no code (malformed JSON, a coercion failure) |
+| `message` | `String` | the text; corpus-pinned messages keep their location prose in it |
+| `path` | `String` | RFC 6901 pointer into the document named by `file`, `""` if none |
+| `file` | `String` | canonical key of the document the error is about (absolute path or URL), `""` for the root |
+| `details` | `Dict{String,Any}` | machine-readable extras, as on a `StructuralError` |
+
+Each subtype keeps its default (all-fields) constructor, so [`_at`](@ref) can
+rebuild any of them with a location filled in.
+"""
+abstract type _LoadDiagnostic <: EarthSciASTError end
+
+"""
+    ParseError <: EarthSciASTError
+
+A document that cannot be read: malformed JSON, a value the typed coercion
+cannot accept, or a construct refused by name at the wire boundary
+(`removed_op`, `faq_version_too_old`, `ic_in_reaction_system`). An ordinary
+parse failure has an empty `code`; a refusal that is also a pinned finding
+carries its `code` and `path`, which [`load_failure_structural_error`](@ref)
+renders. After the common fields (see `_LoadDiagnostic`) comes
+`original_error`, the underlying exception, if any.
+
+    ParseError(message, original_error = nothing; code = "", path = "", file = "", details = Dict())
+"""
+struct ParseError <: _LoadDiagnostic
+    code::String
+    message::String
+    path::String
+    file::String
+    details::Dict{String, Any}
+    original_error::Union{Exception, Nothing}
+end
+
+ParseError(
+    message::AbstractString, original_error = nothing;
+    code::AbstractString = "", path::AbstractString = "", file::AbstractString = "",
+    details::AbstractDict = Dict{String, Any}()
+) = ParseError(
+    String(code), String(message), String(path), String(file),
+    Dict{String, Any}(details), original_error
+)
+
+Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
 
 """
     ExpressionTemplateError <: EarthSciASTError
 
-Exception raised when a load-time lowering pass fails: expression-template
-expansion (esm-spec §9.6), template-library imports (§9.7), coupling-library
-imports (§10.9–§10.11), and the subsystem-reference / index-set checks in
-`parse.jl`. Carries a stable diagnostic `code` drawn from
-[`ERROR_CODES`](@ref) — [`_KNOWN_DIAGNOSTIC_CODES`](@ref) names the subset of
-that registry this exception is raised with. Codes (and their message texts)
-are conformance-relevant, so a new raise site MUST use a code registered there
-— and a genuinely new code MUST be added to `ERROR_CODES` (and coordinated
-across every binding) alongside its first raise site.
+A load-time pass refused the document: expression-template expansion
+(esm-spec §9.6), template-library imports (§9.7), coupling-library imports
+(§10.9–§10.11), the §4.7 mount checks (`mounts.jl`), the version gates, and the
+`solver` and data-source location checks. Its `code` is drawn from
+[`ERROR_CODES`](@ref); [`_KNOWN_DIAGNOSTIC_CODES`](@ref) lists the codes it is
+raised with. Codes and their messages are conformance-relevant, so a new raise
+site uses a registered code, and a new code is added to `ERROR_CODES` and
+coordinated across the bindings with its first raise site. Fields: the common
+ones of `_LoadDiagnostic`.
+
+    ExpressionTemplateError(code, message; path = "", file = "", details = Dict())
 """
-struct ExpressionTemplateError <: EarthSciASTError
+struct ExpressionTemplateError <: _LoadDiagnostic
     code::String
     message::String
+    path::String
+    file::String
+    details::Dict{String, Any}
 end
+
+ExpressionTemplateError(
+    code::AbstractString, message::AbstractString;
+    path::AbstractString = "", file::AbstractString = "",
+    details::AbstractDict = Dict{String, Any}()
+) = ExpressionTemplateError(
+    String(code), String(message), String(path), String(file), Dict{String, Any}(details)
+)
 
 Base.showerror(io::IO, e::ExpressionTemplateError) =
     print(io, "[$(e.code)] $(e.message)")
 
 """
+    SubsystemRefError <: EarthSciASTError
+
+A §4.7 mount that cannot be resolved: its file is missing, unreadable or does
+not hold exactly the component asked for, or the mounts form a cycle. `code`
+is required (`unresolved_subsystem_ref`, `ambiguous_subsystem_ref`,
+`element_type_uncarried`). After the common fields (see `_LoadDiagnostic`)
+come the `ref` as written and, for the `subsystems.<k>` form, the mount site
+(`subsystem`, `parent_model`), which `validate` renders as
+`/models/<parent_model>/subsystems/<subsystem>`.
+
+    SubsystemRefError(message; code, ref = "", subsystem = "", parent_model = "", path = "", file = "", details = Dict())
+"""
+struct SubsystemRefError <: _LoadDiagnostic
+    code::String
+    message::String
+    path::String
+    file::String
+    details::Dict{String, Any}
+    ref::String
+    subsystem::String
+    parent_model::String
+end
+
+SubsystemRefError(
+    message::AbstractString;
+    code::AbstractString,
+    ref::AbstractString = "", subsystem::AbstractString = "",
+    parent_model::AbstractString = "", path::AbstractString = "",
+    file::AbstractString = "", details::AbstractDict = Dict{String, Any}()
+) = SubsystemRefError(
+    String(code), String(message), String(path), String(file),
+    Dict{String, Any}(details), String(ref), String(subsystem), String(parent_model)
+)
+
+Base.showerror(io::IO, e::SubsystemRefError) =
+    print(io, "SubsystemRefError: ", e.message)
+
+"""
+    _at(e; path = "", file = "") -> typeof(e)
+
+`e` with its `path` and `file` filled in where they are still empty. A
+location already set is kept, so the innermost site that knows it wins. Any
+other exception comes back unchanged.
+"""
+function _at(e::_LoadDiagnostic; path::AbstractString = "", file::AbstractString = "")
+    fill_path = isempty(e.path) && !isempty(path)
+    fill_file = isempty(e.file) && !isempty(file)
+    (fill_path || fill_file) || return e
+    T = typeof(e)
+    return T(
+        (
+            f === :path && fill_path ? String(path) :
+                f === :file && fill_file ? String(file) : getfield(e, f)
+                for f in fieldnames(T)
+        )...
+    )
+end
+_at(e; path::AbstractString = "", file::AbstractString = "") = e
+
+"""
+    _in_file(f, file) -> f()
+
+Run `f`. A load diagnostic escaping it that names no file yet is rethrown
+naming `file` (`_at`), so an error raised inside a document another one reads
+names that document.
+"""
+function _in_file(f, file::AbstractString)
+    try
+        return f()
+    catch e
+        located = _at(e; file = file)
+        located === e && rethrow()
+        throw(located)
+    end
+end
+
+# `e` with the `subsystems.<k>` mount site filled in where it is not set yet.
+_with_mount_site(e::SubsystemRefError, subsystem::AbstractString, parent_model::AbstractString) =
+    SubsystemRefError(
+    e.code, e.message, e.path, e.file, e.details, e.ref,
+    isempty(e.subsystem) ? String(subsystem) : e.subsystem,
+    isempty(e.parent_model) ? String(parent_model) : e.parent_model
+)
+
+# The load error of type `T` with `code` and `message`.
+_load_error(::Type{ExpressionTemplateError}, code, message; kw...) =
+    ExpressionTemplateError(code, message; kw...)
+_load_error(::Type{SubsystemRefError}, code, message; kw...) =
+    SubsystemRefError(message; code = code, kw...)
+
+"""
+    _rebrand(f, code, context; as = ExpressionTemplateError, kw...) -> f()
+
+Run `f`. A resource error (`_is_resource_error`) or a package error
+(`EarthSciASTError`) propagates as it is. Anything else (a `MethodError` from a
+caller's loader, an I/O error) is rethrown as an `as` error with `code` and the
+message `"<context>: <its showerror text>"`; `kw` go to that constructor.
+"""
+function _rebrand(
+        f, code::AbstractString, context::AbstractString;
+        as::Type = ExpressionTemplateError, kw...
+    )
+    try
+        return f()
+    catch e
+        (_is_resource_error(e) || e isa EarthSciASTError) && rethrow()
+        throw(_load_error(as, code, string(context, ": ", sprint(showerror, e)); kw...))
+    end
+end
+
+"""
     _KNOWN_DIAGNOSTIC_CODES
 
 The subset of [`ERROR_CODES`](@ref) that is raised as an
-[`ExpressionTemplateError`](@ref) anywhere in the package (`templates/`,
-`mounts.jl`, `coupling_imports.jl`, `parse.jl`, `solver.jl`), grouped by the
-spec section that pins it. Every entry is a REFERENCE into the central
-registry (`src/error_codes.jl`), never a literal — this tuple records which
-codes belong to this exception, and `ERROR_CODES` alone owns their values.
-Diagnostic codes are conformance-relevant (cross-binding fixtures assert
-them), so keep this tuple in sync with the raise sites: add the code to
-`ERROR_CODES` and list it here when introducing it.
+[`ExpressionTemplateError`](@ref), grouped by the spec section that pins it.
+Every entry is a reference into the central registry (`src/error_codes.jl`),
+never a literal: `ERROR_CODES` owns the values, this tuple records which codes
+belong to this exception. Keep it in step with the raise sites.
 """
 const _KNOWN_DIAGNOSTIC_CODES = (
     # esm-spec §4.8.5 item 6: declared `units` on an expression node need
@@ -44,10 +217,12 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.VARIABLE_BOUNDS_VERSION_TOO_OLD,
     # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
     ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
-    # esm-spec §2.2.6 `solver.external` load checks (solver.jl).
+    # esm-spec §2.2.6 `solver.external`: the version gate and the `${`
+    # refusal (solver.jl).
     ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
     ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
-    # esm-spec §2.2.7 `solver.time_span` load checks (solver.jl).
+    # esm-spec §2.2.7 `solver.time_span`: the version gate and the interval
+    # check (solver.jl).
     ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
     ERROR_CODES.SOLVER_TIME_SPAN_INVALID,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
@@ -70,8 +245,8 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
     # Option B / CONFORMANCE_SPEC §5.5.7).
     ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
-    # esm-spec §2.2.4 document-scoped solver hints (solver.jl): the top-level
-    # `solver` block in a file declaring esm < 1.1.0.
+    # esm-spec §2.2.4 document-scoped solver hints: the top-level `solver`
+    # block in a file declaring esm < 1.1.0 (solver.jl).
     ERROR_CODES.SOLVER_VERSION_TOO_OLD,
     # esm-spec §9.7 template-library imports + metaparameters
     # (templates/imports.jl, templates/metaparameters.jl).
@@ -105,7 +280,8 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.COUPLING_ROLE_UNUSED,
     ERROR_CODES.COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
     ERROR_CODES.COUPLING_LIBRARY_NESTED_IMPORT,
-    # Subsystem-reference / index-set checks (parse.jl).
+    # esm-spec §4.7 mounts: a leaf that is a library, and the index-set merge
+    # (mounts.jl).
     ERROR_CODES.SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
     ERROR_CODES.SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
@@ -114,47 +290,11 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
     # esm-spec §4.7 mount-edge `url_substitutions` (data_source_urls.jl).
     ERROR_CODES.URL_SUBSTITUTION_UNKNOWN_NAME,
-    # esm-spec §4.7 mounted `data_sources` merge (resolve.jl).
+    # esm-spec §4.7 mounted `data_sources` merge (mounts.jl).
     ERROR_CODES.DATA_SOURCE_MERGE_CONFLICT,
     # esm-spec §8.5.1 record shapes re-checked by `flatten` after
     # `coupling_import` expansion (flatten.jl).
     ERROR_CODES.RECORDS_PER_SAMPLE_INVALID,
     ERROR_CODES.RECORD_AXIS_MISPLACED,
     ERROR_CODES.RECORD_AXIS_TIME_INVARIANT_SOURCE,
-)
-
-"""
-    SubsystemRefError
-
-Exception thrown when subsystem reference resolution fails.
-"""
-struct SubsystemRefError <: EarthSciASTError
-    message::String
-    # The machine-readable half: `validate` renders the error as a structural
-    # finding (`unresolved_subsystem_ref`, `ambiguous_subsystem_ref`, ...) at
-    # `/models/<parent_model>/subsystems/<subsystem>`. The raising site knows the
-    # `ref` and the code; the mount form fills in the site (`_with_mount_site`).
-    code::String
-    ref::String
-    subsystem::String
-    parent_model::String
-
-    SubsystemRefError(
-        message::AbstractString;
-        code::AbstractString = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF,
-        ref::AbstractString = "", subsystem::AbstractString = "",
-        parent_model::AbstractString = ""
-    ) =
-        new(String(message), String(code), String(ref), String(subsystem), String(parent_model))
-end
-
-Base.showerror(io::IO, e::SubsystemRefError) =
-    print(io, "SubsystemRefError: ", e.message)
-
-# `e` with the mount site filled in where it is not set yet.
-_with_mount_site(e::SubsystemRefError, subsystem::AbstractString, parent_model::AbstractString) =
-    SubsystemRefError(
-    e.message; code = e.code, ref = e.ref,
-    subsystem = isempty(e.subsystem) ? subsystem : e.subsystem,
-    parent_model = isempty(e.parent_model) ? parent_model : e.parent_model
 )

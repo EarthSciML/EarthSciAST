@@ -41,8 +41,10 @@ function _collect_mount_declared_metaparameters(
         child = try
             _read_document(src, t; copy = false)
         catch e
-            _is_resource_error(e) && rethrow()
-            return   # unreadable ref: not this walk's diagnostic to raise
+            # An unreadable or refused document is the mount's diagnostic to
+            # raise, not this walk's.
+            e isa EarthSciASTError || rethrow()
+            return
         end
         _is_object(child) || return
         decls = _raw_get(child, "metaparameters")
@@ -999,17 +1001,41 @@ function _resolve_mount_edge(
         mount_noun::String, file_noun::String, unreadable::Function
     )
     comp = try
-        _read_document(ctx.source, target)
+        _in_file(() -> _read_document(ctx.source, target), target.key)
     catch e
         e isa _RefUnreadable || rethrow()
         throw(unreadable(e))
     end
     comp isa AbstractDict{String, Any} || throw(
         SubsystemRefError(
-            "Referenced $(file_noun) file '$(target.ref)' did not parse as a JSON object"
+            "Referenced $(file_noun) file '$(target.ref)' did not parse as a JSON object";
+            code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
         )
     )
     leaf_precision = _declared_element_type(comp)
+    # What the leaf itself declares is checked, closed and expanded in the
+    # leaf's own file; a diagnostic escaping this block names it.
+    comp, nested_contributed = _in_file(target.key) do
+        _close_mounted_leaf(comp, edge, target, base, ctx, leaf_precision, mount_noun)
+    end
+    if edge.index_set_rename !== nothing
+        comp = apply_mount_index_set_rename(
+            comp, edge.index_set_rename, mount_noun; nested_contributed = nested_contributed
+        )
+    end
+    apply_mount_url_substitutions!(comp, edge.url_substitutions, _base_string(base), mount_noun)
+    located = _in_file(() -> _resolve_data_source_urls(comp, target.base), target.key)
+    located === nothing || (comp["data_sources"] = located["data_sources"])
+    return comp, leaf_precision
+end
+
+# Steps 1 to 5 of `_resolve_mount_edge`, on the leaf `comp` read from `target`.
+# Returns the closed, expanded leaf and the index-set names that reached its
+# registry only through its own mounts.
+function _close_mounted_leaf(
+        comp, edge::_MountEdge, target::_RefTarget, base::_RefBase,
+        ctx::_MountContext, leaf_precision, mount_noun::String
+    )
     _check_authored_document(comp, :mounted_leaf)
     _reject_library_ref(comp, target.ref, _is_remote(target) ? nothing : target.key)
 
@@ -1042,15 +1068,7 @@ function _resolve_mount_edge(
     comp isa AbstractDict{String, Any} || (comp = _to_ordered(comp))
 
     nested_contributed = _land_staged_index_sets!(comp, child.staged, close.fold_env, target.ref)
-    if edge.index_set_rename !== nothing
-        comp = apply_mount_index_set_rename(
-            comp, edge.index_set_rename, mount_noun; nested_contributed = nested_contributed
-        )
-    end
-    apply_mount_url_substitutions!(comp, edge.url_substitutions, _base_string(base), mount_noun)
-    located = _resolve_data_source_urls(comp, target.base)
-    located === nothing || (comp["data_sources"] = located["data_sources"])
-    return comp, leaf_precision
+    return comp, nested_contributed
 end
 
 # A leaf's own mounts have staged their index sets; the leaf has closed, so they
@@ -1181,10 +1199,14 @@ function _on_mount_stack(f, ctx::_MountContext, key::String, cycle::Function)
     end
 end
 
-# The `subsystems.<k>` form's diagnostic for a leaf that cannot be read.
+# The `subsystems.<k>` form's diagnostic for a leaf that cannot be read; a
+# leaf that is not JSON is an unresolved mount too.
 function _subsystem_unreadable(u::_RefUnreadable)
-    u.reason === :invalid_json && return u.cause
     t = u.target
+    u.reason === :invalid_json && return SubsystemRefError(
+        "Failed to resolve subsystem ref '$(t.ref)': $(_unreadable_cause(u))";
+        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, ref = t.ref
+    )
     why = u.reason === :not_found ? "file does not exist" :
         _is_remote(t) ? "fetching $(t.key) failed: $(_unreadable_cause(u))" :
         "reading $(t.key) failed: $(_unreadable_cause(u))"
@@ -1216,9 +1238,10 @@ end
 
 The `subsystems.<k>` mount form: resolve `edge` and return the leaf's single
 model, staging its `index_sets` in `ctx` and merging its `data_sources` into
-`host`. A failure that is not already a package diagnostic is a
-`SubsystemRefError`, and every `SubsystemRefError` carries the mount site so
-`validate` renders `/models/<parent>/subsystems/<sub>`.
+`host`. A failure that is not a package error is rebranded as an
+`unresolved_subsystem_ref` (`_rebrand`); a package error propagates, and every
+`SubsystemRefError` carries the mount site so `validate` renders
+`/models/<parent>/subsystems/<sub>`.
 """
 function _mount_subsystem!(
         host::AbstractDict, edge::_MountEdge, sub_name::String, parent_name::String,
@@ -1227,36 +1250,42 @@ function _mount_subsystem!(
     target = _resolve_ref(base, edge.ref)
     ref = target.ref
     try
-        return _on_mount_stack(
-            ctx, target.key,
-            () -> SubsystemRefError("Circular subsystem reference detected: $(target.key)")
+        return _rebrand(
+            ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, "Failed to resolve subsystem ref '$(ref)'";
+            as = SubsystemRefError, ref = ref
         ) do
-            comp, leaf_precision = _resolve_mount_edge(
-                edge, target, base, ctx; mount_noun = "subsystem ref '$(ref)'",
-                file_noun = "model", unreadable = _subsystem_unreadable
-            )
-            cmodels = get(comp, "models", nothing)
-            (cmodels isa AbstractDict && length(cmodels) == 1) || throw(
-                SubsystemRefError(
-                    "Subsystem reference '$(ref)' resolves to a file containing multiple " *
-                        "top-level systems; exactly one is required";
-                    code = ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF, ref = ref
+            _on_mount_stack(
+                ctx, target.key,
+                () -> SubsystemRefError(
+                    "Circular subsystem reference detected: $(target.key)";
+                    code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
                 )
-            )
-            cmodel = first(values(cmodels))
-            _carry_mounted_element_type!(cmodel, leaf_precision, ctx.precision, "subsystem ref '$(ref)'")
-            _absolutize_nested_refs!(cmodel, target.base)
-            _merge_raw_index_sets!(
-                ctx.staged.decls, get(comp, "index_sets", nothing), ref; refs = ctx.staged.refs
-            )
-            _hoist_mounted_sources!(host, comp, "models.$(parent_name).subsystems.$(sub_name) (ref '$(ref)')")
-            cmodel
+            ) do
+                comp, leaf_precision = _resolve_mount_edge(
+                    edge, target, base, ctx; mount_noun = "subsystem ref '$(ref)'",
+                    file_noun = "model", unreadable = _subsystem_unreadable
+                )
+                cmodels = get(comp, "models", nothing)
+                (cmodels isa AbstractDict && length(cmodels) == 1) || throw(
+                    SubsystemRefError(
+                        "Subsystem reference '$(ref)' resolves to a file containing multiple " *
+                            "top-level systems; exactly one is required";
+                        code = ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF, ref = ref
+                    )
+                )
+                cmodel = first(values(cmodels))
+                _carry_mounted_element_type!(cmodel, leaf_precision, ctx.precision, "subsystem ref '$(ref)'")
+                _absolutize_nested_refs!(cmodel, target.base)
+                _merge_raw_index_sets!(
+                    ctx.staged.decls, get(comp, "index_sets", nothing), ref; refs = ctx.staged.refs
+                )
+                _hoist_mounted_sources!(host, comp, "models.$(parent_name).subsystems.$(sub_name) (ref '$(ref)')")
+                cmodel
+            end
         end
     catch e
-        _is_resource_error(e) && rethrow()
-        err = (e isa SubsystemRefError || e isa ExpressionTemplateError) ? e :
-            SubsystemRefError("Failed to resolve subsystem ref '$(ref)': $(e)")
-        throw(err isa SubsystemRefError ? _with_mount_site(err, sub_name, parent_name) : err)
+        e isa SubsystemRefError || rethrow()
+        throw(_with_mount_site(e, sub_name, parent_name))
     end
 end
 
@@ -1287,12 +1316,14 @@ function _toplevel_unreadable(u::_RefUnreadable, form::_TopLevelMountForm)
     u.reason === :invalid_json && return u.cause
     t = u.target
     u.reason === :not_found && return SubsystemRefError(
-        "Referenced $(form.noun) file not found: $(t.key) (from ref '$(t.ref)')"
+        "Referenced $(form.noun) file not found: $(t.key) (from ref '$(t.ref)')";
+        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
     )
     return SubsystemRefError(
         "Referenced $(form.noun) file could not be " *
             "$(_is_remote(t) ? "fetched" : "read"): $(t.key) (from ref '$(t.ref)'): " *
-            _unreadable_cause(u)
+            _unreadable_cause(u);
+        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
     )
 end
 
@@ -1324,7 +1355,10 @@ function _inline_toplevel_form!(
         mount_noun = "top-level $(form.noun) ref '$(ref)'"
         _on_mount_stack(
             ctx, target.key,
-            () -> SubsystemRefError("Circular top-level $(form.noun) reference detected: $(target.key)")
+            () -> SubsystemRefError(
+                "Circular top-level $(form.noun) reference detected: $(target.key)";
+                code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
+            )
         ) do
             comp, leaf_precision = _resolve_mount_edge(
                 edge, target, base, ctx; mount_noun = mount_noun, file_noun = form.noun,
@@ -1333,7 +1367,8 @@ function _inline_toplevel_form!(
             leaf_components = get(comp, form.block, nothing)
             leaf_components isa AbstractDict || throw(
                 SubsystemRefError(
-                    "Top-level $(form.noun) ref '$(ref)' resolves to a file with no $(form.block) block"
+                    "Top-level $(form.noun) ref '$(ref)' resolves to a file with no $(form.block) block";
+                    code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
                 )
             )
             available = join(sort(collect(keys(leaf_components))), ", ")
@@ -1342,7 +1377,8 @@ function _inline_toplevel_form!(
                 haskey(leaf_components, sel) || throw(
                     SubsystemRefError(
                         "Top-level $(form.noun) ref '$(ref)' has no $(form.noun) '$(sel)' " *
-                            "(available: $(available))"
+                            "(available: $(available))";
+                        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
                     )
                 )
                 leaf_components[sel]
@@ -1352,7 +1388,8 @@ function _inline_toplevel_form!(
                         "Top-level $(form.noun) ref '$(ref)' resolves to " *
                             "$(length(leaf_components)) $(form.plural); " *
                             "add a \"$(form.selector)\" selector to choose one " *
-                            "(available: $(available))"
+                            "(available: $(available))";
+                        code = ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF
                     )
                 )
                 first(values(leaf_components))
