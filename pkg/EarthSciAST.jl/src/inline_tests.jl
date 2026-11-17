@@ -705,34 +705,22 @@ function field_reduce(
 end
 
 # Collect the (cell-index-tuple, flat-slot) pairs of one array state from a
-# var_map. Flattening may prefix element names with the owning model
+# var_map. Flattening prefixes element names with the owning model
 # ("Heat.u[3]"); a name matches when its element stem equals `model.variable`
-# qualified, or `variable` bare. Sorted by cell tuple so callers get a
-# deterministic pairing.
-#
-# Model-qualified-first, exactly like `_scalar_slot`: two sibling components
-# sharing an array field name (each a `u`) both bare-match `variable`, so a
-# single OR-pass would MIS-COLLECT the union of both models' cells. We therefore
-# collect the exact qualified / exact-bare stems first, and only fall back to
-# the bare-suffix match when no exact stem is present (a bare-keyed single-model
-# build). Same qualified-first hardening as the Python `state_cells`.
+# qualified, or `variable` bare (a bare-keyed single-model build). Sorted by cell
+# tuple so callers get a deterministic pairing. As in `_scalar_slot`, a stem of
+# another component that shares the bare name never matches.
 function _state_cells(
         var_map::StateLayout, variable::AbstractString,
         model::AbstractString
     )
-    # The same two-pass match, over the layout's blocks rather than its keys.
     qualified = String(model) * "." * String(variable)
-    exact = _ArrayBlock[]
-    fallback = _ArrayBlock[]
-    for b in _layout_blocks(var_map)
-        if b.name == qualified || b.name == String(variable)
-            push!(exact, b)
-        else
-            bare = occursin('.', b.name) ? String(split(b.name, '.'; limit = 2)[2]) : b.name
-            bare == String(variable) && push!(fallback, b)
-        end
-    end
-    return _block_cell_pairs(isempty(exact) ? fallback : exact)
+    return _block_cell_pairs(
+        _ArrayBlock[
+            b for b in _layout_blocks(var_map)
+                if b.name == qualified || b.name == String(variable)
+        ]
+    )
 end
 
 # Every `(cell, slot)` of `blocks`, in slot order and then sorted by cell — the
@@ -753,24 +741,45 @@ function _state_cells(
         model::AbstractString
     )
     qualified = String(model) * "." * String(variable)
-    exact = Tuple{Vector{Int}, Int}[]
-    fallback = Tuple{Vector{Int}, Int}[]
+    out = Tuple{Vector{Int}, Int}[]
     for (name, slot) in var_map
         # `_parse_cell_key` (tree_walk.jl) is the single inverse of
         # `_cell_key`'s "name[i,j]" encoding — no local regex.
         parsed = _parse_cell_key(String(name))
         parsed === nothing && continue
         stem, cell = parsed
-        if stem == qualified || stem == String(variable)
-            push!(exact, (cell, Int(slot)))
-        else
-            bare = occursin('.', stem) ? String(split(stem, '.'; limit = 2)[2]) : stem
-            bare == String(variable) && push!(fallback, (cell, Int(slot)))
-        end
+        (stem == qualified || stem == String(variable)) && push!(out, (cell, Int(slot)))
     end
-    out = isempty(exact) ? fallback : exact
     sort!(out; by = first)
     return out
+end
+
+# The state rows of OTHER components whose name, after the component prefix,
+# is `variable`: the candidates an unmatched unscoped assertion lists. Cell keys
+# are reported once, by their stem.
+function _assertion_candidates(var_map, variable::AbstractString)
+    names = var_map isa StateLayout ?
+        vcat(_layout_scalar_names(var_map), String[b.name for b in _layout_blocks(var_map)]) :
+        String[String(k) for k in keys(var_map)]
+    out = Set{String}()
+    for n in names
+        parsed = _parse_cell_key(n)
+        stem = parsed === nothing ? n : first(parsed)
+        occursin('.', stem) || continue
+        String(split(stem, '.'; limit = 2)[2]) == String(variable) && push!(out, stem)
+    end
+    return sort!(collect(out))
+end
+
+# An unscoped assertion whose variable has no exact match in the component
+# under test, as a state or as an observed, is refused; a same-named variable
+# of another component is named as a candidate, never read.
+function _refuse_unmatched_assertion(var_map, a, owner::AbstractString, loc::AbstractString, kind::String)
+    cands = _assertion_candidates(var_map, loc)
+    msg = "$kind '$(a.variable)' not found in component '$owner'"
+    isempty(cands) || (msg *= "; a variable of that name exists in another component: " *
+        join(cands, ", ") * " (scope the assertion to read it)")
+    throw(InlineTestError(msg))
 end
 
 # Build-time scalar-parameter scope for §6.6.5 cellwise references, as the
@@ -1825,19 +1834,15 @@ function _materialized_obs_scope(
     return materialized == 0 ? base : ca
 end
 
-# Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
-# (preferred) or bare name; 0 if absent.
+# Flat slot of a SCALAR state by model-qualified name, or by bare name in a
+# bare-keyed (single-model) build; 0 if absent.
 #
 # Flattening qualifies every element with its owning model ("arrh.k"), and a
-# coupled build routinely reuses the same bare observed/state name across
-# sibling components — several reaction-rate coefficients all named `k`. So the
-# model-qualified name MUST win: a lone bare-name match returns whichever `k`
-# happens to come first in `var_map` iteration (NON-DETERMINISTIC for a `Dict`),
-# reading the WRONG component's value for every model's `k` assertion. We
-# therefore do two passes — an exact qualified / exact-bare match first, then a
-# bare-suffix fallback (reached only when no exact element is present, e.g. a
-# bare-keyed single-model build). Byte-identical selection to the Python
-# `_scalar_slot`.
+# coupled build routinely reuses the same bare name across sibling components —
+# several reaction-rate coefficients all named `k`. An unscoped assertion names
+# a variable of the component under test, so only an exact match counts: a row
+# of another component that happens to share the bare name never answers it
+# (see `_refuse_unmatched_assertion`).
 function _scalar_slot(
         var_map::AbstractDict, variable::AbstractString,
         model::AbstractString,
@@ -1852,12 +1857,7 @@ function _scalar_slot(
         s = String(name)
         (s == qualified || s == String(variable)) && return Int(slot)
     end
-    for (name, slot) in names
-        s = String(name)
-        bare = occursin('.', s) ? String(split(s, '.'; limit = 2)[2]) : s
-        bare == String(variable) && return Int(slot)
-    end
-    # A THIRD pass, for a name an `operator_compose` renaming match DELETED
+    # A second pass, for a name an `operator_compose` renaming match DELETED
     # (§4.7.1 step 4). A test is written against the component that owns it, and
     # a merge can fold that component's state onto another's — the quantity the
     # assertion names still exists, under the survivor's spelling. LAST, so a
@@ -2283,8 +2283,7 @@ function _evaluate_assertion(
             insp, eval_file, owner, loc; ctx = ctx, u = state,
             t = Float64(sim.t[ti]), var_map = var_map
         )
-        obs === nothing &&
-            throw(InlineTestError("scalar state '$(a.variable)' not found"))
+        obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "scalar state")
         field, cell_tuples = obs
         # A SHAPED observed named by a bare assertion is a different error from
         # an absent one: §6.6.5 says pick a cell with `coords` or collapse the
@@ -2330,11 +2329,7 @@ function _evaluate_assertion(
             insp, eval_file, owner, loc; ctx = ctx, u = state,
             t = Float64(sim.t[ti]), var_map = var_map
         )
-        obs === nothing && throw(
-            InlineTestError(
-                "array state '$(a.variable)' has no cells in var_map"
-            )
-        )
+        obs === nothing && _refuse_unmatched_assertion(var_map, a, owner, loc, "array state")
         field, cell_tuples = obs
     end
 
