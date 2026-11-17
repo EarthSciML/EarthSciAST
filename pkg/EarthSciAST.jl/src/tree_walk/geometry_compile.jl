@@ -375,9 +375,9 @@ function _geo_count_value(sp::_GeoCountSpec, x::Float64)::Float64
 end
 
 # Resolve a node's `join` to slot-addressed gates: `_resolve_geo_join_gates`
-# does the name-level work (faithfully replaying the interpreter's skip
-# semantics — an unresolvable pair never gates), then the loop-var names map
-# through the lexical scope. `nothing` ⇒ the node has no join arm.
+# does the name-level work (a pair it cannot resolve gates nothing), then the
+# loop-var names map through the lexical scope. `nothing` ⇒ the node has no
+# join arm.
 function _geo_slot_gates(expr, g::_GeoCompileCtx)
     rg = _resolve_geo_join_gates(expr, g.ctx, g.setof)
     rg === nothing && return nothing

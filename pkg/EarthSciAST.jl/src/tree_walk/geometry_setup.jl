@@ -258,14 +258,33 @@ end
 # tree_walk/geometry_compile.jl.)
 
 # Map a join key column to the aggregate loop var that indexes it (via its
-# declared 1-D shape's index set).
-function _geo_loopvar_for(col, setof, var_shapes)
+# declared 1-D shape's index set), by the right-hand side's rule
+# (`_join_sym_for_key`, CONFORMANCE_SPEC §5.5.8 "Two ranges over one index
+# set"): `pick` is the clause's `syms` entry for this side when it has one, else
+# `:left` / `:right`, which take the first / second of two candidate loop vars
+# in `order` (the node's canonical range order). Three or more candidates
+# without `syms` are refused, never settled by hash order.
+function _geo_loopvar_for(col, setof, var_shapes, pick = :left, order = nothing)
     sets = get(var_shapes, col, String[])
     isempty(sets) && return nothing
-    for (lv, st) in setof
-        st == sets[1] && return lv
+    if pick isa AbstractString
+        return get(setof, String(pick), nothing) == sets[1] ? String(pick) : nothing
     end
-    return nothing
+    cands = String[String(lv) for (lv, st) in setof if st == sets[1]]
+    ord = order === nothing ? sort(cands) : order
+    rank(s) = something(findfirst(==(s), ord), length(ord) + 1)
+    sort!(cands; by = s -> (rank(s), s))
+    isempty(cands) && return nothing
+    length(cands) == 1 && return cands[1]
+    length(cands) == 2 && return cands[pick === :right ? 2 : 1]
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_JOIN_AMBIGUOUS_KEY",
+            "index set '$(sets[1])' of join key column '$col' is drawn by " *
+                "$(length(cands)) range symbols ($(cands)); name the clause's two sides " *
+                "with `join.syms` (CONFORMANCE_SPEC §5.5.8)"
+        )
+    )
 end
 
 # Loop-invariant context for the setup-time geometry COMPILER (`_geo_compile`,
@@ -301,16 +320,20 @@ struct _GeoJoinGate
     lvB::String
 end
 
-# Pre-resolve `expr.join` (once per sweep), faithfully replaying the historical
-# per-tuple join arm: a pair whose loop vars don't resolve, or whose
-# columns aren't both in `env`, is SKIPPED here exactly as the original `continue`
-# skipped it — so an omitted pair never gates, byte-for-byte as before. Returns
-# `nothing` when the node has no join (lets the compiled gate skip the whole
-# arm). Consumed by `_geo_slot_gates` (tree_walk/geometry_compile.jl), which
-# maps the loop-var names to frame slots.
+# Pre-resolve `expr.join` (once per sweep). Each side of a pair resolves to a
+# loop var as on the right-hand side, honouring the clause's `syms`. A pair
+# whose loop vars do not resolve, or whose columns are not both in `env` (a key
+# column the setup sweep has no value for, such as a binning coordinate the
+# regrid templates leave to the right-hand side), gates nothing here. Returns `nothing`
+# when the node has no join (lets the compiled gate skip the whole arm).
+# Consumed by `_geo_slot_gates` (tree_walk/geometry_compile.jl), which maps the
+# loop-var names to frame slots.
 function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
     expr.join === nothing && return nothing
     gates = _GeoJoinGate[]
+    order = _canonical_range_order(
+        expr.output_idx, expr.ranges === nothing ? Dict{String, Any}() : expr.ranges
+    )
     for clause in expr.join
         # Only bin-equality (key-column-pair) clauses resolve HERE. A Phase-2a
         # `overlap` clause is a `_OverlapJoinSpec` (not a pair vector) and is
@@ -320,10 +343,13 @@ function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
         # (A nested `:geo_agg` therefore still ignores an overlap clause; no
         # shipped template puts one there. See the block above.)
         clause isa AbstractVector || continue
+        csyms = _clause_syms(clause)
+        pick_l = csyms === nothing ? :left : csyms[1]
+        pick_r = csyms === nothing ? :right : csyms[2]
         for pair in clause
             colA, colB = String(pair[1]), String(pair[2])
-            lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes)
-            lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes)
+            lvA = _geo_loopvar_for(colA, setof, ctx.var_shapes, pick_l, order)
+            lvB = _geo_loopvar_for(colB, setof, ctx.var_shapes, pick_r, order)
             (lvA === nothing || lvB === nothing) && continue
             (haskey(ctx.env, colA) && haskey(ctx.env, colB)) || continue
             push!(gates, _GeoJoinGate(ctx.env[colA], lvA, ctx.env[colB], lvB))
@@ -645,8 +671,11 @@ function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
         clause isa _OverlapJoinSpec || continue
         isempty(clause.src_env) && continue
         isempty(clause.tgt_env) && continue
-        sym_l = _geo_loopvar_for(String(clause.src_env[1]), setof, ctx.var_shapes)
-        sym_r = _geo_loopvar_for(String(clause.tgt_env[1]), setof, ctx.var_shapes)
+        order = _canonical_range_order(
+            faq.output_idx, faq.ranges === nothing ? Dict{String, Any}() : faq.ranges
+        )
+        sym_l = _geo_loopvar_for(String(clause.src_env[1]), setof, ctx.var_shapes, :left, order)
+        sym_r = _geo_loopvar_for(String(clause.tgt_env[1]), setof, ctx.var_shapes, :right, order)
         (sym_l === nothing || sym_r === nothing) && continue
         sym_l == sym_r && continue                # a self-join cannot drive
         sl = get(scope, sym_l, 0)
