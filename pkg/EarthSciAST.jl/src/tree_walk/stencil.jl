@@ -216,9 +216,6 @@ struct _TemplateCtx
     bound_bodies::IdDict{OpExpr, Vector{Tuple{Vector{ASTExpr}, ASTExpr}}}
     # This equation's loop-index-set key — the per-equation component of vkey.
     idxkey::String
-    # Node-count memo for the nested-boundary size gate (`_nested_site_big`):
-    # per expansion-root identity, computed once per equation.
-    szmemo::IdDict{OpExpr, Int}
 end
 function _TemplateCtx(
         sites::IdDict{OpExpr, OpExpr}, var_map::AbstractDict{String, Int},
@@ -235,68 +232,6 @@ function _TemplateCtx(
         var_map, param_sym_set, reg_funcs, bound, idxkey,
         IdDict{OpExpr, Int}()
     )
-end
-
-# ---- Nested compile-once boundaries (ess-nested-template-boundary) ----------
-# Historically compile-once boundaries were the OUTERMOST expansion roots only,
-# and every nested root fused into its enclosing variant — the right call for
-# small helper templates (per-call indirection would cost more than the sharing
-# saves), and catastrophically wrong for a big one: the duo momentum interior
-# template holds 186 nested physics-stencil applies, and fusing them built
-# ~127k-node variant bodies per region class (3.2e6 emitted nodes over one RHS,
-# a ~93-minute first-call compile). So a nested root now becomes its own
-# boundary exactly when its expansion clears a size floor: small helpers keep
-# fusing, big physics stencils compile once and are CALLED. The variant IR has
-# carried nested sub-call sites since the tier landed (`_SubVariant.subcalls`,
-# `_lower_subcall`'s local re-basing), so this only starts minting them.
-# EXPERIMENTAL, and it ships OFF: `ESS_NESTED_TEMPLATE_BOUNDARY=1` is the one
-# `ESS_*` variable that turns it on. It is not an oracle selector — no tier
-# stands down when it is unset, the tier simply does not exist in the default
-# build — and nothing in the corpus depends on it. Measured on the duo LMARS RHS
-# the nested boundaries mint correctly (89 sites) but deliver no emitted-node
-# reduction there (see the sub-kernel function tier's default note,
-# codegen_kernel.jl); outermost-only remains the default until an
-# affinely-gathering rule encoding gives the carved bodies real cross-class
-# sharing.
-_nested_boundary_disabled() =
-    get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY", "") != "1"
-# Size floor for minting a nested boundary: a refusal boundary under `native`,
-# since moving it changes which bodies are carved out and therefore what the
-# emitter is asked to compile.
-_nested_boundary_min_nodes() =
-    something(tryparse(Int, get(ENV, "ESS_NESTED_TEMPLATE_BOUNDARY_MIN_NODES", "")), 256)
-function _site_node_count(e::OpExpr, tctx::_TemplateCtx)
-    got = get(tctx.szmemo, e, nothing)
-    got === nothing || return got
-    n = Ref(0)
-    foreach_subexpr(_ -> (n[] += 1; nothing), e)
-    tctx.szmemo[e] = n[]
-    return n[]
-end
-_nested_site_big(e::OpExpr, tctx::_TemplateCtx) =
-    _site_node_count(e, tctx) >= _nested_boundary_min_nodes()
-
-# Does `expr` reference any of the output loop indices in `idxset`? EXHAUSTIVE
-# over every `ASTExpr`-typed field of `OpExpr` via the shared `child_exprs`
-# traversal (`foreach_subexpr`, expression.jl) — args / expr_body / lower /
-# upper / values / filter / key / ranges bounds — so a loop index
-# buried in an aggregate body or a reduction bound routes
-# that op to the fallback and is NEVER mis-seen as loop-invariant (a false
-# negative would return an unsubstituted loop var to resolve → a hard build
-# error instead of a fallback). Cold path — called once per branch template,
-# not per cell (the per-cell guard is the memoized `_refs_idxset`).
-# IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
-# path-multiplicity-insensitive, and the branch-template expressions scanned
-# here share subtrees by reference (`_sub_preserving`) — the per-path walk was
-# exponential on a doubling chain (ESS-0hh). The memo is per call, which is
-# per QUERY: `idxset` is fixed within a call, so a node's answer cannot change.
-function _refs_loop_var(e::ASTExpr, idxset::Set{String})
-    found = false
-    foreach_subexpr_once(e) do x
-        found || (x isa VarExpr && x.name in idxset && (found = true))
-        nothing
-    end
-    return found
 end
 
 # Select the `makearray` region covering `kvals` — LAST covering region wins,
@@ -350,18 +285,12 @@ struct _StencilCtx
     # (`nothing` on every reference-free build).
     subcalls::Vector{_SubCallSite}
     tctx::Union{Nothing, _TemplateCtx}
-    # True while walking a VARIANT BODY (inside `_stencilize_shared`): a nested
-    # expansion root met there becomes its own compile-once boundary only when
-    # its body clears `_nested_boundary_min_nodes()` — a small helper template
-    # (limiter, edge interpolant) still fuses, a big physics stencil does not
-    # (see the boundary note in `_stencilize_shared`).
-    nested::Bool
 end
 _StencilCtx(idxset, recipes, idx_env, array_var_info, const_arrays, pgather) =
     _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
     IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
-    _SubCallSite[], nothing, false
+    _SubCallSite[], nothing
 )
 _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
@@ -370,7 +299,7 @@ _StencilCtx(
     _StencilCtx(
     idxset, recipes, idx_env, array_var_info, const_arrays, pgather,
     IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, Bool}(),
-    _SubCallSite[], tctx, false
+    _SubCallSite[], tctx
 )
 
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
@@ -408,9 +337,7 @@ function _stencilize_op(e::OpExpr, ctx::_StencilCtx)
     # root still hoists whole, and a root reached twice through a shared observed
     # subtree reuses its cached sentinel exactly like any shared subtree.
     tctx = ctx.tctx
-    if tctx !== nothing && haskey(tctx.sites, e) &&
-            (!ctx.nested || _nested_site_big(e, tctx))
-        ctx.nested && _tally_cascade!(:nested_template_boundary)
+    if tctx !== nothing && haskey(tctx.sites, e)
         return _stencilize_site(e, ctx, tctx)
     end
     return _stencilize_op_core(e, ctx)
@@ -655,25 +582,17 @@ function _stencilize_shared(
     if variant === nothing
         _BENCH_ON[] && (_BENCH_BODY_VARIANTS[] += 1)
         rs = _LaneRecipe[]
-        # The body walk carries `tctx` with `nested = true`: a nested expansion
-        # root — ESD's stencils are deeply factored into limiter/edge-interpolant
-        # helper templates AND large physics stencils — becomes its OWN
-        # compile-once boundary when it clears `_nested_boundary_min_nodes()`
-        # (ess-nested-template-boundary; see the tier note at the helpers), and
-        # compiles FUSED into this variant otherwise. Small helpers fusing keeps
-        # the variant count and per-call indirection bounded (the original
-        # reason boundaries were outermost-only, the RFC's "7 lon bodies"); big
-        # bodies becoming boundaries is what keeps ONE variant's emitted size
-        # bounded (the duo interior templates fused to ~127k-node bodies per
-        # region class otherwise). Nested region selections still reach the
+        # The body walk carries no template context: compile-once boundaries
+        # are the OUTERMOST expansion roots, and a nested root compiles FUSED
+        # into this variant, which keeps the variant count and the per-call
+        # indirection bounded. Nested region selections still reach the
         # variant key through `_branch_key!`, which descends everything
-        # identically. Without the opt-in, boundaries stay outermost-only.
+        # identically.
         subctx = _StencilCtx(
             ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,
             ctx.const_arrays, ctx.pgather,
             IdDict{OpExpr, ASTExpr}(), tctx.gmemo,
-            _SubCallSite[],
-            _nested_boundary_disabled() ? nothing : tctx, true
+            _SubCallSite[], nothing
         )
         spine = bypass ? _stencilize_op_core(node, subctx) : _stencilize(node, subctx)
         # Rescued-subtree lanes need their compile-once evaluator before any
@@ -723,9 +642,8 @@ function _stencilize_bound_site(
         # The substitution rebuilds every subtree that references a bound index,
         # which detaches NESTED expansion roots from `tctx.sites` by identity —
         # exactly the drift `_translate_sites_lockstep!` exists for (an OpExpr's
-        # expression slots are preserved under leaf substitution). Without this,
-        # every nested root inside an index-bound body silently fuses and the
-        # nested-boundary tier (ess-nested-template-boundary) never sees it.
+        # expression slots are preserved under leaf substitution), so a root
+        # inside the bound body stays recognized by identity.
         _translate_sites_lockstep!(tctx.sites, body, sub_body)
         push!(entries, (ASTExpr[a for a in kargs], sub_body))
     end
@@ -1008,9 +926,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     # sub-kernel over its index-bound body instead of being re-substituted and
     # re-fused into every branch spine.
     tctx = ctx.tctx
-    if tctx !== nothing && haskey(tctx.sites, producer) &&
-            (!ctx.nested || _nested_site_big(producer, tctx))
-        ctx.nested && _tally_cascade!(:nested_template_boundary)
+    if tctx !== nothing && haskey(tctx.sites, producer)
         return _stencilize_bound_site(producer, oi, kargs, body, ctx, tctx)
     end
     idx_exprs = Dict{String, ASTExpr}(oi[d] => kargs[d] for d in 1:length(oi))
@@ -1879,7 +1795,7 @@ function _build_branch_template(
         ctx_proto.idxset, rs, ctx_proto.idx_env,
         ctx_proto.array_var_info, ctx_proto.const_arrays,
         ctx_proto.pgather, IdDict{OpExpr, ASTExpr}(), ctx_proto.vsmemo,
-        _SubCallSite[], ctx_proto.tctx, false
+        _SubCallSite[], ctx_proto.tctx
     )
     spine = _stencilize(body, ctx)
     # Attach each state gather's affine slot map (cold, once per branch) so the hot
