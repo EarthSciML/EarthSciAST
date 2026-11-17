@@ -837,8 +837,8 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
     # defects the schema cannot express:
     #   • `invalid_broadcast_fn` — a `broadcast` node whose `fn` is missing,
     #     names no operator, names a STRUCTURAL operator, or is handed the wrong
-    #     number of operands. `fn` is an opaque string on the wire, so nothing
-    #     checked it at all until now.
+    #     number of operands. `fn` is an opaque string on the wire, so no other
+    #     check reads it.
     #   • `array_shape_mismatch` — an element-wise operand declared over an
     #     index set the RESULT does not have, which no name-based broadcast can
     #     align (esm-spec §4.3.4 "Broadcast compatibility").
@@ -1981,9 +1981,10 @@ end
 """
     validate_aggregate_semantics(file::EsmFile) -> Vector{StructuralError}
 
-The three static aggregate/relational checks of F-6. Walks every
-expression-bearing field of every model (and its subsystems) and, for each
-`faq` node it finds, applies:
+The static aggregate/relational checks of F-6. Walks every expression site of
+the document ([`foreach_expression`](@ref): every model and reaction system and
+their subsystems, and the coupling entries) and, for each `faq` node it finds,
+applies:
 
 - [`_check_undefined_index_set!`] — a `ranges` `{from: NAME}` whose
   NAME is not a key of the document `index_sets` registry (run only when the
@@ -1994,71 +1995,53 @@ expression-bearing field of every model (and its subsystems) and, for each
   STATE variable of the model.
 
 Findings attach at the FIELD pointer (`/models/M/equations/i/rhs`, …), the same
-convention the reference-integrity pass uses.
+convention the reference-integrity pass uses. The `faq_bare_array_operand`
+check runs at the same sites; on an equation's right-hand side the names its
+left-hand side defines are exempt.
 """
 function validate_aggregate_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
-    file.models === nothing && return errors
     registry = Set{String}(keys(file.index_sets))
-    for model_name in sort!(collect(keys(file.models)))
-        model = file.models[model_name]
-        _check_model_aggregates!(
-            errors, file, model,
-            "/models/$model_name", registry
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            model = file.models[model_name]
+            _check_model_aggregates!(
+                errors, file, model,
+                "/models/$model_name", registry
+            )
+            # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
+            # so the index-set name a call binds is checked on the expansion; the
+            # pointer still names the authored field.
+            view = _units_view(file, model_name, model, views)
+            view === model && continue
+            reg = get(file.component_templates, "models.$model_name", nothing)
+            reg === nothing && continue
+            _check_template_index_sets!(errors, model, view, "/models/$model_name", registry, reg)
+        end
+    end
+    if file.reaction_systems !== nothing
+        for rs_name in sort!(collect(keys(file.reaction_systems)))
+            _check_reaction_system_aggregates!(
+                errors, file, file.reaction_systems[rs_name],
+                "/reaction_systems/$rs_name", registry
+            )
+        end
+    end
+    # A coupling entry names other systems' variables by scoped reference, so it
+    # has no state set or array shapes of its own.
+    no_names = Set{String}()
+    no_shapes = Dict{String, Vector{String}}()
+    for (i, entry) in enumerate(file.coupling)
+        _check_site_aggregates!(
+            errors, file, entry, "/coupling/$(i - 1)", no_names, registry, no_shapes
         )
-        # A template parameter may stand for a range's `from` (esm-spec §9.6.1),
-        # so the index-set name a call binds is checked on the expansion; the
-        # pointer still names the authored field.
-        view = _units_view(file, model_name, model, views)
-        view === model && continue
-        reg = get(file.component_templates, "models.$model_name", nothing)
-        reg === nothing && continue
-        _check_template_index_sets!(errors, model, view, "/models/$model_name", registry, reg)
-    end
-    return errors
-end
-
-# The `undefined_index_set` check of `_check_undefined_index_set!` on every
-# expression field of `model` (`_foreach_model_expression`: equations,
-# initialization equations, parameter updates, guesses, events, inline tests,
-# subsystem models) that calls a template, read from the expanded `view`. A
-# field the view leaves unexpanded is expanded here against `reg`.
-function _check_template_index_sets!(
-        errors::Vector{StructuralError}, model::Model, view::Model,
-        path::String, registry::Set{String}, reg
-    )
-    templated = Set{String}()
-    _foreach_model_expression(model, path, nothing) do e, anchor, _
-        _contains_template_reference(e) && push!(templated, anchor)
-        nothing
-    end
-    isempty(templated) && return errors
-    memo = _ExpandCache()
-    _foreach_model_expression(view, path, nothing) do e, anchor, _
-        anchor in templated || return nothing
-        any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
-            return nothing
-        if _contains_template_reference(e)
-            e = try
-                _expand_expr_refs(e, reg, nothing, memo)
-            catch err
-                # An unresolvable call is reported by the template checks.
-                err isa ExpressionTemplateError || rethrow()
-                return nothing
-            end
-        end
-        foreach_subexpr_once(e) do sub
-            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
-            nothing
-        end
-        return nothing
     end
     return errors
 end
 
 # Per-model driver: compute the model's state-variable set (for the continuous
-# relational check) and walk each of its expression-bearing fields, then recurse
-# into Model subsystems. The `index_sets` registry is document-scoped, so it is
+# relational check) and walk each of its expression sites, then recurse into
+# Model subsystems. The `index_sets` registry is document-scoped, so it is
 # threaded down unchanged.
 function _check_model_aggregates!(
         errors::Vector{StructuralError}, file::EsmFile,
@@ -2076,26 +2059,100 @@ function _check_model_aggregates!(
         n => String[String(x) for x in v.shape]
             for (n, v) in model.variables if v.shape !== nothing
     )
-
-    for (i, eq) in enumerate(model.equations)
-        _check_faq_bare_array_operands!(
-            errors, eq.lhs, eq.rhs, "$path/equations/$(i - 1)/rhs", var_shapes
-        )
-        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
-    end
-    for (i, eq) in enumerate(model.initialization_equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs", state_vars, registry, var_shapes)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs", state_vars, registry, var_shapes)
-    end
-    for name in sort!(collect(keys(model.guesses)))
-        g = model.guesses[name]
-        isa(g, ASTExpr) || continue
-        _walk_aggregates!(errors, file, g, "$path/guesses/$name", state_vars, registry, var_shapes)
-    end
-
+    _check_site_aggregates!(errors, file, model, path, state_vars, registry, var_shapes)
     for (subsys_name, subsys) in model_subsystems(model)
         _check_model_aggregates!(errors, file, subsys, "$path/subsystems/$subsys_name", registry)
+    end
+    return errors
+end
+
+# The reaction-system twin: its species are its continuous states, and its
+# parameters the variables that may carry a shape.
+function _check_reaction_system_aggregates!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        rs::ReactionSystem, path::String, registry::Set{String}
+    )
+    state_vars = Set{String}(sp.name for sp in rs.species)
+    var_shapes = Dict{String, Vector{String}}(
+        p.name => String[String(x) for x in p.shape]
+            for p in rs.parameters if p.shape !== nothing
+    )
+    _check_site_aggregates!(errors, file, rs, path, state_vars, registry, var_shapes)
+    for (sub_name, sub) in rs.subsystems
+        _check_reaction_system_aggregates!(errors, file, sub, "$path/subsystems/$sub_name", registry)
+    end
+    return errors
+end
+
+# The site kinds that are an equation's right-hand side, keyed to the kind of
+# the left-hand side visited just before it.
+const _RHS_OF_LHS = Dict{Symbol, Symbol}(
+    :equation_lhs => :equation_rhs, :initialization_lhs => :initialization_rhs,
+    :constraint_lhs => :constraint_rhs,
+)
+const _EQUATION_RHS_KINDS = Set{Symbol}(values(_RHS_OF_LHS))
+
+# The faq checks over the expression sites of one component (not its
+# subsystems) or one coupling entry. A left-hand side is visited immediately
+# before its right-hand side (`foreach_expression`), so the right-hand side's
+# bare-array check exempts what that left-hand side defines.
+function _check_site_aggregates!(
+        errors::Vector{StructuralError}, file::EsmFile, x, path::String,
+        state_vars::Set{String}, registry::Set{String},
+        var_shapes::Dict{String, Vector{String}}
+    )
+    lhs = Ref{Union{ASTExpr, Nothing}}(nothing)
+    visit = function (e, anchor, kind)
+        if haskey(_RHS_OF_LHS, kind)
+            lhs[] = e
+        else
+            excl = kind in _EQUATION_RHS_KINDS ? lhs[]::ASTExpr : nothing
+            _check_faq_bare_array_operands!(errors, excl, e, anchor, var_shapes)
+        end
+        _walk_aggregates!(errors, file, e, anchor, state_vars, registry, var_shapes)
+        return nothing
+    end
+    if x isa CouplingEntry
+        foreach_expression(visit, x, path)
+    else
+        foreach_expression(visit, x, path; subsystems = false)
+    end
+    return errors
+end
+
+# The `undefined_index_set` check of `_check_undefined_index_set!` on every
+# expression site of `model` and its subsystem models (`foreach_expression`)
+# that calls a template, read from the expanded `view`. A
+# field the view leaves unexpanded is expanded here against `reg`.
+function _check_template_index_sets!(
+        errors::Vector{StructuralError}, model::Model, view::Model,
+        path::String, registry::Set{String}, reg
+    )
+    templated = Set{String}()
+    foreach_expression(model, path) do e, anchor, _
+        _contains_template_reference(e) && push!(templated, anchor)
+        nothing
+    end
+    isempty(templated) && return errors
+    memo = _ExpandCache()
+    foreach_expression(view, path) do e, anchor, _
+        anchor in templated || return nothing
+        any(x -> x.path == anchor && x.error_type == ERROR_CODES.UNDEFINED_INDEX_SET, errors) &&
+            return nothing
+        if _contains_template_reference(e)
+            e = try
+                _expand_expr_refs(e, reg, nothing, memo)
+            catch err
+                # An unresolvable call is reported by the template checks.
+                err isa ExpressionTemplateError || rethrow()
+                return nothing
+            end
+        end
+        foreach_subexpr_once(e) do sub
+            sub isa OpExpr && sub.op == "faq" && _check_undefined_index_set!(errors, sub, anchor, registry)
+            nothing
+        end
+        return nothing
     end
     return errors
 end
@@ -2272,11 +2329,13 @@ function faq_bare_exempt_names(lhs::ASTExpr)
     return derivative ? Set{String}() : _referenced_var_names(lhs, Set{String}())
 end
 
+# `lhs` is the left-hand side of the equation whose right-hand side `expr` is,
+# or `nothing` for a site that is not an equation's right-hand side.
 function _check_faq_bare_array_operands!(
-        errors::Vector{StructuralError}, lhs::ASTExpr, expr::ASTExpr, anchor::String,
-        var_shapes
+        errors::Vector{StructuralError}, lhs::Union{ASTExpr, Nothing}, expr::ASTExpr,
+        anchor::String, var_shapes
     )
-    defined = faq_bare_exempt_names(lhs)
+    defined = lhs === nothing ? Set{String}() : faq_bare_exempt_names(lhs)
     found = faq_bare_array_operands(
         expr, var_shapes; exclude = defined, opaque_applications = true
     )
@@ -2575,51 +2634,81 @@ positions.
 """
 function validate_broadcast_semantics(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
-    file.models === nothing && return errors
-    for model_name in sort!(collect(keys(file.models)))
-        _check_model_broadcasts!(errors, file.models[model_name], "/models/$model_name")
+    if file.models !== nothing
+        for model_name in sort!(collect(keys(file.models)))
+            _check_model_broadcasts!(errors, file.models[model_name], "/models/$model_name")
+        end
+    end
+    if file.reaction_systems !== nothing
+        for rs_name in sort!(collect(keys(file.reaction_systems)))
+            _check_reaction_system_broadcasts!(
+                errors, file.reaction_systems[rs_name], "/reaction_systems/$rs_name"
+            )
+        end
+    end
+    no_shapes = Dict{String, Vector{String}}()
+    for (i, entry) in enumerate(file.coupling)
+        _check_site_broadcasts!(errors, entry, "/coupling/$(i - 1)", no_shapes)
     end
     return errors
 end
 
-# Per-model driver for `validate_broadcast_semantics`: the `fn` contract over
-# the equations, initialization equations and guesses (not update rules, events
-# or inline tests), plus the element-wise axis check wherever an equation has a
-# declared array RESULT shape. Recurses into Model subsystems.
+_declared_array_shapes(shapes) = Dict{String, Vector{String}}(
+    name => String[String(x) for x in s] for (name, s) in shapes
+        if s !== nothing && !isempty(s)
+)
+
+# Per-model driver for `validate_broadcast_semantics`: the `fn` contract at
+# every expression site of the model, plus the element-wise axis check on the
+# right-hand side of every equation whose left-hand side writes a declared
+# whole array. Recurses into Model subsystems.
 function _check_model_broadcasts!(
         errors::Vector{StructuralError}, model::Model,
         path::String
     )
-    var_shapes = Dict{String, Vector{String}}()
-    for (name, v) in model.variables
-        v.shape === nothing && continue
-        s = String[String(x) for x in v.shape]
-        isempty(s) || (var_shapes[name] = s)
-    end
-
-    for (i, eq) in enumerate(model.equations)
-        _walk_broadcast_fns!(errors, eq.lhs, "$path/equations/$(i - 1)/lhs")
-        anchor = "$path/equations/$(i - 1)/rhs"
-        _walk_broadcast_fns!(errors, eq.rhs, anchor)
-        tgt = _wholearray_result_axes(eq.lhs, var_shapes)
-        tgt === nothing ||
-            _check_broadcast_axes!(errors, eq.rhs, tgt[1], tgt[2], var_shapes, anchor)
-    end
-    # An observed unknown's defining expression is an equation, so the loop
-    # above covers it (its bare-variable LHS gives `_wholearray_result_axes`
-    # the target axes).
-    for (i, eq) in enumerate(model.initialization_equations)
-        _walk_broadcast_fns!(errors, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs")
-        _walk_broadcast_fns!(errors, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs")
-    end
-    for name in sort!(collect(keys(model.guesses)))
-        g = model.guesses[name]
-        isa(g, ASTExpr) || continue
-        _walk_broadcast_fns!(errors, g, "$path/guesses/$name")
-    end
-
+    var_shapes = _declared_array_shapes((n, v.shape) for (n, v) in model.variables)
+    _check_site_broadcasts!(errors, model, path, var_shapes)
     for (subsys_name, subsys) in model_subsystems(model)
         _check_model_broadcasts!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
+    return errors
+end
+
+function _check_reaction_system_broadcasts!(
+        errors::Vector{StructuralError}, rs::ReactionSystem, path::String
+    )
+    var_shapes = _declared_array_shapes((p.name, p.shape) for p in rs.parameters)
+    _check_site_broadcasts!(errors, rs, path, var_shapes)
+    for (sub_name, sub) in rs.subsystems
+        _check_reaction_system_broadcasts!(errors, sub, "$path/subsystems/$sub_name")
+    end
+    return errors
+end
+
+# The broadcast checks over the expression sites of one component (not its
+# subsystems) or one coupling entry. An observed unknown's defining expression
+# is an equation, so it is covered (its bare-variable LHS gives
+# `_wholearray_result_axes` the target axes).
+function _check_site_broadcasts!(
+        errors::Vector{StructuralError}, x, path::String,
+        var_shapes::Dict{String, Vector{String}}
+    )
+    lhs = Ref{Union{ASTExpr, Nothing}}(nothing)
+    visit = function (e, anchor, kind)
+        _walk_broadcast_fns!(errors, e, anchor)
+        if haskey(_RHS_OF_LHS, kind)
+            lhs[] = e
+        elseif kind in _EQUATION_RHS_KINDS
+            tgt = _wholearray_result_axes(lhs[]::ASTExpr, var_shapes)
+            tgt === nothing ||
+                _check_broadcast_axes!(errors, e, tgt[1], tgt[2], var_shapes, anchor)
+        end
+        return nothing
+    end
+    if x isa CouplingEntry
+        foreach_expression(visit, x, path)
+    else
+        foreach_expression(visit, x, path; subsystems = false)
     end
     return errors
 end
@@ -3410,8 +3499,8 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
         end
     end
 
-    # A reaction system's constraint equations, events and inline tests are the
-    # same sites as a model's, and report `undefined_variable` as the model's do
+    # A reaction system's constraint equations, parameter update rules, events
+    # and inline tests are the same sites as a model's, and report `undefined_variable` as the model's do
     # (only a reaction `rate` keeps `undefined_parameter`). Each is checked against
     # the system's species and parameters plus the document's implicit names,
     # widened to the document scope when the system is coupled, exactly as
@@ -3420,7 +3509,8 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
         coupled = _coupled_system_names(file)
         for (rs_name, rs) in file.reaction_systems
             isempty(rs.tests) && isempty(rs.constraint_equations) &&
-                isempty(rs.discrete_events) && isempty(rs.continuous_events) && continue
+                isempty(rs.discrete_events) && isempty(rs.continuous_events) &&
+                all(p -> p.update === nothing, rs.parameters) && continue
             is_coupled = rs_name ∈ coupled
             scope = is_coupled ? _document_declared_names(file) :
                 Set{String}(vcat([sp.name for sp in rs.species], [p.name for p in rs.parameters]))
@@ -3441,6 +3531,12 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
                         file, eq.rhs, "$rs_path/constraint_equations/$(i - 1)/rhs"; scope = scope
                     )
                 )
+            end
+            # A parameter's update rules (esm-spec §5.4) read the system's names.
+            foreach_expression(rs, rs_path; subsystems = false) do e, at, kind
+                kind in (:update_when, :update_expression) || return nothing
+                append!(errors, validate_expression_references(file, e, at; scope = scope))
+                return nothing
             end
             for (i, event) in enumerate(rs.discrete_events)
                 append!(
@@ -3605,29 +3701,14 @@ function _coordinate_names(file::EsmFile)::Set{String}
     coords = Set{String}(_CONVENTIONAL_COORDINATE_NAMES)
     indep = _indep_var(file)
 
-    walk(e) = nothing
-    function walk(e::OpExpr)
-        e.dim !== nothing && !isempty(e.dim) && push!(coords, e.dim)
-        e.wrt !== nothing && !isempty(e.wrt) && e.wrt != indep && push!(coords, e.wrt)
-        for c in child_exprs(e)
-            walk(c)
-        end
-        return nothing
-    end
-
-    file.models === nothing && return coords
-    for (_, model) in file.models
-        for eq in model.equations
-            walk(eq.lhs); walk(eq.rhs)
-        end
-        # esm 1.0.0: a variable carries no defining expression. A parameter's
-        # update rules do, and a spatial `D` may appear in one.
-        for (_, v) in model.variables
-            v.update === nothing && continue
-            for rule in v.update
-                rule.when === nothing || walk(rule.when)
-                rule.expression === nothing || walk(rule.expression)
-            end
+    # Every expression site of the document: a spatial `D` or a `dim` may sit
+    # in any of them, in a subsystem or a reaction system as well.
+    foreach_expression(file) do site, _, _
+        foreach_subexpr_once(site) do e
+            e isa OpExpr || return nothing
+            e.dim !== nothing && !isempty(e.dim) && push!(coords, e.dim)
+            e.wrt !== nothing && !isempty(e.wrt) && e.wrt != indep && push!(coords, e.wrt)
+            return nothing
         end
     end
     return coords
@@ -3831,8 +3912,7 @@ function validate_model_references(
 
     # The other expression-bearing fields of the model: parameter update rules,
     # initialization equations, guesses, inline-test references and events, each
-    # walked with the same `scope`. (Not every check in this file walks all of
-    # them; the faq and broadcast checks do not.)
+    # walked with the same `scope`.
 
     # 1. A parameter update's expression-bearing fields (esm-spec §5.4): the
     #    `when` trigger and the `expression` value form. An observed unknown's

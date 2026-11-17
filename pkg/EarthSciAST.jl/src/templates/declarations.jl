@@ -6,27 +6,14 @@
 # ---------------------------------------------------------------------------
 
 function _assert_no_nested_apply(body, template_name::String, path::String)
-    if _is_array(body)
-        for (i, child) in enumerate(body)
-            _assert_no_nested_apply(child, template_name, "$path/$(i - 1)")
-        end
-        return
-    end
-    return if _is_object(body)
-        op = _raw_get(body, "op")
-        op_str = op === nothing ? "" : string(op)
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
-                )
-            )
-        end
-        for (k, v) in pairs(body)
-            _assert_no_nested_apply(v, template_name, "$path/$(string(k))")
-        end
-    end
+    at = _find_json_path(_is_apply_node, body, path)
+    at === nothing || throw(
+        ExpressionTemplateError(
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $at; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
+        )
+    )
+    return
 end
 
 function _validate_templates(templates::AbstractDict{String, Any}, scope::String)
@@ -88,11 +75,10 @@ function _validate_templates(templates::AbstractDict{String, Any}, scope::String
         # esm-spec §9.6: an optional `match` pattern turns the entry into an
         # auto-applied rewrite rule. The pattern is an Expression in which the
         # declared params are wildcards; it MUST NOT contain nested
-        # apply_expression_template ops. Nontermination is NOT checked
-        # statically any more — the bounded fixpoint (`MAX_REWRITE_PASSES`,
-        # esm-spec §9.6.3) is the authoritative guard, so a self-reintroducing
-        # rule is rejected at load time (`rewrite_rule_nonterminating`) only when
-        # it actually fails to converge within the pass bound.
+        # apply_expression_template ops. Nontermination is not checked
+        # statically: the bounded fixpoint (`MAX_REWRITE_PASSES`, esm-spec
+        # §9.6.3) is the guard, so a self-reintroducing rule is rejected
+        # (`rewrite_rule_nonterminating`) only when it fails to converge.
         match = _raw_get(decl, "match")
         if match !== nothing
             _assert_no_nested_apply(match, name, "/match")
@@ -179,17 +165,14 @@ across all bindings.
 const MAX_TEMPLATE_EXPANSION_DEPTH = 32
 
 # ---------------------------------------------------------------------------
-# Registration-time body composition (esm-spec §9.7.3)
+# The template body-reference graph (esm-spec §9.7.3)
 # ---------------------------------------------------------------------------
 
 # The `name` of every `apply_expression_template` node in a template body
 # (document order) — the §9.7.3 body-reference edges.
 function _collect_apply_names!(out::Vector{String}, x)
-    _walk_json(x) do _, n
-        _is_array(n) && return _may_hold_object(n)
-        _is_object(n) || return true
-        op = _raw_get(n, "op")
-        if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
+    _visit_json(x) do _, n
+        if _is_apply_node(n)
             nm = _raw_get(n, "name")
             nm !== nothing && push!(out, string(nm))
         end
@@ -198,29 +181,77 @@ function _collect_apply_names!(out::Vector{String}, x)
     return out
 end
 
-"""
-    _check_template_body_graph(templates, scope)
+# A component's `expression_templates` block as `name => raw declaration`
+# (empty when it declares none).
+function _component_templates(comp)::Dict{String, Any}
+    tpl = _raw_get(comp, "expression_templates")
+    _is_object(tpl) || return Dict{String, Any}()
+    return Dict{String, Any}(string(n) => d for (n, d) in pairs(tpl))
+end
 
-Registration-time body checking (esm-spec §9.7.3):
-template bodies MAY reference other in-scope MATCH-LESS templates via
-`apply_expression_template` nodes. Builds the body-reference graph, rejects
-cycles (`apply_expression_template_recursive_body`), references to undeclared
-or `match`-bearing templates (`apply_expression_template_unknown_template`),
-and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH` templates
-(`template_body_expansion_too_deep`).
-
-Bodies are not inlined: the references are preserved and denote their
-expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are computed
-separately by [`_template_target_bearing`](@ref). This runs BEFORE the §9.6.3
-fixpoint ever consults a `match` rule.
 """
+    _TemplateGraph
+
+The template reference graph: each template's name with the names its body
+calls (`apply_expression_template` nodes, in document order), esm-spec
+§9.7.3. Built from a registry by [`_template_graph`](@ref); read by
+[`_reachable`](@ref), [`_flagged`](@ref) and the acyclicity check.
+"""
+struct _TemplateGraph
+    refs::OrderedDict{String, Vector{String}}
+end
+
+# The graph of a registry `templates` (name => raw declaration).
+_template_graph(templates::AbstractDict) = _TemplateGraph(
+    OrderedDict{String, Vector{String}}(
+        string(n) => _collect_apply_names!(String[], _is_object(d) ? _raw_get(d, "body") : nothing)
+            for (n, d) in templates
+    )
+)
+
+"""
+    _reachable(g, roots; through = _ -> true) -> Set{String}
+
+The names reachable from `roots` along `g`'s edges, `roots` included: only
+names that are in `g` and satisfy `through` are entered or followed.
+"""
+function _reachable(g::_TemplateGraph, roots; through = _ -> true)::Set{String}
+    out = Set{String}()
+    stack = collect(String, roots)
+    while !isempty(stack)
+        n = pop!(stack)
+        (n in out || !haskey(g.refs, n) || !through(n)) && continue
+        push!(out, n)
+        append!(stack, g.refs[n])
+    end
+    return out
+end
+
+"""
+    _flagged(direct, g) -> Dict{String,Bool}
+
+For every name in `g`: whether `direct(name)` holds for it or for a name it
+reaches. Exact on a graph with cycles.
+"""
+function _flagged(direct, g::_TemplateGraph)::Dict{String, Bool}
+    callers = Dict{String, Vector{String}}()
+    for (n, rs) in g.refs, r in rs
+        push!(get!(callers, r, String[]), n)
+    end
+    flags = Dict{String, Bool}(n => false for n in keys(g.refs))
+    stack = String[n for n in keys(g.refs) if direct(n)]
+    while !isempty(stack)
+        n = pop!(stack)
+        flags[n] && continue
+        flags[n] = true
+        append!(stack, get(callers, n, String[]))
+    end
+    return flags
+end
+
 function _check_template_body_graph(templates::AbstractDict{String, Any}, scope::String)
     isempty(templates) && return
-    refs = Dict{String, Vector{String}}()
-    for (name, decl) in templates
-        body = _raw_get(decl, "body")
-        refs[name] = _collect_apply_names!(String[], body)
-    end
+    refs = _template_graph(templates).refs
     any(!isempty, values(refs)) || return
 
     for name in sort(collect(keys(refs)))

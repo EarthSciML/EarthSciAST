@@ -59,6 +59,8 @@ include("load_errors.jl")
 include("compiler.jl")
 # Core data model + validation
 include("types.jl")
+# The expression sites of a typed document: `map_expressions!` / `foreach_expression`.
+include("expression_sites.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
 # is stated over `Model`) and precede every consumer, which is nearly all of
 # them: from esm 1.0.0 there are only two declared variable types, so ODE
@@ -126,8 +128,6 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
-# Walkers over every expression-bearing field of a model / reaction system.
-include("expression_fields.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("graph.jl")

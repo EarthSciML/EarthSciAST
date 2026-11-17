@@ -30,33 +30,25 @@ _expand_expr_refs(e::OpExpr, reg) = _expand_expr_refs(e, reg, nothing)
 # is recorded `root => apply node`, at every nesting level. The tree-walk build's
 # affine stencil compiler treats each recorded root as a compilation boundary
 # (one compiled body per use site × region class) while every other consumer
-# sees the plain Option-A expanded tree. `sites === nothing` is the plain
-# expansion (byte-identical to the pre-tier behavior).
+# sees the plain Option-A expanded tree. `sites === nothing` records nothing.
 const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 
-# Expansion memo (perf plan A4): the recursive expansion of an
-# `apply_expression_template` node is a PURE function of (template name,
-# unexpanded bindings, registry) — `reg` is fixed for one `_expand_model_refs!`
-# call — so two structurally-identical apply sites expand to structurally-equal
-# subtrees. Keying `(name, canonical bindings)` → expanded root lets the second
-# site REUSE the first's expansion instead of re-running serialize → substitute
-# → re-parse → recurse, which the profiler flagged as ~34% build wall / ~46%
-# build allocs on the 7×7×7 transport fixture (the PPM flux templates recur at
-# every tracer equation, and each nested sub-template re-expands per parent).
+# Expansion memo: the recursive expansion of an `apply_expression_template`
+# node is a pure function of (template name, unexpanded bindings, registry),
+# and the registry is fixed for one memo, so two structurally identical apply
+# sites expand to structurally equal subtrees. Keying `(name, canonical
+# bindings)` → expanded root lets the second site reuse the first's expansion
+# instead of serializing, substituting, re-parsing and recursing again (a
+# template that recurs at every equation, with nested sub-templates, would
+# otherwise re-expand per parent).
 #
-# SHARING SAFETY: returning the SAME object for two sites makes the expanded
-# equation set a DAG — exactly the DAG A1 interning would collapse it to one
-# pass later (build.jl `_intern_model`). The two identity consumers are
-# DAG-safe by construction: `sites` is read as a `haskey` boundary Set
-# (stencil.jl:347/538) — a shared root is still a boundary; and
-# `_translate_sites_lockstep!` (build_helpers.jl) already carries a `seen`
-# guard "O(distinct nodes) on a shared DAG". The A1 pre-audit
-# (audits/intern_preaudit_2026-07-19.md) established that merging site keys is
-# harmless because the only site consumers are those `haskey` checks. Output is
-# byte-identical (verified by the differential oracle + the affine/intern
-# oracles), so the memo is not a choice of evaluator and every compiler keeps
-# it; `nothing` is the per-site re-expansion, for a caller that wants the
-# sharing measured rather than assumed.
+# Returning the same object for two sites makes the expanded equation set a
+# DAG, the one interning (`_intern_model`) would produce anyway. Its identity
+# consumers are DAG-safe: the stencil compiler reads `sites` only as a
+# `haskey` boundary set, so a shared root is still a boundary, and
+# `_translate_sites_lockstep!` keeps a `seen` set. The expanded output is the
+# same with or without the memo; `nothing` is the per-site re-expansion, for a
+# caller that wants the sharing measured rather than assumed.
 #
 # The memo also carries the per-template INSTANTIATION cache (`_TplSkel`): each
 # template is substituted, parsed and expanded ONCE per memo with a sentinel
@@ -95,7 +87,7 @@ function _cache_for!(memo::_ExpandCache, reg)
     memo.reg = reg
     return memo
 end
-# The entry points also take a bare bindings memo (the earlier form of `memo`).
+# The entry points also take a bare bindings memo.
 _expand_cache(m::Union{Nothing, _ExpandCache}) = m
 _expand_cache(m::Dict{Tuple{String, String}, OpExpr}) = _ExpandCache(m)
 
@@ -119,22 +111,7 @@ const _TEMPLATE_ORIGIN_WIRE_KEY = "__esm_template_origin"
 
 # The JSON-pointer path of the first `_TEMPLATE_ORIGIN_WIRE_KEY` in `node`, or
 # `nothing`.
-function _template_origin_key_path(node, path::String = "")
-    if _is_object(node)
-        haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY) && return path
-        for (k, v) in pairs(node)
-            p = _template_origin_key_path(v, string(path, "/", k))
-            p === nothing || return p
-        end
-    elseif _is_array(node)
-        _may_hold_object(node) || return nothing
-        for (i, v) in enumerate(node)
-            p = _template_origin_key_path(v, string(path, "/", i - 1))
-            p === nothing || return p
-        end
-    end
-    return nothing
-end
+_template_origin_key_path(node) = _find_json_path(n -> haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY), node)
 
 # Refuse an authored document that spells `_TEMPLATE_ORIGIN_WIRE_KEY`: the key
 # is load provenance, and the schema admits no such property, so an authored
@@ -158,37 +135,10 @@ end
 # the containers on a path to a mark; returns `node` itself when it holds none.
 # Every authored file was refused above if it spelled the key, so what this
 # removes is only the load's own marks.
-function _strip_template_origins(node, memo::IdDict{Any, Any} = IdDict{Any, Any}())
-    if _is_object(node)
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY)
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            string(k) == _TEMPLATE_ORIGIN_WIRE_KEY && continue
-            rv = _strip_template_origins(v, memo)
-            rv === v || (changed = true)
-            buf[string(k)] = rv
-        end
-        res = changed ? buf : node
-        memo[node] = res
-        return res
-    elseif _is_array(node)
-        _may_hold_object(node) || return node
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _strip_template_origins(v, memo)
-            rv === v || (changed = true)
-            buf[i] = rv
-        end
-        res = changed ? buf : node
-        memo[node] = res
-        return res
-    end
-    return node
+_strip_template_origins(node) =
+    _rewrite_json(node; leaves = false) do rw, n
+    haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY) || return _JSON_DESCEND
+    return _rewrite_json_children(rw, n; drop = _TEMPLATE_ORIGIN_WIRE_KEY)
 end
 
 # `ex` marked as the root of an expansion of `name`, while marking is on.
@@ -583,9 +533,9 @@ end
     _expand_refs!(file::EsmFile) -> EsmFile
 
 Expand every surviving `apply_expression_template` reference in `file`'s
-component expressions against `file.component_templates`, IN PLACE (the caller
-passes a copy when the reference-preserving original must be kept). Mirrors
-`lower_enums!`'s whole-file expression walk. A no-op when
+models and reaction systems against `file.component_templates`, IN PLACE (the
+caller passes a copy when the reference-preserving original must be kept), at
+every expression site [`map_expressions!`](@ref) reaches. A no-op when
 `file.component_templates` is `nothing` (no references survived).
 """
 function _expand_refs!(file::EsmFile)::EsmFile
@@ -594,15 +544,13 @@ function _expand_refs!(file::EsmFile)::EsmFile
     if file.models !== nothing
         for (cname, m) in file.models
             reg = get(ct, "models.$cname", nothing)
-            reg === nothing && continue
-            _expand_model_refs!(m, reg)
+            reg === nothing || _expand_model_refs!(m, reg)
         end
     end
     if file.reaction_systems !== nothing
         for (cname, rs) in file.reaction_systems
             reg = get(ct, "reaction_systems.$cname", nothing)
-            reg === nothing && continue
-            _expand_reaction_system_refs!(rs, reg)
+            reg === nothing || _expand_reaction_system_refs!(rs, reg)
         end
     end
     return file
@@ -630,87 +578,37 @@ function expanded_file(file::EsmFile)::EsmFile
     return reconstruct(out; component_templates = nothing)
 end
 
+"""
+    _expand_model_refs!(model, reg; sites = nothing, memo = _ExpandCache())
+    _expand_reaction_system_refs!(rs, reg; sites = nothing, memo = _ExpandCache())
 
-# The `update` rules of one variable, expanded. Returns `nothing` when no rule
-# changed, so every caller can pass the variable through BY IDENTITY rather than
-# reconstructing it. Shared by the load-time walk and the `FlattenedSystem`
-# boundary seam so the two cannot drift on which positions they expand.
-function _expand_update_refs(
-        var::ModelVariable, reg, sites::_TemplateSites,
-        memo::_ExpandMemo
-    )
-    var.update === nothing && return nothing
-    rules = ParameterUpdate[]
-    changed = false
-    for r in var.update
-        nw = r.when === nothing ? nothing :
-            _expand_expr_refs(r.when, reg, sites, memo)
-        ne = r.expression === nothing ? nothing :
-            _expand_expr_refs(r.expression, reg, sites, memo)
-        (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(
-            rules, ParameterUpdate(
-                r.kind; times = r.times, interval = r.interval,
-                initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                source = r.source, hook = r.hook, expression = ne, from = r.from,
-                handler = r.handler
-            )
-        )
-    end
-    return changed ? rules : nothing
-end
+Expand the surviving references at every expression site of `model` or `rs`
+and of their subsystems ([`EXPRESSION_SITE_KINDS`](@ref): equations,
+initialization equations, guesses, update rules, bounds, events, inline-test
+references, rates, constraint equations), in place, against the component
+registry `reg`. One `memo` serves every site, so structurally identical
+applications expand once and share the expanded root (`_ExpandCache`); pass
+`memo = nothing` to expand each site separately. `sites` records each
+expansion root as `_expand_expr_refs` describes.
 
+The containers `model` holds directly are updated in place, so a caller that
+must keep the reference-preserving original passes a copy that owns them.
+"""
 function _expand_model_refs!(
         model::Model, reg; sites::_TemplateSites = nothing,
         memo::Union{_ExpandMemo, Dict{Tuple{String, String}, OpExpr}} = _ExpandCache()
     )
     memo = _expand_cache(memo)
-    # esm 1.0.0: the only per-variable expression positions are a parameter
-    # update's `when` trigger and `expression` value form (esm-spec §5.4); an
-    # observed unknown's body is an equation, expanded just below.
-    for (name, var) in model.variables
-        rules = _expand_update_refs(var, reg, sites, memo)
-        rules === nothing || (model.variables[name] = reconstruct(var; update = rules))
-    end
-    _expand_equations_refs!(model.equations, reg; sites = sites, memo = memo)
-    _expand_equations_refs!(model.initialization_equations, reg; sites = sites, memo = memo)
-    for (_, sub) in model.subsystems
-        sub isa Model && _expand_model_refs!(sub, reg; sites = sites, memo = memo)
-    end
+    map_expressions!(e -> _expand_expr_refs(e, reg, sites, memo), model)
     return
 end
 
-function _expand_equations_refs!(
-        eqs::Vector{Equation}, reg; sites::_TemplateSites = nothing,
-        memo::_ExpandMemo = nothing
+function _expand_reaction_system_refs!(
+        rs::ReactionSystem, reg; sites::_TemplateSites = nothing,
+        memo::Union{_ExpandMemo, Dict{Tuple{String, String}, OpExpr}} = _ExpandCache()
     )
-    isempty(eqs) && return
-    new_eqs = Equation[
-        Equation(
-            _expand_expr_refs(eq.lhs, reg, sites, memo),
-            _expand_expr_refs(eq.rhs, reg, sites, memo); _comment = eq._comment
-        )
-            for eq in eqs
-    ]
-    empty!(eqs); append!(eqs, new_eqs)
-    return
-end
-
-function _expand_reaction_system_refs!(rs::ReactionSystem, reg)
-    new_reactions = Reaction[]
-    for r in rs.reactions
-        push!(
-            new_reactions, Reaction(
-                r.id, raw_substrates(r), raw_products(r),
-                _expand_expr_refs(r.rate, reg); name = r.name, reference = r.reference
-            )
-        )
-    end
-    empty!(rs.reactions); append!(rs.reactions, new_reactions)
-    _expand_equations_refs!(rs.constraint_equations, reg)
-    for (_, sub) in rs.subsystems
-        _expand_reaction_system_refs!(sub, reg)
-    end
+    memo = _expand_cache(memo)
+    map_expressions!(e -> _expand_expr_refs(e, reg, sites, memo), rs)
     return
 end
 
@@ -728,10 +626,11 @@ tree-walk build does NOT (it expands at its own entry with site recording).
 
 Expanded positions: the equations, the field initial conditions, every event
 expression (conditions, condition triggers, affect right-hand sides), and each
-variable's parameter-update `when` and `expression` (esm-spec §5.4) in all three
-variable buckets. The three subset maps (`algebraic_variables`,
-`brownian_parameters`, `discrete_parameters`) are re-read from the expanded
-buckets, so they hold the same expanded variables.
+variable's sites (update rules and expression bounds, `_map_variable_sites`)
+in all three variable buckets; a bucket with no reference is kept as it is.
+The three subset maps (`algebraic_variables`, `brownian_parameters`,
+`discrete_parameters`) are re-read from the expanded buckets, so they hold the
+same expanded variables.
 
 `memo` is the shared expansion memo (`_expand_model_refs!`'s default):
 structurally identical apply sites expand once and share the result. Pass `nothing` for the
@@ -751,9 +650,9 @@ function expand_flattened_refs(
     # contribution's origins.
     expand = e -> _expand_expr_refs(e, reg, nothing, memo)
     neweqs, newcontribs = _rewrite_flat_equations(expand, flat)
-    states = _expand_vars_refs(flat.state_variables, reg, memo)
-    params = _expand_vars_refs(flat.parameters, reg, memo)
-    observeds = _expand_vars_refs(flat.observed_variables, reg, memo)
+    states = _map_variable_sites(expand, flat.state_variables)
+    params = _map_variable_sites(expand, flat.parameters)
+    observeds = _map_variable_sites(expand, flat.observed_variables)
     return FlattenedSystem(
         flat; equations = neweqs, equation_contributions = newcontribs,
         state_variables = states, parameters = params, observed_variables = observeds,
@@ -764,20 +663,4 @@ function expand_flattened_refs(
         continuous_events = _map_event_exprs(expand, flat.continuous_events),
         discrete_events = _map_event_exprs(expand, flat.discrete_events)
     )
-end
-
-# One variable bucket of a `FlattenedSystem`, expanded. Unchanged variables are
-# passed through BY IDENTITY (`_expand_update_refs` returns `nothing`), so a
-# bucket with no references costs one dictionary rebuild and no `ModelVariable`
-# allocation.
-function _expand_vars_refs(
-        vars::OrderedDict{String, ModelVariable}, reg,
-        memo::_ExpandMemo
-    )
-    out = OrderedDict{String, ModelVariable}()
-    for (name, var) in vars
-        rules = _expand_update_refs(var, reg, nothing, memo)
-        out[name] = rules === nothing ? var : reconstruct(var; update = rules)
-    end
-    return out
 end

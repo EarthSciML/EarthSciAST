@@ -1,6 +1,7 @@
-# Variable bounds `lb` / `ub` (esm-spec §6.3.2): the version gate, the four
-# validity rules, and the rewrite flattening applies to a bound
-# (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
+# Variable bounds `lb` / `ub` (esm-spec §6.3.2): the version gate and the four
+# validity rules. The rewrite flattening applies to a bound
+# (esm-libraries-spec §4.7.5, "Bounds follow the renaming") is the bound site
+# of the expression-site walk (expression_sites.jl).
 
 # ============================================================================
 # Version gate
@@ -224,47 +225,4 @@ function _observed_chain_to(g, from::String, goal::String)
         end
     end
     return nothing
-end
-
-# ============================================================================
-# Flattening
-# ============================================================================
-
-"""
-    _map_variable_bounds(var, f) -> ModelVariable
-
-`var` with each reference bound rewritten by `f`, the expression rewrite
-flattening applies to a reference in the component's equations
-(esm-libraries-spec §4.7.5). The reference goes through `f` as a one-leaf
-expression, so namespacing, the `operator_compose` merged-away rename and a
-`variable_map` substitution reach it exactly as they reach an equation. A
-result that is still a single variable is stored back as its name; a scaled
-replacement stays the expression it became. A number is never touched, and
-`var` itself comes back when nothing changed.
-"""
-function _map_variable_bounds(var::ModelVariable, f)::ModelVariable
-    (_is_bound_reference(var.lb) || _is_bound_reference(var.ub)) || return var
-    lb, ub = _map_bound(var.lb, f), _map_bound(var.ub, f)
-    (isequal(lb, var.lb) && isequal(ub, var.ub)) && return var
-    return reconstruct(var; lb = lb, ub = ub)
-end
-
-_is_bound_reference(b) = b isa String || b isa ASTExpr
-
-_map_bound(b, f) = b
-function _map_bound(b::Union{String, ASTExpr}, f)
-    out = f(b isa String ? VarExpr(b) : b)
-    return out isa VarExpr ? out.name : out
-end
-
-# The map form: a new map only when some variable's bounds changed.
-function _map_variable_bounds_all(vars::OrderedDict{String, ModelVariable}, f)
-    mapped = nothing
-    for (name, var) in vars
-        nv = _map_variable_bounds(var, f)
-        nv === var && continue
-        mapped === nothing && (mapped = OrderedDict{String, ModelVariable}(vars))
-        mapped[name] = nv
-    end
-    return mapped === nothing ? vars : mapped
 end

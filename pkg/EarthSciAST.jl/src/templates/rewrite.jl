@@ -3,7 +3,7 @@
 
 """
 Load-time rewrite pass for `expression_templates` (esm-spec §9.6,
-docs/rfcs/ast-expression-templates.md, esm-giy).
+docs/rfcs/ast-expression-templates.md).
 
 `expression_templates` is the single structural-substitution mechanism in the
 format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
@@ -55,18 +55,6 @@ tree) and returns the rewritten `OrderedDict{String,Any}` document ready for
 
 const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
 
-# (The `JSONLikeDict` property-surface shim that used to live here is gone:
-# documents are normalized ONCE at the wire boundary into the single
-# `OrderedDict{String,Any}` carrier — see `_to_ordered` in json_walk.jl — and
-# every downstream consumer speaks plain string-keyed `get`.)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-# (`_is_object` / `_is_array` — the raw-JSON node-kind predicates — and
-# `_to_ordered` — the ONE sharing-preserving, order-preserving normalizer —
-# live in src/json_walk.jl with the shared traversal combinators.)
-
 # ---------------------------------------------------------------------------
 # Substitution
 # ---------------------------------------------------------------------------
@@ -94,52 +82,22 @@ substituted once.
 """
 function _substitute(body, bindings::Dict{String, Any})
     isempty(bindings) && return body
-    return _subst_shared(body, bindings, IdDict{Any, Any}())
-end
-
-function _subst_shared(n, bindings::Dict{String, Any}, memo::IdDict{Any, Any})
-    if n isa AbstractString
-        return haskey(bindings, string(n)) ? bindings[string(n)] : n
-    elseif _is_array(n)
-        r = get(memo, n, nothing)
-        r === nothing || return r
-        changed = false
-        buf = Vector{Any}(undef, length(n))
-        for (i, x) in enumerate(n)
-            rx = _subst_shared(x, bindings, memo)
-            rx === x || (changed = true)
-            buf[i] = rx
-        end
-        res = changed ? buf : n
-        memo[n] = res
-        return res
-    elseif _is_object(n)
-        r = get(memo, n, nothing)
-        r === nothing || return r
+    return _rewrite_json(body) do rw, n
+        n isa AbstractString && return get(bindings, String(n), n)
         # esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4: parameter substitution
         # applies inside a nested `apply_expression_template` reference's
         # `bindings` values exactly as any other Expression position, but the
-        # `name` field is NEVER a substitution site.
-        op = _raw_get(n, "op")
-        is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-        changed = false
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(n)
-            ks = string(k)
-            if is_apply && ks == "name"
-                buf[ks] = v
-                continue
-            end
-            rv = _subst_shared(v, bindings, memo)
-            rv === v || (changed = true)
-            buf[ks] = rv
-        end
-        res = changed ? buf : n
-        memo[n] = res
-        return res
-    else
-        return n
+        # `name` field is never a substitution site.
+        _is_apply_node(n) && return _rewrite_json_children(rw, n; keep = "name")
+        return _JSON_DESCEND
     end
+end
+
+# Whether the raw JSON node `n` is an `apply_expression_template` node.
+function _is_apply_node(n)
+    _is_object(n) || return false
+    op = _raw_get(n, "op")
+    return op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
 end
 
 """
@@ -149,10 +107,11 @@ end
 The ONE call-site resolution shared by [`_expand_apply`](@ref) (expansion)
 and [`_validate_apply_ref`](@ref) (surviving-reference check): `name` present,
 declared in `templates`, `bindings` an object covering the declaration's
-`params` exactly. `reject_match_rule = true` additionally rejects — directly
-after the declaration lookup, preserving the historical error precedence — a
-reference to a `match` rewrite rule (only match-less templates are invocable
-by name, esm-spec §9.6.2). Throws the stable §9.6.6 diagnostics.
+`params` exactly. `reject_match_rule = true` additionally rejects a reference
+to a `match` rewrite rule (only match-less templates are invocable by name,
+esm-spec §9.6.2); that check runs directly after the declaration lookup, so it
+takes precedence over a bindings mismatch. Throws the stable §9.6.6
+diagnostics.
 """
 function _resolve_apply_site(
         node, templates::AbstractDict, scope::String;
@@ -215,11 +174,11 @@ end
 
 function _expand_apply(node, templates::AbstractDict, scope::String)
     _, decl, bindings_raw = _resolve_apply_site(node, templates, scope)
-    # The bindings have already been rewritten in place by the bottom-up
-    # `_rewrite` pass (children are rewritten before their parent apply node is
-    # expanded), so they are consumed as-is here. The template `body` is
-    # instantiated by pure structural substitution and is NOT re-scanned
-    # (esm-spec §9.6.3 rule 2: a replacement body is not re-matched).
+    # The bindings are consumed as they are: `_expand_refs_walk`, the only
+    # route here, expands the references inside them first. The template
+    # `body` is instantiated by pure structural substitution and is NOT
+    # re-scanned (esm-spec §9.6.3 rule 2: a replacement body is not
+    # re-matched).
     resolved = Dict{String, Any}()
     for (k, v) in pairs(bindings_raw)
         resolved[string(k)] = v
@@ -250,28 +209,10 @@ Walk `node` and run [`_validate_apply_ref`](@ref) on every surviving
 checks). Descends into references' `bindings` too — a binding value MAY itself
 be a surviving reference.
 """
-function _check_surviving_refs(
-        node, templates::AbstractDict, scope::String,
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )
-    if _is_array(node)
-        # An array of numbers or number rows holds no reference.
-        _may_hold_object(node) || return
-        haskey(seen, node) && return
-        seen[node] = nothing
-        for c in node
-            _check_surviving_refs(c, templates, scope, seen)
-        end
-    elseif _is_object(node)
-        haskey(seen, node) && return
-        seen[node] = nothing
-        op = _raw_get(node, "op")
-        if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-            _validate_apply_ref(node, templates, scope)
-        end
-        for (_, v) in pairs(node)
-            _check_surviving_refs(v, templates, scope, seen)
-        end
+function _check_surviving_refs(node, templates::AbstractDict, scope::String)
+    _visit_json(node) do _, n
+        _is_apply_node(n) && _validate_apply_ref(n, templates, scope)
+        return true
     end
     return
 end
@@ -320,30 +261,11 @@ object whose `op` satisfies `pred(op::String)`. Does NOT follow references to
 other templates — that transitive step is [`_transitive_op_flags`](@ref).
 Identity-`seen` so a structurally-shared subtree is visited once.
 """
-function _direct_op_hit(
-        node, pred,
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )::Bool
-    if _is_array(node)
-        haskey(seen, node) && return false
-        seen[node] = nothing
-        for c in node
-            _direct_op_hit(c, pred, seen) && return true
-        end
-        return false
-    elseif _is_object(node)
-        haskey(seen, node) && return false
-        seen[node] = nothing
-        op = _raw_get(node, "op")
-        if op !== nothing && pred(string(op))
-            return true
-        end
-        for (_, v) in pairs(node)
-            _direct_op_hit(v, pred, seen) && return true
-        end
-        return false
-    else
-        return false
+function _direct_op_hit(node, pred)::Bool
+    return _visit_json(node) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        return (op !== nothing && pred(string(op))) ? _JSON_STOP : true
     end
 end
 
@@ -367,33 +289,10 @@ against a cycle the checker somehow missed (an in-progress node is treated as
 non-contributing — acyclicity is enforced earlier).
 """
 function _transitive_op_flags(templates::AbstractDict, pred)::Dict{String, Bool}
-    flags = Dict{String, Bool}()
-    inprogress = Set{String}()
-    function visit(name::String)::Bool
-        haskey(flags, name) && return flags[name]
-        name in inprogress && return false
-        decl = get(templates, name, nothing)
-        decl === nothing && (flags[name] = false; return false)
-        push!(inprogress, name)
-        body = _raw_get(decl, "body")
-        res = body !== nothing && _direct_op_hit(body, pred)
-        if !res
-            for r in _collect_apply_names!(String[], body)
-                haskey(templates, r) || continue
-                if visit(r)
-                    res = true
-                    break
-                end
-            end
-        end
-        delete!(inprogress, name)
-        flags[name] = res
-        return res
+    return _flagged(_template_graph(templates)) do name
+        body = _raw_get(templates[name], "body")
+        body !== nothing && _direct_op_hit(body, pred)
     end
-    for name in keys(templates)
-        visit(string(name))
-    end
-    return flags
 end
 
 """
@@ -439,74 +338,30 @@ function _expand_refs_walk(
         node, named::AbstractDict, scope::String,
         expand_pred, memo::IdDict{Any, Any}
     )
-    if _is_object(node)
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        op = _raw_get(node, "op")
-        op_str = op === nothing ? "" : string(op)
-        local res
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            # Innermost-first: rewrite references inside the bindings first.
-            b = _raw_get(node, "bindings")
-            newnode = node
-            if b !== nothing && _is_object(b)
-                nb = OrderedDict{String, Any}()
-                changed = false
-                for (k, v) in pairs(b)
-                    rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-                    rv === v || (changed = true)
-                    nb[string(k)] = rv
-                end
-                if changed
-                    newnode = OrderedDict{String, Any}()
-                    for (k, v) in pairs(node)
-                        newnode[string(k)] = (string(k) == "bindings") ? nb : v
-                    end
-                end
+    return _rewrite_json(node; memo = memo, leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        # Innermost-first: rewrite references inside the bindings first.
+        b = _raw_get(n, "bindings")
+        newnode = n
+        if b !== nothing && _is_object(b)
+            nb = _rewrite_json_children(rw, b)
+            if nb !== b
+                newnode = OrderedDict{String, Any}(
+                    string(k) => (string(k) == "bindings" ? nb : v) for (k, v) in pairs(n)
+                )
             end
-            if expand_pred(newnode)
-                body = _expand_apply(newnode, named, scope)
-                res = _expand_refs_walk(body, named, scope, expand_pred, memo)
-                # While marking (a mount's leaf, expanded at load), the root of
-                # the expansion records that it came from an application
-                # (esm-spec §9.6.11), as `_expand_expr_refs` does on typed trees.
-                if _marking_template_origins() && _is_object(res)
-                    marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
-                    marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
-                    res = marked
-                end
-            else
-                res = newnode
-            end
-        else
-            changed = false
-            buf = OrderedDict{String, Any}()
-            for (k, v) in pairs(node)
-                rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-                rv === v || (changed = true)
-                buf[string(k)] = rv
-            end
-            res = changed ? buf : node
         end
-        memo[node] = res
-        return res
-    elseif _is_array(node)
-        # An array of numbers or number rows holds no reference.
-        _may_hold_object(node) || return node
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-            rv === v || (changed = true)
-            buf[i] = rv
+        expand_pred(newnode) || return newnode
+        res = _rewrite_json_node(rw, _expand_apply(newnode, named, scope))
+        # While marking (a mount's leaf, expanded at load), the root of the
+        # expansion records that it came from an application (esm-spec
+        # §9.6.11), as `_expand_expr_refs` does on typed trees.
+        if _marking_template_origins() && _is_object(res)
+            marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
+            marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
+            res = marked
         end
-        res = changed ? buf : node
-        memo[node] = res
         return res
-    else
-        return node
     end
 end
 
@@ -798,9 +653,8 @@ end
 """
     _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
 
-One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3),
-expressed as an identity-memoized, sharing-preserving recursion
-([`_rewrite_node`](@ref)). At each object node the engine first tries to fire
+One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3), a
+sharing-preserving [`_rewrite_json`](@ref) walk. At each object node the engine first tries to fire
 a rule AT the node before descending:
 
 1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
@@ -828,108 +682,41 @@ function _rewrite_pass(
         target_bearing::Dict{String, Bool}
     )
     changed = Ref(false)
-    # Identity-memoized recursion (not `_map_json`): the rewrite of a node is a
-    # pure function of the node itself (pattern matching is structural, the
-    # registries and `shape_env` are pass-constant), so a subtree shared under
-    # many parents is rewritten ONCE and the shared result respliced —
-    # preserving the DAG `_substitute` builds instead of exploding it back
-    # into a tree, and keeping pass cost linear in UNIQUE nodes. Unchanged
-    # subtrees are returned by identity for the same reason.
-    memo = IdDict{Any, Any}()
-    out = _rewrite_node(
-        node, named, sorted_rules, scope, last, shape_env,
-        target_bearing, memo, changed
-    )
-    return (out, changed[])
-end
-
-function _rewrite_node(
-        n, named::Dict{String, Any},
-        sorted_rules::Vector{_RewriteRule},
-        scope::String, last::Ref{String},
-        shape_env::Dict{String, Vector{String}},
-        target_bearing::Dict{String, Bool},
-        memo::IdDict{Any, Any}, changed::Base.RefValue{Bool}
-    )
-    if _is_object(n)
-        r = get(memo, n, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
+    # One rewrite per unique node: the rewrite of a node is a function of the
+    # node alone (matching is structural; the registries and `shape_env` are
+    # fixed for the pass), so a subtree shared under many parents is rewritten
+    # once and its result shared, keeping the pass linear in unique nodes.
+    out = _rewrite_json(node; leaves = false) do _, n
         op = _raw_get(n, "op")
         op_str = op === nothing ? "" : string(op)
-        local res
-        # (1) Outermost-first: fire a rule AT this node before descending.
+        # Outermost-first: fire a rule AT this node before descending.
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            # esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
-            # (non-eager) reference as a LEAF — it does not descend into its
-            # `bindings`, no rule fires inside it, and it survives the fixpoint.
-            # Eager references were already removed by the pre-pass
-            # (`_expand_eager`); a defensive check keeps any eager node that a
-            # caller passed in unexpanded correct.
-            if _ref_is_eager(n, target_bearing)
-                last[] = APPLY_EXPRESSION_TEMPLATE_OP
+            # esm-spec §9.6.4 rule 4 (Option B): a surviving (non-eager)
+            # reference is a LEAF: the engine does not descend into its
+            # `bindings`, no rule fires inside it, and it survives the
+            # fixpoint. The eager pre-pass (`_expand_eager`) has removed the
+            # eager ones; one passed in unexpanded is expanded here.
+            _ref_is_eager(n, target_bearing) || return n
+            last[] = APPLY_EXPRESSION_TEMPLATE_OP
+            changed[] = true
+            return _expand_eager(n, named, target_bearing, scope)
+        end
+        for rule in sorted_rules
+            bindings = Dict{String, Any}()
+            if _match_pattern(rule.pattern, n, rule.params, bindings) &&
+                    _where_satisfied(rule.where_clause, bindings, shape_env)
+                last[] = op_str
                 changed[] = true
-                res = _expand_eager(n, named, target_bearing, scope)
-            else
-                res = n
-            end
-        else
-            fired = false
-            for rule in sorted_rules
-                bindings = Dict{String, Any}()
-                if _match_pattern(rule.pattern, n, rule.params, bindings) &&
-                        _where_satisfied(rule.where_clause, bindings, shape_env)
-                    last[] = op_str
-                    changed[] = true
-                    # Instantiate by pure substitution (through nested
-                    # references' `bindings`; `name` is never a site). An eager
-                    # reference introduced by the instantiation expands as part
-                    # of the same rewrite (§9.6.4 rule 4) via the pre-pass.
-                    body = _substitute(rule.body, bindings)
-                    res = _expand_eager(body, named, target_bearing, scope)
-                    fired = true
-                    break
-                end
-            end
-            if !fired
-                # (2) No rule fired here — descend into children,
-                # identity-preserving.
-                kids_changed = false
-                buf = OrderedDict{String, Any}()
-                for (k, v) in pairs(n)
-                    rv = _rewrite_node(
-                        v, named, sorted_rules, scope, last,
-                        shape_env, target_bearing, memo, changed
-                    )
-                    rv === v || (kids_changed = true)
-                    buf[string(k)] = rv
-                end
-                res = kids_changed ? buf : n
+                # Instantiate by pure substitution (through nested
+                # references' `bindings`; `name` is never a site). An eager
+                # reference the instantiation introduces expands as part of
+                # the same rewrite (§9.6.4 rule 4).
+                return _expand_eager(_substitute(rule.body, bindings), named, target_bearing, scope)
             end
         end
-        memo[n] = res
-        return res
-    elseif _is_array(n)
-        # A rule fires only on an object: an array of numbers or number rows
-        # comes back unchanged.
-        _may_hold_object(n) || return n
-        r = get(memo, n, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        kids_changed = false
-        buf = Vector{Any}(undef, length(n))
-        for (i, v) in enumerate(n)
-            rv = _rewrite_node(
-                v, named, sorted_rules, scope, last,
-                shape_env, target_bearing, memo, changed
-            )
-            rv === v || (kids_changed = true)
-            buf[i] = rv
-        end
-        res = kids_changed ? buf : n
-        memo[n] = res
-        return res
-    else
-        return n
+        return _JSON_DESCEND
     end
+    return (out, changed[])
 end
 
 """
@@ -977,48 +764,17 @@ end
 # Scan utilities
 # ---------------------------------------------------------------------------
 
+# The JSON pointer of every `apply_expression_template` node in `x`, under
+# `path`, in document order.
 function _find_apply_paths!(hits::Vector{String}, x, path::String)
-    if _is_array(x)
-        for (i, child) in enumerate(x)
-            _find_apply_paths!(hits, child, "$path/$(i - 1)")
-        end
-        return
-    end
-    return if _is_object(x)
-        op = _raw_get(x, "op")
-        op_str = op === nothing ? "" : string(op)
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            push!(hits, path)
-        end
-        for (k, v) in pairs(x)
-            _find_apply_paths!(hits, v, "$path/$(string(k))")
-        end
-    end
-end
-
-function _has_apply_op(x)
-    found = false
-    # Visit each unique container once (`seen`): on a structurally-shared
-    # expanded tree the same subtree hangs under exponentially many paths.
-    seen = IdDict{Any, Nothing}()
-    _walk_json(x) do _, n
-        found && return false   # already answered — prune the rest
-        n isa AbstractVector && _leaves_only(n) && return false   # holds no object
-        if _is_object(n) || _is_array(n)
-            haskey(seen, n) && return false
-            seen[n] = nothing
-        end
-        if _is_object(n)
-            op = _raw_get(n, "op")
-            if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-                found = true
-                return false
-            end
-        end
+    _visit_json(x; path = path) do _, n, ptr
+        _is_apply_node(n) && push!(hits, string(ptr))
         return true
     end
-    return found
+    return hits
 end
+
+_has_apply_op(x) = _visit_json((_, n) -> _is_apply_node(n) ? _JSON_STOP : true, x)
 
 """
     _has_template_machinery(raw_data) -> Bool
@@ -1032,17 +788,9 @@ no template expansion (returned unchanged, by identity).
 function _has_template_machinery(raw_data)
     raw_data === nothing && return false
     _is_object(raw_data) || return false
-    for compkind in ("models", "reaction_systems")
-        comps = _raw_get(raw_data, compkind)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            tpl = _raw_get(comp, "expression_templates")
-            if _is_object(tpl) && length(collect(pairs(tpl))) > 0
-                return true
-            end
-        end
+    for (_, _, comp) in _components(raw_data)
+        tpl = _raw_get(comp, "expression_templates")
+        _is_object(tpl) && !isempty(tpl) && return true
     end
     return _has_apply_op(raw_data)
 end
@@ -1068,63 +816,40 @@ only concrete integer pairs are checked (a fully-folded document tree carries
 nothing else in bound position). Throws [`ExpressionTemplateError`](@ref) with
 code `makearray_region_inverted`.
 """
-function _validate_makearray_regions(
-        x, path::String = "",
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )
-    if _is_array(x)
-        _may_hold_object(x) || return
-        haskey(seen, x) && return
-        seen[x] = nothing
-        for (i, child) in enumerate(x)
-            # A scalar holds no region; skipping it spares a path string per
-            # element of a large inline number array.
-            (_is_array(child) || _is_object(child)) || continue
-            _validate_makearray_regions(child, "$path/$(i - 1)", seen)
-        end
-        return
-    end
-    _is_object(x) || return
-    haskey(seen, x) && return
-    seen[x] = nothing
-    op = _raw_get(x, "op")
-    op_str = op === nothing ? "" : string(op)
-    if op_str == "makearray"
-        regions = _raw_get(x, "regions")
-        if regions !== nothing && _is_array(regions)
-            for (ri, region) in enumerate(regions)
-                _is_array(region) || continue
-                for (di, bounds) in enumerate(region)
-                    (_is_array(bounds) && length(bounds) == 2) || continue
-                    lo, hi = bounds[1], bounds[2]
-                    (
-                        lo isa Integer && !(lo isa Bool) &&
-                            hi isa Integer && !(hi isa Bool)
-                    ) || continue
-                    if hi < lo - 1
-                        throw(
-                            ExpressionTemplateError(
-                                ERROR_CODES.MAKEARRAY_REGION_INVERTED,
-                                "$path: makearray regions[$(ri - 1)] dimension $(di - 1) " *
-                                    "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
-                                    "An empty bound is spelled [start, start-1] and " *
-                                    "contributes no elements (esm-spec §4.3.2); a further-" *
-                                    "inverted pair is an authoring error — e.g. an interior " *
-                                    "stencil region [2, N-1] instantiated at N below the " *
-                                    "scheme's minimum extent (§9.6.8)."
-                            )
-                        )
-                    end
-                end
+function _validate_makearray_regions(x, path::String = "")
+    _visit_json(x; path = path) do key, n, ptr
+        # Template bodies and matches are pre-substitution trees, whose bounds
+        # may carry metaparameter names or fold later (esm-spec §9.7.6).
+        key == "expression_templates" && return false
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        (op !== nothing && string(op) == "makearray") || return true
+        regions = _raw_get(n, "regions")
+        (regions !== nothing && _is_array(regions)) || return true
+        for (ri, region) in enumerate(regions)
+            _is_array(region) || continue
+            for (di, bounds) in enumerate(region)
+                (_is_array(bounds) && length(bounds) == 2) || continue
+                lo, hi = bounds[1], bounds[2]
+                (
+                    lo isa Integer && !(lo isa Bool) &&
+                        hi isa Integer && !(hi isa Bool)
+                ) || continue
+                hi < lo - 1 && throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.MAKEARRAY_REGION_INVERTED,
+                        "$(string(ptr)): makearray regions[$(ri - 1)] dimension $(di - 1) " *
+                            "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
+                            "An empty bound is spelled [start, start-1] and " *
+                            "contributes no elements (esm-spec §4.3.2); a further-" *
+                            "inverted pair is an authoring error — e.g. an interior " *
+                            "stencil region [2, N-1] instantiated at N below the " *
+                            "scheme's minimum extent (§9.6.8)."
+                    )
+                )
             end
         end
-    end
-    for (k, v) in pairs(x)
-        ks = string(k)
-        # Template bodies/matches are pre-substitution trees; bounds may
-        # legally carry metaparameter names or fold later (esm-spec §9.7.6).
-        ks == "expression_templates" && continue
-        _validate_makearray_regions(v, "$path/$ks", seen)
+        return true
     end
     return
 end
@@ -1180,16 +905,9 @@ function reject_expression_templates_pre_v04(raw_data)
     !is_pre_v04 && return
 
     offences = String[]
-    for compkind in ("models", "reaction_systems")
-        comps = _raw_get(raw_data, compkind)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            if _raw_haskey(comp, "expression_templates")
-                push!(offences, "/$compkind/$(string(cname))/expression_templates")
-            end
-        end
+    for (compkind, cname, comp) in _components(raw_data)
+        _raw_haskey(comp, "expression_templates") &&
+            push!(offences, "/$compkind/$cname/expression_templates")
     end
     _find_apply_paths!(offences, raw_data, "")
 
@@ -1234,8 +952,7 @@ because it shares a deeply-nested, float-heavy array with non-integral floats
 (the `1`/`8` of `{op:"/",args:[1,8]}` nested under a `cos(pi·…)` aggregate body).
 The AST-golden pathway (`resolve_template_machinery` → `lower_expression_templates`
 → canonical sorted write) never runs `expression_from_json`, so without this pass a
-widened `1.0`/`8.0` survives all the way to the emitted golden — the lone Julia
-outlier vs. Python/Rust/TS/Go, which read `[1,8]` as integers.
+widened `1.0`/`8.0` would reach the emitted golden, which spells `[1,8]`.
 
 Narrowing is scoped to `args` array elements (the Expression operand position),
 so scalar CONFIGURATION floats an authored `1.0`/`0.0` legitimately occupies
@@ -1248,28 +965,16 @@ which deliberately preserves an authored `1.0`, is on a separate path and is
 untouched.
 """
 function _narrow_arg_literals!(x)
-    # One visit per unique container (`seen`): on a structurally-shared
-    # expanded tree the same node hangs under many parents, and narrowing is
-    # idempotent and value-local, so a single visit of the shared object is
-    # exactly equivalent to (exponentially many) repeated ones.
-    seen = IdDict{Any, Nothing}()
-    _walk_json(x) do key, n
-        # Narrow the DIRECT elements of every `args` array in place; the walk
-        # then descends into the (mutated) array, recursing through nested
-        # operand objects toward their own `args` arrays. This runs before the
-        # seen-prune because the trigger is POSITIONAL (the parent key), and a
-        # shared array can hang under more than one key.
-        if key == "args" && n isa AbstractVector
-            for i in eachindex(n)
-                vi = n[i]
-                _int64_narrowable(vi) && (n[i] = Int64(vi))
+    # Narrowing is idempotent and local to the value, so visiting a shared
+    # object once is the same as visiting it under each of its parents.
+    _visit_json(x) do _, n
+        _is_object(n) || return true
+        args = _raw_get(n, "args")
+        if args isa AbstractVector
+            for i in eachindex(args)
+                vi = args[i]
+                _int64_narrowable(vi) && (args[i] = Int64(vi))
             end
-        end
-        # Below an array of numbers or number rows there is no `args` array.
-        n isa AbstractVector && !_may_hold_object(n) && return false
-        if _is_object(n) || n isa AbstractVector
-            haskey(seen, n) && return false
-            seen[n] = nothing
         end
         return true
     end
@@ -1339,101 +1044,95 @@ function lower_expression_templates(raw_data)
     # reaction system never overwrites a same-named model.
     registries = Dict{String, _ComponentRegistry}()
 
-    for compkind in ("models", "reaction_systems")
-        comps = get(root, compkind, nothing)
-        comps === nothing && continue
-        _is_object(comps) || continue
-        for (cname, compraw) in pairs(comps)
-            _is_object(compraw) || continue
-            comp = compraw::OrderedDict{String, Any}
-            # Static shape environment for `where` constraint evaluation
-            # (esm-spec §9.6.1): declared variable shapes only.
-            shape_env = _component_shape_env(comp)
-            tplraw = get(comp, "expression_templates", nothing)
-            # `named`       — every template keyed by name, consulted by
-            #                 `apply_expression_template` (order-independent).
-            # `match_rules` — the auto-applied `match` rules, in template
-            #                 DECLARATION order (esm-spec §9.6.3).
-            named = Dict{String, Any}()
-            match_rules = _RewriteRule[]
-            if _is_object(tplraw)
-                # `root` is order-preserving (`_to_ordered`), so this map's key
-                # order IS the authored declaration order — the `match`-rule
-                # precedence tie-break (esm-spec §9.6.3) reads straight off it.
-                templates = OrderedDict{String, Any}()
-                for (tname, tdecl) in pairs(tplraw)
-                    templates[string(tname)] = tdecl
-                end
-                _validate_templates(templates, "$compkind.$(string(cname))")
-                # Registration-time body CHECKING (esm-spec §9.7.3, Option B):
-                # validate the body-reference DAG (acyclic, depth-bounded,
-                # references resolve to match-less templates). Bodies are NOT
-                # inlined — references are preserved (§9.6.4).
-                _check_template_body_graph(templates, "$compkind.$(string(cname))")
-                decl_index = 0
-                for (tname, decl) in templates
-                    decl_index += 1
-                    named[tname] = decl
-                    m = _raw_get(decl, "match")
-                    if m !== nothing
-                        params_raw = _raw_get(decl, "params")
-                        params = Set{String}(
-                            string(p) for p in
-                                something(params_raw, String[])
-                        )
-                        body = _raw_get(decl, "body")
-                        # `where` registration: normalize constraints and
-                        # resolve every referenced index-set name against the
-                        # consuming document's registry (esm-spec §9.6.1;
-                        # `template_constraint_unknown_index_set`).
-                        where_c = _registered_where(
-                            decl, iset_names,
-                            "$compkind.$(string(cname))", tname
-                        )
-                        push!(
-                            match_rules,
-                            _RewriteRule(
-                                tname, m, params, body,
-                                _rule_priority(decl), decl_index,
-                                where_c
-                            )
-                        )
-                    end
-                end
-                # Deterministic selection order (esm-spec §9.6.3): highest
-                # `priority` first, ties broken by declaration order (earliest
-                # wins). `_rewrite_pass` then takes the FIRST matching rule.
-                sort!(match_rules, by = r -> (-r.priority, r.decl_index))
+    for (compkind, cname, compraw) in _components(root)
+        comp = compraw::OrderedDict{String, Any}
+        # Static shape environment for `where` constraint evaluation
+        # (esm-spec §9.6.1): declared variable shapes only.
+        shape_env = _component_shape_env(comp)
+        tplraw = get(comp, "expression_templates", nothing)
+        # `named`       — every template keyed by name, consulted by
+        #                 `apply_expression_template` (order-independent).
+        # `match_rules` — the auto-applied `match` rules, in template
+        #                 DECLARATION order (esm-spec §9.6.3).
+        named = Dict{String, Any}()
+        match_rules = _RewriteRule[]
+        if _is_object(tplraw)
+            # `root` is order-preserving (`_to_ordered`), so this map's key
+            # order IS the authored declaration order — the `match`-rule
+            # precedence tie-break (esm-spec §9.6.3) reads straight off it.
+            templates = OrderedDict{String, Any}()
+            for (tname, tdecl) in pairs(tplraw)
+                templates[string(tname)] = tdecl
             end
-            # Target-bearing flags (esm-spec §9.6.4 rule 3): drive the eager
-            # pre-pass and the surviving-reference leaf semantics.
-            target_bearing = _template_target_bearing(named)
-            # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
-            # non-template field (esm-spec §9.6.3): fires auto `match` rules and
-            # eagerly expands target-bearing references; NON-eager references
-            # survive (§9.6.4 rule 4).
-            cscope = "$compkind.$(string(cname))"
-            for k in collect(keys(comp))
-                k == "expression_templates" && continue
-                comp[k] = _rewrite_to_fixpoint(
-                    comp[k], named, match_rules,
-                    "$cscope.$k", shape_env, target_bearing
-                )
-                # Call-site checks on surviving references (§9.6.9): unknown
-                # name / bindings mismatch. Known surviving references are the
-                # new normal (Option B) — no longer an error.
-                _check_surviving_refs(comp[k], named, "$cscope.$k")
+            _validate_templates(templates, "$compkind.$cname")
+            # Registration-time body CHECKING (esm-spec §9.7.3, Option B):
+            # validate the body-reference DAG (acyclic, depth-bounded,
+            # references resolve to match-less templates). Bodies are NOT
+            # inlined — references are preserved (§9.6.4).
+            _check_template_body_graph(templates, "$compkind.$cname")
+            decl_index = 0
+            for (tname, decl) in templates
+                decl_index += 1
+                named[tname] = decl
+                m = _raw_get(decl, "match")
+                if m !== nothing
+                    params_raw = _raw_get(decl, "params")
+                    params = Set{String}(
+                        string(p) for p in
+                            something(params_raw, String[])
+                    )
+                    body = _raw_get(decl, "body")
+                    # `where` registration: normalize constraints and
+                    # resolve every referenced index-set name against the
+                    # consuming document's registry (esm-spec §9.6.1;
+                    # `template_constraint_unknown_index_set`).
+                    where_c = _registered_where(
+                        decl, iset_names,
+                        "$compkind.$cname", tname
+                    )
+                    push!(
+                        match_rules,
+                        _RewriteRule(
+                            tname, m, params, body,
+                            _rule_priority(decl), decl_index,
+                            where_c
+                        )
+                    )
+                end
             end
-            # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
-            # `expression_templates` block — it is the retained registered
-            # registry that emit materializes (§9.6.4 rule 5) and Expand
-            # consumes (§9.6.4 rule 2).
-            haskey(registries, string(cname)) ||
-                (
-                registries[string(cname)] =
-                    _ComponentRegistry(named, match_rules, shape_env, target_bearing)
-            )
+            # Deterministic selection order (esm-spec §9.6.3): highest
+            # `priority` first, ties broken by declaration order (earliest
+            # wins). `_rewrite_pass` then takes the FIRST matching rule.
+            sort!(match_rules, by = r -> (-r.priority, r.decl_index))
         end
+        # Target-bearing flags (esm-spec §9.6.4 rule 3): drive the eager
+        # pre-pass and the surviving-reference leaf semantics.
+        target_bearing = _template_target_bearing(named)
+        # Outermost-first, priority-ordered, bounded-fixpoint rewrite per
+        # non-template field (esm-spec §9.6.3): fires auto `match` rules and
+        # eagerly expands target-bearing references; NON-eager references
+        # survive (§9.6.4 rule 4).
+        cscope = "$compkind.$cname"
+        for k in collect(keys(comp))
+            k == "expression_templates" && continue
+            comp[k] = _rewrite_to_fixpoint(
+                comp[k], named, match_rules,
+                "$cscope.$k", shape_env, target_bearing
+            )
+            # Call-site checks on surviving references (§9.6.9): unknown
+            # name / bindings mismatch. A reference to a known template
+            # survives (Option B).
+            _check_surviving_refs(comp[k], named, "$cscope.$k")
+        end
+        # esm-spec §9.6.4 rule 1 (Option B): DO NOT delete the component's
+        # `expression_templates` block — it is the retained registered
+        # registry that emit materializes (§9.6.4 rule 5) and Expand
+        # consumes (§9.6.4 rule 2).
+        haskey(registries, cname) ||
+            (
+            registries[cname] =
+                _ComponentRegistry(named, match_rules, shape_env, target_bearing)
+        )
     end
 
     # Coupling `variable_map` expression transforms (esm-spec §10.4/§10.5):
@@ -1457,11 +1156,6 @@ function lower_expression_templates(raw_data)
         )
     end
 
-    # esm-spec §9.6.4 rule 1 (Option B): surviving `apply_expression_template`
-    # references are the NEW NORMAL. Only UNKNOWN-name / bindings-mismatch
-    # references are errors — already checked per component / per transform by
-    # `_check_surviving_refs`. No global "no apply ops remain" gate.
-
     # Validation discharge (esm-spec §9.6.9): the makearray-region check on the
     # reference-preserving form. Region bounds cannot carry template params, so
     # it runs on the reference-preserving tree AND the retained folded template
@@ -1470,11 +1164,7 @@ function lower_expression_templates(raw_data)
     _validate_makearray_regions_in_registries(registries)
 
     # Canonical arithmetic-operand literal narrowing (CONFORMANCE_SPEC §5.5.3.1
-    # rule 1): normalize any integral, Int64-representable `Float64` that JSON3's
-    # structural number inference widened in an `args` position back to an
-    # integer, so the AST-golden pathway (which never calls `expression_from_json`)
-    # emits `[1,8]` — byte-identical with Python/Rust/TS/Go — for an integer
-    # ratio nested inside an aggregate. See `_narrow_arg_literals!`.
+    # rule 1); see `_narrow_arg_literals!`.
     _narrow_arg_literals!(root)
 
     return root

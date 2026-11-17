@@ -22,13 +22,9 @@ function _merge_flat_registry(component_templates)
     rename = OrderedDict{String, Dict{String, String}}()
     component_templates === nothing && return (merged, rename)
     byname = OrderedDict{String, Vector{Tuple{String, Any}}}()
-    # DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, normative): components in
-    # the order the file declares them, entries in the order their block declares
-    # them. Both loops previously sorted "so dedup first-occurrence and the
-    # collision rename are reproducible" — document order is equally
-    # reproducible, and it is the order the spec fixes. Sorting agreed with it
-    # only when component names happened to sort in declaration order. The
-    # dedup / collision-rename SEMANTICS below are untouched.
+    # Document order (esm-libraries-spec §4.7.5 step 4, normative): components
+    # in the order the file declares them, entries in the order their block
+    # declares them.
     for (compkey, block) in component_templates
         _is_object(block) || continue
         path = String(last(split(compkey, "."; limit = 2)))
@@ -71,34 +67,14 @@ according to `rename` (old name → new name), in lockstep with a registry
 rename. Sharing-preserving.
 """
 function _rename_apply_refs(node, rename::AbstractDict{String, String})
-    if _is_array(node)
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _rename_apply_refs(v, rename)
-            rv === v || (changed = true)
-            buf[i] = rv
-        end
-        return changed ? buf : node
-    elseif _is_object(node)
-        op = _raw_get(node, "op")
-        is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-        changed = false
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            ks = string(k)
-            if is_apply && ks == "name" && v isa AbstractString && haskey(rename, string(v))
-                buf[ks] = rename[string(v)]
-                changed = true
-            else
-                rv = _rename_apply_refs(v, rename)
-                rv === v || (changed = true)
-                buf[ks] = rv
-            end
-        end
-        return changed ? buf : node
-    else
-        return node
+    return _rewrite_json(node; leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        name = _raw_get(n, "name")
+        (name isa AbstractString && haskey(rename, String(name))) || return _JSON_DESCEND
+        out = _rewrite_json_children(rw, n; keep = "name")
+        out === n && (out = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(n)))
+        out["name"] = rename[String(name)]
+        return out
     end
 end
 
@@ -154,26 +130,10 @@ function flatten_template_registries(loaded)
     root = _to_ordered(loaded)::OrderedDict{String, Any}
     # (path, compkind, cname, comp, named)
     comps = Tuple{String, String, String, OrderedDict{String, Any}, Dict{String, Any}}[]
-    for compkind in ("models", "reaction_systems")
-        cs = get(root, compkind, nothing)
-        (cs !== nothing && _is_object(cs)) || continue
-        for (cname, comp) in pairs(cs)
-            _is_object(comp) || continue
-            named = Dict{String, Any}()
-            tpl = get(comp, "expression_templates", nothing)
-            if _is_object(tpl)
-                for (n, d) in pairs(tpl)
-                    _raw_get(d, "match") === nothing || continue  # match rules not merged
-                    named[string(n)] = d
-                end
-            end
-            push!(
-                comps, (
-                    string(cname), compkind, string(cname),
-                    comp::OrderedDict{String, Any}, named,
-                )
-            )
-        end
+    for (compkind, cname, comp) in _components(root)
+        # Match rules are not merged.
+        named = filter(((_, d),) -> _raw_get(d, "match") === nothing, _component_templates(comp))
+        push!(comps, (cname, compkind, cname, comp::OrderedDict{String, Any}, named))
     end
 
     # Group each template name across components (preserving first-seen path).

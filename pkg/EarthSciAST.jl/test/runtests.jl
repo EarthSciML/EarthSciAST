@@ -404,6 +404,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_dead_observed_test.jl")  # an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # a mount does not carry the leaf's tests
     include("enum_lowering_test.jl")             # esm-spec §9.3 lowering, error codes, zero/negative members
+    include("expression_sites_test.jl")          # every expression site of a typed document
     include("mount_enums_test.jl")               # a mounted file's enum ops resolve in its own block
     include("mount_element_type_test.jl")        # §4.7: a mounted leaf's element_type crosses the mount
     include("toplevel_reaction_system_ref_test.jl")  # §4.7: a top-level reaction_systems.<k> {ref} mounts
