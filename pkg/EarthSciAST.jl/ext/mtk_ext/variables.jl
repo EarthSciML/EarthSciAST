@@ -149,9 +149,10 @@ end
 
 """
 Create Symbolics.jl variable/parameter symbols for every state, parameter, and
-observed variable in a flattened system. Returns `(var_dict, t_sym, dim_dict,
-states, parameters, observed)` where `states`/`parameters`/`observed` are typed
-`Vector{Num}`. Every state and observed is a function of `t` alone: the caller
+observed variable in a flattened system. Returns the named tuple
+`(lowering, states, parameters, observed)`: the `_Lowering` context (names,
+time symbol, index-set extents, const-array observeds) and the typed
+`Vector{Num}` lists. Every state and observed is a function of `t` alone: the caller
 has already refused a system with a spatial independent variable.
 
 When the flattened system contains `faq`/`makearray`/`index` nodes,
@@ -164,15 +165,12 @@ scalar elements of those array variables (so `length(states) == M*N` for a
 """
 function _build_var_dict(flat::FlattenedSystem)
     t_sym = Symbolics.variable(:t)
-    dim_dict = Dict{String, Any}("t" => t_sym)
 
     # Document-scoped index-set extents (`name => size`), the only place an
     # `IndexSetRef` range (`{"from": "x"}`) or an index-set-named variable
     # `shape` can get a concrete length. Empty for documents that declare no
-    # index sets, which leaves every pre-existing path byte-for-byte unchanged.
-    # Published on `dim_dict` for `_build_arrayop_sym` (see `_INDEX_EXTENTS_KEY`).
+    # index sets.
     extents = _index_set_extents(flat)
-    isempty(extents) || (dim_dict[_INDEX_EXTENTS_KEY] = extents)
 
     # Shape inference: scalar-only systems get an empty dict and pay nothing.
     # Use LHS arrayop output ranges as the authoritative shape when available:
@@ -295,7 +293,11 @@ function _build_var_dict(flat::FlattenedSystem)
         end
     end
 
-    return var_dict, t_sym, dim_dict, states, parameters, observed
+    L = _Lowering(
+        var_dict, t_sym; extents = extents,
+        const_arrays = _const_array_observeds(flat)
+    )
+    return (lowering = L, states = states, parameters = parameters, observed = observed)
 end
 
 # ========================================
@@ -323,21 +325,18 @@ function _wrap_pre_states(expr, state_syms)
     return Symbolics.substitute(expr, subs)
 end
 
-function _affect_to_eq(
-        affect, var_dict::Dict{String, Any}, t_sym, dim_dict,
-        state_syms
-    )
+function _affect_to_eq(affect, L::_Lowering, state_syms)
     if affect isa AffectEquation
         # An affect whose target is not a variable of the system would be
         # dropped, and the event would fire without it.
-        haskey(var_dict, affect.lhs) || throw(
+        haskey(L.vars, affect.lhs) || throw(
             ArgumentError(
                 "event affect targets '$(affect.lhs)', which is not a variable " *
                     "of the flattened system"
             )
         )
-        target = var_dict[affect.lhs]
-        rhs = _esm_to_symbolic(affect.rhs, var_dict, t_sym, dim_dict)
+        target = L.vars[affect.lhs]
+        rhs = _esm_to_symbolic(affect.rhs, L)
         rhs = _wrap_pre_states(rhs, state_syms)
         return target ~ rhs
     end
@@ -345,7 +344,7 @@ function _affect_to_eq(
 end
 
 """
-    _condition_to_root_equation(cond, var_dict, t_sym, dim_dict) -> Equation
+    _condition_to_root_equation(cond, L::_Lowering) -> Equation
 
 Lower one ESM continuous-event condition to the MTK ROOT-FINDING equation that
 expresses it.
@@ -369,7 +368,7 @@ is piecewise-constant, so root-finding on it is meaningless. That is a discrete
 trigger wearing a continuous event's clothes, and it FAILS LOUDLY here rather
 than being lowered to something that silently never fires.
 """
-function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
+function _condition_to_root_equation(cond::ASTExpr, L::_Lowering)
     if cond isa OpExpr
         if cond.op in ("and", "or", "not")
             throw(
@@ -384,12 +383,12 @@ function _condition_to_root_equation(cond::ASTExpr, var_dict, t_sym, dim_dict)
         end
         # Binary `-` and the relationals both root where the two sides meet.
         if length(cond.args) == 2 && cond.op in ("-", "<", "<=", ">", ">=", "==")
-            lhs = _esm_to_symbolic(cond.args[1], var_dict, t_sym, dim_dict)
-            rhs = _esm_to_symbolic(cond.args[2], var_dict, t_sym, dim_dict)
+            lhs = _esm_to_symbolic(cond.args[1], L)
+            rhs = _esm_to_symbolic(cond.args[2], L)
             return lhs ~ rhs
         end
     end
-    return _esm_to_symbolic(cond, var_dict, t_sym, dim_dict) ~ 0
+    return _esm_to_symbolic(cond, L) ~ 0
 end
 
 # esm-spec §5.2: `root_find` names which side of the root the event lands on,
@@ -400,19 +399,18 @@ function _rootfind_option(root_find::Union{Nothing, AbstractString})
 end
 
 function _build_continuous_events(
-        flat::FlattenedSystem, var_dict, t_sym, dim_dict,
-        state_syms
+        flat::FlattenedSystem, L::_Lowering, state_syms
     )
     cbs = Any[]
     for ev in flat.continuous_events
         conds = ModelingToolkit.Equation[
-            _condition_to_root_equation(c, var_dict, t_sym, dim_dict)
+            _condition_to_root_equation(c, L)
                 for c in ev.conditions
         ]
         to_eqs(list) = filter(
             !isnothing,
             [
-                _affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                _affect_to_eq(a, L, state_syms)
                     for a in list
             ]
         )
@@ -441,21 +439,20 @@ function _build_continuous_events(
 end
 
 function _build_discrete_events(
-        flat::FlattenedSystem, var_dict, t_sym, dim_dict,
-        state_syms
+        flat::FlattenedSystem, L::_Lowering, state_syms
     )
     cbs = Any[]
     for ev in flat.discrete_events
         affects = filter(
             !isnothing,
             [
-                _affect_to_eq(a, var_dict, t_sym, dim_dict, state_syms)
+                _affect_to_eq(a, L, state_syms)
                     for a in ev.affects
             ]
         )
         isempty(affects) && continue
         if ev.trigger isa ConditionTrigger
-            cond = _esm_to_symbolic(ev.trigger.expression, var_dict, t_sym, dim_dict)
+            cond = _esm_to_symbolic(ev.trigger.expression, L)
             push!(cbs, ModelingToolkit.SymbolicDiscreteCallback(cond, affects))
         elseif ev.trigger isa PeriodicTrigger
             push!(cbs, ModelingToolkit.SymbolicDiscreteCallback(ev.trigger.period, affects))

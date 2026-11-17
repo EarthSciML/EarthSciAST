@@ -583,9 +583,8 @@ end
         MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         t = Symbolics.variable(:t)
         u = (Symbolics.@variables u[1:5])[1]
-        vd = Dict{String, Any}("u" => u)
-        dd = Dict{String, Any}("t" => t)
-        lower(e) = MTKExt._esm_to_symbolic(e, vd, t, dd)
+        L = MTKExt._Lowering(Dict{String, Any}("u" => u), t)
+        lower(e) = MTKExt._esm_to_symbolic(e, L)
 
         # `[start, step, stop]` (esm-spec §4.3.1) visits 1, 3, 5.
         @test MTKExt._range_bounds_int([1, 2, 6]) == (1, 5)
