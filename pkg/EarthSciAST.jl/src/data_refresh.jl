@@ -1,35 +1,32 @@
-# Discrete-cadence loader refresh — the EarthSciAST-Julia consumer surface
-# (ess-14f.4, JL-J1). Plan: mayor-dir esio-consumer-julia-plan-2026-06-26.md §1.
+# Discrete-cadence loader refresh: the consumer surface for provider-fed
+# forcing buffers.
 #
-# The companion to the JL-J0 engine touch (`param_arrays` / `_NK_PARAM_GATHER`,
-# ess-14f.3). J0 made a forcing buffer readable LIVE by the RHS: a dense
-# `Array{Float64}` bound through `_build_evaluator(...; param_arrays=...)` is
-# captured BY REFERENCE, so an in-place `buf .= …` shows through to `f!` with
-# zero reallocation. J1 builds the thing that DOES that in-place write at the
+# A dense `Array{Float64}` bound through `_build_evaluator(...; param_arrays=...)`
+# is captured BY REFERENCE, so an in-place `buf .= …` shows through to `f!` with
+# zero reallocation. This file builds what does that in-place write at the
 # right times: a `PresetTimeCallback` whose `affect!` pulls fresh native arrays
-# from a data Provider, regrids them, and writes them into the SAME buffer
-# objects — once per cadence boundary, never on the hot per-step path.
+# from a data Provider and writes them into the SAME buffer objects, once per
+# cadence boundary, never on the per-step path.
 #
-# Principle `[[library-exposes-rhs-not-solver]]`: EarthSciAST returns the *pieces*
-# (`build_refresh_callback -> (cb, tstops)`); the USER attaches them to their own
-# `ODEProblem`/`solve`. EarthSciAST ships no `solve`, no `ODEProblem`, no solver. The
-# callback constructor itself lives in a package extension gated on
-# `DiffEqCallbacks` + `SciMLBase` (see ext/EarthSciASTDataRefreshExt.jl)
-# so the base library never pulls a solver-adjacent stack into `[deps]`.
+# EarthSciAST returns the pieces (`build_refresh_callback -> (cb, tstops)`); the
+# USER attaches them to their own `ODEProblem`/`solve`. The callback constructor
+# lives in a package extension gated on `DiffEqCallbacks` + `SciMLBase` (see
+# ext/EarthSciASTDataRefreshExt.jl), so the base library pulls no solver stack
+# into `[deps]`.
 #
 # This file (core) owns two decoupled seams; concrete implementations live
-# outside EarthSciAST, exactly like the GridAccessor / AbstractGrid traits:
+# outside EarthSciAST:
 #
-#   1. the Provider protocol  — `provider_refresh_times` / `provider_is_const` /
-#      `provider_sample`. Satisfied by the EarthSciIO Julia Provider
-#      (esio-9nb.5) via a thin adapter, or by a mock in tests. EarthSciAST never
-#      imports EarthSciIO; it calls these generics, which the data binding fills in.
+#   1. the Provider protocol (`provider_refresh_times`, `provider_is_const`,
+#      `provider_sample` and the selection / gate / extent generics),
+#      satisfied by the EarthSciIO Julia Provider via a thin adapter, or by a
+#      mock in tests. EarthSciAST never imports EarthSciIO; it calls these
+#      generics, which the data binding fills in.
 #   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
 #      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
 #      `affect!` writes the freshly sampled native forcing straight into them
 #      (`_write_forcing!`); any native→sim regrid is an in-model coupling
-#      expression the RHS evaluates, not a refresh-time transform (the obsolete
-#      `RegridApplier` seam was removed in v0.8.0).
+#      expression the RHS evaluates, not a refresh-time transform.
 
 """
     RefreshError(msg)
@@ -50,7 +47,7 @@ Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 # --------------------------------------------------------------------------- #
 #
 # A "provider" is any object that supplies a loader's native-grid arrays on the
-# solver time axis. EarthSciAST owns the contract (these three generics) and calls
+# solver time axis. EarthSciAST owns the contract (the generics below) and calls
 # them; the EarthSciIO Julia Provider satisfies it via an adapter, e.g.
 #
 #     EarthSciAST.provider_refresh_times(p::EarthSciIO.Provider) = EarthSciIO.refresh_times(p)
@@ -296,8 +293,8 @@ provider_sample(p, ::Real; selection = nothing) = throw(
 # --------------------------------------------------------------------------- #
 # Forcing-write seam — pull a freshly sampled field out of a provider sample and
 # write it into the live buffer IN PLACE. There is NO native→sim regrid here:
-# regridding is an ordinary in-model coupling expression over the native forcing
-# (the obsolete `RegridApplier` seam was removed in v0.8.0). The buffer aliases
+# regridding is an ordinary in-model coupling expression over the native forcing.
+# The buffer aliases
 # the `param_arrays` storage the RHS reads live, so the write MUST mutate in
 # place (`copyto!`), never rebind — a fresh allocation would silently detach the
 # refresh from `f!`.
