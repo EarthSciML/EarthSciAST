@@ -5,7 +5,7 @@
 # output cell, so a per-cell physics lookup over an N-cell grid paid N full AST
 # lowerings — 55% of a ReSEACT chemistry `build_evaluator`, and the reason build
 # cost tracked the grid. It now resolves+compiles ONCE with the output indices
-# bound as parameters (the wall2 Phase C `_cellwise_compile_once` machinery: a
+# bound as parameters (the `_cellwise_compile_once` machinery: a
 # const read carrying an output index lowers to a runtime `_NK_CONST_GATHER`
 # instead of constant-folding) and rebinds only those per cell.
 #
