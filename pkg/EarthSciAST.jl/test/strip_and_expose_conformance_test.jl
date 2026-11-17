@@ -144,6 +144,19 @@ end
         end
     end
 
+    # The post-value read check sees a bare read in every expression-bearing
+    # field, not only `args` and a `faq` body; a `Pre` read is not one.
+    @testset "affect bare reads reach every field" begin
+        E, V = EarthSciAST.ASTExpr, EarthSciAST.VarExpr
+        f = OpExpr(
+            "faq", E[]; output_idx = Any[], ranges = Dict("k" => Any[1, 3]),
+            expr_body = V("k"), filter = OpExpr(">", E[V("x"), OpExpr("Pre", E[V("y")])])
+        )
+        reads = EarthSciAST._bare_reads!(Set{String}(), f)
+        @test "x" in reads
+        @test !("y" in reads)
+    end
+
     @testset "refusals: $(c.id)" for c in _SE.refusals
         prob = _se_build(c.path, c.strip)
         err = try

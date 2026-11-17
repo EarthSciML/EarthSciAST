@@ -797,13 +797,14 @@ end
 # `e` with every child expression mapped by `f`.
 _map_opexpr(e::OpExpr, f) = map_children(f, e)
 
+# Every name `e` reads outside a `Pre`, in every expression-bearing field (a
+# `faq` filter, a `makearray` value, an integral bound included).
 function _bare_reads!(out::Set{String}, e::ASTExpr)
     if e isa VarExpr
         push!(out, e.name)
     elseif e isa OpExpr
         e.op == "Pre" && return out
-        foreach(a -> _bare_reads!(out, a), e.args)
-        e.expr_body === nothing || _bare_reads!(out, e.expr_body)
+        foreach_child(c -> _bare_reads!(out, c), e)
     end
     return out
 end
