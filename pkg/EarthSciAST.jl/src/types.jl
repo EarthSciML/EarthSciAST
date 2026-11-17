@@ -1332,13 +1332,13 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
     depth = length(idx)
     if v isa AbstractArray
         depth < length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: an array appears where a number is expected " *
                     "(esm-spec §6.3)"
             )
         )
         length(v) == dims[depth + 1] || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: axis $(depth + 1) has both $(dims[depth + 1]) " *
                     "and $(length(v)) elements (esm-spec §6.3)"
             )
@@ -1348,7 +1348,7 @@ function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int}
         end
     else
         depth == length(dims) || throw(
-            ArgumentError(
+            ParseError(
                 "inline array data is ragged: a number appears at nesting depth $(depth) " *
                     "where an array of $(dims[depth + 1]) elements is expected (esm-spec §6.3)"
             )
