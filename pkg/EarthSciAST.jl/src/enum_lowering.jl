@@ -75,45 +75,39 @@ function _lower_enum_ops_for_file(
     return _lower_raw_enum_ops(target, enums, open_names)
 end
 
-function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
-    if _is_array(node)
-        return Any[_lower_raw_enum_ops(v, enums, open_names) for v in node]
-    elseif _is_object(node)
-        if _raw_get(node, "op") == "enum"
-            args = _raw_get(node, "args")
-            (
-                args !== nothing && _is_array(args) && length(args) == 2 &&
-                    _allof(a -> a isa AbstractString, args) &&
-                    !_anyof(a -> String(a) in open_names, args)
-            ) || return node
-            enum_name, symbol = String(args[1]), String(args[2])
-            mapping = enums !== nothing && _is_object(enums) ?
-                _raw_get(enums, enum_name) : nothing
-            mapping === nothing && throw(
-                EnumLoweringError(
-                    ERROR_CODES.UNKNOWN_ENUM,
-                    "enum `$(enum_name)` is not declared in the file's `enums` block"
-                )
-            )
-            (_is_object(mapping) && _raw_haskey(mapping, symbol)) ||
-                throw(
-                EnumLoweringError(
-                    ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
-                    "symbol `$(symbol)` is not declared under enum `$(enum_name)`"
-                )
-            )
-            return OrderedDict{String, Any}(
-                "op" => "const", "args" => Any[],
-                "value" => Int(_raw_get(mapping, symbol))
-            )
-        end
-        out = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            out[string(k)] = _lower_raw_enum_ops(v, enums, open_names)
-        end
-        return out
-    end
-    return node
+# Every container is rebuilt (`_map_json`): callers may mutate the result.
+_lower_raw_enum_ops(node, enums, open_names::AbstractSet{String}) =
+    _map_json(node) do _, n
+    _is_object(n) || return _JSON_DESCEND
+    return _raw_get(n, "op") == "enum" ? _lower_enum_op(n, enums, open_names) : _JSON_DESCEND
+end
+
+# One raw `enum` op lowered to its `const`, or `n` itself when its arguments
+# are not two strings or one is an open name.
+function _lower_enum_op(n, enums, open_names::AbstractSet{String})
+    args = _raw_get(n, "args")
+    (
+        args !== nothing && _is_array(args) && length(args) == 2 &&
+            _allof(a -> a isa AbstractString, args) &&
+            !_anyof(a -> String(a) in open_names, args)
+    ) || return n
+    enum_name, symbol = String(args[1]), String(args[2])
+    mapping = enums !== nothing && _is_object(enums) ? _raw_get(enums, enum_name) : nothing
+    mapping === nothing && throw(
+        EnumLoweringError(
+            ERROR_CODES.UNKNOWN_ENUM,
+            "enum `$(enum_name)` is not declared in the file's `enums` block"
+        )
+    )
+    (_is_object(mapping) && _raw_haskey(mapping, symbol)) || throw(
+        EnumLoweringError(
+            ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+            "symbol `$(symbol)` is not declared under enum `$(enum_name)`"
+        )
+    )
+    return OrderedDict{String, Any}(
+        "op" => "const", "args" => Any[], "value" => Int(_raw_get(mapping, symbol))
+    )
 end
 
 """
@@ -138,20 +132,12 @@ function _lower_mounted_document_enums(document, target = document)
     return _lower_mounted_enum_ops(target, enums)
 end
 
-function _lower_mounted_enum_ops(node, enums)
-    if _is_array(node)
-        return Any[_lower_mounted_enum_ops(v, enums) for v in node]
-    elseif _is_object(node)
-        _raw_get(node, "op") == "enum" && return _lower_raw_enum_ops(node, enums, Set{String}())
-        out = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            key = string(k)
-            out[key] = key == "expression_templates" && _is_object(v) ?
-                _lower_template_body_enums(v, enums) : _lower_mounted_enum_ops(v, enums)
-        end
-        return out
-    end
-    return node
+_lower_mounted_enum_ops(node, enums) =
+    _map_json(node) do key, n
+    _is_object(n) || return _JSON_DESCEND
+    key == "expression_templates" && return _lower_template_body_enums(n, enums)
+    _raw_get(n, "op") == "enum" && return _lower_enum_op(n, enums, Set{String}())
+    return _JSON_DESCEND
 end
 
 function _lower_template_body_enums(templates, enums)

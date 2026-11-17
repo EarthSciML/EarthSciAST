@@ -94,52 +94,22 @@ substituted once.
 """
 function _substitute(body, bindings::Dict{String, Any})
     isempty(bindings) && return body
-    return _subst_shared(body, bindings, IdDict{Any, Any}())
-end
-
-function _subst_shared(n, bindings::Dict{String, Any}, memo::IdDict{Any, Any})
-    if n isa AbstractString
-        return haskey(bindings, string(n)) ? bindings[string(n)] : n
-    elseif _is_array(n)
-        r = get(memo, n, nothing)
-        r === nothing || return r
-        changed = false
-        buf = Vector{Any}(undef, length(n))
-        for (i, x) in enumerate(n)
-            rx = _subst_shared(x, bindings, memo)
-            rx === x || (changed = true)
-            buf[i] = rx
-        end
-        res = changed ? buf : n
-        memo[n] = res
-        return res
-    elseif _is_object(n)
-        r = get(memo, n, nothing)
-        r === nothing || return r
+    return _rewrite_json(body) do rw, n
+        n isa AbstractString && return get(bindings, String(n), n)
         # esm-spec §9.6.3 constraint 5 / §9.6.4 rule 4: parameter substitution
         # applies inside a nested `apply_expression_template` reference's
         # `bindings` values exactly as any other Expression position, but the
-        # `name` field is NEVER a substitution site.
-        op = _raw_get(n, "op")
-        is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-        changed = false
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(n)
-            ks = string(k)
-            if is_apply && ks == "name"
-                buf[ks] = v
-                continue
-            end
-            rv = _subst_shared(v, bindings, memo)
-            rv === v || (changed = true)
-            buf[ks] = rv
-        end
-        res = changed ? buf : n
-        memo[n] = res
-        return res
-    else
-        return n
+        # `name` field is never a substitution site.
+        _is_apply_node(n) && return _rewrite_json_children(rw, n; keep = "name")
+        return _JSON_DESCEND
     end
+end
+
+# Whether the raw JSON node `n` is an `apply_expression_template` node.
+function _is_apply_node(n)
+    _is_object(n) || return false
+    op = _raw_get(n, "op")
+    return op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
 end
 
 """
@@ -250,28 +220,10 @@ Walk `node` and run [`_validate_apply_ref`](@ref) on every surviving
 checks). Descends into references' `bindings` too — a binding value MAY itself
 be a surviving reference.
 """
-function _check_surviving_refs(
-        node, templates::AbstractDict, scope::String,
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )
-    if _is_array(node)
-        # An array of numbers or number rows holds no reference.
-        _may_hold_object(node) || return
-        haskey(seen, node) && return
-        seen[node] = nothing
-        for c in node
-            _check_surviving_refs(c, templates, scope, seen)
-        end
-    elseif _is_object(node)
-        haskey(seen, node) && return
-        seen[node] = nothing
-        op = _raw_get(node, "op")
-        if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-            _validate_apply_ref(node, templates, scope)
-        end
-        for (_, v) in pairs(node)
-            _check_surviving_refs(v, templates, scope, seen)
-        end
+function _check_surviving_refs(node, templates::AbstractDict, scope::String)
+    _visit_json(node) do _, n
+        _is_apply_node(n) && _validate_apply_ref(n, templates, scope)
+        return true
     end
     return
 end
@@ -320,30 +272,11 @@ object whose `op` satisfies `pred(op::String)`. Does NOT follow references to
 other templates — that transitive step is [`_transitive_op_flags`](@ref).
 Identity-`seen` so a structurally-shared subtree is visited once.
 """
-function _direct_op_hit(
-        node, pred,
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )::Bool
-    if _is_array(node)
-        haskey(seen, node) && return false
-        seen[node] = nothing
-        for c in node
-            _direct_op_hit(c, pred, seen) && return true
-        end
-        return false
-    elseif _is_object(node)
-        haskey(seen, node) && return false
-        seen[node] = nothing
-        op = _raw_get(node, "op")
-        if op !== nothing && pred(string(op))
-            return true
-        end
-        for (_, v) in pairs(node)
-            _direct_op_hit(v, pred, seen) && return true
-        end
-        return false
-    else
-        return false
+function _direct_op_hit(node, pred)::Bool
+    return _visit_json(node) do _, n
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        return (op !== nothing && pred(string(op))) ? _JSON_STOP : true
     end
 end
 
@@ -439,74 +372,30 @@ function _expand_refs_walk(
         node, named::AbstractDict, scope::String,
         expand_pred, memo::IdDict{Any, Any}
     )
-    if _is_object(node)
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        op = _raw_get(node, "op")
-        op_str = op === nothing ? "" : string(op)
-        local res
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            # Innermost-first: rewrite references inside the bindings first.
-            b = _raw_get(node, "bindings")
-            newnode = node
-            if b !== nothing && _is_object(b)
-                nb = OrderedDict{String, Any}()
-                changed = false
-                for (k, v) in pairs(b)
-                    rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-                    rv === v || (changed = true)
-                    nb[string(k)] = rv
-                end
-                if changed
-                    newnode = OrderedDict{String, Any}()
-                    for (k, v) in pairs(node)
-                        newnode[string(k)] = (string(k) == "bindings") ? nb : v
-                    end
-                end
+    return _rewrite_json(node; memo = memo, leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        # Innermost-first: rewrite references inside the bindings first.
+        b = _raw_get(n, "bindings")
+        newnode = n
+        if b !== nothing && _is_object(b)
+            nb = _rewrite_json_children(rw, b)
+            if nb !== b
+                newnode = OrderedDict{String, Any}(
+                    string(k) => (string(k) == "bindings" ? nb : v) for (k, v) in pairs(n)
+                )
             end
-            if expand_pred(newnode)
-                body = _expand_apply(newnode, named, scope)
-                res = _expand_refs_walk(body, named, scope, expand_pred, memo)
-                # While marking (a mount's leaf, expanded at load), the root of
-                # the expansion records that it came from an application
-                # (esm-spec §9.6.11), as `_expand_expr_refs` does on typed trees.
-                if _marking_template_origins() && _is_object(res)
-                    marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
-                    marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
-                    res = marked
-                end
-            else
-                res = newnode
-            end
-        else
-            changed = false
-            buf = OrderedDict{String, Any}()
-            for (k, v) in pairs(node)
-                rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-                rv === v || (changed = true)
-                buf[string(k)] = rv
-            end
-            res = changed ? buf : node
         end
-        memo[node] = res
-        return res
-    elseif _is_array(node)
-        # An array of numbers or number rows holds no reference.
-        _may_hold_object(node) || return node
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
-            rv === v || (changed = true)
-            buf[i] = rv
+        expand_pred(newnode) || return newnode
+        res = _rewrite_json_node(rw, _expand_apply(newnode, named, scope))
+        # While marking (a mount's leaf, expanded at load), the root of the
+        # expansion records that it came from an application (esm-spec
+        # §9.6.11), as `_expand_expr_refs` does on typed trees.
+        if _marking_template_origins() && _is_object(res)
+            marked = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(res))
+            marked[_TEMPLATE_ORIGIN_WIRE_KEY] = string(_raw_get(newnode, "name"))
+            res = marked
         end
-        res = changed ? buf : node
-        memo[node] = res
         return res
-    else
-        return node
     end
 end
 
@@ -798,9 +687,8 @@ end
 """
     _rewrite_pass(node, named, sorted_rules, scope, last, shape_env) -> (new_node, changed)
 
-One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3),
-expressed as an identity-memoized, sharing-preserving recursion
-([`_rewrite_node`](@ref)). At each object node the engine first tries to fire
+One pre-order (outermost-first) rewrite pass over `node` (esm-spec §9.6.3), a
+sharing-preserving [`_rewrite_json`](@ref) walk. At each object node the engine first tries to fire
 a rule AT the node before descending:
 
 1. an `apply_expression_template` op is expanded (`_expand_apply`), OR
@@ -828,108 +716,41 @@ function _rewrite_pass(
         target_bearing::Dict{String, Bool}
     )
     changed = Ref(false)
-    # Identity-memoized recursion (not `_map_json`): the rewrite of a node is a
-    # pure function of the node itself (pattern matching is structural, the
-    # registries and `shape_env` are pass-constant), so a subtree shared under
-    # many parents is rewritten ONCE and the shared result respliced —
-    # preserving the DAG `_substitute` builds instead of exploding it back
-    # into a tree, and keeping pass cost linear in UNIQUE nodes. Unchanged
-    # subtrees are returned by identity for the same reason.
-    memo = IdDict{Any, Any}()
-    out = _rewrite_node(
-        node, named, sorted_rules, scope, last, shape_env,
-        target_bearing, memo, changed
-    )
-    return (out, changed[])
-end
-
-function _rewrite_node(
-        n, named::Dict{String, Any},
-        sorted_rules::Vector{_RewriteRule},
-        scope::String, last::Ref{String},
-        shape_env::Dict{String, Vector{String}},
-        target_bearing::Dict{String, Bool},
-        memo::IdDict{Any, Any}, changed::Base.RefValue{Bool}
-    )
-    if _is_object(n)
-        r = get(memo, n, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
+    # One rewrite per unique node: the rewrite of a node is a function of the
+    # node alone (matching is structural; the registries and `shape_env` are
+    # fixed for the pass), so a subtree shared under many parents is rewritten
+    # once and its result shared, keeping the pass linear in unique nodes.
+    out = _rewrite_json(node; leaves = false) do _, n
         op = _raw_get(n, "op")
         op_str = op === nothing ? "" : string(op)
-        local res
-        # (1) Outermost-first: fire a rule AT this node before descending.
+        # Outermost-first: fire a rule AT this node before descending.
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            # esm-spec §9.6.4 rule 4 (Option B): the engine treats a surviving
-            # (non-eager) reference as a LEAF — it does not descend into its
-            # `bindings`, no rule fires inside it, and it survives the fixpoint.
-            # Eager references were already removed by the pre-pass
-            # (`_expand_eager`); a defensive check keeps any eager node that a
-            # caller passed in unexpanded correct.
-            if _ref_is_eager(n, target_bearing)
-                last[] = APPLY_EXPRESSION_TEMPLATE_OP
+            # esm-spec §9.6.4 rule 4 (Option B): a surviving (non-eager)
+            # reference is a LEAF: the engine does not descend into its
+            # `bindings`, no rule fires inside it, and it survives the
+            # fixpoint. The eager pre-pass (`_expand_eager`) has removed the
+            # eager ones; one passed in unexpanded is expanded here.
+            _ref_is_eager(n, target_bearing) || return n
+            last[] = APPLY_EXPRESSION_TEMPLATE_OP
+            changed[] = true
+            return _expand_eager(n, named, target_bearing, scope)
+        end
+        for rule in sorted_rules
+            bindings = Dict{String, Any}()
+            if _match_pattern(rule.pattern, n, rule.params, bindings) &&
+                    _where_satisfied(rule.where_clause, bindings, shape_env)
+                last[] = op_str
                 changed[] = true
-                res = _expand_eager(n, named, target_bearing, scope)
-            else
-                res = n
-            end
-        else
-            fired = false
-            for rule in sorted_rules
-                bindings = Dict{String, Any}()
-                if _match_pattern(rule.pattern, n, rule.params, bindings) &&
-                        _where_satisfied(rule.where_clause, bindings, shape_env)
-                    last[] = op_str
-                    changed[] = true
-                    # Instantiate by pure substitution (through nested
-                    # references' `bindings`; `name` is never a site). An eager
-                    # reference introduced by the instantiation expands as part
-                    # of the same rewrite (§9.6.4 rule 4) via the pre-pass.
-                    body = _substitute(rule.body, bindings)
-                    res = _expand_eager(body, named, target_bearing, scope)
-                    fired = true
-                    break
-                end
-            end
-            if !fired
-                # (2) No rule fired here — descend into children,
-                # identity-preserving.
-                kids_changed = false
-                buf = OrderedDict{String, Any}()
-                for (k, v) in pairs(n)
-                    rv = _rewrite_node(
-                        v, named, sorted_rules, scope, last,
-                        shape_env, target_bearing, memo, changed
-                    )
-                    rv === v || (kids_changed = true)
-                    buf[string(k)] = rv
-                end
-                res = kids_changed ? buf : n
+                # Instantiate by pure substitution (through nested
+                # references' `bindings`; `name` is never a site). An eager
+                # reference the instantiation introduces expands as part of
+                # the same rewrite (§9.6.4 rule 4).
+                return _expand_eager(_substitute(rule.body, bindings), named, target_bearing, scope)
             end
         end
-        memo[n] = res
-        return res
-    elseif _is_array(n)
-        # A rule fires only on an object: an array of numbers or number rows
-        # comes back unchanged.
-        _may_hold_object(n) || return n
-        r = get(memo, n, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        kids_changed = false
-        buf = Vector{Any}(undef, length(n))
-        for (i, v) in enumerate(n)
-            rv = _rewrite_node(
-                v, named, sorted_rules, scope, last,
-                shape_env, target_bearing, memo, changed
-            )
-            rv === v || (kids_changed = true)
-            buf[i] = rv
-        end
-        res = kids_changed ? buf : n
-        memo[n] = res
-        return res
-    else
-        return n
+        return _JSON_DESCEND
     end
+    return (out, changed[])
 end
 
 """
@@ -977,48 +798,17 @@ end
 # Scan utilities
 # ---------------------------------------------------------------------------
 
+# The JSON pointer of every `apply_expression_template` node in `x`, under
+# `path`, in document order.
 function _find_apply_paths!(hits::Vector{String}, x, path::String)
-    if _is_array(x)
-        for (i, child) in enumerate(x)
-            _find_apply_paths!(hits, child, "$path/$(i - 1)")
-        end
-        return
-    end
-    return if _is_object(x)
-        op = _raw_get(x, "op")
-        op_str = op === nothing ? "" : string(op)
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            push!(hits, path)
-        end
-        for (k, v) in pairs(x)
-            _find_apply_paths!(hits, v, "$path/$(string(k))")
-        end
-    end
-end
-
-function _has_apply_op(x)
-    found = false
-    # Visit each unique container once (`seen`): on a structurally-shared
-    # expanded tree the same subtree hangs under exponentially many paths.
-    seen = IdDict{Any, Nothing}()
-    _walk_json(x) do _, n
-        found && return false   # already answered — prune the rest
-        n isa AbstractVector && _leaves_only(n) && return false   # holds no object
-        if _is_object(n) || _is_array(n)
-            haskey(seen, n) && return false
-            seen[n] = nothing
-        end
-        if _is_object(n)
-            op = _raw_get(n, "op")
-            if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-                found = true
-                return false
-            end
-        end
+    _visit_json(x; path = path) do _, n, ptr
+        _is_apply_node(n) && push!(hits, string(ptr))
         return true
     end
-    return found
+    return hits
 end
+
+_has_apply_op(x) = _visit_json((_, n) -> _is_apply_node(n) ? _JSON_STOP : true, x)
 
 """
     _has_template_machinery(raw_data) -> Bool
@@ -1068,63 +858,40 @@ only concrete integer pairs are checked (a fully-folded document tree carries
 nothing else in bound position). Throws [`ExpressionTemplateError`](@ref) with
 code `makearray_region_inverted`.
 """
-function _validate_makearray_regions(
-        x, path::String = "",
-        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
-    )
-    if _is_array(x)
-        _may_hold_object(x) || return
-        haskey(seen, x) && return
-        seen[x] = nothing
-        for (i, child) in enumerate(x)
-            # A scalar holds no region; skipping it spares a path string per
-            # element of a large inline number array.
-            (_is_array(child) || _is_object(child)) || continue
-            _validate_makearray_regions(child, "$path/$(i - 1)", seen)
-        end
-        return
-    end
-    _is_object(x) || return
-    haskey(seen, x) && return
-    seen[x] = nothing
-    op = _raw_get(x, "op")
-    op_str = op === nothing ? "" : string(op)
-    if op_str == "makearray"
-        regions = _raw_get(x, "regions")
-        if regions !== nothing && _is_array(regions)
-            for (ri, region) in enumerate(regions)
-                _is_array(region) || continue
-                for (di, bounds) in enumerate(region)
-                    (_is_array(bounds) && length(bounds) == 2) || continue
-                    lo, hi = bounds[1], bounds[2]
-                    (
-                        lo isa Integer && !(lo isa Bool) &&
-                            hi isa Integer && !(hi isa Bool)
-                    ) || continue
-                    if hi < lo - 1
-                        throw(
-                            ExpressionTemplateError(
-                                ERROR_CODES.MAKEARRAY_REGION_INVERTED,
-                                "$path: makearray regions[$(ri - 1)] dimension $(di - 1) " *
-                                    "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
-                                    "An empty bound is spelled [start, start-1] and " *
-                                    "contributes no elements (esm-spec §4.3.2); a further-" *
-                                    "inverted pair is an authoring error — e.g. an interior " *
-                                    "stencil region [2, N-1] instantiated at N below the " *
-                                    "scheme's minimum extent (§9.6.8)."
-                            )
-                        )
-                    end
-                end
+function _validate_makearray_regions(x, path::String = "")
+    _visit_json(x; path = path) do key, n, ptr
+        # Template bodies and matches are pre-substitution trees, whose bounds
+        # may carry metaparameter names or fold later (esm-spec §9.7.6).
+        key == "expression_templates" && return false
+        _is_object(n) || return true
+        op = _raw_get(n, "op")
+        (op !== nothing && string(op) == "makearray") || return true
+        regions = _raw_get(n, "regions")
+        (regions !== nothing && _is_array(regions)) || return true
+        for (ri, region) in enumerate(regions)
+            _is_array(region) || continue
+            for (di, bounds) in enumerate(region)
+                (_is_array(bounds) && length(bounds) == 2) || continue
+                lo, hi = bounds[1], bounds[2]
+                (
+                    lo isa Integer && !(lo isa Bool) &&
+                        hi isa Integer && !(hi isa Bool)
+                ) || continue
+                hi < lo - 1 && throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.MAKEARRAY_REGION_INVERTED,
+                        "$(string(ptr)): makearray regions[$(ri - 1)] dimension $(di - 1) " *
+                            "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
+                            "An empty bound is spelled [start, start-1] and " *
+                            "contributes no elements (esm-spec §4.3.2); a further-" *
+                            "inverted pair is an authoring error — e.g. an interior " *
+                            "stencil region [2, N-1] instantiated at N below the " *
+                            "scheme's minimum extent (§9.6.8)."
+                    )
+                )
             end
         end
-    end
-    for (k, v) in pairs(x)
-        ks = string(k)
-        # Template bodies/matches are pre-substitution trees; bounds may
-        # legally carry metaparameter names or fold later (esm-spec §9.7.6).
-        ks == "expression_templates" && continue
-        _validate_makearray_regions(v, "$path/$ks", seen)
+        return true
     end
     return
 end
@@ -1248,28 +1015,16 @@ which deliberately preserves an authored `1.0`, is on a separate path and is
 untouched.
 """
 function _narrow_arg_literals!(x)
-    # One visit per unique container (`seen`): on a structurally-shared
-    # expanded tree the same node hangs under many parents, and narrowing is
-    # idempotent and value-local, so a single visit of the shared object is
-    # exactly equivalent to (exponentially many) repeated ones.
-    seen = IdDict{Any, Nothing}()
-    _walk_json(x) do key, n
-        # Narrow the DIRECT elements of every `args` array in place; the walk
-        # then descends into the (mutated) array, recursing through nested
-        # operand objects toward their own `args` arrays. This runs before the
-        # seen-prune because the trigger is POSITIONAL (the parent key), and a
-        # shared array can hang under more than one key.
-        if key == "args" && n isa AbstractVector
-            for i in eachindex(n)
-                vi = n[i]
-                _int64_narrowable(vi) && (n[i] = Int64(vi))
+    # Narrowing is idempotent and local to the value, so visiting a shared
+    # object once is the same as visiting it under each of its parents.
+    _visit_json(x) do _, n
+        _is_object(n) || return true
+        args = _raw_get(n, "args")
+        if args isa AbstractVector
+            for i in eachindex(args)
+                vi = args[i]
+                _int64_narrowable(vi) && (args[i] = Int64(vi))
             end
-        end
-        # Below an array of numbers or number rows there is no `args` array.
-        n isa AbstractVector && !_may_hold_object(n) && return false
-        if _is_object(n) || n isa AbstractVector
-            haskey(seen, n) && return false
-            seen[n] = nothing
         end
         return true
     end

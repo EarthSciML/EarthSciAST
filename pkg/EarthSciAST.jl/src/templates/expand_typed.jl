@@ -119,22 +119,7 @@ const _TEMPLATE_ORIGIN_WIRE_KEY = "__esm_template_origin"
 
 # The JSON-pointer path of the first `_TEMPLATE_ORIGIN_WIRE_KEY` in `node`, or
 # `nothing`.
-function _template_origin_key_path(node, path::String = "")
-    if _is_object(node)
-        haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY) && return path
-        for (k, v) in pairs(node)
-            p = _template_origin_key_path(v, string(path, "/", k))
-            p === nothing || return p
-        end
-    elseif _is_array(node)
-        _may_hold_object(node) || return nothing
-        for (i, v) in enumerate(node)
-            p = _template_origin_key_path(v, string(path, "/", i - 1))
-            p === nothing || return p
-        end
-    end
-    return nothing
-end
+_template_origin_key_path(node) = _find_json_path(n -> haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY), node)
 
 # Refuse an authored document that spells `_TEMPLATE_ORIGIN_WIRE_KEY`: the key
 # is load provenance, and the schema admits no such property, so an authored
@@ -158,37 +143,10 @@ end
 # the containers on a path to a mark; returns `node` itself when it holds none.
 # Every authored file was refused above if it spelled the key, so what this
 # removes is only the load's own marks.
-function _strip_template_origins(node, memo::IdDict{Any, Any} = IdDict{Any, Any}())
-    if _is_object(node)
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = haskey(node, _TEMPLATE_ORIGIN_WIRE_KEY)
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            string(k) == _TEMPLATE_ORIGIN_WIRE_KEY && continue
-            rv = _strip_template_origins(v, memo)
-            rv === v || (changed = true)
-            buf[string(k)] = rv
-        end
-        res = changed ? buf : node
-        memo[node] = res
-        return res
-    elseif _is_array(node)
-        _may_hold_object(node) || return node
-        r = get(memo, node, _JSON_DESCEND)
-        r === _JSON_DESCEND || return r
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _strip_template_origins(v, memo)
-            rv === v || (changed = true)
-            buf[i] = rv
-        end
-        res = changed ? buf : node
-        memo[node] = res
-        return res
-    end
-    return node
+_strip_template_origins(node) =
+    _rewrite_json(node; leaves = false) do rw, n
+    haskey(n, _TEMPLATE_ORIGIN_WIRE_KEY) || return _JSON_DESCEND
+    return _rewrite_json_children(rw, n; drop = _TEMPLATE_ORIGIN_WIRE_KEY)
 end
 
 # `ex` marked as the root of an expansion of `name`, while marking is on.

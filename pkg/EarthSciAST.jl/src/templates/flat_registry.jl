@@ -71,34 +71,14 @@ according to `rename` (old name → new name), in lockstep with a registry
 rename. Sharing-preserving.
 """
 function _rename_apply_refs(node, rename::AbstractDict{String, String})
-    if _is_array(node)
-        changed = false
-        buf = Vector{Any}(undef, length(node))
-        for (i, v) in enumerate(node)
-            rv = _rename_apply_refs(v, rename)
-            rv === v || (changed = true)
-            buf[i] = rv
-        end
-        return changed ? buf : node
-    elseif _is_object(node)
-        op = _raw_get(node, "op")
-        is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
-        changed = false
-        buf = OrderedDict{String, Any}()
-        for (k, v) in pairs(node)
-            ks = string(k)
-            if is_apply && ks == "name" && v isa AbstractString && haskey(rename, string(v))
-                buf[ks] = rename[string(v)]
-                changed = true
-            else
-                rv = _rename_apply_refs(v, rename)
-                rv === v || (changed = true)
-                buf[ks] = rv
-            end
-        end
-        return changed ? buf : node
-    else
-        return node
+    return _rewrite_json(node; leaves = false) do rw, n
+        _is_apply_node(n) || return _JSON_DESCEND
+        name = _raw_get(n, "name")
+        (name isa AbstractString && haskey(rename, String(name))) || return _JSON_DESCEND
+        out = _rewrite_json_children(rw, n; keep = "name")
+        out === n && (out = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(n)))
+        out["name"] = rename[String(name)]
+        return out
     end
 end
 

@@ -6,27 +6,14 @@
 # ---------------------------------------------------------------------------
 
 function _assert_no_nested_apply(body, template_name::String, path::String)
-    if _is_array(body)
-        for (i, child) in enumerate(body)
-            _assert_no_nested_apply(child, template_name, "$path/$(i - 1)")
-        end
-        return
-    end
-    return if _is_object(body)
-        op = _raw_get(body, "op")
-        op_str = op === nothing ? "" : string(op)
-        if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            throw(
-                ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
-                )
-            )
-        end
-        for (k, v) in pairs(body)
-            _assert_no_nested_apply(v, template_name, "$path/$(string(k))")
-        end
-    end
+    at = _find_json_path(_is_apply_node, body, path)
+    at === nothing || throw(
+        ExpressionTemplateError(
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $at; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
+        )
+    )
+    return
 end
 
 function _validate_templates(templates::AbstractDict{String, Any}, scope::String)
@@ -185,11 +172,8 @@ const MAX_TEMPLATE_EXPANSION_DEPTH = 32
 # The `name` of every `apply_expression_template` node in a template body
 # (document order) — the §9.7.3 body-reference edges.
 function _collect_apply_names!(out::Vector{String}, x)
-    _walk_json(x) do _, n
-        _is_array(n) && return _may_hold_object(n)
-        _is_object(n) || return true
-        op = _raw_get(n, "op")
-        if op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
+    _visit_json(x) do _, n
+        if _is_apply_node(n)
             nm = _raw_get(n, "name")
             nm !== nothing && push!(out, string(nm))
         end
