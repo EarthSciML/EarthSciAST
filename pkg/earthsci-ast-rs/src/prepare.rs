@@ -3262,6 +3262,7 @@ mod whole_document_tests {
     //! are spelled, and the flattened system it hands the compile path.
 
     use super::{BuildContext, Spelling, run_prepare};
+    use crate::problem::{ProblemOptions, esm_problem};
     use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -3383,5 +3384,72 @@ mod whole_document_tests {
         let prepared = prepared_with(&two, Some("A"));
         assert_eq!(prepared.model_name.as_deref(), Some("A"));
         assert!(prepared.flattened.is_none());
+    }
+
+    struct Column(Vec<f64>);
+
+    impl crate::provider::DataProvider for Column {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
+            Ok(
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[self.0.len()]), self.0.clone())
+                    .unwrap(),
+            )
+        }
+    }
+
+    /// A dynamic document whose derived set is invented from a provider's
+    /// data: the compile sizes the set from the pipeline's value invention,
+    /// which read that data, so a rate over the set compiles.
+    #[test]
+    fn the_compile_sizes_a_derived_set_from_the_pipelines_value_invention() {
+        let key = json!({"op": "index", "args": ["code", "f"]});
+        let d = json!({
+            "esm": "2.0.0", "metadata": {"name": "Codes"},
+            "index_sets": {
+                "faces": {"kind": "interval", "size": 4},
+                "kinds": {"kind": "derived", "from_faq": "kind_set"}
+            },
+            "data_sources": {"src": {"kind": "static",
+                                     "source": {"url_template": "never-read.parquet"}}},
+            "models": {"Codes": {
+                "variables": {
+                    "code": {"type": "parameter", "shape": ["faces"], "default": 0.0,
+                             "update": {"kind": "data", "source": "src",
+                                        "from": {"file_variable": "code"}}},
+                    "kind_exists": {"type": "unknown", "shape": ["kinds"]},
+                    "n": {"type": "unknown"},
+                    "x": {"type": "unknown", "default": 0.0}
+                },
+                "equations": [
+                    {"lhs": {"op": "index", "args": ["kind_exists", "k"]},
+                     "rhs": {"op": "faq", "args": [], "id": "kind_set",
+                             "semiring": "bool_and_or", "distinct": true,
+                             "output_idx": ["k"], "ranges": {"f": {"from": "faces"}},
+                             "key": key, "expr": {"op": "true", "args": []}}},
+                    {"lhs": "n",
+                     "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                             "output_idx": [], "ranges": {"k": {"from": "kinds"}},
+                             "expr": 1.0}},
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "n"}
+                ]
+            }}
+        });
+        let mut providers: HashMap<String, Box<dyn crate::provider::DataProvider>> = HashMap::new();
+        providers.insert(
+            "Codes.code".to_string(),
+            Box::new(Column(vec![3.0, 1.0, 3.0, 2.0])),
+        );
+        let prob = esm_problem(
+            &d,
+            (0.0, 1.0),
+            ProblemOptions {
+                build_pipeline: true,
+                providers,
+                ..Default::default()
+            },
+        )
+        .expect("the compile takes the pipeline's three members");
+        assert_eq!(prob.extents().get("kind_set"), Some(&3));
+        assert_eq!(prob.members()["kind_set"], vec![1, 2, 3]);
     }
 }
