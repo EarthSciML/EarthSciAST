@@ -150,25 +150,31 @@ function _de_unsupported_op()
     )
 end
 
-# Push a third operand onto every compiled `/` node reachable from `x`.
+# Give every compiled two-operand `/` node reachable from `x` (a `_Node` or a
+# lane-batched node; both carry `op` and `children`) a third operand, a copy of
+# its second.
 function _de_malform_divide!(x, seen = IdDict{Any, Nothing}())
     (isbits(x) || x isa Module || x isa DataType || haskey(seen, x)) && return 0
     seen[x] = nothing
     n = 0
-    if x isa EarthSciAST._Node
-        if x.kind === EarthSciAST._NK_OP && x.op === :/ && length(x.children) == 2
-            push!(x.children, EarthSciAST._mknode(kind = EarthSciAST._NK_LITERAL, literal = 3.0))
-            n += 1
-        end
-        for c in x.children
-            n += _de_malform_divide!(c, seen)
-        end
-    elseif x isa Union{AbstractArray, Tuple, NamedTuple, AbstractDict}
-        for v in (x isa AbstractDict ? values(x) : x)
+    T = typeof(x)
+    if isstructtype(T) && hasfield(T, :op) && hasfield(T, :children) &&
+            getfield(x, :op) === :/ && getfield(x, :children) isa AbstractVector &&
+            length(getfield(x, :children)) == 2
+        ch = getfield(x, :children)
+        push!(ch, ch[2])
+        n += 1
+    end
+    if x isa Union{AbstractArray, Tuple, NamedTuple}
+        for v in x
             n += _de_malform_divide!(v, seen)
         end
-    elseif !(x isa Function) && isstructtype(typeof(x))
-        for f in fieldnames(typeof(x))
+    elseif x isa AbstractDict
+        for (k, v) in x
+            n += _de_malform_divide!(k, seen) + _de_malform_divide!(v, seen)
+        end
+    elseif isstructtype(T)
+        for f in fieldnames(T)
             isdefined(x, f) && (n += _de_malform_divide!(getfield(x, f), seen))
         end
     end

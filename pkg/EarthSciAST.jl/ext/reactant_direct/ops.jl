@@ -279,9 +279,9 @@ _de_foldable_op(op::Symbol) = haskey(_DE_OPS, op)
 # to `range` host multiply-adds and, after interning, a handful of constants.
 #
 # It is also strictly MORE faithful than emitting the ops would be: the value is
-# computed in Float64 by `_scalar_op`, whose arm order is pinned against
-# `_eval_node_op` by test/scalar_ops_test.jl, so a folded subtree agrees with the
-# interpreter bit for bit, where `stablehlo.power` and friends would not.
+# computed in Float64 by `_scalar_op`, which the same generator as `_eval_node_op`
+# builds (`_op_ladder`), so a folded subtree agrees with the interpreter bit for
+# bit, where `stablehlo.power` and friends would not.
 #
 # `_de_static` is memoized per node (structural, so a loop body asked once per
 # `k` pays the walk once); `_de_hostval` is re-evaluated per `k`, because a
@@ -352,9 +352,8 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         end
         return s
     end
-    # `_NK_OP`: the shared ladder, at Float64. Its arms are pinned against the
-    # interpreter's (`_eval_node_op`) by test/scalar_ops_test.jl, so a folded
-    # subtree is bit-identical to what `f!` computes for it.
+    # `_NK_OP`: the host ladder, generated as the interpreter's (`_op_ladder`),
+    # so a folded subtree is bit-identical to what `f!` computes for it.
     c = Any[_de_hostval(ctx, ch) for ch in nd.children]
     return _E._scalar_op(nd.op, c)
 end
