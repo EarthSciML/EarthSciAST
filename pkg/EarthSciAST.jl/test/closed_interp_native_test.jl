@@ -153,14 +153,11 @@ const _TI_NOFOLD = _TI._plan_with(_TI._compiler_plan(:native); count_fold = fals
 const _TI_NOSHARE = _TI._plan_with(_TI._compiler_plan(:native); share_subtrees = false)
 const _TI_TIMES = (0.0, 0.7, 3.1, 6.0, 10.0, 17.5)
 
-# `du` keyed by variable name at each of `_TI_TIMES`, and the build's tally,
+# `du` keyed by variable name at each of `_TI_TIMES`, and the build's counts,
 # under `compiler` (a vocabulary value or a plan).
 function _ti_eval(doc, compiler; times = _TI_TIMES)
-    _TI._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        _TI._build_evaluator(doc; compiler = compiler) :
-        _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(doc; compiler = compiler), compiler)
-    tally = copy(_TI._CASCADE_TALLY)
+    f!, u0, p, _, vm, rep = _TI.Internal.build(doc; compiler = compiler)
+    tally = rep.counts
     out = Dict{String, Vector{Float64}}()
     for t in times
         du = similar(u0); fill!(du, NaN)
@@ -277,13 +274,10 @@ end
     end
     qs = vcat(Any[NaN, -Inf, Inf, -0.0], Any[ax[k] for k in 1:2:n], Any[ax[k] + 0.25 for k in 2:2:n])
     function agree(d)
-        ics = Dict{String, Any}("q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
+        ics = Dict{String, Any}("M.q[$i]" => qs[mod1(i, length(qs))] for i in 1:n)
         r = Dict{Any, Any}()
         for c in (:native, _TI_NOSHARE, :interpreter)
-            _TI._reset_cascade_tally!()
-            f!, u0, p, _, vm = c isa Symbol ?
-                _TI._build_evaluator(d; initial_conditions = ics, compiler = c) :
-                _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(d; initial_conditions = ics, compiler = c), c)
+            f!, u0, p, _, vm, rep = _TI.Internal.build(d; initial_conditions = ics, compiler = c)
             out = Dict{String, Vector{Float64}}()
             for t in (0.0, 0.4, 2.0, 4.4)
                 du = similar(u0); f!(du, u0, p, t)
@@ -291,7 +285,7 @@ end
                     push!(get!(() -> Float64[], out, k), du[v])
                 end
             end
-            r[c] = (out, copy(_TI._CASCADE_TALLY))
+            r[c] = (out, rep.counts)
         end
         @test _ti_same(r[:native][1], r[:interpreter][1])
         @test _ti_same(r[_TI_NOSHARE][1], r[:interpreter][1])
@@ -396,25 +390,22 @@ end
             )
         )
     )
-    ics = Dict{String, Any}("out[$i]" => 0.0 for i in 1:2)
-    ics["s"] = 2.0
+    ics = Dict{String, Any}("M.out[$i]" => 0.0 for i in 1:2)
+    ics["M.s"] = 2.0
     qv(a, b) = 10.0 * a + b / 64
     for a in 1:M, b in 1:M
-        ics["q[$a,$b]"] = qv(a, b)
+        ics["M.q[$a,$b]"] = qv(a, b)
     end
     # Exact sums of the reads in range (every one an exact binary fraction).
     rd(a, k) = a <= M ? qv(a, c[k + 2]) : 0.0
     expect = [sum(rd(k + i + 1, k) + 2.0 * rd(k + i + 2, k) for k in 1:M) for i in 1:2]
     r = Dict{Any, Any}()
     for comp in (:native, _TI_NOSHARE, :interpreter)
-        _TI._reset_cascade_tally!()
-        f!, u0, p, _, vm = comp isa Symbol ?
-            _TI._build_evaluator(doc; initial_conditions = ics, compiler = comp) :
-            _TI._with_compiler_plan(() -> _TI._build_evaluator_dict(doc; initial_conditions = ics, compiler = comp), comp)
-        comp === :native && @test get(_TI._CASCADE_TALLY, :array_contraction_codegen, 0) >= 1
+        f!, u0, p, _, vm, rep = _TI.Internal.build(doc; initial_conditions = ics, compiler = comp)
+        comp === :native && @test get(rep.counts, :array_contraction_codegen, 0) >= 1
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        r[comp] = Float64[du[vm["out[$i]"]] for i in 1:2]
+        r[comp] = Float64[du[vm["M.out[$i]"]] for i in 1:2]
     end
     @test r[:interpreter] == expect
     @test all(r[:native] .=== r[:interpreter])

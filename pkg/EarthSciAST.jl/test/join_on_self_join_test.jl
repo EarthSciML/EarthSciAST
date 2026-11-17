@@ -87,20 +87,17 @@ const BACK = 3
 function _run(doc, n::Int; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     ca = Dict{String, Any}(
-        "row_id" => _ids(n), "row_prior" => _shifted(n, 1),
-        "row_back" => _shifted(n, BACK), "payload" => _payload(n)
+        "S.row_id" => _ids(n), "S.row_prior" => _shifted(n, 1),
+        "S.row_back" => _shifted(n, BACK), "S.payload" => _payload(n)
     )
-    let
-        ESS._VI_ENUM_VISITS[] = 0
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
-            file; model_name = "S", const_arrays = ca,
-            initial_conditions = Dict("out" => zeros(n)),
-            compiler = disable ? :interpreter : :native
-        )
-        du = similar(u0)
-        f!(du, u0, p, 0.0)
-        return (Float64[du[i] for i in 1:n], ESS._VI_ENUM_VISITS[])
-    end
+    f!, u0, p, _, _, rep = EarthSciAST.Internal.build(
+        file; const_arrays = ca,
+        initial_conditions = Dict("S.out" => zeros(n)),
+        compiler = disable ? :interpreter : :native
+    )
+    du = similar(u0)
+    f!(du, u0, p, 0.0)
+    return (Float64[du[i] for i in 1:n], get(rep.counts, :vi_enum_visits, 0))
 end
 
 # Independent oracles, so a shared mistake cannot pass.
@@ -204,9 +201,9 @@ end
     doc = _self_join_doc(n)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     function _eval(ca)
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
-            file; model_name = "S", const_arrays = ca,
-            initial_conditions = Dict("out" => zeros(n))
+        f!, u0, p, _, _ = EarthSciAST.Internal.build(
+            file; const_arrays = Dict{String, Any}("S.$k" => v for (k, v) in ca),
+            initial_conditions = Dict("S.out" => zeros(n))
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         return Float64[du[i] for i in 1:n]

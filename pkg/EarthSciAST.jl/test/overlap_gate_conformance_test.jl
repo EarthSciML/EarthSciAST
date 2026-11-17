@@ -286,16 +286,18 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     function _regrid_eval(eps; atol = 1.0e-15)
         raw = JSON3.read(JSON3.write(_regrid_doc(eps)))
         ics = Dict(
-            "A_j[1]" => 0.0, "A_j[2]" => 0.0, "A_j[3]" => 0.0,
-            "F_tgt[1]" => 0.0, "F_tgt[2]" => 0.0, "F_tgt[3]" => 0.0
+            "RegridOverlap.A_j[1]" => 0.0, "RegridOverlap.A_j[2]" => 0.0,
+            "RegridOverlap.A_j[3]" => 0.0, "RegridOverlap.F_tgt[1]" => 0.0,
+            "RegridOverlap.F_tgt[2]" => 0.0, "RegridOverlap.F_tgt[3]" => 0.0
         )
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-            raw; model_name = "RegridOverlap", initial_conditions = ics,
-            const_arrays = _regrid_const, parameter_overrides = Dict("atol" => atol)
+        f!, u0, p, _, vmap = EarthSciAST.Internal.build(
+            raw; initial_conditions = ics,
+            const_arrays = Dict{String, Any}("RegridOverlap.$k" => v for (k, v) in _regrid_const),
+            parameter_overrides = Dict("RegridOverlap.atol" => atol)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        A_j = [du[vmap["A_j[$j]"]] for j in 1:3]
-        F_tgt = [du[vmap["F_tgt[$j]"]] for j in 1:3]
+        A_j = [du[vmap["RegridOverlap.A_j[$j]"]] for j in 1:3]
+        F_tgt = [du[vmap["RegridOverlap.F_tgt[$j]"]] for j in 1:3]
         return A_j, F_tgt
     end
 

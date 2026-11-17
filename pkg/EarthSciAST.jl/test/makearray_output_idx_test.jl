@@ -57,13 +57,13 @@ _moi_u(k) = Float64(k^2)
 
 function _moi_du(doc, N; compiler)
     ics = merge(
-        Dict{String, Any}("u[$k]" => _moi_u(k) for k in 1:N),
-        Dict{String, Any}("J[$k]" => 0.0 for k in 1:N)
+        Dict{String, Any}("M.u[$k]" => _moi_u(k) for k in 1:N),
+        Dict{String, Any}("M.J[$k]" => 0.0 for k in 1:N)
     )
-    f!, u0, p, _, vm = _MOI._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+    f!, u0, p, _, vm = _MOI.Internal.build(doc; initial_conditions = ics, compiler = compiler)
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    return [du[vm["J[$i]"]] for i in 1:N]
+    return [du[vm["M.J[$i]"]] for i in 1:N]
 end
 
 # The value the makearray holds at cell c.

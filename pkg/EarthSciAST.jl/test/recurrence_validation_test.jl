@@ -345,9 +345,8 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
         )
         if _require_fixture(path)
             for c in (:native, :interpreter)
-                insp = EarthSciAST.BuildInspection()
-                EarthSciAST._build_evaluator(load_path(path); compiler = c, inspect = insp)
-                rows = [r for r in insp.compiler_report.rules if endswith(r.rule, "r")]
+                rep = EarthSciAST.Internal.build(load_path(path); compiler = c).report
+                rows = [r for r in rep.compiler_report.rules if endswith(r.rule, "r")]
                 @test length(rows) == 1
                 @test only(rows).tier === (c === :native ? :recurrence_sweep : :interpreter)
             end
@@ -369,7 +368,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("a")),
         ]
         err = try
-            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST.Internal.build(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e
@@ -391,7 +390,7 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             ESM_R.Equation(_D("x"), _v("y")),
         ]
         err = try
-            EarthSciAST._build_evaluator(ESM_R.Model(vars, eqs))
+            EarthSciAST.Internal.build(ESM_R.Model(vars, eqs))
             nothing
         catch e
             e

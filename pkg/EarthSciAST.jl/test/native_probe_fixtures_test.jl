@@ -41,9 +41,9 @@ _npf_path(f) = f in ("native_inline_const_subscript.esm", "native_neg_weight_gat
     joinpath(@__DIR__, "fixtures", f) : joinpath(_NPF_DIR, f)
 
 function _npf_build(path, compiler)
-    _NPF._reset_cascade_tally!()
-    prob = _NPF.esm_problem(path, (0.0, 1.0); compiler = compiler)
-    return prob, copy(_NPF._CASCADE_TALLY)
+    return _NPF.Internal.counting() do
+        _NPF.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    end
 end
 
 # A state off the initial one (no two elements equal), in `prob`'s layout.

@@ -29,9 +29,9 @@ const ESM = EarthSciAST
             [ESM.Equation(_op("D", _v("y"); wrt = "t"), _idx("forcing", _i(2)))]
         )
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _t, _vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0), param_arrays = Dict("forcing" => buf)
+            initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[1] == 7.0
@@ -54,8 +54,8 @@ const ESM = EarthSciAST
             ]
         )
         buf = collect(10.0:10.0:(10.0 * N))
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+        f!, u0, p, _t, _vm = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing" => buf)
         )
@@ -80,8 +80,8 @@ const ESM = EarthSciAST
                 ),
             ]
         )
-        ics = Dict("u[$k]" => 0.0 for k in 1:nx)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:nx)
+        f!, u0, p, _t, _vm = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing2d" => f2d)
         )
@@ -106,8 +106,8 @@ const ESM = EarthSciAST
         )
         wsrc = collect(1.0:Float64(N))         # const source (will be inlined)
         fbuf = fill(100.0, N)                   # live forcing buffer
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+        f!, u0, p, _t, _vm = EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = Dict("w" => wsrc), param_arrays = Dict("forcing" => fbuf)
         )
@@ -145,15 +145,15 @@ const ESM = EarthSciAST
             ]
         )
         buf = collect(1.0:Float64(N))
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _t, _vm = EarthSciAST._build_evaluator(
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
+        f!, u0, p, _t, _vm = EarthSciAST.Internal.build(
             model;
-            initial_conditions = ics, param_arrays = Dict("forcing" => buf)
+            initial_conditions = ics, param_arrays = Dict("M.forcing" => buf)
         )
         # `p` carries the scalar `a` but NOT the array `forcing`.
-        @test haskey(p, :a)
-        @test !haskey(p, :forcing)
-        @test p.a == 2.0
+        @test haskey(p, Symbol("M.a"))
+        @test !haskey(p, Symbol("M.forcing"))
+        @test p[Symbol("M.a")] == 2.0
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du == Float64[2.0 * buf[i] for i in 1:N]
     end
@@ -184,21 +184,21 @@ const ESM = EarthSciAST
             ]
         )
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
-            initial_conditions = Dict("y" => 0.0, "z" => 0.0),
+            initial_conditions = Dict("M.y" => 0.0, "M.z" => 0.0),
             param_arrays = Dict("forcing" => buf)
         )
         # The shared `forcing[2]*a` IS hoisted (3 occurrences) — without that this
         # test would pass vacuously, so pin it.
-        @test diag.n_cse_slots >= 1
-        @test diag.n_cse_occurrences >= 3
+        @test rep.stats.n_cse_slots >= 1
+        @test rep.stats.n_cse_occurrences >= 3
 
         a = 0.5
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["y"]] === sin(7.0 * a) + cos(7.0 * a)
-        @test du[vm["z"]] === 7.0 * a
+        @test du[vm["M.y"]] === sin(7.0 * a) + cos(7.0 * a)
+        @test du[vm["M.z"]] === 7.0 * a
         # In-place refresh of the SAME buffer object → the CACHED expression tracks
         # it. Since B3 the state-free slot is TIME-cadence — memoized on (p, t,
         # forcing epoch) — so a refresh landing at an ALREADY-SEEN t is announced
@@ -207,12 +207,12 @@ const ESM = EarthSciAST
         buf[2] = 42.0
         ESM.notify_forcing_refresh!()
         f!(du, u0, p, 0.0)
-        @test du[vm["y"]] === sin(42.0 * a) + cos(42.0 * a)
-        @test du[vm["z"]] === 42.0 * a
+        @test du[vm["M.y"]] === sin(42.0 * a) + cos(42.0 * a)
+        @test du[vm["M.z"]] === 42.0 * a
         # …and needs no notify at any t the memo has not stamped.
         buf[2] = 5.0
         f!(du, u0, p, 1.0)
-        @test du[vm["z"]] === 5.0 * a
+        @test du[vm["M.z"]] === 5.0 * a
     end
 
     @testset "build-time guards" begin
@@ -221,11 +221,11 @@ const ESM = EarthSciAST
             Dict("u" => ModelVariable(UnknownVariable)),
             [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))]
         )
-        ics = Dict("u[$k]" => 0.0 for k in 1:N)
+        ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
 
         # Out-of-range index → E_TREEWALK_PGATHER_OOB.
         err = try
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 mk(_idx("forcing", _i(9)));
                 initial_conditions = ics, param_arrays = Dict("forcing" => fill(0.0, N))
             )
@@ -237,7 +237,7 @@ const ESM = EarthSciAST
 
         # ndim mismatch (2 indices into a 1-D buffer) → E_TREEWALK_PGATHER_NDIM.
         err = try
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 mk(_idx("forcing", _v("i"), _i(1)));
                 initial_conditions = ics, param_arrays = Dict("forcing" => fill(0.0, N))
             )
@@ -249,7 +249,7 @@ const ESM = EarthSciAST
 
         # Non-Float64 buffer → E_TREEWALK_PARAM_ARRAY_TYPE.
         err = try
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 mk(_idx("forcing", _v("i")));
                 initial_conditions = ics, param_arrays = Dict("forcing" => [1, 2, 3])
             )

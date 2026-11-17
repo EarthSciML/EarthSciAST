@@ -118,18 +118,23 @@ const ENV0 = Dict{String, Any}(
     "kk" => Float64[1.0, 2.0, 3.0]
 )
 
+# How the overlap-gated sweeps of one call were driven: (driven, gated per
+# tuple, no gate), from the call's engagement counts.
+_drives(c) = (
+    get(c, :geom_overlap_drive, 0), get(c, :geom_overlap_gate_only, 0),
+    get(c, :geom_overlap_none, 0),
+)
+
 # Materialize `json` under `native` and, separately, under
 # `compiler=:interpreter` (the dense sweep, gated per tuple).
-# Returns (native, interpreter, Δdrive, Δgate_only, Δnone), the counters
-# for the native sweep.
+# Returns (native, interpreter, drive, gate_only, none), the counts for the
+# native sweep.
 function both_ways(json, env = ENV0, idx = IDX)
     rhs = EA.expression_from_json(json)
-    d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-        EA._GEOM_OVERLAP_NONE[]
-    got = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
-    dd = EA._GEOM_OVERLAP_DRIVE[] - d0
-    dg = EA._GEOM_OVERLAP_GATE_ONLY[] - g0
-    dn = EA._GEOM_OVERLAP_NONE[] - n0
+    got, counts = EA.Internal.counting() do
+        EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
+    end
+    dd, dg, dn = _drives(counts)
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     end
@@ -270,14 +275,15 @@ const A_IJ = _agg(
 
     @testset "the interpreter gates the dense sweep per tuple, never drives" begin
         rhs = EA.expression_from_json(A_IJ)
-        d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-            EA._GEOM_OVERLAP_NONE[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+        _, counts = EA.Internal.counting() do
+            EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+            end
         end
-        @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
-        @test EA._GEOM_OVERLAP_GATE_ONLY[] - g0 == 1   # resolved, tested per tuple
-        @test EA._GEOM_OVERLAP_NONE[] - n0 == 0
+        dd, dg, dn = _drives(counts)
+        @test dd == 0
+        @test dg == 1   # resolved, tested per tuple
+        @test dn == 0
     end
 
     @testset "a shape the planner declines is GATED, not driven" begin
@@ -296,10 +302,11 @@ const A_IJ = _agg(
             join = _ovj(["src_poly"], ["tgt_poly"])
         )
         rhs = EA.expression_from_json(j)
-        d0, g0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[]
-        got = EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-        @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
-        @test EA._GEOM_OVERLAP_GATE_ONLY[] - g0 == 1
+        got, counts = EA.Internal.counting() do
+            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+        end
+        @test _drives(counts)[1] == 0
+        @test _drives(counts)[2] == 1
         # Total overlap area is 4 × 0.04; scaled by kk = [1,2,3].
         total = sum(
             EA._materialize_geom_array(
@@ -342,13 +349,10 @@ const A_IJ = _agg(
             join = _ovj(["flat_src"], ["tgt_poly"])
         )
         rhs3 = EA.expression_from_json(j3)
-        d3, g3, n3 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-            EA._GEOM_OVERLAP_NONE[]
-        got3 = EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
-        @test (
-            EA._GEOM_OVERLAP_DRIVE[] - d3, EA._GEOM_OVERLAP_GATE_ONLY[] - g3,
-            EA._GEOM_OVERLAP_NONE[] - n3,
-        ) == (0, 0, 1)
+        got3, counts3 = EA.Internal.counting() do
+            EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
+        end
+        @test _drives(counts3) == (0, 0, 1)
         ref3 = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
         end
