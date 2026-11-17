@@ -30,7 +30,7 @@
 # and its recurrence sweeps in their walked form (`_obs_reaches_recurrence`).
 
 # Everything a program build needs from the build that produced the problem.
-# Captured by `_build_compile_evaluator` into the problem's `BuildInspection`,
+# Captured by `_build_compile_evaluator` into the problem's `BuildProducts`,
 # bound to the problem when `esm_problem` publishes it, and holding the
 # problem's programs as they are built.
 mutable struct _ObsProgramCtx
@@ -438,10 +438,7 @@ end
 
 # The program context `prob`'s own build captured, or `nothing` for a problem
 # whose build captured none (a compiler that builds its own program).
-_obs_ctx(prob) = lock(
-    () -> get(prob.inspection.observed_ctxs, prob.run_file, nothing),
-    prob.inspection.observed_lock
-)
+_obs_ctx(prob) = prob.build.products.observed_ctx
 
 # Whether a read was served by a compiled observed program: the output-time
 # row's tier says so. Task-local, like the per-cell count beside it

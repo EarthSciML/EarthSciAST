@@ -382,9 +382,10 @@ function _foreach_aggregate_product(
     ) where {F, COUNT}
     body === nothing && iters isa AbstractVector && length(iters) == 1 &&
         return _foreach_keys1(emit!, contract_names[1], iters[1], gates, binding, Val(COUNT))
+    nvisit = 0
     for k_tuple in _agg_tuples(iters)
         if binding !== nothing
-            COUNT && (_VI_ENUM_VISITS[] += 1)
+            COUNT && (_VI_ENUM_VISITS[] += 1; nvisit += 1)
             for d in 1:length(contract_names)
                 binding[contract_names[d]] = k_tuple[d]
             end
@@ -404,6 +405,7 @@ function _foreach_aggregate_product(
         end
         emit!(term)
     end
+    COUNT && _count!(:vi_enum_visits, nvisit)
     return nothing
 end
 
@@ -418,14 +420,16 @@ function _foreach_keys1(
         emit!::F, name::String, it, gates, binding,
         ::Val{COUNT}
     ) where {F, COUNT}
+    nvisit = 0
     for k in it
         if binding !== nothing
-            COUNT && (_VI_ENUM_VISITS[] += 1)
+            COUNT && (_VI_ENUM_VISITS[] += 1; nvisit += 1)
             binding[name] = k
             _join_admits(gates, binding) || continue
         end
         emit!((k,))
     end
+    COUNT && _count!(:vi_enum_visits, nvisit)
     return nothing
 end
 
@@ -509,6 +513,7 @@ function _foreach_aggregate_pairs(
         contract_names::Vector{String}, cols, gates, filt, zerobar::Float64,
         binding, k_exprs::Dict{String, ASTExpr}
     ) where {F}
+    _count!(:vi_enum_visits, length(cols[1]))
     for p in 1:length(cols[1])
         _VI_ENUM_VISITS[] += 1
         for d in 1:length(contract_names)

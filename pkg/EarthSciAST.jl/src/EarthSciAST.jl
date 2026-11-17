@@ -155,6 +155,7 @@ include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
 include("inline_tests.jl")
+include("internal.jl")
 
 export
     # Root of the exception hierarchy (H-1): every exception this package

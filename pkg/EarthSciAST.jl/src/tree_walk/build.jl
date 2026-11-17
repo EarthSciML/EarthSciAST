@@ -1,17 +1,15 @@
 # ========================================================================
 # tree_walk/build.jl — part of the tree-walk evaluator (gt-e8yw).
 # Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Sections 2/2b/2c: BuildInspection, the extracted build-pipeline
+# include order. Sections 2/2b/2c: BuildInspection and BuildProducts, the extracted build-pipeline
 # stages, the four build phases + _build_evaluator_impl, the public
 # build_evaluator entry points, and evaluate_expr.
 # ========================================================================
 
 # One `observed_field` answer: the forcing epoch it was computed at
 # (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only
-# when a live buffer is refreshed in place. It is filed under the build it
-# belongs to, named by the problem's `run_file` slot — each build allocates its
-# own and `remake` shares it — so a record reused for a second build, or a
-# second problem, never answers with the first one's field.
+# when a live buffer is refreshed in place. Kept per Problem (and shared by its
+# `remake`s, which share its build).
 struct _ObservedMemo
     epoch::UInt64
     value::Any
@@ -89,112 +87,118 @@ are otherwise internal to the evaluator closure:
 * `recurrences::Vector{RecurrenceInfo}` — one [`RecurrenceInfo`](@ref) per
   causal self-reference the build recognized (esm-spec §4.3.1.1): its axis,
   derived maximum lag, whether the lag was proved, and the sweep's size.
+* `compiler_report::CompilerReport` — which tier every rule landed on (API_SPEC
+  §5.8), the record [`compiler_report`](@ref) returns for this build. It is
+  filled even when the build REFUSED, which leaves no Problem to read it off.
 
-Filling the record never changes the build: the returned
-`(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
+A record describes ONE build. It is filled when that build ends (a refused build
+still fills `compiler_report`), and passing it to a second build raises an
+`ArgumentError`. The entries are the build's own objects, not copies.
+
+Filling the record never changes the build.
 """
 mutable struct BuildInspection
     setup_arrays::Dict{String, Array{Float64}}
     const_arrays::Dict{String, Any}
     observed_exprs::Dict{String, ASTExpr}
     params::Dict{String, Float64}
-    # ---- UN-inlined observed definitions, for BUILD-TIME field evaluation ---
-    # `observed_exprs` above is the fully SUBSTITUTED view: every observed
-    # inlined into its readers. That is self-contained, but it makes a build-time
-    # `evaluate_cellwise` of one observed re-execute its ENTIRE producer chain
-    # once per OUTPUT CELL. On the ISRM source-receptor model that is
-    # 5 pathways x |ppl| x |emission records| terms at EVERY receptor cell — the
-    # spatial join re-run 52,411 times (~1.7e13 evaluations at full scale).
-    #
-    # This is the per-observed definition BEFORE observed-into-observed
-    # substitution, so `_observed_field` can materialize each producer ONCE in
-    # dependency order and let its readers gather the buffer.
-    #
-    # NOTE this is deliberately independent of the RHS-side factoring
-    # (`_collect_materialized_array_obs`), whose liveness roots are the `D`/`ic`
-    # equations. A PURE-ALGEBRAIC model — `system_kind: nonlinear`, no state, every
-    # result an observed, which is exactly the ISRM case — has NO such roots, so
-    # nothing is RHS-factored and the whole chain stays inlined. The build-time
-    # observability path has a different root: the observed a caller asks for.
-    observed_defs::Dict{String, ASTExpr}
-    # Extents of DATA-DERIVED index sets (RFC §5.5 value invention), keyed by
-    # index-set name. An observed shaped on a derived axis — the ISRM emission
-    # binning is shaped on `emis_src_cells`, whose size is discovered by value
-    # invention — cannot have its extents read from `index_sets` alone, so
-    # without these it could not be materialized at all.
-    derived_extents::Dict{String, Int}
-    # The numeric / structural / const_folded / forcing partition of the
-    # declared parameters (differentiability plan §3 Phase 5). Derived from the
-    # names the build-time consumers actually READ, so it is a record of this
-    # build, not a re-reading of the document.
     param_classes::Dict{String, Symbol}
-    # Which tier every rule of this build landed on (API_SPEC §5.8). The same
-    # record `compiler_report(prob)` returns, put here too so a caller who
-    # builds through the private builder — or whose build REFUSED, leaving no
-    # Problem to read it off — can still read it. [`compiler_report`](@ref)
-    # takes this record as well as an `EsmProblem`. Empty until the build that
-    # owns this record finishes.
-    compiler_report::CompilerReport
-    # The live forcing buffers this build bound, in the stable (name-sorted)
-    # NamedTuple order a compiled backend's buffers argument is aligned with,
-    # and the name → position map. Published by EVERY build form, which is what
-    # lets `forcing_buffers(prob)` answer on an `EsmProblem` whatever compiler
-    # built it — the seam used to hang off the out-of-place build product alone.
-    forcing_buffers::NamedTuple
-    forcing_buffer_index::Dict{String, Int}
-    # `observed_field(prob, name)` answers, keyed by the build (the problem's
-    # `run_file` slot) and the requested name (see `_ObservedMemo`), so two
-    # problems sharing this record do not evict each other's. Emptied when a
-    # build starts, and read and written under `observed_lock`, since two tasks
-    # may read one problem at once.
-    observed_memo::Dict{Tuple{Base.RefValue{Any}, String}, _ObservedMemo}
-    observed_lock::ReentrantLock
-    # The `run_file` slot of the problem whose build this record describes:
-    # the one whose reads file `:observed` rows into `compiler_report`. A
-    # problem built earlier with the same record still reads through it, but
-    # its rows would land in another build's report.
-    observed_build::Base.RefValue{Any}
-    # What the compiled observed program (`observed_program.jl`) needs from the
-    # latest build, and, per problem (keyed by its `run_file` slot, bound when
-    # `esm_problem` publishes the problem), the context its reads compile
-    # against — each problem's own build, whatever was built with this record
-    # since.
-    observed_ctx::Any
-    observed_ctxs::WeakKeyDict{Base.RefValue{Any}, Any}
-    # The state slots (by position in `u0`) nothing in the document gave a
-    # starting value: no `default`, no `ic` equation, no initial condition.
-    # The build writes 0.0 there only as a placeholder; `esm_problem` refuses
-    # any the caller's `u0` does not then cover (esm-spec §11.4).
-    unvalued_slots::Vector{Int}
-    # What `rhs_program` rebuilds an operator from (src/range_restricted.jl):
-    # the recipe `esm_problem` records (`_ProgramSeedRecipe`), from which the
-    # first `rhs_program` call builds the flattened system with its per-term
-    # provenance. `nothing` for a build `esm_problem` did not make.
-    program_seed::Any
-    # `(t0, data) -> u0`: the build's initial state at another start of the
-    # run, the `ic` right-hand sides evaluated at `t0` with the data-fed
-    # parameters' values `data` there (esm-spec §11.4.2). `nothing` when the
-    # initial state does not depend on the start.
-    ic_reseed::Any
-    # One entry per causal self-reference this build recognized (esm-spec
-    # §4.3.1.1), in name order: the interpretation its self-reads were given,
-    # reported rather than authored. The same four facts Rust's build
-    # inspection reports, plus the sweep's size.
     recurrences::Vector{RecurrenceInfo}
+    compiler_report::CompilerReport
+    # Whether a build has taken this record; a second one refuses it.
+    taken::Bool
 end
 BuildInspection() = BuildInspection(
-    Dict{String, Array{Float64}}(),
-    Dict{String, Any}(), Dict{String, ASTExpr}(),
-    Dict{String, Float64}(),
-    Dict{String, ASTExpr}(),
-    Dict{String, Int}(),
-    Dict{String, Symbol}(),
+    Dict{String, Array{Float64}}(), Dict{String, Any}(), Dict{String, ASTExpr}(),
+    Dict{String, Float64}(), Dict{String, Symbol}(), RecurrenceInfo[],
+    CompilerReport(:native), false
+)
+
+# Claim `insp` for one build, refusing a record an earlier build took.
+function _take_inspection!(insp::BuildInspection)
+    insp.taken && throw(
+        ArgumentError(
+            "this BuildInspection already describes an earlier build; pass a fresh " *
+                "BuildInspection() to each esm_problem call"
+        )
+    )
+    insp.taken = true
+    return insp
+end
+
+# Point the caller's record at what the build produced.
+function _publish_inspection!(insp::BuildInspection, products)
+    insp.setup_arrays = products.setup_arrays
+    insp.const_arrays = products.const_arrays
+    insp.observed_exprs = products.observed_exprs
+    insp.params = products.params
+    insp.param_classes = products.param_classes
+    insp.recurrences = products.recurrences
+    insp.compiler_report = products.compiler_report
+    return insp
+end
+
+"""
+    BuildProducts()
+
+Everything one build produced besides the right-hand side, owned by the build
+and by the `EsmProblem` made from it. Not exported: [`BuildInspection`](@ref)
+is the public view of the first seven fields, and `EarthSciAST.Internal.build`
+returns the whole record in its report.
+
+The fields [`BuildInspection`](@ref) documents (`setup_arrays`, `const_arrays`,
+`observed_exprs`, `params`, `param_classes`, `recurrences`, `compiler_report`),
+and:
+
+* `observed_defs` — each observed's definition BEFORE observed-into-observed
+  substitution, so a build-time field evaluation (`_observed_field`) can
+  materialize each producer once in dependency order and let its readers
+  gather the buffer, instead of re-running the whole producer chain per output
+  cell. Independent of the right-hand side's factoring, whose roots are the
+  `D`/`ic` equations: a model with no state has no such roots.
+* `derived_extents` — the extents of data-derived index sets (value
+  invention), keyed by producer id, without which an observed shaped on a
+  derived axis cannot be materialized.
+* `forcing_buffers`, `forcing_buffer_index` — the live forcing buffers the
+  build bound, in the name-sorted order a compiled backend's buffers argument
+  is aligned with, and name → position. Filled by every build form.
+* `unvalued_slots` — the state slots nothing in the document gave a starting
+  value; the build writes 0.0 there as a placeholder and `esm_problem` refuses
+  any the caller's `u0` does not cover (esm-spec §11.4).
+* `ic_reseed` — `(t0, data) -> u0`, the initial state at another start of the
+  run (esm-spec §11.4.2), or `nothing` when it does not depend on the start.
+* `observed_ctx` — what the compiled observed program (`observed_program.jl`)
+  compiles an output-time read against.
+* `stats` — the emitted right-hand side's structural counts (kernels, CSE and
+  prelude slots, scan folds, factored observeds); empty until the build ends.
+* `kernels` — the access kernels the right-hand side carries, after the class
+  merge.
+"""
+mutable struct BuildProducts
+    setup_arrays::Dict{String, Array{Float64}}
+    const_arrays::Dict{String, Any}
+    observed_exprs::Dict{String, ASTExpr}
+    params::Dict{String, Float64}
+    param_classes::Dict{String, Symbol}
+    recurrences::Vector{RecurrenceInfo}
+    compiler_report::CompilerReport
+    observed_defs::Dict{String, ASTExpr}
+    derived_extents::Dict{String, Int}
+    forcing_buffers::NamedTuple
+    forcing_buffer_index::Dict{String, Int}
+    unvalued_slots::Vector{Int}
+    ic_reseed::Any
+    observed_ctx::Any
+    stats::NamedTuple
+    kernels::AbstractVector
+end
+BuildProducts() = BuildProducts(
+    Dict{String, Array{Float64}}(), Dict{String, Any}(), Dict{String, ASTExpr}(),
+    Dict{String, Float64}(), Dict{String, Symbol}(), RecurrenceInfo[],
     CompilerReport(:native),
+    Dict{String, ASTExpr}(), Dict{String, Int}(),
     NamedTuple(), Dict{String, Int}(),
-    Dict{Tuple{Base.RefValue{Any}, String}, _ObservedMemo}(),
-    ReentrantLock(), Ref{Any}(nothing),
-    nothing, WeakKeyDict{Base.RefValue{Any}, Any}(),
-    Int[], nothing, nothing, RecurrenceInfo[]
+    Int[], nothing, nothing, NamedTuple(), Any[]
 )
 
 """
@@ -4874,7 +4878,7 @@ function _build_compile_evaluator(
         model::Model, cls, parts, layout;
         index_sets::AbstractDict = Dict{String, Any}(), const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
-        initial_conditions::AbstractDict, tspan, inspect, materialize_out,
+        initial_conditions::AbstractDict, tspan, products, materialize_out,
         form::Symbol,
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing
     )
@@ -4908,16 +4912,16 @@ function _build_compile_evaluator(
         parts.geom_setup_arrays, cls.const_obs_arrays
     )
 
-    # ---- Build observability (the `inspect` kwarg; see BuildInspection) ----
-    # Copy the named build-time products into the caller's sink. Read-only with
-    # respect to the build: nothing downstream consults `inspect`.
-    if inspect !== nothing
+    # ---- The build's products (see `BuildProducts`) ----
+    # Copy the named build-time products into the record. The right-hand side
+    # does not consult them.
+    if products !== nothing
         for (k, arr) in parts.geom_setup_arrays
             # Published by reference, as the const arrays below are.
-            inspect.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
+            products.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
         end
         for (k, arr) in const_registry
-            inspect.const_arrays[String(k)] = arr
+            products.const_arrays[String(k)] = arr
         end
         # The observed map published here is the FULLY RESOLVED one — the same
         # bytes as before this change. A factored array observed no longer sits
@@ -4927,7 +4931,7 @@ function _build_compile_evaluator(
         # observed's expression CELLWISE, off the ODE path, so every reference
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
-        # when a sink asked for it.
+        # when a record asked for it.
         # A recurrence's definition reads itself, so it has no fully substituted
         # form: it is published as authored, and the others around it.
         recur_pub = _recurrence_names(mat_defs, mat_vars)
@@ -4949,29 +4953,28 @@ function _build_compile_evaluator(
         end
         # Filled as each sweep compiles (below), so the sweep's own checks
         # run first and decide any error the build raises.
-        empty!(inspect.recurrences)
+        empty!(products.recurrences)
         for (k, e) in published
-            _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
+            _is_hoisted_name(String(k)) || (products.observed_exprs[String(k)] = e)
         end
         # ALSO publish the UN-inlined per-observed definitions, so a build-time
         # field evaluation can materialize each producer once in dependency order
-        # instead of re-executing the chain per output cell (see the
-        # BuildInspection docstring). `observed_exprs` above is left exactly as
-        # it was, so callers that do not know about this field are unaffected.
+        # instead of re-executing the chain per output cell (see
+        # `BuildProducts`). `observed_exprs` above keeps the substituted view.
         for (k, e) in raw_obs
-            _is_hoisted_name(String(k)) || (inspect.observed_defs[String(k)] = e)
+            _is_hoisted_name(String(k)) || (products.observed_defs[String(k)] = e)
         end
         # Keyed by the PRODUCER id (`"emis_src_cells_faq" => 9`), exactly as the
         # build holds it. A consumer resolving a `kind:"derived"` axis follows the
         # set's `from_faq` to this map (see `_materialized_obs_scope`).
         for (k, n) in parts.derived_extents
-            inspect.derived_extents[String(k)] = Int(n)
+            products.derived_extents[String(k)] = Int(n)
         end
         # Resolved scalar parameter values (load-time constants) so a build-time
         # cellwise re-evaluation of a parameter-dependent observed / reference
         # (§6.6.5) binds them — see `evaluate_cellwise(...; params=…)`.
         for (k, val) in parts.param_scope
-            inspect.params[String(k)] = val
+            products.params[String(k)] = val
         end
     end
 
@@ -5006,8 +5009,8 @@ function _build_compile_evaluator(
     # Output-time reads compile against this build's ODE layout, its const
     # arrays, live buffers (discrete caches included) and parameters. Captured
     # only for a build with a sink to hold it; nothing here runs until a read.
-    if inspect !== nothing
-        inspect.observed_ctx = _ObsProgramCtx(
+    if products !== nothing
+        products.observed_ctx = _ObsProgramCtx(
             model, cls, parts, index_sets,
             layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
             const_registry, pgather, template_sites,
@@ -5175,8 +5178,8 @@ function _build_compile_evaluator(
                         pgather, param_sym_set
                     )
                     _record_rule!(name, :observed, _recurrence_tier(sw))
-                    inspect === nothing ||
-                        push!(inspect.recurrences, _recurrence_info(name, mat_defs[name], sw))
+                    products === nothing ||
+                        push!(products.recurrences, _recurrence_info(name, mat_defs[name], sw))
                     push!(lvl_recurs, sw)
                     continue
                 end
@@ -5231,7 +5234,7 @@ function _build_compile_evaluator(
             end
         end
     end
-    inspect === nothing || sort!(inspect.recurrences; by = r -> r.var)
+    products === nothing || sort!(products.recurrences; by = r -> r.var)
 
     # ---- Build per-derivative compiled-IR list ----
     # (see `_compile_derivative_equations` / `_compile_faq_equation!`)
@@ -5400,14 +5403,14 @@ function _build_compile_evaluator(
     # ---- Default tspan ----
     tspan_default = _pick_tspan(tspan, model)
 
-    # ---- Build observability: the live forcing buffers (see BuildInspection) --
+    # ---- The live forcing buffers (see `BuildProducts`) ----
     # Published for BOTH forms, from the same `pgather` the out-of-place product
     # carries as a field, so that `forcing_buffers(prob)` is a question about
     # the PROBLEM rather than about which build form happened to produce it.
-    if inspect !== nothing
+    if products !== nothing
         _fb, _fbi = _forcing_buffer_container(pgather)
-        inspect.forcing_buffers = _fb
-        inspect.forcing_buffer_index = _fbi
+        products.forcing_buffers = _fb
+        products.forcing_buffer_index = _fbi
     end
 
     # ---- The RHS slot ----
@@ -5536,6 +5539,10 @@ function _build_compile_evaluator(
         n_mat_time_levels = length(mat_time_levels),
     )
 
+    if products !== nothing
+        products.stats = diag
+        products.kernels = acc_kernels
+    end
     # The PUBLIC map is the ODE layout only: the factored array-observed buffer
     # slots are build-owned scratch above `length(u0)`, not integrator slots, and
     # every caller (solution indexing, cellwise evaluation, the conformance
@@ -5567,14 +5574,7 @@ function _build_evaluator_impl(
     end
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
-    insp = get(kwargs, :inspect, nothing)
-    # A record passed to a second build describes that build from here on, so
-    # nothing the previous one answered may be served out of it.
-    insp isa BuildInspection && lock(insp.observed_lock) do
-        empty!(insp.observed_memo)
-        insp.observed_build = Ref{Any}(nothing)
-        insp.observed_ctx = nothing
-    end
+    products = get(kwargs, :products, nothing)
     return _with_compiler_plan(plan) do
         _with_build_record(record) do
             try
@@ -5582,8 +5582,7 @@ function _build_evaluator_impl(
             finally
                 # The report is filled even when the build THREW: a refusal is
                 # exactly the case a caller wants the partial tier record for.
-                insp isa BuildInspection &&
-                    (insp.compiler_report = _finish_report(record))
+                products === nothing || (products.compiler_report = _finish_report(record))
             end
         end
     end
@@ -5638,12 +5637,11 @@ function _build_evaluator_impl_inner(
         # each buffer's 1-D shape index set. Set by the AbstractDict
         # front-door; empty on a direct typed call (RFC §5.3 / §6.1).
         _vi_maps = _EMPTY_VI_MAPS,
-        # Build observability sink (see BuildInspection): when
-        # non-nothing, filled with the materialized setup-time
-        # geometry arrays, the const-array registry, and the
-        # resolved observed substitution map. Never changes the
-        # build itself.
-        inspect::Union{Nothing, BuildInspection} = nothing,
+        # The build's products record (see `BuildProducts`): when
+        # non-nothing, filled with everything the build produced
+        # besides the right-hand side. The right-hand side is the
+        # same with or without it.
+        products::Union{Nothing, BuildProducts} = nothing,
         # Discrete-cadence materialization sink (opt-in; see
         # DiscreteMaterializer). When non-nothing, a state-free
         # live-field array observed is cut out of the per-step RHS
@@ -5852,7 +5850,7 @@ function _build_evaluator_impl_inner(
     # flattening-qualified parameter name the build resolves (`M.pert_amp`)
     # BEFORE any consumer reads it, so the same map binds the parameter
     # NamedTuple, the coordinate-expression `ic` seed, the setup env, and
-    # `inspect.params`. Idempotent — the AbstractDict front-door normalizes
+    # `products.params`. Idempotent — the AbstractDict front-door normalizes
     # too, and a document whose parameters are already bare is unchanged.
     parameter_overrides = _normalize_param_override_keys(
         model, parameter_overrides;
@@ -5943,15 +5941,15 @@ function _build_evaluator_impl_inner(
         model, cls, parts;
         initial_conditions = initial_conditions, index_sets = index_sets, const_arrays = ic_const_arrays,
         vi_vars = _vi_vars, param_reads = param_reads,
-        unvalued = inspect === nothing ? nothing : empty!(inspect.unvalued_slots)
+        unvalued = products === nothing ? nothing : empty!(products.unvalued_slots)
     )
 
     # `remake` with a new start re-evaluates the `ic` right-hand sides through
     # this. An initialization equation (esm-spec §6.2) reads the seeded state
     # in a later phase, which a re-seed would not replay, so such a build
     # refuses the move instead of returning a state the equations did not see.
-    if inspect !== nothing
-        inspect.ic_reseed = layout.ic_reseed === nothing ? nothing :
+    if products !== nothing
+        products.ic_reseed = layout.ic_reseed === nothing ? nothing :
             isempty(parts.init_equations) ? layout.ic_reseed :
             (_, _) -> throw(
                 TreeWalkError(
@@ -5967,7 +5965,7 @@ function _build_evaluator_impl_inner(
     # ---- The parameter partition (differentiability plan §3 Phase 5) ----
     # Every build-time consumer has now run, so the read set is complete.
     # Published to whichever sinks the caller supplied; never changes the build.
-    if _param_classes !== nothing || inspect !== nothing
+    if _param_classes !== nothing || products !== nothing
         classes = _classify_parameters(
             model, parts.param_names, param_reads,
             const_arrays, param_arrays
@@ -5977,9 +5975,9 @@ function _build_evaluator_impl_inner(
                 _param_classes[k] = v
             end
         end
-        if inspect !== nothing
+        if products !== nothing
             for (k, v) in classes
-                inspect.param_classes[k] = v
+                products.param_classes[k] = v
             end
         end
     end
@@ -5989,7 +5987,7 @@ function _build_evaluator_impl_inner(
         model, cls, parts, layout;
         index_sets = index_sets, const_arrays = const_arrays,
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
-        initial_conditions = initial_conditions, tspan = tspan, inspect = inspect,
+        initial_conditions = initial_conditions, tspan = tspan, products = products,
         materialize_out = materialize_out, form = form,
         template_sites = _template_sites
     )
@@ -6723,6 +6721,7 @@ function _tally_cascade!(k::Symbol)
     lock(_CASCADE_TALLY_LOCK) do
         _CASCADE_TALLY[k] = get(_CASCADE_TALLY, k, 0) + 1
     end
+    _count!(k)
     rec = _build_record()
     if rec !== nothing
         rec.tally[k] = get(rec.tally, k, 0) + 1
@@ -8348,7 +8347,7 @@ RHS expressions at build time.
 
 Keyword arguments (see `_build_evaluator_impl` for the full set,
 including `const_arrays`, `param_arrays`, `const_array_boundaries`,
-`index_sets`, and `inspect`):
+`index_sets`, and `products`, a [`BuildProducts`](@ref) record):
 
 * `initial_conditions::AbstractDict` — override the default values in
   `model.variables` for specific state variables. A value is a real number,
@@ -8370,7 +8369,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   mounted components) is left unbound rather than guessed at. The
   resolved values are load-time constants, so they bind the build-time
   evaluation scope too — the coordinate-expression `ic` seed and the
-  §6.6.5 reference / observed assertion scope reported via `inspect` —
+  §6.6.5 reference / observed assertion scope recorded in `products` —
   not just the runtime parameter NamedTuple.
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
   `nothing`, the first inline `tests` block's `time_span` is used; if
@@ -8851,10 +8850,14 @@ for callers that already have a parsed `Model`.
 by name; a read `index(name, i…)` at constant subscripts is inlined as a
 literal value.
 """
-function _build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
+function _build_evaluator(
+        esm::AbstractDict; compiler::Union{Symbol, CompilerPlan} = :native, kwargs...
+    )
     # Before the pre-build work below, which is not cheap and which a refusal
     # would throw away.
-    _xla_check_form(compiler, get(kwargs, :form, :inplace))
+    _xla_check_form(
+        compiler isa Symbol ? compiler : compiler.name, get(kwargs, :form, :inplace)
+    )
     # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
     # the binning-coordinate derivation and value invention below run first and
     # hand their results to the build as const arrays, so a per-cell setup sweep

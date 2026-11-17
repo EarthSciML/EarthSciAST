@@ -524,6 +524,7 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
 end
 function _compile(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
     _BENCH_ON[] && (_BENCH_COMPILE_CALLS[] += 1)   # §12 node-lowering counter (off by default)
+    _count!(:compile_calls)
     memo === nothing && return _compile_op(expr, var_map, param_syms, nothing)
     m = memo.compile
     r = get(m, expr, nothing)

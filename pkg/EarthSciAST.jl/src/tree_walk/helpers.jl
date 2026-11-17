@@ -1223,8 +1223,10 @@ function _cellwise_compile_once(
     )
     if ce === nothing
         _CELLWISE_FASTPATH_MISS[] += 1
+        _count!(:cellwise_fastpath_miss)
     else
         _CELLWISE_FASTPATH_HITS[] += 1
+        _count!(:cellwise_fastpath_hit)
     end
     return ce
 end

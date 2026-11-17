@@ -375,6 +375,56 @@ _build_record()::Union{Nothing, _BuildRecord} =
 _with_build_record(f, rec::_BuildRecord) =
     task_local_storage(f, _BUILD_RECORD_KEY, rec)
 
+# ---------------------------------------------------------------------------
+# Engagement counts
+# ---------------------------------------------------------------------------
+#
+# How often a build path engaged: every cascade tally key, plus the counters
+# below that no `CompilerReport` row carries (a geometry sweep that took the
+# candidate drive, a setup map served by its fast path, a value-invention
+# binding visited). They are observations only; nothing reads them to decide
+# what to build. They land in the task-local `Dict` that
+# `Internal.counting` (or `Internal.build`) opens, and nowhere when none is
+# open, so an `esm_problem` build pays one lookup per event and keeps nothing.
+#
+#   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
+#                          — an overlap-gated setup geometry sweep, by how its
+#                            candidate set was driven (geometry_setup.jl)
+#   :geom_eq_drive         — an equality-gated setup sweep driven by its key
+#   :setup_map_fastpath_hit / :setup_map_fastpath_miss
+#                          — a setup map compiled once / walked per cell
+#   :cellwise_fastpath_hit / :cellwise_fastpath_miss
+#                          — `_cellwise_compile_once` compiled / declined
+#   :vi_enum_visits        — one binding visited by a value-invention or
+#                            overlap-gated enumeration
+#   :compile_calls / :branch_templates / :body_variants
+#                          — node lowerings, stencil spine templates and
+#                            stencil body variants
+const _COUNTS_KEY = :earthsci_build_counts
+
+_counts_sink()::Union{Nothing, Dict{Symbol, Int}} =
+    get(task_local_storage(), _COUNTS_KEY, nothing)
+
+function _count!(k::Symbol, n::Int = 1)
+    c = _counts_sink()
+    c === nothing || (c[k] = get(c, k, 0) + n)
+    return nothing
+end
+
+# `(f(), counts)`: the value and every count `f` produced on this task. A nested
+# call also adds its counts into the enclosing one.
+function _with_counts(f)
+    outer = _counts_sink()
+    c = Dict{Symbol, Int}()
+    v = task_local_storage(f, _COUNTS_KEY, c)
+    if outer !== nothing
+        for (k, n) in c
+            outer[k] = get(outer, k, 0) + n
+        end
+    end
+    return v, c
+end
+
 # Name the rule the cascade is about to work on. Declines recorded while it is
 # open attach to it; `_land_rule!` closes it.
 function _open_rule!(rule::AbstractString, kind::Symbol)

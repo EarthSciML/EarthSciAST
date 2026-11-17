@@ -948,10 +948,13 @@ function _materialize_geom_array(
     ovdense = drive === nothing ? ov : nothing     # gate per tuple only if not driven
     if ov === nothing
         _GEOM_OVERLAP_NONE[] += 1
+        _count!(:geom_overlap_none)
     elseif drive === nothing
         _GEOM_OVERLAP_GATE_ONLY[] += 1
+        _count!(:geom_overlap_gate_only)
     else
         _GEOM_OVERLAP_DRIVE[] += 1
+        _count!(:geom_overlap_drive)
     end
     # With no overlap gate, a bin-equality (`on`) gate drives instead, through
     # the same two sweep shapes (see `_geo_equality_drive`). `dov` is the gate
@@ -965,6 +968,7 @@ function _materialize_geom_array(
         if eq !== nothing
             dov, drive = eq
             _GEOM_EQ_DRIVE[] += 1
+            _count!(:geom_eq_drive)
         end
     end
     # A candidate-driven MAP writes only the cells its pairs reach.
@@ -1196,7 +1200,7 @@ function _materialize_setup_general_map(
         rhs, exts; const_arrays = ca, params = params
     )
     if filled !== nothing
-        _SETUP_MAP_FASTPATH_HITS[] += 1
+        _SETUP_MAP_FASTPATH_HITS[] += 1; _count!(:setup_map_fastpath_hit)
         _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
         return filled
     end
@@ -1227,12 +1231,13 @@ function _materialize_setup_general_map(
             nothing
         end
         if fast !== nothing
-            _SETUP_MAP_FASTPATH_HITS[] += 1
+            _SETUP_MAP_FASTPATH_HITS[] += 1; _count!(:setup_map_fastpath_hit)
             _record_rule!(_current_rule_label(), :setup_array, :setup_compiled)
             return fast
         end
     end
     _SETUP_MAP_FASTPATH_MISS[] += 1
+    _count!(:setup_map_fastpath_miss)
     # A map no form can evaluate is the document's error, not a compiler's
     # refusal, so a strict compiler's probe runs the per-cell reference at one
     # cell, for its diagnostic only, before the refusal is raised: the cell the

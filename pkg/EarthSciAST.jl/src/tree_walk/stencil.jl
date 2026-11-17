@@ -575,6 +575,7 @@ function _stencilize_shared(
     variant = get(tctx.variants, vkey, nothing)
     if variant === nothing
         _BENCH_ON[] && (_BENCH_BODY_VARIANTS[] += 1)
+        _count!(:body_variants)
         rs = _LaneRecipe[]
         # The body walk carries no template context: compile-once boundaries
         # are the OUTERMOST expansion roots, and a nested root compiles FUSED
@@ -1746,6 +1747,7 @@ function _build_branch_template(
         param_sym_set
     )::_StencilBranch
     _BENCH_ON[] && (_BENCH_BRANCH_TEMPLATES[] += 1)   # §12 spine-template counter (off by default)
+    _count!(:branch_templates)
     rs = _LaneRecipe[]
     # A fresh spine memo (its entries name this template's lane recipes), but
     # the prototype's loop-index memo: whether a node reads a loop index is a
