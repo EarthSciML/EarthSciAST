@@ -1783,9 +1783,11 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 
 # True iff a run-time subscript is built only from loop counters — a bound
 # output-index symbol of a symbolic resolve, or a contraction loop variable
-# (`__esm_lv_*`) — integer literals, `+ - *` and `mod`, and a quotient that is
-# the DIRECT operand of `floor` or `ceil`: what a gather can evaluate from the
-# counters alone (`_index_int`). The rounded quotient is the cell-to-row
+# (`__esm_lv_*`) — integer literals, `+ - *`, and a quotient that is the DIRECT
+# operand of `floor` or `ceil`: what a gather can evaluate from the counters
+# alone (`_index_int`) and the walk can compile. (`mod` is no esm operator, so
+# the scalar compiler refuses it; admitting it here would refuse a subscript the
+# unrolled fold evaluates.) The rounded quotient is the cell-to-row
 # reindex a flattened loader field takes (`F[floor((c - 1) / NX) + 1, c - NX *
 # floor((c - 1) / NX)]`, reseact's NEI emissions, issue #665).
 #

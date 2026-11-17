@@ -880,7 +880,7 @@ end
 # name that is not a loop index) leaves `_eval_const_int` without a value.
 const _LANE_SUBSCRIPT_OPS = Set(
     [
-        "+", "-", "*", "/", "floor", "mod", "max", "min",
+        "+", "-", "*", "/", "floor", "ceil", "mod", "max", "min",
         "ifelse", "<", "<=", ">", ">=", "==", "neg",
     ]
 )
@@ -1538,7 +1538,7 @@ end
 
 const _IX_LIT, _IX_LOOP, _IX_ADD, _IX_SUB, _IX_NEG, _IX_MUL, _IX_DIV, _IX_MOD,
     _IX_MAX, _IX_MIN, _IX_IFELSE, _IX_LT, _IX_LE, _IX_GT, _IX_GE, _IX_EQ,
-    _IX_GATHER = Int8.(1:17)
+    _IX_GATHER, _IX_FLD, _IX_CLD = Int8.(1:19)
 
 struct _IdxNode
     kind::Int8
@@ -1603,7 +1603,14 @@ function _ix_compile(e::ASTExpr, idx_names::Vector{String}, const_arrays::Abstra
             return _IdxNode(_IX_NEG, 0, xs)
         elseif op == "-" && n == 2
             return _IdxNode(_IX_SUB, 0, xs)
-        elseif op == "floor" && n == 1
+        elseif (op == "floor" || op == "ceil") && n == 1
+            # A rounded quotient rounds the exact quotient, as `_eval_const_int`
+            # does; over an integer subexpression the rounding is the identity.
+            q = c[1]
+            if q isa OpExpr && q.op == "/" && length(q.args) == 2
+                x = xs[1]
+                return _IdxNode(op == "floor" ? _IX_FLD : _IX_CLD, 0, x.args)
+            end
             return xs[1]
         elseif (op == "max" || op == "min") && n >= 1
             return _IdxNode(op == "max" ? _IX_MAX : _IX_MIN, 0, xs)
@@ -1657,9 +1664,11 @@ function _ix_eval(n::_IdxNode, loop::Vector{Int})::Tuple{Int, Bool}
     y, ok2 = _ix_eval(a[2], loop)
     (ok1 && ok2) || return (0, false)
     k === _IX_SUB && return (x - y, true)
-    if k === _IX_DIV || k === _IX_MOD
+    if k === _IX_DIV || k === _IX_MOD || k === _IX_FLD || k === _IX_CLD
         y == 0 && return (0, false)
-        return (k === _IX_DIV ? div(x, y) : mod(x, y), true)
+        v = k === _IX_DIV ? div(x, y) : k === _IX_MOD ? mod(x, y) :
+            k === _IX_FLD ? fld(x, y) : cld(x, y)
+        return (v, true)
     end
     b = k === _IX_LT ? x < y : k === _IX_LE ? x <= y : k === _IX_GT ? x > y :
         k === _IX_GE ? x >= y : x == y
