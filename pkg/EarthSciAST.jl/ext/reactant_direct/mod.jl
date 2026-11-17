@@ -26,6 +26,7 @@
 # shape and the rule it came from. See api.jl for why.
 #
 # FILES
+#   options.jl  `DirectEmitOptions`, the tuning switches, read from ENV once
 #   values.jl   the emitted value, the context, constants, shape plumbing, slot
 #               maps, the slices-plus-concatenate read form, forcing buffers
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
@@ -51,6 +52,7 @@ const _MLIR = Reactant.MLIR
 const _hlo = Reactant.MLIR.Dialects.stablehlo
 const _chlo = Reactant.MLIR.Dialects.chlo
 
+include("options.jl")
 include("values.jl")
 include("ops.jl")
 include("closed.jl")

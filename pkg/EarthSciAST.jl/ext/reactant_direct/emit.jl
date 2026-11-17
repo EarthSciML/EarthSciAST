@@ -11,6 +11,7 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     p = ctx.p
     p isa NamedTuple ||
         _de_refuse(
+        ctx,
         "a parameter read on a `p` of type $(typeof(p))",
         "the emitter reads parameters by NAME out of a NamedTuple, the " *
             "shape a build hands back as `p`. A vector `p` (`ComponentVector`, " *
@@ -18,6 +19,7 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
     )
     hasproperty(p, sym) ||
         _de_refuse(
+        ctx,
         "the parameter `$(sym)`",
         "it is not a field of the parameter NamedTuple passed to this call."
     )
@@ -33,6 +35,7 @@ function _de_param(ctx::_DECtx, sym::Symbol)::_DEVal
         return _de_const(ctx, Float64(x))
     end
     return _de_refuse(
+        ctx,
         "the parameter `$(sym)` of type $(typeof(x))",
         "a parameter is either a host `Real` (baked as a constant) or a traced " *
             "`Float64` scalar (a program input)."
@@ -44,8 +47,8 @@ function _de_time(t)
         op = _hlo.reshape(t.mlir_data; result_0 = _de_ty(1), location = _de_loc())
         return _DEVal(_de_res(op), 1)
     end
-    return _de_refuse(
-        "a time argument of type $(typeof(t))",
+    return _de_refuse_at(
+        "the right-hand side", "a time argument of type $(typeof(t))",
         "`t` must be traced so the program can be stepped without recompiling; " *
             "pass a `ConcreteRNumber{Float64}`."
     )
@@ -137,6 +140,7 @@ function _de_scalar(ctx::_DECtx, nd::_E._Node, cache::Vector{_DEVal})::_DEVal
         return _de_op(ctx, nd, c)
     end
     return _de_refuse(
+        ctx,
         "the scalar-spine node kind $(_de_kindname(k))",
         "no arm of `_de_scalar` lowers it."
     )
@@ -223,12 +227,12 @@ function _de_reduce_fold(
         zerobar::Float64, op::Symbol
     )::_DEVal
     N = length(seg) - 1
-    N >= 1 || _de_refuse("_NK_REDUCE", "the CSR row-pointer vector is empty.")
+    N >= 1 || _de_refuse(ctx, "_NK_REDUCE", "the CSR row-pointer vector is empty.")
     widths = Int[seg[c + 1] - seg[c] for c in 1:N]
     W = maximum(widths)
     W == 0 && return _de_bcast(ctx, _de_const(ctx, zerobar), N)
     E = bodyE.len
-    f = _de_semiring_fn(op)
+    f = _de_semiring_fn(ctx, op)
     s = _de_bcast(ctx, _de_const(ctx, zerobar), N)
     zpad = _de_const(ctx, zerobar)
     for m in 1:W
@@ -300,7 +304,7 @@ function _de_acck(
         return nd.payload === K.cse.scratch ? cellvals[nd.idx] : invvals[nd.idx]
     elseif k === _E._NK_SUBCALL
         S = nd.payload::_E._AccKernel
-        j = _de_sub_index(sub.subs, S)
+        j = _de_sub_index(ctx, sub.subs, S)
         Sp = sub.plans[j]
         iv = sub.invvals[j]
         cv = sub.cellvals[j]
@@ -313,6 +317,7 @@ function _de_acck(
     elseif k === _E._NK_REDUCE
         isempty(plan.red_plan) &&
             _de_refuse(
+            ctx,
             "_NK_REDUCE", "this kernel's plan carries no E-lane " *
                 "reduce plan, so the body cannot be evaluated per entry."
         )
@@ -358,16 +363,18 @@ function _de_acck(
         return _de_op(ctx, nd, c)
     end
     return _de_refuse(
+        ctx,
         "the access-kernel node kind $(_de_kindname(k))",
         "no arm of `_de_acck` lowers it."
     )
 end
 
-function _de_sub_index(subs::Vector{_E._AccKernel}, S::_E._AccKernel)
+function _de_sub_index(ctx::_DECtx, subs::Vector{_E._AccKernel}, S::_E._AccKernel)
     for j in eachindex(subs)
         subs[j] === S && return j
     end
     return _de_refuse(
+        ctx,
         "_NK_SUBCALL",
         "the call references a sub-kernel absent from the parent plan's " *
             "transitive `K.subs` list — a `_collect_subkernels` invariant break, " *
@@ -385,6 +392,7 @@ function _de_run_kernel!(
     )
     plan.vectorizable ||
         _de_refuse(
+        ctx,
         "a per-cell fallback access kernel",
         "its lane plan is not vectorizable, so the interpreter runs it one " *
             "cell at a time. A compiled program cannot: the emitted graph would " *
@@ -425,7 +433,7 @@ function _de_scan!(ctx::_DECtx, m::_DEMap, S::_E._ScanFold)
     len = S.len
     len >= 1 || return nothing
     nl = div(length(S.slots), len)
-    f = _de_semiring_fn(S.oplus)
+    f = _de_semiring_fn(ctx, S.oplus)
     z = _de_const(ctx, S.zerobar)
     acc = z
     for kk in 1:len
@@ -487,7 +495,7 @@ function _de_plan_writes!(ctx::_DECtx, rhs, du::_DEMap)
     for S in getfield(rhs, :scan_folds)
         _de_mark!(du, (S::_E._ScanFold).slots, sec)
     end
-    _DE_SECTIONS[] = sections
+    ctx.sections = sections
     return nothing
 end
 
@@ -503,6 +511,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
             sum(length(lvl[5]) for lvl in getfield(rhs, :mat_levels); init = 0)
         nac == 0 ||
             _de_refuse(
+            ctx,
             "$nac whole-array contraction(s)",
             "the array-contraction tier (ess-array-contraction) is a " *
                 "section of the in-place RHS with no arm in this walk. " *
@@ -527,6 +536,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         _de_at!(ctx, :mat_kernel)
         for j in eachindex(kernels)
             _de_rule!(
+                ctx,
                 "the observed fill kernel writing " *
                     "$(_de_slotsname(ctx, plans[j].out_slots)) " *
                     "(materialization level $li)"
@@ -536,7 +546,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
         end
         _de_at!(ctx, :mat_scan)
         for S in scans
-            _de_rule!("a prefix scan at materialization level $li") do
+            _de_rule!(ctx, "a prefix scan at materialization level $li") do
                 _de_scan!(ctx, ctx.ue, S)
             end
         end
@@ -548,7 +558,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     cache = Vector{_DEVal}(undef, length(prelude))
     _de_at!(ctx, :prelude)
     for s in eachindex(prelude)
-        _de_rule!("shared subexpression $s of the CSE prelude") do
+        _de_rule!(ctx, "shared subexpression $s of the CSE prelude") do
             cache[s] = _de_scalar(ctx, prelude[s], cache)
         end
     end
@@ -565,13 +575,13 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     plans = getfield(rhs, :acc_plans)
     _de_at!(ctx, :kernel)
     for j in eachindex(kernels)
-        _de_rule!("the access kernel writing $(_de_slotsname(ctx, plans[j].out_slots))") do
+        _de_rule!(ctx, "the access kernel writing $(_de_slotsname(ctx, plans[j].out_slots))") do
             _de_run_kernel!(ctx, du, kernels[j], plans[j])
         end
     end
     _de_at!(ctx, :scan)
     for S in getfield(rhs, :scan_folds)
-        _de_rule!("a prefix scan over the state equations") do
+        _de_rule!(ctx, "a prefix scan over the state equations") do
             _de_scan!(ctx, du, S)
         end
     end

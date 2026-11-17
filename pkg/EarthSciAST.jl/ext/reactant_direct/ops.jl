@@ -91,24 +91,25 @@ const _DE_COMPARE = Dict{Symbol, String}(
 # can differ in the last bits. That is inside every tolerance class the
 # `compiled_rhs` tier defines (`reduction` is the class such a fold belongs to),
 # and it is the ONLY place this emitter deliberately leaves the interpreter's
-# association order. The cut is `ESM_DIRECT_EMIT_REDUCE_MIN` (default 32): below
+# association order. The cut is `DirectEmitOptions.reduce_min` (default 32): below
 # it the chain, at or above it one reduce, so short folds — every scalar
 # contraction in a small model — stay bit-identical.
 
-function _de_semiring_fn(op::Symbol)
+function _de_semiring_fn(ctx::_DECtx, op::Symbol)
     op === :+ && return _hlo.add
     op === :* && return _hlo.multiply
     op === :max && return _hlo.maximum
     op === :min && return _hlo.minimum
     return _de_refuse(
+        ctx,
         "the semiring operator `$op`",
         "only `+`, `*`, `max` and `min` have a StableHLO reduction form here."
     )
 end
 
-_de_semiring_jl(op::Symbol) =
+_de_semiring_jl(ctx::_DECtx, op::Symbol) =
     op === :+ ? (+) : op === :* ? (*) : op === :max ? max :
-    op === :min ? min : _de_semiring_fn(op)
+    op === :min ? min : _de_semiring_fn(ctx, op)
 
 # One `stablehlo.reduce` over `terms`, seeded from `zbar`. The terms are
 # concatenated into a `tensor<(L*n)xf64>`, reshaped to `(L, n)` — column `j` is
@@ -122,7 +123,7 @@ function _de_reduce_terms(
     flat = _de_concat(ctx, _DEVal[_de_bcast(ctx, x, L) for x in terms])
     x2 = Reactant.Ops.reshape(_de_traced(flat), L, n)
     init = Reactant.promote_to(TracedRNumber{Float64}, zbar)
-    r = Reactant.Ops.reduce(x2, init, Int[2], _de_semiring_jl(op))
+    r = Reactant.Ops.reduce(x2, init, Int[2], _de_semiring_jl(ctx, op))
     _de_tally!(ctx, :reduce)
     return _de_untraced(r)
 end
@@ -146,10 +147,10 @@ function _de_fold_terms(
     )::_DEVal
     isempty(terms) && return _de_const(ctx, zbar)
     L = maximum(x.len for x in terms)
-    if length(terms) >= ctx.reduce_min
+    if length(terms) >= ctx.opts.reduce_min
         return _de_reduce_terms(ctx, op, zbar, terms, L)
     end
-    f = _de_semiring_fn(op)
+    f = _de_semiring_fn(ctx, op)
     s = _de_const(ctx, zbar)
     for x in terms
         s = _de_bin(ctx, f, s, x)
@@ -188,51 +189,55 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     elseif op === :-
         n == 1 && return _de_un(ctx, _hlo.negate, c[1])
         n == 2 && return _de_bin(ctx, _hlo.subtract, c[1], c[2])
-        _de_refuse("`-` with $n arguments", "the IR's `-` is unary or binary.")
+        _de_refuse(ctx, "`-` with $n arguments", "the IR's `-` is unary or binary.")
     elseif op === :neg
         return _de_un(ctx, _hlo.negate, c[1])
     elseif op === :/
-        n == 2 || _de_refuse("`/` with $n arguments", "division is binary.")
+        n == 2 || _de_refuse(ctx, "`/` with $n arguments", "division is binary.")
         return _de_bin(ctx, _hlo.divide, c[1], c[2])
     elseif op === :^ || op === :pow
-        n == 2 || _de_refuse("`^` with $n arguments", "exponentiation is binary.")
+        n == 2 || _de_refuse(ctx, "`^` with $n arguments", "exponentiation is binary.")
         return _de_bin(ctx, _hlo.power, c[1], c[2])
     elseif op === :max
         return _de_chain(ctx, _hlo.maximum, c)
     elseif op === :min
         return _de_chain(ctx, _hlo.minimum, c)
     elseif op === :atan2
-        n == 2 || _de_refuse("`atan2` with $n arguments", "`atan2` is binary.")
+        n == 2 || _de_refuse(ctx, "`atan2` with $n arguments", "`atan2` is binary.")
         return _de_bin(ctx, _hlo.atan2, c[1], c[2])
     elseif op === :atan && n == 2
         # The registry spells the two-argument form both ways.
         return _de_bin(ctx, _hlo.atan2, c[1], c[2])
     elseif op === :log10
         n == 1 || _de_refuse(
+            ctx,
             "unary `log10` with $n arguments",
             "`log10` takes exactly one argument."
         )
         return _de_log10(ctx, c[1])
     elseif haskey(_DE_UNARY, op)
         n == 1 || _de_refuse(
+            ctx,
             "unary `$op` with $n arguments",
             "`$op` takes exactly one argument."
         )
         return _de_un(ctx, _DE_UNARY[op], c[1])
     elseif haskey(_DE_UNARY_CHLO, op)
         n == 1 || _de_refuse(
+            ctx,
             "unary `$op` with $n arguments",
             "`$op` takes exactly one argument."
         )
         return _de_un(ctx, _DE_UNARY_CHLO[op], c[1])
     elseif haskey(_DE_COMPARE, op)
         n == 2 || _de_refuse(
+            ctx,
             "comparison `$op` with $n arguments",
             "a comparison is binary."
         )
         return _de_cmp(ctx, _DE_COMPARE[op], c[1], c[2])
     elseif op === :ifelse
-        n == 3 || _de_refuse("`ifelse` with $n arguments", "`ifelse` takes three.")
+        n == 3 || _de_refuse(ctx, "`ifelse` with $n arguments", "`ifelse` takes three.")
         pred, L = _de_nonzero(ctx, c[1])
         L2 = max(L, c[2].len, c[3].len)
         if L2 != L
@@ -271,6 +276,7 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     # not a document-level refusal, so it reports the emitter's own
     # `DirectEmitError` (`E_DIRECT_EMIT_UNSUPPORTED`) with the rule breadcrumb.
     return _de_refuse(
+        ctx,
         "the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
             "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
@@ -355,7 +361,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
         return Float64(cg.flat[off])
     elseif k === _E._NK_CONTRACTION
         s = nd.literal
-        f = _de_semiring_jl(nd.op)
+        f = _de_semiring_jl(ctx, nd.op)
         for ch in nd.children
             s = f(s, _de_hostval(ctx, ch))
         end
@@ -363,7 +369,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
     elseif k === _E._NK_CONTRACTION_LOOP
         spec = nd.payload::_E._ContractLoop
         s = nd.literal
-        f = _de_semiring_jl(nd.op)
+        f = _de_semiring_jl(ctx, nd.op)
         body = nd.children[1]
         for kk in spec.lo:spec.step:spec.hi
             spec.ref[] = kk
