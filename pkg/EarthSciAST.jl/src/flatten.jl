@@ -1508,12 +1508,15 @@ function flatten(
         )
         resolved.transform isa ASTExpr && continue
         push!(map_rewritten_names, resolved.to)
-        # A bound naming the replaced parameter follows the replacement the
-        # equations just took (esm-libraries-spec §4.7.5).
+        # A bound, an update rule and an event naming the replaced parameter
+        # follow the replacement the equations just took (esm-libraries-spec
+        # §4.7.5).
         rw = _variable_map_rewrite(resolved)
-        states = _map_variable_bounds_all(states, rw)
-        params = _map_variable_bounds_all(params, rw)
-        observeds = _map_variable_bounds_all(observeds, rw)
+        states = _map_variable_bounds_all(_lower_variable_updates(states, rw), rw)
+        params = _map_variable_bounds_all(_lower_variable_updates(params, rw), rw)
+        observeds = _map_variable_bounds_all(_lower_variable_updates(observeds, rw), rw)
+        continuous_events = _map_event_exprs(rw, continuous_events)
+        discrete_events = _map_event_exprs(rw, discrete_events)
     end
 
     # An `operator_compose` merge DELETES a name the same way a `variable_map`
@@ -1574,10 +1577,7 @@ function flatten(
     target_domain = file_domain
 
     # §4.7.5 step 4 (Ordering, normative): components in the order the FILE
-    # declares them. This list was previously sorted "for determinism" — but
-    # document order is equally deterministic and is the order the spec fixes,
-    # and a sorted list silently disagrees with `parameters` / `state_variables`
-    # about which component came first.
+    # declares them, the order `parameters` / `state_variables` follow.
     metadata = FlattenMetadata(
         collect(source_systems),
         coupling_rules_applied;
@@ -1605,12 +1605,15 @@ function flatten(
 
     # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
     # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
-    equations, contribs, field_ics, continuous_events, discrete_events =
-        _normalize_angle_arguments(
+    states, params, observeds, equations, contribs, field_ics,
+        continuous_events, discrete_events = _normalize_angle_arguments(
         states, params, observeds,
         equations, contribs, lifted_shapes, field_ics,
         continuous_events, discrete_events
     )
+    algebraic_variables = _resubset(algebraic_variables, states, observeds)
+    brownian = _resubset(brownian, params)
+    discrete_params = _resubset(discrete_params, params)
 
     # Step 9: write each elementwise template application (esm-spec §9.6.11),
     # in an equation or a field initial condition, as its per-cell `faq`,
@@ -1669,7 +1672,7 @@ function _normalize_angle_arguments(
         angle_normalization_factor(parse_units(u)) !== nothing
             for u in values(var_units)
     ) || return (
-        equations, contribs, field_ics,
+        states, params, observeds, equations, contribs, field_ics,
         continuous_events, discrete_events,
     )
 
@@ -1685,33 +1688,17 @@ function _normalize_angle_arguments(
     equations = Equation[first(r) for r in rewritten]
     contribs = Vector{Contribution}[last(r) for r in rewritten]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
-    # Events are rewritten too: this binding exports the flattened form to
-    # ModelingToolkit, which DOES run events, so leaving a `sin(theta [deg])` in
-    # an event condition unconverted would put the defect back in the one place
-    # a binding still evaluates it.
-    affect(a) = AffectEquation(a.lhs, rewrite(a.rhs))
-    continuous_events = ContinuousEvent[
-        ContinuousEvent(
-            ASTExpr[rewrite(c) for c in ev.conditions],
-            AffectEquation[affect(a) for a in ev.affects];
-            affect_neg = ev.affect_neg === nothing ? nothing :
-                AffectEquation[affect(a) for a in ev.affect_neg],
-            root_find = ev.root_find, reinitialize = ev.reinitialize,
-            description = ev.description, name = ev.name
-        )
-            for ev in continuous_events
-    ]
-    discrete_events = DiscreteEvent[
-        DiscreteEvent(
-            ev.trigger isa ConditionTrigger ?
-                ConditionTrigger(rewrite(ev.trigger.expression)) : ev.trigger,
-            AffectEquation[affect(a) for a in ev.affects];
-            reinitialize = ev.reinitialize, description = ev.description,
-            name = ev.name
-        )
-            for ev in discrete_events
-    ]
-    return (equations, contribs, field_ics, continuous_events, discrete_events)
+    # Events and update rules are evaluated expressions too, so they are
+    # rewritten the same way.
+    continuous_events = _map_event_exprs(rewrite, continuous_events)
+    discrete_events = _map_event_exprs(rewrite, discrete_events)
+    states = _lower_variable_updates(states, rewrite)
+    params = _lower_variable_updates(params, rewrite)
+    observeds = _lower_variable_updates(observeds, rewrite)
+    return (
+        states, params, observeds, equations, contribs, field_ics,
+        continuous_events, discrete_events,
+    )
 end
 
 # Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a scale
@@ -2016,3 +2003,36 @@ function _lower_variable_updates(vars::OrderedDict{String, ModelVariable}, f)
     end
     return lowered === nothing ? vars : lowered
 end
+
+# Every expression of each event mapped through `f`: a continuous event's
+# conditions, a condition trigger's expression, and the right-hand side of every
+# affect. An affect's target (`lhs`, a variable name) is left as written.
+_map_affects(f, affects::Vector{AffectEquation}) =
+    AffectEquation[AffectEquation(a.lhs, f(a.rhs)) for a in affects]
+_map_affects(f, ::Nothing) = nothing
+
+_map_event_exprs(f, events::Vector{ContinuousEvent}) = ContinuousEvent[
+    ContinuousEvent(
+            ASTExpr[f(c) for c in ev.conditions], _map_affects(f, ev.affects);
+            affect_neg = _map_affects(f, ev.affect_neg),
+            root_find = ev.root_find, reinitialize = ev.reinitialize,
+            description = ev.description, name = ev.name
+        )
+        for ev in events
+]
+
+_map_event_exprs(f, events::Vector{DiscreteEvent}) = DiscreteEvent[
+    DiscreteEvent(
+            ev.trigger isa ConditionTrigger ?
+                ConditionTrigger(f(ev.trigger.expression)) : ev.trigger,
+            _map_affects(f, ev.affects);
+            reinitialize = ev.reinitialize, description = ev.description,
+            name = ev.name
+        )
+        for ev in events
+]
+
+# The §6.3.1 subset maps re-read from their parents after a pass rewrote the
+# parents' variables, so a subset never holds a stale copy.
+_resubset(subset::OrderedDict{String, ModelVariable}, parents::OrderedDict{String, ModelVariable}...) =
+    _in_document_order(Set{String}(keys(subset)), parents...)

@@ -2498,28 +2498,22 @@ end
 
 The shared "Expand at your boundary" utility for `FlattenedSystem` consumers
 (esm-spec §9.6.4 rule 2, RFC out-of-line-expression-templates §7.7): expand
-every surviving `apply_expression_template` reference in the flattened
-equations and observed expressions against the merged `template_registry`,
-returning an Expanded copy, bit-identical to the Expand-at-load image. A no-op
-when the registry is empty (no references survived). `flatten` ALWAYS carries
-references, so a consumer with no template handling calls this at its entry —
-the MTK `System`/`PDESystem` constructors do; the tree-walk build
-does NOT (it expands at its own entry with site recording, the compile-once
-tier).
+every surviving `apply_expression_template` reference against the merged
+`template_registry`, returning an Expanded copy, bit-identical to the
+Expand-at-load image. A no-op when the registry is empty (no references
+survived). `flatten` ALWAYS carries references, so a consumer with no template
+handling calls this at its entry — the ModelingToolkit constructors do; the
+tree-walk build does NOT (it expands at its own entry with site recording).
 
-Every expression-bearing position ON A VARIABLE is expanded too, not only the
-equations. In esm 1.0.0 an observed unknown's body is its defining EQUATION, so
-the declaration itself carries no expression; what remains on a variable is a
-parameter update's `when` trigger and its `expression` value form (esm-spec
-§5.4). The flattener namespaces those for every variable before partitioning it
-into `state_variables` / `parameters` / `observed_variables`, so any of the
-three buckets can legally carry an `apply_expression_template` inside an
-`update`. Expanding only the equations left an Option-B node in a parameter's
-update for a consumer that had been promised an Option-A image.
+Expanded positions: the equations, the field initial conditions, every event
+expression (conditions, condition triggers, affect right-hand sides), and each
+variable's parameter-update `when` and `expression` (esm-spec §5.4) in all three
+variable buckets. The three subset maps (`algebraic_variables`,
+`brownian_parameters`, `discrete_parameters`) are re-read from the expanded
+buckets, so they hold the same expanded variables.
 
-`memo` is the shared expansion memo (`_expand_model_refs!`'s default, ~34% of
-build wall time on the 7×7×7 transport fixture when absent): structurally
-identical apply sites expand once and share the result. Pass `nothing` for the
+`memo` is the shared expansion memo (`_expand_model_refs!`'s default):
+structurally identical apply sites expand once and share the result. Pass `nothing` for the
 per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
@@ -2534,14 +2528,20 @@ function expand_flattened_refs(
     # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
     # reference whose body is a sum expands into terms that all inherit the
     # contribution's origins.
-    neweqs, newcontribs = _rewrite_flat_equations(
-        e -> _expand_expr_refs(e, reg, nothing, memo), flat
-    )
+    expand = e -> _expand_expr_refs(e, reg, nothing, memo)
+    neweqs, newcontribs = _rewrite_flat_equations(expand, flat)
+    states = _expand_vars_refs(flat.state_variables, reg, memo)
+    params = _expand_vars_refs(flat.parameters, reg, memo)
+    observeds = _expand_vars_refs(flat.observed_variables, reg, memo)
     return FlattenedSystem(
         flat; equations = neweqs, equation_contributions = newcontribs,
-        state_variables = _expand_vars_refs(flat.state_variables, reg, memo),
-        parameters = _expand_vars_refs(flat.parameters, reg, memo),
-        observed_variables = _expand_vars_refs(flat.observed_variables, reg, memo)
+        state_variables = states, parameters = params, observed_variables = observeds,
+        algebraic_variables = _resubset(flat.algebraic_variables, states, observeds),
+        brownian_parameters = _resubset(flat.brownian_parameters, params),
+        discrete_parameters = _resubset(flat.discrete_parameters, params),
+        field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(expand, flat.continuous_events),
+        discrete_events = _map_event_exprs(expand, flat.discrete_events)
     )
 end
 
