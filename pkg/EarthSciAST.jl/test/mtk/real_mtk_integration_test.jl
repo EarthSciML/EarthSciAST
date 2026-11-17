@@ -286,4 +286,51 @@ import Symbolics
             @test err.code == "E_TREEWALK_ARITY"
         end
     end
+
+    @testset "System refuses what it would build wrongly" begin
+        decay(name) = Model(
+            Dict(
+                name => ModelVariable(UnknownVariable; default = 1.0),
+                "k" => ModelVariable(ParameterVariable; default = 0.5),
+            ),
+            [
+                Equation(
+                    OpExpr("D", EarthSciAST.ASTExpr[VarExpr(name)], wrt = "t"),
+                    OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k"), VarExpr(name)])
+                ),
+            ]
+        )
+        # `a.b_c` and `a_b.c` both sanitize to the symbol `a_b_c`.
+        file = EsmFile(
+            "2.0.0", Metadata("Collide");
+            models = Dict("a" => decay("b_c"), "a_b" => decay("c"))
+        )
+        flat = flatten(file)
+        @test haskey(flat.state_variables, "a.b_c")
+        @test haskey(flat.state_variables, "a_b.c")
+        err = try
+            ModelingToolkit.System(flat; name = :Collide)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("a_b_c", err.msg)
+
+        # An event affect whose target is not a variable is refused, not dropped.
+        flat1 = flatten(decay("x"); name = "D1")
+        ev = EarthSciAST.ContinuousEvent(
+            EarthSciAST.ASTExpr[OpExpr("-", EarthSciAST.ASTExpr[VarExpr("D1.x"), NumExpr(0.5)])],
+            [EarthSciAST.AffectEquation("D1.nope", NumExpr(1.0))]
+        )
+        push!(flat1.continuous_events, ev)
+        err = try
+            ModelingToolkit.System(flat1; name = :D1)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("D1.nope", err.msg)
+    end
 end

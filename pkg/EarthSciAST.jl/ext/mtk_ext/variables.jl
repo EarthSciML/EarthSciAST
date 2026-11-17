@@ -196,7 +196,24 @@ function _build_var_dict(flat::FlattenedSystem)
     iv_syms_any = Any[t_sym]
 
     # Sanitize names for use as Julia symbols (dots in "System.var" would
-    # otherwise produce invalid symbols in the generated @variables call).
+    # otherwise produce invalid symbols in the generated @variables call). Two
+    # names that sanitize alike (`a.b` and `a_b`) would become ONE symbol, so
+    # that is refused rather than built.
+    sanitized = Dict{Symbol, String}()
+    for reg in (flat.state_variables, flat.parameters, flat.observed_variables),
+            name in keys(reg)
+        key = Symbol(replace(String(name), '.' => '_'))
+        prior = get(sanitized, key, nothing)
+        (prior === nothing || prior == name) || throw(
+            ArgumentError(
+                "variables '$(prior)' and '$(name)' both become the " *
+                    "ModelingToolkit symbol `$(key)` (a dot is not a Julia " *
+                    "identifier character and is replaced by an underscore); " *
+                    "rename one of them"
+            )
+        )
+        sanitized[key] = String(name)
+    end
     _san(s::AbstractString) = Symbol(replace(String(s), '.' => '_'))
 
     # Attach a default value to a Symbolics variable via VariableDefaultValue
@@ -311,10 +328,14 @@ function _affect_to_eq(
         state_syms
     )
     if affect isa AffectEquation
-        if !haskey(var_dict, affect.lhs)
-            @warn "Target variable $(affect.lhs) not found for event affect"
-            return nothing
-        end
+        # An affect whose target is not a variable of the system would be
+        # dropped, and the event would fire without it.
+        haskey(var_dict, affect.lhs) || throw(
+            ArgumentError(
+                "event affect targets '$(affect.lhs)', which is not a variable " *
+                    "of the flattened system"
+            )
+        )
         target = var_dict[affect.lhs]
         rhs = _esm_to_symbolic(affect.rhs, var_dict, t_sym, dim_dict)
         rhs = _wrap_pre_states(rhs, state_syms)
