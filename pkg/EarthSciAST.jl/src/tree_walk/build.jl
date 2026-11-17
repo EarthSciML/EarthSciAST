@@ -8583,8 +8583,11 @@ A deep copy of the selected model with every surviving Option-B
 `apply_expression_template` reference (esm-spec §9.6.4) expanded against the
 document's `component_templates` — the same expansion `build_evaluator`
 performs before compiling, exposed as a public seam so downstream tools
-(e.g. EarthSciASTDiff, which differentiates the tree) analyze the SAME tree
-the evaluator compiles. `file` is not mutated.
+(e.g. EarthSciASTDiff, which differentiates the tree) analyze the expressions
+the evaluator compiles. The build goes on to rewrite this tree further without
+changing its value (recurrence groups stacked, `broadcast` lowered, nested
+reductions hoisted, subtrees interned), so the evaluator's own tree can differ
+from this one in structure. `file` is not mutated.
 
 Model selection matches the build's: `model_name = nothing`
 selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
