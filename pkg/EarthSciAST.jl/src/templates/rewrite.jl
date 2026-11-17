@@ -889,37 +889,12 @@ end
     reject_expression_templates_pre_v04(raw_data)
 
 Reject `expression_templates` blocks and `apply_expression_template` ops in
-files declaring `esm` < 0.4.0. Mirrors the equivalent TS / Python / Rust /
-Go checks for cross-binding-uniform diagnostics.
+files declaring `esm` < 0.4.0, with `apply_expression_template_version_too_old`
+naming every offending path. The rule is the `expression_templates` row of
+[`_VERSION_GATES`](@ref).
 """
-function reject_expression_templates_pre_v04(raw_data)
-    raw_data === nothing && return
-    !_is_object(raw_data) && return
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return
-    major = parse(Int, m.captures[1])
-    minor = parse(Int, m.captures[2])
-    is_pre_v04 = (major == 0 && minor < 4)
-    !is_pre_v04 && return
-
-    offences = String[]
-    for (compkind, cname, comp) in _components(raw_data)
-        _raw_haskey(comp, "expression_templates") &&
-            push!(offences, "/$compkind/$cname/expression_templates")
-    end
-    _find_apply_paths!(offences, raw_data, "")
-
-    return if !isempty(offences)
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-                "expression_templates / apply_expression_template require esm >= 0.4.0; file declares $(string(esm_raw)). Offending paths: $(join(offences, ", "))"
-            )
-        )
-    end
-end
+reject_expression_templates_pre_v04(raw_data) =
+    _check_version_gate(_VERSION_GATES.expression_templates, raw_data)
 
 # ---------------------------------------------------------------------------
 # Canonical arithmetic-operand literal narrowing (CONFORMANCE_SPEC §5.5.3.1)

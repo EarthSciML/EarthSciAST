@@ -380,14 +380,9 @@ end
 # `expression_templates` block, then every `apply_expression_template` node.
 function _expression_template_offences(doc)
     offences = String[]
-    for compkind in _COMPONENT_KINDS
-        comps = _raw_get(doc, compkind)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            _raw_haskey(comp, "expression_templates") &&
-                push!(offences, "/$compkind/$(string(cname))/expression_templates")
-        end
+    for (compkind, cname, comp) in _components(doc)
+        _raw_haskey(comp, "expression_templates") &&
+            push!(offences, "/$compkind/$cname/expression_templates")
     end
     _find_apply_paths!(offences, doc, "")
     return offences
