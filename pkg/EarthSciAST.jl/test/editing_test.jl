@@ -143,6 +143,17 @@ end
         @test haskey(m.variables, "x")
     end
 
+    @testset "rename_variable and substitute_in_equations keep equation comments" begin
+        eq = _make_eq("x", 2.0)
+        m = Model(
+            _make_model().variables,
+            Equation[Equation(eq.lhs, eq.rhs; _comment = "decay")]
+        )
+        @test rename_variable(m, "x", "z").equations[1]._comment == "decay"
+        bindings = Dict{String, ESS.ASTExpr}("x" => NumExpr(1.0))
+        @test substitute_in_equations(m, bindings).equations[1]._comment == "decay"
+    end
+
     @testset "add_equation appends" begin
         m = _make_model()
         new_eq = _make_eq("k", 0.0)  # D(k) = 0*k
@@ -169,13 +180,14 @@ end
     @testset "remove_equation by LHS pattern" begin
         m = _make_model()
         m = add_equation(m, _make_eq("k", 0.0))
-        # Pattern must match the stored lhs by `==` — for OpExpr that is
-        # `===` in the default struct, so reuse the exact lhs object here.
-        pattern = m.equations[1].lhs
+        # A freshly built pattern matches structurally, not by identity.
+        pattern = OpExpr("D", ESS.ASTExpr[VarExpr("x")], wrt = "t")
         m2 = remove_equation(m, pattern)
         @test length(m2.equations) == 1
         remaining = m2.equations[1]
         @test remaining.lhs.args[1].name == "k"
+        # The stored object itself still matches.
+        @test length(remove_equation(m, m.equations[2].lhs).equations) == 1
 
         # Pattern with no match: throws EditError
         bogus = OpExpr("D", ESS.ASTExpr[VarExpr("nonexistent")], wrt = "t")
