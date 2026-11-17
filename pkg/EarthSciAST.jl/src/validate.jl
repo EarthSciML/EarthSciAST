@@ -3839,8 +3839,10 @@ function validate_model_references(
     # participating systems' scopes, so a cross-system bare reference is
     # legitimate, while a name declared nowhere is still an `undefined_variable`
     # (F-1). Mirrors Python's `global_symbols` and TS `documentDeclaredNames`.
-    scope = is_coupled ? _document_declared_names(file) : Set{String}(keys(model.variables))
-    is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
+    # The model's own variables are in scope either way: a subsystem's are not
+    # among the document-wide (top-level) names.
+    scope = Set{String}(keys(model.variables))
+    is_coupled && union!(scope, _document_declared_names(file), (_OPERATOR_PLACEHOLDER_VAR,))
     union!(scope, keys(file.index_sets))
     for eq in model.equations
         target = _equation_lhs_target(eq)
@@ -3965,7 +3967,13 @@ function validate_model_references(
 
     # Recursively check subsystems (already expanded in the view)
     for (subsys_name, subsys) in model_subsystems(view)
-        append!(errors, validate_model_references(file, subsys, "$path/subsystems/$subsys_name"))
+        # A subsystem of a coupled model is composed along with its parent, so
+        # it is checked with the parent's scope rule.
+        append!(
+            errors, validate_model_references(
+                file, subsys, "$path/subsystems/$subsys_name"; is_coupled = is_coupled
+            )
+        )
     end
 
     return errors
@@ -4688,6 +4696,23 @@ function validate_reaction_rate_units(
     errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
     scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
+
+    # An unresolvable unit string on a species or parameter is a defect in the
+    # file (esm-spec §4.8.4), reported at its declaration as a model
+    # variable's is.
+    for (block, decls) in (("species", rs.species), ("parameters", rs.parameters))
+        for decl in decls, (field, str) in (("units", decl.units), ("default_units", decl.default_units))
+            (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
+            push!(
+                errors, StructuralError(
+                    "$path/$block/$(_ptr_escape(decl.name))",
+                    "Unit string '$str' is not a recognised unit " *
+                        "($(block == "species" ? "species" : "parameter") '$(decl.name)', field '$field')",
+                    ERROR_CODES.UNIT_PARSE_ERROR
+                )
+            )
+        end
+    end
 
     # Build name → unit-string map using ONLY explicitly declared units.
     # Mirrors Python's conservative scope: skip when any relevant unit is

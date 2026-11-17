@@ -1250,4 +1250,46 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @test !any(p -> occursin("/p/update/0", p), paths)
     end
 
+    @testset "a subsystem of a coupled model resolves with the coupled scope" begin
+        D(v) = OpExpr("D", ASTExpr[VarExpr(v)]; wrt = "t")
+        sub = Model(
+            Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("y"), VarExpr("z"))]
+        )
+        a = Model(
+            Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("x"), NumExpr(0.0))];
+            subsystems = Dict("S" => sub)
+        )
+        b = Model(
+            Dict{String, ModelVariable}("z" => ModelVariable(UnknownVariable; default = 0.0)),
+            Equation[Equation(D("z"), NumExpr(0.0))]
+        )
+        file = EsmFile(
+            "1.0.0", Metadata("coupled_sub");
+            models = Dict("A" => a, "B" => b),
+            coupling = CouplingEntry[CouplingOperatorCompose(["A", "B"])]
+        )
+        undefined = filter(
+            e -> e.error_type == "undefined_variable" && startswith(e.path, "/models/A/subsystems/S"),
+            EarthSciAST.validate_structural(file)
+        )
+        @test isempty(undefined)
+    end
+
+    @testset "an unresolvable unit on a reaction-system species or parameter" begin
+        rs = ReactionSystem(
+            Species[Species("A"; units = "not_a_unit")], Reaction[];
+            parameters = Parameter[Parameter("k", 1.0; units = "1/s"), Parameter("q", 1.0; units = "m/s2x")]
+        )
+        file = EsmFile("1.0.0", Metadata("rs_units"); reaction_systems = Dict("R" => rs))
+        found = sort!(
+            [
+                e.path for e in EarthSciAST.validate_structural(file)
+                    if e.error_type == "unit_parse_error"
+            ]
+        )
+        @test found == ["/reaction_systems/R/parameters/q", "/reaction_systems/R/species/A"]
+    end
+
 end
