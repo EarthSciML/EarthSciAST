@@ -952,9 +952,18 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
         end
         vn_by_pos[p] = vn
     end
-    mult_by_pos, _ = _dag_path_counts(order, pos_of, _dag_children, _dag_every, _dag_strict)
+    # Both tiers' recipes run unconditionally (the invariant tier once per call,
+    # the cell tier once per cell), while `ifelse`/`and`/`or` evaluate their
+    # guarded operands lazily. So only a value with at least one occurrence
+    # outside a guarded operand (`_cg_lazy_operand`) may take a slot: hoisting
+    # one that occurs only under a guard would evaluate what the lazy walk skips
+    # (a guarded `log` or `sqrt` raising outside its domain).
+    mult_by_pos, uncond_by_pos =
+        _dag_path_counts(order, pos_of, _dag_children, _dag_every, _cg_lazy_operand)
+    uncond = zeros(Int, length(counts))
     for p in 1:P
         counts[vn_by_pos[p]] = _sat_add(counts[vn_by_pos[p]], mult_by_pos[p])
+        uncond[vn_by_pos[p]] = _sat_add(uncond[vn_by_pos[p]], uncond_by_pos[p])
     end
     # Two-tier slot assignment, in value-number order (a child's vn is always below
     # its parent's, so each tier's recipes end up dependency-ordered): every
@@ -962,7 +971,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # cell); every remaining SHARED cell-varying OP gets a per-cell CSE slot.
     inv_slot = Dict{Int, Int}(); cell_slot = Dict{Int, Int}()
     for vn in 1:length(counts)
-        is_op[vn] || continue
+        (is_op[vn] && uncond[vn] >= 1) || continue
         if is_inv[vn]
             inv_slot[vn] = length(inv_slot) + 1
         elseif counts[vn] >= 2 && !inv_only

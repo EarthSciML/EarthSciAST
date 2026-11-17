@@ -850,12 +850,10 @@ end
 # This is deliberately not "refuse to recurse into guarded arms", which would lose
 # legitimate sharing within an arm and between an arm and an unconditional one.
 #
-# Guard laziness holds only on the SCALAR walker (`_eval_node`). The
-# access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
-# broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
-# guarded-domain expression inside a `faq` is NOT protected by its guard, with
-# or without CSE. That is a deliberate scalar/array divergence (see the `ifelse` arm
-# of `_eval_acc`), and it is why the guard rule lives in the scalar pass only.
+# Every walker is lazy for `ifelse` and short-circuits `and`/`or`: the scalar
+# `_eval_node` and the access-kernel `_eval_acc_op` alike (the eager ladder is the
+# shared `_scalar_op`, which receives evaluated operands). The access-kernel CSE
+# applies the same rule to its own unconditional tiers (`_build_acc_cse`).
 #
 # SCOPE — why this pass is scalar-only. Redundancy is removed at three layers:
 #   * cross-grid-cell  — by whole-array kernels (one broadcast per structural cell

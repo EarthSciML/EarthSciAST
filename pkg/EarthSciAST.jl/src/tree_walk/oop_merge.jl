@@ -692,11 +692,14 @@ function _oop_x_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
 end
 
 # Identity-based CSE over a cloned DAG: every OP/CONTRACTION node referenced
-# more than once (the clone memo preserved member-common sharing) becomes a
+# more than once (the clone memo preserved member-common sharing), at least
+# once outside a lazily evaluated operand (`_cg_lazy_operand`), becomes a
 # cell-tier recipe read through a fresh scratch; recipes are emitted in
 # topological (children-first) order, so recipe i only ever reads lower slots
 # — the invariant every runner's prelude fill relies on. Caching a pure
-# deterministic subtree instead of re-walking it cannot change any bit.
+# deterministic subtree instead of re-walking it cannot change any bit; a node
+# referenced only under guards stays in place, because the recipe prelude runs
+# unconditionally and would evaluate what the lazy walk skips.
 function _oop_x_apply_cse(root::_Node)
     refcnt = IdDict{_Node, Int}()
     order = _Node[]                      # post-order, each node once
@@ -720,8 +723,10 @@ function _oop_x_apply_cse(root::_Node)
             push!(order, n)
         end
     end
+    dorder, dpos = _dag_postorder(root, _dag_children, _dag_every)
+    _, uncond = _dag_path_counts(dorder, dpos, _dag_children, _dag_every, _cg_lazy_operand)
     isrec(n) = (n.kind === _NK_OP || n.kind === _NK_CONTRACTION) &&
-        get(refcnt, n, 0) >= 2 && n !== root
+        get(refcnt, n, 0) >= 2 && n !== root && uncond[dpos[n]] >= 1
     nrec = count(isrec, order)
     nrec == 0 && return (root, _Node[], _AccScratch(0))
     scr = _AccScratch(nrec)
