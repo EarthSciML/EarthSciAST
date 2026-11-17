@@ -1747,8 +1747,10 @@ function _inline_toplevel_form!(
     # precision, which each of its edges compares its leaf against.
     effective = something(_declared_element_type(native), String(precision))
     for (name, entry) in collect(components)
+        # A stub whose `ref` is not a string is left in place for the schema
+        # check to report.
         (
-            entry isa AbstractDict && haskey(entry, "ref") &&
+            entry isa AbstractDict && get(entry, "ref", nothing) isa AbstractString &&
                 !haskey(entry, form.body_key)
         ) || continue
         ref = _expand_ref_env(String(entry["ref"]), base_path)  # esm-spec §4.7 ${VAR} / esm:std
