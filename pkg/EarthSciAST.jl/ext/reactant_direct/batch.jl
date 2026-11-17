@@ -83,14 +83,7 @@ function _de_bstatic_uncached(ctx::_DECtx, b::_E._OopBatchNode)::Bool
     elseif k === _E._NK_CONTRACTION_LOOP
         return _de_bstatic(ctx, b.children[1])
     elseif k === _E._NK_OP
-        (
-            haskey(_DE_UNARY, b.op) || haskey(_DE_COMPARE, b.op) ||
-                haskey(_DE_UNARY_CHLO, b.op) ||
-                b.op in (
-                :+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10,
-            )
-        ) || return false
+        _de_foldable_op(b.op) || return false
         return all(c -> _de_bstatic(ctx, c), b.children)
     end
     return false
@@ -110,13 +103,13 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
         return _de_hostval(ctx, b.nodes[l])
     elseif k === _E._NK_CONTRACTION
         s = b.literal
-        g = _de_semiring_jl(b.op)
+        g = _de_semiring_jl(ctx, b.op)
         for c in b.children
             s = g(s, _de_bhostval(ctx, c, l))
         end
         return s
     elseif k === _E._NK_CONTRACTION_LOOP
-        g = _de_semiring_jl(b.op)
+        g = _de_semiring_jl(ctx, b.op)
         s = b.literal
         body = b.children[1]
         r = b.refs[l]
@@ -169,6 +162,7 @@ function _de_batch(
     elseif k === _E._NK_CACHED
         (1 <= b.idx <= length(cache)) ||
             _de_refuse(
+            ctx,
             "a lane-batched `_NK_CACHED` read",
             "the group references CSE slot $(b.idx) on a surface emitted " *
                 "without a CSE cache."
@@ -189,6 +183,7 @@ function _de_batch(
         # `_de_btry_fold` above already took every case where the subscripts are
         # host data, which is every case `_NK_CONST_GATHER` can be in.
         _de_refuse(
+            ctx,
             "a lane-batched const gather with non-host subscripts",
             "a `_NK_CONST_GATHER` subscript is loop-counter and literal " *
                 "arithmetic by construction; this one did not resolve on host."
@@ -201,18 +196,11 @@ function _de_batch(
         srcs = Vector{_DESlot}(undef, length(nds))
         @inbounds for l in eachindex(nds)
             nd = nds[l]
-            sg = nd.payload::_E._StateGather
-            off = 0
-            ghost = false
-            for d in eachindex(nd.children)
-                sub = _de_index_int(nd.children[d])
-                if !(sg.lo[d] <= sub <= sg.hi[d])
-                    ghost = true
-                    break
-                end
-                off += (sub - sg.lo[d]) * sg.strides[d]
-            end
-            srcs[l] = ghost ? nothing : _de_src(ctx, ctx.ue, sg.slot_flat[off + 1])
+            slot = _E._state_gather_slot(
+                nd.payload::_E._StateGather, length(nd.children),
+                d -> _de_index_int(nd.children[d])
+            )
+            srcs[l] = slot == 0 ? nothing : _de_src(ctx, ctx.ue, slot)
         end
         return _de_emit_runs(ctx, srcs)
     elseif k === _E._NK_CONTRACTION_LOOP
@@ -245,6 +233,7 @@ function _de_batch(
         return _de_op(ctx, b.op, c)
     end
     return _de_refuse(
+        ctx,
         "the lane-batched node kind $(_de_kindname(k))",
         "no arm of `_de_batch` lowers it. The batch lowering " *
             "(`_oop_batch_lower`) and this walk must cover the same kinds; a kind " *
@@ -264,13 +253,14 @@ function _de_scalar_surface!(
         what::AbstractString
     )
     for (slot, nd) in sb.rest
-        _de_rule!("$what for $(_de_slotname(ctx, slot))") do
+        _de_rule!(ctx, "$what for $(_de_slotname(ctx, slot))") do
             _de_write!(ctx, out, Int[slot], _de_scalar(ctx, nd, cache))
         end
     end
     for g in sb.groups
         slots = g.slots
         _de_rule!(
+            ctx,
             "$what for the lane-batched group writing " *
                 "$(_de_slotsname(ctx, slots))"
         ) do

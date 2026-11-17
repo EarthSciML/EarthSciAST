@@ -400,7 +400,7 @@ end
 
 The join-gated path. Returns the evaluated field `Vector{Float64}` when `expr` is — or
 elementwise wraps — a single `faq` carrying resolved `join_gates`, else
-`nothing` (⇒ the caller falls through to the per-cell walk it always had).
+`nothing` (⇒ the caller falls through to the per-cell walk).
 """
 function _evaluate_cellwise_gated(
         expr::ASTExpr,
@@ -587,10 +587,9 @@ function evaluate_cellwise(
     #
     # RANK 0 (`nidx == 0`, the single empty cell of a SHAPELESS observed) goes
     # through the same door. There is no output index to bind, so "compile once
-    # and evaluate every cell" is one compile and one evaluation — the cheapest
-    # shape there is, and the one the fast path used to decline outright, which
-    # sent every scalar observed of every document to the per-cell walk and so to
-    # the strict compiler's refusal.
+    # and evaluate every cell" is one compile and one evaluation. Declining it
+    # would send every scalar observed to the per-cell walk and so to the strict
+    # compiler's refusal.
     nidx = length(first(cells))
     if all(c -> length(c) == nidx, cells)
         ce = _cellwise_compile_once(

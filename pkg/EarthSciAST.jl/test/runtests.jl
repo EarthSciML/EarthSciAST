@@ -268,7 +268,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("refresh_conformance_test.jl")
     # Streaming output sinks — the OUTPUT mirror of the data-refresh input seam
     # (streaming-output-sinks RFC §16, Wave 1). Loads DiffEqCallbacks + SciMLBase
-    # (the test target), which activates the EarthSciASTDataOutputExt extension.
+    # (the test target), which activates the EarthSciASTCallbacksExt extension.
     include("data_output_test.jl")
     # Phase 1b projection pushdown across the EarthSciIO provider seam. Loads
     # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml

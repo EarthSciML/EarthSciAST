@@ -16,7 +16,7 @@
 
 using Test
 using EarthSciAST
-using DiffEqCallbacks            # loads EarthSciASTDataRefreshExt
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (cf. scripts/pde_simulation_adapter.jl)
 

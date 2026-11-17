@@ -13,11 +13,9 @@ directly, and a solution is a real `ODESolution` carrying a real
 `SciMLBase.ReturnCode` and indexed by variable name through
 SymbolicIndexingInterface.
 
-Kept out of the base package per `[[library-exposes-rhs-not-solver]]` and
-§2.5.9: CONSTRUCTING an `EsmProblem` must not require the solver, so
-`ODEProblem` / `solve` / `ReturnCode` stay behind a `weakdep`, mirroring the
-`DataRefreshExt` / `DataOutputExt` / `MTKExt` pattern. Only `solve` / `init` /
-`solve!` need this extension.
+Kept out of the base package per §2.5.9: CONSTRUCTING an `EsmProblem` must
+not require the solver, so `ODEProblem` / `solve` / `ReturnCode` stay behind a
+weak dependency. Only `solve` / `init` / `solve!` need this extension.
 
 The algorithm itself (e.g. `Tsit5`) comes from the caller's own solver package
 (OrdinaryDiffEq*); `solve(prob, alg)` dispatches into it.

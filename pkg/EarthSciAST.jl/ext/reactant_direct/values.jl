@@ -23,7 +23,7 @@ const _DESlot = Union{Nothing, Tuple{_DEVal, Int}}
 # `nothing` entry. `writer[s]` is the SECTION of the emission that first writes
 # slot `s` (0 ⇒ no section writes it at all); sections are numbered in emission
 # order — one per materialization level, then one for the state equations — and
-# `_DE_SECTIONS` names them.
+# the context's `sections` names them.
 #
 # The plan exists because a `nothing` entry means two different things, and only
 # one of them is a bug. The emitted program runs THESE units in THIS order over
@@ -68,37 +68,6 @@ function _de_mark!(M::_DEMap, slots, section::Int32)
     return nothing
 end
 
-# ---- where we are, for the error messages -----------------------------------
-#
-# The IR carries no provenance (`_Node` and `_AccKernel` have no name field), so
-# the emitter keeps its own breadcrumb: the driver sets this to the state
-# equation / fill level / access kernel it is about to emit, and every refusal
-# reads it. Module-level because the refusal sites are leaves of a deep walk
-# that would otherwise all have to thread a context they do not use; one
-# emission runs to completion inside one `Reactant.@compile` trace on one task,
-# and `_de_rule!` restores the previous value, so nesting is safe.
-const _DE_RULE = Ref{String}("the right-hand side")
-
-function _de_rule!(f::F, s::AbstractString) where {F}
-    prev = _DE_RULE[]
-    _DE_RULE[] = String(s)
-    try
-        return f()
-    finally
-        _DE_RULE[] = prev
-    end
-end
-
-"""
-    _de_refuse(construct, detail)
-
-The emitter's ONE refusal. Hard by design: no interpreter fallback.
-`construct` names the node kind / descriptor kind / kernel shape in the IR's own
-vocabulary; the rule comes from `_DE_RULE`.
-"""
-_de_refuse(construct::AbstractString, detail::AbstractString) =
-    throw(_E.DirectEmitError(construct, _DE_RULE[], detail))
-
 # ---- the emission context ----------------------------------------------------
 
 mutable struct _DECtx
@@ -117,10 +86,17 @@ mutable struct _DECtx
     bufs::Any
     hostkeys::Vector{Vector{Float64}}
     bufvals::Vector{Union{Nothing, _DEVal}}
-    static::IdDict{_E._Node, Bool}           # memoized "this subtree is host-computable"
+    static::_E._NodeMap{Bool}                # memoized "this subtree is host-computable"
     bstatic::IdDict{Any, Bool}               # the same, for a lane-batched subtree
-    reduce_min::Int                         # fold length at which a chain becomes a reduce
+    opts::DirectEmitOptions
     names::Dict{Int, String}                 # flat slot -> element name (for the rule text)
+    # WHERE WE ARE, for the error messages. The IR carries no provenance
+    # (`_Node` and `_AccKernel` have no name field), so the driver sets `rule`
+    # to the state equation / fill level / access kernel it is about to emit
+    # (`_de_rule!`), and every refusal reads it. `sections` names the emission
+    # sections the write plan numbers (`_de_plan_writes!`).
+    rule::String
+    sections::Vector{String}
     # Producer-set -> the one concatenation a cross-producer gather reads from,
     # so a read set that recurs (and on a stencil they all do) pays for it once.
     gather_bases::Dict{Tuple{Vector{_MLIR.IR.Value}, Bool}, Tuple{_DEVal, Vector{Int}, Int}}
@@ -153,7 +129,8 @@ end
 
 function _DECtx(
         n_states::Int, n_total::Int, p, t::_DEVal, uval::_DEVal,
-        bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String}
+        bufs, hostkeys::Vector{Vector{Float64}}, names::Dict{Int, String},
+        opts::DirectEmitOptions
     )
     ue = _DEMap(n_total)
     for s in 1:n_states
@@ -163,8 +140,8 @@ function _DECtx(
         n_states, p, t, ue, Dict{UInt64, _DEVal}(),
         Dict{Vector{Float64}, _DEVal}(), bufs, hostkeys,
         Union{Nothing, _DEVal}[nothing for _ in hostkeys],
-        IdDict{_E._Node, Bool}(), IdDict{Any, Bool}(),
-        _de_reduce_min(), names,
+        _E._NodeMap{Bool}(), IdDict{Any, Bool}(),
+        opts, names, "the right-hand side", String[],
         Dict{
             Tuple{Vector{_MLIR.IR.Value}, Bool},
             Tuple{_DEVal, Vector{Int}, Int},
@@ -177,21 +154,39 @@ function _DECtx(
     )
 end
 
-# A ⊕-fold this long stops being a chain of binary ops and becomes ONE
-# `stablehlo.reduce` (see `_de_fold_terms`). The chain is kept below the cut
-# because it is bit-identical to the interpreter's left fold; the reduce is not
-# (XLA may reassociate), which is why the cut exists at all and why it is
-# tunable rather than hard-wired.
-_de_reduce_min() =
-    something(tryparse(Int, get(ENV, "ESM_DIRECT_EMIT_REDUCE_MIN", "32")), 32)
+# ---- refusals ----------------------------------------------------------------
+
+"""
+    _de_refuse(ctx, construct, detail)
+    _de_refuse_at(rule, construct, detail)
+
+The emitter's ONE refusal. Hard by design: no interpreter fallback.
+`construct` names the node kind / descriptor kind / kernel shape in the IR's own
+vocabulary; the rule is the context's breadcrumb (`_de_rule!`), or, at the few
+sites that run before or outside an emission, the rule the caller names.
+"""
+_de_refuse_at(rule::AbstractString, construct::AbstractString, detail::AbstractString) =
+    throw(_E.DirectEmitError(construct, rule, detail))
+_de_refuse(ctx::_DECtx, construct::AbstractString, detail::AbstractString) =
+    _de_refuse_at(ctx.rule, construct, detail)
+
+# Run `f` with the breadcrumb set to `s`, restoring the previous one after.
+function _de_rule!(f::F, ctx::_DECtx, s::AbstractString) where {F}
+    prev = ctx.rule
+    ctx.rule = String(s)
+    try
+        return f()
+    finally
+        ctx.rule = prev
+    end
+end
 
 # Section names for the refusal text. Sections are numbered in emission order:
 # `1 … nlev` are the materialization levels, `nlev + 1` is everything after them
 # (the CSE prelude, the state equations, their kernels and their prefix scans),
-# which writes only `du`. The vector is per-emission, set by `_de_plan_writes!`.
-const _DE_SECTIONS = Ref{Vector{String}}(String[])
-_de_sectionname(k::Integer) =
-    (v = _DE_SECTIONS[]; 1 <= k <= length(v) ? v[k] : "emission section $k")
+# which writes only `du`.
+_de_sectionname(sections::Vector{String}, k::Integer) =
+    1 <= k <= length(sections) ? sections[k] : "emission section $k"
 
 # Name a flat slot for an error message: the caller's `var_map` spelling when it
 # passed one, the bare slot otherwise.
@@ -290,6 +285,7 @@ end
 function _de_bcast(ctx::_DECtx, a::_DEVal, L::Int)::_DEVal
     a.len == L && return a
     a.len == 1 || _de_refuse(
+        ctx,
         "a lane-width mismatch",
         "a value of length $(a.len) met lane width $L. The two came from the " *
             "same expression, so one of them was planned at a different lane " *
@@ -362,23 +358,9 @@ end
 # and a 32-bit index addresses a base far longer than a slot map that fits in
 # memory, so the vector is emitted as `i32` whenever every position into the
 # base is representable in one and as `i64` otherwise. The width changes no
-# number the program computes. `ESM_DIRECT_GATHER_INDEX_BITS` pins it, as the
-# negative control and as the escape if a backend is found that wants the wide
-# form.
-const _DE_GATHER_INDEX_BITS = 32
-
-function _de_gather_index_bits()
-    v = get(ENV, "ESM_DIRECT_GATHER_INDEX_BITS", "")
-    isempty(v) && return _DE_GATHER_INDEX_BITS
-    w = tryparse(Int, v)
-    (w == 32 || w == 64) || _de_refuse(
-        "an index width of `$v`",
-        "ESM_DIRECT_GATHER_INDEX_BITS is `$v`. A gather's start indices are " *
-            "emitted as 32- or 64-bit integers and as nothing else; unset the " *
-            "variable for the default."
-    )
-    return w
-end
+# number the program computes. `DirectEmitOptions.gather_index_bits` pins it,
+# as the negative control and as the escape if a backend is found that wants the
+# wide form.
 
 # Pure, so the width can be pinned by a test at base lengths no fixture reaches.
 _de_index_bits(baselen::Int, want::Int) =
@@ -413,7 +395,7 @@ function _de_gather_op(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal
     L = length(positions)
     idx = _de_idxconst(
         ctx, positions,
-        _de_index_bits(src.len, _de_gather_index_bits())
+        _de_index_bits(src.len, ctx.opts.gather_index_bits)
     )
     dn = _MLIR.API.stablehloGatherDimensionNumbersGet(
         _MLIR.IR.current_context(),
@@ -472,28 +454,18 @@ const _DESlotSrc = Union{Nothing, _DEVal}
 # Neither form changes a NUMBER: a gather of the same positions from the same
 # values is bit-identical to slices-plus-concatenate of them.
 #
-# Switches: `ESM_DIRECT_EMIT_READ=runs` restores the slice-per-run shape (the
-# negative control); `=always` gathers every multi-run read and lifts the base
-# budget (a measurement lever, not a recommendation);
-# `ESM_DIRECT_GATHER_MAX_PIECES` overrides the cap. Pinned by
+# Switches (`DirectEmitOptions`): `read = :runs` restores the slice-per-run
+# shape (the negative control); `:always` gathers every multi-run read and lifts
+# the base budget (a measurement lever, not a recommendation);
+# `gather_max_pieces` overrides the cap. Pinned by
 # test/reactant_direct_emit_test.jl.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
-const _DE_GATHER_MAX_PIECES = _DE_GATHER_MIN_PIECES
 
-_de_read_mode() = get(ENV, "ESM_DIRECT_EMIT_READ", "gather")
-
-function _de_gather_max_pieces()
-    v = get(ENV, "ESM_DIRECT_GATHER_MAX_PIECES", "")
-    return isempty(v) ? _DE_GATHER_MAX_PIECES :
-        something(tryparse(Int, v), _DE_GATHER_MAX_PIECES)
-end
-
-function _de_gather_is_cheaper(npieces::Int, n::Int)
-    mode = _de_read_mode()
-    mode == "runs" && return false
-    mode == "always" && return npieces > 1
-    npieces > _de_gather_max_pieces() && return true
+function _de_gather_is_cheaper(opts::DirectEmitOptions, npieces::Int, n::Int)
+    opts.read === :runs && return false
+    opts.read === :always && return npieces > 1
+    npieces > opts.gather_max_pieces && return true
     return npieces >= _DE_GATHER_MIN_PIECES && npieces * _DE_RUN_WORTH > n
 end
 
@@ -517,7 +489,7 @@ end
 # beside a forcing buffer — and those producers are what the copy is, not the
 # read. A budget that big shatters exactly the reads whose slices the
 # reverse-mode program then multiplies by the tape.
-# `ESM_DIRECT_GATHER_BASE_MAX` overrides the budget, and is the other half of
+# `DirectEmitOptions.gather_base_max` overrides the budget, and is the other half of
 # the measurement lever: a small value reproduces the shape the per-read rule
 # produced, which is the negative control.
 #
@@ -538,10 +510,8 @@ _de_gather_base_max(n_ue::Int) =
     max(_DE_GATHER_BASE_FLOOR, _DE_GATHER_BASE_FACTOR * n_ue)
 
 function _de_gather_base_budget(ctx::_DECtx)
-    _de_read_mode() == "always" && return typemax(Int)
-    dflt = _de_gather_base_max(length(ctx.ue.m))
-    v = get(ENV, "ESM_DIRECT_GATHER_BASE_MAX", "")
-    return isempty(v) ? dflt : something(tryparse(Int, v), dflt)
+    ctx.opts.read === :always && return typemax(Int)
+    return something(ctx.opts.gather_base_max, _de_gather_base_max(length(ctx.ue.m)))
 end
 
 # Pure, so the decision can be pinned by a test at sizes no fixture reaches.
@@ -651,7 +621,7 @@ function _de_emit_decomposed(
         runs::Vector{Tuple{_DESlotSrc, Int, Int, Int}},
         nzero::Int
     )::_DEVal
-    if _de_gather_is_cheaper(length(runs), length(srcs))
+    if _de_gather_is_cheaper(ctx.opts, length(runs), length(srcs))
         g = _de_runs_as_gather(ctx, srcs, runs, nzero > 0)
         g === nothing || return g
     end
@@ -664,7 +634,7 @@ end
 
 function _de_emit_runs(ctx::_DECtx, srcs::Vector{_DESlot})::_DEVal
     isempty(srcs) &&
-        _de_refuse("an empty read", "a read of zero positions reached the emitter.")
+        _de_refuse(ctx, "an empty read", "a read of zero positions reached the emitter.")
     runs, nzero = _de_run_decompose(srcs)
     return _de_emit_decomposed(ctx, srcs, runs, nzero)
 end
@@ -700,11 +670,10 @@ _de_take(ctx::_DECtx, src::_DEVal, positions::Vector{Int})::_DEVal =
 # every read form already carries; whether reading one is an ORDERING VIOLATION
 # is a property of the READ, and the read has already asked that question by the
 # time it asks for a base.
-function _de_canon_worth(npieces::Int)
-    mode = _de_read_mode()
-    mode == "runs" && return false
-    mode == "always" && return npieces > 1
-    return npieces > _de_gather_max_pieces()
+function _de_canon_worth(opts::DirectEmitOptions, npieces::Int)
+    opts.read === :runs && return false
+    opts.read === :always && return npieces > 1
+    return npieces > opts.gather_max_pieces
 end
 
 function _de_canon_base(ctx::_DECtx, M::_DEMap)::Union{Nothing, _DEVal}
@@ -787,14 +756,14 @@ end
 # A write by a LATER section is the ordering violation, and it refuses.
 @inline function _de_unwritten(
         M::_DEMap, s::Int, section::Int32,
-        name::AbstractString
+        name::AbstractString, sections::Vector{String}, rule::AbstractString
     )
     w = @inbounds M.writer[s]
     (w == 0 || w <= section) && return nothing
-    return _de_refuse(
-        "a read-before-write",
-        "$name is read while emitting $(_de_sectionname(section)), and " *
-            "$(_de_sectionname(w)) writes it LATER. The ordering must come from " *
+    return _de_refuse_at(
+        rule, "a read-before-write",
+        "$name is read while emitting $(_de_sectionname(sections, section)), and " *
+            "$(_de_sectionname(sections, w)) writes it LATER. The ordering must come from " *
             "the fill levels, which are supposed to guarantee that a level reads " *
             "only levels below it. The emitted program would read a zero there " *
             "while the host evaluator reads the PREVIOUS CALL's value out of its " *
@@ -805,12 +774,15 @@ end
 
 @inline function _de_src(ctx::_DECtx, M::_DEMap, s::Int)::_DESlot
     (1 <= s <= length(M.m)) || _de_refuse(
+        ctx,
         "a read outside the slot map",
         "slot $s is outside the extended state (length $(length(M.m)))."
     )
     e = @inbounds M.m[s]
     e === nothing || return e
-    return _de_unwritten(M, s, ctx.section, _de_slotname(ctx, s))
+    return _de_unwritten(
+        M, s, ctx.section, _de_slotname(ctx, s), ctx.sections, ctx.rule
+    )
 end
 
 _de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol = :read1)::_DEVal =
@@ -821,10 +793,10 @@ _de_read(ctx::_DECtx, M::_DEMap, s::Int, why::Symbol = :read1)::_DEVal =
 
 function _de_gather(ctx::_DECtx, M::_DEMap, slots::Vector{Int})::_DEVal
     isempty(slots) &&
-        _de_refuse("an empty read", "a read of zero positions reached the emitter.")
+        _de_refuse(ctx, "an empty read", "a read of zero positions reached the emitter.")
     srcs = _DESlot[_de_src(ctx, M, s) for s in slots]
     runs, nzero = _de_run_decompose(srcs)
-    if _de_canon_worth(length(runs))
+    if _de_canon_worth(ctx.opts, length(runs))
         cb = _de_canon_base(ctx, M)
         # On a base in slot order the SAME read decomposes over plain slot
         # indices, so it re-enters the cost model one level down: affine slots
@@ -844,6 +816,7 @@ function _de_write!(ctx::_DECtx, M::_DEMap, slots::Vector{Int}, val::_DEVal)
     else
         val.len == length(slots) ||
             _de_refuse(
+            ctx,
             "a scatter of the wrong width",
             "a kernel result of length $(val.len) is scattered into " *
                 "$(length(slots)) slots ($(_de_slotsname(ctx, slots)))."
@@ -876,7 +849,7 @@ end
 function _de_assemble(ctx::_DECtx, M::_DEMap, n::Int)::_DEVal
     srcs = _DESlot[@inbounds M.m[i] for i in 1:n]
     runs, nzero = _de_run_decompose(srcs)
-    if _de_canon_worth(length(runs))
+    if _de_canon_worth(ctx.opts, length(runs))
         cb = _de_canon_base(ctx, M)
         if cb !== nothing
             # Slots `1..n` of a base in slot order: the base, or a prefix of it.
@@ -908,6 +881,7 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
             x = ctx.bufs[j]
             x isa TracedRArray{Float64, 1} ||
                 _de_refuse(
+                ctx,
                 "a forcing buffer argument of type $(typeof(x))",
                 "buffer $j of the `buffers` argument is not a traced " *
                     "rank-1 Float64 array. Pass `map(ConcreteRArray, " *
@@ -921,6 +895,7 @@ function _de_buffer(ctx::_DECtx, arr::Vector{Float64})::_DEVal
         end
     end
     return _de_refuse(
+        ctx,
         "a live forcing buffer of length $(length(arr))",
         "the read's aliased host buffer is not in the `buffers` argument. " *
             "Compile `direct_rhs_with_buffers(f)` and pass the container " *

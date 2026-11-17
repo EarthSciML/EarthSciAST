@@ -66,45 +66,8 @@ end
 # Const table with the RAW 1-based pool vars, so NO symbolic index ever leaves
 # `1:N` — scalarize sees only 1-based positions into a precomputed table.
 
-# Context threaded into `_build_index` (via a reserved `dim_dict` key) while a
-# stencil arrayop body is being built. Carries everything needed to materialize
-# a per-output-cell gather table for an indexed read.
-struct _GatherCtx
-    # output index var name => (pool var, physical-index lo, length N_d, step)
-    out_vars::Dict{String, Tuple{Any, Int, Int, Int}}
-    # ordered output var names (defines the table axis order = pool var order)
-    out_order::Vector{String}
-end
-
-# SIDE CHANNEL — read this before touching `dim_dict`.
-#
-# The `_GatherCtx` is smuggled to `_build_index` through `dim_dict::Dict{
-# String,Any}` under this reserved key rather than as an explicit argument.
-# `_esm_to_symbolic` has dozens of call sites (every `_build_*` helper, the
-# System constructor, event lowering), all sharing
-# the `(expr, var_dict, t_sym, dim_dict)` signature; adding a context
-# parameter would touch every one of them for the benefit of exactly one
-# producer (`_build_arrayop_sym`) and one consumer (`_build_index`). Until
-# a second consumer appears, the reserved-key hack is the lesser evil.
-#
-# Invariants that keep it safe:
-# - `_build_arrayop_sym` installs the ctx before evaluating an arrayop body
-#   and restores the previous value in a `finally` (nesting-safe).
-# - The key is not a valid variable name and is only ever written by
-#   `_build_arrayop_sym`.
-# - `_build_index` type-checks (`ctx isa _GatherCtx`) before use.
-const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
-
-# Second reserved `dim_dict` key, same side-channel rationale as above: the
-# document-scoped index-set extent table (`name => size`) needed to decode an
-# `IndexSetRef` range (`{"from": "x"}`) into concrete bounds. Written once by
-# `_build_var_dict` from `flat.index_sets`, read by `_build_arrayop_sym`.
-# Absent ⇒ empty ⇒ any `IndexSetRef` range raises a descriptive
-# `ArgumentError` from `_range_bounds_int`.
-const _INDEX_EXTENTS_KEY = "__esm_index_set_extents__"
-
-_extents(dim_dict::Dict{String, Any}) =
-    get(dim_dict, _INDEX_EXTENTS_KEY, _NO_EXTENTS)::AbstractDict
+# The gather context itself (`_GatherCtx`) and the lowering context that carries
+# it (`_Lowering.gather`) are defined in lowering.jl.
 
 # Gate a per-combination body value by an aggregate `filter` predicate.
 # A predicate over CONCRETE integer indices already folds to a `Bool` (the
@@ -210,10 +173,7 @@ end
 # Stencil neighbor reads that can leave the field bounds at a boundary cell are
 # materialized as numeric gather tables (see `_build_gather_read` above) so no
 # symbolic out-of-bounds index ever reaches the scalarizer.
-function _build_arrayop_sym(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
-    )
+function _build_arrayop_sym(expr::OpExpr, L::_Lowering)
     output_idx = expr.output_idx === nothing ? Any[] : expr.output_idx
     body = expr.expr_body
     body === nothing && throw(ArgumentError("arrayop node missing 'expr' body"))
@@ -231,10 +191,9 @@ function _build_arrayop_sym(
                 "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)"
         )
     )
-    extents = _extents(dim_dict)
     ranges = Dict{String, StepRange{Int, Int}}()
     for (name, r) in expr.ranges
-        ranges[name] = _range_int(r, extents)
+        ranges[name] = _range_int(r, L.extents)
     end
 
     output_names = String[]
@@ -254,8 +213,7 @@ function _build_arrayop_sym(
     # via integer iteration (rare path, not in current simulation fixtures).
     if isempty(output_names)
         return _arrayop_scalar_reduce(
-            body, var_dict, t_sym, dim_dict, ranges,
-            reduce_fn, expr.filter, identity_val
+            body, L, ranges, reduce_fn, expr.filter, identity_val
         )
     end
 
@@ -266,8 +224,8 @@ function _build_arrayop_sym(
     n_named = length(all_named)
     pool = get_idx_vars(n_named + n_singletons)
     # idx_sym: raw pool vars, used as keys in output_idx_syms and ranges_sym.
-    # idx_body: the physical index as a function of the pool var, injected into
-    # var_dict for body evaluation. SymbolicUtils scalarizes by iterating the
+    # idx_body: the physical index as a function of the pool var, bound in
+    # `L.vars` for body evaluation. SymbolicUtils scalarizes by iterating the
     # shape (1:length(r)) and substituting pool[k] = 1..N, so for a range
     # `lo:st:hi` the body sees `lo + (pool[k] - 1) * st` (e.g. i ∈ 2:4 gives
     # 2..4 for pool[k] = 1..3, and i ∈ 1:2:5 gives 1, 3, 5).
@@ -303,69 +261,49 @@ function _build_arrayop_sym(
     end
     gather_ctx = _GatherCtx(out_vars, out_order)
 
-    # Inject OFFSET-ADJUSTED index vars into var_dict and evaluate the body.
-    # Also install the gather context so `_build_index` can intercept
-    # gather-eligible reads. Both are restored in the `finally`.
-    saved = Dict{String, Any}()
-    for (k, v) in idx_body
-        if haskey(var_dict, k)
-            saved[k] = var_dict[k]
-        end
-        var_dict[k] = v
-    end
-    saved_ctx = get(dim_dict, _GATHER_CTX_KEY, nothing)
-    dim_dict[_GATHER_CTX_KEY] = gather_ctx
-    body_sym = try
-        b = _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
-        # `filter` gate (RFC semiring-faq-unified-ir §5.3, esm-spec §4.3.1).
-        # The predicate is built under the SAME index bindings as the body, so
-        # a cumulative/prefix reduction — `filter: {"<=": ["j", "i"]}` and
-        # friends — becomes `ifelse(j <= i, body, identity)` over the full
-        # rectangular `i × j` range. The scalarizer substitutes concrete
-        # positions for both pool vars, folding each `ifelse` to one branch,
-        # so cell `i` reduces exactly the admitted WINDOW (which `j` values
-        # contribute), which is the part of §4.3.1 this path does honor.
-        #
-        # ORDER IS NOT HONORED — read this before trusting a low bit.
-        # §4.3.1 additionally makes the ascending-`j` LEFT FOLD normative:
-        # `((b_a ⊕ b_{a+1}) ⊕ b_{a+2}) ⊕ …`, lowest admitted `j` first. This
-        # path cannot deliver that. The gated terms are handed to SymbolicUtils
-        # as an n-ary `+`, which stores and emits them in ITS canonical term
-        # order, not ours; re-association is inherent to lowering a sum into a
-        # symbolic algebra and is not something a caller can switch off.
-        #
-        # The divergence is NOT confined to the last ulp. On a window whose
-        # partial sums cancel it is O(1) absolute — with u = [1e16, 1, -1e16, 1]
-        # the normative fold gives fwd_inc = [1e16, 1e16, 0, 1] (what the
-        # tree-walk evaluator produces) while this path gives [1e16, 1e16, 1, 2].
-        # Bit-agreement with the tree-walk holds only when the summands are
-        # exactly representable and no cancellation occurs — which is why the
-        # conformance fixtures (powers of two; 0.5/0.25/0.125) match bit-for-bit
-        # and are NOT evidence of a general guarantee.
-        #
-        # esm-spec §4.3.1 pins bit-exactness on the EXECUTING bindings; in Julia
-        # that is the tree-walk evaluator (`build_evaluator`, src/tree_walk/
-        # scan.jl, pinned by test/scan_prefix_test.jl), not this MTK export
-        # path. Callers who need the normative low bits must use it.
-        # Pinned by "Cumulative prefix reductions (MTK lowering)" in
-        # test/mtk/array_ops_mtk_test.jl, where the cancellation case is `@test_broken`.
-        if expr.filter !== nothing
-            pred = _esm_to_symbolic(expr.filter, var_dict, t_sym, dim_dict)
-            b = _gate_by_filter(pred, b, identity_val)
-        end
-        b
-    finally
-        for k in keys(idx_body)
-            if haskey(saved, k)
-                var_dict[k] = saved[k]
-            else
-                delete!(var_dict, k)
+    # Bind the OFFSET-ADJUSTED index vars and install the gather context so
+    # `_build_index` can intercept gather-eligible reads; both are restored
+    # afterwards.
+    body_sym = _with_bindings(L, idx_body) do
+        _with_gather(L, gather_ctx) do
+            b = _esm_to_symbolic(body, L)
+            # `filter` gate (RFC semiring-faq-unified-ir §5.3, esm-spec §4.3.1).
+            # The predicate is built under the SAME index bindings as the body, so
+            # a cumulative/prefix reduction — `filter: {"<=": ["j", "i"]}` and
+            # friends — becomes `ifelse(j <= i, body, identity)` over the full
+            # rectangular `i × j` range. The scalarizer substitutes concrete
+            # positions for both pool vars, folding each `ifelse` to one branch,
+            # so cell `i` reduces exactly the admitted WINDOW (which `j` values
+            # contribute), which is the part of §4.3.1 this path does honor.
+            #
+            # ORDER IS NOT HONORED — read this before trusting a low bit.
+            # §4.3.1 additionally makes the ascending-`j` LEFT FOLD normative:
+            # `((b_a ⊕ b_{a+1}) ⊕ b_{a+2}) ⊕ …`, lowest admitted `j` first. This
+            # path cannot deliver that. The gated terms are handed to SymbolicUtils
+            # as an n-ary `+`, which stores and emits them in ITS canonical term
+            # order, not ours; re-association is inherent to lowering a sum into a
+            # symbolic algebra and is not something a caller can switch off.
+            #
+            # The divergence is NOT confined to the last ulp. On a window whose
+            # partial sums cancel it is O(1) absolute — with u = [1e16, 1, -1e16, 1]
+            # the normative fold gives fwd_inc = [1e16, 1e16, 0, 1] (what the
+            # tree-walk evaluator produces) while this path gives [1e16, 1e16, 1, 2].
+            # Bit-agreement with the tree-walk holds only when the summands are
+            # exactly representable and no cancellation occurs — which is why the
+            # conformance fixtures (powers of two; 0.5/0.25/0.125) match bit-for-bit
+            # and are NOT evidence of a general guarantee.
+            #
+            # esm-spec §4.3.1 pins bit-exactness on the EXECUTING bindings; in Julia
+            # that is the tree-walk evaluator (`build_evaluator`, src/tree_walk/
+            # scan.jl, pinned by test/scan_prefix_test.jl), not this MTK export
+            # path. Callers who need the normative low bits must use it.
+            # Pinned by "Cumulative prefix reductions (MTK lowering)" in
+            # test/mtk/array_ops_mtk_test.jl, where the cancellation case is `@test_broken`.
+            if expr.filter !== nothing
+                pred = _esm_to_symbolic(expr.filter, L)
+                b = _gate_by_filter(pred, b, identity_val)
             end
-        end
-        if saved_ctx === nothing
-            delete!(dim_dict, _GATHER_CTX_KEY)
-        else
-            dim_dict[_GATHER_CTX_KEY] = saved_ctx
+            b
         end
     end
 
@@ -408,35 +346,20 @@ end
 # Scalar-output fallback: iterate all ranges and reduce. Used only when
 # output_idx is empty or all-singleton (no named output dimensions).
 function _arrayop_scalar_reduce(
-        body, var_dict, t_sym, dim_dict, ranges, reduce_fn,
+        body, L::_Lowering, ranges, reduce_fn,
         filt = nothing, identity_val = 0.0
     )
     all_names = collect(keys(ranges))
     range_tuple = Tuple(ranges[n] for n in all_names)
     acc = nothing
     for vals in Iterators.product(range_tuple...)
-        saved = Dict{String, Any}()
-        for (k, v) in zip(all_names, vals)
-            if haskey(var_dict, k)
-                saved[k] = var_dict[k]
-            end
-            var_dict[k] = Int(v)
-        end
-        contrib = try
-            b = _esm_to_symbolic(body, var_dict, t_sym, dim_dict)
+        contrib = _with_bindings(L, zip(all_names, map(Int, vals))) do
+            b = _esm_to_symbolic(body, L)
             if filt !== nothing
-                pred = _esm_to_symbolic(filt, var_dict, t_sym, dim_dict)
+                pred = _esm_to_symbolic(filt, L)
                 b = _gate_by_filter(pred, b, identity_val)
             end
             b
-        finally
-            for k in all_names
-                if haskey(saved, k)
-                    var_dict[k] = saved[k]
-                else
-                    delete!(var_dict, k)
-                end
-            end
         end
         acc = acc === nothing ? contrib : reduce_fn(acc, contrib)
     end
@@ -560,7 +483,7 @@ end
 #      semiring-faq-unified-ir §5.2) — whose extent lives in the DOCUMENT-scoped
 #      index-set registry, not in the node. `extents` is that registry reduced to
 #      name => size (see `_index_set_extents` in variables.jl); it arrives here
-#      through the `_INDEX_EXTENTS_KEY` side channel on `dim_dict`.
+#      as `_Lowering.extents`.
 #
 # Anything else is rejected with an `ArgumentError` naming the offending form —
 # never a `MethodError`.
