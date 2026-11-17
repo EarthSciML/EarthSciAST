@@ -2285,9 +2285,10 @@ _is_time_power(d) = all(x -> x isa Unitful.Dimension{:Time}, typeof(d).parameter
 """
     equation_unit_findings(eq::Equation, var_units::AbstractDict) -> Vector{String}
 
-The PROVABLE dimensional inconsistency of a derivative equation's two SIDES, if
-any: the comparison half of the equation check site (esm-spec §4.8.4, §4.8.6),
-which `validate` reports for every `D(u, t) = …` equation (see
+The PROVABLE dimensional inconsistencies of a derivative equation, if any: an
+operator-rule mismatch inside either side, then the mismatch between the two
+SIDES (the whole equation check site, esm-spec §4.8.4, §4.8.6), which
+`validate` reports for every `D(u, t) = …` equation (see
 [`model_unit_findings`](@ref)).
 
 Scope, and why it is this narrow:
@@ -2314,7 +2315,7 @@ Scope, and why it is this narrow:
 function equation_unit_findings(eq::Equation, var_units::AbstractDict)::Vector{String}
     lhs = eq.lhs
     (lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1) || return String[]
-    return last(_site_check(lhs, eq.rhs, var_units))
+    return _site_findings(lhs, eq.rhs, var_units)
 end
 
 # THE CHECK OF ONE SITE (esm-spec §4.8.4, §4.8.6) under `var_units`'s literal
