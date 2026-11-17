@@ -151,7 +151,6 @@ apart — the only difference between them is which `base_path` anchors the refs
 function _load_document(
         raw_data, base_path::String;
         metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[],
         native_subsystem_refs::Bool = true,
         record_import_base::Bool = true
     )::EsmFile
@@ -254,7 +253,6 @@ function _load_document(
     doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(
         doc; base_path = base_path, metaparameters = metaparameters,
-        injected_imports = injected_imports,
         mount_declared = mount_declared, authored_checked = true
     )
     # Resolve nested subsystem references relative to the document's directory.
@@ -344,9 +342,6 @@ Julia decoration on the canonical `load_string`, not a fourth entry point:
 Runs the SAME pipeline [`load_path`](@ref) and [`load_document`](@ref) run —
 `_load_document`: top-level `{ref}` inlining, version gates, schema
 validation, template lowering, coercion, and nested subsystem-ref resolution.
-(Before that was shared, a stream-loaded document kept its subsystem refs as
-unresolved `SubsystemRef`s, which `flatten` silently SKIPS: the same document
-loaded from a stream flattened to a strictly smaller system, with no error.)
 `base_path` anchors relative `expression_template_imports` refs and nested
 `{ref}`s (esm-spec §9.7.2, §4.7), defaulting to `pwd()` for that; left at
 `nothing` the document has no location of its own, so a relative
@@ -356,27 +351,23 @@ the loader API (esm-spec §9.7.6).
 """
 function load_string(
         json::AbstractString; base_path::Union{Nothing, AbstractString} = nothing,
-        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[]
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}()
     )::EsmFile
     raw_data = _read_json_document(json)
     return _load_document(
         raw_data, String(something(base_path, pwd()));
         metaparameters = metaparameters,
-        injected_imports = injected_imports,
         record_import_base = base_path !== nothing
     )
 end
 
 function load_string(
         io::IO; base_path::Union{Nothing, AbstractString} = nothing,
-        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}(),
-        injected_imports::AbstractVector = Any[]
+        metaparameters::AbstractDict{String, <:Integer} = Dict{String, Int}()
     )::EsmFile
     return load_string(
         read(io, String); base_path = base_path,
-        metaparameters = metaparameters,
-        injected_imports = injected_imports
+        metaparameters = metaparameters
     )
 end
 
@@ -2021,12 +2012,6 @@ function _resolve_refs_in_file!(
         end
     end
 
-    # Resolve reaction system subsystem refs
-    if file.reaction_systems !== nothing
-        for (name, rsys) in file.reaction_systems
-            _resolve_reaction_system_refs!(file.reaction_systems, name, rsys, base_path, visited)
-        end
-    end
     # Merge into THIS document; its own entry wins a name clash. Returned are the
     # entries that could not be merged in place because `file` has no
     # `data_sources` registry to merge into — the caller rebuilds it with them
@@ -2299,13 +2284,6 @@ function _resolve_subsystem_ref(
     )
 end
 
-_resolve_subsystem_ref(
-    ref::String, base_path::String, visited::Set{String},
-    registry::AbstractDict{String, IndexSet} = OrderedDict{String, IndexSet}();
-    api_meta::AbstractDict{String, <:Integer} = Dict{String, Int}()
-) =
-    _resolve_subsystem_ref(SubsystemRef(ref), base_path, visited, registry; api_meta = api_meta)
-
 """
     _typed_mount_data_sources(loaded, subs, ref, base_path, where) -> Dict{String,DataSource}
 
@@ -2398,22 +2376,6 @@ function _validate_mount_url_substitutions(
         _native_source_locations(loaded.data_sources), subs, base_path, where
     )
     return nothing
-end
-
-"""
-    _resolve_reaction_system_refs!(rsys_dict, name, rsys, base_path, visited)
-
-Recursively resolve subsystem references within a ReactionSystem's subsystems.
-"""
-function _resolve_reaction_system_refs!(
-        rsys_dict::AbstractDict{String, ReactionSystem}, name::String,
-        rsys::ReactionSystem, base_path::String, visited::Set{String}
-    )
-    for (sub_name, sub_rsys) in rsys.subsystems
-        # Recursively resolve nested subsystem refs
-        _resolve_reaction_system_refs!(rsys.subsystems, sub_name, sub_rsys, base_path, visited)
-    end
-    return
 end
 
 """
