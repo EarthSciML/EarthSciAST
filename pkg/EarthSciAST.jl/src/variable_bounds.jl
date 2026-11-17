@@ -1,6 +1,7 @@
-# Variable bounds `lb` / `ub` (esm-spec §6.3.2): the version gate, the four
-# validity rules, and the rewrite flattening applies to a bound
-# (esm-libraries-spec §4.7.5, "Bounds follow the renaming").
+# Variable bounds `lb` / `ub` (esm-spec §6.3.2): the version gate and the four
+# validity rules. The rewrite flattening applies to a bound
+# (esm-libraries-spec §4.7.5, "Bounds follow the renaming") is the bound site
+# of the expression-site walk (expression_sites.jl).
 
 # ============================================================================
 # Version gate
@@ -15,27 +16,10 @@ pointer of the first such field. Runs on the raw JSON before schema validation,
 so the author sees the version hint rather than an unknown-property error. Only
 this file's inline models and subsystems are read: a `{ref}` subsystem is
 another file, gated against its own version when it is mounted.
+The rule is the `variable_bounds` row of [`_VERSION_GATES`](@ref).
 """
-function reject_variable_bounds_pre_v21(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    version = _declared_minor(raw_data)
-    (version === nothing || version >= (2, 1)) && return
-    models = _raw_get(raw_data, "models")
-    (models !== nothing && _is_object(models)) || return
-    for (name, model) in pairs(models)
-        path = _first_raw_bound(model, "/models/$(name)")
-        path === nothing && continue
-        throw(
-            ExpressionTemplateError(
-                ERROR_CODES.VARIABLE_BOUNDS_VERSION_TOO_OLD,
-                "variable bounds (`lb` / `ub`) require esm >= 2.1.0; " *
-                    "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: $path"
-            )
-        )
-    end
-    return
-end
+reject_variable_bounds_pre_v21(raw_data) =
+    _check_version_gate(_VERSION_GATES.variable_bounds, raw_data)
 
 # The pointer of the first `lb` / `ub` in a raw model or inline subsystem, in
 # document order (a variable's `lb` before its `ub`, a model's own variables
@@ -73,8 +57,8 @@ document [`reject_variable_bounds_pre_v21`](@ref) refuses to read back. Like
 """
 function _raise_variable_bounds_esm_floor!(doc)
     doc isa AbstractDict || return doc
-    version = _declared_minor(doc)
-    (version === nothing || version >= (2, 1)) && return doc
+    version = _esm_version(doc)
+    (version === nothing || version >= (2, 1, 0)) && return doc
     models = _raw_get(doc, "models")
     (models !== nothing && _is_object(models)) || return doc
     any(m -> _first_raw_bound(m, "") !== nothing, values(models)) || return doc
@@ -241,47 +225,4 @@ function _observed_chain_to(g, from::String, goal::String)
         end
     end
     return nothing
-end
-
-# ============================================================================
-# Flattening
-# ============================================================================
-
-"""
-    _map_variable_bounds(var, f) -> ModelVariable
-
-`var` with each reference bound rewritten by `f`, the expression rewrite
-flattening applies to a reference in the component's equations
-(esm-libraries-spec §4.7.5). The reference goes through `f` as a one-leaf
-expression, so namespacing, the `operator_compose` merged-away rename and a
-`variable_map` substitution reach it exactly as they reach an equation. A
-result that is still a single variable is stored back as its name; a scaled
-replacement stays the expression it became. A number is never touched, and
-`var` itself comes back when nothing changed.
-"""
-function _map_variable_bounds(var::ModelVariable, f)::ModelVariable
-    (_is_bound_reference(var.lb) || _is_bound_reference(var.ub)) || return var
-    lb, ub = _map_bound(var.lb, f), _map_bound(var.ub, f)
-    (isequal(lb, var.lb) && isequal(ub, var.ub)) && return var
-    return reconstruct(var; lb = lb, ub = ub)
-end
-
-_is_bound_reference(b) = b isa String || b isa ASTExpr
-
-_map_bound(b, f) = b
-function _map_bound(b::Union{String, ASTExpr}, f)
-    out = f(b isa String ? VarExpr(b) : b)
-    return out isa VarExpr ? out.name : out
-end
-
-# The map form: a new map only when some variable's bounds changed.
-function _map_variable_bounds_all(vars::OrderedDict{String, ModelVariable}, f)
-    mapped = nothing
-    for (name, var) in vars
-        nv = _map_variable_bounds(var, f)
-        nv === var && continue
-        mapped === nothing && (mapped = OrderedDict{String, ModelVariable}(vars))
-        mapped[name] = nv
-    end
-    return mapped === nothing ? vars : mapped
 end

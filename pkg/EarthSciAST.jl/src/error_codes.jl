@@ -200,8 +200,7 @@ const ERROR_CODES = (
     IC_IN_REACTION_SYSTEM = "ic_in_reaction_system",
 
     # ── Expression templates (esm-spec §9.6) + the §9.6.4 post-expansion
-    #    validators (lower_expression_templates.jl; the recursive-body
-    #    composition check lives in template_imports.jl). ───────────────────
+    #    validators (templates/declarations.jl, templates/rewrite.jl). ──────
     APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE = "apply_expression_template_unknown_template",
     APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH = "apply_expression_template_bindings_mismatch",
     APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY = "apply_expression_template_recursive_body",
@@ -246,7 +245,7 @@ const ERROR_CODES = (
     VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted",
 
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
-    #    template_imports.jl). ──────────────────────────────────────────────
+    #    templates/imports.jl, templates/metaparameters.jl). ───────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",
     TEMPLATE_IMPORT_UNRESOLVED = "template_import_unresolved",
     TEMPLATE_IMPORT_NOT_LIBRARY = "template_import_not_library",
@@ -353,6 +352,10 @@ const ERROR_CODES = (
     # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
+    # A document spells `"op": "faq"` while declaring esm below 1.1.0, the
+    # version `faq` arrives at; refused at the wire boundary (CONFORMANCE_SPEC
+    # §7, esm-spec §4.2 "The `faq` tag").
+    FAQ_VERSION_TOO_OLD = "faq_version_too_old",
     # A Markdown or Typst source text is not an ESM document: an unknown word,
     # an ambiguous juxtaposition, an unbalanced delimiter, an unclosed display,
     # container or directive, and every other malformed input the document

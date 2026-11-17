@@ -9,36 +9,6 @@ using JSON3
 using JSONSchema
 
 
-"""
-    ParseError
-
-Exception thrown when JSON parsing fails.
-"""
-struct ParseError <: EarthSciASTError
-    message::String
-    original_error::Union{Exception, Nothing}
-    # MACHINE-READABLE half, defaulting empty. A few parse/load-time rejections
-    # are ALSO pinned structural findings the conformance harness reports as
-    # `(code, path)` — `ic_in_reaction_system` at
-    # `/reaction_systems/<R>/constraint_equations/<i>` is the current one — so
-    # the throw carries everything `validate` needs to render that finding
-    # instead of only an opaque string. An empty `code` marks an ordinary
-    # parse failure with no pinned structural shape.
-    code::String
-    path::String
-    details::Dict{String, Any}
-
-    ParseError(
-        message::String, original_error = nothing;
-        code::AbstractString = "", path::AbstractString = "",
-        details::AbstractDict = Dict{String, Any}()
-    ) =
-        new(message, original_error, String(code), String(path), Dict{String, Any}(details))
-end
-
-Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
-
-
 # Recursively convert any JSON carrier into plain-`Dict{String,Any}` /
 # `Vector{Any}` containers — the UNORDERED deep-plain normalizer, kept (beside
 # the order-preserving `_to_ordered` in json_walk.jl) for two jobs where key
@@ -924,8 +894,8 @@ function _coerce_subsystem_entry(name::String, v)
         end
         # Optional `expression_template_imports` injects a discretization
         # into the REFERENCED component's own scope (esm-spec §9.7.10
-        # form A). Kept as raw §9.7.2 entries; `_resolve_subsystem_ref`
-        # threads them into the referenced document's load and the
+        # form A). Kept as raw §9.7.2 entries; the mount pipeline
+        # (`_resolve_mount_edge`) threads them into the referenced document's load and the
         # §9.6.3 fixpoint consumes them before the mounted form is set.
         injected = Any[]
         imports_raw = _get_field(v, :expression_template_imports, nothing)
@@ -935,14 +905,13 @@ function _coerce_subsystem_entry(name::String, v)
         # Optional `index_set_rename` translates the MOUNTED document's index-set
         # names into this document's vocabulary at load (esm-spec §4.7
         # "Mount-edge index-set renaming"). Kept as a raw name→name map;
-        # `_resolve_subsystem_ref` threads it into the referenced document's load
+        # the mount pipeline (`_resolve_mount_edge`) threads it into the referenced document's load
         # and applies it once that document has resolved in its own scope, so it
         # is consumed at the mount and does not survive `parse → emit`.
         iset_rename = nothing
         rename_raw = _get_field(v, :index_set_rename, nothing)
         if rename_raw !== nothing
-            # A malformed (non-object) map is left for `_name_map` to reject with
-            # `template_import_rename_invalid` at the mount, not stringified here.
+            # A malformed (non-object) map is `template_import_rename_invalid`.
             iset_rename = _is_object(rename_raw) ?
                 OrderedDict{String, String}(
                     string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)

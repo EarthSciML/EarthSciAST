@@ -1088,51 +1088,15 @@ unknown the flattened system no longer declares, which the solver reports far
 downstream, if at all.
 """
 function _rename_event_names!(
-        events::Vector{ContinuousEvent},
-        renames::AbstractDict{String, String}
+        events::Vector{<:EventType}, renames::AbstractDict{String, String}
     )
     isempty(renames) && return events
-    for (i, ev) in enumerate(events)
-        events[i] = ContinuousEvent(
-            ASTExpr[_rename_variables(c, renames) for c in ev.conditions],
-            _rename_affects(ev.affects, renames);
-            affect_neg = (
-                ev.affect_neg === nothing ? nothing :
-                    _rename_affects(ev.affect_neg, renames)
-            ),
-            root_find = ev.root_find, reinitialize = ev.reinitialize,
-            description = ev.description, name = ev.name
-        )
+    mapped = _map_event_exprs(e -> _rename_variables(e, renames), events)
+    for (i, ev) in enumerate(mapped)
+        events[i] = _rename_affect_targets(n -> get(renames, n, n), ev)
     end
     return events
 end
-
-function _rename_event_names!(
-        events::Vector{DiscreteEvent},
-        renames::AbstractDict{String, String}
-    )
-    isempty(renames) && return events
-    for (i, ev) in enumerate(events)
-        # Only a `ConditionTrigger` carries an expression; a periodic / times
-        # trigger is pure data.
-        trigger = ev.trigger isa ConditionTrigger ?
-            ConditionTrigger(_rename_variables(ev.trigger.expression, renames)) :
-            ev.trigger
-        events[i] = DiscreteEvent(
-            trigger, _rename_affects(ev.affects, renames);
-            reinitialize = ev.reinitialize, description = ev.description, name = ev.name
-        )
-    end
-    return events
-end
-
-_rename_affects(affects::Vector{AffectEquation}, renames::AbstractDict{String, String}) =
-    AffectEquation[
-    AffectEquation(
-        get(renames, a.lhs, a.lhs),
-        _rename_variables(a.rhs, renames)
-    ) for a in affects
-]
 
 function _substitute_placeholder(
         expr::ASTExpr,

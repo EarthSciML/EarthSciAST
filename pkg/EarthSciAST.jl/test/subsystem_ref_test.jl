@@ -9,8 +9,10 @@ end
 @testset "Subsystem Reference Resolution Tests" begin
 
     @testset "SubsystemRefError construction" begin
-        err = EarthSciAST.SubsystemRefError("test error")
+        err = EarthSciAST.SubsystemRefError("test error"; code = "unresolved_subsystem_ref")
         @test err.message == "test error"
+        @test err.code == "unresolved_subsystem_ref"
+        @test (err.path, err.file) == ("", "")
         @test err isa Exception
     end
 
@@ -65,34 +67,65 @@ end
         @test haskey(file.models["Outer"].subsystems, "Inner")
     end
 
-    @testset "_canonical_ref for local paths" begin
+    @testset "_resolve_ref key for local paths" begin
         base = "/tmp/test_dir"
         ref = "sub/model.esm"
-        canonical = EarthSciAST._canonical_ref(ref, base)
+        canonical = EarthSciAST._resolve_ref(EarthSciAST._DirBase(base), ref).key
         @test canonical == abspath(joinpath(base, ref))
     end
 
-    @testset "_canonical_ref for URLs" begin
+    @testset "_resolve_ref key for URLs" begin
         ref = "https://example.com/model.esm"
-        canonical = EarthSciAST._canonical_ref(ref, "/tmp")
-        @test canonical == ref
+        t = EarthSciAST._resolve_ref(EarthSciAST._DirBase("/tmp"), ref)
+        @test t.key == ref
+        @test t.base == EarthSciAST._UrlBase("https://example.com")
     end
 
-    @testset "_load_ref with missing local file" begin
-        visited = Set{String}()
-        @test_throws EarthSciAST.SubsystemRefError begin
-            EarthSciAST._load_ref("nonexistent_file.esm", tempdir(), visited)
+    # A typed file whose model `Host` mounts `ref` as subsystem `S`, resolved by
+    # `resolve_subsystem_refs!` against `base`.
+    _mounting(ref) = EsmFile(
+        "0.1.0", Metadata("mounting");
+        models = Dict{String, Model}(
+            "Host" => Model(
+                Dict{String, ModelVariable}(), Equation[];
+                subsystems = EarthSciAST.OrderedDict{String, EarthSciAST.SubsystemNode}(
+                    "S" => EarthSciAST.SubsystemRef(ref)
+                )
+            )
+        )
+    )
+
+    @testset "resolve_subsystem_refs! with a missing local file" begin
+        e = try
+            resolve_subsystem_refs!(_mounting("nonexistent_file.esm"), tempdir())
+            nothing
+        catch err
+            err
         end
+        @test e isa EarthSciAST.SubsystemRefError
+        @test e.code == "unresolved_subsystem_ref"
+        @test e.subsystem == "S" && e.parent_model == "Host"
     end
 
     @testset "Circular reference detection" begin
-        # Simulate a cycle by pre-loading the visited set
-        visited = Set{String}()
-        ref = "/tmp/circular.esm"
-        push!(visited, abspath(ref))
-
-        @test_throws EarthSciAST.SubsystemRefError begin
-            EarthSciAST._load_ref("circular.esm", "/tmp", visited)
+        # A file that mounts itself as a subsystem.
+        mktempdir() do dir
+            write(
+                joinpath(dir, "circular.esm"), """{
+                "esm": "0.1.0", "metadata": {"name": "circular"},
+                "models": {"M": {
+                    "variables": {"x": {"type": "unknown", "default": 1.0}},
+                    "equations": [],
+                    "subsystems": {"Self": {"ref": "circular.esm"}}}}}"""
+            )
+            e = try
+                resolve_subsystem_refs!(_mounting("circular.esm"), dir)
+                nothing
+            catch err
+                err
+            end
+            @test e isa EarthSciAST.SubsystemRefError
+            @test occursin("Circular subsystem reference detected", e.message)
         end
     end
 
@@ -119,13 +152,12 @@ end
         write(ref_path, ref_content)
 
         try
-            # The minimal fixture is schema-valid, so this must load cleanly;
+            # The minimal fixture is schema-valid, so this must resolve cleanly;
             # any exception propagates as a genuine failure.
-            visited = Set{String}()
-            loaded = EarthSciAST._load_ref("referenced.esm", tmp_dir, visited)
-            @test loaded isa EsmFile
-            @test loaded.metadata.name == "Referenced Model"
-            @test haskey(loaded.models, "SubModel")
+            resolved = resolve_subsystem_refs!(_mounting("referenced.esm"), tmp_dir)
+            sub = resolved.models["Host"].subsystems["S"]
+            @test sub isa Model
+            @test haskey(sub.variables, "x")
         finally
             rm(tmp_dir, recursive = true, force = true)
         end
