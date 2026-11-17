@@ -626,13 +626,8 @@ function _lower_and_coerce(
         authored = _authored_template_names(machinery_input)
         _expand_coupling_transform_refs!(root)
         blocks, bump = _materialize_components!(root, authored)
-        for compkind in ("models", "reaction_systems")
-            comps = get(root, compkind, nothing)
-            (comps isa AbstractDict) || continue
-            for (_, comp) in comps
-                comp isa AbstractDict && haskey(comp, "expression_templates") &&
-                    delete!(comp, "expression_templates")
-            end
+        for (_, _, comp) in _components(root)
+            delete!(comp, "expression_templates")
         end
         isempty(blocks) || (comp_tpls = OrderedDict{String, Any}(k => v for (k, v) in blocks))
         bump && (esm_stamp = _esm_stamp_floor(get(root, "esm", nothing)))

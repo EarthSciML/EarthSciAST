@@ -87,15 +87,10 @@ function _collect_mount_declared_metaparameters(
     end
 
     visit_imports!(raw)   # a DOCUMENT-level `expression_template_imports`
-    for compkind in _COMPONENT_KINDS
-        comps = _raw_get(raw, compkind)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            visit_ref!(comp)                       # top-level `models.<k>` {ref}
-            visit_imports!(comp)
-            visit_subsystems!(comp)
-        end
+    for (_, _, comp) in _components(raw)
+        visit_ref!(comp)                       # top-level `models.<k>` {ref}
+        visit_imports!(comp)
+        visit_subsystems!(comp)
     end
     return out
 end
@@ -157,17 +152,12 @@ Whether `raw` still carries an unresolved §4.7 mount — a top-level
 """
 function _document_has_unresolved_mount(raw)::Bool
     _is_object(raw) || return false
-    for compkind in _COMPONENT_KINDS
-        comps = _raw_get(raw, compkind)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            _has_field(comp, :ref) && return true
-            subs = _raw_get(comp, "subsystems")
-            (subs !== nothing && _is_object(subs)) || continue
-            for (_, sub) in pairs(subs)
-                (_is_object(sub) && _has_field(sub, :ref)) && return true
-            end
+    for (_, _, comp) in _components(raw)
+        _has_field(comp, :ref) && return true
+        subs = _raw_get(comp, "subsystems")
+        (subs !== nothing && _is_object(subs)) || continue
+        for (_, sub) in pairs(subs)
+            (_is_object(sub) && _has_field(sub, :ref)) && return true
         end
     end
     return false

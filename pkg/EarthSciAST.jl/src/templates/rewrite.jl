@@ -278,18 +278,19 @@ end
 _direct_T_op(node) = _direct_op_hit(node, _op_in_T)
 
 """
-    _transitive_op_flags(templates, pred) -> Dict{String,Bool}
+    _transitive_op_flags(templates, pred; graph = _template_graph(templates)) -> Dict{String,Bool}
 
-The ONE transitive DAG-flag DFS behind [`_template_target_bearing`](@ref)
-(§9.6.4 rule 3) and the enum-bearing check: a template
-is flagged iff its body contains an op satisfying `pred` anywhere (including
-inside nested references' `bindings`), OR it references — transitively through
-the §9.7.3-checked acyclic DAG — a flagged template. Memoized DFS; defensive
-against a cycle the checker somehow missed (an in-progress node is treated as
-non-contributing — acyclicity is enforced earlier).
+The one transitive flag behind [`_template_target_bearing`](@ref) (§9.6.4
+rule 3) and the enum-bearing check: a template is flagged iff its body
+contains an op satisfying `pred` anywhere (including inside nested references'
+`bindings`), or it references, transitively, a flagged template
+([`_flagged`](@ref), exact on a graph with cycles). A caller that already
+holds the reference graph of `templates` passes it as `graph`.
 """
-function _transitive_op_flags(templates::AbstractDict, pred)::Dict{String, Bool}
-    return _flagged(_template_graph(templates)) do name
+function _transitive_op_flags(
+        templates::AbstractDict, pred; graph::_TemplateGraph = _template_graph(templates)
+    )::Dict{String, Bool}
+    return _flagged(graph) do name
         body = _raw_get(templates[name], "body")
         body !== nothing && _direct_op_hit(body, pred)
     end

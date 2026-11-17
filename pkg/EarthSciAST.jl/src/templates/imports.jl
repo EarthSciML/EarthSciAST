@@ -66,14 +66,9 @@ function _template_import_offences(raw_data)
     _raw_haskey(raw_data, "metaparameters") && push!(offences, "/metaparameters")
     _raw_haskey(raw_data, "expression_template_imports") &&
         push!(offences, "/expression_template_imports")
-    for compkind in _COMPONENT_KINDS
-        comps = _raw_get(raw_data, compkind)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            _raw_haskey(comp, "expression_template_imports") &&
-                push!(offences, "/$compkind/$(string(cname))/expression_template_imports")
-        end
+    for (compkind, cname, comp) in _components(raw_data)
+        _raw_haskey(comp, "expression_template_imports") &&
+            push!(offences, "/$compkind/$cname/expression_template_imports")
     end
     return offences
 end
@@ -969,21 +964,10 @@ function _filter_only!(scope::_TemplateScope, edge::_ImportEdge)
             "`only` names template '$n', which '$(edge.ref)' does not declare (esm-spec §9.7.2)"
         )
     end
-    keepset = Set(keep)
-    closure = Set{String}()
-    wstack = String[]
-    for n in keep
-        append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[n], "body")))
-    end
-    while !isempty(wstack)
-        r = pop!(wstack)
-        (r in keepset || r in closure || !haskey(scope.templates, r)) && continue
-        push!(closure, r)
-        append!(wstack, _collect_apply_names!(String[], _raw_get(scope.templates[r], "body")))
-    end
+    kept = _reachable(_template_graph(scope.templates), keep)
     filtered = OrderedDict{String, Any}()
     for (n, d) in scope.templates
-        (n in keepset || n in closure) && (filtered[n] = d)
+        n in kept && (filtered[n] = d)
     end
     scope.templates = filtered
     return scope
@@ -1062,7 +1046,8 @@ function _expand_library_enum_calls!(
         named, library, own_names::Vector{String},
         origin::String
     )
-    bearing = _transitive_op_flags(named, op -> op == "enum")
+    graph = _template_graph(named)
+    bearing = _transitive_op_flags(named, op -> op == "enum"; graph = graph)
     calls_bearing = node -> begin
         nm = _raw_get(node, "name")
         nm isa AbstractString && get(bearing, String(nm), false)
@@ -1072,7 +1057,7 @@ function _expand_library_enum_calls!(
         decl = get(named, n, nothing)
         (decl !== nothing && _is_object(decl) && _raw_haskey(decl, "body")) || continue
         body = _raw_get(decl, "body")
-        any(r -> get(bearing, r, false), _collect_apply_names!(String[], body)) || continue
+        any(r -> get(bearing, r, false), graph.refs[n]) || continue
         expanded = _expand_refs_walk(body, named, origin, calls_bearing, IdDict{Any, Any}())
         bodies[n] = _lower_library_template_body(library, n, decl, expanded, origin)
     end
@@ -1132,13 +1117,8 @@ function _has_import_machinery(raw)
             _raw_haskey(raw, "metaparameters") ||
             _raw_haskey(raw, "expression_template_imports")
     ) && return true
-    for compkind in _COMPONENT_KINDS
-        comps = _raw_get(raw, compkind)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (_, comp) in pairs(comps)
-            _is_object(comp) || continue
-            _raw_haskey(comp, "expression_template_imports") && return true
-        end
+    for (_, _, comp) in _components(raw)
+        _raw_haskey(comp, "expression_template_imports") && return true
     end
     return false
 end
@@ -1177,29 +1157,24 @@ function _resolve_component_imports!(
         doc_isets::OrderedDict{String, Any},
         doc_meta::OrderedDict{String, Any}, src::_DocumentSource
     )
-    for compkind in _COMPONENT_KINDS
-        comps = get(root, compkind, nothing)
-        (comps !== nothing && _is_object(comps)) || continue
-        for (cname, comp) in pairs(comps)
-            _is_object(comp) || continue
-            imports = get(comp, "expression_template_imports", nothing)
-            imports === nothing && continue
-            cscope = _TemplateScope()
-            corigin = "$compkind.$(string(cname))"
-            if _is_array(imports)
-                for entry in imports
-                    sub = _resolve_import_entry(entry, base, stack, corigin, src)
-                    _merge_scope!(cscope, sub, corigin)
-                end
+    for (compkind, cname, comp) in _components(root)
+        imports = get(comp, "expression_template_imports", nothing)
+        imports === nothing && continue
+        cscope = _TemplateScope()
+        corigin = "$compkind.$cname"
+        if _is_array(imports)
+            for entry in imports
+                sub = _resolve_import_entry(entry, base, stack, corigin, src)
+                _merge_scope!(cscope, sub, corigin)
             end
-            _merge_own_templates!(cscope.templates, comp, corigin)
-            _merge_scope_registries!(doc_isets, doc_meta, cscope, corigin)
-            # The effective sequence (imports depth-first post-order, then
-            # local declarations) becomes the component's template block; the
-            # OrderedDict key order IS the §9.6.3 declaration order.
-            comp["expression_templates"] = cscope.templates
-            delete!(comp, "expression_template_imports")
         end
+        _merge_own_templates!(cscope.templates, comp, corigin)
+        _merge_scope_registries!(doc_isets, doc_meta, cscope, corigin)
+        # The effective sequence (imports depth-first post-order, then
+        # local declarations) becomes the component's template block; the
+        # OrderedDict key order IS the §9.6.3 declaration order.
+        comp["expression_templates"] = cscope.templates
+        delete!(comp, "expression_template_imports")
     end
     return
 end
