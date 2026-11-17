@@ -47,6 +47,61 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     )
 
     # ---------------------------------------------------------------------------
+    # The raw-JSON (`Dict`) spelling of the same nodes, for a document built as
+    # a native `Dict` and handed to `esm_problem` / `Internal.build`.
+    # ---------------------------------------------------------------------------
+    jop(o, args...; kw...) = Dict{String, Any}(
+        "op" => String(o), "args" => Any[args...],
+        (String(k) => v for (k, v) in kw)...
+    )
+    jidx(v, is...) = jop("index", v, is...)
+    jD(v; wrt = "t") = jop("D", v; wrt = wrt)
+    jconst(value) = jop("const"; value = value)
+    # A `faq` node: `body` summed (or folded by `semiring`) over `ranges`
+    # (index name => `Dict("from" => set)` or `[lo, hi]`), keeping `output_idx`.
+    function jfaq(
+            body, output_idx, ranges::AbstractDict; filter = nothing,
+            semiring = "sum_product", args = Any[]
+        )
+        d = Dict{String, Any}(
+            "op" => "faq", "semiring" => semiring, "output_idx" => Any[output_idx...],
+            "ranges" => Dict{String, Any}(String(k) => v for (k, v) in ranges),
+            "args" => Any[args...], "expr" => body
+        )
+        filter === nothing || (d["filter"] = filter)
+        return d
+    end
+    # A one-model document in the current schema version.
+    function jdoc(
+            variables::AbstractDict, equations::AbstractVector; name = "M",
+            index_sets = nothing, extra...
+        )
+        model = Dict{String, Any}("variables" => variables, "equations" => Any[equations...])
+        for (k, v) in extra
+            model[String(k)] = v
+        end
+        doc = Dict{String, Any}(
+            "esm" => EarthSciAST.SCHEMA_VERSION,
+            "metadata" => Dict{String, Any}("name" => String(name)),
+            "models" => Dict{String, Any}(String(name) => model)
+        )
+        index_sets === nothing || (doc["index_sets"] = index_sets)
+        return doc
+    end
+
+    # Bit equality of two arrays (`===` per element, so `-0.0 !== 0.0`).
+    bitsame(a, b) = size(a) == size(b) && all(a .=== b)
+    # The right-hand side `f!` writes at `(u, p, t)`, into a zeroed `du`.
+    rhs_du(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
+    # The exception `f()` throws, or `nothing`.
+    caught(f) = try
+        f()
+        nothing
+    catch err
+        err
+    end
+
+    # ---------------------------------------------------------------------------
     # Expressions from math text, and expressions compared as canonical JSON.
     # ---------------------------------------------------------------------------
     # A typed expression (or `Equation`) read from Typst math under the names it
