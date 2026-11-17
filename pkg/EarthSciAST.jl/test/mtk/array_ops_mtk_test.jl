@@ -578,4 +578,51 @@ end
         @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["c[3]"]]
         @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["c[4]"]]
     end
+
+    @testset "faq honours a stepped range and its semiring" begin
+        MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
+        t = Symbolics.variable(:t)
+        u = (Symbolics.@variables u[1:5])[1]
+        vd = Dict{String, Any}("u" => u)
+        dd = Dict{String, Any}("t" => t)
+        lower(e) = MTKExt._esm_to_symbolic(e, vd, t, dd)
+
+        # `[start, step, stop]` (esm-spec §4.3.1) visits 1, 3, 5.
+        @test MTKExt._range_bounds_int([1, 2, 6]) == (1, 5)
+        @test MTKExt._range_int([1, 2, 6]) == 1:2:5
+        @test_throws ArgumentError MTKExt._range_int([1, 0, 6])
+        stepped = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any["i"], expr_body = _idx("u", _var("i")),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 2, 5])
+        )
+        cells = collect(Symbolics.scalarize(lower(stepped)))
+        @test length(cells) == 3
+        @test all(isequal.(cells, [u[1], u[3], u[5]]))
+        stepped_sum = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any[], expr_body = _idx("u", _var("i")),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 2, 5])
+        )
+        @test isequal(Symbolics.simplify(lower(stepped_sum) - (u[1] + u[3] + u[5])), 0)
+
+        # `semiring` supersedes `reduce`: max_sum folds with max.
+        scalar_faq(; kw...) = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[];
+            output_idx = Any[], expr_body = _var("i"),
+            ranges = Dict{String, Vector{Int}}("i" => [1, 3]), kw...
+        )
+        @test lower(scalar_faq()) == 6
+        @test lower(scalar_faq(; semiring = "max_sum", reduce = "+")) == 3
+        @test lower(scalar_faq(; semiring = "min_sum")) == 1
+        err = try
+            lower(scalar_faq(; semiring = "no_such_semiring"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.TreeWalkError
+        @test err.code == "E_TREEWALK_UNKNOWN_SEMIRING"
+        @test_throws ArgumentError lower(scalar_faq(; semiring = "bool_and_or"))
+    end
 end
