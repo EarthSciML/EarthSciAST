@@ -93,7 +93,14 @@ its own, and `model_name` and `index_sets` are refused.
 tiers switched off, `EarthSciAST._plan_with`). The remaining keywords are the
 build's own: `parameter_overrides`, `initial_conditions`, `const_arrays`,
 `param_arrays`, `const_array_boundaries`, `tspan`, `form` (`:inplace` or
-`:oop`), `materialize_out`, `pushdown_rewrite`.
+`:oop`), `materialize_out`. `pushdown_rewrite = true` rewrites the authored
+document before it is flattened, as `esm_problem` does; the provider gates
+`esm_problem` derives from the rewrite are not applied, so a document whose
+gated slabs come from providers is built with `esm_problem`.
+
+A `const_arrays` / `param_arrays` key for a name the document reads but does
+not declare stays as the document spells it (`"W"`, not `"M.W"`): the
+reference-integrity check matches undeclared names against the keys as written.
 
 A build that throws returns no report; run it as
 `Internal.counting(() -> try Internal.build(…) catch err; err end)` to read what
@@ -105,6 +112,7 @@ function build(
         index_sets::Union{Nothing, AbstractDict} = nothing,
         metaparameters::AbstractDict = Dict{String, Int}(),
         base_path::AbstractString = pwd(),
+        pushdown_rewrite::Bool = false,
         kwargs...
     )
     products = BuildProducts()
@@ -114,8 +122,16 @@ function build(
                 for k in keys(get(kwargs, name, Dict{String, Any}()))
         )
         run_flat = Ref{Any}(nothing)
+        document = _document(input, model_name, index_sets)
+        # The projection-pushdown rewrite reads the authored model, so it runs
+        # before flattening, as in `esm_problem`.
+        pushdown_rewrite && (
+            document = first(
+                EarthSciAST._pushdown_input(document, nothing, metaparameters, String(base_path))
+            )
+        )
         doc = EarthSciAST._prepare_run_doc(
-            _document(input, model_name, index_sets);
+            document;
             metaparameters = metaparameters, base_path = String(base_path),
             supplied_names = supplied, flat_out = run_flat
         )
