@@ -2688,8 +2688,11 @@ function _load_local_ref(
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file — those reference mechanisms are disjoint (esm-spec §9.7.1, §10.9).
-    content = read(resolved_path, String)
-    raw_ref_doc = _read_json_document(content)
+    raw_ref_doc = _read_json_document(read(resolved_path, String))
+    # A second, independent copy for the inlining walk below, which rewrites it;
+    # copied rather than re-parsed so the wire boundary (and its
+    # `deprecated_op` warning) runs once per leaf.
+    ref_doc = deepcopy(raw_ref_doc)
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
     # The mounted file's own version gates, on its authored form: its own
     # top-level mounts are inlined below, and each of them is gated against its
@@ -2733,7 +2736,6 @@ function _load_local_ref(
     # as an unresolved edge. Local refs only — the inliner reads its targets with
     # `isfile`, so an assembly reached over http(s) is out of its reach (and out
     # of `_load_remote_ref`'s, which is why that path is untouched).
-    ref_doc = _read_json_document(content)
     # `api_meta` travels into the leaf's own top-level mounts too, so the §9.7.6
     # site-4 backfill composes down the reference DAG at BOTH mount forms — the
     # same threading TypeScript's `inlineNestedTopLevelMounts` and Go's
