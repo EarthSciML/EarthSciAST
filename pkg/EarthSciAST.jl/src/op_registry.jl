@@ -393,7 +393,7 @@ const _OP_TABLE = _OpSpec[
     #    over `index_sets` (§4.9.1(ii), §11.2, flatten.jl), never from these op
     #    names. They carry NO bespoke registry flag AT ALL — not even `cse=true`.
     #    Their membership in the open rewrite-target tier T (`_op_in_T`, via
-    #    `_REWRITE_TARGET_OPS`, lower_expression_templates.jl) is the SINGLE
+    #    `_REWRITE_TARGET_OPS`, templates/rewrite.jl) is the SINGLE
     #    source of both behaviours that used to need `cse=true`: (1)
     #    `_cse_hoistable` treats every T op as a non-hoistable CSE barrier,
     #    routing it to `_compile`/`_compile_op` instead of the guardless

@@ -121,10 +121,9 @@ _stdref_doc(path) =
         @test EarthSciAST._expand_ref_env("https://example.com/a.esm") == "https://example.com/a.esm"
         @test EarthSciAST._expand_ref_env("./a.esm", "/somewhere") == "./a.esm"
         # A std ref is never URL-joined against a URL-loaded document's base.
-        @test EarthSciAST._canonical_ref(
-            EarthSciAST._expand_ref_env("esm:std/interp.esm", "https://example.com/m"),
-            "https://example.com/m"
-        ) == joinpath(bundle, "interp.esm")
+        @test EarthSciAST._resolve_ref(
+            EarthSciAST._UrlBase("https://example.com/m"), "esm:std/interp.esm"
+        ).key == joinpath(bundle, "interp.esm")
     end
 
     @testset "refs inside a bundled file resolve among the bundled files" begin

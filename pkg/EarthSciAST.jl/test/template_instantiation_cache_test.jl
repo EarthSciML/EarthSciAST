@@ -1,4 +1,4 @@
-# The template instantiation cache (src/lower_expression_templates.jl
+# The template instantiation cache (src/templates/expand_typed.jl
 # `_TplSkel`): a call site is instantiated from its template's skeleton, built
 # once per expansion with a sentinel per parameter, instead of being serialized,
 # substituted and re-parsed level by level. The direct route (`memo = nothing`)

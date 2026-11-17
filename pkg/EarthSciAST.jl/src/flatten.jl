@@ -1442,9 +1442,9 @@ function flatten(
         _rn(e) = _rename_variables(e, merged_renames)
         _rename_event_names!(continuous_events, merged_renames)
         _rename_event_names!(discrete_events, merged_renames)
-        states = _map_variable_bounds_all(_lower_variable_updates(states, _rn), _rn)
-        params = _map_variable_bounds_all(_lower_variable_updates(params, _rn), _rn)
-        observeds = _map_variable_bounds_all(_lower_variable_updates(observeds, _rn), _rn)
+        states = _map_variable_sites(_rn, states)
+        params = _map_variable_sites(_rn, params)
+        observeds = _map_variable_sites(_rn, observeds)
     end
 
     # A coupling entry's index — the `{"coupling": k}` origin of anything it
@@ -1474,9 +1474,9 @@ function flatten(
         # follow the replacement the equations just took (esm-libraries-spec
         # §4.7.5).
         rw = _variable_map_rewrite(resolved)
-        states = _map_variable_bounds_all(_lower_variable_updates(states, rw), rw)
-        params = _map_variable_bounds_all(_lower_variable_updates(params, rw), rw)
-        observeds = _map_variable_bounds_all(_lower_variable_updates(observeds, rw), rw)
+        states = _map_variable_sites(rw, states)
+        params = _map_variable_sites(rw, params)
+        observeds = _map_variable_sites(rw, observeds)
         continuous_events = _map_event_exprs(rw, continuous_events)
         discrete_events = _map_event_exprs(rw, discrete_events)
     end
@@ -1650,13 +1650,13 @@ function _normalize_angle_arguments(
     equations = Equation[first(r) for r in rewritten]
     contribs = Vector{Contribution}[last(r) for r in rewritten]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
-    # Events and update rules are evaluated expressions too, so they are
-    # rewritten the same way.
+    # Events, update rules and bounds are evaluated expressions too, so they
+    # are rewritten the same way.
     continuous_events = _map_event_exprs(rewrite, continuous_events)
     discrete_events = _map_event_exprs(rewrite, discrete_events)
-    states = _lower_variable_updates(states, rewrite)
-    params = _lower_variable_updates(params, rewrite)
-    observeds = _lower_variable_updates(observeds, rewrite)
+    states = _map_variable_sites(rewrite, states)
+    params = _map_variable_sites(rewrite, params)
+    observeds = _map_variable_sites(rewrite, observeds)
     return (
         states, params, observeds, equations, contribs, field_ics,
         continuous_events, discrete_events,
@@ -1930,69 +1930,6 @@ function flattened_to_esm(
     end
     return doc
 end
-
-# One variable's §5.4 update rules, rewritten through `f`. Returns `var` itself
-# when it declares no update or nothing changed.
-function _lower_variable_update(var::ModelVariable, f)::ModelVariable
-    var.update === nothing && return var
-    rules = ParameterUpdate[]
-    changed = false
-    for r in var.update
-        nw = r.when === nothing ? nothing : f(r.when)
-        ne = r.expression === nothing ? nothing : f(r.expression)
-        (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(
-            rules, ParameterUpdate(
-                r.kind; times = r.times, interval = r.interval,
-                initial_offset = r.initial_offset, when = nw, direction = r.direction,
-                source = r.source, hook = r.hook, expression = ne, from = r.from,
-                handler = r.handler
-            )
-        )
-    end
-    return changed ? reconstruct(var; update = rules) : var
-end
-
-# The map form: a NEW map only when some variable's update actually changed, so
-# an unaffected `FlattenedSystem` keeps sharing its variable maps.
-function _lower_variable_updates(vars::OrderedDict{String, ModelVariable}, f)
-    lowered = nothing
-    for (name, var) in vars
-        nv = _lower_variable_update(var, f)
-        nv === var && continue
-        lowered === nothing && (lowered = OrderedDict{String, ModelVariable}(vars))
-        lowered[name] = nv
-    end
-    return lowered === nothing ? vars : lowered
-end
-
-# Every expression of each event mapped through `f`: a continuous event's
-# conditions, a condition trigger's expression, and the right-hand side of every
-# affect. An affect's target (`lhs`, a variable name) is left as written.
-_map_affects(f, affects::Vector{AffectEquation}) =
-    AffectEquation[AffectEquation(a.lhs, f(a.rhs)) for a in affects]
-_map_affects(f, ::Nothing) = nothing
-
-_map_event_exprs(f, events::Vector{ContinuousEvent}) = ContinuousEvent[
-    ContinuousEvent(
-        ASTExpr[f(c) for c in ev.conditions], _map_affects(f, ev.affects);
-        affect_neg = _map_affects(f, ev.affect_neg),
-        root_find = ev.root_find, reinitialize = ev.reinitialize,
-        description = ev.description, name = ev.name
-    )
-        for ev in events
-]
-
-_map_event_exprs(f, events::Vector{DiscreteEvent}) = DiscreteEvent[
-    DiscreteEvent(
-        ev.trigger isa ConditionTrigger ?
-            ConditionTrigger(f(ev.trigger.expression)) : ev.trigger,
-        _map_affects(f, ev.affects);
-        reinitialize = ev.reinitialize, description = ev.description,
-        name = ev.name
-    )
-        for ev in events
-]
 
 # The §6.3.1 subset maps re-read from their parents after a pass rewrote the
 # parents' variables, so a subset never holds a stale copy.

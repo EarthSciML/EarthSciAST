@@ -9,9 +9,11 @@ expression templates §9.6, template-library imports §9.7, coupling imports
 §10.9–§10.11, value-invention front door) walks that shape, plus the raw
 `JSON3.Object`/`JSON3.Array` a wire-boundary gate inspects BEFORE
 normalization (JSON3's views accept string keys, so one string-keyed accessor
-serves both). This file hosts the accessors, the normalizer, and the three
-traversal combinators so each pass expresses only its per-node logic, not the
-object/array/leaf skeleton.
+serves both). This file hosts the accessors, the normalizer, and the traversal
+combinators, so each pass expresses only its per-node logic, not the
+object/array/leaf skeleton. `_walk_json`, `_map_json` and `_collect_json!` are
+for trees; `_rewrite_json` and `_visit_json` handle each shared subtree of a
+DAG once.
 
 Included before the lowering passes in EarthSciAST.jl; depends only on JSON3
 and OrderedCollections (never on the typed AST).
@@ -63,6 +65,21 @@ wire-boundary gate still sees — resolves string keys natively, so one plain
 """
 _raw_get(x, key::String) = get(x, key, nothing)
 _raw_haskey(x, key::String) = haskey(x, key)
+
+"""
+    _components(root)
+
+The components of a raw document, as `(kind, name::String, comp)` for each
+object under `root["models"]` and then `root["reaction_systems"]`, in document
+order. Entries that are not objects are skipped; a `root` that is not an
+object has none.
+"""
+_components(root) = (
+    (kind, string(name), comp)
+        for kind in (_is_object(root) ? ("models", "reaction_systems") : ())
+        for comps in (_raw_get(root, kind),) if comps !== nothing && _is_object(comps)
+        for (name, comp) in pairs(comps) if _is_object(comp)
+)
 
 """
     _to_ordered(x)
@@ -370,4 +387,173 @@ function _collect_json!(pred, out, node)
         return true
     end
     return out
+end
+
+# ---------------------------------------------------------------------------
+# Sharing-aware traversals
+# ---------------------------------------------------------------------------
+#
+# Template substitution splices each binding by reference, so an expanded tree
+# is a DAG in which one subtree can hang under exponentially many paths. The
+# two traversals below handle each container once: `_rewrite_json` keeps an
+# identity memo of results and rebuilds a container only when a child changed,
+# and `_visit_json` keeps a set of the containers it has visited.
+
+# Sentinel a `_visit_json` visitor returns to end the whole walk.
+struct _JsonStop end
+const _JSON_STOP = _JsonStop()
+
+# The state of one `_rewrite_json` walk; passed to the callback so that it can
+# rewrite parts of a node itself (`_rewrite_json_node`, `_rewrite_json_children`).
+struct _JsonRewrite{F}
+    f::F
+    memo::IdDict{Any, Any}
+    leaves::Bool
+end
+
+"""
+    _rewrite_json(f, node; memo = IdDict{Any,Any}(), leaves = true) -> node′
+
+Sharing-preserving rewrite of a raw JSON tree that may be a DAG. `f(rw, n)` is
+called once per object (and, when `leaves = true`, on every scalar leaf),
+parent first, and returns
+
+- `_JSON_DESCEND` to keep `n` and rewrite its children (a leaf is kept as is);
+- anything else to replace `n`; the replacement is not descended into. To
+  rewrite part of `n` first, `f` calls `_rewrite_json_node(rw, x)` on a
+  subtree or `_rewrite_json_children(rw, n; keep, drop)` on `n` itself, which
+  share the walk's memo.
+
+Arrays are always descended. Each container's result is recorded in `memo`
+by identity, so a subtree shared under many parents is rewritten once and
+its result shared; a container is rebuilt (`OrderedDict{String,Any}` /
+`Vector{Any}`, key order kept) only when one of its children changed, and is
+otherwise returned itself. A walk that changes nothing returns `node`.
+`f`'s answer for a container must therefore depend on the container alone.
+
+With `leaves = false`, `f` never sees a leaf, and an array that can hold no
+object (`_may_hold_object`) is returned without being looked into, which keeps
+a walk over large inline number arrays cheap.
+"""
+_rewrite_json(f, node; memo::IdDict{Any, Any} = IdDict{Any, Any}(), leaves::Bool = true) =
+    _rewrite_json_node(_JsonRewrite(f, memo, leaves), node)
+
+function _rewrite_json_node(rw::_JsonRewrite, n)
+    if _is_object(n)
+        r = get(rw.memo, n, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
+        r = rw.f(rw, n)
+        res = r === _JSON_DESCEND ? _rewrite_json_children(rw, n) : r
+        rw.memo[n] = res
+        return res
+    elseif _is_array(n)
+        rw.leaves || _may_hold_object(n) || return n
+        r = get(rw.memo, n, _JSON_DESCEND)
+        r === _JSON_DESCEND || return r
+        res = _rewrite_json_children(rw, n)
+        rw.memo[n] = res
+        return res
+    end
+    rw.leaves || return n
+    r = rw.f(rw, n)
+    return r === _JSON_DESCEND ? n : r
+end
+
+"""
+    _rewrite_json_children(rw, n; keep = nothing, drop = nothing) -> n′
+
+`n` with each child rewritten by the walk `rw`: a new container when some
+child changed, else `n` itself. On an object, the value under the key `keep`
+is copied as it is, and the entry under the key `drop` is left out (which
+counts as a change).
+"""
+function _rewrite_json_children(
+        rw::_JsonRewrite, n; keep::Union{Nothing, String} = nothing,
+        drop::Union{Nothing, String} = nothing
+    )
+    changed = false
+    if _is_object(n)
+        buf = OrderedDict{String, Any}()
+        for (k, v) in pairs(n)
+            ks = string(k)
+            if ks == drop
+                changed = true
+            elseif ks == keep
+                buf[ks] = v
+            else
+                rv = _rewrite_json_node(rw, v)
+                rv === v || (changed = true)
+                buf[ks] = rv
+            end
+        end
+        return changed ? buf : n
+    end
+    abuf = Vector{Any}(undef, length(n))
+    for (i, v) in enumerate(n)
+        rv = _rewrite_json_node(rw, v)
+        rv === v || (changed = true)
+        abuf[i] = rv
+    end
+    return changed ? abuf : n
+end
+
+# A JSON pointer built only when asked for: the base and the segments of the
+# current position, which `_visit_json` pushes and pops as it moves.
+struct _JsonPointer
+    base::String
+    segs::Vector{Any}
+end
+Base.string(p::_JsonPointer) = string(p.base, ("/" * string(s) for s in p.segs)...)
+
+"""
+    _visit_json(f, node; seen = IdDict{Any,Nothing}(), path = nothing) -> Bool
+
+Visit each container of a raw JSON tree (which may be a DAG) once, parent
+first, in document order. `f(key, n)` is called on every object and on every
+array that may hold one (`_may_hold_object`; other arrays and scalar leaves
+are skipped), with `key` the object key `n` hangs under or `nothing` for the
+root and array elements. When `path` is a string, `f(key, n, ptr)` is called
+instead: `string(ptr)` is the JSON pointer of `n` under `path`, built only when
+asked for and valid only during the call.
+
+`f` returns `false` to skip `n`'s children (`n` is then not counted as
+visited, so `f` sees it again where it hangs elsewhere), `_JSON_STOP` to end
+the walk, anything else to descend. A container already in `seen` is not
+visited again. Returns `true` when `f` ended the walk.
+"""
+function _visit_json(
+        f, node; seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}(),
+        path::Union{Nothing, AbstractString} = nothing
+    )
+    ptr = path === nothing ? nothing : _JsonPointer(String(path), Any[])
+    return _visit_json_node(f, nothing, node, seen, ptr) === _JSON_STOP
+end
+
+function _visit_json_node(f, key, n, seen::IdDict{Any, Nothing}, ptr)
+    obj = _is_object(n)
+    obj || (_is_array(n) && _may_hold_object(n)) || return nothing
+    haskey(seen, n) && return nothing
+    r = ptr === nothing ? f(key, n) : f(key, n, ptr)
+    r === false && return nothing
+    r === _JSON_STOP && return _JSON_STOP
+    seen[n] = nothing
+    if obj
+        for (k, v) in pairs(n)
+            _is_json_leaf(v) && continue
+            ks = string(k)
+            ptr === nothing || push!(ptr.segs, ks)
+            s = _visit_json_node(f, ks, v, seen, ptr)
+            ptr === nothing || pop!(ptr.segs)
+            s === _JSON_STOP && return s
+        end
+    else
+        for (i, v) in enumerate(n)
+            _is_json_leaf(v) && continue
+            ptr === nothing || push!(ptr.segs, i - 1)
+            s = _visit_json_node(f, nothing, v, seen, ptr)
+            ptr === nothing || pop!(ptr.segs)
+            s === _JSON_STOP && return s
+        end
+    end
+    return nothing
 end

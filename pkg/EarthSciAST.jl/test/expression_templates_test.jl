@@ -843,7 +843,7 @@ end
 
 # ---------------------------------------------------------------------------
 # Diagnostic-code registry coverage (src/error_codes.jl,
-# src/lower_expression_templates.jl). Every raise site now names its code as a
+# src/load_errors.jl). Every raise site now names its code as a
 # field of the central `ERROR_CODES` registry rather than as an inline literal,
 # so this scan reads the FIELD NAMES out of src/ and resolves each through the
 # registry: a raise site naming an unregistered field would not even compile,
@@ -856,7 +856,7 @@ end
         endswith(file, ".jl") || continue
         text = read(joinpath(root, file), String)
         # First argument of each raise site: `ERROR_CODES.<FIELD>`. The sites in
-        # template_imports.jl `_merge_named!` pass the code through a variable
+        # templates/imports.jl `_merge_named!` pass the code through a variable
         # (TEMPLATE_IMPORT_NAME_CONFLICT / TEMPLATE_IMPORT_INDEX_SET_CONFLICT —
         # asserted registered below) and are deliberately not matched here.
         for m in eachmatch(r"ExpressionTemplateError\(\s*ERROR_CODES\.([A-Z][A-Z0-9_]*)", text)

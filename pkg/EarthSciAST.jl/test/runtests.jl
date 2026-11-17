@@ -144,7 +144,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
     include("native_subsystem_walk_test.jl")  # §4.7 subsystems.<k> form on the native dict
-    include("native_typed_agreement_test.jl")  # the native pass and the typed walk agree
+    include("resolve_subsystem_refs_wrapper_test.jl")  # the typed wrapper runs the load's mount pipeline
+    include("mount_remote_leaf_test.jl")  # http(s) leaves take the same pipeline
     # §8.9.4 discovered `extent` + §9.7.6 site 4 widened past the root's own
     # declarations; the shared fixtures both mount forms are pinned against.
     include("data_source_extent_scope_test.jl")
@@ -402,6 +403,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_dead_observed_test.jl")  # an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # a mount does not carry the leaf's tests
     include("enum_lowering_test.jl")             # esm-spec §9.3 lowering, error codes, zero/negative members
+    include("expression_sites_test.jl")          # every expression site of a typed document
     include("mount_enums_test.jl")               # a mounted file's enum ops resolve in its own block
     include("mount_element_type_test.jl")        # §4.7: a mounted leaf's element_type crosses the mount
     include("toplevel_reaction_system_ref_test.jl")  # §4.7: a top-level reaction_systems.<k> {ref} mounts
@@ -432,7 +434,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("template_array_args_test.jl")  # §9.6.11 a template applied elementwise over an array
 
     # ---- Expression templates & scoped imports
-    #      (src/lower_expression_templates.jl, template_imports.jl) ----
+    #      (src/templates/) ----
     include("expression_templates_test.jl")
     include("template_imports_test.jl")
     include("stdlib_refs_test.jl")       # §4.7 esm:std/ refs to the bundled lib/
