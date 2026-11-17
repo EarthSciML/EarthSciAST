@@ -123,69 +123,6 @@ end
     end
 end
 
-@testset "inline_elementwise_array_observeds" begin
-    # An ARRAY observed defined by a bare ELEMENTWISE equation (not faq)
-    # is folded into the equations that read it and dropped — the library form of the
-    # level-set fold. a = f+1, b = a*2 (both [c]); D(s) = f - b. After inlining, a and b
-    # vanish and D(s)'s RHS references only f.
-    d = Dict{String, Any}(
-        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
-        # esm-spec v0.8.0: index_sets is a single document-scoped registry.
-        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
-        "models" => Dict{String, Any}(
-            "M" => Dict{String, Any}(
-                "variables" => Dict{String, Any}(
-                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
-                    "a" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
-                    "b" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
-                    "s" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"])
-                ),
-                "equations" => Any[
-                    Dict{String, Any}("lhs" => "a", "rhs" => op("+", "f", 1)),
-                    Dict{String, Any}("lhs" => "b", "rhs" => op("*", "a", 2)),
-                    Dict{String, Any}(
-                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"),
-                        "rhs" => op("-", "f", "b")
-                    ),
-                ]
-            )
-        )
-    )
-    flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
-    @test haskey(flat.observed_variables, "M.a")
-    @test haskey(flat.observed_variables, "M.b")
-
-    inl = E.inline_elementwise_array_observeds(flat)
-    @test !haskey(inl.observed_variables, "M.a")     # elementwise array observeds folded away
-    @test !haskey(inl.observed_variables, "M.b")
-    deq = only(filter(eq -> eq.lhs isa E.OpExpr && eq.lhs.op == "D", inl.equations))
-    fv = E.free_variables(deq.rhs)
-    @test "M.f" in fv
-    @test !("M.a" in fv) && !("M.b" in fv)           # no dangling refs to the folded vars
-
-    # No elementwise array observed ⇒ a no-op: the scalar observed survives untouched.
-    sc = Dict{String, Any}(
-        "esm" => "0.5.0", "metadata" => Dict("name" => "S"),
-        "models" => Dict{String, Any}(
-            "M" => Dict{String, Any}(
-                "variables" => Dict{String, Any}(
-                    "x" => Dict{String, Any}("type" => "parameter", "default" => 2.0),
-                    "y" => Dict{String, Any}("type" => "unknown"),
-                    "z" => Dict{String, Any}("type" => "unknown")
-                ),
-                "equations" => Any[
-                    Dict{String, Any}("lhs" => "y", "rhs" => op("*", "x", 3)),
-                    Dict{String, Any}("lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"), "rhs" => "y"),
-                ]
-            )
-        )
-    )
-    f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
-    n2 = E.inline_elementwise_array_observeds(f2)
-    @test haskey(n2.observed_variables, "M.y")       # scalar observed untouched
-    @test length(n2.equations) == length(f2.equations)
-end
-
 @testset "build_evaluator folds elementwise array observeds (WS4)" begin
     # A spatial state psi[c] fed by a chain of ELEMENTWISE array observeds
     # (a = psi + 1, b = a * 2, both shape [c]) with D(psi,t) = -b. This is the

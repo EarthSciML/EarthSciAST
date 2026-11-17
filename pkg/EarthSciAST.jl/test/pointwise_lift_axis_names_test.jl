@@ -89,7 +89,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
 
         gaxes, ranges = ESM._pointwise_lift_axes(
             ma, loops, size_to_names, "sp", 3;
-            mas = [ma], var_shapes = var_shapes, index_sets = index_sets, reg = nothing
+            mas = [ma], var_shapes = var_shapes, index_sets = index_sets, reg = nothing,
+            registry = copy(index_sets)
         )
         @test gaxes == ["lon", "lat", "lev"]
         @test !any(a -> startswith(a, "_liftdim"), gaxes)
@@ -129,7 +130,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # dimension while naming the other two.
         gaxes, _ = ESM._pointwise_lift_axes(
             ma2, loops, size_to_names, "sp", 3;
-            mas = [ma2], var_shapes = shapes2, index_sets = index_sets, reg = nothing
+            mas = [ma2], var_shapes = shapes2, index_sets = index_sets, reg = nothing,
+            registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "lat", "lev"]
     end
@@ -142,12 +144,9 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         gaxes, _ = ESM._pointwise_lift_axes(
             bare, loops, size_to_names, "sp", 3;
             mas = [bare], var_shapes = Dict{String, Vector{String}}(),
-            index_sets = index_sets, reg = nothing
+            index_sets = index_sets, reg = nothing, registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "_liftdim2_6", "_liftdim3_8"]
-        # And the un-keyworded call (no name evidence available) is unchanged.
-        gaxes0, _ = ESM._pointwise_lift_axes(bare, loops, size_to_names, "sp", 3)
-        @test gaxes0 == gaxes
     end
 
     @testset "a repeated loop name is not resolved from a diagonal gather" begin

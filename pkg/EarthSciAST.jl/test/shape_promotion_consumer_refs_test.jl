@@ -1,24 +1,14 @@
 # promote_downstream_shapes: consumer-side gathers for newly promoted variables.
 #
-# The hole (found downstream, in the ReSEACT operator-split runner's
-# `index_promoted_refs_by_loop!` workaround): `promote_downstream_shapes` lifts a
-# scalar-authored physics chain fed by array sources (Fast-JX j-rates fed by
-# [lon,lat,lev] met fields) into the grid shape and rewrites each promoted
-# variable's OWN defining equation into a `faq` — but it left its CONSUMERS
-# alone. A pointwise-lifted species ODE indexes only the operands that carried a
-# shape AT FLATTEN TIME, so the later-promoted variable survives as a bare
-# scalar name inside the per-cell `faq` body, and the evaluator fails to
-# bind it (E_TREEWALK_UNBOUND_VARIABLE) — which is why `EarthSciAST.simulate`
-# could not mount Fast-JX. The post-discretize `index_promoted_refs!` companion
-# cannot close it either: it takes ONE `spatial_loops` list while each consumer
+# `promote_downstream_shapes` lifts a scalar-authored physics chain fed by array
+# sources (Fast-JX j-rates fed by [lon,lat,lev] met fields) into the grid shape
+# and rewrites each promoted variable's OWN defining equation into a `faq`. A
+# pointwise-lifted species ODE indexes only the operands that carried a shape AT
+# FLATTEN TIME, so the pass also rewrites bare references to newly promoted
+# variables inside loop-carrying faq bodies into `index(var, <loops>)` gathers
+# bound in the body's own scope (name-aligned against the ranges' index sets;
+# positional over the producer's `output_idx` as fallback); each consumer
 # equation iterates its OWN loop names.
-#
-# The fix: `promote_downstream_shapes` now rewrites bare references to newly
-# promoted variables inside loop-carrying faq bodies into
-# `index(var, <loops>)` gathers bound in the body's own scope (name-aligned
-# against the ranges' index sets; positional over the producer's `output_idx`
-# as fallback). `index_consumer_refs=false` restores the pre-fix behaviour and
-# pins the old symptom below.
 using Test
 import EarthSciAST as ESS
 const E = ESS
@@ -89,34 +79,6 @@ consumer_rhs(sys) = only(
 @testset "consumer refs to promoted vars are gathered in-loop" begin
     flat = lifted_consumer_doc() |> roundtrip
     pre = E.algebraic_states_to_observeds(flat)
-
-    @testset "kill switch pins the pre-fix symptom" begin
-        broken = E.promote_downstream_shapes(pre; index_consumer_refs = false)
-        # `M.j` IS promoted to [c] …
-        @test broken.observed_variables["M.j"].shape == ["c"]
-        # … but its consumer still references it bare inside the lift body,
-        # so the build/eval fails to bind the (now-array) scalar name.
-        body = consumer_rhs(broken).expr_body
-        @test E.VarExpr("M.j") in E.child_exprs(body)
-        # The downstream symptom reseact saw was
-        # "E_TREEWALK_UNBOUND_VARIABLE: FastJX.j_NO2". The build now refuses the
-        # bare shaped read by name first (`faq_bare_array_operand`, esm-spec
-        # §4.3.1), still naming the variable:
-        err = try
-            f!, u0, p, _t, vmap = E._build_evaluator(
-                E.flattened_to_esm(broken);
-                const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]),
-                initial_conditions = Dict("M.s[$i]" => 1.0 for i in 1:3)
-            )
-            du = similar(u0); f!(du, u0, p, 0.0)
-            nothing
-        catch e
-            e
-        end
-        @test err isa E.TreeWalkError
-        @test occursin("faq_bare_array_operand", sprint(showerror, err))
-        @test occursin("M.j", sprint(showerror, err))
-    end
 
     @testset "with the fix: bare ref becomes an in-scope gather, evaluates" begin
         prom = E.promote_downstream_shapes(pre)
@@ -229,8 +191,7 @@ end
 @testset "scalar-position refs stay bare (post-discretize contract)" begin
     # The wildfire/level-set path: an un-discretized spatial state equation
     # references the promoted chain in SCALAR position. Its loops do not exist
-    # yet; `index_promoted_refs!` closes it after `discretize`, so the promote
-    # pass must leave it bare.
+    # until `discretize`, so the promote pass leaves it bare.
     d = Dict{String, Any}(
         "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
         "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
@@ -286,14 +247,11 @@ end
         )
     )
     flat = roundtrip(d)
-    prom_on = E.promote_downstream_shapes(flat)
-    prom_off = E.promote_downstream_shapes(flat; index_consumer_refs = false)
-    for prom in (prom_on, prom_off)
-        f!, u0, p, _t, vmap = E._build_evaluator(
-            E.flattened_to_esm(prom);
-            const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
-        )
-        du = similar(u0); f!(du, u0, p, 0.0)
-        @test du[vmap["M.s"]] ≈ 18.0
-    end
+    prom = E.promote_downstream_shapes(flat)
+    f!, u0, p, _t, vmap = E._build_evaluator(
+        E.flattened_to_esm(prom);
+        const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
+    )
+    du = similar(u0); f!(du, u0, p, 0.0)
+    @test du[vmap["M.s"]] ≈ 18.0
 end
