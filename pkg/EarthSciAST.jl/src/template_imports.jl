@@ -893,40 +893,6 @@ function _name_map(raw, field::String, ctx::String)::OrderedDict{String, String}
     return out
 end
 
-# (`_RENAME_AXIS_KEYS` / `_RENAME_PROTECTED_KEYS` — the key sets this walk
-# dispatches on — are derived from the canonical `_STRUCTURAL_FIELDS` table in
-# the metaparameters section above; register new structural fields THERE.)
-
-"""
-    _rename_walk(x, varmap, isetmap, tplmap)
-
-One transitive-substitution pass over an imported declaration (esm-spec
-§9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
-bare strings in variable-reference positions; `isetmap` rewrites index-set
-reference positions (`{"from": …}` values, the `wrt`/`dim`/`var` axis fields, a
-bare-axis-name `integral` `lower`/`upper` bound, and the
-`where.*.shape` match-scoping index-set names, in `body` and `match` alike);
-`tplmap` rewrites `apply_expression_template.name`. Structural scalar fields
-(`_RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
-rewritten. Pure syntactic substitution — no evaluation.
-
-`where` is handled positionally (never by the protected-key copy that
-metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
-{paramName: {shape: [indexSetName, …]}}. Import-edge rename renames templates,
-index sets, and metaparameters — NOT template-internal param names — so the
-constraint KEYS (param names) are copied verbatim while each constraint's
-`shape` list entries are mapped through `isetmap` exactly like a `wrt`/`from`
-index-set reference (a name absent from the map stays as spelled, matching the
-body-reference rule). Without this the rule body/registry would use the renamed
-`meshA.x` while `where` still said `x`, and registration would fail with
-`template_constraint_unknown_index_set`.
-
-Deliberately a direct recursion rather than a `_map_json` visitor: nearly
-every object key needs sibling-context dispatch (the op-dependent apply
-`name`, positional `from`/`of`/`where`, the axis/protected sets), so a
-combinator visitor would rebuild every object by hand anyway and the
-combinator would only ever handle arrays.
-"""
 # Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
 # (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
 # clause, and its shape is unambiguous, so the key plus this test is a sound
@@ -960,6 +926,40 @@ function _rename_join_on(v, isetmap::AbstractDict{String, String}, fallback)
     ]
 end
 
+# (`_RENAME_AXIS_KEYS` / `_RENAME_PROTECTED_KEYS` — the key sets `_rename_walk`
+# dispatches on — are derived from the canonical `_STRUCTURAL_FIELDS` table in
+# the metaparameters section above; register new structural fields THERE.)
+
+"""
+    _rename_walk(x, varmap, isetmap, tplmap)
+
+One transitive-substitution pass over an imported declaration (esm-spec
+§9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
+bare strings in variable-reference positions; `isetmap` rewrites index-set
+reference positions (`{"from": …}` values, the `wrt`/`dim`/`var` axis fields, a
+bare-axis-name `integral` `lower`/`upper` bound, and the
+`where.*.shape` match-scoping index-set names, in `body` and `match` alike);
+`tplmap` rewrites `apply_expression_template.name`. Structural scalar fields
+(`_RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
+rewritten. Pure syntactic substitution — no evaluation.
+
+`where` is handled positionally (never by the protected-key copy that
+metaparameter substitution uses, esm-spec §9.7.7): a `where` block is a map
+{paramName: {shape: [indexSetName, …]}}. Import-edge rename renames templates,
+index sets, and metaparameters — NOT template-internal param names — so the
+constraint KEYS (param names) are copied verbatim while each constraint's
+`shape` list entries are mapped through `isetmap` exactly like a `wrt`/`from`
+index-set reference (a name absent from the map stays as spelled, matching the
+body-reference rule). Without this the rule body/registry would use the renamed
+`meshA.x` while `where` still said `x`, and registration would fail with
+`template_constraint_unknown_index_set`.
+
+Deliberately a direct recursion rather than a `_map_json` visitor: nearly
+every object key needs sibling-context dispatch (the op-dependent apply
+`name`, positional `from`/`of`/`where`, the axis/protected sets), so a
+combinator visitor would rebuild every object by hand anyway and the
+combinator would only ever handle arrays.
+"""
 function _rename_walk(
         x, varmap::AbstractDict{String, String},
         isetmap::AbstractDict{String, String},

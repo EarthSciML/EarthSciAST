@@ -984,25 +984,6 @@ function _inline_toplevel_refs(
     return native
 end
 
-"""
-    _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
-                             mount_noun, file_noun, parent_meta, api_meta, forwarded,
-                             precision) -> (comp, compdir, leaf_fold_env, leaf_precision)
-
-The per-edge core of the esm-spec §4.7 edge pipeline, shared by BOTH mount forms:
-read the referenced document, run its version gates and library rejections,
-close its metaparameters with this edge's `bindings` (§9.7.6 site 3, with the
-site-4 loader-API backfill for the names the leaf declares), apply this edge's
-§9.7.10 form-A injection, resolve its §9.7 machinery and run the §9.6.3
-fixpoint, and apply this edge's `index_set_rename`.
-
-The caller owns the cycle-detection push/pop on `visited` and everything the
-two mount forms do DIFFERENTLY once the leaf is resolved — a `models.<k>` edge
-selects one model and merges the leaf's by-name blocks, a `subsystems.<k>`
-edge requires exactly one component. One copy for every mount form, so the forms
-cannot drift apart. `file_noun` names what the edge mounts ("model" or "reaction
-system") in the not-found and not-an-object diagnostics.
-"""
 # esm-spec §4.7 "Working precision crosses a mount". A ROOT that declares no
 # `domain.element_type` evaluates in binary64 (§11.3); a MOUNTED document that
 # declares none adopts its mounter's.
@@ -1107,6 +1088,25 @@ function _lower_mounted_enums_at_edge(document, target, mount_noun::AbstractStri
     end
 end
 
+"""
+    _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
+                             mount_noun, file_noun, parent_meta, api_meta, forwarded,
+                             precision) -> (comp, compdir, leaf_fold_env, leaf_precision)
+
+The per-edge core of the esm-spec §4.7 edge pipeline, shared by BOTH mount forms:
+read the referenced document, run its version gates and library rejections,
+close its metaparameters with this edge's `bindings` (§9.7.6 site 3, with the
+site-4 loader-API backfill for the names the leaf declares), apply this edge's
+§9.7.10 form-A injection, resolve its §9.7 machinery and run the §9.6.3
+fixpoint, and apply this edge's `index_set_rename`.
+
+The caller owns the cycle-detection push/pop on `visited` and everything the
+two mount forms do DIFFERENTLY once the leaf is resolved — a `models.<k>` edge
+selects one model and merges the leaf's by-name blocks, a `subsystems.<k>`
+edge requires exactly one component. One copy for every mount form, so the forms
+cannot drift apart. `file_noun` names what the edge mounts ("model" or "reaction
+system") in the not-found and not-an-object diagnostics.
+"""
 function _resolve_mount_edge_core(
         entry::AbstractDict, ref::String, refpath::String,
         base_path::String, visited::Set{String};
