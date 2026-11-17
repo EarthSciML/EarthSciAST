@@ -52,25 +52,18 @@ include("shared/eval_var_macro.jl")
 # ESM ASTExpr → Symbolics conversion (rate expressions)
 # ========================================
 
-# The unary elementwise ops the rate interpreter accepts — deliberately
-# NARROWER than the MTK lowering's set (no sinh/asin/…); membership is
-# behavior, so it stays explicit.
-const _RATE_UNARY_SCALAR_OPS = (
-    "exp", "log", "log10", "sin", "cos", "tan",
-    "sqrt", "abs",
-)
-
-# Lower an ESM rate expression to Symbolics. The extension-independent
-# scalar arms live in the shared `_esm_to_symbolic_core`
-# (ext/shared/esm_to_symbolic.jl); the hooks below carry this extension's
-# policies: NumExpr values pass through untouched (no Int promotion), and
-# any op outside the scalar vocabulary is an error.
+# Lower an ESM rate expression to Symbolics. A rate speaks the same scalar
+# vocabulary as the ModelingToolkit lowering, the registry's
+# (`_esm_to_symbolic_core`, ext/shared/esm_to_symbolic.jl), comparisons and
+# `ifelse` included, so a piecewise rate law lowers on this route as it does
+# through `flatten`. The hooks carry this extension's policies: NumExpr values
+# pass through untouched (no Int promotion), and any op outside the scalar
+# vocabulary is an error.
 function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String, Any})
     return _esm_to_symbolic_core(
         expr, a -> _esm_to_symbolic(a, var_dict);
         number_value = identity,
         resolve_var = name -> _resolve_rate_var(name, var_dict),
-        unary_ops = _RATE_UNARY_SCALAR_OPS,
         extended_op = (op, _) -> throw(
             ArgumentError(
                 "Unsupported operator in rate expression: $op"
@@ -321,47 +314,11 @@ end
 
 # (`_strip_time` is shared from src/mtk_export.jl.)
 
-# Ordered operator table of the Catalyst rate walk, matched by `==` — a
-# deliberately smaller coverage than the MTK export walk's table (which is
-# also matched by a nameof-tolerant predicate); only the table scan itself
-# (`_call_op_to_esm_name`) is shared.
-const _RATE_EXPORT_OP_TABLE = ((+, "+"), (*, "*"), (-, "-"), (/, "/"), (^, "^"))
-
-# Reverse walk for rate expressions. The scalar fast-paths, the Const-node
-# branch, and the operator-table scan are shared with the MTK export walk
-# (ext/shared/symbolic_to_esm.jl); unlike that walk, this one has no
-# derivative branch and no `known_vars` disambiguation — species calls are
-# recognized by `issym(op)` instead.
-function _catalyst_rate_to_esm(expr)
-    lit = _number_to_esm_literal(expr)  # Bool arm is defensive here
-    lit === nothing || return lit
-    raw = Symbolics.unwrap(expr)
-    if Symbolics.issym(raw)
-        return VarExpr(_strip_time(string(Symbolics.getname(raw))))
-    end
-    if Symbolics.iscall(raw)
-        op = Symbolics.operation(raw)
-        args = Symbolics.arguments(raw)
-        # Species reference: Catalyst represents a time-dependent species
-        # `S` inside a rate as a call `S(t)` whose operation is the species
-        # symbol itself. Emit a bare identifier rather than wrapping it in
-        # {op: "S", args: ["t"]}, which would serialize as a registered-
-        # function call and break downstream consumers (esm-edt).
-        if Symbolics.issym(op)
-            return VarExpr(_strip_time(string(Symbolics.getname(op))))
-        end
-        esm_args = [_catalyst_rate_to_esm(a) for a in args]
-        esm_op = _call_op_to_esm_name(op, _RATE_EXPORT_OP_TABLE, ==)
-        esm_op === nothing || return OpExpr(esm_op, esm_args)
-        return OpExpr(string(nameof(op)), esm_args)
-    end
-    # Const-style symbolic literal (esm-edt): without this branch, numeric
-    # Const nodes would fall through to the string fallback below and get
-    # serialized as JSON strings.
-    const_lit = _symbolic_const_to_esm(raw)
-    const_lit === nothing || return const_lit
-    return VarExpr(string(expr))
-end
+# A rate expression back to ESM: the shared reverse walk
+# (ext/shared/symbolic_to_esm.jl). A species inside a rate is a call `S(t)` whose
+# operation is the species symbol; it becomes a bare `VarExpr`, never an
+# `OpExpr("S", ["t"])`. A rate has no derivatives.
+_catalyst_rate_to_esm(expr) = _symbolic_to_esm(expr; derivatives = false)
 
 # ========================================
 # MTK → ESM export for Catalyst.ReactionSystem (gt-dod2)

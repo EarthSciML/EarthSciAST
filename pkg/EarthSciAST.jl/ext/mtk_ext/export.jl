@@ -58,101 +58,11 @@ function _export_system(sys, strip_ns::Function)
     return model, gaps
 end
 
-# Ordered operator table of the MTK reverse walk, matched with `_op_matches`
-# below. Wider than the Catalyst rate walk's table (which also matches by
-# `==` only) — the two coverages are deliberate, live behavior; only the
-# table-scan itself is shared (`_call_op_to_esm_name`).
-const _MTK_EXPORT_OP_TABLE = (
-    (+, "+"), (*, "*"), (-, "-"), (/, "/"), (^, "^"),
-    (exp, "exp"), (log, "log"), (log10, "log10"),
-    (sin, "sin"), (cos, "cos"), (tan, "tan"),
-    (sqrt, "sqrt"), (abs, "abs"),
-    (ifelse, "ifelse"), (min, "min"), (max, "max"),
-)
-
-# Check op equality, handling SymbolicUtils-wrapped forms.
-_op_matches(op, target) = op == target || string(nameof(op)) == string(nameof(target))
-
-# Convert a symbolic to ESM expression using a known set of variable names
-# to disambiguate callable-symbolic nodes like `x(t)` from operator calls.
-# MTK states and observed variables appear in the symbolic tree as
-# `Sym{FnType{...}}(t)`, which a naive walk would emit as
-# `OpExpr("x", [VarExpr("t")])` — the wrong shape for the ESM schema.
-# `known_vars` lets us recognize those nodes and emit `VarExpr("x")`.
-# (Scalar fast-paths, the Const-node branch, and the operator-table scan are
-# shared with the Catalyst rate walk — see ext/shared/symbolic_to_esm.jl.)
-function _symbolic_to_esm_export(
-        expr, known_vars::Set{String},
-        strip_ns::Function = identity
-    )
-    # Scalar fast-paths
-    lit = _number_to_esm_literal(expr)
-    lit === nothing || return lit
-    raw = Symbolics.unwrap(expr)
-
-    # Symbolic constants (e.g. `-1` produced by SymbolicUtils' multiplication
-    # simplification `-k*x`) arrive as `BasicSymbolic{Int}` / `...{Real}`
-    # with issym=false AND iscall=false.
-    if !Symbolics.issym(raw) && !Symbolics.iscall(raw)
-        const_lit = try
-            _symbolic_const_to_esm(raw)
-        catch
-            nothing
-        end
-        const_lit === nothing || return const_lit
-    end
-
-    if Symbolics.issym(raw)
-        name = strip_ns(_strip_time(string(Symbolics.getname(raw))))
-        return VarExpr(name)
-    end
-
-    if Symbolics.is_derivative(raw)
-        # `Differential(x, order)`: the variable it differentiates in and how
-        # many times. An order-n derivative is n nested `D`s.
-        d = Symbolics.operation(raw)
-        wrt = _strip_time(string(Symbolics.getname(d.x)))
-        out = _symbolic_to_esm_export(
-            Symbolics.arguments(raw)[1],
-            known_vars, strip_ns
-        )
-        for _ in 1:(hasproperty(d, :order) ? d.order : 1)
-            out = OpExpr("D", EsmExpr[out], wrt = wrt)
-        end
-        return out
-    end
-
-    if Symbolics.iscall(raw)
-        op = Symbolics.operation(raw)
-        args = Symbolics.arguments(raw)
-
-        # Callable-symbolic variable: `x(t)` where `x` is a state/observed
-        # var. Recognize by checking if the operation's name is a known
-        # variable. Preserve as a bare VarExpr(name), dropping the IV args
-        # — the ESM schema implicitly threads time through state vars.
-        if !isempty(args)
-            opname = try
-                strip_ns(_strip_time(string(Symbolics.getname(op))))
-            catch
-                ""
-            end
-            if !isempty(opname) && opname in known_vars
-                return VarExpr(opname)
-            end
-        end
-
-        esm_args = [_symbolic_to_esm_export(a, known_vars, strip_ns) for a in args]
-        esm_op = _call_op_to_esm_name(op, _MTK_EXPORT_OP_TABLE, _op_matches)
-        esm_op === nothing || return OpExpr(esm_op, esm_args)
-        opname = try
-            string(nameof(op))
-        catch
-            string(op)
-        end
-        return OpExpr(opname, esm_args)
-    end
-    return VarExpr(string(expr))
-end
+# The MTK reverse walk: the shared one (ext/shared/symbolic_to_esm.jl), with
+# `known_vars` naming the callable-symbolic states and observeds (`x(t)`) that
+# are variables rather than operator calls.
+_symbolic_to_esm_export(expr, known_vars::Set{String}, strip_ns::Function = identity) =
+    _symbolic_to_esm(expr; known_vars, strip_ns)
 
 function _symbolic_to_esm_with_gaps(
         expr, known_vars::Set{String},
