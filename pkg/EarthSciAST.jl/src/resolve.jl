@@ -325,41 +325,216 @@ function _format_schema_errors(schema_errors)::String
     return error_msg
 end
 
+"""
+    _esm_version(doc) -> Union{Nothing, Tuple{Int,Int,Int}}
+
+The `(major, minor, patch)` a document declares in `esm`, or `nothing` when it
+declares none in the schema's `MAJOR.MINOR.PATCH` form. The one version reader
+of the load-time gates.
+"""
+function _esm_version(doc)
+    _is_object(doc) || return nothing
+    v = _get_field(doc, :esm, nothing)
+    v isa AbstractString || return nothing
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", v)
+    m === nothing && return nothing
+    parts = map(c -> tryparse(Int, c), m.captures)
+    any(isnothing, parts) && return nothing
+    return (parts[1], parts[2], parts[3])
+end
+
+"""
+    _VersionGate
+
+One "construct X arrives at esm V" rule. A document declaring a version below
+`since` that `offences` finds X in (pointers, document order) is refused with
+`refusal(declared, offences)`. `roles` are the documents the gate applies to
+(see `_AUTHORED_CHECKS`; `:wire` is the op-spelling boundary,
+`_prepare_document_ops!`).
+"""
+struct _VersionGate
+    since::Tuple{Int, Int, Int}
+    roles::Tuple{Vararg{Symbol}}
+    offences::Function
+    refusal::Function
+end
+
+# A gate whose refusal is the `ExpressionTemplateError` every gate but `faq`
+# raises: "<subject> esm >= V; file declares D. Offending path: P", naming the
+# first offence, or every one (`Offending paths: P1, P2`) when `all`.
+function _VersionGate(
+        since::Tuple{Int, Int, Int}, code::String, subject::String,
+        roles::Tuple{Vararg{Symbol}}, offences::Function; all::Bool = false
+    )
+    floor = join(since, ".")
+    refusal = (declared, offs) -> ExpressionTemplateError(
+        code,
+        "$(subject) esm >= $(floor); file declares $(declared). " *
+            (all ? "Offending paths: $(join(offs, ", "))" : "Offending path: $(first(offs))");
+        path = first(offs)
+    )
+    return _VersionGate(since, roles, offences, refusal)
+end
+
+# The pointers of the §9.6 constructs in a document: a component's
+# `expression_templates` block, then every `apply_expression_template` node.
+function _expression_template_offences(doc)
+    offences = String[]
+    for compkind in _COMPONENT_KINDS
+        comps = _raw_get(doc, compkind)
+        (comps !== nothing && _is_object(comps)) || continue
+        for (cname, comp) in pairs(comps)
+            _is_object(comp) || continue
+            _raw_haskey(comp, "expression_templates") &&
+                push!(offences, "/$compkind/$(string(cname))/expression_templates")
+        end
+    end
+    _find_apply_paths!(offences, doc, "")
+    return offences
+end
+
+# `[pointer]` when the document's `solver` block carries `field`.
+function _solver_field_offence(doc, field::String)
+    solver = _raw_get(doc, "solver")
+    (solver !== nothing && _is_object(solver) && _raw_haskey(solver, field)) || return String[]
+    return ["/solver/$field"]
+end
+
+_found(p) = p === nothing ? String[] : String[p]
+
+# The first `lb` / `ub` on a model variable, at any depth of inline subsystems.
+function _variable_bound_offence(doc)
+    models = _raw_get(doc, "models")
+    (models !== nothing && _is_object(models)) || return String[]
+    for (name, model) in pairs(models)
+        p = _first_raw_bound(model, "/models/$(name)")
+        p === nothing || return String[p]
+    end
+    return String[]
+end
+
+"""
+    _VERSION_GATES
+
+Every "construct arrives at esm V" rule, in the order they are checked; the
+order decides which code a document old for two reasons reports. Each file is
+held to its own declared version (esm-spec §4.7): the gates run on a document as
+authored, before anything is mounted into it. The `solver.external` and
+`solver.time_span` gates apply to the root alone (§2.2.6, §2.2.7 "Mounting");
+`faq` is checked at the op-spelling boundary of every document read
+(`_prepare_document_ops!`).
+"""
+const _VERSION_GATES = (
+    # §9.6.5: expression templates and their references (RFC §5.4).
+    expression_templates = _VersionGate(
+        (0, 4, 0), ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+        "expression_templates / apply_expression_template require",
+        (:root, :mounted_leaf, :template_library), _expression_template_offences; all = true
+    ),
+    # §9.6.5: the §9.7 constructs.
+    template_imports = _VersionGate(
+        (0, 8, 0), ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
+        "expression_template_imports / top-level expression_templates / metaparameters require",
+        (:root, :mounted_leaf, :template_library), d -> _template_import_offences(d); all = true
+    ),
+    # §2.2.4: the top-level `solver` block.
+    solver = _VersionGate(
+        (1, 1, 0), ERROR_CODES.SOLVER_VERSION_TOO_OLD,
+        "the top-level `solver` block requires", (:root, :mounted_leaf),
+        d -> _raw_haskey(d, "solver") ? ["/solver"] : String[]
+    ),
+    # §2.2.4 requirement 4: `solver.external` and `solver.time_span`.
+    solver_external = _VersionGate(
+        (1, 3, 0), ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
+        "`solver.external` requires", (:root,), d -> _solver_field_offence(d, "external")
+    ),
+    solver_time_span = _VersionGate(
+        (1, 3, 0), ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
+        "`solver.time_span` requires", (:root,), d -> _solver_field_offence(d, "time_span")
+    ),
+    # §4.8.5 item 6: declared `units` on an expression node.
+    const_units = _VersionGate(
+        (1, 2, 0), ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
+        "declared `units` on an expression node require", (:root, :mounted_leaf),
+        d -> _found(_find_units_bearing_node(d, ""))
+    ),
+    # §6.3.2: variable bounds. Only this file's inline models and subsystems;
+    # a `{ref}` subsystem is gated against its own version when mounted.
+    variable_bounds = _VersionGate(
+        (2, 1, 0), ERROR_CODES.VARIABLE_BOUNDS_VERSION_TOO_OLD,
+        "variable bounds (`lb` / `ub`) require", (:root, :mounted_leaf),
+        d -> _variable_bound_offence(d)
+    ),
+    # §4.2 "The `faq` tag": a `ParseError`, like the `removed_op` refusal
+    # beside it at the wire boundary.
+    faq = _VersionGate(
+        (1, 1, 0), (:wire,), d -> _found(_find_op_path(d, "faq")),
+        (declared, offs) -> ParseError(
+            "[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(first(offs)): the " *
+                "`faq` op arrives at esm 1.1.0; file declares $(declared). " *
+                "Raise the declared version. " *
+                "See docs/content/rfcs/faq-node-rename.md.";
+            code = ERROR_CODES.FAQ_VERSION_TOO_OLD, path = first(offs)
+        )
+    ),
+)
+
+# The pointers `gate` finds in `doc` when `doc` declares a version below the
+# gate's; empty otherwise.
+function _version_gate_offences(gate::_VersionGate, doc)
+    v = _esm_version(doc)
+    (v === nothing || v >= gate.since) && return String[]
+    return gate.offences(doc)
+end
+
+"""
+    _check_version_gate(gate, doc)
+
+Throw `gate`'s refusal when `doc` declares a version below it and uses the
+construct; `nothing` otherwise.
+"""
+function _check_version_gate(gate::_VersionGate, doc)
+    offs = _version_gate_offences(gate, doc)
+    isempty(offs) && return nothing
+    throw(gate.refusal(string(_get_field(doc, :esm, nothing)), offs))
+end
+
+"""
+    _check_version_gates(doc, role)
+
+Run every [`_VERSION_GATES`](@ref) row that applies to `role`, in order.
+"""
+function _check_version_gates(doc, role::Symbol)
+    for gate in _VERSION_GATES
+        role in gate.roles && _check_version_gate(gate, doc)
+    end
+    return nothing
+end
+
 # The checks a document gets AS ITS FILE SPELLS IT, in the order they run, and
-# the roles each applies to. Each file is held to its own declared `esm`
-# version (esm-spec §4.7, §4.8.5 item 6): run on a document whose mounts are
-# already inlined, a gate would judge a mounted file's constructs against the
-# mounting file's version (`tests/valid/version_gate_older_mounts_newer.esm`).
-# The order decides which error a document with two faults reports.
+# the roles each applies to. Each runs before anything is inlined into the
+# document, so a mounted file is judged by its own declared version, not the
+# mounting file's (`tests/valid/version_gate_older_mounts_newer.esm`). The
+# version gates run first, so a document old for its constructs reports the
+# version before any other refusal; the order decides which error a document
+# with two faults reports.
 #
 # Roles: `:root` (the document a `load_*` entry point was given),
 # `:mounted_leaf` (a document a §4.7 mount edge reads), `:template_library`
-# (§9.7.2 import target), `:coupling_library` (§10.10 import target, whose own
-# checks are `_validate_library`'s). The `solver.external` / `time_span` checks
-# are the root's alone: a mounted leaf's `solver` block does not cross the mount
+# (§9.7.2 import target). A coupling library's own checks are
+# `_validate_library`'s. The `solver.external` / `time_span` checks are the
+# root's alone: a mounted leaf's `solver` block does not cross the mount
 # (§2.2.6 "Mounting", §2.2.7 "Mounting").
 const _AUTHORED_CHECKS = (
-    # esm < 0.4.0: expression_templates / apply_expression_template (RFC §5.4),
-    # surfaced before schema validation so the user sees the version hint.
-    (d -> reject_expression_templates_pre_v04(d), (:root, :mounted_leaf, :template_library)),
-    # esm < 0.8.0: the §9.7 constructs (esm-spec §9.6.5).
-    (d -> reject_template_imports_pre_v08(d), (:root, :mounted_leaf, :template_library)),
+    ((d, role) -> _check_version_gates(d, role), (:root, :mounted_leaf, :template_library)),
     # Top-level `expression_templates` beside a component payload (§9.7.1).
-    (d -> _reject_impure_template_library(d), (:root,)),
-    # The `solver` block arrives at 1.1.0 (§2.2.4), its `external` and
-    # `time_span` at 1.3.0; then a `${` in `external` (§2.2.6) and a
-    # `time_span` that is no interval (§2.2.7).
-    (d -> reject_solver_pre_v11(d), (:root, :mounted_leaf)),
-    (d -> reject_solver_external_pre_v13(d), (:root,)),
-    (d -> reject_solver_time_span_pre_v13(d), (:root,)),
-    (d -> _reject_solver_external_unresolved(d), (:root,)),
-    (d -> _reject_solver_time_span_invalid(d), (:root,)),
-    # Declared `units` on a `const` node arrive at 1.2.0 (§4.8.5).
-    (d -> reject_const_units_pre_v12(d), (:root, :mounted_leaf)),
-    # Variable bounds `lb` / `ub` arrive at 2.1.0 (§6.3.2).
-    (d -> reject_variable_bounds_pre_v21(d), (:root, :mounted_leaf)),
+    ((d, _) -> _reject_impure_template_library(d), (:root,)),
+    # A `${` in `solver.external` (§2.2.6), a `time_span` that is no interval
+    # (§2.2.7).
+    ((d, _) -> _reject_solver_external_unresolved(d), (:root,)),
+    ((d, _) -> _reject_solver_time_span_invalid(d), (:root,)),
     # The template-origin mark is load provenance; no file spells it.
-    (d -> _reject_authored_template_origins(d), (:root, :mounted_leaf)),
+    ((d, _) -> _reject_authored_template_origins(d), (:root, :mounted_leaf)),
 )
 
 """
@@ -370,7 +545,7 @@ as its file spells it, before anything is inlined into it.
 """
 function _check_authored_document(doc, role::Symbol)
     for (check, roles) in _AUTHORED_CHECKS
-        role in roles && check(doc)
+        role in roles && check(doc, role)
     end
     return nothing
 end
@@ -566,20 +741,11 @@ function _prepare_document_ops!(doc; gate::Bool = true)::Nothing
     end
     _reject_removed_2_0_0!(doc)
     _rewrite_deprecated_ops!(doc)
-    faq_at = _find_op_path(doc, "faq")
-    (faq_at !== nothing && _declared_below_v11(doc)) || return nothing
     if gate
-        declared = _get_field(doc, :esm, nothing)
-        throw(
-            ParseError(
-                "[E_FAQ_VERSION_TOO_OLD] faq_version_too_old at $(faq_at): the " *
-                    "`faq` op arrives at esm 1.1.0; file declares $(declared). " *
-                    "Raise the declared version. " *
-                    "See docs/content/rfcs/faq-node-rename.md.";
-                code = ERROR_CODES.FAQ_VERSION_TOO_OLD, path = faq_at
-            )
-        )
+        _check_version_gate(_VERSION_GATES.faq, doc)
+        return nothing
     end
+    isempty(_version_gate_offences(_VERSION_GATES.faq, doc)) && return nothing
     for key in (:esm, "esm")
         if haskey(doc, key)
             doc[key] = "1.1.0"
@@ -765,19 +931,3 @@ _find_op_path(node, op::AbstractString, at::AbstractString = "") =
     n -> any(k -> haskey(n, k) && get(n, k, nothing) == op, (:op, "op")),
     node, at
 )
-
-"""
-    _declared_below_v11(doc) -> Bool
-
-Does `doc` declare an `esm` version below 1.1.0?
-"""
-function _declared_below_v11(doc)::Bool
-    doc isa AbstractDict || return false
-    esm = _get_field(doc, :esm, nothing)
-    esm isa AbstractString || return false
-    parts = split(String(esm), '.')
-    length(parts) >= 2 || return false
-    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
-    (major === nothing || minor === nothing) && return false
-    return (major, minor) < (1, 1)
-end

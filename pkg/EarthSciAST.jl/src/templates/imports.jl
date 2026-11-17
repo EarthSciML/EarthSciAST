@@ -53,18 +53,14 @@ const _LIBRARY_FORBIDDEN_KEYS =
 declaring an earlier version that carry any of them are rejected with
 `template_import_version_too_old` (esm-spec §9.6.5). Mirrors
 [`reject_expression_templates_pre_v04`](@ref) for the §9.7 constructs.
+The rule is the `template_imports` row of [`_VERSION_GATES`](@ref).
 """
-function reject_template_imports_pre_v08(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return
-    major = parse(Int, m.captures[1])
-    minor = parse(Int, m.captures[2])
-    (major == 0 && minor < 8) || return
+reject_template_imports_pre_v08(raw_data) =
+    _check_version_gate(_VERSION_GATES.template_imports, raw_data)
 
+# The pointers of the §9.7 constructs in a document, in the order the version
+# gate reports them.
+function _template_import_offences(raw_data)
     offences = String[]
     _raw_haskey(raw_data, "expression_templates") && push!(offences, "/expression_templates")
     _raw_haskey(raw_data, "metaparameters") && push!(offences, "/metaparameters")
@@ -79,15 +75,7 @@ function reject_template_imports_pre_v08(raw_data)
                 push!(offences, "/$compkind/$(string(cname))/expression_template_imports")
         end
     end
-    isempty(offences) && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,
-            "expression_template_imports / top-level expression_templates / metaparameters " *
-                "require esm >= 0.8.0; file declares $(string(esm_raw)). " *
-                "Offending paths: $(join(offences, ", "))"
-        )
-    )
+    return offences
 end
 
 """

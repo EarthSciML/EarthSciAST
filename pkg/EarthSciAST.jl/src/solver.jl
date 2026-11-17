@@ -26,31 +26,9 @@ Reject a top-level `solver` block in a file declaring `esm` < 1.1.0.
 The block arrives at `esm: 1.1.0`; a document declaring an earlier version that
 carries one is rejected with `solver_version_too_old` (esm-spec §2.2.4).
 Mirrors [`reject_template_imports_pre_v08`](@ref).
+The rule is the `solver` row of [`_VERSION_GATES`](@ref).
 """
-function reject_solver_pre_v11(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    _raw_haskey(raw_data, "solver") || return
-    version = _declared_minor(raw_data)
-    (version === nothing || version >= (1, 1)) && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.SOLVER_VERSION_TOO_OLD,
-            "the top-level `solver` block requires esm >= 1.1.0; " *
-                "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: /solver"
-        )
-    )
-end
-
-# `(major, minor)` of the document's `esm` string, or `nothing` when it declares
-# none the version gates can read.
-function _declared_minor(raw_data)
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return nothing
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return nothing
-    return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
-end
+reject_solver_pre_v11(raw_data) = _check_version_gate(_VERSION_GATES.solver, raw_data)
 
 """
     reject_solver_external_pre_v13(raw_data)
@@ -63,23 +41,10 @@ at `/solver/external` (esm-spec §2.2.4 requirement 4). Runs before schema
 validation and after [`reject_solver_pre_v11`](@ref), so a document below 1.1.0
 reports the block itself as too new. A 1.1.0 or 1.2.0 block without `external`
 stays valid.
+The rule is the `solver_external` row of [`_VERSION_GATES`](@ref).
 """
-function reject_solver_external_pre_v13(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    solver = _raw_get(raw_data, "solver")
-    (solver !== nothing && _is_object(solver)) || return
-    _raw_haskey(solver, "external") || return
-    version = _declared_minor(raw_data)
-    (version === nothing || version >= (1, 3)) && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
-            "`solver.external` requires esm >= 1.3.0; " *
-                "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: /solver/external"
-        )
-    )
-end
+reject_solver_external_pre_v13(raw_data) =
+    _check_version_gate(_VERSION_GATES.solver_external, raw_data)
 
 # The §2.2.6 refusal: `external` names its run configuration literally, so a
 # `${...}` would make the numerics depend on the environment the document is
@@ -206,23 +171,10 @@ The field arrives at `esm: 1.3.0`; a document declaring an earlier version whose
 `solver` block carries it is rejected with `solver_time_span_version_too_old`
 at `/solver/time_span` (esm-spec §2.2.4 requirement 4). Runs before schema
 validation, beside [`reject_solver_external_pre_v13`](@ref).
+The rule is the `solver_time_span` row of [`_VERSION_GATES`](@ref).
 """
-function reject_solver_time_span_pre_v13(raw_data)
-    raw_data === nothing && return
-    _is_object(raw_data) || return
-    solver = _raw_get(raw_data, "solver")
-    (solver !== nothing && _is_object(solver)) || return
-    _raw_haskey(solver, "time_span") || return
-    version = _declared_minor(raw_data)
-    (version === nothing || version >= (1, 3)) && return
-    throw(
-        ExpressionTemplateError(
-            ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
-            "`solver.time_span` requires esm >= 1.3.0; " *
-                "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: /solver/time_span"
-        )
-    )
-end
+reject_solver_time_span_pre_v13(raw_data) =
+    _check_version_gate(_VERSION_GATES.solver_time_span, raw_data)
 
 # A `time_span` bound written as a timestamp: the schema's pattern, UTC with `Z`.
 # Anchored with `\z`, not `$`: PCRE's `$` also matches before a final newline,

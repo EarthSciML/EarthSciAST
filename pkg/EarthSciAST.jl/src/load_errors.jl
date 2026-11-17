@@ -210,15 +210,15 @@ belong to this exception. Keep it in step with the raise sites.
 """
 const _KNOWN_DIAGNOSTIC_CODES = (
     # esm-spec §4.8.5 item 6: declared `units` on an expression node need
-    # esm >= 1.2.0 (units.jl `reject_const_units_pre_v12`).
+    # esm >= 1.2.0 (`_VERSION_GATES`, resolve.jl).
     ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
     # esm-spec §6.3.2: `lb` / `ub` on a variable need esm >= 2.1.0
-    # (variable_bounds.jl `reject_variable_bounds_pre_v21`).
+    # (`_VERSION_GATES`, resolve.jl).
     ERROR_CODES.VARIABLE_BOUNDS_VERSION_TOO_OLD,
     # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
     ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
-    # esm-spec §2.2.6 `solver.external`: the version gate and the `${`
-    # refusal (solver.jl).
+    # esm-spec §2.2.6 `solver.external`: the version gate (`_VERSION_GATES`)
+    # and the `${` refusal (solver.jl).
     ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
     ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
     # esm-spec §2.2.7 `solver.time_span`: the version gate and the interval
@@ -246,7 +246,7 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # Option B / CONFORMANCE_SPEC §5.5.7).
     ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
     # esm-spec §2.2.4 document-scoped solver hints: the top-level `solver`
-    # block in a file declaring esm < 1.1.0 (solver.jl).
+    # block in a file declaring esm < 1.1.0 (`_VERSION_GATES`).
     ERROR_CODES.SOLVER_VERSION_TOO_OLD,
     # esm-spec §9.7 template-library imports + metaparameters
     # (templates/imports.jl, templates/metaparameters.jl).
