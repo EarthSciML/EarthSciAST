@@ -384,10 +384,8 @@ function _table_columns(t::RecordTable, u::Float64)
 
     kept = count(keep)
     out = Dict{String, Vector{Float64}}(name => col[keep] for (name, col) in raw)
-    kept == nrec || println(
-        "  [esio] loader '$(t.loader)': $nrec records read, ",
-        "$kept kept by its declared record filter"
-    )
+    kept == nrec ||
+        @info "loader '$(t.loader)': $nrec records read, $kept kept by its declared record filter"
     t.anchor = anchor
     t.cache = out
     return out
@@ -753,21 +751,23 @@ function _record_at(p::DeclaredProvider, t::Real)
     return _sample_inner(p, t)
 end
 
-# Every (flattened-name, variable-dict) pair of a raw model tree, recursing
-# through `subsystems` exactly as `flatten` namespaces them.
-function _walk_model_variables(models, prefix::String, cb)
+# Every (flattened-name, declaration-dict) pair of a raw component tree,
+# recursing through `subsystems` exactly as `flatten` namespaces them. `vars_key`
+# is where the declarations live: `"variables"` on a model, `"parameters"` on a
+# reaction system.
+function _walk_model_variables(models, prefix::String, cb; vars_key::String = "variables")
     models isa AbstractDict || return
     for mname0 in sort!(String[String(k) for k in keys(models)])
         m = models[mname0]
         m isa AbstractDict || continue
         path = isempty(prefix) ? mname0 : "$(prefix).$(mname0)"
-        vars = get(m, "variables", nothing)
+        vars = get(m, vars_key, nothing)
         if vars isa AbstractDict
             for vname0 in sort!(String[String(k) for k in keys(vars)])
                 cb("$(path).$(vname0)", vname0, vars[vname0])
             end
         end
-        _walk_model_variables(get(m, "subsystems", nothing), path, cb)
+        _walk_model_variables(get(m, "subsystems", nothing), path, cb; vars_key)
     end
     return
 end
@@ -962,20 +962,25 @@ function providers_from_document(
 
     # Group the consuming parameters by the source they name, so one source's
     # Cache and RecordTable are built once and shared.
+    # A data-fed parameter may be declared on a model or on a reaction system
+    # (src/reactions.jl).
     consumers = Dict{String, Vector{NamedTuple}}()
+    collect_consumer = (key, local_name, vd) -> begin
+        rule = _data_update_rule(vd)
+        rule === nothing && return
+        sname = get(rule, "source", nothing)
+        sname isa AbstractString || return
+        from = get(rule, "from", nothing)
+        from isa AbstractDict || return
+        push!(
+            get!(() -> NamedTuple[], consumers, String(sname)),
+            (key = key, local_name = local_name, from = from, decl = vd)
+        )
+    end
+    _walk_model_variables(get(raw, "models", nothing), "", collect_consumer)
     _walk_model_variables(
-        get(raw, "models", nothing), "", (key, local_name, vd) -> begin
-            rule = _data_update_rule(vd)
-            rule === nothing && return
-            sname = get(rule, "source", nothing)
-            sname isa AbstractString || return
-            from = get(rule, "from", nothing)
-            from isa AbstractDict || return
-            push!(
-                get!(() -> NamedTuple[], consumers, String(sname)),
-                (key = key, local_name = local_name, from = from, decl = vd)
-            )
-        end
+        get(raw, "reaction_systems", nothing), "", collect_consumer;
+        vars_key = "parameters"
     )
 
     out = Dict{String, Any}()

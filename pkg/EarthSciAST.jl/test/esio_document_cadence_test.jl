@@ -119,6 +119,29 @@ const _SECTOR = Dict("NEI" => Dict("sector" => "agr"))
     end
 end
 
+# A data-fed parameter declared on a reaction system gets a provider too, named
+# as `flatten` names it.
+@testset "providers_from_document — a data-fed reaction-system parameter" begin
+    mktempdir() do dir
+        doc = _cadence_doc(dir)
+        decl = doc["models"]["Emis"]["variables"]["nox"]
+        delete!(doc, "models")
+        doc["reaction_systems"] = Dict{String, Any}(
+            "Chem" => Dict{String, Any}(
+                "species" => Dict{String, Any}(), "reactions" => Any[],
+                "parameters" => Dict{String, Any}("nox" => decl)
+            )
+        )
+        provs = providers_from_document(
+            doc; cache_root = joinpath(dir, "cache"),
+            substitutions = _SECTOR, window = (u(2016, 1), u(2016, 4))
+        )
+        @test collect(keys(provs)) == ["Chem.nox"]
+        @test vec(EarthSciAST.provider_sample(provs["Chem.nox"], u(2016, 3) - u(2016, 1))) ==
+            [60.0, 62.0]
+    end
+end
+
 # The time origin of every provider (esm-spec §2.2.7), first match wins:
 # reference_time, start, the window start, the POSIX epoch.
 @testset "providers_from_document — the model clock's origin" begin
