@@ -3521,40 +3521,11 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
             push!(scope, _indep_var(file))
             union!(scope, _coordinate_names(file))
             union!(scope, _callback_injected_names(file))
-            rs_path = "/reaction_systems/$rs_name"
-            for (i, eq) in enumerate(rs.constraint_equations)
-                append!(
-                    errors, validate_expression_references(
-                        file, eq.lhs, "$rs_path/constraint_equations/$(i - 1)/lhs"; scope = scope
-                    )
-                )
-                append!(
-                    errors, validate_expression_references(
-                        file, eq.rhs, "$rs_path/constraint_equations/$(i - 1)/rhs"; scope = scope
-                    )
-                )
-            end
-            # A parameter's update rules (esm-spec §5.4) read the system's names.
-            foreach_expression(rs, rs_path; subsystems = false) do e, at, kind
-                kind in (:update_when, :update_expression) || return nothing
+            foreach_expression(rs, "/reaction_systems/$rs_name"; subsystems = false) do e, at, kind
+                kind in _REFERENCE_CHECKED_SITES || return nothing
                 append!(errors, validate_expression_references(file, e, at; scope = scope))
                 return nothing
             end
-            for (i, event) in enumerate(rs.discrete_events)
-                append!(
-                    errors, validate_event_references(
-                        file, event, "$rs_path/discrete_events/$(i - 1)"; scope = scope
-                    )
-                )
-            end
-            for (i, event) in enumerate(rs.continuous_events)
-                append!(
-                    errors, validate_event_references(
-                        file, event, "$rs_path/continuous_events/$(i - 1)"; scope = scope
-                    )
-                )
-            end
-            append!(errors, _validate_test_references(file, rs.tests, rs_path, scope))
         end
     end
 
@@ -3818,34 +3789,25 @@ function _callback_injected_names(file::EsmFile)::Set{String}
     return names
 end
 
-# The assertion `reference` expressions of a component's inline tests (§6.6).
-function _validate_test_references(
-        file::EsmFile, tests, path::String,
-        scope::Set{String}
-    )::Vector{StructuralError}
-    errors = StructuralError[]
-    for (i, t) in enumerate(tests)
-        for (j, a) in enumerate(t.assertions)
-            ref = a.reference
-            # A `from_file` reference (esm-spec §6.6.5 convention 3) is data, not
-            # an expression, and carries no names to resolve.
-            ref isa ASTExpr || continue
-            append!(
-                errors, validate_expression_references(
-                    file, ref, "$path/tests/$(i - 1)/assertions/$(j - 1)/reference"; scope = scope
-                )
-            )
-        end
-    end
-    return errors
-end
+# The expression sites (`EXPRESSION_SITE_KINDS`) of a model or reaction system
+# whose names the reference-integrity check resolves against the component's
+# scope. Not here: a reaction `rate` (`validate_reaction_consistency` reports
+# `undefined_parameter` there), a data update's `from.unit_conversion`
+# (`_check_update_unit_conversions!`), a variable's `lb` / `ub`, and a
+# continuous event's `affect_neg`. An inline test's `from_file` reference
+# (esm-spec §6.6.5 convention 3) is data, not an expression, and is not a site.
+const _REFERENCE_CHECKED_SITES = (
+    :equation_lhs, :equation_rhs, :initialization_lhs, :initialization_rhs,
+    :constraint_lhs, :constraint_rhs, :guess, :update_when, :update_expression,
+    :event_condition, :event_trigger, :affect, :test_reference,
+)
 
 """
     validate_model_references(file::EsmFile, model::Model, path::String) -> Vector{StructuralError}
 
-Validate variable references within a model.
+Validate the variable references at every expression site of `model` and of
+its model subsystems (an event's affect targets are names, not sites).
 """
-
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
@@ -3897,84 +3859,20 @@ function validate_model_references(
     # `external_temperature_forcing` exactly this way and nowhere else).
     union!(scope, _callback_injected_names(file))
 
-    # Validate equation references — on the EXPANSION of any surviving
-    # `apply_expression_template` reference (esm-spec §9.6.4 rule 2: a reference
-    # denotes its expansion). A template binding is a value substituted into the
-    # body, and only where the body uses it in an expression position is it a
-    # reference; one bound to a scalar field (`K_manifold => "planar"` filling a
-    # `manifold`) or to a range's `from` is a literal. Expansion keeps the
-    # equation order, so pointers still name the authored equation. The view
-    # expands the equations, initialization equations and parameter updates of
-    # the model and of its subsystems, which are walked from it below too.
+    # Check every expression site (`_REFERENCE_CHECKED_SITES`) against `scope`,
+    # on the EXPANSION of any surviving `apply_expression_template` reference
+    # (esm-spec §9.6.4 rule 2: a reference denotes its expansion). A template
+    # binding is a value substituted into the body, and only where the body uses
+    # it in an expression position is it a reference; one bound to a scalar
+    # field (`K_manifold => "planar"` filling a `manifold`) or to a range's
+    # `from` is a literal. Expansion keeps every site where it was, so pointers
+    # still name the authored expression. The view expands every site of the
+    # model and of its subsystems, which are walked from it below.
     view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
-    for (i, eq) in enumerate(view.equations)
-        append!(errors, validate_expression_references(file, eq.lhs, "$path/equations/$(i - 1)/lhs"; scope = scope))
-        append!(errors, validate_expression_references(file, eq.rhs, "$path/equations/$(i - 1)/rhs"; scope = scope))
-    end
-
-    # The other expression-bearing fields of the model: parameter update rules,
-    # initialization equations, guesses, inline-test references and events, each
-    # walked with the same `scope`.
-
-    # 1. A parameter update's expression-bearing fields (esm-spec §5.4): the
-    #    `when` trigger and the `expression` value form. An observed unknown's
-    #    defining expression is NOT here any more — it is an ordinary equation,
-    #    walked with every other equation.
-    for name in sort!(collect(keys(view.variables)))
-        rules = view.variables[name].update
-        rules === nothing && continue
-        for (ri, rule) in enumerate(rules)
-            for (field, e) in (("when", rule.when), ("expression", rule.expression))
-                e === nothing && continue
-                append!(
-                    errors, validate_expression_references(
-                        file, e,
-                        _update_rule_path("$path/variables/$name", rules, ri) * "/$field";
-                        scope = scope
-                    )
-                )
-            end
-        end
-    end
-
-    # 2. `guesses` — an initial guess may be a bare number (nothing to check) or
-    #    an expression over the model's names.
-    for name in sort!(collect(keys(model.guesses)))
-        g = model.guesses[name]
-        isa(g, ASTExpr) || continue
-        append!(
-            errors, validate_expression_references(
-                file, g, "$path/guesses/$name"; scope = scope
-            )
-        )
-    end
-
-    # 3. `initialization_equations`.
-    for (i, eq) in enumerate(view.initialization_equations)
-        append!(
-            errors, validate_expression_references(
-                file, eq.lhs, "$path/initialization_equations/$(i - 1)/lhs"; scope = scope
-            )
-        )
-        append!(
-            errors, validate_expression_references(
-                file, eq.rhs, "$path/initialization_equations/$(i - 1)/rhs"; scope = scope
-            )
-        )
-    end
-
-    # 4. Inline `tests` blocks: an assertion may carry a `reference` expression.
-    append!(errors, _validate_test_references(file, model.tests, path, scope))
-
-    # Validate discrete event references. `scope` is threaded now — without it
-    # the descent happened but the bare-variable check was a no-op.
-    for (i, event) in enumerate(model.discrete_events)
-        append!(errors, validate_event_references(file, event, "$path/discrete_events/$(i - 1)"; scope = scope))
-    end
-
-    # Validate continuous event references
-    for (i, event) in enumerate(model.continuous_events)
-        append!(errors, validate_event_references(file, event, "$path/continuous_events/$(i - 1)"; scope = scope))
+    foreach_expression(view, path; subsystems = false) do e, at, kind
+        kind in _REFERENCE_CHECKED_SITES || return nothing
+        append!(errors, validate_expression_references(file, e, at; scope = scope))
+        return nothing
     end
 
     # Recursively check subsystems (already expanded in the view)
@@ -4497,56 +4395,6 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Validate trigger expression if present (for discrete events)
         if coupling_entry.trigger !== nothing && isa(coupling_entry.trigger, ConditionTrigger)
             append!(errors, validate_expression_references(file, coupling_entry.trigger.expression, "$path/trigger/expression"))
-        end
-    end
-
-    return errors
-end
-
-"""
-    validate_event_references(file::EsmFile, event::EventType, path::String;
-                              scope=nothing) -> Vector{StructuralError}
-
-Validate event variable references.
-
-`scope` is the enclosing model's name set. It MUST be threaded from a model call
-site: without it `_check_bare_variable!` is a no-op, so the descent walks the
-whole event tree and then declines to look at any of it — which is exactly how an
-undefined name in a trigger, a condition or an affect stayed invisible (audit
-finding (h)). It stays optional (`nothing`) only for the coupling-level event
-call sites, whose names are fully-qualified cross-system references resolved by
-the qualified-reference resolver rather than against any one model's scope.
-"""
-function validate_event_references(
-        file::EsmFile, event::EventType, path::String;
-        scope::Union{Set{String}, Nothing} = nothing
-    )::Vector{StructuralError}
-    errors = StructuralError[]
-
-    if isa(event, ContinuousEvent)
-        # Validate condition expressions
-        for (i, condition) in enumerate(event.conditions)
-            append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i - 1)"; scope = scope))
-        end
-
-        # Validate affect references
-        for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"; scope = scope))
-            # affect.lhs is a string (variable name) - would need model context to validate
-        end
-
-    elseif isa(event, DiscreteEvent)
-        # Validate affect references. The RHS expression field of a discrete
-        # affect is pinned at `.../affects/i/rhs` (the cross-binding contract
-        # §7.1.3(h); TS emits the same).
-        for (i, affect) in enumerate(event.affects)
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"; scope = scope))
-            # affect.lhs is a string (variable name) - would need model context to validate
-        end
-
-        # Validate trigger references (if condition-based)
-        if isa(event.trigger, ConditionTrigger)
-            append!(errors, validate_expression_references(file, event.trigger.expression, "$path/trigger/expression"; scope = scope))
         end
     end
 
