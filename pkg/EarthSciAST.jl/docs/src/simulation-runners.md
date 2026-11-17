@@ -289,6 +289,11 @@ and the reason for:
 * `D(<expression>)` — a time derivative of an expression credits no state, so it
   is an implicit equation spelled wrong; ModelingToolkit rejects the system and
   this names the equation instead.
+* a parameter recomputed by its own `update` rule (`schedule`, `condition`,
+  `crossing` with an `expression`) or loaded by a `data` update, a
+  coupling-level event, a `faq`-valued initialization equation, and an
+  operator the lowering has no arm for. Each would otherwise be dropped or
+  fail inside ModelingToolkit.
 
 **Two differences from the other compilers, both deliberate.**
 

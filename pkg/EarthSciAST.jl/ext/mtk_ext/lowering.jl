@@ -67,6 +67,19 @@ function _resolve_lowering_var(
     end
 end
 
+# Every operator `_esm_to_symbolic` lowers: the shared scalar arms, the
+# elementwise functions above, and the arms of `_mtk_extended_op` below. Keep
+# this in step with that ladder; `compiler = :mtk` reads it to refuse an
+# operator by name before the system is built.
+const _MTK_LOWERED_OPS = Set{String}(
+    [
+        "+", "-", "*", "/", "^", "min", "max", _MTK_UNARY_SCALAR_OPS...,
+        "neg", "pow", "D", "ifelse", "Pre", ">", "<", ">=", "<=", "==", "!=",
+        "faq", "makearray", "index", "broadcast", "reshape", "transpose",
+        "concat", "const",
+    ]
+)
+
 # The MTK-specific OpExpr arms: calculus operators, control flow,
 # comparisons and the array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op outside the
 # shared scalar arms.
