@@ -10,7 +10,7 @@
 using Test
 using EarthSciAST
 using OrdinaryDiffEqTsit5
-using DiffEqCallbacks            # loads EarthSciASTDataOutputExt (the sink test)
+using DiffEqCallbacks            # loads EarthSciASTCallbacksExt (the sink test)
 using SciMLBase
 using JSON3
 include("testutils.jl")

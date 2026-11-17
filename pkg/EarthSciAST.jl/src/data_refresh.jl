@@ -11,7 +11,7 @@
 # EarthSciAST returns the pieces (`build_refresh_callback -> (cb, tstops)`); the
 # USER attaches them to their own `ODEProblem`/`solve`. The callback constructor
 # lives in a package extension gated on `DiffEqCallbacks` + `SciMLBase` (see
-# ext/EarthSciASTDataRefreshExt.jl), so the base library pulls no solver stack
+# ext/EarthSciASTCallbacksExt.jl), so the base library pulls no solver stack
 # into `[deps]`.
 #
 # This file (core) owns two decoupled seams; concrete implementations live
@@ -540,7 +540,7 @@ build_refresh_callback(args...; kwargs...) = throw(
     RefreshError(
         "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
             "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-            "EarthSciASTDataRefreshExt is active"
+            "EarthSciASTCallbacksExt is active"
     )
 )
 

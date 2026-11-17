@@ -628,43 +628,10 @@ end
 # solution interpolant.
 # ---------------------------------------------------------------------------
 
-# For reaction_system containers, seed u0 and p from the species and parameter
-# defaults declared in the ESM file (the Catalyst extension also attaches them
-# to its symbols; the explicit maps keep this runner independent of that);
-# returns `(defaults_u0, defaults_p)` (both empty for model containers).
-function _catalyst_default_maps(
-        container_kind::Symbol, esm_container, simp,
-        sys_name::Symbol
-    )
-    defaults_u0 = Dict{Any, Float64}()
-    defaults_p = Dict{Any, Float64}()
-    (container_kind === :reaction_system && esm_container !== nothing) ||
-        return defaults_u0, defaults_p
-    # NO silent skip here. A `try _resolve_handle(...) catch; nothing end` +
-    # `continue` (what this used to do) drops the species/parameter from the
-    # seed, so the inline test runs from a DIFFERENT initial condition than the
-    # file declares — and still reports PASS. A seed that cannot be established
-    # is a build error, not a shrug: the assertions are about to be evaluated
-    # against the wrong problem. `_resolve_handle` already throws a precise
-    # `ArgumentError` naming the variable and the spellings it tried; let it out.
-    for sp in esm_container.species
-        sp.default === nothing && continue
-        defaults_u0[_resolve_handle(simp, sys_name, sp.name)] = Float64(sp.default)
-    end
-    for pr in esm_container.parameters
-        pr.default === nothing && continue
-        defaults_p[_resolve_handle(simp, sys_name, pr.name)] = Float64(pr.default)
-    end
-    return defaults_u0, defaults_p
-end
-
 struct MtkTestEngine
     simp::Any
     sys_name::Symbol
-    container_kind::Symbol
     solver::Any
-    defaults_u0::Dict{Any, Float64}
-    defaults_p::Dict{Any, Float64}
     # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
     # resolved against the document's `solver` block. The runner's own
     # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
@@ -680,13 +647,13 @@ struct MtkTestEngine
     renames::Dict{String, String}
 
     MtkTestEngine(
-        simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
+        simp, sys_name, solver;
         reltol::Float64 = DEFAULT_TEST_RELTOL,
         abstol::Float64 = DEFAULT_TEST_ABSTOL,
         renames::AbstractDict = _NO_RENAMES
     ) =
         new(
-        simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
+        simp, sys_name, solver,
         reltol, abstol, Dict{String, String}(renames)
     )
 end
@@ -694,21 +661,17 @@ end
 function _engine_setup(e::MtkTestEngine, t)
     MTK = _require_mtk()
     try
-        u0_map = copy(e.defaults_u0)
+        u0_map = Dict{Any, Float64}()
         for (spec, val) in t.initial_conditions
             u0_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
         end
-        p_map = copy(e.defaults_p)
+        p_map = Dict{Any, Float64}()
         for (spec, val) in t.parameter_overrides
             p_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
         end
         tspan = (t.time_span.start, t.time_span.stop)
         merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
-        prob = if e.container_kind === :reaction_system
-            MTK.ODEProblem(e.simp, merged, tspan; combinatoric_ratelaws = false)
-        else
-            MTK.ODEProblem(e.simp, merged, tspan)
-        end
+        prob = MTK.ODEProblem(e.simp, merged, tspan)
         return MTK.SciMLBase.solve(
             prob, e.solver;
             reltol = e.reltol, abstol = e.abstol
@@ -776,16 +739,16 @@ end
 # run its inline tests through the unified frame with an `MtkTestEngine`; a
 # compile failure records one ERROR result per test (`label` names the
 # container family in the error message). Containers with no tests are skipped
-# without compiling. Solver selection (`_pick_solver`) and Catalyst default
-# seeding (`_catalyst_default_maps`) run OUTSIDE any try/catch on purpose: a
-# missing solver stack or an unresolvable declared default must abort the run
-# loudly, not degrade to per-test ERROR rows.
+# without compiling. Solver selection (`_pick_solver`) runs OUTSIDE any
+# try/catch on purpose: a missing solver stack must abort the run loudly, not
+# degrade to per-test ERROR rows. A reaction system's species and parameter
+# defaults and its mass-action rate law (`combinatoric_ratelaws = false`) come
+# from `Catalyst.ReactionSystem(::ReactionSystem)` itself.
 function _run_container_tests!(
         results::Vector{AssertionResult},
         path::AbstractString, container_kind::Symbol,
         name::AbstractString, container,
         compile::Function, label::AbstractString;
-        esm_container = nothing,
         renames::AbstractDict = _NO_RENAMES,
         stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
         stiffness = nothing, solver_hints = nothing
@@ -810,14 +773,12 @@ function _run_container_tests!(
         path; stiff_files = stiff_files,
         stiffness = stiffness
     )
-    defaults_u0, defaults_p =
-        _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
     # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
     # the runner's own defaults; each falls through independently.
     reltol, abstol = _test_integration_tolerances(solver_hints)
     engine = MtkTestEngine(
-        simp, sys_name, container_kind, solver,
-        defaults_u0, defaults_p; reltol = reltol, abstol = abstol,
+        simp, sys_name, solver;
+        reltol = reltol, abstol = abstol,
         renames = renames
     )
     return _run_test_frame!(
@@ -945,7 +906,7 @@ function run_file_tests!(
                 _run_container_tests!(
                     results, path, :reaction_system,
                     String(rname), rs, _compile_reaction_system,
-                    "ReactionSystem"; esm_container = rs,
+                    "ReactionSystem";
                     stiff_files = stiff_files, stiffness = stiffness,
                     solver_hints = esm_file.solver
                 )

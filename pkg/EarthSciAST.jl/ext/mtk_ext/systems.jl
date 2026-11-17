@@ -31,22 +31,19 @@ end
 # which has no handler → "Unsupported operator: ic"). Returns the
 # `(variable name, lowered value)` pairs plus the remaining dynamic
 # equations; `_apply_ic_defaults!` folds the values into the states.
-function _split_ic_equations(
-        flat::FlattenedSystem, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
-    )
+function _split_ic_equations(flat::FlattenedSystem, L::_Lowering)
     ic_values = Tuple{String, Any}[]
     dyn_equations = Equation[]
     # `field_ics` are classified OUT of `flat.equations` (esm-libraries-spec
     # §4.7.5 step 4), so they have to be read from their own field or the states
     # they seed silently fall back to their bare `default`.
     for (vn, rhs) in flat.field_ics
-        haskey(var_dict, vn) || throw(
+        haskey(L.vars, vn) || throw(
             ArgumentError(
                 "ic($(vn)) targets unknown variable '$(vn)'"
             )
         )
-        push!(ic_values, (vn, _esm_to_symbolic(rhs, var_dict, t_sym, dim_dict)))
+        push!(ic_values, (vn, _esm_to_symbolic(rhs, L)))
     end
     for eq in flat.equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
@@ -54,14 +51,14 @@ function _split_ic_equations(
             (length(lop.args) == 1 && lop.args[1] isa VarExpr) ||
                 throw(ArgumentError("ic(...) LHS must name a single state variable"))
             vn = (lop.args[1]::VarExpr).name
-            haskey(var_dict, vn) || throw(
+            haskey(L.vars, vn) || throw(
                 ArgumentError(
                     "ic($(vn)) targets unknown variable '$(vn)'"
                 )
             )
             push!(
                 ic_values,
-                (vn, _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict))
+                (vn, _esm_to_symbolic(eq.rhs, L))
             )
         else
             push!(dyn_equations, eq)
@@ -71,7 +68,7 @@ function _split_ic_equations(
 end
 
 # Fold each ic value into the target state's default via `setdefaultval`,
-# rewriting the shared handle in both `var_dict` (so the equations, events,
+# rewriting the shared handle in both `L.vars` (so the equations, events,
 # and `state_syms` built afterwards reference the defaulted symbol) and
 # `states` (so the default rides through into `dvs`). The default-value
 # metadata is the same channel `_build_var_dict` uses for
@@ -218,10 +215,11 @@ function ModelingToolkit.System(
 
     _assert_no_spatial_ops(flat)
 
-    var_dict, t_sym, dim_dict, states, parameters, observed = _build_var_dict(flat)
-    _register_const_array_observeds!(dim_dict, flat)
+    (; lowering, states, parameters, observed) = _build_var_dict(flat)
+    L = lowering
+    var_dict = L.vars
 
-    ic_values, dyn_equations = _split_ic_equations(flat, var_dict, t_sym, dim_dict)
+    ic_values, dyn_equations = _split_ic_equations(flat, L)
     _apply_ic_defaults!(var_dict, states, ic_values)
     # After the `ic` split, so a state whose only appearance is an initial
     # value still counts as unmentioned and gets its closure (see above).
@@ -233,8 +231,8 @@ function ModelingToolkit.System(
     MTKEquation = ModelingToolkit.Equation
     eqs = Vector{MTKEquation}()
     for eq in dyn_equations
-        lhs = _esm_to_symbolic(eq.lhs, var_dict, t_sym, dim_dict)
-        rhs = _esm_to_symbolic(eq.rhs, var_dict, t_sym, dim_dict)
+        lhs = _esm_to_symbolic(eq.lhs, L)
+        rhs = _esm_to_symbolic(eq.rhs, L)
         _push_lowered_equation!(eqs, lhs, rhs)
     end
 
@@ -249,8 +247,8 @@ function ModelingToolkit.System(
     # Symbolic handles for state variables (not their array-scalarized
     # elements) drive `Pre`-wrapping in affect equations.
     state_syms = Any[var_dict[vname] for vname in keys(flat.state_variables)]
-    cont_cbs = _build_continuous_events(flat, var_dict, t_sym, dim_dict, state_syms)
-    disc_cbs = _build_discrete_events(flat, var_dict, t_sym, dim_dict, state_syms)
+    cont_cbs = _build_continuous_events(flat, L, state_syms)
+    disc_cbs = _build_discrete_events(flat, L, state_syms)
 
     sys_name = name isa Symbol ? name : Symbol(name)
 
@@ -260,7 +258,7 @@ function ModelingToolkit.System(
     isempty(cont_cbs) || push!(event_kwargs, :continuous_events => cont_cbs)
     isempty(disc_cbs) || push!(event_kwargs, :discrete_events => disc_cbs)
     return ModelingToolkit.System(
-        eqs, t_sym, dvs, parameters;
+        eqs, L.t, dvs, parameters;
         name = sys_name, event_kwargs..., kwargs...
     )
 end

@@ -229,9 +229,9 @@ end
 # buffers form, with the SAME host buffers the interpreter reads.
 function _de_compare(
         name, fo, fi!, p, samples; buffers = nothing, rtol = 1.0e-12,
-        census = true
+        census = true, options = EXT_DE.DirectEmitOptions()
     )
-    d = EXT_DE.direct_rhs(fo)
+    d = EXT_DE.direct_rhs(fo; options = options)
     callee = buffers === nothing ? d : EXT_DE.direct_rhs_with_buffers(d)
     pr = _de_dev(p)
     u1, t1 = samples[1]
@@ -658,21 +658,21 @@ end
     @testset "the read cost model: slices per run, or one cross-producer gather" begin
         # The DECISION is pure arithmetic and needs no MLIR context.
         # `runs` is the negative control: the pre-2026-09-15 shape, never gathers.
-        withenv("ESM_DIRECT_EMIT_READ" => "runs") do
-            @test !EXT_DE._de_gather_is_cheaper(400, 1104)
-            @test !EXT_DE._de_gather_is_cheaper(600, 1000)
+        let o = EXT_DE.DirectEmitOptions(; read = :runs)
+            @test !EXT_DE._de_gather_is_cheaper(o, 400, 1104)
+            @test !EXT_DE._de_gather_is_cheaper(o, 600, 1000)
         end
         # The DEFAULT is the cost model, with nothing set.
-        withenv("ESM_DIRECT_EMIT_READ" => nothing) do
-            @test EXT_DE._de_gather_is_cheaper(400, 1104)
-            @test !EXT_DE._de_gather_is_cheaper(6, 216)
+        let o = EXT_DE.DirectEmitOptions()
+            @test EXT_DE._de_gather_is_cheaper(o, 400, 1104)
+            @test !EXT_DE._de_gather_is_cheaper(o, 6, 216)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "gather") do
+        let o = EXT_DE.DirectEmitOptions(; read = :gather)
             # 400 runs over 1,104 positions: average run 2.8, shorter than the
             # break-even 4, so one gather is the cheaper program. The rule this
             # replaced asked `400 > 1104 ÷ 2` and said no.
-            @test EXT_DE._de_gather_is_cheaper(400, 1104)
-            @test EXT_DE._de_gather_is_cheaper(8, 24)
+            @test EXT_DE._de_gather_is_cheaper(o, 400, 1104)
+            @test EXT_DE._de_gather_is_cheaper(o, 8, 24)
             # THE PIECE CAP, AND IT IS THE PIECE FLOOR. Average run length is a
             # property of the STENCIL and does not move with the grid; the
             # number of pieces is proportional to cells. A read whose runs are
@@ -683,42 +683,33 @@ end
             # pad-and-add that becomes more slices, and the passes that
             # deduplicate slices are quadratic in how many there are, while a
             # gather's reverse is one scatter.
-            @test EXT_DE._de_gather_is_cheaper(9, 9 * 7)     # avg 7, over the cap
-            @test !EXT_DE._de_gather_is_cheaper(8, 8 * 7)    # avg 7, AT the cap
-            @test !EXT_DE._de_gather_is_cheaper(1, 216)      # one affine run
-            @test !EXT_DE._de_gather_is_cheaper(6, 216)      # avg 36, under the cap
-            @test EXT_DE._de_gather_is_cheaper(936, 6552)    # a whole-grid column read
-            @test EXT_DE._de_gather_is_cheaper(100, 100_000) # avg 1000, still capped
+            @test EXT_DE._de_gather_is_cheaper(o, 9, 9 * 7)     # avg 7, over the cap
+            @test !EXT_DE._de_gather_is_cheaper(o, 8, 8 * 7)    # avg 7, AT the cap
+            @test !EXT_DE._de_gather_is_cheaper(o, 1, 216)      # one affine run
+            @test !EXT_DE._de_gather_is_cheaper(o, 6, 216)      # avg 36, under the cap
+            @test EXT_DE._de_gather_is_cheaper(o, 936, 6552)    # a whole-grid column read
+            @test EXT_DE._de_gather_is_cheaper(o, 100, 100_000) # avg 1000, still capped
             # The cap and the floor are ONE number, so the average-run test is
             # consulted at exactly that many pieces and nowhere else.
-            @test EXT_DE._de_gather_is_cheaper(8, 24)        # avg 3, at the cap
-            @test !EXT_DE._de_gather_is_cheaper(7, 21)       # avg 3, under the floor
+            @test EXT_DE._de_gather_is_cheaper(o, 8, 24)        # avg 3, at the cap
+            @test !EXT_DE._de_gather_is_cheaper(o, 7, 21)       # avg 3, under the floor
         end
         # The cap is overridable, and lifting it leaves the average-run test
         # alone — the negative control for the clause, and the shape the cap of
         # 64 this replaces produced.
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => string(typemax(Int))
-        ) do
-            @test !EXT_DE._de_gather_is_cheaper(936, 6552)
-            @test !EXT_DE._de_gather_is_cheaper(100, 100_000)
-            @test EXT_DE._de_gather_is_cheaper(400, 1104)    # the average-run test
+        let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = typemax(Int))
+            @test !EXT_DE._de_gather_is_cheaper(o, 936, 6552)
+            @test !EXT_DE._de_gather_is_cheaper(o, 100, 100_000)
+            @test EXT_DE._de_gather_is_cheaper(o, 400, 1104)    # the average-run test
         end
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => "64"
-        ) do
-            @test EXT_DE._de_gather_is_cheaper(65, 65 * 7)
-            @test !EXT_DE._de_gather_is_cheaper(64, 64 * 7)
-            @test !EXT_DE._de_gather_is_cheaper(9, 9 * 7)
+        let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = 64)
+            @test EXT_DE._de_gather_is_cheaper(o, 65, 65 * 7)
+            @test !EXT_DE._de_gather_is_cheaper(o, 64, 64 * 7)
+            @test !EXT_DE._de_gather_is_cheaper(o, 9, 9 * 7)
         end
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => "4"
-        ) do
-            @test EXT_DE._de_gather_is_cheaper(5, 10_000)
-            @test !EXT_DE._de_gather_is_cheaper(4, 10_000)
+        let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = 4)
+            @test EXT_DE._de_gather_is_cheaper(o, 5, 10_000)
+            @test !EXT_DE._de_gather_is_cheaper(o, 4, 10_000)
         end
 
         # WHETHER THE MAP'S CANONICAL BASE IS WORTH BUILDING is the same line,
@@ -727,41 +718,32 @@ end
         # a read that shatters past the cap and not against one that is a single
         # affine run. `runs` never builds one, so it stays the exact negative
         # control; `always` builds one for anything with more than a single run.
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => nothing
-        ) do
-            @test EXT_DE._de_canon_worth(9)
-            @test !EXT_DE._de_canon_worth(8)
-            @test !EXT_DE._de_canon_worth(3)
+        let o = EXT_DE.DirectEmitOptions(; read = :gather)
+            @test EXT_DE._de_canon_worth(o, 9)
+            @test !EXT_DE._de_canon_worth(o, 8)
+            @test !EXT_DE._de_canon_worth(o, 3)
         end
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => "64"
-        ) do
-            @test EXT_DE._de_canon_worth(65)
-            @test !EXT_DE._de_canon_worth(64)
-            @test !EXT_DE._de_canon_worth(8)
+        let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = 64)
+            @test EXT_DE._de_canon_worth(o, 65)
+            @test !EXT_DE._de_canon_worth(o, 64)
+            @test !EXT_DE._de_canon_worth(o, 8)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "runs") do
-            @test !EXT_DE._de_canon_worth(10_000)
+        let o = EXT_DE.DirectEmitOptions(; read = :runs)
+            @test !EXT_DE._de_canon_worth(o, 10_000)
         end
-        withenv("ESM_DIRECT_EMIT_READ" => "always") do
-            @test EXT_DE._de_canon_worth(2)
-            @test !EXT_DE._de_canon_worth(1)
+        let o = EXT_DE.DirectEmitOptions(; read = :always)
+            @test EXT_DE._de_canon_worth(o, 2)
+            @test !EXT_DE._de_canon_worth(o, 1)
         end
-        withenv(
-            "ESM_DIRECT_EMIT_READ" => "gather",
-            "ESM_DIRECT_GATHER_MAX_PIECES" => "2"
-        ) do
-            @test EXT_DE._de_canon_worth(3)
-            @test !EXT_DE._de_canon_worth(2)
+        let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = 2)
+            @test EXT_DE._de_canon_worth(o, 3)
+            @test !EXT_DE._de_canon_worth(o, 2)
         end
         # `always` is the measurement lever: gather anything with more than one
         # run, and no budget on the base.
-        withenv("ESM_DIRECT_EMIT_READ" => "always") do
-            @test EXT_DE._de_gather_is_cheaper(2, 10_000)
-            @test !EXT_DE._de_gather_is_cheaper(1, 216)
+        let o = EXT_DE.DirectEmitOptions(; read = :always)
+            @test EXT_DE._de_gather_is_cheaper(o, 2, 10_000)
+            @test !EXT_DE._de_gather_is_cheaper(o, 1, 216)
             @test EXT_DE._de_gather_base_fits(4, false, 10_000_000, typemax(Int))
         end
 
@@ -805,7 +787,7 @@ end
         end
         # The override reproduces the per-read rule's effect on this model, and
         # is how the negative control in reseact.esm's COMPILE_COST.md was run.
-        withenv("ESM_DIRECT_GATHER_BASE_MAX" => "4096") do
+        let
             @test !EXT_DE._de_gather_base_fits(2, false, 3744 + 2304, 4096)
             @test EXT_DE._de_gather_base_fits(1, false, 476_928, 4096)
         end
@@ -828,8 +810,8 @@ end
         tallies = Dict{String, Dict{Symbol, Int}}()
         outs = Dict{String, Vector{Float64}}()
         for mode in ("runs", "gather", "always")
-            withenv("ESM_DIRECT_EMIT_READ" => mode) do
-                d = EXT_DE.direct_rhs(fo)
+            let o = EXT_DE.DirectEmitOptions(; read = Symbol(mode))
+                d = EXT_DE.direct_rhs(fo; options = o)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
                 outs[mode] = Array(xla(ur, pr, tr))
                 @test isapprox(outs[mode], ref; rtol = 1.0e-12, atol = 0.0)
@@ -839,8 +821,8 @@ end
         # And the budget is a SHAPE decision, not a numerical one: the same
         # model emitted with the per-read budget the default replaces has to
         # agree to the last bit.
-        withenv("ESM_DIRECT_GATHER_BASE_MAX" => "64") do
-            d = EXT_DE.direct_rhs(fo)
+        let o = EXT_DE.DirectEmitOptions(; gather_base_max = 64)
+            d = EXT_DE.direct_rhs(fo; options = o)
             xla = RX_DE.@compile sync = true d(ur, pr, tr)
             @test isapprox(Array(xla(ur, pr, tr)), ref; rtol = 1.0e-12, atol = 0.0)
             tallies["base64"] = copy(d.stats)
@@ -853,11 +835,8 @@ end
         # BELOW the fixture's reads: every read past it becomes one gather, and
         # the numbers do not move.
         for (nm, cap) in (("cap64", "64"), ("cap2", "2"))
-            withenv(
-                "ESM_DIRECT_EMIT_READ" => "gather",
-                "ESM_DIRECT_GATHER_MAX_PIECES" => cap
-            ) do
-                d = EXT_DE.direct_rhs(fo)
+            let o = EXT_DE.DirectEmitOptions(; read = :gather, gather_max_pieces = parse(Int, cap))
+                d = EXT_DE.direct_rhs(fo; options = o)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
                 outs[nm] = Array(xla(ur, pr, tr))
                 @test isapprox(outs[nm], ref; rtol = 1.0e-12, atol = 0.0)
@@ -952,11 +931,8 @@ end
         mods = Dict{String, String}()
         tallies = Dict{String, Dict{Symbol, Int}}()
         for bits in ("32", "64")
-            withenv(
-                "ESM_DIRECT_EMIT_READ" => "always",
-                "ESM_DIRECT_GATHER_INDEX_BITS" => bits
-            ) do
-                d = EXT_DE.direct_rhs(fo)
+            let o = EXT_DE.DirectEmitOptions(; read = :always, gather_index_bits = parse(Int, bits))
+                d = EXT_DE.direct_rhs(fo; options = o)
                 mods[bits] = repr(RX_DE.@code_hlo optimize = false d(ur, pr, tr))
                 tallies[bits] = copy(d.stats)
                 xla = RX_DE.@compile sync = true d(ur, pr, tr)
@@ -999,22 +975,19 @@ end
 
     @testset "the gather's index width" begin
         # THE DECISION is pure arithmetic and needs no MLIR context.
-        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => nothing) do
-            @test EXT_DE._de_gather_index_bits() == 32
-        end
-        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "64") do
-            @test EXT_DE._de_gather_index_bits() == 64
-        end
-        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "32") do
-            @test EXT_DE._de_gather_index_bits() == 32
-        end
-        # A width the gather has no form for is a refusal, not a fallback.
-        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "16") do
-            @test_throws ESM_DE.DirectEmitError EXT_DE._de_gather_index_bits()
-        end
-        withenv("ESM_DIRECT_GATHER_INDEX_BITS" => "wide") do
-            @test_throws ESM_DE.DirectEmitError EXT_DE._de_gather_index_bits()
-        end
+        @test EXT_DE.DirectEmitOptions().gather_index_bits == 32
+        envopts(v) = EXT_DE.DirectEmitOptions(Dict("ESM_DIRECT_GATHER_INDEX_BITS" => v))
+        @test envopts("64").gather_index_bits == 64
+        @test envopts("32").gather_index_bits == 32
+        # A width the gather has no form for is a refusal, not a fallback, and
+        # it is refused when the options are built, before any emission.
+        @test_throws ESM_DE.DirectEmitError envopts("16")
+        @test_throws ESM_DE.DirectEmitError envopts("wide")
+        @test_throws ESM_DE.DirectEmitError EXT_DE.DirectEmitOptions(; gather_index_bits = 16)
+        # So is a read mode that names nothing.
+        @test_throws ESM_DE.DirectEmitError EXT_DE.DirectEmitOptions(
+            Dict("ESM_DIRECT_EMIT_READ" => "gahter")
+        )
         # THE ONE THING THAT FORCES THE WIDE FORM is a base a 32-bit index
         # cannot address. Nothing a slot map that fits in memory reaches — the
         # boundary is pinned here because no fixture can reach it.
@@ -1090,10 +1063,10 @@ end
         # decision `_de_gather_is_cheaper` exists to make. Force the other side
         # of it and the whole-lane read IS one gather per tent position, with
         # the same numbers.
-        withenv("ESM_DIRECT_EMIT_READ" => "always") do
+        let o = EXT_DE.DirectEmitOptions(; read = :always)
             da, _ = _de_compare(
                 "halo (lane-batched, gather)", fo, fi!, p,
-                samples; census = false
+                samples; census = false, options = o
             )
             println("  batched tally (always): ", da.stats)
             @test get(da.stats, Symbol("gather@rhs_scalar.x"), 0) == M * M
@@ -1203,16 +1176,17 @@ end
         M = EXT_DE._DEMap(6)
         EXT_DE._de_mark!(M, (2, 3), Int32(2))      # written at level 2
         EXT_DE._de_mark!(M, (5,), Int32(7))        # written at level 7
-        EXT_DE._DE_SECTIONS[] = ["materialization level $k" for k in 1:8]
+        secs = ["materialization level $k" for k in 1:8]
+        unw(M, s, sec, name) = EXT_DE._de_unwritten(M, s, sec, name, secs, "the rule")
         # Nothing writes slot 1: a zero, whatever section is reading.
-        @test EXT_DE._de_unwritten(M, 1, Int32(1), "x") === nothing
-        @test EXT_DE._de_unwritten(M, 1, Int32(8), "x") === nothing
+        @test unw(M, 1, Int32(1), "x") === nothing
+        @test unw(M, 1, Int32(8), "x") === nothing
         # Slot 2's writer is THIS section, still running (the in-place scan).
-        @test EXT_DE._de_unwritten(M, 2, Int32(2), "x") === nothing
+        @test unw(M, 2, Int32(2), "x") === nothing
         # Slot 5 is written at level 7: from level 2 that is a later section.
         err = nothing
         try
-            EXT_DE._de_unwritten(M, 5, Int32(2), "Mz[10]")
+            unw(M, 5, Int32(2), "Mz[10]")
         catch e
             err = e
         end
@@ -1222,8 +1196,8 @@ end
         @test occursin("materialization level 7", err.detail)   # names the writer
         @test occursin("materialization level 2", err.detail)   # and the reader
         # From level 7 itself, and from anything after it, the same slot is a zero.
-        @test EXT_DE._de_unwritten(M, 5, Int32(7), "Mz[10]") === nothing
-        @test EXT_DE._de_unwritten(M, 5, Int32(8), "Mz[10]") === nothing
+        @test unw(M, 5, Int32(7), "Mz[10]") === nothing
+        @test unw(M, 5, Int32(8), "Mz[10]") === nothing
     end
 
     @testset "the hard-error path names the construct and the rule" begin

@@ -63,7 +63,7 @@ _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 # terms are 0.0/1.0 and `n ≪ 2^53`, so every association order is exact, and the
 # tiers below only ever ADD exact small integers.
 #
-#   LADDER (n ≤ `ESS_RX_LOCATE_LADDER_MAX`, default 8). Emit the host chain
+#   LADDER (n ≤ `locate_ladder_max`, default 8). Emit the host chain
 #     verbatim: `n` compares against knot CONSTANTS, `n` selects, `n-1` adds.
 #     Bit-identical by construction — it IS the reference expression. This is
 #     not the O(table) ladder the file header warns of: it is CAPPED at a few
@@ -109,19 +109,17 @@ _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 #     None of this is assumed. The bound is VERIFIED on the host, exhaustively,
 #     at trace time: see `_rx_affine_ok`.
 #
-#   REDUCE (everything else, and `ESS_RX_LOCATE=reduce`). The original lowering,
-#     kept as the documented fallback for a non-uniform axis too big for the
-#     ladder. Nothing about it changed.
+#   REDUCE (everything else, and `locate = :reduce`). The fallback for a
+#     non-uniform axis too big for the ladder.
 #
-# `ESS_RX_LOCATE` picks the lowering (`auto` | `reduce` | `ladder` | `affine`)
-# and `ESS_RX_LOCATE_LADDER_MAX` moves the ladder/affine cut. Both are tuning
+# `DirectEmitOptions.locate` picks the lowering (`:auto` | `:reduce` | `:ladder`
+# | `:affine`) and `locate_ladder_max` moves the ladder/affine cut (environment
+# spellings `ESS_RX_LOCATE`, `ESS_RX_LOCATE_LADDER_MAX`). Both are tuning
 # thresholds of ONE tier, not a choice of evaluator: the three lowerings are
 # observationally identical, every one of them is a compiled locate, and none
 # of them puts a tree walk in the right-hand side — so neither variable selects
 # an oracle and neither is a refusal boundary. What they change is the emitted
 # program, which is what makes them worth measuring.
-_rx_locate_mode() = get(ENV, "ESS_RX_LOCATE", "auto")
-_rx_ladder_max() = something(tryparse(Int, get(ENV, "ESS_RX_LOCATE_LADDER_MAX", "8")), 8)
 
 # LADDER tier: the reference chain, op for op.
 function _rx_count_ladder(knots::Vector{Float64}, qv, cmp::F) where {F}
@@ -207,20 +205,28 @@ function _rx_count_affine(knots::Vector{Float64}, qv, cmp::F, a::Float64, b::Flo
     return gm .+ ifelse.(cmp.(_rx_take(flat, lin), qv), 1.0, 0.0)   # knots[gm+1]
 end
 
+# A traced count outside a direct emission takes the options from `ENV`.
 function _knot_count(knots::Vector{Float64}, q::_RxIdx, cmp::F) where {F}
+    o = DirectEmitOptions(ENV)
+    return _rx_knot_count(knots, q, cmp, o.locate, o.locate_ladder_max)
+end
+
+function _rx_knot_count(
+        knots::Vector{Float64}, q::_RxIdx, cmp::F,
+        mode::Symbol, ladder_max::Int
+    ) where {F}
     n = length(knots)
     L = _rx_len(q)
-    mode = _rx_locate_mode()
-    if mode != "reduce" && n >= 1
+    if mode !== :reduce && n >= 1
         qv = _rx_vec(q, max(L, 1))
-        if n <= _rx_ladder_max() || mode == "ladder"
+        if n <= ladder_max || mode === :ladder
             return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
         end
         ab = _rx_affine_fit(knots, cmp)
         if ab !== nothing
             return _rx_unwrap(_rx_count_affine(knots, qv, cmp, ab[1], ab[2]), L)
         end
-        mode == "affine" && return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
+        mode === :affine && return _rx_unwrap(_rx_count_ladder(knots, qv, cmp), L)
     end
     # Fallback: one compare against a constant knot row + one reduce.
     Lq = max(_rx_len(q), 1)

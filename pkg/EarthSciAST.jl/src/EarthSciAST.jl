@@ -26,7 +26,7 @@ module EarthSciAST
 using Dates
 using JSON3
 using JSONSchema
-using LinearAlgebra   # wall2 Phase D: BLAS `mul!` accelerator for linear mat-vec observeds
+using LinearAlgebra   # BLAS `mul!` accelerator for linear mat-vec observeds (inline_tests.jl)
 # The threaded RHS tier needs a thread dispatch that does NOT allocate a task
 # per call (see access_kernel.jl, "Threaded cell axis"). Base
 # `Threads.@threads :static` allocates ~1.6 kB per dispatch; Polyester reuses a

@@ -19,11 +19,10 @@ bridge:
   EQUATIONS, the constructs CONFORMANCE_SPEC §5.39 has every other evaluator
   refuse (`mtk_ext/compiler.jl`).
 
-Kept a `weakdep` extension (mirroring `SimulateExt` / `DataRefreshExt`) so
-the base package carries no MTK dependency; without it loaded, the core
-stubs in src/mtk_export.jl throw an `ArgumentError` naming what to load,
-and the MTK-free path (`flatten` → `FlattenedSystem`, `esm_problem`) remains
-fully available.
+Kept a weak-dependency extension so the base package carries no MTK
+dependency; without it loaded, the core stubs in src/mtk_export.jl throw an
+`ArgumentError` naming what to load, and the MTK-free path (`flatten` →
+`FlattenedSystem`, `esm_problem`) remains fully available.
 """
 module EarthSciASTMTKExt
 

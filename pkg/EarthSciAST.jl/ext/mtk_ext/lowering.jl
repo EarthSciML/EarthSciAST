@@ -12,28 +12,89 @@ const _MTK_UNARY_SCALAR_OPS = (
     "sqrt", "abs",
 )
 
-"""
-Build a Symbolics.jl expression from an ESM `ASTExpr` tree, using the given
-variable dictionary (name → symbolic variable) and the time symbol `t_sym`.
-`dim_dict` holds the time symbol plus the lowering context stored under the
-reserved keys of ext/mtk_ext/arrayop.jl.
+# The stencil gather context `_build_arrayop_sym` installs while it lowers an
+# arrayop body: the output index variables (`name => (pool var, physical lo,
+# length, step)`) in table-axis order. `_build_index` reads it to turn an
+# affine neighbour read into a numeric per-cell gather table (arrayop.jl).
+struct _GatherCtx
+    out_vars::Dict{String, Tuple{Any, Int, Int, Int}}
+    out_order::Vector{String}
+end
 
-The extension-independent scalar arms live in the shared
+"""
+    _Lowering
+
+Everything the ODE lowering reads besides the expression itself:
+
+- `vars`: ESM name => symbolic variable (states, parameters, observeds, and an
+  arrayop's index variables while its body is lowered, see `_with_bindings`);
+- `t`: the time symbol;
+- `extents`: index-set sizes, which decode an `IndexSetRef` range;
+- `const_arrays`: observeds defined by a `const` array, read as literal data;
+- `gather`: the stencil gather context while an arrayop body is lowered.
+"""
+mutable struct _Lowering
+    vars::Dict{String, Any}
+    t::Any
+    extents::Dict{String, Int}
+    const_arrays::Dict{String, Array{Float64}}
+    gather::Union{Nothing, _GatherCtx}
+end
+
+_Lowering(
+    vars::Dict{String, Any}, t;
+    extents::AbstractDict = Dict{String, Int}(),
+    const_arrays::AbstractDict = Dict{String, Array{Float64}}()
+) = _Lowering(
+    vars, t, Dict{String, Int}(extents),
+    Dict{String, Array{Float64}}(const_arrays), nothing
+)
+
+# Run `f()` with `pairs` (name => value) bound in `L.vars`, restoring whatever
+# those names held before.
+function _with_bindings(f, L::_Lowering, pairs)
+    saved = Dict{String, Any}()
+    for (k, v) in pairs
+        haskey(L.vars, k) && (saved[k] = L.vars[k])
+        L.vars[k] = v
+    end
+    try
+        return f()
+    finally
+        for (k, _) in pairs
+            haskey(saved, k) ? (L.vars[k] = saved[k]) : delete!(L.vars, k)
+        end
+    end
+end
+
+# Run `f()` with the stencil gather context `ctx` installed.
+function _with_gather(f, L::_Lowering, ctx::_GatherCtx)
+    prev = L.gather
+    L.gather = ctx
+    try
+        return f()
+    finally
+        L.gather = prev
+    end
+end
+
+"""
+    _esm_to_symbolic(expr, L::_Lowering)
+
+Build a Symbolics.jl expression from an ESM `ASTExpr` tree under the lowering
+context `L`. The extension-independent scalar arms live in the shared
 `_esm_to_symbolic_core` (ext/shared/esm_to_symbolic.jl); everything MTK-
 specific — calculus/control/comparison ops and the array vocabulary — is
 handled by `_mtk_extended_op` below.
 """
-function _esm_to_symbolic(
-        expr::EsmExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
-    )
+function _esm_to_symbolic(expr::EsmExpr, L::_Lowering)
     return _esm_to_symbolic_core(
         expr,
-        a -> _esm_to_symbolic(a, var_dict, t_sym, dim_dict);
+        a -> _esm_to_symbolic(a, L);
         number_value = _int_promoted_number,
-        resolve_var = name -> _resolve_lowering_var(name, var_dict, dim_dict),
+        resolve_var = name -> _resolve_lowering_var(name, L),
         unary_ops = _MTK_UNARY_SCALAR_OPS,
-        extended_op = (op, e) -> _mtk_extended_op(op, e, var_dict, t_sym, dim_dict)
+        extended_op = (op, e) -> _mtk_extended_op(op, e, L)
     )
 end
 
@@ -51,17 +112,14 @@ function _int_promoted_number(v)
 end
 
 # Unknown-variable policy of the ODE lowering: variables must already be
-# declared (state/parameter/observed dictionaries or a known dimension) —
-# THROW otherwise. The Catalyst rate lowering auto-creates instead; the
-# divergence is live behavior (see ext/shared/esm_to_symbolic.jl).
-function _resolve_lowering_var(
-        name::String, var_dict::Dict{String, Any},
-        dim_dict::Dict{String, Any}
-    )
-    if haskey(var_dict, name)
-        return var_dict[name]
-    elseif haskey(dim_dict, name)
-        return dim_dict[name]
+# declared (a state, parameter, observed or bound index variable, or the time
+# symbol) — THROW otherwise. The Catalyst rate lowering auto-creates instead;
+# the divergence is live behavior (see ext/shared/esm_to_symbolic.jl).
+function _resolve_lowering_var(name::String, L::_Lowering)
+    if haskey(L.vars, name)
+        return L.vars[name]
+    elseif name == "t"
+        return L.t
     else
         throw(ArgumentError("Variable '$(name)' not found in variable dictionary"))
     end
@@ -83,19 +141,15 @@ const _MTK_LOWERED_OPS = Set{String}(
 # The MTK-specific OpExpr arms: calculus operators, control flow,
 # comparisons and the array/aggregate vocabulary. Reached from `_esm_to_symbolic_core` for every op outside the
 # shared scalar arms.
-function _mtk_extended_op(
-        op::AbstractString, expr::OpExpr,
-        var_dict::Dict{String, Any}, t_sym,
-        dim_dict::Dict{String, Any}
-    )
+function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
     if op == "neg"
         # `neg` and `pow` are the deprecated word spellings of unary `-` and
         # `^` (`_DEPRECATED_OPS`, src/op_registry.jl). The loader rewrites them
         # away; an AST built in code can still carry them.
-        return -_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        return -_esm_to_symbolic(expr.args[1], L)
     elseif op == "pow"
-        return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
-            _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
+        return _esm_to_symbolic(expr.args[1], L) ^
+            _esm_to_symbolic(expr.args[2], L)
     elseif op == "D"
         # Only the time derivative lowers. A spatial `D` is a rewrite target
         # that a discretization rule must replace before a system is built.
@@ -107,18 +161,18 @@ function _mtk_extended_op(
                     "an index set) before building the system"
             )
         )
-        return Differential(t_sym)(_esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict))
+        return Differential(L.t)(_esm_to_symbolic(expr.args[1], L))
     elseif op == "ifelse"
-        cond = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        t_val = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
-        f_val = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
+        cond = _esm_to_symbolic(expr.args[1], L)
+        t_val = _esm_to_symbolic(expr.args[2], L)
+        f_val = _esm_to_symbolic(expr.args[3], L)
         return ifelse(cond, t_val, f_val)
     elseif op == "Pre"
-        arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        arg = _esm_to_symbolic(expr.args[1], L)
         return ModelingToolkit.Pre(arg)
     elseif op in (">", "<", ">=", "<=", "==", "!=")
-        l = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
-        r = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
+        l = _esm_to_symbolic(expr.args[1], L)
+        r = _esm_to_symbolic(expr.args[2], L)
         return op == ">" ? l > r :
             op == "<" ? l < r :
             op == ">=" ? l >= r :
@@ -126,19 +180,19 @@ function _mtk_extended_op(
             op == "==" ? l == r :
             l != r
     elseif op == "faq"
-        return _build_arrayop_sym(expr, var_dict, t_sym, dim_dict)
+        return _build_arrayop_sym(expr, L)
     elseif op == "makearray"
-        return _build_makearray(expr, var_dict, t_sym, dim_dict)
+        return _build_makearray(expr, L)
     elseif op == "index"
-        return _build_index(expr, var_dict, t_sym, dim_dict)
+        return _build_index(expr, L)
     elseif op == "broadcast"
-        return _build_broadcast(expr, var_dict, t_sym, dim_dict)
+        return _build_broadcast(expr, L)
     elseif op == "reshape"
-        return _build_reshape(expr, var_dict, t_sym, dim_dict)
+        return _build_reshape(expr, L)
     elseif op == "transpose"
-        return _build_transpose(expr, var_dict, t_sym, dim_dict)
+        return _build_transpose(expr, L)
     elseif op == "concat"
-        return _build_concat(expr, var_dict, t_sym, dim_dict)
+        return _build_concat(expr, L)
     elseif op == "const"
         # esm-spec §9.2: a `const` node IS its value. A scalar lowers to the
         # number. An ARRAY lowers to a dense `Array{Float64}` (`value[i][j]` is
@@ -159,31 +213,16 @@ function _mtk_extended_op(
     end
 end
 
-# Walk an ESM expression tree looking for any spatial differential operator
-# (`grad`/`div`/`laplacian`). Returns the offending op name on the first
-# match, or `nothing` if none is present. Used by `ModelingToolkit.System` to
-# refuse an undiscretized spatial operator with a message that says so.
+# The first spatial differential operator (`grad`/`div`/`laplacian`) anywhere in
+# `expr`, or `nothing`. Used by `ModelingToolkit.System` to refuse an
+# undiscretized spatial operator with a message that says so.
 function _find_spatial_op(expr::EsmExpr)::Union{String, Nothing}
-    if expr isa OpExpr
-        if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
-            return expr.op
-        end
-        for a in expr.args
-            hit = _find_spatial_op(a)
-            hit === nothing || return hit
-        end
-        if expr.expr_body !== nothing
-            hit = _find_spatial_op(expr.expr_body)
-            hit === nothing || return hit
-        end
-        if expr.values !== nothing
-            for v in expr.values
-                hit = _find_spatial_op(v)
-                hit === nothing || return hit
-            end
-        end
+    hit = nothing
+    EarthSciAST.foreach_subexpr(expr) do x
+        hit === nothing && x isa OpExpr && x.op in ("grad", "div", "laplacian") &&
+            (hit = x.op)
     end
-    return nothing
+    return hit
 end
 
 # Build a native `Array{Num}` from a `makearray` node. We construct the
@@ -200,8 +239,7 @@ end
 # element by element and must match the region's shape once singleton
 # dimensions are dropped (esm-spec §4.3.2).
 function _build_makearray(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
     expr.regions === nothing && throw(ArgumentError("makearray node missing 'regions'"))
     expr.values === nothing && throw(ArgumentError("makearray node missing 'values'"))
@@ -221,7 +259,7 @@ function _build_makearray(
     result = Array{Symbolics.Num}(undef, sz...)
     fill!(result, Symbolics.Num(0))
     for (region, val_expr) in zip(expr.regions, expr.values)
-        v = _esm_to_symbolic(val_expr, var_dict, t_sym, dim_dict)
+        v = _esm_to_symbolic(val_expr, L)
         region_axes = Tuple(pair[1]:pair[2] for pair in region)
         if v isa Symbolics.Arr || v isa AbstractArray
             _fill_makearray_region!(result, region_axes, v)
@@ -265,13 +303,9 @@ end
 # carries no boundary policy for a const array, so the §5.5.5 default applies,
 # and the zero ghost of a state/observed gather is never used.
 
-# `dim_dict` key of the name → `Array{Float64}` registry of const-array
-# observeds, filled by `_register_const_array_observeds!`.
-const _CONST_ARRAYS_KEY = "__esm_const_array_observeds__"
-
-# Record every observed defined by a `const` array so a gather on its name
-# reads the literal data rather than the symbolic array variable.
-function _register_const_array_observeds!(dim_dict::Dict{String, Any}, flat)
+# Every observed defined by a `const` array, so a gather on its name reads the
+# literal data rather than the symbolic array variable.
+function _const_array_observeds(flat)
     registry = Dict{String, Array{Float64}}()
     for eq in flat.equations
         (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
@@ -279,19 +313,15 @@ function _register_const_array_observeds!(dim_dict::Dict{String, Any}, flat)
         (rhs.op == "const" && rhs.value isa AbstractVector) || continue
         registry[(eq.lhs::VarExpr).name] = EarthSciAST._const_op_to_array(rhs.value)
     end
-    isempty(registry) || (dim_dict[_CONST_ARRAYS_KEY] = registry)
-    return nothing
+    return registry
 end
 
 # `(table, name)` when `base` is a const-array gather base, else `(nothing, "")`.
-function _const_index_base(base::EsmExpr, dim_dict::Dict{String, Any})
+function _const_index_base(base::EsmExpr, L::_Lowering)
     if base isa OpExpr && base.op == "const" && base.value isa AbstractVector
         return EarthSciAST._const_op_to_array(base.value), "inline const"
-    elseif base isa VarExpr
-        registry = get(dim_dict, _CONST_ARRAYS_KEY, nothing)
-        if registry !== nothing && haskey(registry, base.name)
-            return registry[base.name], base.name
-        end
+    elseif base isa VarExpr && haskey(L.const_arrays, base.name)
+        return L.const_arrays[base.name], base.name
     end
     return nothing, ""
 end
@@ -325,8 +355,7 @@ Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_const_gather), args...) = 
 
 function _build_const_gather(
         table::Array{Float64}, name::String,
-        idx_args::AbstractVector, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        idx_args::AbstractVector, L::_Lowering
     )
     length(idx_args) == ndims(table) ||
         throw(
@@ -338,7 +367,7 @@ function _build_const_gather(
     )
     idxs = Any[]
     for a in idx_args
-        v = _esm_to_symbolic(a, var_dict, t_sym, dim_dict)
+        v = _esm_to_symbolic(a, L)
         # `Num <: Real`, so test the unwrapped value: only a NUMBER resolves now.
         n = Symbolics.value(v)
         if n isa Real
@@ -429,19 +458,15 @@ end
 # Symbolics.Arr is 1-based and would raise BoundsError without this guard.
 # Out-of-bounds periodic reads return 0 (zero-ghost convention).
 function _build_index(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
     # A const-array gather (CONFORMANCE_SPEC §5.5.5) never takes the zero ghost
     # below, so it is routed before the operand is lowered.
-    table, table_name = _const_index_base(expr.args[1], dim_dict)
+    table, table_name = _const_index_base(expr.args[1], L)
     table === nothing ||
-        return _build_const_gather(
-        table, table_name, expr.args[2:end],
-        var_dict, t_sym, dim_dict
-    )
+        return _build_const_gather(table, table_name, expr.args[2:end], L)
 
-    arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+    arr = _esm_to_symbolic(expr.args[1], L)
     idx_args = expr.args[2:end]
 
     # Stencil gather path (ess-c59): inside a stencil arrayop body, when this
@@ -449,8 +474,8 @@ function _build_index(
     # numeric per-cell gather table instead of emitting a symbolic index. This
     # keeps boundary reads (e.g. u[i-1, j] at i=1 -> Dirichlet ghost 0) within
     # the 1:N field, so the scalarizer never sees an out-of-bounds index.
-    ctx = get(dim_dict, _GATHER_CTX_KEY, nothing)
-    if ctx isa _GatherCtx && arr isa AbstractArray && !isempty(idx_args) &&
+    ctx = L.gather
+    if ctx !== nothing && arr isa AbstractArray && !isempty(idx_args) &&
             _index_args_gatherable(idx_args, ctx)
         return _build_gather_read(arr, idx_args, ctx)
     end
@@ -470,7 +495,7 @@ function _build_index(
             )
             push!(idxs, Int(a.value))
         else
-            push!(idxs, _esm_to_symbolic(a, var_dict, t_sym, dim_dict))
+            push!(idxs, _esm_to_symbolic(a, L))
         end
     end
     # Ghost-cell guard: concrete integer indices outside the declared array
@@ -506,8 +531,7 @@ const _BROADCAST_FNS = Dict{String, Function}(
 )
 
 function _build_broadcast(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
     # The §4.3.4 `fn` contract, from the SAME predicate `validate()` reports as
     # `invalid_broadcast_fn` and the tree-walk build enforces: a missing /
@@ -518,16 +542,15 @@ function _build_broadcast(
     fn_name = String(expr.fn)
     fn = get(_BROADCAST_FNS, fn_name, nothing)
     fn === nothing && throw(ArgumentError("Unsupported broadcast fn: $fn_name"))
-    operands = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
+    operands = [_esm_to_symbolic(a, L) for a in expr.args]
     return Base.materialize(Base.broadcasted(fn, operands...))
 end
 
 function _build_reshape(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
     expr.shape === nothing && throw(ArgumentError("reshape node missing 'shape'"))
-    arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+    arr = _esm_to_symbolic(expr.args[1], L)
     dims = Int[]
     for entry in expr.shape
         if entry isa Integer
@@ -540,10 +563,9 @@ function _build_reshape(
 end
 
 function _build_transpose(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
-    arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+    arr = _esm_to_symbolic(expr.args[1], L)
     if expr.perm !== nothing
         # Schema perm is 0-based; Julia permutedims expects 1-based axes.
         perm1 = [p + 1 for p in expr.perm]
@@ -553,10 +575,9 @@ function _build_transpose(
 end
 
 function _build_concat(
-        expr::OpExpr, var_dict::Dict{String, Any},
-        t_sym, dim_dict::Dict{String, Any}
+        expr::OpExpr, L::_Lowering
     )
     expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
-    arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
+    arrs = [_esm_to_symbolic(a, L) for a in expr.args]
     return cat(arrs...; dims = expr.axis + 1)
 end

@@ -61,7 +61,7 @@ direct StableHLO emitter, and return a callable `(u, p, t) -> du` to compile:
 
 ```julia
 fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
-d   = EarthSciASTReactantExt.direct_rhs(fo; var_map = vmap)
+d   = EarthSciAST.direct_rhs(fo; var_map = vmap)
 ur  = Reactant.ConcreteRArray(u0)
 pr  = NamedTuple{keys(p)}(map(Reactant.ConcreteRNumber, values(p)))
 tr  = Reactant.ConcreteRNumber(0.0)
@@ -82,6 +82,10 @@ Build the device inputs with [`direct_state`](@ref), [`direct_params`](@ref) and
 [`direct_time`](@ref) so they land on the chosen client with the chosen shard;
 see device.jl for what a slab shard means and when it is refused.
 
+`options` is the emitter's [`DirectEmitOptions`](@ref): read-form and fold
+switches that change the program's shape. The default reads them from `ENV`
+once, here.
+
 DIRECT EMISSION IS THE COMPILED PATH. A model containing any node kind or kernel
 shape the emitter cannot lower raises `EarthSciAST.DirectEmitError` naming the
 construct and the rule it came from. There is no fallback to the interpreter — a
@@ -97,7 +101,7 @@ reassociate (see ops.jl). Emitted programs are never compared.
 """
 function direct_rhs(
         f::_E._OopRHS; var_map = nothing, client = nothing,
-        sharding = nothing
+        sharding = nothing, options::DirectEmitOptions = DirectEmitOptions(ENV)
     )
     names = Dict{Int, String}()
     if var_map !== nothing
@@ -106,13 +110,11 @@ function direct_rhs(
         end
     end
     cl = direct_client(client)
-    n_states = getfield(f.rhs, :n_states)::Int
-    shard = _de_rule!("the flat state's cell axis") do
-        _de_resolve_shard(sharding, cl, n_states, names)
-    end
+    n_states = f.rhs.n_states
+    shard = _de_resolve_shard(sharding, cl, n_states, names)
     return _de_register_place!(
         DirectRHS{typeof(f), shard !== nothing}(f, names, Dict{Symbol, Int}()),
-        DirectPlace(cl, shard)
+        DirectPlace(cl, shard, options)
     )
 end
 
@@ -123,8 +125,8 @@ end
 The explicit-buffers form:
 
 ```julia
-fo  = EarthSciAST.Internal.build(model; form = :oop, param_arrays = forcing)[1]
-db  = EarthSciASTReactantExt.direct_rhs_with_buffers(fo)
+fo  = EarthSciAST.Internal.build(model; form = :oop, param_arrays = forcing).f!
+db  = EarthSciAST.direct_rhs_with_buffers(fo)
 dev = map(Reactant.ConcreteRArray, forcing_buffers(fo))
 xla = Reactant.@compile db(ur, pr, tr, dev)
 # at each cadence boundary, after the host refresh:
@@ -149,23 +151,23 @@ function _de_run(
         hostkeys::Vector{Vector{Float64}}
     )
     rhs = d.f.rhs
-    n_states = getfield(rhs, :n_states)::Int
-    n_total = getfield(rhs, :n_total)::Int
+    n_states = rhs.n_states
+    n_total = rhs.n_total
     length(u) == n_states ||
-        _de_refuse(
+        _de_refuse_at(
+        "the right-hand side",
         "a state vector of length $(length(u))",
         "this model's flat state has $n_states elements."
     )
     ctx = _DECtx(
         n_states, n_total, p, _de_time(t), _DEVal(u.mlir_data, n_states),
-        bufs, hostkeys, d.names
+        bufs, hostkeys, d.names, _de_options(d)
     )
-    out = _de_rule!("the right-hand side") do
-        _de_emit!(ctx, rhs)
-    end
+    out = _de_emit!(ctx, rhs)
     d.stats = copy(ctx.stats)
     out.len == n_states ||
-        _de_refuse(
+        _de_refuse_at(
+        "the right-hand side",
         "an assembled `du` of length $(out.len)",
         "the output slot map assembled to the wrong width; expected " *
             "$n_states."
@@ -203,7 +205,8 @@ function (d::DirectRHS)(u::TracedRArray{Float64, 1}, p, t)
     host = _E.forcing_buffers(d.f)
     named = join(String[String(k) for k in keys(host)], ", ")
     isempty(host) ||
-        _de_refuse(
+        _de_refuse_at(
+        "the right-hand side",
         "a live forcing buffer under the three-argument form",
         "this model binds $(length(host)) live forcing buffer(s) " *
             "($named). The three-argument " *
@@ -219,7 +222,8 @@ function (b::DirectRHSBuffers)(u::TracedRArray{Float64, 1}, p, t, buffers)
     d = b.d
     host = _E.forcing_buffers(d.f)
     length(buffers) == length(host) ||
-        _de_refuse(
+        _de_refuse_at(
+        "the right-hand side",
         "a `buffers` argument of length $(length(buffers))",
         "it must be aligned with `forcing_buffers(f)`, which has " *
             "$(length(host)) entry/entries in name-sorted order."
@@ -239,7 +243,8 @@ end
     _de_wrong_eltype(T)
 
 _de_wrong_eltype(::Type{T}) where {T} =
-    _de_refuse(
+    _de_refuse_at(
+    "the right-hand side",
     "a state vector with element type $T",
     "direct emission is Float64 throughout — every emitted value is a " *
         "`tensor<Lxf64>` — and it will not widen a narrower state into Float64 " *
@@ -251,7 +256,8 @@ _de_wrong_eltype(::Type{T}) where {T} =
 (d::DirectRHS)(u, p, t) = _de_not_traced(u)
 (b::DirectRHSBuffers)(u, p, t, buffers) = _de_not_traced(u)
 
-_de_not_traced(u) = _de_refuse(
+_de_not_traced(u) = _de_refuse_at(
+    "the right-hand side",
     "a call on a state vector of type $(typeof(u))",
     "direct emission builds StableHLO and only runs under `Reactant.@compile`. " *
         "Pass a `ConcreteRArray{Float64,1}` (which the trace turns into a " *

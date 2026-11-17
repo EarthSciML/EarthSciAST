@@ -26,6 +26,7 @@
 # shape and the rule it came from. See api.jl for why.
 #
 # FILES
+#   options.jl  `DirectEmitOptions`, the tuning switches, read from ENV once
 #   values.jl   the emitted value, the context, constants, shape plumbing, slot
 #               maps, the slices-plus-concatenate read form, forcing buffers
 #   ops.jl      the elementwise ladder, the ⊕-folds, the host const-fold
@@ -46,11 +47,16 @@
 #               reaches back into the package's Problem surface.
 
 import EarthSciAST
+# The entry points are declared in src/compiler_xla.jl; the methods are here.
+import EarthSciAST: direct_rhs, direct_rhs_with_buffers, direct_state,
+    direct_params, direct_time, direct_buffers, direct_client, direct_devices,
+    direct_shard, direct_devicecount, direct_platform
 const _E = EarthSciAST
 const _MLIR = Reactant.MLIR
 const _hlo = Reactant.MLIR.Dialects.stablehlo
 const _chlo = Reactant.MLIR.Dialects.chlo
 
+include("options.jl")
 include("values.jl")
 include("ops.jl")
 include("closed.jl")

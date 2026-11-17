@@ -256,9 +256,8 @@ import Symbolics
         ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         t = Symbolics.variable(:t)
         y, x = Symbolics.variable(:y), Symbolics.variable(:x)
-        vd = Dict{String, Any}("y" => y, "x" => x)
-        dd = Dict{String, Any}("t" => t)
-        lower(e) = ext._esm_to_symbolic(e, vd, t, dd)
+        L = ext._Lowering(Dict{String, Any}("y" => y, "x" => x), t)
+        lower(e) = ext._esm_to_symbolic(e, L)
         A = EarthSciAST.ASTExpr
         # Two-operand atan is atan(y, x), not atan(y).
         @test isequal(lower(OpExpr("atan", A[VarExpr("y"), VarExpr("x")])), atan(y, x))

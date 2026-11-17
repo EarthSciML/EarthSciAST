@@ -583,22 +583,20 @@ function _walk_expr_for_gaps!(
         expr, seen::Set{String}, gaps::Vector{GapReport},
         where_str::String
     )
-    return if expr isa OpExpr
-        if !(expr.op in _KNOWN_OPS) && !(expr.op in seen)
-            push!(seen, expr.op)
-            push!(
-                gaps, GapReport(
-                    "unknown_operator",
-                    "'$(expr.op)' is not an ESM operator; express it with the " *
-                        "built-in operators or an expression template (esm-spec §9.6)",
-                    where_str
-                )
+    EarthSciAST.foreach_subexpr(expr) do x
+        x isa OpExpr || return
+        (x.op in _KNOWN_OPS || x.op in seen) && return
+        push!(seen, x.op)
+        push!(
+            gaps, GapReport(
+                "unknown_operator",
+                "'$(x.op)' is not an ESM operator; express it with the " *
+                    "built-in operators or an expression template (esm-spec §9.6)",
+                where_str
             )
-        end
-        for a in expr.args
-            _walk_expr_for_gaps!(a, seen, gaps, where_str)
-        end
+        )
     end
+    return nothing
 end
 
 """

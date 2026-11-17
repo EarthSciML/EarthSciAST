@@ -109,7 +109,13 @@ end
 # default one: Reactant's own default backend, unsharded, which is what the
 # lane did before device choice existed.
 _de_lookup_place(d) =
-    get(() -> DirectPlace(Reactant.XLA.default_backend(), nothing), _DE_PLACES, d)
+    get(
+    () -> DirectPlace(Reactant.XLA.default_backend(), nothing, DirectEmitOptions(ENV)),
+    _DE_PLACES, d
+)
+
+# The emission options of `d`, read at trace time beside the trace (see below).
+_de_options(d) = _de_lookup_place(d).opts::DirectEmitOptions
 
 # `_de_run` reads the shard through this lookup WHILE TRACING, to attach the
 # `sharding_constraint` to `du`. Nothing inside it is a traced operation — it is
@@ -147,6 +153,7 @@ _de_lookup_place(d) =
 # nests, so the generator depth under `@compile` is now a small constant.
 function _de_skip_rewrite!()
     Reactant.@skip_rewrite_func _de_lookup_place
+    Reactant.@skip_rewrite_func _de_options
     Reactant.@skip_rewrite_func _de_emit!
     return nothing
 end
@@ -232,15 +239,17 @@ end
 """
     DirectPlace
 
-The placement recorded for a [`DirectRHS`](@ref): the XLA client its device
-inputs are built on, and the cell-axis [`DirectShard`](@ref) or `nothing`. It is
-NOT a field of the wrapper — it is held beside it, in `_DE_PLACES` — because a
-callable that carries it is a callable `Reactant.@compile` cannot get through.
-Read it through [`direct_client`](@ref) and [`direct_shard`](@ref).
+What is recorded for a [`DirectRHS`](@ref) beside it: the XLA client its
+device inputs are built on, the cell-axis [`DirectShard`](@ref) or `nothing`,
+and the [`DirectEmitOptions`](@ref) its emission runs with. It is NOT a field of
+the wrapper — it is held beside it, in `_DE_PLACES` — because a callable that
+carries it is a callable `Reactant.@compile` cannot get through. Read it through
+[`direct_client`](@ref), [`direct_shard`](@ref) and `_de_options`.
 """
 struct DirectPlace
     client::Reactant.XLA.AbstractClient
     shard::Union{Nothing, DirectShard}
+    opts::DirectEmitOptions
 end
 
 # The mesh axis is named for what it cuts. One axis only: `u` is rank 1.
@@ -291,6 +300,9 @@ function _de_state_blocks(names::Dict{Int, String}, n::Int)
     return blocks
 end
 
+# The rule a sharding refusal names.
+const _DE_SHARD_RULE = "the flat state's cell axis"
+
 # Refuse a slab cut that is neither "inside one block" nor "whole blocks".
 function _de_check_block_alignment(blocks, n::Int, ndev::Int)
     blocks === nothing && return nothing   # no var map: nothing to check against
@@ -304,7 +316,8 @@ function _de_check_block_alignment(blocks, n::Int, ndev::Int)
         # several blocks: accept only if the slab is exactly whole blocks.
         (hit[1][1] == lo && hit[end][2] == hi) && continue
         partial = String[b[3] for b in hit if b[1] < lo || b[2] > hi]
-        _de_refuse(
+        _de_refuse_at(
+            _DE_SHARD_RULE,
             "a cell-axis shard slab that straddles a variable block",
             "device $d would hold flat slots $lo:$hi, which is a partial piece " *
                 "of more than one state variable (" * join(partial, ", ") * "). The " *
@@ -336,14 +349,16 @@ function _de_resolve_shard(spec, client, n::Int, names::Dict{Int, String})
     end
     ndev = length(devs)
     ndev >= 2 ||
-        _de_refuse(
+        _de_refuse_at(
+        _DE_SHARD_RULE,
         "a cell-axis shard across $ndev device(s)",
         "sharding needs at least two devices; the " *
             "$(Reactant.XLA.platform_name(client)) client exposes $ndev " *
             "addressable device(s). Leave `sharding` unset to run on one."
     )
     n % ndev == 0 ||
-        _de_refuse(
+        _de_refuse_at(
+        _DE_SHARD_RULE,
         "a cell-axis shard of a $n-slot state across $ndev devices",
         "the flat state length is not divisible by the device count, so the " *
             "slabs would be ragged. Shard across a device count that divides " *

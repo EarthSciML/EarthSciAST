@@ -23,12 +23,13 @@ an attached GPU, and **which one is fixed by the client of the arrays you feed
 it**. This page is about that choice and about cutting the state across several
 devices of one client.
 
-The emitter lives in a package extension, so reach it through
-`Base.get_extension`:
+The emitter lives in the Reactant package extension; its entry points are
+declared (unexported) in EarthSciAST itself, so they are reached as
+`EarthSciAST.direct_rhs` and friends once Reactant is loaded:
 
 ```julia
 using EarthSciAST, Reactant
-ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
+const ESA = EarthSciAST
 ```
 
 ## One device
@@ -41,10 +42,10 @@ whatever Reactant's default happens to be:
 ```julia
 fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
 
-d  = ext.direct_rhs(fo; var_map = vmap, client = :gpu)
-ur = ext.direct_state(d, u0)      # ConcreteRArray on that client
-pr = ext.direct_params(d, p)      # every parameter as a ConcreteRNumber
-tr = ext.direct_time(d, 0.0)
+d  = ESA.direct_rhs(fo; var_map = vmap, client = :gpu)
+ur = ESA.direct_state(d, u0)      # ConcreteRArray on that client
+pr = ESA.direct_params(d, p)      # every parameter as a ConcreteRNumber
+tr = ESA.direct_time(d, 0.0)
 
 xla = Reactant.@compile sync = true d(ur, pr, tr)
 du  = Array(xla(ur, pr, tr))
@@ -86,7 +87,7 @@ xla = compile_rhs(d, ur, pr, tr)
 
 The `compiled_rhs` adapter and the sharding test both do exactly this.
 
-`ext.direct_platform(d)` reports what the wrapper settled on (`"cuda x1"`,
+`ESA.direct_platform(d)` reports what the wrapper settled on (`"cuda x1"`,
 `"cpu x4"`), which is worth logging: asking for `:gpu` on a machine with no GPU
 **throws** rather than quietly running on the CPU, and a run that silently
 changed platform is a result nobody can interpret afterwards.
@@ -103,8 +104,8 @@ schema has no field for it.
 `sharding` cuts the flat state across several devices of the chosen client:
 
 ```julia
-d = ext.direct_rhs(fo; var_map = vmap, client = :gpu, sharding = :cells)  # all of them
-d = ext.direct_rhs(fo; var_map = vmap, client = :gpu, sharding = 4)       # the first four
+d = ESA.direct_rhs(fo; var_map = vmap, client = :gpu, sharding = :cells)  # all of them
+d = ESA.direct_rhs(fo; var_map = vmap, client = :gpu, sharding = 4)       # the first four
 ```
 
 `direct_state` then builds `u` already distributed, and the emitted `du` carries
