@@ -83,8 +83,8 @@
 #
 # ASCENDING SLOT ORDER makes clause (2) a single forward pass. Prelude slot order is
 # topological (a def may only read slots strictly below its own — `_compile_cse`
-# assigns child slots first, and `_share_kernel_invariants!` sorts its new defs by node
-# count for the same reason), so when slot `s` is classified, every slot it can
+# assigns child slots first, and `_share_kernel_invariants!` mints its new defs in
+# first-seen order, dependencies before their parents), so when slot `s` is classified, every slot it can
 # possibly reference is already classified:
 #
 #     tier[s] = max(leaf tiers of def s, tier[r] for r in cached-slots-referenced)
@@ -128,7 +128,7 @@ function _def_tier(n::_Node, tier::Vector{Int8}, slot::Int, cache::_CSECache)::I
         (1 <= r < slot) || return _TIER_DYNAMIC       # not below us: fail closed
         return @inbounds tier[r]
     end
-    # `_NK_LITERAL` / `_NK_PARAM` are childless ⇒ const. `_NK_OP` (`fn` included) and
+    # `_NK_LITERAL` / `_NK_PARAM` are childless ⇒ const. `_NK_OP` and
     # `_NK_CONTRACTION` are pure functions of their children: max over them. A
     # live forcing buffer is refreshed at time boundaries, whatever offset it is
     # read at, so `_NK_LIVE_GATHER` is at least TIME, and its subscripts can

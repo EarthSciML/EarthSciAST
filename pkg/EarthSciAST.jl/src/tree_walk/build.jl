@@ -6139,9 +6139,9 @@ end
 # kernels (ess-dhq) rather than pushed individually into `rhs_list`; the
 # per-cell build logic (ghost cells, const-array inlining, joins/filters,
 # variable-valence bounds) is unchanged. Appends to `acc_kernels` and marks
-# `covered` for every cell it owns. Two-branch dispatch: the symbolic-stencil
-# fast path when it applies, else the per-cell fallback
-# (`_compile_faq_percell!`).
+# `covered` for every cell it owns. The tiers are offered in order at the
+# function itself (`_compile_faq_equation!`); the per-cell build
+# (`_compile_faq_percell!`) is the last.
 # (`acc_kernels` is a `Vector{_AccKernel}`; the annotation is omitted because
 # `_AccKernel` is defined in access_kernel.jl, included after this build section.)
 
@@ -6224,12 +6224,14 @@ end
 # filter admits the monotone window `j ⋚ i` against one output index — so the
 # equation can be evaluated as a term pass plus an O(N) accumulation instead of
 # the O(N²) guarded fold `_unrolled_contraction_body` would emit. See scan.jl
-# for the rewrite, the bit-exactness argument, and why forward-only.
+# for the rewrite and the bit-exactness argument.
 #
-# Returns `(axis, inclusive, j_name, term_iters)` — `axis` the POSITION of the
-# scanned symbol in `idx_names`, `term_iters` the range vector the TERM build
-# must run over (`nothing` ⇒ `range_iters` unchanged; see the STAGGERED case
-# below) — or `nothing` for anything that is not exactly this shape. Every
+# Returns `(axis, inclusive, j_name, term_iters, reverse)` — `axis` the
+# POSITION of the scanned symbol in `idx_names`, `term_iters` the range vector
+# the TERM build must run over (`nothing` ⇒ `range_iters` unchanged; see the
+# STAGGERED case below), `reverse` whether the window is `j >= i` (a REVERSE
+# scan, folding from the top of the axis) — or `nothing` for anything that is
+# not exactly this shape. Every
 # condition below is load-bearing:
 #
 #   * one contracted symbol, constant-bound: a second contraction or a ragged
@@ -8541,11 +8543,6 @@ function expanded_model(
     return model
 end
 
-# Value-invention materialisation runs only through the AbstractDict
-# front-door (which owns the document-scoped index-set registry the pass
-# needs); default the internal extents/vars to empty here so a direct
-# EsmFile/Model call is unchanged.
-
 # The const-array keys an authored bare factor name resolves to in THIS build.
 # The front-door build keeps bare names, but `esm_problem` flattens first — every
 # variable is namespaced to `<OrigModel>.<name>` (the model itself renamed
@@ -8847,14 +8844,12 @@ end
 """
     _build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
 
-Parse a raw ESM dict, then delegate. This is the signature from the
-bead description; the typed entry point is faster for callers that
-already have a parsed `Model`.
+Parse a raw ESM dict, then delegate to the typed entry point, which is faster
+for callers that already have a parsed `Model`.
 
-`const_arrays` (forwarded via kwargs) accepts pre-computed 1D float arrays
-keyed by name. `index(name, i)` references in the equations are inlined as
-literal values. Used to inject `__stgfw_` Fornberg weight arrays for
-`stencil_gen` models with `spacing="from_grid"`.
+`const_arrays` (forwarded via kwargs) accepts pre-computed float arrays keyed
+by name; a read `index(name, i…)` at constant subscripts is inlined as a
+literal value.
 """
 function _build_evaluator(esm::AbstractDict; compiler::Symbol = :native, kwargs...)
     # Before the pre-build work below, which is not cheap and which a refusal

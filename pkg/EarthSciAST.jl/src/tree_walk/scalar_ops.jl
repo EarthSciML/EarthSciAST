@@ -58,11 +58,8 @@ let arms = :(return nothing)
 end
 
 # The fixed-2-ary elementwise arms (`/`, `^`, `pow`, `atan2`), GENERATED from
-# `_BINARY_ELEMENTWISE_OPS`. NB the `^` arm here is only the FALLBACK for a
-# malformed arity: a well-formed 2-ary `^`/`pow` is intercepted upstream by
-# the walkers' literal-exponent arms (`_eval_node_op`, `_eval_acc_op`) and never
-# reaches the shared ladder: a literal exponent must stay a host `Float64` so a
-# Dual walk keeps the power rule.
+# `_BINARY_ELEMENTWISE_OPS`. A literal exponent stays a host `Float64` (the
+# leaves are never converted to `T`), so a Dual walk keeps the power rule.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(

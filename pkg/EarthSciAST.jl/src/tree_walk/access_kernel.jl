@@ -385,7 +385,7 @@ _AccKernel(
 # to it — the type flows naturally from the leaves (a state read yields
 # `eltype(u)`, a const/literal yields `Float64`) and promotes at the operators.
 # That duck-typing is load-bearing: it is what keeps a LITERAL `^` exponent a
-# `Float64` (see the `:^` arm of `_eval_acc_op`), and it makes the `T === Float64`
+# `Float64` (the power rule under a Dual walk), and it makes the `T === Float64`
 # path bit-identical to the pre-AD walker, instruction for instruction. Matches
 # `_eval_node`'s discipline arm for arm — the differential + AD tests pin it.
 #
