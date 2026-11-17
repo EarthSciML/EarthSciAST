@@ -292,7 +292,8 @@ function _build_tpl_skeleton(name::String, reg, memo::_ExpandCache)
     root = try
         body = _raw_get(decl, "body")
         _expand_expr_refs(expression_from_json(_substitute(body, sent)), reg, nested, memo)
-    catch
+    catch e
+        _is_resource_error(e) && rethrow()
         # The direct route raises the real diagnostic at each site.
         nothing
     finally
