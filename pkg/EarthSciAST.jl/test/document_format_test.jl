@@ -609,10 +609,11 @@ end
 @testset "a refused document says where" begin
     path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "expression_templates_arrhenius.esm")
     doc = JSON.parse(read(path, String))
-    for (fmt, decl) in ((:markdown, ":var["), (:typst, "#var("))
+    for (fmt, decls) in ((:markdown, (":var[", ":param[")), (:typst, ("#var(", "#param(")))
         lines = split(print_document(doc, fmt), '\n')
-        i = findfirst(l -> occursin(decl, l), lines)
+        i = findfirst(l -> any(d -> startswith(l, d), decls), lines)
         @test i !== nothing
+        decl = decls[findfirst(d -> startswith(lines[i], d), decls)]
         bad = copy(lines)
         bad[i] = replace(bad[i], decl => decl * "\"")
         err = try
@@ -627,7 +628,7 @@ end
         @test occursin("line $i:", sprint(showerror, err))
         # CRLF line ends and a byte-order mark move no line.
         err2 = try
-            parse_document("﻿" * join(bad, "\r\n"), fmt)
+            parse_document("\ufeff" * join(bad, "\r\n"), fmt)
             nothing
         catch e
             e
