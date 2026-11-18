@@ -288,7 +288,7 @@ end
 # an ordinary one that the kernel-class merge can batch.
 function _affine_reduce_form(
         contract_names::Vector{String}, contract_const,
-        agg_gates, oplus::String, zerobar::Float64
+        agg_gates::Union{Vector{_JoinGate}, Nothing}, oplus::String, zerobar::Float64
     )
     isempty(contract_names) && return nothing
     agg_gates === nothing || return nothing
@@ -349,7 +349,7 @@ end
 #     cells sum DIFFERENT terms and share no partial result at all.
 function _detect_prefix_scan(
         idx_names::Vector{String}, range_iters,
-        contract_names::Vector{String}, contract_const, agg_gates, agg_filter,
+        contract_names::Vector{String}, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing}, agg_filter,
         rhs_body::ASTExpr
     )
     agg_gates === nothing || return nothing
@@ -603,7 +603,7 @@ end
 # The scan fold's slots in lane order (see `_build_scan_fold`), for an LHS whose
 # subscripts are affine.
 function _scan_fold_slots!(
-        slots::Vector{Int}, blk, var_map, vname::String,
+        slots::Vector{Int}, blk, var_map::AbstractDict{String, Int}, vname::String,
         forms::Vector{Tuple{Int, Int, Int}}, axis::Int,
         outer_iters, scan_range
     )
@@ -618,7 +618,7 @@ function _scan_fold_slots!(
     )
 end
 function _scan_fold_slots_lanes!(
-        slots::Vector{Int}, blk, var_map, vname::String,
+        slots::Vector{Int}, blk, var_map::AbstractDict{String, Int}, vname::String,
         forms::Vector{Tuple{Int, Int, Int}}, axis::Int,
         lanes, scan_range, cell::Vector{Int},
         loop::Vector{Int}, nd::Int
@@ -825,8 +825,8 @@ const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 # The tile view of a `faq` equation (`_range_affine_view`, range_hooks.jl) and
 # its whole-domain ranges in `idx_names` order, or `nothing`.
 function _faq_range_view(
-        lhs_body::OpExpr, idx_names, range_iters, var_map,
-        array_var_info, xeq
+        lhs_body::OpExpr, idx_names::Vector{String}, range_iters, var_map::AbstractDict{String, Int},
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}, xeq
     )
     spec = _range_spec_now()
     spec === nothing && return nothing
@@ -1651,7 +1651,7 @@ end
 # ranges as a tuple, so the loop is compiled for their rank rather than
 # dispatched per cell. Returns the number of cells.
 function _ac_claim_outs!(
-        outs::Vector{Int}, covered::_Covered, blk, var_map, vname::String,
+        outs::Vector{Int}, covered::_Covered, blk, var_map::AbstractDict{String, Int}, vname::String,
         cell::Vector{Int}, forms, iters::Tuple
     )
     c = 0
@@ -1963,7 +1963,7 @@ end
 # literals by `idx_exprs`. The arithmetic reading of the same thing, for a
 # left-hand side whose subscripts are affine, is `_lhs_affine_target` /
 # `_lhs_cell_slot`.
-function _lhs_cell_slot_at(lhs_body::OpExpr, idx_exprs::Dict{String, ASTExpr}, var_map)
+function _lhs_cell_slot_at(lhs_body::OpExpr, idx_exprs::Dict{String, ASTExpr}, var_map::AbstractDict{String, Int})
     sub_lhs = _sub_preserving(lhs_body, idx_exprs)
     malformed(why) = throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS", why))
     sub_lhs isa OpExpr && sub_lhs.op == "D" || malformed("expected D(index(...)) in faq body")
@@ -1994,7 +1994,7 @@ end
 function _array_contraction_table(
         contract_refs::Vector{Base.RefValue{Int}},
         idx_names::Vector{String}, range_iters, contract_names::Vector{String},
-        contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
+        contract_ranges, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing}, oplus::String, zerobar::Float64,
         const_registry::AbstractDict; reverse::Bool = false
     )
     nc = length(contract_names)
@@ -2020,8 +2020,8 @@ end
 # `_array_contraction_table`'s cell loop, behind a barrier so it runs at the
 # concrete type of the cell iterator.
 function _ac_table_fill!(
-        seg, cols, iters, fixed, idx_env, cells, idx_names,
-        contract_names, contract_ranges, contract_const, agg_gates,
+        seg, cols, iters, fixed, idx_env, cells, idx_names::Vector{String},
+        contract_names, contract_ranges, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing},
         zerobar, const_registry, reverse::Bool = false
     )
     nc = length(contract_names)
