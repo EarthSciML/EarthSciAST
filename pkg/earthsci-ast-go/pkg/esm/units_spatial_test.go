@@ -26,7 +26,7 @@ func spatialNode(op, operand, dim string) ExprNode {
 // dimensional analysis reports an indeterminate (nil) result and no error, the
 // same as the same user op without a `dim` — even when `dim` names a declared,
 // unit-bearing variable. No op-name gating remains (the `grad`, `div` and
-// `laplacian` ops that once had one were removed at esm 3.0.0).
+// `laplacian` ops that once had one were removed at esm 2.4.0).
 func TestDimFieldUserOpDimensionsAreIndeterminate(t *testing.T) {
 	env := spatialUnitEnv(t)
 	ref, err := PropagateDimension(ExprNode{Op: "godunov_hamiltonian", Args: []any{"c"}}, env)

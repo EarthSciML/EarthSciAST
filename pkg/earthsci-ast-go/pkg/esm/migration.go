@@ -5,27 +5,27 @@ package esm
 // the typed MigrationError.
 //
 // A migration here is a pure version-MARKER bump: it changes the `esm` field
-// and touches nothing else. Three lines of versions can be carried to the
-// current schema version that way:
+// and touches nothing else. Two lines of versions can be carried to the current
+// schema version that way:
 //
-//   - the ADDITIVE line `3.0.0 … <current schema version>`: a run of schema
+//   - the ADDITIVE line `2.0.0 … <current schema version>`: a run of schema
 //     releases each of which introduced its changes as additive,
 //     backward-compatible fields, so an older file already loads under the
 //     newer schema without any mechanical transform;
-//   - the 2.x line `2.0.0 … 2.3.0`. esm 3.0.0 is a break that only REMOVES the
-//     spatial-calculus ops `grad`, `div` and `laplacian` (removed_ops.go), so a
-//     2.x document that uses none of them means the same under 3.0.0 and is
-//     relabelled. One that uses any is REFUSED with the `removed_op`
-//     diagnostic; there is no codemod for them (MIGRATION.md, "esm 3.0.0").
-//   - the 1.x line `1.0.0 … 1.3.0`. esm 2.0.0 is a break that only REMOVES
-//     constructs — the closed-function call `fn`, `function_tables` and
+//   - the 1.x line `1.0.0 … 1.3.0` (last1x). esm 2.0.0 is a break that only
+//     REMOVES constructs — the closed-function call `fn`, `function_tables` and
 //     `table_lookup`, `skolem`, `rank`, the geometry leaves and the `argmin` /
 //     `argmax` op forms (removed_ops.go) — so a 1.x document that uses none of
-//     them (nor the 3.0.0 removals) means the same under the current version
-//     and is relabelled. One that uses any is REFUSED with the `removed_op`
-//     diagnostic: rewriting the 2.0.0 removals to the esm:std templates is the
-//     job of the one codemod (`python -m earthsci_ast.migrate`), not of a
-//     marker bump.
+//     them means the same under 2.0.0 and is relabelled. One that uses any is
+//     REFUSED with the `removed_op` diagnostic: rewriting it to the esm:std
+//     templates is the job of the one codemod (`python -m earthsci_ast.migrate`),
+//     not of a marker bump.
+//
+// esm 2.4.0 removed the spatial-calculus ops `grad`, `div` and `laplacian`
+// (removed_ops.go). A source on either line that uses one is REFUSED with the
+// `removed_op` diagnostic too, pointing at MIGRATION.md "esm 2.4.0": there is
+// no codemod for them, and a marker bump would label as 2.4.0 a document that
+// 2.4.0 rejects.
 //
 // THERE IS NO MIGRATION ACROSS THE 1.0.0 BOUNDARY. esm 1.0.0 is a clean break
 // with no deprecation path: the five declared variable types collapse to two,
@@ -43,8 +43,8 @@ package esm
 // The single supported target is the CURRENT schema version (SchemaVersion);
 // arbitrary intermediate targets are deliberately NOT offered — there is no
 // per-minor transform to encode, only "bring this file up to current". Sources
-// outside these lines (newer than current, another major, a 1.x minor past
-// 1.3.0, a 2.x minor past 2.3.0, or malformed) yield no supported targets.
+// outside both lines (newer than current, another major, a 1.x minor past
+// last1x, or malformed) yield no supported targets.
 
 import (
 	"encoding/json"
@@ -76,8 +76,8 @@ type MigrationError struct {
 	FromVersion string
 	ToVersion   string
 	// Code is the diagnostic code of a refusal that has one: `removed_op` for a
-	// 1.x or 2.x document that uses a construct esm 2.0.0 or 3.0.0 removed.
-	// Empty otherwise.
+	// 1.x document that uses a construct esm 2.0.0 removed, or a 1.x or 2.x
+	// document that uses one esm 2.4.0 removed. Empty otherwise.
 	Code  string
 	cause error
 }
@@ -142,14 +142,18 @@ func sign(n int) int {
 	}
 }
 
-// lastMinorOfMajor is the last schema release of each older major line a
-// newer library relabels: 1.3.0 is the last 1.x release and 2.3.0 the last
-// 2.x release, so a later minor of either names a format that never existed
-// and is not offered.
-var lastMinorOfMajor = map[int]semVer{
-	1: {Major: 1, Minor: 3, Patch: 0},
-	2: {Major: 2, Minor: 3, Patch: 0},
-}
+// additiveFloor is the oldest version of the additive line. The 1.x line ended
+// at the 2.0.0 break, so it is 2.0.0; a 1.x source is carried forward only by
+// the relabel of onRelabelLine.
+var additiveFloor = semVer{Major: 2, Minor: 0, Patch: 0}
+
+// first1x and last1x bound the 1.x line a 2.x library relabels: 1.3.0 is the
+// last 1.x schema release, so a later 1.x minor names a format that never
+// existed and is not offered.
+var (
+	first1x = semVer{Major: 1, Minor: 0, Patch: 0}
+	last1x  = semVer{Major: 1, Minor: 3, Patch: 0}
+)
 
 // currentSchemaSemVer is SchemaVersion parsed once.
 var currentSchemaSemVer = func() semVer {
@@ -161,19 +165,20 @@ var currentSchemaSemVer = func() semVer {
 }()
 
 // onAdditiveLine reports whether `v` sits on the additive line
-// `<current major>.0.0 … current` and can therefore be carried to current by a
-// marker-only, no-op migration.
+// `2.0.0 … current` and can therefore be carried to current by a marker-only,
+// no-op migration.
 func onAdditiveLine(v, current semVer) bool {
 	return v.Major == current.Major &&
+		compareSemVer(v, additiveFloor) >= 0 &&
 		compareSemVer(v, current) <= 0
 }
 
-// onRelabelLine reports whether `v` is a release of an older supported major
-// (1.0.0 … 1.3.0, or 2.0.0 … 2.3.0 under a 3.x library) that the library
-// relabels to current when the document uses no removed construct.
+// onRelabelLine reports whether `v` is a 1.x version a 2.x library relabels to
+// current when the document uses no removed construct.
 func onRelabelLine(v, current semVer) bool {
-	last, ok := lastMinorOfMajor[v.Major]
-	return ok && v.Major < current.Major && compareSemVer(v, last) <= 0
+	return current.Major == 2 &&
+		compareSemVer(v, first1x) >= 0 &&
+		compareSemVer(v, last1x) <= 0
 }
 
 // migrationTargets is SupportedMigrationTargets against an explicit current
@@ -188,10 +193,10 @@ func migrationTargets(sourceVersion string, current semVer, currentStr string) [
 // SupportedMigrationTargets returns the schema versions `sourceVersion` can be
 // migrated to.
 //
-//   - any version on the additive line `3.0.0 … <current schema version>`, on
-//     the 2.x line `2.0.0 … 2.3.0` or on the 1.x line `1.0.0 … 1.3.0` →
-//     [SchemaVersion]. A 1.x or 2.x source is offered by VERSION; Migrate still
-//     refuses one that uses a removed construct.
+//   - any version on the additive line `2.0.0 … <current schema version>`, or
+//     on the 1.x line `1.0.0 … 1.3.0` → [SchemaVersion]. A 1.x source is
+//     offered by VERSION; Migrate still refuses a 1.x document that uses a
+//     removed construct.
 //   - everything else — including EVERY 0.x version, which 1.0.0's clean break
 //     puts out of reach of a marker bump — → an empty slice.
 //
@@ -215,12 +220,13 @@ func CanMigrate(sourceVersion, targetVersion string) bool {
 // `targetVersion`.
 //
 // Every supported step is a pure version-marker bump with no structural
-// transform: a source on the additive line, the 2.x line or the 1.x line
-// advanced to the current schema version (see the file header). A 1.x or 2.x
-// document that uses a removed op returns a *MigrationError whose Code is
-// `removed_op`, naming the op, where it is, and the codemod (for a 2.0.0
-// removal) or MIGRATION.md "esm 3.0.0" (for `grad`, `div`, `laplacian`);
-// errors.As finds the underlying diagnostic as a DiagnosticError. Any other version pair — a 0.x source included —
+// transform: a source on the additive line or the 1.x line advanced to the
+// current schema version (see the file header). A 1.x document that uses a
+// removed op returns a *MigrationError whose Code is `removed_op`, naming the
+// op, where it is, and the codemod; so does a 1.x or 2.x document that uses
+// `grad`, `div` or `laplacian`, pointing at MIGRATION.md "esm 2.4.0" instead
+// of the codemod. errors.As finds the underlying diagnostic
+// as a DiagnosticError. Any other version pair — a 0.x source included —
 // returns a *MigrationError. Content-level changes are not performed; they are
 // modeling decisions, not mechanical migrations.
 //
@@ -256,21 +262,23 @@ func migrateAgainst(file *ESMFile, targetVersion string, current semVer, current
 			ToVersion:   targetVersion,
 		}
 	}
-	if v, _ := parseSemVer(sourceVersion); onRelabelLine(v, current) {
-		if removed, err := findRemovedInFile(file); err != nil {
-			return nil, &MigrationError{
-				Message:     err.Error(),
-				FromVersion: sourceVersion,
-				ToVersion:   targetVersion,
-			}
-		} else if removed != nil {
-			return nil, &MigrationError{
-				Message:     removed.Message,
-				FromVersion: sourceVersion,
-				ToVersion:   targetVersion,
-				Code:        codeRemovedOp,
-				cause:       removed,
-			}
+	// Every supported source is checked: a 1.x source for the 2.0.0 removals
+	// and, on either line, the 2.4.0 removals (`grad`, `div`, `laplacian`).
+	removed, err := findRemovedInFile(file)
+	if err != nil {
+		return nil, &MigrationError{
+			Message:     err.Error(),
+			FromVersion: sourceVersion,
+			ToVersion:   targetVersion,
+		}
+	}
+	if removed != nil {
+		return nil, &MigrationError{
+			Message:     removed.Message,
+			FromVersion: sourceVersion,
+			ToVersion:   targetVersion,
+			Code:        codeRemovedOp,
+			cause:       removed,
 		}
 	}
 
