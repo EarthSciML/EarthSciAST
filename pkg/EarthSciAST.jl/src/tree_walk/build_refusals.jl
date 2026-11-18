@@ -45,7 +45,7 @@ end
 # documents.
 #
 # First in equation order, so a document with several gets a stable message.
-function _first_doubly_defined_unknown(equations)
+function _first_doubly_defined_unknown(equations::AbstractVector{Equation})
     diff_eqs = Dict{String, Equation}()
     bare_eqs = Dict{String, Equation}()
     for eq in equations
@@ -167,7 +167,7 @@ _doubly_defined_refusal(name::AbstractString, diff_eq::Equation, bare_eq::Equati
 # keeps a doubly-defined name a STATE and drops nothing — integrates a system
 # free of a constraint the file declares and reports the trajectory as the
 # answer.
-function _refuse_doubly_defined_unknown(equations)
+function _refuse_doubly_defined_unknown(equations::AbstractVector{Equation})
     found = _first_doubly_defined_unknown(equations)
     found === nothing || throw(_doubly_defined_refusal(found...))
     return nothing

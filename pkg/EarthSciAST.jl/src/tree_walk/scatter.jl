@@ -40,7 +40,7 @@
 #
 # A RAGGED range whose parent is another contracted index (`{from: <ragged>,
 # of: [r]}`, `r` contracted) makes the box a nest, parent outer, not a product
-# (`_contract_nest`, resolve.jl). Both forms walk that nest in its own order:
+# (`_contract_nest`, aggregate_expand.jl). Both forms walk that nest in its own order:
 # the static form while it builds the table, the run-time form over a point
 # list the build walks once (only when no range reads an output index, so one
 # list serves every chunk).
@@ -917,13 +917,13 @@ function _scatter_symbolic(
     b = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
     got = _resolve_array_contraction_term(
         b, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather; nest_scalar_loops = true
+        _ResolveCtx(array_var_info, var_map, const_registry, pgather); nest_scalar_loops = true
     )
     got isa _Decline && return got
     nd = try
         _compile(got[3], var_map, param_sym_set)
     catch err
-        # Only a document-level refusal is a decline (see resolve.jl).
+        # Only a document-level refusal is a decline (see resolve_loops.jl).
         err isa EarthSciASTError || rethrow()
         return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
     end

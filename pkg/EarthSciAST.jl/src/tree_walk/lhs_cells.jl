@@ -185,11 +185,8 @@ end
 
 # Every LHS predicate below reads "is this a time derivative?" through
 # `_is_time_derivative`, which applies esm-spec §4.2's default: an ABSENT `wrt`
-# MEANS `t`. Spelling the test `lhs.wrt == "t"` dropped that default on this
-# pathway while `classification.jl` kept it, so the tree-walk runner refused
-# `{"op": "D", "args": ["z"]}` with `E_TREEWALK_UNSUPPORTED_EQUATION` for a
-# document `ode_states` had already reported `z` as a state of
-# (EarthSciAST#407).
+# MEANS `t`, as `classification.jl` does, so the build and `ode_states` agree
+# on which variables are states.
 
 # Identify D(scalar_var) — the classic scalar ODE LHS.
 function _is_scalar_D_lhs(lhs)

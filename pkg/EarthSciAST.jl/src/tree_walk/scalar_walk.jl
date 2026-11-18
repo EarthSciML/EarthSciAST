@@ -30,7 +30,7 @@
     elseif k === _NK_PARAM
         return _read_param(p, n.sym, n.idx)
     elseif k === _NK_PARAM_GATHER
-        # Live read of a captured forcing buffer (ess-14f.3). `payload` is the
+        # Live read of a captured forcing buffer. `payload` is the
         # aliased flat `Vector{Float64}` (a `_PGatherArray.flat`) and `idx` the
         # pre-linearized column-major offset, both fixed at build time; the buffer
         # CONTENTS are refreshed in place by the J1 discrete callback. The concrete
@@ -38,11 +38,11 @@
         # runtime-symbol `getfield`, so the scalar `p` NamedTuple stays homogeneous).
         @inbounds return (n.payload::Vector{Float64})[n.idx]
     elseif k === _NK_CONST_GATHER || k === _NK_LIVE_GATHER
-        # Runtime-indexed read of a captured const/provider array (wall2 Phase B),
+        # Runtime-indexed read of a captured const/provider array,
         # or of a live forcing buffer (`_NK_LIVE_GATHER`, the same read).
         # `payload` is a `_ConstGatherArray` (flat column-major values + strides);
         # the subscript `children` are evaluated HERE and linearized HERE, so a
-        # child that resolves to a runtime-varying value (Phase C: a bound output
+        # child that resolves to a runtime-varying value (a bound output
         # index) reaches a different element with no rebuild. Subscripts are
         # exact-integer-valued, so `round(Int, …)` recovers them without drift. Each
         # subscript is resolved on its own axis (`_const_gather_sub`). The concrete
@@ -60,7 +60,7 @@
     elseif k === _NK_TIME
         return t
     elseif k === _NK_CACHED
-        # Common-subexpression reference (ess-r7h). The value was computed once
+        # Common-subexpression reference. The value was computed once
         # into the per-call scratch cache by the CSE prelude (see `_make_rhs`);
         # every occurrence reads it here instead of re-walking the subtree. The
         # `_CSECache` is captured in `payload` at build time; `T` selects which of
@@ -71,7 +71,7 @@
         return _eval_contraction(n, u, p, t, T)
     elseif k === _NK_LOOPVAR
         # Current value of the enclosing runtime contraction loop counter
-        # (ess-runtime-contraction). Always an INTEGER (a contracted index),
+        #. Always an INTEGER (a contracted index),
         # read as a `Float64` like the literal the unroll puts in its place, so
         # arithmetic on it differentiates as the unroll's does.
         return Float64((n.payload::Base.RefValue{Int})[])
@@ -104,7 +104,7 @@ the node.
     )
 )
 
-# Runtime state read at a loop-var-dependent slot (ess-runtime-contraction).
+# Runtime state read at a loop-var-dependent slot.
 # Evaluates the subscript children to integers, bounds-checks each against the
 # state array's `[lo,hi]` (an out-of-range subscript is a ghost cell → 0̄, matching
 # the unroll), computes the column-major offset into the frozen slot table, and
@@ -120,7 +120,7 @@ function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
         (sg.lo[d] <= sub <= sg.hi[d]) || return zero(eltype(u))   # ghost cell
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
-    slot = @inbounds sg.slot_flat[off + 1]
+    slot = _sg_slot(sg, off)
     @inbounds return u[slot]
 end
 
@@ -185,7 +185,7 @@ end
     )
 end
 
-# Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static
+# Compile-once runtime ⊕-reduction. Iterates the static
 # integer range `lo:step:hi`, writing the counter into the shared `Ref` every
 # iteration so the ONE compiled `body` (whose `_NK_LOOPVAR` leaves read that ref)
 # yields term(k); folds with ⊕ seeded from 0̄ (`n.literal`). The iteration order is
@@ -275,7 +275,7 @@ end
 # `@tullio s = …` sum (which `zero`-seeds the same sequential accumulation). The
 # Tullio form built per-call codegen machinery (~80 B per reduced cell); keeping
 # the arms structurally identical is what makes the RHS `f!` non-allocating
-# (ess-9cc). This node is only built with ≥1 child (the empty case folds to a
+#. This node is only built with ≥1 child (the empty case folds to a
 # literal upstream).
 # bool_and_or's ⊕ (§5.1) on the evaluator's 1.0/0.0 encoding of a truth value:
 # a fold step, so both operands are evaluated, as the other bindings' reductions

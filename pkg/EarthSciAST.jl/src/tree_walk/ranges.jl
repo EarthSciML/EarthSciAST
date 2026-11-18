@@ -71,7 +71,7 @@ _is_const_int_range(r::AbstractVector) = _allof(x -> x isa Integer, r)
 # variable-valence / ragged segment reduction with NO host-side padding: the
 # upper bound is each cell's true valence, evaluated lazily per output cell.
 # Integer elements pass through unchanged, so a fully-constant range gives the
-# same result as `_expand_int_range` (backward compatible).
+# same result as `_expand_int_range`.
 function _expand_int_range_dyn(
         r::AbstractVector, idx_env::Dict{String, Int},
         const_arrays::AbstractDict

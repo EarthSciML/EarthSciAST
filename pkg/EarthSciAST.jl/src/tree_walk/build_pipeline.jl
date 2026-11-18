@@ -575,6 +575,25 @@ end
 _rhs_list_compiled(::_InPlace) = false
 _rhs_list_compiled(::_OutOfPlace) = true
 
+# The state length of a two-buffer slot space (`_ObsSplitVec`, obs_buffers.jl)
+# the in-place sections address, or 0 for one plain vector: the out-of-place
+# product is read as one vector.
+_obs_split_nst(::_InPlace, n_states::Int, n_total::Int) = n_total > n_states ? n_states : 0
+_obs_split_nst(::_OutOfPlace, ::Int, ::Int) = 0
+# An observed fill level always runs on the split slot space in place.
+_level_nst(::_InPlace, n_states::Int) = n_states
+_level_nst(::_OutOfPlace, ::Int) = 0
+
+# A recurrence sweep has no lowering in the out-of-place product.
+_check_recurrence_form(::_InPlace, ::String) = nothing
+_check_recurrence_form(::_OutOfPlace, name::String) = _refuse_rule(
+    name,
+    "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
+        "lowering in the out-of-place product this compiler emits; " *
+        "its cells cannot be computed as one whole-array program " *
+        "(CONFORMANCE_SPEC §5.19.2)"
+)
+
 # Phase 4 (`_build_compile_evaluator`): the observed split, the const-array
 # registry, the live forcing buffers and the two compile scopes, the discrete
 # caches, the initialization-equation seed, the materialized-observed fill
@@ -691,7 +710,7 @@ function _build_compile_evaluator(
         template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
         rhs_list_compiled = _rhs_list_compiled(form),
-        obs_nst = (form isa _InPlace && n_total > n_states) ? n_states : 0
+        obs_nst = _obs_split_nst(form, n_states, n_total)
     )
 
     sealed = _seal_fill_levels(form, levels, oop_levels, state_eqs, split, n_states, n_total)
@@ -858,7 +877,7 @@ function _compile_fill_levels(
             lvl, cadence, fill, recurrence, split.resolved, scope, _n_total(layout);
             template_sites = template_sites,
             rhs_list_compiled = _rhs_list_compiled(form),
-            obs_nst = form isa _InPlace ? n_states : 0
+            obs_nst = _level_nst(form, n_states)
         )
             for (lvl, cadence) in plan
     ]
@@ -1136,7 +1155,7 @@ function _build_evaluator_impl_inner(
         parameter_overrides::AbstractDict = Dict{String, Float64}(),
         tspan::Union{Nothing, Tuple{<:Real, <:Real}} = nothing,
         const_arrays::AbstractDict = Dict{String, Vector{Float64}}(),
-        # Live forcing buffers bound BY REFERENCE (ess-14f.3, JL-J0).
+        # Live forcing buffers bound BY REFERENCE.
         # Each value MUST be a dense `Array{Float64}`; its `index(…)`
         # reads compile to live `_NK_PARAM_GATHER` nodes over an
         # aliased flat view, so a discrete-cadence
@@ -1146,7 +1165,7 @@ function _build_evaluator_impl_inner(
         # literal inlining). Disjoint from the scalar `p` NamedTuple
         # so existing scalar-param reads stay byte-identical + 0-alloc.
         param_arrays::AbstractDict = Dict{String, Any}(),
-        # Per-const-array boundary policy (ess-gj4): name → an
+        # Per-const-array boundary policy: name → an
         # iterable of per-dimension policy symbols (:periodic |
         # :clamp | :error). A const array named here is wrapped so
         # an out-of-range stencil gather resolves declaratively
@@ -1259,9 +1278,8 @@ function _build_evaluator_impl_inner(
     _refuse_doubly_defined_unknown(model.equations)
     # A DATA-FED parameter with nothing bound to it is refused here too, and for
     # the same reason (esm-spec §9.6.6 `data_source_unbound`, CONFORMANCE_SPEC
-    # §5.46): this build used to bind such a parameter from its `default` and
-    # integrate it, reporting a whole trajectory under the label of a rate the
-    # document says is read from a file. The three registries are every channel a
+    # §5.46): binding it from its `default` would report a trajectory under the
+    # label of a rate the document says is read from a file. The three registries are every channel a
     # value can have arrived through by now — the resolved `parameter_overrides`,
     # `const_arrays` (a CONST provider's materialized field, a gated provider's
     # fetched slab, and inline array data for a shaped parameter) and
@@ -1317,8 +1335,8 @@ function _build_evaluator_impl_inner(
     end
     # ---- esm-spec §4.3.1 `faq_bare_array_operand`, on the EXPANDED model ----
     # `validate` (and the front door's reference-integrity refusal) cannot see a
-    # bare shaped name a template binding delivers into a `faq` filter, the
-    # spelling issue #441 was found in; here every reference is expanded.
+    # bare shaped name a template binding delivers into a `faq` filter; here
+    # every reference is expanded.
     _refuse_faq_bare_array_operands(model)
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed
@@ -1480,7 +1498,7 @@ function _build_evaluator_impl_inner(
             )
     end
 
-    # ---- The parameter partition (differentiability plan §3 Phase 5) ----
+    # ---- The parameter partition ----
     # Every build-time consumer has now run, so the read set is complete.
     # Published to whichever sinks the caller supplied; never changes the build.
     if _param_classes !== nothing || products !== nothing
@@ -1528,13 +1546,7 @@ function _level_recurrence(
         products::Union{Nothing, BuildProducts}
     )
     name in recur_names || return nothing
-    form isa _OutOfPlace && _refuse_rule(
-        name,
-        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
-            "lowering in the out-of-place product this compiler emits; " *
-            "its cells cannot be computed as one whole-array program " *
-            "(CONFORMANCE_SPEC §5.19.2)"
-    )
+    _check_recurrence_form(form, name)
     sw = _compile_recurrence_sweep(
         name, mat_defs[name],
         layout.mat_dims[name], get(model.variables, name, nothing), resolved_obs, cs

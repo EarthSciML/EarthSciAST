@@ -189,17 +189,23 @@ end
 end
 
 # Run a section: `body(args, c, nchunks)` for every chunk when its verdict
-# allows threading (at most `maxchunks` chunks), else its serial instance
-# `body(args, 1, 1)`. A chunk computes each of its cells exactly as the serial
-# instance does, so both routes give the same bits.
+# allows threading (at most `maxchunks` chunks), else serially: `body(args, 1,
+# 1)`, or its `ntiles` static tiles back to back (`body(args, c, ntiles)` for
+# each `c`), which keeps a large section's working set in cache. A chunk or
+# tile computes each of its cells exactly as the serial instance does, so every
+# route gives the same bits.
 @inline function _run_section!(
-        tc::_SecTCache, body::B, args::A, maxchunks::Int = typemax(Int)
+        tc::_SecTCache, body::B, args::A, maxchunks::Int = typemax(Int), ntiles::Int = 1
     ) where {B, A}
     if _threads_available() && _sec_prep_threads!(tc).state == 1
         tc.nchunks = min(tc.nchunks, maxchunks)
         _run_chunked!(tc, body, args)
-    else
+    elseif ntiles == 1
         body(args, 1, 1)
+    else
+        for c in 1:ntiles
+            body(args, c, ntiles)
+        end
     end
     return nothing
 end

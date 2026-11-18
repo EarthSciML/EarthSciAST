@@ -249,6 +249,58 @@ _foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr, Nothing}) = (f(e); nothing
     return nothing
 end
 
+# Every VarExpr name appearing anywhere in `expr` — the NON-BINDING twin of
+# `free_variables`: it enumerates children through the ONE shared
+# `child_exprs`/`foreach_subexpr` traversal (so it sees EVERY expression-bearing
+# `OpExpr` field: args, faq `expr_body`, integral `lower`/`upper`,
+# makearray `values`, aggregate `filter` predicates, value-invention `key`s,
+# and expression-valued dense `ranges` bounds), plus
+# the `wrt` differentiation target, exactly as `free_variables` does. Unlike
+# `free_variables` it does NOT subtract a faq's bound loop
+# symbols — we need the vars an expression READS, and every caller intersects
+# the result with declared variable names (which drops the bound indices).
+#
+# Do NOT re-hand-roll the field list here. This walker feeds the setup-geometry
+# dependency closure, the live-taint pass, `_resolve_observed`'s inlining
+# trigger AND the cadence materialization split (`_discrete_materialize_split`),
+# where a missed reference is a silent wrong answer (a def whose only state read
+# sits in an aggregate `filter` would be frozen into a discrete-cadence cache at
+# `u = 0`). Routing through `child_exprs` keeps this walker in step with the
+# IR; `_build_discrete_materializer!` additionally CHECKS the
+# result on the compiled fill nodes, so a future divergence fails loudly.
+#
+# IDENTITY-MEMOIZED (`foreach_subexpr_once`, expression.jl — the same generated
+# field walk, deduplicated by `OpExpr` identity): the inputs here are routinely
+# DAGs — `_resolve_observed` bodies keep sharing via `_sub_preserving`'s
+# identity memo, and this walker runs INSIDE that resolver's fixed-point loop —
+# so the plain path-walk (`foreach_subexpr`) was exponential on an observed
+# chain whose levels each reference their predecessor ≥2×. A name set
+# is dedup-insensitive, so the result is identical to the un-memoized walk.
+function _referenced_var_names(expr, acc::Set{String} = Set{String}())
+    expr isa ASTExpr || return acc
+    foreach_subexpr_once(expr) do e
+        if e isa VarExpr
+            push!(acc, e.name)
+        elseif e isa OpExpr && e.wrt !== nothing
+            push!(acc, e.wrt::String)
+        end
+    end
+    return acc
+end
+
+# Run `sweep` — a `() -> Bool` "did this pass change anything" closure — until a
+# pass reports no change. The shared shape of the monotone set-propagation
+# passes in `_geometry_setup_vars` (live taint, scalar-observed block,
+# setup-forward, setup-backward) and the closure-materialization pass in
+# `_derive_binning_coords`: each caller owns its seed set(s) and grows them
+# inside `sweep`; saturation of a monotone pass over a finite universe always
+# terminates.
+function _saturate!(sweep::Function)
+    while sweep()
+    end
+    return nothing
+end
+
 # The pointer segment of a child at `key` in the field with wire key `w`.
 _child_pointer(path, w, ::Int) = string(path, "/", w)
 _child_pointer(path, w, mk::AbstractString) = string(path, "/", w, "/", mk)

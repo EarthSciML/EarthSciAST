@@ -92,6 +92,29 @@ _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 # the per-kernel transaction in `_build_codegen_rhs` catches it and the kernel
 # keeps its per-cell runner.
 
+# A fused scan's consumer as the nest emits it (`_cg_consumer`, scan_fused.jl):
+# kernel `K`, whose descriptor `ix` reads the scan's value at its cell plus
+# `delta`, with `invsyms` its invariant locals; `store` writes `K`'s own output.
+struct _CGConsumer
+    K::_AccKernel
+    ix::Int
+    delta::Int
+    store::Bool
+    invsyms::Vector{Symbol}
+end
+
+# A fused prefix scan's nest (scan_fused.jl): the accumulator local `acc`, the
+# ordinal range `[a, b)` of one lane, the fold `op`, whether the fold is
+# inclusive, and the consumer taken in, if any.
+struct _CGScanMode
+    acc::Symbol
+    a::Symbol
+    b::Symbol
+    op::Symbol
+    inclusive::Bool
+    cons::Union{Nothing, _CGConsumer}
+end
+
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
     # Runtime objects the generated code needs (const arrays, slot tables,
@@ -148,11 +171,8 @@ mutable struct _CGCtx
     # `tblcbs` collects the run-mode locals the version guard tests.
     tblaffine::Bool
     tblcbs::Vector{Symbol}
-    # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
-    # rule its loop body folds each cell's term with — `(acc, a, b, op,
-    # inclusive, cons)`, the nest running ordinals `[a, b)` (one lane), `cons`
-    # the consumer taken in (`_cg_consumer`) or `nothing`.
-    scanmode::Any
+    # A fused prefix scan's nest, or `nothing` (see `_CGScanMode`).
+    scanmode::Union{Nothing, _CGScanMode}
     # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
     # each state read is emitted against the buffer its slots live in
@@ -2119,8 +2139,8 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     for s in rest
         push!(stmts, _cg_calls_by_value(s, idx, left))
     end
-    # The emitter only ever CALLS a sub-function; a bare reference would be left
-    # pointing at a definition the by-value form no longer has.
+    # The emitter only ever calls a sub-function; a bare reference would point
+    # at a definition the by-value form does not have.
     left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
     _tally_cascade!(:cg_split_by_value)
     return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
@@ -2716,22 +2736,10 @@ end
 @inline (b::_CGChunk)(args, c::Int, nchunks::Int) =
     b.f(args[1], args[2], args[3], args[4], b.tabs, c, nchunks)
 
-# Run one generated function chunked when the section's verdict allows, and
-# serially otherwise (one thread, too few cells, shared out-slots): its
-# `(1, 1)` instance, or `ntiles` serial cell tiles (`_run_cg_section_serial!`).
-# Every value type takes the same route: a chunk computes each of
-# its cells exactly as the serial instance does.
-@inline function _run_cg_maybe_threaded!(
-        f, tabs, du, u, p, t, tc::_SecTCache,
-        ntiles::Int = 1
-    )
-    if _threads_available() && _sec_prep_threads!(tc).state == 1
-        _run_chunked!(tc, _CGChunk(f, tabs), (du, u, p, t))
-    else
-        _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles)
-    end
-    return nothing
-end
+# Run one generated function through the section runner (threading.jl):
+# chunked when the verdict allows, else serially in `ntiles` cell tiles.
+@inline _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache, ntiles::Int = 1) =
+    _run_section!(tc, _CGChunk(f, tabs), (du, u, p, t), typemax(Int), ntiles)
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, rhs_assembly.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -2796,17 +2804,6 @@ const _SECTION_TILE_CELLS = 1024
 function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
     (disjoint && n_emitted >= 2) || return 1
     return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
-end
-
-@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
-    if ntiles == 1
-        f(du, u, p, t, tabs, 1, 1)
-    else
-        for c in 1:ntiles
-            f(du, u, p, t, tabs, c, ntiles)
-        end
-    end
-    return nothing
 end
 
 @inline function (s::_KernelSection{F, TB, W})(

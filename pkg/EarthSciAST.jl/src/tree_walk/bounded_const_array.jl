@@ -1,6 +1,6 @@
 # tree_walk/bounded_const_array.jl — a const array's per-axis boundary policy (`BoundedConstArray`).
 
-# ---- Const-array boundary policy (ess-gj4) ----
+# ---- Const-array boundary policy ----
 # A const array (Fornberg weights, mesh connectivity, a per-cell metric factor)
 # may carry a per-dimension boundary policy so that a stencil gather at an
 # out-of-range index resolves declaratively instead of erroring. This mirrors the

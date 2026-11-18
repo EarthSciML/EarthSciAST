@@ -20,17 +20,16 @@
 #     algebraic chain — e.g. the flattened Rothermel fire-physics chain of a
 #     run file — resolve through `_build_evaluator`
 #     with NO caller pre-inlining (`_resolve_observed` collapses the chain to a
-#     fixed point). It used to be gated on geometry, which left a non-geometry
-#     expression-defined observed unbound. Synthesis only ADDS equations for
-#     observeds lacking one, so equation-defined models stay byte-identical.
+#     fixed point). Synthesis only adds equations for observeds lacking one,
+#     so an equation-defined model is unchanged by it.
 #  1b. INDEXED OBSERVED-LHS NORMALIZATION (esm-spec §6.3.1): an observed's
 #     defining equation may name it BARE (`y ~ f(…)`) or INDEXED
 #     (`aggregate{k}(y[k]) ~ f(…)`); both spellings are normative and neither is
 #     restricted by rank. Every owner-bucket collector below tests the syntactic
 #     `eq.lhs isa VarExpr`, so an ARRAY-shaped observed written the indexed way
 #     matched none of them and hard-errored in `_partition_variables`
-#     (`E_TREEWALK_UNSUPPORTED_SHAPE`) on a document Rust and Python both run —
-#     issue #232. `_normalize_indexed_observed_lhs` rewrites the indexed spelling
+#     (`E_TREEWALK_UNSUPPORTED_SHAPE`) on a document Rust and Python both run.
+#     `_normalize_indexed_observed_lhs` rewrites the indexed spelling
 #     into the bare one ONCE, before any classifier reads an LHS, so exactly one
 #     form reaches the rest of the build. Must run BEFORE the WS4 fold and the
 #     inline-var collection, which are two of the buckets it feeds.
@@ -75,7 +74,7 @@ end
 #    areas, A_ij, constant reduction tables), materialized at setup and
 #    excluded from the ODE partition / observed substitution — build-once
 #    functions of the const inputs.
-#  * `inline_vars` — live-field geometry observeds (ess-14f.4): array observeds
+#  * `inline_vars` — live-field geometry observeds: array observeds
 #    that are NOT build-once setup vars because they read a live `param_arrays`
 #    buffer (the conservative-regrid output F_tgt = A_ij ⊗ F_src / A_j is the
 #    motivating case). They are INLINED into the array-state RHS that consumes
@@ -119,12 +118,9 @@ function _discover_geometry_vars(
         # readers. Adding an NEI regrid to reseact.esm swept in ~500 observeds
         # across DryDepositionGas / FastJX / WetDeposition / Transport3D,
         # including the whole RHS of the air-mass continuity equation
-        # (`divh_fix`, `Mz`, `dPSdt`, `dp`). That routed host equations into the
-        # array-equation compiler for the first time (the pre-geometry cascade
-        # tally is EMPTY), where `D(m)` declined to the per-cell tier and emitted
-        # O(#cells) IR — a >32 GiB build at NLEV=72 whose cost scaled with the
-        # grid. Geometry in one model must not change how another model's
-        # equations compile.
+        # (`divh_fix`, `Mz`, `dPSdt`, `dp`), which would route host equations
+        # into the array-equation compiler and its per-cell tier. Geometry in one
+        # model must not change how another model's equations compile.
         #
         # Derived = reads a geometry setup var, transitively. The
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
@@ -157,12 +153,12 @@ end
 # the reader's equation is refused. `esm_problem` never meets this, because its
 # discrete-cadence cut lifts the observed into a per-refresh cache first; an
 # `rhs_program` build has no such cut (its forcing is an argument of every
-# call), so the observed stays inline (issue #665).
+# call), so the observed stays inline.
 #
 # Hand such an observed to the promoted-array-observed set instead, so the
 # compiled builds give it a buffer filled once per right-hand-side call
 # (`_collect_materialized_array_obs`), whose fill compiles the gated aggregate
-# on its own (live source gathers included, #657) and whose readers gather the
+# on its own (live source gathers included) and whose readers gather the
 # buffer. The interpreter inlines every array observed anyway, so nothing
 # changes there; an ungated live-field observed keeps the inline path.
 #
@@ -291,10 +287,7 @@ end
 # GHOST CELLS. A materialized observed is a first-class array field of its
 # declared shape, so a gather OUTSIDE that shape reads the ghost literal 0.0 —
 # identical to the rule for an array STATE, and to a `makearray`-defined
-# observed's own "no region covers ⇒ 0" default. (An aggregate-defined observed
-# that a reader gathers out of range used to beta-reduce its body at the
-# out-of-range index instead; the discretizations' region-split boundary
-# stencils keep their gathers in range, which the conformance goldens pin.)
+# observed's own "no region covers ⇒ 0" default.
 _array_obs_inline_forced() = _compiler_plan_now().name === :interpreter
 
 # Candidate set: the promoted array observeds (post cadence cut) that are not
@@ -583,12 +576,8 @@ end
 # is build-time literal data, not a scalar observed and not a state.
 # Materialize each into the const-array registry (so a fused-leaf aggregate
 # gathers `index(src_poly,i)` at setup and an ODE reads `index(F_src,i)`) and
-# exclude it from the ODE partition. This used to be
-# gated on the setup-geometry machinery, which left the const mesh data of a
-# geometry-free unstructured document (the MPAS keyed-factor wiring, esm-spec
-# §4.6) rejected as E_TREEWALK_UNSUPPORTED_SHAPE; the materialization only ADDS
-# const arrays for variables that previously hard-errored, so geometry files
-# and files without const-op array observeds stay byte-identical.
+# exclude it from the ODE partition. This holds with or without setup
+# geometry (a geometry-free unstructured document's mesh data, esm-spec §4.6).
 #
 # When `register_coord_buffers` (setup geometry or value invention present):
 # a build-time BINNING-COORDINATE observed (an inline reduce aggregate over
@@ -728,7 +717,7 @@ function _partition_variables(
                 # coordinate factors
                 # a value-invention key is computed from, §5.2) OR as a live
                 # forcing buffer via `param_arrays` (a discrete-cadence loader
-                # buffer, ess-14f.3). Either way it is array-backed, not a scalar
+                # buffer). Either way it is array-backed, not a scalar
                 # parameter, so it is NOT added to param_names.
                 haskey(const_arrays, name) || haskey(param_arrays, name) ||
                     throw(_missing_data_error(name, v))
@@ -761,7 +750,7 @@ end
 # resolve observed-into-observed references to a fixed point. A live-field
 # geometry observed (F_tgt …) or a promoted array observed enters the
 # substitution map as a faq value; `index(obs, j)` in a reader
-# beta-reduces to its body via `_resolve_indices` (ess-14f.4 /
+# beta-reduces to its body via `_resolve_indices` (
 # shape-promotion). Returns an `_ObservedSplit`; its `raw` map preserves the author-declared observed-into-observed references so the
 # scalar-slot plan (`_plan_observed_slots`) can compile each observed once as a
 # named prelude def instead of splicing the resolved chain into every reader.
@@ -879,7 +868,7 @@ function _decline_unmaterialized_recurrences(
     return nothing
 end
 
-# ---- Stage: scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
+# ---- Stage: scalar-observed slot plan (named prelude defs) ----
 #
 # STOP INLINING SCALAR OBSERVEDS. The author-declared name of a scalar observed
 # IS a sharing declaration — splicing its body into every reader erases the name
@@ -909,7 +898,7 @@ end
 #     site in the pre-slot walk — hoisting it introduces no new throw/NaN.
 #
 # The ARRAY paths (faq kernels, stencil/affine builds, discrete-cadence
-# fills) keep receiving the FULL resolved map and inline exactly as before; a
+# fills) receive the full resolved map and inline every observed; a
 # kernel's inlined copy of a slotted observed is later collapsed onto the
 # observed's slot by `_share_kernel_invariants!` when the value numbers match.
 #
@@ -1006,7 +995,7 @@ end
 # model equation is a single `_sub_preserving` call. Iteration cap =
 # depth of the longest valid chain; exceeding it means there's a cycle.
 #
-# CONSUMERS after ess-obs-slots: the ARRAY paths (faq kernels, stencil /
+# CONSUMERS: the ARRAY paths (faq kernels, stencil /
 # affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
 # path still splice these fully-resolved bodies. The scalar path's primary
 # mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build_classify.jl),
@@ -1027,7 +1016,7 @@ function _resolve_observed(obs::Dict{String, ASTExpr})
             # THROUGH a faq body is detected — a live-field geometry
             # observed reads its upstream regrid output inside a faq, which
             # `free_variables` treats as bound-away and would leave un-inlined
-            # (ess-14f.4). For a scalar value the two agree, so scalar observeds are
+            #. For a scalar value the two agree, so scalar observeds are
             # byte-identical; only array-valued observeds gain transitive collapse.
             # The `n in names` guard means only observed-named references trigger a
             # rewrite, so the extra bound loop indices it surfaces are inert.
@@ -1071,7 +1060,7 @@ end
 # a repeat visit of the same (node, mode) never loses a name — this is what
 # makes the walk O(nodes + edges) on the DAGs template lowering produces
 # (raw observed bodies keep subtree sharing by reference) instead of
-# once-per-path exponential (ESS-0hh).
+# once-per-path exponential.
 const _OBS_SEEN_SPINE = 0x01
 const _OBS_SEEN_MARKALL = 0x02
 const _ObsSeen = IdDict{OpExpr, UInt8}

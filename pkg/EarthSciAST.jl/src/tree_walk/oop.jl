@@ -52,7 +52,7 @@
 #
 # WHY. The per-CELL scalar surface of a build — `rhs_list` entries a state
 # equation lowers to when it declines the kernel path (a runtime contraction
-# loop routes there BY DESIGN, see the array-cell depth note in resolve.jl), and
+# loop routes there BY DESIGN, see the array-cell depth note in resolve_loops.jl), and
 # the per-column `scalars` of a materialized-observed fill level — is one entry
 # per cell. Emitted one at a time, that is the one place a compiled program's
 # SIZE scales with the grid: every entry emits its whole tree, so a contraction

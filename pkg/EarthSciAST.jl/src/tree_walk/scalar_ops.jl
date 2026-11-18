@@ -32,7 +32,7 @@ end
 # (TracedRNumber{Bool}) used in boolean context" — a control decision XLA cannot
 # make, on a quantity that was concrete all along.
 #
-# Reached whenever a runtime contraction loop (ess-runtime-contraction) puts a
+# Reached whenever a runtime contraction loop puts a
 # loop-var-dependent subscript on the traced RHS, which a mass-weighted column
 # integral does as soon as the reduction is long enough to clear
 # `ESS_CONTRACTION_LOOP_MIN`.

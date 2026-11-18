@@ -1,5 +1,5 @@
 # ========================================================================
-# tree_walk/errors.jl — part of the tree-walk evaluator (gt-e8yw).
+# tree_walk/errors.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 1: the TreeWalkError type and its E_TREEWALK_* codes.
 # ========================================================================

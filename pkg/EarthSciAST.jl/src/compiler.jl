@@ -525,9 +525,10 @@ end
 _WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
 
 mutable struct _BuildState
-    # A state array's flat slot table, by array name (`_resolve_state_gather`).
-    # It depends on the layout the build resolves against.
-    slot_tables::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    # A state array's slot map (table, run base, strides), by array name
+    # (`_resolve_state_gather`). It depends on the layout the build resolves
+    # against.
+    slot_tables::Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}
     # A reserved runtime loop variable's counter `Ref`, by name: written where
     # the resolve keeps an index symbolic, read by `_compile(::VarExpr)`.
     loopvars::Dict{Symbol, Base.RefValue{Int}}
@@ -544,14 +545,14 @@ mutable struct _BuildState
     # out.
     scatter_keep::Union{Nothing, IdDict{Any, Nothing}}
     # The scalar parameter values a join gate's computed key column reads while
-    # the gates resolve (`_with_join_params`, semiring.jl); empty otherwise.
+    # the gates resolve (`_with_join_params`, join_key_columns.jl); empty otherwise.
     join_params::Dict{String, Float64}
 end
 _BuildState(
     count::Base.RefValue{Int} = Ref(0);
     scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
 ) = _BuildState(
-    Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+    Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
     Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
     Dict{String, Float64}()
 )
@@ -696,7 +697,7 @@ end
 function _with_own_slot_tables(f)
     st = _build_state()
     saved = st.slot_tables
-    st.slot_tables = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    st.slot_tables = Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}()
     try
         return f()
     finally
@@ -747,7 +748,7 @@ _scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
 #
 #   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
 #                          — an overlap-gated setup geometry sweep, by how its
-#                            candidate set was driven (geometry_setup.jl)
+#                            candidate set was driven (setup_sweep.jl)
 #   :geom_eq_drive         — an equality-gated setup sweep driven by its key
 #   :setup_map_fastpath_hit / :setup_map_fastpath_miss
 #                          — a setup map compiled once / walked per cell
