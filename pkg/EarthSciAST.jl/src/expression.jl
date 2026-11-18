@@ -459,6 +459,43 @@ end
     return reconstruct(e; $(last(_opexpr_map_children_parts())...))
 end
 
+"""
+    _rewrite_expr(leaf, node, e::ASTExpr; scope = nothing, enter = (n, s) -> s) -> ASTExpr
+
+Rewrite `e` bottom-up, the one whole-expression rewriter the flatten passes
+share. A leaf (`NumExpr`, `IntExpr`, `VarExpr`) goes through `leaf(x, scope)`.
+An `OpExpr`'s children are rewritten in the scope `enter(node, scope)` (a
+node that binds loop symbols, say, changes what its children see), then the
+node goes through `node(n, scope)`, where `n` is the node itself when no child
+changed (`map_children` keeps identity) and a rebuilt copy otherwise.
+
+Each distinct `OpExpr` is rewritten once per scope, by a memo keyed by node
+identity and scope: template expansion makes subtrees shared by many parents,
+and a walk without the memo visits a shared subtree once per path and
+rematerializes the DAG as a tree. The result shares what the input shared.
+"""
+function _rewrite_expr(
+        leaf::L, node::N, e::ASTExpr; scope = nothing, enter::F = _same_scope
+    ) where {L, N, F}
+    memo = Dict{Any, IdDict{OpExpr, ASTExpr}}()
+    return _rewrite_expr_at(leaf, node, enter, e, scope, memo)
+end
+
+_same_scope(_, s) = s
+
+function _rewrite_expr_at(leaf::L, node::N, enter::F, e::ASTExpr, scope, memo) where {L, N, F}
+    e isa OpExpr || return leaf(e, scope)::ASTExpr
+    tbl = get!(() -> IdDict{OpExpr, ASTExpr}(), memo, scope)
+    hit = get(tbl, e, nothing)
+    hit === nothing || return hit
+    inner = enter(e, scope)
+    out = node(
+        map_children(c -> _rewrite_expr_at(leaf, node, enter, c, inner, memo), e), scope
+    )::ASTExpr
+    tbl[e] = out
+    return out
+end
+
 # ========================================
 # 1. Variable Substitution
 # ========================================
