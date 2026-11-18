@@ -898,6 +898,38 @@
       "area": "diagnostics",
       "note": "A reference to a declared name that has no value yet at evaluation is reported as E_TREEWALK_UNRESOLVED_ORDER (or a weaker diagnosis), never as E_TREEWALK_UNBOUND_NAME, which is reserved for names no scope binds.",
       "concern": "Placement resolved 2026-10-26 (Q-18 part): the row is back in the §7.1 table. Still open: what 'claim the stronger one' lets a binding report instead."
+    },
+    {
+      "id": "conf.5.60.expanded-goldens-unchanged",
+      "section": "5.60",
+      "quote": "engine produced, so the existing goldens MUST NOT be regenerated",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "The expanded goldens of fixtures with no cross-boundary match stay those of the in-place engine, as evidence the reference form denotes the inlined meaning."
+    },
+    {
+      "id": "conf.5.60.assert-both-goldens",
+      "section": "5.60",
+      "quote": "A harness MUST assert both.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Both the emitted and the expanded golden are asserted for every firing fixture."
+    },
+    {
+      "id": "conf.5.60.non-vacuity",
+      "section": "5.60",
+      "quote": "**Non-vacuity.** The set MUST include a rule firing inside a template body",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Non-vacuity of the rule-firing fixture set."
+    },
+    {
+      "id": "conf.5.60.flatten-wire-goldens-unchanged",
+      "section": "5.60",
+      "quote": "goldens are serialized after `Expand` and MUST NOT change",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "The flatten_wire expanded goldens are the oracle that a reference-keeping lift denotes the lift of the expansion."
     }
   ]
 }

@@ -124,11 +124,11 @@
     {
       "id": "spec.9.6.4.load-does-not-expand",
       "section": "9.6.4",
-      "quote": "but MUST NOT expand `apply_expression_template` nodes except as rule 3 requires",
+      "quote": "metaparameters and run the §9.6.3 fixpoint as before, but MUST NOT expand `apply_expression_template` nodes.",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
-      "note": "After load, every non-eager (non-target-bearing) template reference survives unexpanded."
+      "note": "After load, every template reference survives unexpanded, at a §4.7 mount edge too."
     },
     {
       "id": "spec.9.6.4.references-denote-expansion",
@@ -158,18 +158,9 @@
       "note": "Evaluating a reference-preserving tree gives bit-identical results to evaluating Expand(tree)."
     },
     {
-      "id": "spec.9.6.4.eager-expansion-prepass",
-      "section": "9.6.4",
-      "quote": "or whose own `bindings` carry such an op or a nested eager reference, MUST be expanded innermost-first in a pre-pass before the §9.6.3 fixpoint",
-      "class": "semantic",
-      "phase": 4,
-      "area": "rewrite",
-      "note": "Target-bearing references (and those whose bindings carry rewrite-target ops or eager references) are expanded innermost-first before the fixpoint, so no rewrite-target op survives inside a reference."
-    },
-    {
       "id": "spec.9.6.4.decisions-on-expand",
       "section": "9.6.4",
-      "quote": "A consumer whose *decisions* depend on the shape of an expression MUST therefore reach those decisions on `Expand(tree)`, not on the reference-preserving tree, or its behavior becomes a function of the author's factoring — which rule 2 forbids (\"all observable behavior MUST be as if evaluated on `Expand(tree)`\"). The projection-pushdown desugar (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT depend on whether the author factored the binning body through a template.**",
+      "quote": "consumer whose *decisions* depend on the shape of an expression MUST therefore reach those decisions as it would on `Expand(tree)`, not on the reference-preserving tree read as if a reference were a leaf, or its behavior becomes a function of the author's factoring — which rule 2 forbids (\"all observable behavior MUST be as if evaluated on `Expand(tree)`\"). The projection-pushdown desugar (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT depend on whether the author factored the binning body through a template.**",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
@@ -474,11 +465,11 @@
     {
       "id": "spec.9.6.8.lowering-deterministic",
       "section": "9.6.8",
-      "quote": "Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs",
+      "quote": "Two bindings lowering the same file MUST produce byte-identical post-lowering documents",
       "class": "semantic",
       "phase": 4,
       "area": "determinism",
-      "note": "Discretization lowering is a deterministic function of the document (same as the §9.6.3 fixpoint determinism, including identical rejections)."
+      "note": "Discretization lowering is a deterministic function of the document: the references firings write, the rewritten template bodies and their variant names, and so the expansions, are byte-identical across bindings (including identical rejections)."
     },
     {
       "id": "spec.9.6.9.discharge-without-materializing",
@@ -500,11 +491,11 @@
     {
       "id": "spec.9.6.11.elementwise-shape-mismatch-refused",
       "section": "9.6.11",
-      "quote": "or one whose index sets would put one name on two axes. Each MUST be rejected with `array_shape_mismatch`",
+      "quote": "or one whose index sets would put one name on two axes, has no elementwise result and MUST be rejected with `array_shape_mismatch`",
       "class": "semantic",
       "phase": 4,
       "area": "arrays",
-      "note": "An elementwise template application whose array arguments read in value positions have incomparable index sets, name an index set outside the target's declared shape, or would put one index set on two axes is rejected with array_shape_mismatch."
+      "note": "An elementwise template application whose array arguments read in value positions name an index set outside the target's declared shape, or would put one index set on two axes, is rejected with array_shape_mismatch. Arguments on disjoint index sets are not refused: they span the union."
     },
     {
       "id": "spec.9.6.11.elementwise-shape-decided-at-build",
