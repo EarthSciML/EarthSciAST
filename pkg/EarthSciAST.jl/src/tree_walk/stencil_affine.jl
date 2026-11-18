@@ -319,7 +319,7 @@ _affine_idx_expr(e::ASTExpr, idx) = _affine_form(e, collect(String, idx)) !== no
 function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
     idx_names isa Vector{String} || return false
     get(sig.bkey_sites, body, true) && return false
-    _tmpl, recipes, state_ks, _subcalls = branch
+    recipes, state_ks = branch.recipes, branch.state_lanes
     for rec in recipes
         all(a -> _affine_idx_expr(a, idxset), rec.idx_args) || return false
         rec.kind == LANE_CONST && rec.arr isa BoundedConstArray && return false
@@ -715,7 +715,7 @@ function _cell_ckey!(
         var_map, param_sym_set
     )
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
-    _tmpl, recipes, state_ks, _subcalls = branch
+    recipes, state_ks = branch.recipes, branch.state_lanes
     # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
     state_vals = sig.state_scratch
@@ -2133,7 +2133,7 @@ function _process_affine_box!(
         sig, rep, idx_names, body, ctx_proto,
         var_map, param_sym_set
     )
-    tmpl, recipes, _state_ks, subcalls = branch
+    tmpl, recipes, subcalls = branch.tmpl, branch.recipes, branch.subcalls
 
     # verify the output slot map on this box against var_map (catches a bad omap)
     denv = Dict{String, Int}()
@@ -2220,7 +2220,7 @@ function _box_lane_evals!(
     )
     _sig_bind!(sig, idx_names, var_map, const_arrays)
     return get!(sig.box_evals, bkey) do
-        recipes = sig.branch_cache[bkey][2]
+        recipes = sig.branch_cache[bkey].recipes
         compiled = idx_names isa Vector{String}
         Union{Nothing, _LaneEval}[
             compiled && rec.kind == LANE_STATE ?

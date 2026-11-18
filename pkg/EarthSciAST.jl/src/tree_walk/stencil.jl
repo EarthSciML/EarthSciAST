@@ -1608,7 +1608,12 @@ end
 # the recipe indices that are STATE gathers (the ghost-key columns), and the
 # sub-kernel call sites its spine references (empty on every reference-free
 # build and on the whole symbolic path).
-const _StencilBranch = Tuple{_Node, Vector{_LaneRecipe}, Vector{Int}, Vector{_SubCallSite}}
+struct _StencilBranch
+    tmpl::_Node
+    recipes::Vector{_LaneRecipe}
+    state_lanes::Vector{Int}
+    subcalls::Vector{_SubCallSite}
+end
 
 # A state var's affine slot map over its `[lo, hi]` box (cell indices → slot:
 # `slot = base + Σ_d inds_d·strides_d`, stride 0 along a one-cell axis), so a
@@ -1731,8 +1736,8 @@ function _build_branch_template(
         ),
         vm_ext, param_sym_set, bmemo
     )
-    return (
+    return _StencilBranch(
         tmpl, rs, Int[k for k in eachindex(rs) if rs[k].kind == LANE_STATE],
-        ctx.subcalls,
+        ctx.subcalls
     )
 end
