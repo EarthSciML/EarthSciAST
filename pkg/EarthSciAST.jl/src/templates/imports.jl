@@ -804,7 +804,7 @@ and whose `base` anchors the library's own imports. A target that cannot be
 read is `template_import_unresolved`.
 """
 function _read_library(src::_DocumentSource, base::_RefBase, ref::String, origin::String)
-    t = _resolve_ref(base, ref)
+    t = _resolve_ref(src, base, ref)
     if src.read_library !== nothing
         raw, target_dir = src.read_library(ref, _base_string(base), origin)
         return _library_wire_form(raw),
@@ -866,7 +866,7 @@ function _load_library(edge::_ImportEdge, base::_RefBase, stack::Vector{String},
     origin, ref = edge.origin, edge.ref
     # Keyed on the resolved spelling, so a bundled file has one identity
     # however it is reached (`esm:std/<f>`, or relative inside the bundle).
-    canonical = _resolve_ref(base, ref).key
+    canonical = _resolve_ref(src, base, ref).key
     if canonical in stack
         cyc = vcat(stack[findfirst(==(canonical), stack):end], [canonical])
         _bad_edge(
