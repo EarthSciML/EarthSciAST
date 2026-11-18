@@ -863,11 +863,16 @@ end
 # Region selection reached through an elementwise producer (`index(a + b, i)`)
 # is followed into its operands, as `_stencilize_index` pushes the gather.
 #
-# Returns the candidate starts per dim and, per dim, whether every cell of it is
-# a candidate.
+# Returns the candidate starts per dim; per dim, whether every cell of it is a
+# candidate; and per dim, the starts the OTHER dims' scans must also probe
+# (`_scan_dim_cuts`). A region bounded in one axis of its makearray spans the
+# makearray's whole extent in every other axis, so any probe line inside that
+# extent crosses it: only a region bounded in two or more axes, and the extent's
+# own ends, add probe lines.
 function _region_cut_candidates(body, idx_names::Vector{String})
     D = length(idx_names)
     cands = [Set{Int}() for _ in 1:D]
+    probes = [Set{Int}() for _ in 1:D]
     full = falses(D)
     # What a name is in terms of the loop indices: `(d, c)` for `loop[d] + c`, a
     # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
@@ -922,7 +927,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         isempty(d) && return nothing
         return sort!(collect(d))
     end
-    function mark!(s, lo_hi)
+    function mark!(s, lo_hi, probe::Bool)
         s === nothing && return
         return if s isa Tuple
             d, c = s
@@ -931,6 +936,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
                 full[d] = true
             else
                 push!(cands[d], lo - c); push!(cands[d], hi + 1 - c)
+                probe && (push!(probes[d], lo - c); push!(probes[d], hi + 1 - c))
             end
         elseif length(s) == 1
             full[s[1]] = true
@@ -948,11 +954,37 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         return if pe.op == "makearray"
             regions = pe.regions === nothing ? Vector{Vector{Vector{Any}}}() : pe.regions
             values = pe.values === nothing ? ASTExpr[] : pe.values
+            # Per axis, the makearray's extent over its regions (`nothing` when a
+            # bound is not a literal): a region whose axis range is that extent
+            # spans the axis.
+            ext = map(eachindex(subs)) do j
+                lo = typemax(Int); hi = typemin(Int)
+                for region in regions
+                    (length(region) == length(subs) && length(region[j]) >= 2) || continue
+                    l = _ma_region_bound(region[j][1]); h = _ma_region_bound(region[j][2])
+                    (l === nothing || h === nothing) && return nothing
+                    lo = min(lo, l); hi = max(hi, h)
+                end
+                return lo <= hi ? (lo, hi) : nothing
+            end
+            spans(region, j) = ext[j] !== nothing &&
+                _ma_region_bound(region[j][1]) == ext[j][1] &&
+                _ma_region_bound(region[j][2]) == ext[j][2]
             for region in regions
                 length(region) == length(subs) || continue
-                for j in eachindex(subs)
-                    length(region[j]) >= 2 && mark!(subs[j], region[j])
+                axes = [j for j in eachindex(subs) if length(region[j]) >= 2]
+                probe = count(j -> !spans(region, j), axes) >= 2
+                for j in axes
+                    mark!(subs[j], region[j], probe)
                 end
+            end
+            # The extent's own ends are probed, so a probe line lies inside the
+            # makearray wherever the scanned dims' defaults fall outside it.
+            for j in eachindex(subs)
+                sj = subs[j]
+                (ext[j] !== nothing && sj isa Tuple) || continue
+                d, c = sj
+                push!(probes[d], ext[j][1] - c); push!(probes[d], ext[j][2] + 1 - c)
             end
             for (r, v) in enumerate(values)
                 if _is_array_producer(v)
@@ -1018,7 +1050,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         return foreach(c -> walk(c, inner), child_exprs(o))
     end
     walk(body, alias0)
-    return cands, full
+    return cands, full, probes
 end
 
 # How many consecutive identical per-cell signatures certify that the interior of
@@ -1073,16 +1105,17 @@ function _affine_cut_points(
     )
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
-    region_cands, full = _region_cut_candidates(body, idx_names)
+    region_cands, full, region_probes = _region_cut_candidates(body, idx_names)
     # A region bounded in several dims is seen on a dim's probe lines only if
-    # one of them crosses it, so each dim's region starts join its probe values
-    # when the other dims are scanned. A dim whose every cell is a candidate
-    # (`full`) adds none: its probe lines stay low / mid / high.
+    # one of them crosses it, so the starts `_region_cut_candidates` names for
+    # probing join each dim's probe values when the other dims are scanned. A
+    # dim whose every cell is a candidate (`full`) adds none: its probe lines
+    # stay low / mid / high.
     probe_extra = Vector{Vector{Int}}(undef, D)
     for d in 1:D
         rng = ranges[d]
         probe_extra[d] = full[d] ? Int[] :
-            sort!(Int[c for c in region_cands[d] if first(rng) <= c <= last(rng)])
+            sort!(Int[c for c in region_probes[d] if first(rng) <= c <= last(rng)])
     end
     for d in 1:D
         full[d] && union!(region_cands[d], (first(ranges[d]) + 1):last(ranges[d]))
