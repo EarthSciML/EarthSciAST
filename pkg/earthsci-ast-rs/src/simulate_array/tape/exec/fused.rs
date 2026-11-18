@@ -351,18 +351,19 @@ unsafe fn fch_scan_fused(
     };
     let (pa, pb, po) = (fix(pa, 0), fix(pb, 1), fix(po, 2));
     let ld = |p: *const f64, s: usize, j: usize| unsafe { *p.add(j * s) };
+    use crate::simulate_array::scalar_ops as k;
     macro_rules! kernel {
         (Add) => {
-            |x: f64, y: f64| x + y
+            |x: f64, y: f64| k::add(x, y)
         };
         (Sub) => {
-            |x: f64, y: f64| x - y
+            |x: f64, y: f64| k::sub(x, y)
         };
         (Mul) => {
-            |x: f64, y: f64| x * y
+            |x: f64, y: f64| k::mul(x, y)
         };
         (Div) => {
-            |x: f64, y: f64| x / y
+            |x: f64, y: f64| k::div(x, y)
         };
     }
     macro_rules! with_post {
@@ -571,92 +572,33 @@ pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MS
 // ---------------------------------------------------------------------------
 
 /// Dispatch a [`BinCode`] to `$apply!(kernel)` with a monomorphized closure
-/// for each hot op. Each closure body is the IDENTICAL expression to
-/// `binary_kernel_of`'s arm for that op, so this is a pure dispatch hoist —
+/// for each op. The closures come from the same list as `binary_kernel_of`'s
+/// table (`scalar_ops::with_bin_kernel`), so this is a pure dispatch hoist —
 /// one indirect kernel call per node (unfused) or per chunk (fused) becomes
-/// an inlined, vectorizable element loop. The arms cover the arithmetic
-/// kernels plus the comparison relops feeding `Select` masks; any remaining op falls
-/// through to the shared fn-pointer table itself, so semantics have a single
-/// source either way.
+/// an inlined, vectorizable element loop.
 macro_rules! dispatch_bin_kernel {
     ($op:expr, $apply:ident) => {
-        // Under `element_type: "Float32"` the monomorphized closures below are
-        // a SECOND, hand-copied definition of the arithmetic that never sees
-        // the precision — the archetypal fast path that quietly stays f64. So
-        // in that mode dispatch through the shared table instead, which returns
-        // the binary32 kernel. The element loop then makes one indirect call
-        // per element as it did before the monomorphization; correctness over
-        // throughput is the only defensible trade when the answer differs.
+        // The binary32 instance under `element_type: "Float32"`: the same
+        // kernels at the other width, as the shared table resolves them.
         if $crate::precision::is_f32() {
             $apply!(binary_kernel_of(*$op))
         } else {
-            match $op {
-                BinCode::Add => $apply!(|x, y| x + y),
-                BinCode::Sub => $apply!(|x, y| x - y),
-                BinCode::Mul => $apply!(|x, y| x * y),
-                BinCode::Div => $apply!(|x, y| x / y),
-                BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
-                BinCode::Min => $apply!(crate::faq::nan_min),
-                BinCode::Max => $apply!(crate::faq::nan_max),
-                BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
-                BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
-                BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
-                BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
-                BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
-                BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
-                BinCode::Atan2 => $apply!(|x: f64, y: f64| x.atan2(y)),
-                BinCode::And => $apply!(|x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64),
-                BinCode::Or => $apply!(|x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64),
-                other => $apply!(binary_kernel_of(*other)),
-            }
+            $crate::simulate_array::scalar_ops::with_bin_kernel!(f64, $op, $apply)
         }
     };
 }
 pub(super) use dispatch_bin_kernel;
 
 /// Dispatch a [`UnCode`] to `$apply!(kernel)` with a monomorphized closure
-/// for each hot op — the unary counterpart of [`dispatch_bin_kernel`]: each
-/// closure body is the IDENTICAL expression to `unary_kernel_of`'s arm, and
-/// the remaining ops fall through to the fn-pointer table.
+/// for each op — the unary counterpart of [`dispatch_bin_kernel`], from the
+/// same list as `unary_kernel_of`'s table (`scalar_ops::with_un_kernel`).
 macro_rules! dispatch_un_kernel {
     ($op:expr, $apply:ident) => {
-        // See `dispatch_bin_kernel`: the monomorphized arms are f64-only, so
-        // Float32 routes through the shared (precision-aware) table.
+        // See `dispatch_bin_kernel`.
         if $crate::precision::is_f32() {
             $apply!(unary_kernel_of(*$op))
         } else {
-            match $op {
-                UnCode::Abs => $apply!(|x: f64| x.abs()),
-                UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
-                UnCode::Exp => $apply!(|x: f64| x.exp()),
-                UnCode::Ln => $apply!(|x: f64| x.ln()),
-                UnCode::Log10 => $apply!(|x: f64| x.log10()),
-                UnCode::Sin => $apply!(|x: f64| x.sin()),
-                UnCode::Cos => $apply!(|x: f64| x.cos()),
-                UnCode::Tanh => $apply!(|x: f64| x.tanh()),
-                UnCode::Floor => $apply!(|x: f64| x.floor()),
-                UnCode::Ceil => $apply!(|x: f64| x.ceil()),
-                UnCode::Tan => $apply!(|x: f64| x.tan()),
-                UnCode::Asin => $apply!(|x: f64| x.asin()),
-                UnCode::Acos => $apply!(|x: f64| x.acos()),
-                UnCode::Atan => $apply!(|x: f64| x.atan()),
-                UnCode::Sinh => $apply!(|x: f64| x.sinh()),
-                UnCode::Cosh => $apply!(|x: f64| x.cosh()),
-                UnCode::Asinh => $apply!(|x: f64| x.asinh()),
-                UnCode::Acosh => $apply!(|x: f64| x.acosh()),
-                UnCode::Atanh => $apply!(|x: f64| x.atanh()),
-                UnCode::Not => $apply!(|x: f64| (x == 0.0) as i32 as f64),
-                UnCode::Sign => $apply!(|x: f64| {
-                    if x > 0.0 {
-                        1.0
-                    } else if x < 0.0 {
-                        -1.0
-                    } else {
-                        0.0
-                    }
-                }),
-                other => $apply!(unary_kernel_of(*other)),
-            }
+            $crate::simulate_array::scalar_ops::with_un_kernel!(f64, $op, $apply)
         }
     };
 }

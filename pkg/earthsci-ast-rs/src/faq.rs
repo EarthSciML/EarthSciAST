@@ -42,45 +42,30 @@ use crate::types::{Expr, IndexSet, Model, RangeSpec};
 /// `max(x, y)` with NaN propagation: a NaN operand, in either position, makes
 /// the result NaN (esm-spec §4.2: IEEE 754-2019 `maximum`, not `maxNum`).
 /// `f64::max` returns the other operand instead, so it is never used as is for
-/// the `max` operator or a `max` reduction's ⊕. Every evaluator's `max` kernel
-/// goes through this function.
+/// the `max` operator or a `max` reduction's ⊕. The definition is
+/// [`crate::simulate_array::scalar_ops::max`], the kernel every evaluator's
+/// `max` expands.
 #[inline(always)]
 pub(crate) fn nan_max(x: f64, y: f64) -> f64 {
-    if x.is_nan() || y.is_nan() {
-        f64::NAN
-    } else {
-        x.max(y)
-    }
+    crate::simulate_array::scalar_ops::max(x, y)
 }
 
 /// `min(x, y)` with NaN propagation; see [`nan_max`].
 #[inline(always)]
 pub(crate) fn nan_min(x: f64, y: f64) -> f64 {
-    if x.is_nan() || y.is_nan() {
-        f64::NAN
-    } else {
-        x.min(y)
-    }
+    crate::simulate_array::scalar_ops::min(x, y)
 }
 
 /// [`nan_max`] in binary32.
 #[inline(always)]
 pub(crate) fn nan_max_f32(x: f32, y: f32) -> f32 {
-    if x.is_nan() || y.is_nan() {
-        f32::NAN
-    } else {
-        x.max(y)
-    }
+    crate::simulate_array::scalar_ops::max(x, y)
 }
 
 /// [`nan_min`] in binary32.
 #[inline(always)]
 pub(crate) fn nan_min_f32(x: f32, y: f32) -> f32 {
-    if x.is_nan() || y.is_nan() {
-        f32::NAN
-    } else {
-        x.min(y)
-    }
+    crate::simulate_array::scalar_ops::min(x, y)
 }
 
 /// The ⊕/⊗ operators the evaluator can fold with, each carrying its normative

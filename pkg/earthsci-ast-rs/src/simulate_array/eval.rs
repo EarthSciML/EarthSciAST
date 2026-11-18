@@ -5,6 +5,7 @@
 //! reference the tape is verified against.
 
 use super::gate_walk::{CellBufs, GatePlan, TupleSink};
+use super::scalar_ops::{with_bin_kernel, with_un_kernel};
 use super::*;
 use crate::compile_error::CompileError;
 use crate::faq::effective_reduce_kind;
@@ -750,45 +751,42 @@ pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     }
 }
 
+/// A kernel closure from [`with_bin_kernel`] as a function pointer.
+macro_rules! fn_ptr2 {
+    ($k:expr) => {{
+        let k: fn(f64, f64) -> f64 = $k;
+        k
+    }};
+}
+
+/// A kernel closure from [`with_un_kernel`] as a function pointer.
+macro_rules! fn_ptr1 {
+    ($k:expr) => {{
+        let k: fn(f64) -> f64 = $k;
+        k
+    }};
+}
+
 pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
-    // Under `element_type: "Float32"` the whole table is the binary32 one. The
-    // Float64 arms below are untouched, so Float64 keeps the exact instruction
-    // sequence it had — the branch is the only addition, and it is not taken.
+    // Under `element_type: "Float32"` the whole table is the binary32 one;
+    // Float64 calls the binary64 kernels inline.
     if crate::precision::is_f32() {
         return binary_kernel_f32_of(BinCode::of(op))(x, y);
     }
-    match BinCode::of(op) {
-        BinCode::Add => x + y,
-        BinCode::Sub => x - y,
-        BinCode::Mul => x * y,
-        BinCode::Div => x / y,
-        BinCode::Pow => x.powf(y),
-        BinCode::Atan2 => x.atan2(y),
-        BinCode::Min => crate::faq::nan_min(x, y),
-        BinCode::Max => crate::faq::nan_max(x, y),
-        // Comparison + logical kernels, so the broadcast paths (`combine` /
-        // `broadcast_binary`) carry array operands elementwise. `==`/`!=`
-        // test EXACT equality with the native relops — the pinned
-        // cross-binding semantic, including `inf == inf ⇒ true`.
-        BinCode::Eq => (x == y) as i32 as f64,
-        BinCode::Ne => (x != y) as i32 as f64,
-        BinCode::Lt => (x < y) as i32 as f64,
-        BinCode::Le => (x <= y) as i32 as f64,
-        BinCode::Gt => (x > y) as i32 as f64,
-        BinCode::Ge => (x >= y) as i32 as f64,
-        BinCode::And => (x != 0.0 && y != 0.0) as i32 as f64,
-        BinCode::Or => (x != 0.0 || y != 0.0) as i32 as f64,
-        BinCode::Unknown => f64::NAN,
+    macro_rules! call {
+        ($k:expr) => {
+            ($k)(x, y)
+        };
     }
+    with_bin_kernel!(f64, BinCode::of(op), call)
 }
 
 /// [`apply_binary`]'s per-element arithmetic with the **op-name lookup lifted
 /// out**: resolve the name once, then call the returned kernel per element.
 ///
-/// The arms are the arms of [`apply_binary`], in the same order, evaluating the
-/// same expressions — `binary_kernels_match_apply_binary` pins the two to raw
-/// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
-/// NaN, subnormals), so a divergence is a test failure, not a silent one.
+/// It and [`apply_binary`] both expand the one kernel list, [`with_bin_kernel`];
+/// `binary_kernels_match_apply_binary` pins the two to raw IEEE bit equality
+/// over every op name and a spread of operands (±0, ±inf, NaN, subnormals).
 #[cfg(test)] // the code-based `binary_kernel_of` is the runtime form; this
 // `&str` wrapper exists for the bit-equality pinning test below.
 pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
@@ -890,40 +888,21 @@ impl BinCode {
 /// table ([`binary_kernel_f32_of`]) instead. Resolution happens ONCE per AST
 /// node on the taped path (and once per cell on the oracle's per-cell walk,
 /// where the operator name is being matched anyway), so the mode read costs a
-/// thread-local load where a string compare already lived — and the Float64
-/// arms below are the identical closures they were before, so Float64 is
-/// bit-unchanged by construction.
+/// thread-local load where a string compare already lived. The kernels are
+/// [`with_bin_kernel`]'s, the list every binary evaluator path expands.
 pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
     if crate::precision::is_f32() {
         return binary_kernel_f32_of(op);
     }
-    match op {
-        BinCode::Add => |x, y| x + y,
-        BinCode::Sub => |x, y| x - y,
-        BinCode::Mul => |x, y| x * y,
-        BinCode::Div => |x, y| x / y,
-        BinCode::Pow => |x: f64, y: f64| x.powf(y),
-        BinCode::Atan2 => |x: f64, y: f64| x.atan2(y),
-        BinCode::Min => crate::faq::nan_min,
-        BinCode::Max => crate::faq::nan_max,
-        BinCode::Eq => |x: f64, y: f64| (x == y) as i32 as f64,
-        BinCode::Ne => |x: f64, y: f64| (x != y) as i32 as f64,
-        BinCode::Lt => |x: f64, y: f64| (x < y) as i32 as f64,
-        BinCode::Le => |x: f64, y: f64| (x <= y) as i32 as f64,
-        BinCode::Gt => |x: f64, y: f64| (x > y) as i32 as f64,
-        BinCode::Ge => |x: f64, y: f64| (x >= y) as i32 as f64,
-        BinCode::And => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
-        BinCode::Or => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
-        BinCode::Unknown => |_, _| f64::NAN,
-    }
+    with_bin_kernel!(f64, op, fn_ptr2)
 }
 
 /// [`binary_kernel_of`]'s table in **binary32**: each kernel narrows both
 /// operands to `f32`, applies the `f32` operation, and widens the `f32` result.
 ///
-/// The arms are [`binary_kernel_of`]'s arms with `f32` operands, in the same
-/// order — `binary_kernels_f32_are_binary32` pins each one to the value the
-/// same expression produces when it is written directly in `f32`.
+/// It is [`with_bin_kernel`] instantiated at `f32` —
+/// `binary_kernels_f32_are_binary32` pins each kernel to the value the same
+/// expression produces when it is written directly in `f32`.
 ///
 /// Narrowing the operands is not redundant with the ingress rounding: it is
 /// what makes the kernel *total*. Every value the evaluator produces in this
@@ -939,28 +918,7 @@ pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
 /// functions are the reason the operands are narrowed explicitly rather than
 /// relying on that — `expf` is not `exp` rounded.
 pub(crate) fn binary_kernel_f32_of(op: BinCode) -> fn(f64, f64) -> f64 {
-    match op {
-        BinCode::Add => |x: f64, y: f64| ((x as f32) + (y as f32)) as f64,
-        BinCode::Sub => |x: f64, y: f64| ((x as f32) - (y as f32)) as f64,
-        BinCode::Mul => |x: f64, y: f64| ((x as f32) * (y as f32)) as f64,
-        BinCode::Div => |x: f64, y: f64| ((x as f32) / (y as f32)) as f64,
-        BinCode::Pow => |x: f64, y: f64| (x as f32).powf(y as f32) as f64,
-        BinCode::Atan2 => |x: f64, y: f64| (x as f32).atan2(y as f32) as f64,
-        BinCode::Min => |x: f64, y: f64| crate::faq::nan_min_f32(x as f32, y as f32) as f64,
-        BinCode::Max => |x: f64, y: f64| crate::faq::nan_max_f32(x as f32, y as f32) as f64,
-        // Comparisons and the logical flags are exact on binary32 operands and
-        // return the same 1.0 / 0.0 flags, but they still narrow: comparing the
-        // f64 carriers of two values that round to the SAME f32 must say equal.
-        BinCode::Eq => |x: f64, y: f64| ((x as f32) == (y as f32)) as i32 as f64,
-        BinCode::Ne => |x: f64, y: f64| ((x as f32) != (y as f32)) as i32 as f64,
-        BinCode::Lt => |x: f64, y: f64| ((x as f32) < (y as f32)) as i32 as f64,
-        BinCode::Le => |x: f64, y: f64| ((x as f32) <= (y as f32)) as i32 as f64,
-        BinCode::Gt => |x: f64, y: f64| ((x as f32) > (y as f32)) as i32 as f64,
-        BinCode::Ge => |x: f64, y: f64| ((x as f32) >= (y as f32)) as i32 as f64,
-        BinCode::And => |x: f64, y: f64| ((x as f32) != 0.0 && (y as f32) != 0.0) as i32 as f64,
-        BinCode::Or => |x: f64, y: f64| ((x as f32) != 0.0 || (y as f32) != 0.0) as i32 as f64,
-        BinCode::Unknown => |_, _| f64::NAN,
-    }
+    with_bin_kernel!(f32, op, fn_ptr2)
 }
 
 pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> ArrayD<f64> {
@@ -1052,48 +1010,23 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 }
 
 pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
-    // See `apply_binary`: Float32 routes to the binary32 table, Float64 falls
-    // through to the untouched arms below.
+    // See `apply_binary`: Float32 routes to the binary32 table, Float64 calls
+    // the binary64 kernels inline.
     if crate::precision::is_f32() {
         return unary_kernel_f32_of(UnCode::of(op))(x);
     }
-    match UnCode::of(op) {
-        UnCode::Exp => x.exp(),
-        UnCode::Ln => x.ln(),
-        UnCode::Log10 => x.log10(),
-        UnCode::Sqrt => x.sqrt(),
-        UnCode::Abs => x.abs(),
-        UnCode::Sign => {
-            if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        }
-        UnCode::Floor => x.floor(),
-        UnCode::Ceil => x.ceil(),
-        UnCode::Sin => x.sin(),
-        UnCode::Cos => x.cos(),
-        UnCode::Tan => x.tan(),
-        UnCode::Asin => x.asin(),
-        UnCode::Acos => x.acos(),
-        UnCode::Atan => x.atan(),
-        UnCode::Sinh => x.sinh(),
-        UnCode::Cosh => x.cosh(),
-        UnCode::Tanh => x.tanh(),
-        UnCode::Asinh => x.asinh(),
-        UnCode::Acosh => x.acosh(),
-        UnCode::Atanh => x.atanh(),
-        UnCode::Not => (x == 0.0) as i32 as f64,
-        UnCode::Unknown => f64::NAN,
+    macro_rules! call {
+        ($k:expr) => {
+            ($k)(x)
+        };
     }
+    with_un_kernel!(f64, UnCode::of(op), call)
 }
 
 /// [`apply_unary`]'s per-element map with the op-name lookup lifted out — the
-/// unary counterpart of `binary_kernel`. Arms mirror [`apply_unary`]
-/// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
+/// unary counterpart of `binary_kernel`. It and [`apply_unary`] both expand
+/// [`with_un_kernel`]; `unary_kernels_match_apply_unary` pins them to bit
+/// equality.
 #[cfg(test)] // see `binary_kernel` above: test-only pinning wrapper.
 pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
     unary_kernel_of(UnCode::of(op))
@@ -1167,9 +1100,10 @@ impl UnCode {
     }
 }
 
-/// `unary_kernel` with the name already resolved to a [`UnCode`]. Arms mirror
-/// [`apply_unary`] exactly; `unary_kernels_match_apply_unary` pins them to bit
-/// equality through `unary_kernel`, which delegates here.
+/// `unary_kernel` with the name already resolved to a [`UnCode`]. It and
+/// [`apply_unary`] both expand [`with_un_kernel`];
+/// `unary_kernels_match_apply_unary` pins them to bit equality through
+/// `unary_kernel`, which delegates here.
 ///
 /// Under [`crate::precision::Precision::Float32`] it returns the binary32 table
 /// ([`unary_kernel_f32_of`]) — see [`binary_kernel_of`] for why the mode read
@@ -1178,38 +1112,7 @@ pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
     if crate::precision::is_f32() {
         return unary_kernel_f32_of(op);
     }
-    match op {
-        UnCode::Exp => |x: f64| x.exp(),
-        UnCode::Ln => |x: f64| x.ln(),
-        UnCode::Log10 => |x: f64| x.log10(),
-        UnCode::Sqrt => |x: f64| x.sqrt(),
-        UnCode::Abs => |x: f64| x.abs(),
-        UnCode::Sign => |x: f64| {
-            if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        },
-        UnCode::Floor => |x: f64| x.floor(),
-        UnCode::Ceil => |x: f64| x.ceil(),
-        UnCode::Sin => |x: f64| x.sin(),
-        UnCode::Cos => |x: f64| x.cos(),
-        UnCode::Tan => |x: f64| x.tan(),
-        UnCode::Asin => |x: f64| x.asin(),
-        UnCode::Acos => |x: f64| x.acos(),
-        UnCode::Atan => |x: f64| x.atan(),
-        UnCode::Sinh => |x: f64| x.sinh(),
-        UnCode::Cosh => |x: f64| x.cosh(),
-        UnCode::Tanh => |x: f64| x.tanh(),
-        UnCode::Asinh => |x: f64| x.asinh(),
-        UnCode::Acosh => |x: f64| x.acosh(),
-        UnCode::Atanh => |x: f64| x.atanh(),
-        UnCode::Not => |x: f64| (x == 0.0) as i32 as f64,
-        UnCode::Unknown => |_| f64::NAN,
-    }
+    with_un_kernel!(f64, op, fn_ptr1)
 }
 
 /// [`unary_kernel_of`]'s table in **binary32** — the unary counterpart of
@@ -1223,39 +1126,7 @@ pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
 /// it is the cross-binding contract this mode has to state explicitly — see
 /// CONFORMANCE_SPEC §5.18.1.
 pub(crate) fn unary_kernel_f32_of(op: UnCode) -> fn(f64) -> f64 {
-    match op {
-        UnCode::Exp => |x: f64| (x as f32).exp() as f64,
-        UnCode::Ln => |x: f64| (x as f32).ln() as f64,
-        UnCode::Log10 => |x: f64| (x as f32).log10() as f64,
-        UnCode::Sqrt => |x: f64| (x as f32).sqrt() as f64,
-        UnCode::Abs => |x: f64| (x as f32).abs() as f64,
-        UnCode::Sign => |x: f64| {
-            let x = x as f32;
-            if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        },
-        UnCode::Floor => |x: f64| (x as f32).floor() as f64,
-        UnCode::Ceil => |x: f64| (x as f32).ceil() as f64,
-        UnCode::Sin => |x: f64| (x as f32).sin() as f64,
-        UnCode::Cos => |x: f64| (x as f32).cos() as f64,
-        UnCode::Tan => |x: f64| (x as f32).tan() as f64,
-        UnCode::Asin => |x: f64| (x as f32).asin() as f64,
-        UnCode::Acos => |x: f64| (x as f32).acos() as f64,
-        UnCode::Atan => |x: f64| (x as f32).atan() as f64,
-        UnCode::Sinh => |x: f64| (x as f32).sinh() as f64,
-        UnCode::Cosh => |x: f64| (x as f32).cosh() as f64,
-        UnCode::Tanh => |x: f64| (x as f32).tanh() as f64,
-        UnCode::Asinh => |x: f64| (x as f32).asinh() as f64,
-        UnCode::Acosh => |x: f64| (x as f32).acosh() as f64,
-        UnCode::Atanh => |x: f64| (x as f32).atanh() as f64,
-        UnCode::Not => |x: f64| ((x as f32) == 0.0) as i32 as f64,
-        UnCode::Unknown => |_| f64::NAN,
-    }
+    with_un_kernel!(f32, op, fn_ptr1)
 }
 
 #[cfg(test)]
@@ -1263,8 +1134,8 @@ mod kernel_equivalence_tests {
     //! The tape resolves an operator name to a kernel ONCE per
     //! AST node ([`binary_kernel`]/[`unary_kernel`]) where the per-cell oracle
     //! re-matches it per element ([`apply_binary`]/[`apply_unary`]). The two
-    //! paths must stay bit-identical, so pin them here rather than trusting two
-    //! hand-kept copies of the same match to drift together.
+    //! paths must stay bit-identical; both expand the kernel lists in
+    //! `scalar_ops`, and these tests pin the result.
     use super::*;
     use std::hint::black_box;
 
