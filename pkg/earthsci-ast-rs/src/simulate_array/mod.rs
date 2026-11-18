@@ -36,19 +36,21 @@
 //!   `from_model` lowering, and shape-inference / LHS-parsing helpers.
 //! * `eval` — the per-cell oracle interpreter (the correctness reference),
 //!   including the geometry leaf ops and standalone [`eval_expression`].
-//! * [`vectorized`] — the vectorized whole-array stencil overlay (ess-bdm):
-//!   shifted-slice `index` gathers, broadcast kernels, einsum folds.
+//! * [`vectorized`] — the `index` axis analyses the tape lowering and the
+//!   range-restricted programs share.
 //! * [`rhs`] — per-call RHS evaluation: the zero-allocation scratch/buffer
 //!   pool (ess-mro), observed-rule materialization, and the rule driver.
-//! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`,
-//!   `debug_*` entry points) and the external refreshable forcing channel
-//!   (PR-1, ess-14f.7) exposed via `forcing_handle`.
+//! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`, the
+//!   crate-private `debug_*` entry points) and the external refreshable
+//!   forcing channel (PR-1, ess-14f.7) exposed via `forcing_handle`.
+//! * [`solve_rhs`] — [`SolveRhs`], the hidden out-of-crate handle on the
+//!   right-hand side a solve integrates and the tape it runs.
 //! * [`layout`] — column-major flat↔multi index/array conversion helpers.
 //!
 //! This file keeps the shared data model: [`Value`], the per-variable
 //! [`VarShape`] table, the compiled rule types ([`RhsRule`],
 //! [`AlgebraicRule`], [`ContractDim`]), the compiled model [`ArrayCompiled`],
-//! the kernel buffer [`Pool`], and the evaluation context [`EvalCtx`].
+//! and the evaluation context [`EvalCtx`].
 
 // This runtime is compiled for wasm too (EarthSciAST-akz): its solver is the
 // diffsol/Faer path, which is pure Rust — so no native-only dependency remains,
@@ -59,28 +61,29 @@
     clippy::needless_range_loop
 )]
 
+#[cfg(test)]
+mod cadence_tier_tests;
 mod compile;
-mod cse;
 mod driver;
 #[cfg(feature = "solve")]
 pub(crate) use driver::IcStart;
-pub(crate) use driver::ParameterKeyResolver;
-pub(crate) use recurrence_group::lower_recurrence_groups;
 mod eval;
 mod gate_walk;
 mod layout;
+mod normalize;
 pub(crate) mod range;
 mod recurrence_group;
 mod rhs;
+pub(crate) mod scalar_ops;
+#[cfg(feature = "solve")]
+mod session;
+mod shape_table;
+mod solve_rhs;
+#[cfg(feature = "solve")]
+pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
 mod vectorized;
 
-// `inline_tests` consumes `eval_buildtime_field` on every target; only the
-// native-only `area_faq` needs the scoped form, so it is gated to avoid an
-// unused-import warning on wasm.
-pub(crate) use compile::eval_buildtime_field;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::eval_buildtime_field_in_scope;
 pub use compile::{
     file_has_array_ops, file_has_spatial_model, run_value_invention,
     run_value_invention_with_params,
@@ -88,20 +91,23 @@ pub use compile::{
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
 // two routes cannot disagree about which names a document declares.
+pub(crate) use compile::InventedSets;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
+pub(crate) use compile::model_tree_any;
 pub(crate) use compile::resolve_declared_shape;
-pub(crate) use compile::{BuiltVariables, model_tree_any, parse_subsystem_model};
-pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
-// The build pipeline reads the authored model, as the single-model route does,
-// so it applies the same stand-ins for `flatten`'s rewrites.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::{
-    apply_flatten_rewrites, model_from_flattened, mount_subsystems, promote_conditional_shapes,
-    refuse_faq_bare_array_operands, resolve_model_self_references,
-};
+pub(crate) use compile::{MemberFactorColumn, member_factor_columns, run_value_invention_in_scope};
+pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
+pub(crate) use shape_table::{BuiltVariables, ShapeTable};
+// The build pipeline normalizes what it builds through the same front half
+// as the compile path.
+#[cfg(test)]
+pub(crate) use compile::{apply_shape_rewrites, model_from_flattened};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use eval::StandaloneScope;
 #[cfg(test)]
 pub(crate) use eval::check_scalar_evaluable;
 #[cfg(not(target_arch = "wasm32"))]
@@ -109,23 +115,25 @@ pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
-    ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
-    per_cell_walk_refused, per_cell_walks,
+    BuildEval, BuildRoute, CellWalks, ONE_CELL_NOTE, Routed, eval_buildtime_field_routed,
+    eval_scalar_expression,
 };
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use tape::StandaloneError;
+pub(crate) use normalize::{BuildInput, NormalizedModel, normalize};
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use vectorized::take_overlay_decline;
-// The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
-// the vectorized overlay); re-exported crate-wide so a caller outside the
+pub(crate) use tape::StandaloneError;
+// The scalar-op leaf kernel is defined once here (backs the per-cell oracle);
+// re-exported crate-wide so a caller outside the
 // runtime that needs one operator's numeric meaning (the expression
 // simplifier) routes through the SAME definition.
-pub(crate) use eval::{apply_binary, eval_expression_with_extents_and_consts_shared};
+pub(crate) use eval::apply_binary;
 pub use rhs::RhsScratch;
+#[doc(hidden)]
+pub use solve_rhs::SolveRhs;
 
 /// The names `expr` reads that no enclosing `faq` binds (strip and expose,
 /// API_SPEC §5.8).
@@ -159,14 +167,13 @@ pub(crate) fn row_major_to_column_major(shape: &[usize], values: &[f64]) -> Vec<
 }
 
 use compile::*;
-use cse::*;
 use eval::*;
 use layout::*;
 use rhs::*;
 use vectorized::*;
 
 use crate::faq::{ReduceKind, empty_derived_extents};
-use crate::types::{Expr, ExpressionNode, IndexSet, RangeSpec};
+use crate::types::{Expr, IndexSet, RangeSpec};
 use crate::value_invention::BoundaryKind;
 use indexmap::IndexMap;
 use ndarray::{ArrayD, IxDyn};
@@ -369,44 +376,17 @@ enum RhsRule {
     },
 }
 
-/// Instrumentation for one `evaluate_rhs` call: how the spatial array-op
-/// derivatives were evaluated. The load-bearing field for the
-/// no-scalarization contract (ess-bdm) is [`RhsStats::kernel_ops`] — the
-/// number of AST-node evaluations performed by the **vectorized** whole-array
-/// path. It is a function of the discretized RHS *expression* only, so it is
-/// **independent of the grid size N**: the same stencil evaluated on a 4-cell
-/// and an 8-cell grid visits the same number of array kernels (one shifted
-/// slice per neighbour, one broadcast per arithmetic node — not `O(N)` scalar
-/// sub-expressions). The per-cell oracle, by contrast, re-walks the body once
-/// per grid cell, so its `kernel_ops` scales with N. A test asserts the
-/// vectorized count is N-independent (criterion 3 of ess-bdm).
+/// Instrumentation for one right-hand-side evaluation: which evaluator ran
+/// the rules.
 #[derive(Debug, Clone, Default)]
 pub struct RhsStats {
-    /// AST-node evaluations performed by the vectorized (whole-array) path.
-    /// N-independent for a fixed discretized RHS.
-    pub kernel_ops: usize,
-    /// Number of array-op derivative rules evaluated vectorized (shifted-slice
-    /// stencils + region-materialized boundary makearrays, no per-cell loop).
-    pub vectorized_rules: usize,
-    /// Number of array-op derivative rules that fell back to the per-cell
-    /// oracle (general semiring contraction, non-affine indexing, periodic
-    /// wrap, …). The vectorized path is a verified-equivalent overlay; the
-    /// per-cell path remains the correctness reference.
+    /// Array-op derivative rules the per-cell oracle evaluated.
     pub scalar_rules: usize,
-    /// Number of array-shaped *observed* (algebraic) rules materialized via the
-    /// vectorized whole-array overlay rather than the per-cell oracle. For a
-    /// coupled model with a time/space-varying behaviour stack this is the
-    /// dominant per-step cost, so keeping it vectorized (not `obs_scalar_rules`)
-    /// is what makes the observed materialization N-independent.
-    pub obs_vectorized_rules: usize,
-    /// Number of array-shaped observed rules that fell back to the per-cell
-    /// oracle (a body op the vectorizer does not yet cover, a non-unit origin,
-    /// or a forced-scalar reference run).
+    /// Array-shaped observed rules the per-cell oracle materialized.
     pub obs_scalar_rules: usize,
-    /// Step 3b: number of rules (observed + RHS) executed through the compiled
-    /// tape's fast executor on this call: every rule of the model, since a
-    /// tape exists only when every rule lowered. Zero on the legacy
-    /// interpreter path.
+    /// Rules (observed and right-hand side) the compiled tape executed: every
+    /// rule of the model, since a tape exists only when every rule lowered.
+    /// Zero on the per-cell oracle.
     pub taped_rules: usize,
 }
 
@@ -422,9 +402,8 @@ pub struct RhsStats {
 /// the production grid). Cloning a rule now shares the immutable body
 /// instead of deep-copying it, collapsing what used to be five simultaneous
 /// full copies at solve time into one. Sharing also keeps every `Expr` node
-/// address stable for the whole run, which the address-keyed CSE overlay
-/// ([`CseRt`] / `AddrClasses`) relies on; bodies are never mutated after
-/// compile, so no copy-on-write can move them mid-solve.
+/// address stable for the whole run, which the address-keyed inline-`const`
+/// memo relies on; bodies are never mutated after compile.
 #[derive(Debug, Clone)]
 enum AlgebraicRule {
     /// `var := body` — pure scalar algebraic.
@@ -437,7 +416,7 @@ enum AlgebraicRule {
     /// `data_shaped` names, for a variable declared with no `shape` whose
     /// body is elementwise down to a scalar-condition `ifelse` whose only
     /// arrays are unshaped data-fed parameters, those parameters (esm-spec
-    /// §4.3.4, [`crate::flatten::ConditionalShapes::data_shaped`]). With no
+    /// §4.3.4, [`ShapeTable::data_shaped`]). With no
     /// `declared_shape` it takes the shape their data has, read where the
     /// data is bound ([`AlgebraicRule::fill_shape`]), so both arms have it.
     Scalar {
@@ -460,8 +439,8 @@ enum AlgebraicRule {
     ///
     /// Structurally an [`AlgebraicRule::ArrayLoop`] plus the recurrence axis,
     /// but a SEPARATE variant on purpose: its cells are not independent, so it
-    /// must never reach the whole-array overlay or any other path that
-    /// evaluates cells out of order or in a batch (CONFORMANCE_SPEC §5.19.2).
+    /// must never reach a path that evaluates cells out of order or in a
+    /// batch (CONFORMANCE_SPEC §5.19.2).
     /// The interpreter evaluates it with `sweep_recurrence`; the tape with an
     /// ordered `Sweep` that runs its cell body one cell at a time in the same
     /// order. Being a distinct variant means every `match` over the rule
@@ -679,52 +658,58 @@ pub struct RecurrenceInfo {
     pub lag_proven: bool,
 }
 
-/// Which compiler this compiled model is serving (API_SPEC §5.8).
+/// Which compiler this compiled model is serving (API_SPEC §5.8), fixed at
+/// construction ([`RuntimeMode::of`]).
 ///
-/// The array runtime has three evaluation tiers under it — the tape, the
-/// whole-array overlay and the per-cell oracle — and the historical routing
-/// walks down them silently. A named compiler fixes which of them may run, so
-/// that what ran is a property of the NAME and not of the input.
+/// The array runtime has three evaluators under it — the tape, the per-cell
+/// oracle, and the XLA executable emitted from the tape — and the compiler
+/// names which one evaluates the right-hand side and the observeds, so that
+/// what ran is a property of the NAME and not of the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum RuntimeMode {
-    /// The historical routing: the tape where it lowers, the overlay and the
-    /// per-cell oracle beneath it. Every entry point that is not
-    /// [`crate::problem::esm_problem`] — `compile_array`, the `debug_*` seams,
-    /// the adapters — builds this.
-    #[default]
-    Legacy,
     /// [`crate::Compiler::Native`]: the tape and nothing under it. Every rule
-    /// is taped (construction refused otherwise), so the build-time and
-    /// output-time observed passes are served from the tape rather than from
-    /// the overlay.
+    /// is taped (a solve refuses the document otherwise), so the right-hand
+    /// side, the build-time and per-segment observed passes and the observeds
+    /// reported at output times all run on the tape. The default: every
+    /// entry point that names no compiler (`compile_array`, the `from_*`
+    /// constructors) builds this.
+    #[default]
     Native,
-    /// [`crate::Compiler::Interpreter`]: no tape and no overlay — the per-cell
-    /// oracle everywhere, as the reference the other compilers are checked
-    /// against.
+    /// [`crate::Compiler::Interpreter`]: no tape — the per-cell oracle for the
+    /// right-hand side and every observed pass. The field initial conditions
+    /// and initialization equations are walked per cell as well
+    /// ([`BuildEval::of_compiler`]).
     Interpreter,
-    /// [`crate::Compiler::Xla`]: the specialty compiler that needs a heavy
-    /// external dependency. The tape is lowered to a StableHLO computation by
-    /// `tape::xla_emit` and run through PJRT (`crate::xla_runtime::CompiledRhs`),
-    /// so the right-hand side — and the
-    /// finite-difference Jacobian built out of it — are the compiled
-    /// executable, not the tape's own interpreter.
+    /// [`crate::Compiler::Xla`]: the tape lowered to a StableHLO computation by
+    /// `tape::xla_emit` and run through PJRT
+    /// (`crate::xla_runtime::CompiledRhs`), which evaluates the right-hand side
+    /// and the finite-difference Jacobian differenced out of it.
     ///
-    /// It is as STRICT as [`Self::Native`] and strict twice over: every rule
-    /// must lower to the tape (or construction refuses it), and the whole tape
-    /// must lower to XLA (or construction refuses that, naming the rule). The
-    /// passes the tape serves under `native` — the build-time materialization,
-    /// the per-segment seed, the inspection snapshot and the observeds
-    /// reported at output times — are served from the tape here too, because
-    /// the emitted program's only output is `du`. That is one evaluator, not
-    /// two: the same tape both feeds the emitter and answers those passes.
+    /// Every rule must lower to the tape and the whole tape must lower to XLA,
+    /// or construction refuses the document naming the rule. The observed
+    /// passes run on the tape the emitter was built from, because the
+    /// emitted program's only output is `du`.
     Xla,
+}
+
+impl RuntimeMode {
+    /// The mode a compiler builds: the one place the mapping is spelled.
+    pub(crate) fn of(compiler: crate::Compiler) -> RuntimeMode {
+        match compiler {
+            crate::Compiler::Native => RuntimeMode::Native,
+            crate::Compiler::Interpreter => RuntimeMode::Interpreter,
+            crate::Compiler::Xla => RuntimeMode::Xla,
+            // Not compilers of this binding: `esm_problem` answers
+            // `compiler_unavailable` for them before anything is built.
+            crate::Compiler::Mtk | crate::Compiler::Sympy => RuntimeMode::Native,
+        }
+    }
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
 pub struct ArrayCompiled {
-    /// Which compiler this model serves. See [`RuntimeMode`]; set by
-    /// [`crate::problem::esm_problem`] right after the build, and
-    /// [`RuntimeMode::Legacy`] for every other entry point.
+    /// Which compiler this model serves. See [`RuntimeMode`]; set by the
+    /// constructor that builds it.
     pub(crate) runtime_mode: RuntimeMode,
     /// The compiler rewrites a tape build of this model applies; set by
     /// [`crate::problem::esm_problem`] from
@@ -756,13 +741,16 @@ pub struct ArrayCompiled {
     /// layout: a slot's name (`"u[2,3]"`, `"s"`) is computed from it
     /// (`layout::slot_name`, `layout::lookup_slot`) rather than stored.
     var_shapes: IndexMap<String, VarShape>,
-    /// Every slot's name, parallel to the flat state vector, built the first
-    /// time [`Self::state_variable_names`] is asked. Nothing inside the build
-    /// or a solve's setup reads it; it is the public surface's spelling.
+    /// Every slot's name as [`Self::state_variable_names`] shows it (without
+    /// `namespace`), parallel to the flat state vector, built on first ask.
+    /// Nothing inside the build or a solve's setup reads it.
     state_names: std::cell::OnceCell<Vec<String>>,
-    /// The same names qualified by `namespace`, built on first ask
-    /// ([`Self::qualified_state_names`]).
+    /// Every slot's name as the build made it, parallel to the flat state
+    /// vector, built on first ask ([`Self::qualified_state_names`]).
     qualified_state_names: std::cell::OnceCell<Vec<String>>,
+    /// The parameter names as [`Self::parameter_names`] shows them (without
+    /// `namespace`), built on first ask.
+    shown_param_names: std::cell::OnceCell<Vec<String>>,
     /// Each state variable's default, parallel to `var_shapes`.
     state_defaults: Vec<StateDefault>,
     param_names: Vec<String>,
@@ -774,9 +762,6 @@ pub struct ArrayCompiled {
     observed_rules: Vec<AlgebraicRule>,
     /// Per-state RHS rules.
     rhs_rules: Vec<RhsRule>,
-    /// Identity of `rhs_rules` + `observed_rules` for the scratch tables keyed
-    /// by their AST node addresses ([`RhsCall::rule_set`]).
-    rule_set: u64,
     /// Number of flat state slots.
     n_states: usize,
     /// External refreshable forcing-array channel (PR-1, ess-14f.7): the live
@@ -812,12 +797,8 @@ pub struct ArrayCompiled {
     /// `data_source_unbound`, CONFORMANCE_SPEC §5.46). Empty for every model
     /// with no data feed.
     data_fed: Vec<(String, String)>,
-    /// How many times [`Self::forcing_handle`] has handed out the buffer: a
-    /// host holding a handle can have written it since, which is what
-    /// [`driver::FieldIcMemo`] checks.
-    forcing_generation: std::cell::Cell<u64>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
-    /// classified out of the equation list by [`Self::from_model`] (single-model
+    /// classified out of the equation list by [`Self::from_model_with_arrays`] (single-model
     /// path) or carried from [`crate::flatten::FlattenedSystem::field_ics`]
     /// (coupled path). Each entry is `(target_state, rhs)`: at `u0` build time
     /// [`Self::simulate`] resolves the target's grid cells and folds the initial
@@ -857,19 +838,17 @@ pub struct ArrayCompiled {
     /// cloning the name set every step. Empty for a model with no const
     /// factors, which reads byte-identically to the pre-§5.5.5 evaluator.
     const_scope: std::sync::Arc<ConstArrayScope>,
-    /// The single-model namespace (the top-level `models` map key), set by
-    /// [`Self::from_file`]. The raw single-model path keys params/states by their
-    /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
-    /// Julia toolkit namespace them (`Model.R_0`).
-    /// So a caller's `parameters` / `initial_conditions` override key is accepted
-    /// in EITHER form: a `<namespace>.` prefix is stripped before lookup (WS3
-    /// cross-toolkit override-naming parity). `None` on the `from_flattened`
-    /// path, whose names are already fully namespaced.
+    /// The model a one-model document is shown under: the key of its only
+    /// model, `None` for any other build. Every name this build makes is the
+    /// flattened, qualified one (`M.u`); a one-model document's names are shown
+    /// without `M.` where this artifact presents them — its public name
+    /// lists, the rows of [`Self::solve`] and the errors it raises — because
+    /// that is how its author wrote them.
     namespace: Option<String>,
     /// The working precision this model was COMPILED under
     /// (`crate::precision`), captured so evaluation reproduces it even when the
-    /// caller reaches an `ArrayCompiled` directly (`compile_array`, the
-    /// `debug_*` entry points) rather than through an `EsmProblem`. Build-time
+    /// caller reaches an `ArrayCompiled` directly (`compile_array`,
+    /// [`SolveRhs`]) rather than through an `EsmProblem`. Build-time
     /// folding and run-time evaluation must round identically, and the
     /// artifact carrying its own precision is what makes that true by
     /// construction rather than by the caller remembering.
@@ -879,26 +858,18 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
-    /// The shape each unshaped mixed-rank-`ifelse` variable was built at
-    /// (esm-spec §4.3.4), which neither the document nor the flattened system
-    /// records (esm-libraries-spec §4.7.5). Kept so a reader downstream of the
-    /// build takes the shape the build used instead of inferring it again; see
-    /// [`compile::promote_conditional_shapes`].
-    pub(crate) conditional_shapes: crate::flatten::BuiltShapes,
-    /// Every variable's index-set axes as this build compiled it, and the
-    /// inputs a coupling substituted away ([`compile::BuiltVariables`]). Read
-    /// by [`Self::built_variables`].
-    built_variables: compile::BuiltVariables,
+    /// Every variable's index-set axes as this build compiled it
+    /// ([`ShapeTable`]), and the inputs a coupling substituted away
+    /// ([`BuiltVariables`]). A reader downstream of the build takes a shape
+    /// the build decided — an unshaped mixed-rank `ifelse`'s (esm-spec
+    /// §4.3.4), which neither the document nor the flattened system records
+    /// (esm-libraries-spec §4.7.5) — from here instead of inferring it again.
+    built_variables: BuiltVariables,
     /// The field initial conditions construction resolved
     /// ([`Self::field_ic_records`]), held for the first solve to take instead
     /// of resolving them again. See [`driver::FieldIcMemo`].
     #[cfg(feature = "solve")]
     field_ic_memo: RefCell<Option<driver::FieldIcMemo>>,
-    /// Each shaped parameter whose declared default the build lowered into a
-    /// `const` observed, with the dense row-major `(shape, values)` it was
-    /// lowered from. The literal's JSON is the per-cell oracle's form; the tape
-    /// reads these numbers instead of parsing it back.
-    inline_param_arrays: HashMap<String, (Vec<usize>, Vec<f64>)>,
     /// Every parameter refreshed from OUTSIDE the model (a data-source `from`
     /// binding or a registered handler), with its declared shape resolved
     /// against the index-set registry: the names the forcing buffer serves
@@ -934,102 +905,6 @@ pub struct ArrayCompiled {
     tape_cache: tape::TapeCache,
 }
 
-/// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
-/// `take_array*`/`give_array` recycle buffers; after a warm-up call the pool
-/// holds enough output-box-sized buffers that no further allocation occurs.
-///
-/// Recycling is **shape-bucketed**: [`Pool::give_array`] parks the whole
-/// [`ArrayD`] (buffer *plus* its already-built `IxDyn` dim and strides) in the
-/// bucket for its exact shape, and [`Pool::take_array_uninit`] pops it straight
-/// back out. In a steady-state RHS the same handful of output-box shapes repeat
-/// on every call, so the common checkout is a hash lookup and a `Vec::pop` —
-/// neither the `memset` that a `Vec::resize`-based refill costs nor the
-/// `IxDyn(shape)` / `from_shape_vec` shape+stride reconstruction that a
-/// buffer-only pool has to redo per checkout (both were measurable shares of
-/// the solve: ~9.5% and ~8.3% respectively on the simpleclimate PPM core).
-///
-/// `free` is the spill list for the cases the buckets cannot serve: a
-/// first-of-its-shape checkout, and a returned array that is not in standard
-/// layout (so its buffer, but not its shape, is reusable).
-#[derive(Default)]
-struct Pool {
-    /// Whole recycled arrays, bucketed by exact shape. Keyed by [`DimU`], which
-    /// hashes and compares as a `[usize]` slice, so the hot lookup borrows the
-    /// caller's `&[usize]` with no key materialization.
-    shaped: HashMap<DimU, Vec<ArrayD<f64>>, FxBuildHasher>,
-    /// Bare buffers with no usable shape attached.
-    free: Vec<Vec<f64>>,
-}
-
-impl Pool {
-    /// Check out a zero-filled buffer of `len` elements, reusing a free buffer
-    /// whose capacity already covers `len` (no reallocation in steady state).
-    fn take(&mut self, len: usize) -> Vec<f64> {
-        if let Some(pos) = self.free.iter().position(|b| b.capacity() >= len) {
-            let mut b = self.free.swap_remove(pos);
-            b.clear();
-            b.resize(len, 0.0);
-            b
-        } else if let Some(mut b) = self.free.pop() {
-            // A free buffer exists but is too small; grow it (warm-up only).
-            b.clear();
-            b.resize(len, 0.0);
-            b
-        } else {
-            vec![0.0; len]
-        }
-    }
-
-    /// Check out an owned `ArrayD` of the given row-major `shape` whose element
-    /// contents are **unspecified** — whatever the previous holder of the
-    /// recycled buffer left there.
-    ///
-    /// For kernels that write every element of the box before anything reads it
-    /// (an elementwise `Zip`, a `fill`, a coordinate ramp, an `assign` of a
-    /// same-shape source). A caller that writes only PART of the box — a
-    /// Dirichlet-ghost gather, a reduction accumulator seeded with the identity,
-    /// a region-tiled `makearray` — must use [`Pool::take_array`] instead, or it
-    /// will read the previous kernel's data.
-    fn take_array_uninit(&mut self, shape: &[usize]) -> ArrayD<f64> {
-        if let Some(bucket) = self.shaped.get_mut(shape) {
-            if let Some(arr) = bucket.pop() {
-                // Recycled whole: right shape, right strides, right length —
-                // nothing to rebuild and nothing to refill.
-                return arr;
-            }
-        }
-        let len = shape.iter().copied().product::<usize>().max(1);
-        let buf = self.take(len);
-        ArrayD::from_shape_vec(IxDyn(shape), buf).expect("pool buffer length matches shape")
-    }
-
-    /// Check out a zero-filled owned `ArrayD` of the given row-major `shape`,
-    /// backed by a pooled buffer.
-    fn take_array(&mut self, shape: &[usize]) -> ArrayD<f64> {
-        let mut arr = self.take_array_uninit(shape);
-        arr.fill(0.0);
-        arr
-    }
-
-    /// Return an owned `ArrayD` to the pool, preserving its buffer capacity and
-    /// — when it is in standard (contiguous, row-major) layout, as every buffer
-    /// this module hands out is and the in-place kernels keep it — its built
-    /// shape and strides too, so the next same-shape checkout rebuilds nothing.
-    fn give_array(&mut self, arr: ArrayD<f64>) {
-        if arr.is_standard_layout() {
-            if let Some(bucket) = self.shaped.get_mut(arr.shape()) {
-                bucket.push(arr);
-                return;
-            }
-            let shape: DimU = arr.shape().iter().copied().collect();
-            self.shaped.insert(shape, vec![arr]);
-            return;
-        }
-        let (buf, _offset) = arr.into_raw_vec_and_offset();
-        self.free.push(buf);
-    }
-}
-
 /// The rule-invariant slice of an evaluation environment: everything an
 /// [`EvalCtx`] carries EXCEPT the observed-array map (whose borrow must be
 /// re-taken after each observed rule writes its output) and the per-loop
@@ -1050,10 +925,6 @@ struct EvalEnv<'a> {
     derived_extents: &'a HashMap<String, i64>,
     /// See [`EvalCtx::forcing`].
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
-    /// See [`EvalCtx::cse`].
-    cse: Option<&'a CseRt>,
-    /// See [`EvalCtx::const_lits`].
-    const_lits: Option<&'a ConstLitMemo>,
     /// See [`EvalCtx::const_arrays`].
     const_arrays: &'a ConstArrayScope,
     /// See [`EvalCtx::declared`].
@@ -1073,20 +944,10 @@ impl<'a> EvalEnv<'a> {
             t: self.t,
             derived_extents: self.derived_extents,
             forcing: self.forcing,
-            cse: self.cse,
-            const_lits: self.const_lits,
             const_arrays: self.const_arrays,
             recur: None,
             declared: self.declared,
-        }
-    }
-
-    /// Like [`Self::ctx`] but with no CSE memo — the per-cell oracle loops
-    /// evaluate without one.
-    fn oracle_ctx(&self, observed_arrays: &'a ArrMap) -> EvalCtx<'a> {
-        EvalCtx {
-            cse: None,
-            ..self.ctx(observed_arrays)
+            walks: CellWalks::default(),
         }
     }
 }
@@ -1121,38 +982,6 @@ struct EvalCtx<'a> {
     /// entry here (see [`lookup_variable`]). Empty for models with no loader
     /// forcing, so the scalar-`p` path reads identically.
     forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
-    /// Common-subexpression memo for the vectorized overlay (ess-cse). `None`
-    /// on the entry points that evaluate a one-off expression (`eval_expression`,
-    /// the build-time observed materialization), where there is nothing to amortize
-    /// a structural analysis over; the overlay then behaves exactly as it did
-    /// before. See [`cse`] for the scoping rule that makes sharing sound.
-    cse: Option<&'a CseRt>,
-    /// Per-model memo for INLINE array-valued `const` literals (esm-spec §4.3.3),
-    /// keyed by the literal node's address and the active working precision.
-    ///
-    /// A `const` node carries its payload as raw JSON, so materializing it is a
-    /// recursive `serde_json::Value` walk plus a fresh `ArrayD` allocation.
-    /// Nothing about that depends on the state, the time or the loop binds, yet
-    /// `index(const([...]), i)` — the shape every transcribed lookup table takes
-    /// (an RRTM k-distribution band is ~14k numbers) — needs the whole walk
-    /// once per cell of the enclosing aggregate without it, which is the
-    /// dominant cost of a right-hand side that gathers such a table.
-    ///
-    /// The memo makes it once per model instead. Entries are `Rc`-shared so a
-    /// hit costs a refcount bump, never a copy, and [`eval_index`] reads the
-    /// element straight out of the shared array rather than cloning it into a
-    /// [`Value::Array`].
-    ///
-    /// `None` on every path that carries no memo to hang the entry on: the
-    /// standalone `eval_expression*` entry points, the recurrence sweep, the
-    /// build-time observed snapshots, the output-node observed pass and the
-    /// test-only reference tape executor. Those walk the payload directly and
-    /// answer exactly the same values; the output-node pass repeats the same
-    /// bodies per node and would benefit from a memo of its own, which it does
-    /// not yet have. The memo itself lives on [`RhsScratch`], whose lifetime is
-    /// the rule set's, and is retargeted on the same key [`CseRt::retarget`]
-    /// uses.
-    const_lits: Option<&'a ConstLitMemo>,
     /// The CONST-ARRAY provenance of this evaluation (CONFORMANCE_SPEC §5.5.5).
     ///
     /// A gather whose target is named here is a **const-array gather** — a
@@ -1175,8 +1004,8 @@ struct EvalCtx<'a> {
     ///
     /// `None` on every path in the runtime except the recurrence sweep itself,
     /// which is what makes the feature cost nothing for a document that does
-    /// not use it: one `Option` test on the `index` fast path and one on each
-    /// vectorized-overlay entry gate.
+    /// not use it: one `Option` test on the `index` fast path and one on the
+    /// variable lookup.
     recur: Option<&'a RecurScope<'a>>,
     /// Every name the compiled model DECLARES — states, parameters and
     /// observeds — regardless of whether a value for it exists in any of the
@@ -1200,6 +1029,12 @@ struct EvalCtx<'a> {
     /// compiled model — an empty set never claims a name IS declared, so those
     /// paths keep exactly the diagnosis they had.
     declared: &'a HashSet<String>,
+    /// What this evaluation is told about walking a `faq` cell by cell —
+    /// stop after the first cell — and what it reports back: how many walks
+    /// it took and whether one stopped ([`CellWalks`]). Default on every
+    /// path but the build-time ones that read it
+    /// ([`StandaloneScope::eval_routed`], the build pipeline).
+    walks: CellWalks,
 }
 
 /// The shared empty declared-name set (see [`EvalCtx::declared`]).
@@ -1216,84 +1051,6 @@ fn empty_declared_names() -> &'static HashSet<String> {
 /// The name `E_TREEWALK_CONSTARRAY_OOB` reports for a `const` literal written
 /// inline as an `index` base, which has no variable name of its own.
 pub(crate) const INLINE_CONST_NAME: &str = "inline const";
-
-/// Per-model memo for inline array-valued `const` literals — see
-/// [`EvalCtx::const_lits`] for why it exists.
-///
-/// Keyed by `(node address, working precision)`. The address is the payload
-/// address of the `Arc<ExpressionNode>` the rule set holds, so it is stable and
-/// unique for exactly as long as that rule set is alive — the same identity
-/// argument the CSE class table rests on, and [`Self::retarget`] discards the
-/// table on the same key when a scratch is handed a different rule set.
-/// Precision is part of the key because a `const` literal rounds on ingress
-/// (esm-spec §11.3.1), so the binary32 materialization is a different array.
-#[derive(Default)]
-pub(super) struct ConstLitMemo {
-    inner: RefCell<ConstLitInner>,
-}
-
-#[derive(Default)]
-struct ConstLitInner {
-    /// The rule-set key this table was built against (see [`CseRt::retarget`]).
-    key: u64,
-    /// `None` marks a payload with no array materialization — a ragged or
-    /// non-numeric literal. Recorded rather than left absent so a repeat read
-    /// is still a single probe; the caller then falls back to the plain walk,
-    /// which is what produces that literal's NaN sentinel.
-    map: HashMap<(usize, bool), Option<std::sync::Arc<ArrayD<f64>>>>,
-}
-
-/// Walk an inline `const` node's JSON payload into a shared array. `None` for
-/// any payload [`eval::json_to_value`] does not read as a numeric array — a
-/// scalar, or a ragged/non-numeric one.
-fn walk_const_lit(node: &ExpressionNode) -> Option<std::sync::Arc<ArrayD<f64>>> {
-    match node.value.as_ref().map(eval::json_to_value) {
-        Some(Some(Value::Array(a))) => Some(std::sync::Arc::new(*a)),
-        _ => None,
-    }
-}
-
-impl ConstLitMemo {
-    /// Bind this memo to a rule set. A different key discards every entry: the
-    /// addresses it holds belonged to the previous rule set and a new node may
-    /// land on one of them.
-    pub(super) fn retarget(&self, key: u64) {
-        let mut inner = self.inner.borrow_mut();
-        if inner.key != key {
-            inner.key = key;
-            inner.map.clear();
-        }
-    }
-
-    /// The materialized array for the inline `const` literal `node`, computing
-    /// (and remembering) it on the first read. `None` for a scalar or malformed
-    /// payload, which the caller handles exactly as an un-memoized walk would.
-    pub(super) fn get(&self, node: &ExpressionNode) -> Option<std::sync::Arc<ArrayD<f64>>> {
-        let k = (
-            node as *const ExpressionNode as usize,
-            crate::precision::active().is_f32(),
-        );
-        if let Some(hit) = self.inner.borrow().map.get(&k) {
-            return hit.clone();
-        }
-        let built = walk_const_lit(node);
-        self.inner.borrow_mut().map.insert(k, built.clone());
-        built
-    }
-}
-
-/// The materialized array for an inline `const` literal, through `memo` when
-/// one is in scope and by a direct walk otherwise. The two answers are equal by
-/// construction: the memo stores exactly what the walk produces.
-pub(super) fn const_lit_array(
-    node: &ExpressionNode,
-    memo: Option<&ConstLitMemo>,
-) -> Option<std::sync::Arc<ArrayD<f64>>> {
-    match memo {
-        Some(m) => m.get(node),
-        None => walk_const_lit(node),
-    }
-}
 
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
 /// declared per-dimension out-of-range boundary policy

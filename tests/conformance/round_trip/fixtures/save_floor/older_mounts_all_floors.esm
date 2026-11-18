@@ -1,0 +1,29 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "save_floor_older_mounts_all_floors",
+    "description": "An esm 1.0.0 document that mounts three leaves: faq_leaf.esm (esm 1.1.0, a `faq` node), tests/valid/version_gate_newer_leaf.esm (esm 1.2.0, a unit-bearing `const`) and bounds_leaf.esm (esm 2.1.0, a variable bound). Once they are inlined all three floors apply, and the highest wins: the document saves as esm 2.1.0 (esm-spec §4.7, \"Save-time version floors\").",
+    "authors": ["EarthSciAST"],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": ["version", "mount", "faq", "const-units", "variable_bounds", "save-floor"]
+  },
+  "models": {
+    "Station": {
+      "variables": {
+        "total_reading": {"type": "unknown", "description": "The faq leaf's total."},
+        "p_reading": {"type": "unknown", "units": "Pa", "description": "The const-units leaf's absolute pressure."},
+        "c_reading": {"type": "unknown", "units": "mol/m^3", "description": "The bounds leaf's concentration."}
+      },
+      "equations": [
+        {"lhs": "total_reading", "rhs": "Faq.total"},
+        {"lhs": "p_reading", "rhs": "Pressure.p_abs"},
+        {"lhs": "c_reading", "rhs": "Bounds.c"}
+      ],
+      "subsystems": {
+        "Faq": {"ref": "./faq_leaf.esm"},
+        "Pressure": {"ref": "../../../../valid/version_gate_newer_leaf.esm"},
+        "Bounds": {"ref": "./bounds_leaf.esm"}
+      }
+    }
+  }
+}

@@ -945,6 +945,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         brownian_parameters: IndexMap::new(),
         discrete_parameters: Default::default(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: vec![Equation {
             comment: None,
             lhs: Expr::operator(ExpressionNode {
@@ -1087,7 +1088,11 @@ fn test_error_grad_in_array_simulator_rejected() {
             rhs: faq_body,
         }],
     );
-    let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
+    let err = match ArrayCompiled::from_model_with_arrays(
+        &model,
+        &std::collections::HashMap::new(),
+        None,
+    ) {
         Ok(_) => panic!("expected error, got Ok"),
         Err(e) => e,
     };
@@ -1168,7 +1173,11 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         system_kind: None,
     };
 
-    let err = match ArrayCompiled::from_model(&model, &std::collections::HashMap::new()) {
+    let err = match ArrayCompiled::from_model_with_arrays(
+        &model,
+        &std::collections::HashMap::new(),
+        None,
+    ) {
         Ok(_) => panic!("expected error for undeclared variable, got Ok"),
         Err(e) => e,
     };
@@ -1200,6 +1209,7 @@ fn dummy_flat() -> FlattenedSystem {
         brownian_parameters: IndexMap::new(),
         discrete_parameters: Default::default(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: Vec::new(),
         equation_contributions: Vec::new(),
         equation_lifted: Vec::new(),

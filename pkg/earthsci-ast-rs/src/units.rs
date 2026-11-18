@@ -18,7 +18,7 @@
 //! get_expression_dimensions`).
 
 use crate::inline_test_checks::pointer_token;
-use crate::types::{Equation, Expr, ExpressionNode};
+use crate::types::{Equation, Expr, ExpressionNode, HasSubsystems};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
@@ -904,26 +904,42 @@ fn propagate_operator_dim(
     env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
-    match op.op.as_str() {
-        "+" | "-" => propagate_additive_dim(op, env, findings),
-        "*" | "/" => propagate_multiplicative_dim(op, env, findings),
-        "^" | "power" | "pow" => propagate_power_dim(op, env, findings),
-        "D" | "ic" => propagate_calculus_dim(op, env, findings),
-        "exp" | "log" | "log10" | "ln" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
-            propagate_transcendental_dim(op, env, findings)
-        }
-        "sqrt" => propagate_sqrt_dim(op, env, findings),
+    use crate::op_registry::{CoreOp, OtherOp as O, UnaryFn as F};
+    let Some(core) = op.core_op() else {
+        return propagate_open_tier_dim(op, env, findings);
+    };
+    match core {
+        CoreOp::Other(O::Add | O::Sub) => propagate_additive_dim(op, env, findings),
+        CoreOp::Other(O::Mul | O::Div) => propagate_multiplicative_dim(op, env, findings),
+        CoreOp::Other(O::Pow | O::PowWord) => propagate_power_dim(op, env, findings),
+        CoreOp::Other(O::D | O::Ic) => propagate_calculus_dim(op, env, findings),
+        CoreOp::Unary(
+            F::Exp
+            | F::Log
+            | F::Log10
+            | F::Sin
+            | F::Cos
+            | F::Tan
+            | F::Asin
+            | F::Acos
+            | F::Atan
+            | F::Sinh
+            | F::Cosh
+            | F::Tanh
+            | F::Asinh
+            | F::Acosh
+            | F::Atanh,
+        ) => propagate_transcendental_dim(op, env, findings),
+        CoreOp::Unary(F::Sqrt) => propagate_sqrt_dim(op, env, findings),
         // abs/floor/ceil preserve dimensions; `Pre` is an initial-value
         // marker — same dimensions as its argument.
-        "abs" | "floor" | "ceil" | "round" | "Pre" => {
-            if !require_arity(op, 1, findings) {
-                return Dim::Unknown;
-            }
-            propagate_dim(&op.args[0], env, findings)
+        CoreOp::Unary(F::Abs | F::Floor | F::Ceil) | CoreOp::Other(O::Pre) => {
+            propagate_first_operand_dim(op, env, findings)
         }
-        "min" | "max" => propagate_matching_dim(op, env, findings, AngleRule::Applies),
-        "atan2" => {
+        CoreOp::Other(O::Min | O::Max) => {
+            propagate_matching_dim(op, env, findings, AngleRule::Applies)
+        }
+        CoreOp::Other(O::Atan2) => {
             if !require_arity(op, 2, findings) {
                 return Dim::Unknown;
             }
@@ -933,8 +949,8 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings, AngleRule::Strict);
             Dim::Known(radian())
         }
-        "ifelse" => propagate_ifelse_dim(op, env, findings),
-        ">" | "<" | ">=" | "<=" | "==" | "!=" => {
+        CoreOp::Other(O::Ifelse) => propagate_ifelse_dim(op, env, findings),
+        CoreOp::Compare(_) => {
             if !require_arity(op, 2, findings) {
                 return Dim::Known(Unit::dimensionless());
             }
@@ -942,7 +958,7 @@ fn propagate_operator_dim(
             propagate_matching_dim(op, env, findings, AngleRule::Applies);
             Dim::Known(Unit::dimensionless())
         }
-        "sign" => {
+        CoreOp::Unary(F::Sign) => {
             // A dimensionless -1/0/+1 whatever the argument's unit, but the
             // argument is walked so a finding inside it (`sign(exp(T [K]))`)
             // is reported (esm-spec §4.8.3).
@@ -951,7 +967,7 @@ fn propagate_operator_dim(
             }
             Dim::Known(Unit::dimensionless())
         }
-        "and" | "or" | "not" => {
+        CoreOp::Other(O::And | O::Or | O::Not) => {
             // A boolean connective's result is a dimensionless boolean. Its
             // operands carry no unit requirement of their own, but they are
             // walked so a mismatch inside one (`not(x [m] > z [kg])`) is
@@ -960,32 +976,77 @@ fn propagate_operator_dim(
             Dim::Known(Unit::dimensionless())
         }
         // Array operators: propagate the element dimension. Shape and
-        // indexing are orthogonal to dimension (see gt-t5c / gt-vt3 — shapes
-        // are a separate concern from unit checking).
-        "faq" | "makearray" | "index" | "reshape" | "transpose" | "concat" | "broadcast" => {
-            propagate_array_dim(op, env, findings)
-        }
+        // indexing are orthogonal to dimension.
+        CoreOp::Other(
+            O::Faq | O::Makearray | O::Index | O::Reshape | O::Transpose | O::Concat | O::Broadcast,
+        ) => propagate_array_dim(op, env, findings),
         // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
         // without `units` it is undeterminable, like a bare literal. An
         // unresolvable string is reported at the containing expression field by
         // `structural.rs` (see [`unresolvable_const_units`]), not here.
-        "const" => match op.units.as_deref().map(parse_unit) {
+        CoreOp::Other(O::Const) => match op.units.as_deref().map(parse_unit) {
             Some(Ok(unit)) => Dim::Known(unit),
             Some(Err(_)) => Dim::Unknown,
-            None => literal_dim(op.value.as_ref().and_then(serde_json::Value::as_f64), env),
+            None => literal_dim(op.value.as_ref().and_then(crate::ConstValue::as_f64), env),
         },
-        // No dimensional rule for this operator — an unregistered user op, or a
-        // rewrite-target sugar op (`grad`/`div`/`laplacian`/
-        // `godunov_hamiltonian`/…) whose dimension is UNDETERMINABLE until a
-        // discretization rule lowers it (esm-spec §4.8.4). The checker reports
-        // UNKNOWN and SKIPS: it emits NO finding, matching the other four
-        // bindings (Julia/TS/Python/Go), which return an unknown dimension and
-        // let their callers skip the check. The node's dimension is `Unknown` —
-        // NOT a silent `dimensionless`, which would manufacture false mismatches
-        // in the enclosing expression. `findings` is left untouched so nothing
-        // is singled out; `_` treats `grad` exactly like any other no-rule op.
+        // No dimensional rule: the deprecated `neg` (the loader rewrites it to
+        // `-` before any check runs), the boolean literals, the load-time ops
+        // `enum` and `apply_expression_template`, the build-time `distinct`
+        // and the engine-internal precision marker. The node's dimension is
+        // UNDETERMINABLE and no finding is emitted (esm-spec §4.8.4).
+        CoreOp::Other(
+            O::Neg
+            | O::True
+            | O::False
+            | O::Enum
+            | O::ApplyExpressionTemplate
+            | O::Distinct
+            | O::Precision,
+        ) => Dim::Unknown,
+    }
+}
+
+/// The dimension of a node whose `op` is not an evaluable-core operator.
+///
+/// An unregistered user op, or a rewrite-target sugar op (`grad`/`div`/
+/// `laplacian`/`godunov_hamiltonian`/…), has a dimension that is
+/// UNDETERMINABLE until a discretization rule lowers it (esm-spec §4.8.4). The
+/// checker reports UNKNOWN and SKIPS: it emits NO finding, matching the other
+/// four bindings, which return an unknown dimension and let their callers skip
+/// the check. The node's dimension is `Unknown` — NOT a silent
+/// `dimensionless`, which would manufacture false mismatches in the enclosing
+/// expression.
+///
+/// Three open-tier names nevertheless have a rule here: `ln` (checked like
+/// `log`), `power` (like `^`) and `round` (like `abs`). esm-spec §4.8.3 says
+/// `ln` "is not an operator" and an `ln` node is a rewrite target like any
+/// other unknown op, but all five bindings' unit checkers accept it as a
+/// transcendental. `power` and `round` have a rule in this binding only.
+/// Each is a unit verdict other bindings can observe, so it is kept until the
+/// bindings change together.
+fn propagate_open_tier_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    match op.op.as_str() {
+        "ln" => propagate_transcendental_dim(op, env, findings),
+        "power" => propagate_power_dim(op, env, findings),
+        "round" => propagate_first_operand_dim(op, env, findings),
         _ => Dim::Unknown,
     }
+}
+
+/// A unary operator whose result carries its operand's dimension.
+fn propagate_first_operand_dim(
+    op: &ExpressionNode,
+    env: &dyn UnitEnv,
+    findings: &mut Vec<UnitFinding>,
+) -> Dim {
+    if !require_arity(op, 1, findings) {
+        return Dim::Unknown;
+    }
+    propagate_dim(&op.args[0], env, findings)
 }
 
 /// Whether an agreement position admits an angle meeting a pure number (esm-spec
@@ -1273,7 +1334,7 @@ pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
         return node
             .value
             .as_ref()
-            .and_then(serde_json::Value::as_f64)
+            .and_then(crate::ConstValue::as_f64)
             .and_then(Rational::from_f64);
     }
     let values = node
@@ -1988,13 +2049,11 @@ impl<'d> ComponentUnitEnv<'d> {
     /// over the document's top-level scoped units.
     pub(crate) fn new(
         own: HashMap<String, Unit>,
-        subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+        component: &impl crate::structural::MemberUnits,
         document: &'d HashMap<String, Unit>,
     ) -> Self {
         let mut parsed: HashMap<String, Option<Unit>> = HashMap::new();
-        let relative = subsystems
-            .map(crate::structural::subsystem_reference_units)
-            .unwrap_or_default()
+        let relative = crate::structural::subsystem_reference_units(component)
             .into_iter()
             .filter(|(name, _)| !own.contains_key(name))
             .map(|(name, units)| {
@@ -2053,7 +2112,7 @@ pub fn model_unit_env(
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let document = document_scoped_units(esm_file);
     let (own, failures) = build_unit_env(&model.variables);
-    let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), &document).into_map();
+    let env = ComponentUnitEnv::new(own, model, &document).into_map();
     (env, failures)
 }
 
@@ -2220,7 +2279,7 @@ fn bare_literal(expr: &Expr) -> Option<BareLiteral> {
                 if node.units.is_some() {
                     return None;
                 }
-                let value = node.value.as_ref()?;
+                let value = node.value.as_ref()?.as_json()?;
                 return Some(BareLiteral {
                     value: value.as_f64()?,
                     text: value.to_string(),
@@ -2341,7 +2400,7 @@ struct LiteralWalk<'d> {
 impl LiteralWalk<'_> {
     fn model(&mut self, pointer: &str, model: &crate::Model) {
         let (own, _) = build_unit_env(&model.variables);
-        let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), self.document_units);
+        let env = ComponentUnitEnv::new(own, model, self.document_units);
         for (i, eq) in model.equations.iter().enumerate() {
             self.site(
                 format!("{pointer}/equations/{i}"),
@@ -2356,13 +2415,11 @@ impl LiteralWalk<'_> {
                 &env,
             );
         }
-        for (name, sub) in inline_subsystems(model.subsystems.as_ref()) {
-            if let Ok(sub) = serde_json::from_value::<crate::Model>(sub.clone()) {
-                self.model(
-                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
-                    &sub,
-                );
-            }
+        for (name, sub) in model.inline_subsystems() {
+            self.model(
+                &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                sub,
+            );
         }
     }
 
@@ -2375,7 +2432,7 @@ impl LiteralWalk<'_> {
         let own: HashMap<String, Unit> = declared
             .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
             .collect();
-        let env = ComponentUnitEnv::new(own, rs.subsystems.as_ref(), self.document_units);
+        let env = ComponentUnitEnv::new(own, rs, self.document_units);
         for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
             self.site(
                 format!("{pointer}/constraint_equations/{i}"),
@@ -2390,13 +2447,11 @@ impl LiteralWalk<'_> {
                 &env,
             );
         }
-        for (name, sub) in inline_subsystems(rs.subsystems.as_ref()) {
-            if let Ok(sub) = serde_json::from_value::<crate::ReactionSystem>(sub.clone()) {
-                self.reaction_system(
-                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
-                    &sub,
-                );
-            }
+        for (name, sub) in rs.inline_subsystems() {
+            self.reaction_system(
+                &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                sub,
+            );
         }
     }
 
@@ -2423,27 +2478,6 @@ impl LiteralWalk<'_> {
         );
         self.out.push((pointer, message));
     }
-}
-
-/// The inline subsystems of a `subsystems` map: a resolved `{ref}` mount is
-/// already spliced in (and a mounted single-component document is unwrapped to
-/// its component); an unresolved `{ref}` has nothing to type and is skipped.
-fn inline_subsystems(
-    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
-) -> impl Iterator<Item = (&String, &serde_json::Value)> {
-    subsystems
-        .into_iter()
-        .flatten()
-        .filter_map(|(name, value)| {
-            let component = value
-                .get("models")
-                .or_else(|| value.get("reaction_systems"))
-                .and_then(|m| m.as_object())
-                .filter(|m| m.len() == 1)
-                .and_then(|m| m.values().next())
-                .unwrap_or(value);
-            (component.is_object() && component.get("ref").is_none()).then_some((name, component))
-        })
 }
 
 /// The dimensional analyser's verdict on one equation, in the form a report
@@ -2544,37 +2578,6 @@ pub fn unresolvable_const_units(expr: &Expr) -> Vec<String> {
     let mut out = Vec::new();
     walk(expr, &mut out);
     out
-}
-
-/// Reject declared `units` on an expression node in a document declaring
-/// `esm` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
-/// `offending` yields the path of the first expression node in THIS file that
-/// declares `units` (the loader's authored walk), and runs only when the
-/// declared version is below 1.2.0. Each file is judged against its own `esm`
-/// (§4.7), so the walk must not reach into a mounted file.
-pub(crate) fn reject_const_units_pre_v12(
-    view: &serde_json::Value,
-    offending: impl FnOnce() -> Option<String>,
-) -> Result<(), crate::diagnostic::DiagnosticError> {
-    let Some(esm) = view.get("esm").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if (major, minor) >= (1, 2) {
-        return Ok(());
-    }
-    match offending() {
-        None => Ok(()),
-        Some(path) => Err(crate::diagnostic::err(
-            crate::diagnostic::codes::CONST_UNITS_VERSION_TOO_OLD,
-            format!(
-                "declared `units` on an expression node require esm >= 1.2.0; file declares \
-                 {esm}. Offending path: {path}"
-            ),
-        )),
-    }
 }
 
 /// Parse a unit string into a Unit struct
@@ -4400,10 +4403,8 @@ mod tests {
         }
     }
 
-    /// The fold is IDEMPOTENT. It has to be: the array runtime runs the same
-    /// rewrite on a `FlattenedSystem` that `flatten` already folded
-    /// (`simulate_array::compile::normalize_model_angle_arguments`), and a
-    /// second application would evaluate `sin(90 · 0.01745²)` with no error.
+    /// The fold is IDEMPOTENT, so a second application never evaluates
+    /// `sin(90 · 0.01745²)` with no error.
     /// What makes it idempotent is the rewrite's own output: the product
     /// carries a BARE LITERAL, so its unit is undeterminable (§4.8.4) and
     /// `angle_normalization_factor` is never reached a second time.
@@ -4732,7 +4733,7 @@ mod tests {
         let konst = |units: Option<&str>| {
             Expr::Operator(std::sync::Arc::new(ExpressionNode {
                 op: "const".into(),
-                value: Some(serde_json::json!(0.44704)),
+                value: Some(serde_json::json!(0.44704).into()),
                 units: units.map(str::to_string),
                 ..ExpressionNode::default()
             }))
@@ -4783,8 +4784,9 @@ mod tests {
             })
         };
         let path = || Some("/models/M/equations/0/rhs".to_string());
-        let err =
-            reject_const_units_pre_v12(&doc("1.1.0"), path).expect_err("1.1.0 must be rejected");
+        let err = crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS]
+            .check(&doc("1.1.0"), path)
+            .expect_err("1.1.0 must be rejected");
         assert!(
             err.to_string().contains("const_units_version_too_old"),
             "{err}"
@@ -4793,7 +4795,11 @@ mod tests {
             err.to_string().contains("/models/M/equations/0/rhs"),
             "{err}"
         );
-        assert!(reject_const_units_pre_v12(&doc("1.2.0"), path).is_ok());
+        assert!(
+            crate::version_gates::VERSIONED[crate::version_gates::CONST_UNITS]
+                .check(&doc("1.2.0"), path)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -5099,7 +5105,7 @@ mod tests {
         let unitless_const = |value: serde_json::Value| {
             Expr::operator(ExpressionNode {
                 op: "const".to_string(),
-                value: Some(value),
+                value: Some(value.into()),
                 ..ExpressionNode::default()
             })
         };
@@ -5154,7 +5160,7 @@ mod tests {
         // A unit-bearing `const` keeps its declared unit under the new rule.
         let with_units = Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!(273.15)),
+            value: Some(serde_json::json!(273.15).into()),
             units: Some("K".to_string()),
             ..ExpressionNode::default()
         });
@@ -5743,7 +5749,7 @@ mod tests {
     fn konst(value: f64, units: Option<&str>) -> Expr {
         Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!(value)),
+            value: Some(serde_json::json!(value).into()),
             units: units.map(str::to_string),
             ..ExpressionNode::default()
         })

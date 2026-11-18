@@ -235,6 +235,32 @@
           "detail": "'A referenced subsystem file's top-level index_sets merge into the importing document's document-scoped registry at resolution time.'" }
       ] },
 
+    { "id": "valid/version_gate_older_mounts_newer", "path": "valid/version_gate_older_mounts_newer.esm", "tags": ["subsystems", "version", "save-floor", "transforming"],
+      "saved_esm": "1.2.0",
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined. TypeScript's loadString leaves the {ref} stub, so its adapter resolves the mounts before checking saved_esm." },
+        { "transform": "save_version_floor", "spec": "esm-spec 4.7, 'Save-time version floors'", "detail": "the inlined leaf carries a unit-bearing const, so the 1.0.0 document saves as 1.2.0." }
+      ] },
+    { "id": "conformance/round_trip/save_floor/older_mounts_faq", "path": "conformance/round_trip/fixtures/save_floor/older_mounts_faq.esm", "tags": ["subsystems", "version", "faq", "save-floor", "transforming"],
+      "saved_esm": "1.1.0",
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined. TypeScript's loadString leaves the {ref} stub, so its adapter resolves the mounts before checking saved_esm." },
+        { "transform": "index_set_merge", "spec": "esm-spec 4.7, 'Index-set merge'", "detail": "the faq leaf's `cells` index set merges into the mounting document's registry." },
+        { "transform": "save_version_floor", "spec": "esm-spec 4.7, 'Save-time version floors'", "detail": "the inlined leaf carries a faq node, so the 1.0.0 document saves as 1.1.0." }
+      ] },
+    { "id": "conformance/round_trip/save_floor/older_mounts_all_floors", "path": "conformance/round_trip/fixtures/save_floor/older_mounts_all_floors.esm", "tags": ["subsystems", "version", "faq", "const-units", "variable_bounds", "save-floor", "transforming"],
+      "saved_esm": "2.1.0",
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined. TypeScript's loadString leaves the {ref} stub, so its adapter resolves the mounts before checking saved_esm." },
+        { "transform": "index_set_merge", "spec": "esm-spec 4.7, 'Index-set merge'", "detail": "the faq leaf's `cells` index set merges into the mounting document's registry." },
+        { "transform": "save_version_floor", "spec": "esm-spec 4.7, 'Save-time version floors'", "detail": "the inlined leaves carry a faq node (1.1.0), a unit-bearing const (1.2.0) and a variable bound (2.1.0); the highest floor wins, so the 1.0.0 document saves as 2.1.0." }
+      ] },
+    { "id": "conformance/round_trip/save_floor/newer_mounts_older", "path": "conformance/round_trip/fixtures/save_floor/newer_mounts_older.esm", "tags": ["subsystems", "version", "const-units", "save-floor", "transforming"],
+      "saved_esm": "2.3.0",
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined. TypeScript's loadString leaves the {ref} stub, so its adapter resolves the mounts before checking saved_esm." }
+      ] },
+
     { "id": "valid/expression_templates_arrhenius", "path": "valid/expression_templates_arrhenius.esm", "tags": ["expression_templates", "divergent"] },
     { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] },
     { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] }

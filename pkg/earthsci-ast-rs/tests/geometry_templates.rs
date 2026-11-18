@@ -13,8 +13,9 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{LoadOptions, load_string_with_options};
+use earthsci_ast::{
+    Compiler, LoadOptions, ProblemOptions, Rhs, esm_problem, load_string_with_options,
+};
 use serde_json::{Value, json};
 
 use crate::common;
@@ -62,10 +63,20 @@ fn values(rhs: &[Value]) -> Vec<f64> {
         ..Default::default()
     };
     let file = load_string_with_options(&doc, &options).expect("load");
-    let compiled = ArrayCompiled::from_file(&file).expect("compile");
-    let names = compiled.state_variable_names().to_vec();
+    let prob = esm_problem(
+        &file,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(Compiler::Interpreter),
+            rhs: Rhs::Always,
+            base_path: options.base_path.clone(),
+            ..Default::default()
+        },
+    )
+    .expect("build");
+    let names = prob.state_variable_names();
     let u = vec![0.0; names.len()];
-    let (du, _) = compiled.debug_eval_rhs(&u, 0.0, &HashMap::new(), true);
+    let du = common::rhs::ProblemRhs::new(&prob).eval(&u, 0.0);
     (0..rhs.len())
         .map(|k| {
             let bare = format!("out_{k}");

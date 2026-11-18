@@ -9,8 +9,9 @@
 
 use earthsci_ast::flatten;
 use earthsci_ast::load_path_with_options;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, SolveRhs};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -55,13 +56,16 @@ fn main() -> Result<(), String> {
         compiled.state_variable_names().len()
     );
 
+    // The oracle handle builds no tape of its own, so a model whose tape
+    // declines a rule still reports which rules it declined.
+    let rhs = SolveRhs::oracle(std::rc::Rc::new(compiled), &HashMap::new());
     let t2 = Instant::now();
-    let report = compiled.debug_build_tape_report();
+    let report = rhs.tape_report();
     let dt = t2.elapsed().as_secs_f64();
     println!("{report}");
     println!("tape build time: {dt:.3} s");
     if std::env::var("TAPE_LISTING").is_ok_and(|v| v == "1") {
-        print!("{}", compiled.debug_tape_listing());
+        print!("{}", rhs.tape_listing());
     }
     Ok(())
 }

@@ -17,6 +17,8 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 
+use crate::common;
+
 const MATRIX: &str = include_str!("../../../tests/version_compatibility/compatibility_matrix.json");
 const MIGRATION_SOURCE: &str =
     include_str!("../../../tests/version_compatibility/migration_test_from_0_0_5.esm");
@@ -232,8 +234,7 @@ fn matrix_deprecated_op_entries_warn_once_naming_their_pointers() {
         .split_once("::")
         .map_or(module_path!(), |(_, m)| m);
     let child = format!("{module}::deprecated_op_load_child");
-    let dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/version_compatibility");
+    let dir = common::repo_fixture("version_compatibility");
     for case in cases {
         let file = case["file"].as_str().expect("file");
         let want: Vec<&str> = case["deprecated_op"]

@@ -12,11 +12,11 @@
 //! Not ported: `Math.expect`, `Math.mkNodeP`. No executable path uses them;
 //! only the Lean proofs do.
 
-use super::expr::{DEPRECATED_OPS, REMOVED_OPS, is_formula, is_greek, is_letter, op_ok, pieces};
+use super::expr::{REMOVED_OPS, is_deprecated_op, is_formula, is_greek, is_letter, op_ok, pieces};
 use super::print::{
-    BMAT_MAX_COLS, CALL_OPS, CORE_OPS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json,
-    formula_raw, ins_kv, mk_json, mk_node, node, prints_as_call, simple_tok, tname_ok, tparams,
-    unesc_k, unesc_t,
+    BMAT_MAX_COLS, Ctx, FIELD_CALL_OPS, FaqForm, MkForm, RedK, faq_json, formula_raw, ins_kv,
+    is_call_op, is_notation_core, mk_json, mk_node, node, prints_as_call, simple_tok, tname_ok,
+    tparams, unesc_k, unesc_t,
 };
 use super::surface::neg_num;
 use super::token::{Kw, Sf, Tok};
@@ -1333,7 +1333,7 @@ pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
     if is_lp(t0) {
         match p_call_args(c, f, r) {
             Some((args, [Tok::Kw(Kw::Rp), r2 @ ..])) => {
-                if CALL_OPS.contains(&n) {
+                if is_call_op(n) {
                     all_pos(&args).map(|vs| (node(n, vs), r2))
                 } else if n == "neg" {
                     match all_pos(&args).as_deref() {
@@ -1370,7 +1370,7 @@ pub fn p_opn<'a>(c: Ctx, f: usize, n: &str, ts: &'a [Tok]) -> P<'a, Json> {
             }
             Some((args, [Tok::Kw(Kw::Semi), r1 @ ..])) => {
                 if REMOVED_OPS.contains(&n)
-                    || (CORE_OPS.contains(&n) && !FIELD_CALL_OPS.contains(&n))
+                    || (is_notation_core(n) && !FIELD_CALL_OPS.contains(&n))
                     || tparams(c.s, n).is_some()
                 {
                     None
@@ -1449,7 +1449,7 @@ fn note_removed_op(ts: &[Tok]) {
 }
 
 fn op_allowed(o: &str) -> bool {
-    op_ok(o) && !REMOVED_OPS.contains(&o) && !DEPRECATED_OPS.contains(&o)
+    op_ok(o) && !REMOVED_OPS.contains(&o) && !is_deprecated_op(o)
 }
 
 /// `Math.pPrim`: a primary. Where it starts and, when it reads one, where it

@@ -477,10 +477,16 @@ function findUnitBearingNode(node: unknown, at: string): string | null {
  * const-units counterpart of `raiseFaqVersionFloor`.
  */
 export function raiseConstUnitsVersionFloor(doc: unknown): void {
-  if (!isObject(doc)) return
-  if (!below1(declaredMinor(doc), 2)) return
-  if (findUnitBearingNode(doc, '') === null) return
-  doc.esm = '1.2.0'
+  if (needsConstUnitsVersionFloor(doc)) (doc as Record<string, unknown>).esm = '1.2.0'
+}
+
+/**
+ * Whether `doc` carries declared `units` on an expression node under a
+ * declared `esm` below 1.2.0, so an emitter must raise the version to 1.2.0
+ * for the document to read back. Reads the declared version before walking.
+ */
+export function needsConstUnitsVersionFloor(doc: unknown): boolean {
+  return isObject(doc) && below1(declaredMinor(doc), 2) && findUnitBearingNode(doc, '') !== null
 }
 
 /**

@@ -1,15 +1,12 @@
 //! The operator registry: the single source of truth for **which `op` strings
 //! exist** and **how many `args` each one takes** (esm-spec §4.2 / §4.3).
 //!
-//! Before this module the crate had no arity check anywhere — neither
-//! [`crate::validate`] nor [`crate::structural`] — and the schema deliberately
-//! leaves `args` at `minItems: 0`, because a *schema* cannot express "`atan2`
-//! takes exactly two arguments but `+` takes any number". The result was that a
-//! malformed-but-schema-valid node reached the evaluators, where the two of them
-//! disagreed about what it meant: the per-cell oracle
-//! ([`crate::simulate_array::eval`]) folded `-(3,1,1)` to `NaN` while the
-//! vectorized overlay ([`crate::simulate_array::vectorized`]) left-folded it to
-//! `1.0`, and `atan2` with one argument indexed `args[1]` and **panicked**.
+//! The schema deliberately leaves `args` at `minItems: 0`, because a *schema*
+//! cannot express "`atan2` takes exactly two arguments but `+` takes any
+//! number". Without an arity check a malformed-but-schema-valid node would
+//! reach the evaluators, where one evaluator could fold `-(3,1,1)` to `NaN`
+//! while another left-folds it to `1.0`, and `atan2` with one argument would
+//! index `args[1]` and panic.
 //!
 //! The registry closes that class of bug at the source: an op/arity pair that
 //! this table rejects never reaches an evaluator, so the evaluators are only
@@ -18,8 +15,8 @@
 //!
 //! # The two tiers (esm-spec §4.2)
 //!
-//! - **Evaluable core (closed).** Everything in [`arity_of`]. Adding one is a
-//!   spec change. A core op with the wrong arity is a hard error
+//! - **Evaluable core (closed).** Everything in [`CoreOp`], whose
+//!   [`CoreOp::info`] holds one row per operator. Adding one is a spec change. A core op with the wrong arity is a hard error
 //!   ([`OpError::Arity`]).
 //! - **Rewrite-target (open).** Everything else — the sugar ops
 //!   `grad`/`div`/`laplacian`/`curl`/`∇`/`integral`, a *spatial* `D`, and any
@@ -204,113 +201,338 @@ pub fn check_makearray_regions(node: &ExpressionNode) -> Result<(), OpError> {
     Ok(())
 }
 
+/// Define a closed set of operator names as an enum with `ALL`, `name()` and
+/// `from_name()`, all three generated from one list so they cannot disagree.
+macro_rules! named_ops {
+    (
+        $(#[$meta:meta])*
+        pub enum $ty:ident {
+            $( $(#[$vmeta:meta])* $variant:ident = $name:literal, )*
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $ty {
+            $( $(#[$vmeta])* $variant, )*
+        }
+
+        impl $ty {
+            /// Every member, in declaration order.
+            #[cfg(test)]
+            pub const ALL: &'static [$ty] = &[$($ty::$variant),*];
+
+            /// The wire spelling.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $( $ty::$variant => $name, )*
+                }
+            }
+
+            /// The member spelled `name`, or `None`.
+            #[must_use]
+            pub fn from_name(name: &str) -> Option<Self> {
+                match name {
+                    $( $name => Some($ty::$variant), )*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+named_ops! {
+    /// The unary elementary functions of esm-spec §4.2.
+    pub enum UnaryFn {
+        Exp = "exp",
+        /// The natural logarithm.
+        Log = "log",
+        Log10 = "log10",
+        Sqrt = "sqrt",
+        Abs = "abs",
+        Sign = "sign",
+        Floor = "floor",
+        Ceil = "ceil",
+        Sin = "sin",
+        Cos = "cos",
+        Tan = "tan",
+        Asin = "asin",
+        Acos = "acos",
+        Atan = "atan",
+        Sinh = "sinh",
+        Cosh = "cosh",
+        Tanh = "tanh",
+        Asinh = "asinh",
+        Acosh = "acosh",
+        Atanh = "atanh",
+    }
+}
+
+named_ops! {
+    /// The six comparisons of esm-spec §4.2. Each yields a 1.0 / 0.0 flag.
+    pub enum Comparison {
+        Eq = "==",
+        Ne = "!=",
+        Lt = "<",
+        Le = "<=",
+        Gt = ">",
+        Ge = ">=",
+    }
+}
+
+named_ops! {
+    /// The evaluable-core operators that are not a unary function or a
+    /// comparison; [`CoreOp`] adds those two families.
+    pub enum OtherOp {
+        Add = "+",
+        /// Unary negation or binary subtraction.
+        Sub = "-",
+        Mul = "*",
+        Div = "/",
+        Pow = "^",
+        /// The deprecated word spelling of `^`.
+        PowWord = "pow",
+        /// The deprecated word spelling of unary `-`.
+        Neg = "neg",
+        /// The engine-internal precision-boundary marker
+        /// ([`crate::precision_infer::MARKER_OP`]), inserted after the typed
+        /// parse and never authored: a transparent unary wrapper naming the
+        /// element type its operand is evaluated at.
+        Precision = "__precision",
+        Atan2 = "atan2",
+        Min = "min",
+        Max = "max",
+        Ifelse = "ifelse",
+        And = "and",
+        Or = "or",
+        Not = "not",
+        /// The STRUCTURAL time derivative. A `D` with a spatial `wrt` has the
+        /// same name but is a rewrite target ([`is_rewrite_target_derivative`]).
+        D = "D",
+        Ic = "ic",
+        Pre = "Pre",
+        Const = "const",
+        True = "true",
+        False = "false",
+        Enum = "enum",
+        ApplyExpressionTemplate = "apply_expression_template",
+        Faq = "faq",
+        Makearray = "makearray",
+        Index = "index",
+        Broadcast = "broadcast",
+        Reshape = "reshape",
+        Transpose = "transpose",
+        Concat = "concat",
+        /// A build-time relational op, evaluated by `crate::value_invention`
+        /// rather than by the per-cell evaluator.
+        Distinct = "distinct",
+    }
+}
+
+/// An evaluable-core operator (esm-spec §4.2): the closed set of `op` strings
+/// a legal AST may carry after rewriting. Every other name is an open-tier
+/// rewrite target (sugar, a user op, or a typo).
+///
+/// [`ExpressionNode::core_op`] reads one off a node. The wire format keeps
+/// `op` a string; this enum is how the crate decides what that string means,
+/// and consumers match it without a wildcard, so a new operator is a compile
+/// error at every place that has to decide something about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoreOp {
+    /// A unary elementary function.
+    Unary(UnaryFn),
+    /// A comparison.
+    Compare(Comparison),
+    /// Everything else.
+    Other(OtherOp),
+}
+
+/// What the registry states about one [`CoreOp`]. [`CoreOp::info`] holds one
+/// row per operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpInfo {
+    /// How many `args` the operator takes.
+    pub arity: Arity,
+    /// A **scalar operator**: a POINTWISE map from scalar operands to a scalar
+    /// result (esm-spec §4.2 "arithmetic, elementary functions, comparisons").
+    /// See [`is_scalar_operator`].
+    pub scalar: bool,
+    /// A **built-in function head**: legal as a bare leaf in VARIABLE position
+    /// even though no variable declares it. See [`is_builtin_function_name`].
+    pub function_head: bool,
+    /// For a DEPRECATED spelling (esm-spec §4.2 "Deprecated ops"), the
+    /// operator the loader rewrites it to.
+    pub replaced_by: Option<CoreOp>,
+}
+
+const fn row(arity: Arity, scalar: bool, function_head: bool) -> OpInfo {
+    OpInfo {
+        arity,
+        scalar,
+        function_head,
+        replaced_by: None,
+    }
+}
+
+const fn deprecated(arity: Arity, scalar: bool, replacement: OtherOp) -> OpInfo {
+    OpInfo {
+        arity,
+        scalar,
+        function_head: false,
+        replaced_by: Some(CoreOp::Other(replacement)),
+    }
+}
+
+impl CoreOp {
+    /// The operator spelled `name`, or `None` for an open-tier name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        if let Some(f) = UnaryFn::from_name(name) {
+            return Some(Self::Unary(f));
+        }
+        if let Some(c) = Comparison::from_name(name) {
+            return Some(Self::Compare(c));
+        }
+        OtherOp::from_name(name).map(Self::Other)
+    }
+
+    /// The wire spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unary(f) => f.name(),
+            Self::Compare(c) => c.name(),
+            Self::Other(o) => o.name(),
+        }
+    }
+
+    /// Every core operator.
+    #[cfg(test)]
+    pub fn all() -> impl Iterator<Item = CoreOp> {
+        UnaryFn::ALL
+            .iter()
+            .map(|&f| Self::Unary(f))
+            .chain(Comparison::ALL.iter().map(|&c| Self::Compare(c)))
+            .chain(OtherOp::ALL.iter().map(|&o| Self::Other(o)))
+    }
+
+    /// The registry row for this operator. Every arity is the one the spec's
+    /// §4.2 tables state.
+    ///
+    /// Of the identifier-shaped operators, only the named elementary functions
+    /// and reductions, `ifelse` and `Pre` are function heads: `neg`, `and`,
+    /// `or`, `not` and the form ops (`D`, `ic`, `const`, `true`, …) have never
+    /// been excused as variable names, and excusing them would silently pass
+    /// a genuinely undeclared variable that happens to carry one of those names.
+    ///
+    /// The scalar column excludes everything whose meaning is not pointwise,
+    /// and each exclusion is load-bearing: the array/tensor ops RESHAPE, so
+    /// "apply element-wise" is not defined for them (and a self-referential
+    /// `fn: "broadcast"` would recurse forever in the evaluators); the
+    /// form/lowering ops are consumed by system assembly or a lowering pass;
+    /// `distinct` is build-time. `neg` is scalar because a code-built
+    /// `broadcast` may still name it (the loader rewrites an authored
+    /// `fn: "neg"` to `-`); `pow` never was a `broadcast` `fn`.
+    #[must_use]
+    pub const fn info(self) -> OpInfo {
+        use Arity::{Any, AtLeast, Between, Exact};
+        use OtherOp as O;
+        match self {
+            Self::Unary(_) => row(Exact(1), true, true),
+            Self::Compare(_) => row(Exact(2), true, false),
+            Self::Other(o) => match o {
+                // `+`/`*` are n-ary; `-` is unary OR binary; `/` and `^` are
+                // strictly binary.
+                O::Add | O::Mul => row(AtLeast(1), true, false),
+                O::Sub => row(Between(1, 2), true, false),
+                O::Div | O::Pow => row(Exact(2), true, false),
+                // The deprecated spellings stay in the core so an AST built in
+                // code still evaluates, by the same kernels as their
+                // replacements; the loader rewrites every authored use.
+                O::PowWord => deprecated(Exact(2), false, O::Pow),
+                O::Neg => deprecated(Exact(1), true, O::Sub),
+                O::Precision => row(Exact(1), false, false),
+                O::Atan2 => row(Exact(2), true, true),
+                // "n-ary with arity >= 2 … Conforming bindings MUST reject
+                // `min`/`max` nodes with fewer than two arguments." (§4.2)
+                O::Min | O::Max => row(AtLeast(2), true, true),
+                O::Ifelse => row(Exact(3), true, true),
+                O::And | O::Or => row(AtLeast(2), true, false),
+                O::Not => row(Exact(1), true, false),
+                // The STRUCTURAL time derivative is strictly unary. A SPATIAL
+                // `D` never reaches an arity check (`check_node` reports it as
+                // unlowered first), so it may carry trailing auxiliary
+                // boundary operands (§4.2 "Arity of `D`").
+                O::D | O::Ic => row(Exact(1), false, false),
+                O::Pre => row(Exact(1), false, true),
+                // "`args` MUST be empty `[]`" (§4.2). `true` is an always-true
+                // join/`filter` predicate (§4.3); `false` its counterpart.
+                O::Const | O::True | O::False => row(Exact(0), false, false),
+                // Lowered at load time (§4.5): `[enum_name, symbol]`.
+                O::Enum => row(Exact(2), false, false),
+                // Expanded at load time (§9.6); its operands live in `bindings`.
+                O::ApplyExpressionTemplate => row(Any, false, false),
+                // `faq` and `makearray` carry their real operands in `expr` /
+                // `values`, so their `args` arity is open.
+                O::Faq | O::Makearray => row(Any, false, false),
+                // "`args[0]` is the array; `args[1..]` are the index
+                // expressions."
+                O::Index | O::Broadcast | O::Concat => row(AtLeast(1), false, false),
+                O::Reshape | O::Transpose => row(Exact(1), false, false),
+                // Operand shapes are checked by its build-time evaluator.
+                O::Distinct => row(Any, false, false),
+            },
+        }
+    }
+
+    /// The deprecated spelling's replacement, or `None`.
+    #[must_use]
+    pub const fn replaced_by(self) -> Option<CoreOp> {
+        self.info().replaced_by
+    }
+}
+
+impl std::fmt::Display for CoreOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl ExpressionNode {
+    /// The evaluable-core operator this node applies, or `None` when its `op`
+    /// is an open-tier name.
+    #[must_use]
+    pub(crate) fn core_op(&self) -> Option<CoreOp> {
+        CoreOp::from_name(&self.op)
+    }
+}
+
 /// The DEPRECATED op spellings (esm-spec §4.2 "Deprecated ops"), each with its
 /// replacement: `neg` is the word spelling of unary `-` and `pow` of `^`. Both
-/// remain evaluable-core ops ([`arity_of`]) with exactly their replacement's
-/// meaning, but the loader's wire boundary rewrites every well-formed use to
-/// the replacement and warns `deprecated_op`, and the canonical form
-/// (`crate::canonicalize`) writes the replacement. They join the removed ops
-/// in a later major version.
-pub const DEPRECATED_OPS: [(&str, &str); 2] = [("neg", "-"), ("pow", "^")];
-
-/// The entry of [`DEPRECATED_OPS`] for `op` — `(deprecated spelling,
-/// replacement)` — or `None` when `op` is not deprecated.
+/// remain evaluable-core ops with exactly their replacement's meaning, but the
+/// loader's wire boundary rewrites every well-formed use to the replacement
+/// and warns `deprecated_op`, and the canonical form (`crate::canonicalize`)
+/// writes the replacement.
+///
+/// The entry for `op` — `(deprecated spelling, replacement)` — or `None` when
+/// `op` is not deprecated.
 #[must_use]
 pub fn deprecated_op(op: &str) -> Option<(&'static str, &'static str)> {
-    DEPRECATED_OPS.iter().find(|(d, _)| *d == op).copied()
+    let core = CoreOp::from_name(op)?;
+    core.replaced_by().map(|r| (core.name(), r.name()))
 }
 
 /// The arity of an evaluable-core operator, or `None` if `op` is not in the
 /// closed core set (esm-spec §4.2) — i.e. it is an open-tier rewrite target.
-///
-/// The unary elementary functions are grouped; every arity here is the one the
-/// spec's §4.2 tables state.
 #[must_use]
 pub fn arity_of(op: &str) -> Option<Arity> {
-    let a = match op {
-        // --- Arithmetic (§4.2). `+`/`*` are n-ary; `-` is unary OR binary;
-        // `/` and `^` are strictly binary.
-        "+" | "*" => Arity::AtLeast(1),
-        "-" => Arity::Between(1, 2),
-        // `pow` and `neg` are the DEPRECATED word spellings of `^` and unary
-        // `-` ([`DEPRECATED_OPS`]). The loader rewrites them, so no loaded
-        // document carries one; they stay in the core so an AST built in code
-        // still evaluates, by the same kernels as their replacements.
-        "/" | "^" | "pow" => Arity::Exact(2),
-        "neg" => Arity::Exact(1),
-        // The engine-internal precision-boundary marker
-        // (`crate::precision_infer::MARKER_OP`), inserted after the typed
-        // parse and never authored: a transparent unary wrapper naming the
-        // element type its operand is evaluated at.
-        crate::precision_infer::MARKER_OP => Arity::Exact(1),
-
-        // --- Elementary functions (§4.2). All unary except `atan2` and
-        // `min`/`max`.
-        "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil" | "sin" | "cos"
-        | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh"
-        | "atanh" => Arity::Exact(1),
-        "atan2" => Arity::Exact(2),
-        // "n-ary with arity >= 2 … Conforming bindings MUST reject `min`/`max`
-        // nodes with fewer than two arguments." (§4.2)
-        "min" | "max" => Arity::AtLeast(2),
-
-        // --- Conditionals / logic (§4.2).
-        "ifelse" => Arity::Exact(3),
-        "==" | "!=" | "<" | "<=" | ">" | ">=" => Arity::Exact(2),
-        "and" | "or" => Arity::AtLeast(2),
-        "not" => Arity::Exact(1),
-
-        // --- Calculus (§4.2 "Arity of `D`"). This table is keyed by op STRING,
-        // so it states the STRUCTURAL time derivative's contract: `wrt: "t"` (or
-        // an absent `wrt`) is evaluable-core, consumed by system assembly, and
-        // STRICTLY UNARY. A SPATIAL `D` is a rewrite target — it never reaches
-        // an arity check here (`check_node` short-circuits it to `Unlowered`
-        // first via `is_rewrite_target_derivative`), so it may carry trailing
-        // auxiliary boundary operands (esm-spec §4.2 "Arity of `D`").
-        "D" | "ic" => Arity::Exact(1),
-
-        // --- Events (§4.2).
-        "Pre" => Arity::Exact(1),
-
-        // --- Inline constants (§4.2): "`args` MUST be empty `[]`".
-        "const" => Arity::Exact(0),
-        // Nullary boolean literals — `true` is an always-true join/`filter`
-        // predicate (§4.3); `false` is its counterpart, 0 in the evaluators'
-        // 1.0 / 0.0 boolean encoding.
-        "true" | "false" => Arity::Exact(0),
-
-        // Lowered at load time (§4.5). `enum` is `[enum_name, symbol]`.
-        "enum" => Arity::Exact(2),
-        // Expanded at load time (§9.6); its operands live in `bindings`.
-        "apply_expression_template" => Arity::Any,
-
-        // --- Array / tensor (§4.3). `faq` and `makearray` carry their
-        // real operands in `expr` / `values`, and `args` is conventionally the
-        // (possibly empty) operand list, so their arity is open.
-        "faq" => Arity::Any,
-        "makearray" => Arity::Any,
-        // "`args[0]` is the array; `args[1..]` are the index expressions."
-        "index" => Arity::AtLeast(1),
-        "broadcast" => Arity::AtLeast(1),
-        "reshape" | "transpose" => Arity::Exact(1),
-        "concat" => Arity::AtLeast(1),
-
-        // --- Relational / value-invention (§4.3 companions). These
-        // are BUILD-TIME ops, evaluated by `value_invention.rs` (not by the
-        // per-cell oracle), so they are known-and-legal here even though
-        // `eval_op` has no arm for them. Their operand shapes are checked by
-        // that evaluator.
-        "distinct" => Arity::Any,
-
-        _ => return None,
-    };
-    Some(a)
+    CoreOp::from_name(op).map(|c| c.info().arity)
 }
 
 /// Is `op` an evaluable-core operator (esm-spec §4.2)?
 #[must_use]
 pub fn is_core_op(op: &str) -> bool {
-    arity_of(op).is_some()
+    CoreOp::from_name(op).is_some()
 }
 
 /// Is `name` a **built-in function head** — always legal as a bare leaf in
@@ -321,47 +543,10 @@ pub fn is_core_op(op: &str) -> bool {
 /// This is the excuse list the crate's two undefined-variable gates share:
 /// [`crate::structural`]'s reference checks and the array compiler's
 /// free-variable check ([`crate::simulate_array`]) skip these names instead of
-/// reporting an undefined variable. Each gate used to carry its own copy of
-/// the list, with a doc comment asking the other to stay in sync; the registry
-/// holds the one copy now.
-///
-/// Every name here is an evaluable-core op, but deliberately NOT every
-/// identifier-shaped core op is here: the operator spellings `neg`, `ln`,
-/// `and`, `or` and `not` (and the form ops `D`, `ic`, `const`, `true`, …) have
-/// never been excused as variable names, and widening the excuse set would
-/// silently pass a genuinely undeclared variable that happens to carry one of
-/// those names. `builtin_function_names_are_core_and_nothing_widened` pins
-/// both directions.
+/// reporting an undefined variable. The column is [`OpInfo::function_head`].
 #[must_use]
 pub fn is_builtin_function_name(name: &str) -> bool {
-    matches!(
-        name,
-        "exp"
-            | "log"
-            | "log10"
-            | "sqrt"
-            | "abs"
-            | "sign"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "asin"
-            | "acos"
-            | "atan"
-            | "atan2"
-            | "sinh"
-            | "cosh"
-            | "tanh"
-            | "asinh"
-            | "acosh"
-            | "atanh"
-            | "min"
-            | "max"
-            | "floor"
-            | "ceil"
-            | "ifelse"
-            | "Pre"
-    )
+    CoreOp::from_name(name).is_some_and(|c| c.info().function_head)
 }
 
 /// Is `op` a **scalar operator** — one whose meaning is a POINTWISE map from
@@ -382,57 +567,16 @@ pub fn is_builtin_function_name(name: &str) -> bool {
 /// * **Does element alignment descend into a node's operands?** An ARRAY-LEVEL
 ///   `a * b` means "multiply corresponding elements", so the operands must first
 ///   be brought onto a common index space (§4.3.4). Every other op consumes its
-///   operands WHOLE and defines its own operand contract — a `faq` and a
-///   `makearray` name their axes, an `index` gathers, the shape ops restructure,
-///   the relational kernels return arrays of an unrelated shape —
-///   so alignment must not reach inside them. [`is_elementwise_node`] lifts this
-///   predicate to nodes.
+///   operands WHOLE and defines its own operand contract, so alignment must not
+///   reach inside them. [`is_elementwise_node`] lifts this predicate to nodes.
 ///
-/// Keeping ONE list rather than two is deliberate: issues #100 and #101 each
-/// arrived carrying its own copy, the two copies agreed on all forty names, and
-/// two hand-maintained spellings of one question is precisely how they would
-/// eventually stop agreeing.
-///
-/// Everything whose meaning is NOT pointwise is excluded, and each exclusion is
-/// load-bearing:
-///
-/// * the array/tensor ops (`faq`, `makearray`, `index`, `reshape`,
-///   `transpose`, `concat`, and `broadcast` itself) — they RESHAPE, so
-///   "apply element-wise" is not defined for them (and a self-referential
-///   `fn: "broadcast"` would recurse forever in the evaluators);
-/// * the form/lowering ops (`D`, `ic`, `Pre`, `const`, `true`, `enum`,
-///   `apply_expression_template`) — consumed by system assembly or a lowering
-///   pass, never evaluated element-wise;
-/// * the build-time relational op `distinct`.
-///
-/// Every name here is also in [`arity_of`]: this is a SUBSET of the evaluable
-/// core, never an extension of it (pinned by `every_scalar_operator_has_an_arity`
-/// and `the_scalar_operator_set_partitions_the_core`), which is the invariant
-/// [`check_broadcast_fn`] relies on when it derives the `fn`'s legal arity. In
-/// particular this list has no alias entries. `**` and `power` are NOT
-/// spellings of `^` and `=` is not a spelling of `==`: none of them is an
-/// operator in this format at all (they are open-tier names that
-/// [`crate::simulate_array`] rejects as `unlowered_operator`), and adding one
-/// here would invent an operator rather than classify one;
-/// `the_registry_has_no_operator_aliases` pins that. The two DEPRECATED word
-/// spellings ([`DEPRECATED_OPS`]) are different: they are core ops, but the
-/// loader rewrites them. `neg` is listed here because a code-built
-/// `broadcast` may still name it (the loader rewrites an authored
-/// `fn: "neg"` to `-`); `pow` never was a `broadcast` `fn`.
+/// The column is [`OpInfo::scalar`]; [`CoreOp::info`] says why each exclusion
+/// is there. Being a column of the core table, the set can only classify core
+/// ops, never invent one: `**` and `power` are NOT spellings of `^` and `=` is
+/// not a spelling of `==`; none of them is an operator in this format at all.
 #[must_use]
 pub fn is_scalar_operator(op: &str) -> bool {
-    matches!(
-        op,
-        // Arithmetic (§4.2), and `neg`, the deprecated spelling of unary `-`.
-        "+" | "-" | "*" | "/" | "^" | "neg"
-        // Elementary functions (§4.2).
-        | "exp" | "log" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
-        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
-        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh"
-        | "atan2" | "min" | "max"
-        // Comparisons, logic and the pointwise conditional (§4.2).
-        | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not" | "ifelse"
-    )
+    CoreOp::from_name(op).is_some_and(|c| c.info().scalar)
 }
 
 /// Does element alignment see THROUGH this node to its `args` — i.e. are the
@@ -472,7 +616,7 @@ pub fn is_elementwise_node(node: &ExpressionNode) -> bool {
 /// elementwise ([`is_elementwise_node`]).
 #[must_use]
 pub fn elementwise_op(node: &ExpressionNode) -> Option<&str> {
-    let op = if node.op == "broadcast" {
+    let op = if node.core_op() == Some(CoreOp::Other(OtherOp::Broadcast)) {
         node.broadcast_fn.as_deref().unwrap_or("+")
     } else {
         node.op.as_str()
@@ -520,7 +664,11 @@ pub fn check_broadcast_fn(node: &ExpressionNode) -> Result<(), OpError> {
     // One `else` covers both "not in the registry at all" and "in the registry
     // but not pointwise" — from the file's point of view they are the same
     // defect: `fn` does not name a scalar operator.
-    let Some(arity) = arity_of(fn_name).filter(|_| is_scalar_operator(fn_name)) else {
+    let Some(arity) = CoreOp::from_name(fn_name)
+        .map(CoreOp::info)
+        .filter(|info| info.scalar)
+        .map(|info| info.arity)
+    else {
         return Err(OpError::BroadcastFn {
             fn_name: Some(fn_name.to_string()),
             reason: format!(
@@ -570,7 +718,8 @@ pub fn derivative_wrt(node: &ExpressionNode) -> &str {
 /// dimensional checker (`crate::units`) read it rather than re-deriving it.
 #[must_use]
 pub fn is_rewrite_target_derivative(node: &ExpressionNode) -> bool {
-    node.op == "D" && derivative_wrt(node) != STRUCTURAL_DERIVATIVE_WRT
+    node.core_op() == Some(CoreOp::Other(OtherOp::D))
+        && derivative_wrt(node) != STRUCTURAL_DERIVATIVE_WRT
 }
 
 /// Classify one operator node: `Ok(())` if it is an evaluable-core op with a
@@ -587,6 +736,7 @@ pub fn is_rewrite_target_derivative(node: &ExpressionNode) -> bool {
 /// misspelling); [`OpError::Arity`] for a core op with the wrong argument count.
 pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
     let op = node.op.as_str();
+    let core = node.core_op();
 
     // A spatial `D` — or any `D` carrying a non-time `wrt` — is a rewrite
     // target, not the structural time derivative.
@@ -594,7 +744,7 @@ pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
         return Err(OpError::Unlowered { op: op.to_string() });
     }
 
-    let Some(arity) = arity_of(op) else {
+    let Some(arity) = core.map(|c| c.info().arity) else {
         // Open tier: the named sugar ops and anything unrecognised (including a
         // typo) share one diagnostic — `unlowered_operator` (§9.6.3 c.6).
         return Err(OpError::Unlowered { op: op.to_string() });
@@ -610,15 +760,13 @@ pub fn check_node(node: &ExpressionNode) -> Result<(), OpError> {
 
     // `makearray` carries its real structure in `regions`/`values`, not `args`,
     // so arity alone says nothing about whether it is well-formed.
-    if op == "makearray" {
-        check_makearray_regions(node)?;
-    }
     // `broadcast` likewise: `Arity::AtLeast(1)` says nothing about the OPERATOR
     // it applies, which lives in the `fn` field (esm-spec §4.3.4).
-    if op == "broadcast" {
-        check_broadcast_fn(node)?;
+    match core {
+        Some(CoreOp::Other(OtherOp::Makearray)) => check_makearray_regions(node),
+        Some(CoreOp::Other(OtherOp::Broadcast)) => check_broadcast_fn(node),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Walk an expression tree and return the first operator node that may not
@@ -687,7 +835,7 @@ mod tests {
         assert!(matches!(e, OpError::Arity { got: 0, .. }));
     }
 
-    /// R2: the empty `neg` that panicked on the vectorized path.
+    /// An empty `neg` is an arity error before any evaluator sees it.
     #[test]
     fn empty_neg_is_an_arity_error() {
         assert!(matches!(
@@ -832,6 +980,10 @@ mod tests {
         "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">", ">=", "and",
         "or", "not",
     ];
+    /// Core ops pinned by their own tests rather than by the two lists above:
+    /// the deprecated `pow` (not a `broadcast.fn`) and the engine-internal
+    /// precision marker.
+    const UNPARTITIONED: &[&str] = &["pow", crate::precision_infer::MARKER_OP];
     const NOT_SCALAR: &[&str] = &[
         "D",
         "ic",
@@ -867,17 +1019,24 @@ mod tests {
         }
     }
 
-    /// Every scalar operator must have an entry in `arity_of` — the invariant
-    /// `check_broadcast_fn` relies on when it derives the `fn`'s legal arity.
+    /// Every core operator is on exactly one side of the scalar partition, so
+    /// a new operator cannot reach the table without the decision being
+    /// written down here; and the name round-trips through the enum.
     #[test]
-    fn every_scalar_operator_has_an_arity() {
-        for op in SCALAR {
-            assert!(is_scalar_operator(op), "`{op}` must be a scalar operator");
-            assert!(
-                arity_of(op).is_some(),
-                "scalar operator `{op}` has no arity entry"
-            );
+    fn the_partition_covers_every_core_op_and_names_round_trip() {
+        let mut names = std::collections::HashSet::new();
+        for op in CoreOp::all() {
+            assert_eq!(CoreOp::from_name(op.name()), Some(op));
+            assert!(names.insert(op.name()), "`{}` is spelled twice", op.name());
+            let listed = SCALAR.contains(&op.name()) as u8
+                + NOT_SCALAR.contains(&op.name()) as u8
+                + UNPARTITIONED.contains(&op.name()) as u8;
+            assert_eq!(listed, 1, "`{}` must be listed exactly once", op.name());
         }
+        assert_eq!(
+            names.len(),
+            SCALAR.len() + NOT_SCALAR.len() + UNPARTITIONED.len()
+        );
     }
 
     /// The built-in-function-head excuse set, pinned exactly: the named
@@ -933,9 +1092,8 @@ mod tests {
         assert_eq!(deprecated_op("pow"), Some(("pow", "^")));
         assert_eq!(deprecated_op("-"), None);
         assert_eq!(deprecated_op("**"), None);
-        for (old, new) in DEPRECATED_OPS {
-            let a = arity_of(old).expect("a deprecated op is still a core op");
-            let b = arity_of(new).expect("its replacement is a core op");
+        for (old, new) in CoreOp::all().filter_map(|c| c.replaced_by().map(|r| (c, r))) {
+            let (a, b) = (old.info().arity, new.info().arity);
             for n in 0..4 {
                 if a.admits(n) {
                     assert!(b.admits(n), "`{new}` must admit {n} operands like `{old}`");

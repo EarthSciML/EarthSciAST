@@ -230,7 +230,11 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
 fn removed_construct(file: &EsmFile) -> Option<String> {
     let mut value = serde_json::to_value(file).ok()?;
     match crate::parse::prepare_document_ops(&mut value) {
-        Err(crate::error::EsmError::SchemaValidation(m)) if m.starts_with("removed_op") => Some(m),
+        Err(crate::error::EsmError::SchemaDiagnostic { code, message, .. })
+            if code == crate::diagnostic::codes::REMOVED_OP =>
+        {
+            Some(message)
+        }
         _ => None,
     }
 }

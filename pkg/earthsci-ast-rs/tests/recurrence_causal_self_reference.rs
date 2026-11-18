@@ -28,6 +28,8 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
+use crate::common;
+
 /// The REFERENCE compiler, for every fixture in this file.
 ///
 /// What this file is about is the SEMANTICS of the sequential sweep, which is
@@ -44,14 +46,12 @@ fn interpreter_options(base_dir: Option<&std::path::Path>) -> InlineTestOptions 
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/recurrence")
-        .join(name)
+    common::repo_fixture("fixtures/recurrence").join(name)
 }
 
 fn run_fixture(name: &str) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert!(!results.is_empty(), "{name}: the fixture asserts nothing");
     results
 }
@@ -215,8 +215,7 @@ fn thirty_eight_distinct_lags_in_one_node_evaluate() {
 #[test]
 fn a_parameter_valued_lag_is_admitted_and_evaluates() {
     assert_fixture_passes("08_recurrence_parameter_valued_lag.esm");
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/recurrence/08_recurrence_parameter_valued_lag.esm");
+    let path = common::repo_fixture("fixtures/recurrence/08_recurrence_parameter_valued_lag.esm");
     let file = load_path(&path).expect("fixture parses");
     let recurrence: Vec<_> = earthsci_ast::validate(&file)
         .structural_errors
@@ -324,7 +323,7 @@ fn doc_with_body(body: Value) -> String {
 /// from a compile refusal or a runtime fault.
 fn probe_message(body: Value) -> String {
     let file = load_string(&doc_with_body(body)).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1, "one assertion: {results:?}");
     let r = &results[0];
     assert!(
@@ -513,7 +512,7 @@ fn self_read_offset_on_two_axes_is_rejected() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
@@ -553,13 +552,25 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
     })
     .to_string();
     let file = load_string(&doc).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     let msg = &results[0].message;
     assert!(
         msg.contains("recurrence_unsupported_form"),
         "expected `recurrence_unsupported_form`, got: {msg}"
     );
+    // The code is the refusal's own, not only text in its message.
+    let Err(err) = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 0.0),
+        earthsci_ast::ProblemOptions {
+            compiler: Some(earthsci_ast::Compiler::Interpreter),
+            ..Default::default()
+        },
+    ) else {
+        panic!("the makearray self-read must be refused");
+    };
+    assert_eq!(err.code(), Some("recurrence_unsupported_form"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -582,8 +593,7 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
 
 #[test]
 fn the_shared_rejection_corpus_agrees_on_code_and_path() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/recurrence/rejections.json");
+    let path = common::repo_fixture("conformance/recurrence/rejections.json");
     let raw = std::fs::read_to_string(&path).expect("rejections.json is readable");
     let corpus: Value = serde_json::from_str(&raw).expect("rejections.json parses");
 
@@ -721,8 +731,7 @@ fn structural_validator_rejects_a_makearray_region_self_read() {
 /// which is the same defect as admitting an illegal one.
 #[test]
 fn the_valid_corpus_recurrence_validates_clean() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/valid/recurrence_causal_self_reference.esm");
+    let path = common::repo_fixture("valid/recurrence_causal_self_reference.esm");
     let file = load_path(&path).expect("fixture parses");
     let report = earthsci_ast::validate(&file);
     let recurrence: Vec<_> = report
@@ -786,7 +795,7 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
         "a two-variable cycle is not a recurrence diagnosis, got {codes:?}"
     );
     let file = load_string(&cyclic).expect("probe parses");
-    let results = run_inline_tests_with_options(&file, &interpreter_options(None), None);
+    let results = run_inline_tests_with_options(&file, &interpreter_options(None));
     assert_eq!(results.len(), 1);
     assert!(
         results[0].actual.is_none() && !results[0].passed,
@@ -822,7 +831,6 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
 
 /// Materialize a fixture through the BUILD PIPELINE and return its fields.
 fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
-    let file = load_path(fixture(name)).expect("fixture parses");
     let opts = earthsci_ast::ProblemOptions {
         // The pipeline's per-cell walk is refused by a strict native (#484), so
         // these semantics are checked on the reference evaluator.
@@ -835,8 +843,18 @@ fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::Arr
         rhs: earthsci_ast::Rhs::Auto,
         ..Default::default()
     };
+    problem_fields(name, opts)
+}
+
+/// Build a fixture through `esm_problem` with `opts` and return the fields its
+/// construction materialized.
+fn problem_fields(
+    name: &str,
+    opts: earthsci_ast::ProblemOptions,
+) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
+    let file = load_path(fixture(name)).expect("fixture parses");
     let prob = earthsci_ast::esm_problem(&file, (0.0, 0.0), opts)
-        .unwrap_or_else(|e| panic!("{name}: build pipeline failed: {e}"));
+        .unwrap_or_else(|e| panic!("{name}: esm_problem failed: {e}"));
     prob.observed_fields().clone()
 }
 
@@ -845,8 +863,16 @@ fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::Arr
 /// two paths must agree to the bit: they are the same construct, and §5.19.1
 /// says its value is fully determined.
 fn assert_pipeline_matches_assertions(name: &str) {
+    assert_fields_match_assertions(name, &pipeline_fields(name));
+}
+
+/// Every coords assertion of fixture `name`'s inline tests, checked to the bit
+/// against `fields`.
+fn assert_fields_match_assertions(
+    name: &str,
+    fields: &std::collections::HashMap<String, ndarray::ArrayD<f64>>,
+) {
     let file = load_path(fixture(name)).expect("fixture parses");
-    let fields = pipeline_fields(name);
     let models = file.models.as_ref().expect("fixture has models");
     let (model_name, model) = models.iter().next().expect("one model");
     let mut checked = 0usize;
@@ -861,7 +887,7 @@ fn assert_pipeline_matches_assertions(name: &str) {
                 .or_else(|| fields.get(&format!("{model_name}.{}", a.variable)))
                 .unwrap_or_else(|| {
                     panic!(
-                        "{name}: the build pipeline materialized NO field for '{}' — \
+                        "{name}: the build materialized NO field for '{}' — \
                          keys were {:?}. An absent field is how this defect first \
                          looked, so it is a failure, not a skip.",
                         a.variable,
@@ -883,7 +909,7 @@ fn assert_pipeline_matches_assertions(name: &str) {
             assert_eq!(
                 actual.to_bits(),
                 a.expected.to_bits(),
-                "{name}: {}[{}] on '{}' at {coords:?} — the BUILD PIPELINE gave {actual:?} \
+                "{name}: {}[{}] on '{}' at {coords:?} — the build gave {actual:?} \
                  where the document pins {:?}. The per-step path agrees with the pin, so a \
                  mismatch here means the two evaluation routes disagree about the same \
                  construct.",
@@ -952,6 +978,41 @@ pipeline_test!(
 );
 pipeline_test!(
     pipeline_recurrence_group_frame_spellings,
+    "17_recurrence_group_frame_spellings.esm"
+);
+
+/// A recurrence group built by `esm_problem` with default options. A document
+/// with no state is evaluated statically from the flattened system, so this is
+/// the group stacked on the flattened route rather than on the inline-test
+/// runner's; both must give the values the fixtures pin.
+macro_rules! default_problem_test {
+    ($fn_name:ident, $fixture:literal) => {
+        #[test]
+        fn $fn_name() {
+            let fields = problem_fields($fixture, earthsci_ast::ProblemOptions::default());
+            assert_fields_match_assertions($fixture, &fields);
+        }
+    };
+}
+
+default_problem_test!(
+    default_problem_recurrence_group,
+    "13_recurrence_group_two_variables.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_order_pin,
+    "14_recurrence_group_order_pin.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_same_cell_order,
+    "15_recurrence_group_same_cell_order.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_contracting_member,
+    "16_recurrence_group_contracting_member.esm"
+);
+default_problem_test!(
+    default_problem_recurrence_group_frame_spellings,
     "17_recurrence_group_frame_spellings.esm"
 );
 

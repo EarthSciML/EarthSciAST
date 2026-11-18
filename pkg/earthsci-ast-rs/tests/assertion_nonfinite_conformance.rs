@@ -23,20 +23,11 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/assertion_nonfinite")
-}
-
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
 
 /// The class the manifest names for one actual value.
 fn class_of(v: f64) -> &'static str {
@@ -53,19 +44,9 @@ fn class_of(v: f64) -> &'static str {
 
 #[test]
 fn nonfinite_actuals_fail_every_finite_expectation() {
-    let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(manifest["category"].as_str(), Some("assertion_nonfinite"));
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
+    let dir = common::category_dir("assertion_nonfinite");
+    let manifest = common::read_json(dir.join("manifest.json"));
+    common::assert_tier_header(&manifest, "assertion_nonfinite");
 
     let rs = &manifest["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
@@ -83,8 +64,15 @@ fn nonfinite_actuals_fail_every_finite_expectation() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+        );
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(

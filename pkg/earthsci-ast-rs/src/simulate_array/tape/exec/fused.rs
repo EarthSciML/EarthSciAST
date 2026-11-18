@@ -9,7 +9,8 @@
 //! what makes an op monomorphized in one path impossible to miss in the
 //! other.
 
-use super::resolve::resolve_scalar;
+use super::interp::Cx;
+use super::resolve::{Slab, resolve_scalar};
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -176,37 +177,6 @@ unsafe fn fch3(
                     *w = v;
                 }
             }
-        }
-    }
-}
-
-/// `dst[k] = g(a[k], b[k], c[k], d[k])` over one chunk, all operands
-/// pointers (the Bin3 superop; scalar/ghost operands were resolved to splat
-/// registers by the caller). See `fch1` for the aliasing argument; operands
-/// may alias each other, which shared slices permit.
-#[inline(always)]
-unsafe fn fch4(
-    dst: *mut f64,
-    n: usize,
-    pa: *const f64,
-    pb: *const f64,
-    pc: *const f64,
-    pd: *const f64,
-    g: impl Fn(f64, f64, f64, f64) -> f64 + Copy,
-) {
-    unsafe {
-        let o = std::slice::from_raw_parts_mut(dst, n);
-        let a = std::slice::from_raw_parts(pa, n);
-        let b = std::slice::from_raw_parts(pb, n);
-        let c = std::slice::from_raw_parts(pc, n);
-        let d = std::slice::from_raw_parts(pd, n);
-        for k in 0..n {
-            *o.get_unchecked_mut(k) = g(
-                *a.get_unchecked(k),
-                *b.get_unchecked(k),
-                *c.get_unchecked(k),
-                *d.get_unchecked(k),
-            );
         }
     }
 }
@@ -381,18 +351,19 @@ unsafe fn fch_scan_fused(
     };
     let (pa, pb, po) = (fix(pa, 0), fix(pb, 1), fix(po, 2));
     let ld = |p: *const f64, s: usize, j: usize| unsafe { *p.add(j * s) };
+    use crate::simulate_array::scalar_ops as k;
     macro_rules! kernel {
         (Add) => {
-            |x: f64, y: f64| x + y
+            |x: f64, y: f64| k::add(x, y)
         };
         (Sub) => {
-            |x: f64, y: f64| x - y
+            |x: f64, y: f64| k::sub(x, y)
         };
         (Mul) => {
-            |x: f64, y: f64| x * y
+            |x: f64, y: f64| k::mul(x, y)
         };
         (Div) => {
-            |x: f64, y: f64| x / y
+            |x: f64, y: f64| k::div(x, y)
         };
     }
     macro_rules! with_post {
@@ -542,7 +513,7 @@ unsafe fn fch_scan_lanes(
     }
 }
 
-/// The `vec_select` pick over one chunk.
+/// The `Select` pick over one chunk.
 #[inline(always)]
 pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
     // A constant condition is the filter-gate broadcast: whole-chunk pick.
@@ -601,92 +572,33 @@ pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MS
 // ---------------------------------------------------------------------------
 
 /// Dispatch a [`BinCode`] to `$apply!(kernel)` with a monomorphized closure
-/// for each hot op. Each closure body is the IDENTICAL expression to
-/// `binary_kernel_of`'s arm for that op, so this is a pure dispatch hoist —
+/// for each op. The closures come from the same list as `binary_kernel_of`'s
+/// table (`scalar_ops::with_bin_kernel`), so this is a pure dispatch hoist —
 /// one indirect kernel call per node (unfused) or per chunk (fused) becomes
-/// an inlined, vectorizable element loop. The arms mirror `vec_combine`'s,
-/// plus the comparison relops feeding `Select` masks; any remaining op falls
-/// through to the shared fn-pointer table itself, so semantics have a single
-/// source either way.
+/// an inlined, vectorizable element loop.
 macro_rules! dispatch_bin_kernel {
     ($op:expr, $apply:ident) => {
-        // Under `element_type: "Float32"` the monomorphized closures below are
-        // a SECOND, hand-copied definition of the arithmetic that never sees
-        // the precision — the archetypal fast path that quietly stays f64. So
-        // in that mode dispatch through the shared table instead, which returns
-        // the binary32 kernel. The element loop then makes one indirect call
-        // per element as it did before the monomorphization; correctness over
-        // throughput is the only defensible trade when the answer differs.
+        // The binary32 instance under `element_type: "Float32"`: the same
+        // kernels at the other width, as the shared table resolves them.
         if $crate::precision::is_f32() {
             $apply!(binary_kernel_of(*$op))
         } else {
-            match $op {
-                BinCode::Add => $apply!(|x, y| x + y),
-                BinCode::Sub => $apply!(|x, y| x - y),
-                BinCode::Mul => $apply!(|x, y| x * y),
-                BinCode::Div => $apply!(|x, y| x / y),
-                BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
-                BinCode::Min => $apply!(crate::faq::nan_min),
-                BinCode::Max => $apply!(crate::faq::nan_max),
-                BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
-                BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
-                BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
-                BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
-                BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
-                BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
-                BinCode::Atan2 => $apply!(|x: f64, y: f64| x.atan2(y)),
-                BinCode::And => $apply!(|x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64),
-                BinCode::Or => $apply!(|x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64),
-                other => $apply!(binary_kernel_of(*other)),
-            }
+            $crate::simulate_array::scalar_ops::with_bin_kernel!(f64, $op, $apply)
         }
     };
 }
 pub(super) use dispatch_bin_kernel;
 
 /// Dispatch a [`UnCode`] to `$apply!(kernel)` with a monomorphized closure
-/// for each hot op — the unary counterpart of [`dispatch_bin_kernel`]: each
-/// closure body is the IDENTICAL expression to `unary_kernel_of`'s arm, and
-/// the remaining ops fall through to the fn-pointer table.
+/// for each op — the unary counterpart of [`dispatch_bin_kernel`], from the
+/// same list as `unary_kernel_of`'s table (`scalar_ops::with_un_kernel`).
 macro_rules! dispatch_un_kernel {
     ($op:expr, $apply:ident) => {
-        // See `dispatch_bin_kernel`: the monomorphized arms are f64-only, so
-        // Float32 routes through the shared (precision-aware) table.
+        // See `dispatch_bin_kernel`.
         if $crate::precision::is_f32() {
             $apply!(unary_kernel_of(*$op))
         } else {
-            match $op {
-                UnCode::Abs => $apply!(|x: f64| x.abs()),
-                UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
-                UnCode::Exp => $apply!(|x: f64| x.exp()),
-                UnCode::Ln => $apply!(|x: f64| x.ln()),
-                UnCode::Log10 => $apply!(|x: f64| x.log10()),
-                UnCode::Sin => $apply!(|x: f64| x.sin()),
-                UnCode::Cos => $apply!(|x: f64| x.cos()),
-                UnCode::Tanh => $apply!(|x: f64| x.tanh()),
-                UnCode::Floor => $apply!(|x: f64| x.floor()),
-                UnCode::Ceil => $apply!(|x: f64| x.ceil()),
-                UnCode::Tan => $apply!(|x: f64| x.tan()),
-                UnCode::Asin => $apply!(|x: f64| x.asin()),
-                UnCode::Acos => $apply!(|x: f64| x.acos()),
-                UnCode::Atan => $apply!(|x: f64| x.atan()),
-                UnCode::Sinh => $apply!(|x: f64| x.sinh()),
-                UnCode::Cosh => $apply!(|x: f64| x.cosh()),
-                UnCode::Asinh => $apply!(|x: f64| x.asinh()),
-                UnCode::Acosh => $apply!(|x: f64| x.acosh()),
-                UnCode::Atanh => $apply!(|x: f64| x.atanh()),
-                UnCode::Not => $apply!(|x: f64| (x == 0.0) as i32 as f64),
-                UnCode::Sign => $apply!(|x: f64| {
-                    if x > 0.0 {
-                        1.0
-                    } else if x < 0.0 {
-                        -1.0
-                    } else {
-                        0.0
-                    }
-                }),
-                other => $apply!(unary_kernel_of(*other)),
-            }
+            $crate::simulate_array::scalar_ops::with_un_kernel!(f64, $op, $apply)
         }
     };
 }
@@ -707,9 +619,6 @@ pub(super) struct FusedScratch {
     /// The sources of the current group's whole-read gathers, in input
     /// order (their `bases` entries point into `whole`).
     whole_src: Vec<*const f64>,
-    /// Per group, [`node_elems`] of its schedule: what lets a worker step
-    /// straight to the start of its share of the group.
-    node_elems: Vec<Vec<usize>>,
     /// The register files and cursors of the workers a split group runs on
     /// (native targets only; see `par`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -737,11 +646,6 @@ impl FusedScratch {
             ),
             whole: vec![0.0; most(whole_len)],
             whole_src: Vec::with_capacity(most(|f| f.inputs.len())),
-            node_elems: prog
-                .fused
-                .iter()
-                .map(|f| node_elems(&f.schedule.nodes))
-                .collect(),
             #[cfg(not(target_arch = "wasm32"))]
             workers: super::par::FusedWorkers::for_program(prog),
         }
@@ -784,37 +688,6 @@ pub(super) fn n_scans(fs: &FusedSpec) -> usize {
         .sum()
 }
 
-/// The elements one execution of each schedule node covers: a run's length,
-/// or ONE repetition of a `Repeat`'s body (its whole span is that times its
-/// count). Pre-order, like the nodes.
-pub(super) fn node_elems(nodes: &[RunNode]) -> Vec<usize> {
-    fn span(nodes: &[RunNode], out: &mut [usize], i: usize) -> (usize, usize) {
-        match &nodes[i] {
-            RunNode::Run(r) => {
-                out[i] = r.len as usize;
-                (out[i], i + 1)
-            }
-            RunNode::Repeat { count, body, .. } => {
-                let end = i + 1 + *body as usize;
-                let (mut rep, mut j) = (0usize, i + 1);
-                while j < end {
-                    let (t, next) = span(nodes, out, j);
-                    rep += t;
-                    j = next;
-                }
-                out[i] = rep;
-                (rep * *count as usize, end)
-            }
-        }
-    }
-    let mut out = vec![0usize; nodes.len()];
-    let mut j = 0usize;
-    while j < nodes.len() {
-        j = span(nodes, &mut out, j).1;
-    }
-    out
-}
-
 /// The share of a fused group one execution of the chunk loop runs: the
 /// elements at flat positions `[lo, hi)` of the schedule's execution order,
 /// or, with a `period`, every element whose position modulo `period` lies in
@@ -828,7 +701,8 @@ pub(super) struct Window<'a> {
     pub(super) hi: usize,
     /// 0 for a plain window.
     pub(super) period: usize,
-    /// [`node_elems`] of the group's schedule.
+    /// [`node_elems`](crate::simulate_array::tape::prepared::node_elems) of the
+    /// group's schedule.
     pub(super) node_elems: &'a [usize],
 }
 
@@ -949,8 +823,8 @@ pub(super) struct IndexTable {
 /// none). Sized here, once; [`refill_index_tables`] only overwrites.
 pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>>> {
     let prime_end = (prog.n_const + prog.n_segment) as usize;
-    let tables = prog.tables();
-    let mut primed: Vec<bool> = vec![false; prog.slots.len()];
+    let tables = prog.slot_tables();
+    let mut primed: Vec<bool> = vec![false; prog.tables.slots.len()];
     for ins in &prog.instrs[..prime_end] {
         ins.for_each_def(&tables, |s| primed[s as usize] = true);
     }
@@ -988,17 +862,12 @@ pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>
 /// resolve per call.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out, with every table's
-/// subscript slot holding the table's element count.
-pub(super) unsafe fn refill_index_tables(
-    tables: &mut [Vec<Option<IndexTable>>],
-    slab_ptr: *const f64,
-    slot_off: &[usize],
-) {
+/// Every table's subscript slot must hold the table's element count, and
+/// nothing may be writing it.
+pub(super) unsafe fn refill_index_tables(tables: &mut [Vec<Option<IndexTable>>], slab: Slab) {
     for t in tables.iter_mut().flatten().flatten() {
-        let sub = unsafe {
-            std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
-        };
+        // SAFETY: the caller's contract.
+        let sub = unsafe { slab.slot_slice(t.subscript, t.pos.len()) };
         let mut all_in = true;
         for (k, (p, &v)) in t.pos.iter_mut().zip(sub).enumerate() {
             *p = match data_subscript(v, t.fi.n) {
@@ -1013,16 +882,27 @@ pub(super) unsafe fn refill_index_tables(
     }
 }
 
-/// A fused group's operands, resolved for one call (see [`resolve_fused`]).
-pub(super) struct Resolved<'a> {
+/// The sources of a fused group's whole-read gathers, one per whole-read
+/// input in input order ([`fill_whole`] reads them into the scratch boxes
+/// the group's input bases point at). A type of its own, so it cannot be
+/// passed where the bases are expected.
+#[derive(Clone, Copy)]
+pub(super) struct WholeSrc<'a>(pub(super) &'a [*const f64]);
+
+/// A fused group's operands, resolved for one call (see [`resolve_fused`]):
+/// what every thread that runs a part of the group reads.
+#[derive(Clone, Copy)]
+pub(super) struct Group<'a> {
+    pub(super) fs: &'a FusedSpec,
     pub(super) svals: &'a [f64],
     pub(super) bases: &'a [*const f64],
-    pub(super) whole_src: &'a [*const f64],
+    pub(super) whole_src: WholeSrc<'a>,
     pub(super) outs: &'a [(GroupIx, *mut f64)],
     /// An absorbed reduction's accumulator (null without one).
     pub(super) red: *mut f64,
+    pub(super) idx: &'a [Option<IndexTable>],
     pub(super) node_elems: &'a [usize],
-    pub(super) cursor: &'a mut RunCursor,
+    pub(super) simd: SimdLevel,
     /// The group's [`PreReduce`], to run range by range (`None` without one,
     /// or when its source is not contiguous and it already ran whole).
     pub(super) pre: Option<PreTile>,
@@ -1068,29 +948,24 @@ unsafe fn pre_fold(pre: &PreReduce, pt: PreTile, a: usize, b: usize) {
     dispatch_bin_kernel!(op, fold_rows);
 }
 
-/// Run fused group `fs` over the inner positions `[lo, hi)` of its
+/// Run fused group `g` over the inner positions `[lo, hi)` of its
 /// [`PreReduce`] (every leading position of them), a range of columns at a
-/// time: fold the range, then run the group's elements there.
+/// time: fold the range, then run the group's elements there, folding an
+/// absorbed reduction into `red`.
 ///
 /// # Safety
-/// As for [`run_fused_window`], with `pt` resolved for `fs.pre`.
-#[allow(clippy::too_many_arguments)]
+/// As for [`run_fused_window`], with `pt` resolved for the group's
+/// pre-reduction.
 pub(super) unsafe fn run_pre_tiled(
-    simd: SimdLevel,
-    fs: &FusedSpec,
+    g: &Group,
     pt: PreTile,
-    svals: &[f64],
-    bases: &[*const f64],
-    whole_src: &[*const f64],
-    outs: &[(GroupIx, *mut f64)],
     red: *mut f64,
-    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
-    node_elems: &[usize],
     lo: usize,
     hi: usize,
 ) {
+    let fs = g.fs;
     let pre = fs.pre.as_ref().expect("a group with a pre-reduction");
     let period = pre.n_inner;
     let step = pre_cols(pre.rows);
@@ -1099,19 +974,8 @@ pub(super) unsafe fn run_pre_tiled(
     if lo == 0 && hi == period && period <= step {
         unsafe {
             pre_fold(pre, pt, 0, period);
-            fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0);
-            run_fused_window(
-                simd,
-                fs,
-                svals,
-                bases,
-                outs,
-                red,
-                idx,
-                fregs,
-                cursor,
-                Window::all(node_elems),
-            );
+            fill_whole(fs, g.bases, g.whole_src, 0, fs.n_elems(), 0);
+            run_fused_window(g, red, fregs, cursor, Window::all(g.node_elems));
         }
         return;
     }
@@ -1120,22 +984,17 @@ pub(super) unsafe fn run_pre_tiled(
         let b = (a + step).min(hi);
         unsafe {
             pre_fold(pre, pt, a, b);
-            fill_whole(fs, bases, whole_src, a, b, period);
+            fill_whole(fs, g.bases, g.whole_src, a, b, period);
             run_fused_window(
-                simd,
-                fs,
-                svals,
-                bases,
-                outs,
+                g,
                 red,
-                idx,
                 fregs,
                 cursor,
                 Window {
                     lo: a,
                     hi: b,
                     period,
-                    node_elems,
+                    node_elems: g.node_elems,
                 },
             );
         }
@@ -1153,20 +1012,25 @@ pub(super) type Workers = ();
 /// scalar values, input base pointers (a whole-read gather's pointing at its
 /// scratch box, its source recorded in `whole_src`), output pointers (the
 /// slab, `dy` for a slot homed there, null for an unstored one) and the
-/// reduction's accumulator.
+/// reduction's accumulator. Also hands back the calling thread's run cursor
+/// and workers from `scratch`.
 ///
 /// # Safety
 /// As for [`exec_fused`].
-#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn resolve_fused<'a>(
     spec: usize,
-    env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
+    cx: &Cx<'a>,
     scratch: &'a mut FusedScratch,
-    dy_home: &[usize],
-    dy: *mut f64,
-) -> (Resolved<'a>, &'a mut Workers) {
+) -> (Group<'a>, &'a mut RunCursor, &'a mut Workers) {
+    let Cx {
+        env,
+        slab,
+        idx_tables,
+        simd,
+        dy_home,
+        dy,
+        ..
+    } = *cx;
     let fs = &env.prog.fused[spec];
     let FusedScratch {
         svals,
@@ -1175,23 +1039,22 @@ pub(super) unsafe fn resolve_fused<'a>(
         cursor,
         whole,
         whole_src,
-        node_elems,
         #[cfg(not(target_arch = "wasm32"))]
         workers,
     } = scratch;
-    let node_elems = &node_elems[spec][..];
+    let node_elems = &env.prep.node_elems[spec][..];
     // Resolve scalar inputs once.
     svals.clear();
     for op in &fs.scalars {
-        svals.push(resolve_scalar(op, env, slab_ptr, slot_off));
+        svals.push(resolve_scalar(op, env, slab));
     }
     // Resolve array input base pointers once.
     bases.clear();
     for inp in &fs.inputs {
         let p: *const f64 = match &inp.src {
             SrcRef::Slot(s) => {
-                debug_assert_eq!(&env.prog.slots[*s as usize].shape, &inp.src_shape);
-                unsafe { slab_ptr.add(slot_off[*s as usize]) as *const f64 }
+                debug_assert_eq!(&env.prog.tables.slots[*s as usize].shape, &inp.src_shape);
+                slab.slot(*s) as *const f64
             }
             SrcRef::State(ix) => {
                 debug_assert_eq!(&env.prog.state_vars[*ix as usize].shape, &inp.src_shape);
@@ -1223,7 +1086,7 @@ pub(super) unsafe fn resolve_fused<'a>(
         let p = match dy_home.get(slot as usize) {
             Some(&super::UNSTORED) => std::ptr::null_mut(),
             Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
-            _ => unsafe { slab_ptr.add(slot_off[slot as usize]) },
+            _ => slab.slot(slot),
         };
         outs.push((reg, p));
     }
@@ -1232,15 +1095,15 @@ pub(super) unsafe fn resolve_fused<'a>(
     let red: *mut f64 = match &fs.reduce {
         Some(r) => match dy_home.get(r.out as usize) {
             Some(&off) if off != usize::MAX => unsafe { dy.add(off) },
-            _ => unsafe { slab_ptr.add(slot_off[r.out as usize]) },
+            _ => slab.slot(r.out),
         },
         None => std::ptr::null_mut(),
     };
     // The pre-reduction, range by range from a contiguous source; else now,
     // whole, by the instruction's own walk.
     let pre = fs.pre.as_ref().and_then(|p| {
-        let sv = super::resolve::resolve_src(&p.src, env, slab_ptr, slot_off);
-        let out = unsafe { slab_ptr.add(slot_off[p.out as usize]) };
+        let sv = super::resolve::resolve_src(&p.src, env, slab);
+        let out = slab.slot(p.out);
         if sv.strides[..] == super::resolve::rm_strides(&sv.shape)[..] {
             return Some(PreTile { src: sv.ptr, out });
         }
@@ -1251,16 +1114,19 @@ pub(super) unsafe fn resolve_fused<'a>(
     #[cfg(target_arch = "wasm32")]
     let workers: &'a mut Workers = Box::leak(Box::new(()));
     (
-        Resolved {
+        Group {
+            fs,
             svals,
             bases,
-            whole_src,
+            whole_src: WholeSrc(whole_src),
             outs,
             red,
+            idx: &idx_tables[spec],
             node_elems,
-            cursor,
+            simd,
             pre,
         },
+        cursor,
         workers,
     )
 }
@@ -1310,54 +1176,27 @@ unsafe fn pre_fold_strided(pre: &PreReduce, sv: &super::resolve::SrcView, out: *
 /// this applies exactly the same scalar kernels in the same order as the
 /// unfused instructions (elementwise maps — chunking cannot change a bit).
 #[inline(never)]
-#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused(
     spec: usize,
-    env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
+    cx: &Cx,
     fregs: &mut [f64],
     scratch: &mut FusedScratch,
-    idx: &[Option<IndexTable>],
-    simd: SimdLevel,
-    dy_home: &[usize],
-    dy: *mut f64,
 ) {
-    let fs = &env.prog.fused[spec];
-    let (r, _workers) =
-        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
-    let Resolved {
-        svals,
-        bases,
-        whole_src,
-        outs,
-        red,
-        node_elems,
-        cursor,
-        pre,
-    } = r;
+    let (g, cursor, _workers) = unsafe { resolve_fused(spec, cx, scratch) };
+    let fs = g.fs;
     // A large group is split into windows across the caller's worker
     // threads (see `par`).
     #[cfg(not(target_arch = "wasm32"))]
     {
         let ways = super::par::split_ways(fs, _workers.call_ways);
         if ways > 1 {
-            unsafe {
-                _workers.run_split(
-                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways, pre,
-                )
-            };
+            unsafe { _workers.run_split(&g, ways) };
             return;
         }
     }
-    if let Some(pt) = pre {
+    if let Some(pt) = g.pre {
         let n = fs.pre.as_ref().map_or(0, |p| p.n_inner);
-        unsafe {
-            run_pre_tiled(
-                simd, fs, pt, svals, bases, whole_src, outs, red, idx, fregs, cursor, node_elems,
-                0, n,
-            )
-        };
+        unsafe { run_pre_tiled(&g, pt, g.red, fregs, cursor, 0, n) };
         return;
     }
     // Seeded with the reduction's identity (a split's workers seed their
@@ -1365,9 +1204,9 @@ pub(super) unsafe fn exec_fused(
     if let Some(r) = &fs.reduce
         && !seeds_itself(fs)
     {
-        unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
+        unsafe { std::slice::from_raw_parts_mut(g.red, r.n_inner).fill(r.init) };
     }
-    unsafe { fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0) };
+    unsafe { fill_whole(fs, g.bases, g.whole_src, 0, fs.n_elems(), 0) };
     // A group with a reverse scan visits its rows from the last.
     if let Some((rows, len)) = fs.rows_reversed() {
         for r in (0..rows).rev() {
@@ -1375,26 +1214,13 @@ pub(super) unsafe fn exec_fused(
                 lo: r * len,
                 hi: (r + 1) * len,
                 period: 0,
-                node_elems,
+                node_elems: g.node_elems,
             };
-            unsafe { run_fused_window(simd, fs, svals, bases, outs, red, idx, fregs, cursor, win) };
+            unsafe { run_fused_window(&g, g.red, fregs, cursor, win) };
         }
         return;
     }
-    unsafe {
-        run_fused_window(
-            simd,
-            fs,
-            svals,
-            bases,
-            outs,
-            red,
-            idx,
-            fregs,
-            cursor,
-            Window::all(node_elems),
-        )
-    }
+    unsafe { run_fused_window(&g, g.red, fregs, cursor, Window::all(g.node_elems)) }
 }
 
 /// Run share `w` of fused group `spec` split `ways` wide (see
@@ -1404,39 +1230,15 @@ pub(super) unsafe fn exec_fused(
 /// # Safety
 /// As for [`exec_fused`].
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_fused_share(
     spec: usize,
-    env: &Env,
-    slab_ptr: *mut f64,
-    slot_off: &[usize],
+    cx: &Cx,
     scratch: &mut FusedScratch,
-    idx: &[Option<IndexTable>],
-    simd: SimdLevel,
-    dy_home: &[usize],
-    dy: *mut f64,
     w: usize,
     ways: usize,
 ) {
-    let fs = &env.prog.fused[spec];
-    let (r, workers) =
-        unsafe { resolve_fused(spec, env, slab_ptr, slot_off, scratch, dy_home, dy) };
-    unsafe {
-        workers.run_own_share(
-            fs,
-            r.svals,
-            r.bases,
-            r.whole_src,
-            r.outs,
-            r.red,
-            idx,
-            r.node_elems,
-            simd,
-            w,
-            ways,
-            r.pre,
-        )
-    };
+    let (g, _cursor, workers) = unsafe { resolve_fused(spec, cx, scratch) };
+    unsafe { workers.run_own_share(&g, w, ways) };
 }
 
 /// Read a group's whole-read gathers (sources `whole_src`, destinations their
@@ -1450,11 +1252,12 @@ pub(super) unsafe fn exec_fused_share(
 pub(super) unsafe fn fill_whole(
     fs: &FusedSpec,
     bases: &[*const f64],
-    whole_src: &[*const f64],
+    whole_src: WholeSrc,
     lo: usize,
     hi: usize,
     period: usize,
 ) {
+    let WholeSrc(whole_src) = whole_src;
     if whole_src.is_empty() {
         return;
     }
@@ -1484,23 +1287,28 @@ pub(super) unsafe fn fill_whole(
     }
 }
 
-/// Run one window of a fused group through the SIMD clone selected at
-/// executor construction (Step 4b). Same source, same scalar semantics — the
-/// `#[target_feature]` wrappers only widen the auto-vectorized lanes.
-#[allow(clippy::too_many_arguments)]
+/// Run one window of fused group `g` through the SIMD clone selected at
+/// executor construction (Step 4b), folding an absorbed reduction into `red`
+/// (the group's own accumulator, or a split worker's cells). Same source,
+/// same scalar semantics — the `#[target_feature]` wrappers only widen the
+/// auto-vectorized lanes.
 #[inline(always)]
 pub(super) unsafe fn run_fused_window(
-    simd: SimdLevel,
-    fs: &FusedSpec,
-    svals: &[f64],
-    bases: &[*const f64],
-    outs: &[(GroupIx, *mut f64)],
+    g: &Group,
     red: *mut f64,
-    idx: &[Option<IndexTable>],
     fregs: &mut [f64],
     cursor: &mut RunCursor,
     win: Window,
 ) {
+    let Group {
+        fs,
+        svals,
+        bases,
+        outs,
+        idx,
+        simd,
+        ..
+    } = *g;
     match simd {
         SimdLevel::Generic => unsafe {
             exec_fused_runs_generic(fs, svals, bases, outs, red, idx, fregs, cursor, win)
@@ -1737,27 +1545,6 @@ unsafe fn exec_fused_runs(
             fs.direct.iter().any(|&(_, d)| d as usize == k)
         }
     };
-    // Bin3 splat registers: one FCHUNK broadcast per scalar plus a zero
-    // register (the ghost read), filled once per call. The values are the
-    // EXACT scalars / the exact `+0.0` ghost, so an all-pointer superop
-    // reads identical bits to the `MSrc::C` broadcast it replaces.
-    let splat_base = fs.n_regs as usize + fs.n_load_regs as usize;
-    let zero_ix = splat_base + svals.len();
-    if fs.n_splat_regs > 0 {
-        debug_assert_eq!(fs.n_splat_regs as usize, svals.len() + 1);
-        unsafe {
-            for (i, &v) in svals.iter().enumerate() {
-                let p = rp.add((splat_base + i) * cs);
-                for k in 0..cs {
-                    *p.add(k) = v;
-                }
-            }
-            let z = rp.add(zero_ix * cs);
-            for k in 0..cs {
-                *z.add(k) = 0.0;
-            }
-        }
-    }
     let RunCursor {
         frames,
         in_delta,
@@ -1893,27 +1680,6 @@ unsafe fn exec_fused_runs(
                                         bases[*i as usize].offset(o as isize + done as isize)
                                     })
                                 }
-                            }
-                        }
-                    }
-                }
-            };
-            // All-pointer operand resolution for the Bin3 superop: scalar
-            // operands point at their splat registers, ghost reads at the
-            // zero register — same values, so same bits, with ONE loop shape
-            // per (op1, op2, op3) instead of 2^4 operand-kind arms.
-            let msrc_p = |m: &MRef| -> *const f64 {
-                match msrc(m) {
-                    MSrc::P(p) => p,
-                    MSrc::C(v) => {
-                        if v == 0.0 && v.is_sign_positive() {
-                            unsafe { rp.add(zero_ix * cs) as *const f64 }
-                        } else {
-                            match m {
-                                MRef::Scal(i) => unsafe {
-                                    rp.add((splat_base + *i as usize) * cs) as *const f64
-                                },
-                                _ => unreachable!("non-scalar constant operand"),
                             }
                         }
                     }
@@ -2186,118 +1952,6 @@ unsafe fn exec_fused_runs(
                             (Mul, Max) => b2!(mul, max),
                             (Max, Mul) => b2!(max, mul),
                             other => unreachable!("Bin2 pair not monomorphized ({other:?})"),
-                        }
-                    }
-                    MicroOp::Bin3 {
-                        op1,
-                        a,
-                        b,
-                        op2,
-                        c: c3,
-                        swap2,
-                        op3,
-                        d: d4,
-                        swap3,
-                        out,
-                    } => {
-                        let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
-                        let dst = dst_of(mi, *out);
-                        // See `Bin2`: Float32 composes the three shared kernels
-                        // in the same order rather than the f64-only closures.
-                        if crate::precision::is_f32() {
-                            let f1 = binary_kernel_of(*op1);
-                            let f2 = binary_kernel_of(*op2);
-                            let f3 = binary_kernel_of(*op3);
-                            match (*swap2, *swap3) {
-                                (false, false) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(f2(f1(x, y), z), w)
-                                    })
-                                },
-                                (true, false) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(f2(z, f1(x, y)), w)
-                                    })
-                                },
-                                (false, true) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(w, f2(f1(x, y), z))
-                                    })
-                                },
-                                (true, true) => unsafe {
-                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                        f3(w, f2(z, f1(x, y)))
-                                    })
-                                },
-                            }
-                            continue;
-                        }
-                        use BinCode::{Add, Div, Mul, Sub};
-                        // Monomorphized composition of the same three kernel
-                        // bodies applied in order:
-                        // t1 = op1(a, b); t2 = swap2 ? op2(c, t1) : op2(t1, c);
-                        // out = swap3 ? op3(d, t2) : op3(t2, d).
-                        macro_rules! b3 {
-                            ($f1:expr, $f2:expr, $f3:expr) => {
-                                match (*swap2, *swap3) {
-                                    (false, false) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3($f2($f1(x, y), z), w)
-                                        })
-                                    },
-                                    (true, false) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3($f2(z, $f1(x, y)), w)
-                                        })
-                                    },
-                                    (false, true) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3(w, $f2($f1(x, y), z))
-                                        })
-                                    },
-                                    (true, true) => unsafe {
-                                        fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
-                                            $f3(w, $f2(z, $f1(x, y)))
-                                        })
-                                    },
-                                }
-                            };
-                        }
-                        let add = |x: f64, y: f64| x + y;
-                        let sub = |x: f64, y: f64| x - y;
-                        let mul = |x: f64, y: f64| x * y;
-                        let div = |x: f64, y: f64| x / y;
-                        macro_rules! b3_op12 {
-                            ($f3:expr) => {
-                                match (op1, op2) {
-                                    (Add, Add) => b3!(add, add, $f3),
-                                    (Add, Sub) => b3!(add, sub, $f3),
-                                    (Add, Mul) => b3!(add, mul, $f3),
-                                    (Add, Div) => b3!(add, div, $f3),
-                                    (Sub, Add) => b3!(sub, add, $f3),
-                                    (Sub, Sub) => b3!(sub, sub, $f3),
-                                    (Sub, Mul) => b3!(sub, mul, $f3),
-                                    (Sub, Div) => b3!(sub, div, $f3),
-                                    (Mul, Add) => b3!(mul, add, $f3),
-                                    (Mul, Sub) => b3!(mul, sub, $f3),
-                                    (Mul, Mul) => b3!(mul, mul, $f3),
-                                    (Mul, Div) => b3!(mul, div, $f3),
-                                    (Div, Add) => b3!(div, add, $f3),
-                                    (Div, Sub) => b3!(div, sub, $f3),
-                                    (Div, Mul) => b3!(div, mul, $f3),
-                                    (Div, Div) => b3!(div, div, $f3),
-                                    other => {
-                                        unreachable!("Bin3 restricted to + - * / ({other:?})")
-                                    }
-                                }
-                            };
-                        }
-                        match op3 {
-                            Add => b3_op12!(add),
-                            Sub => b3_op12!(sub),
-                            Mul => b3_op12!(mul),
-                            Div => b3_op12!(div),
-                            other => unreachable!("Bin3 restricted to + - * / ({other:?})"),
                         }
                     }
                 }
@@ -2626,10 +2280,10 @@ pub(super) unsafe fn exec_fused_runs_avx512(
 /// * `Bin`/`Un` apply [`binary_kernel_of`] / [`unary_kernel_of`] — the same
 ///   fn-pointer tables the unfused instructions dispatch through.
 /// * `Neg` is `x → -x`, NOT `0 - x` (which differs on signed zero).
-/// * `Bin2`/`Bin3` operand orientation: the fused intermediate always feeds
-///   the NEXT kernel, and `swap*` records which SIDE it enters on —
-///   `t = op1(a, b); out = swap ? op2(c, t) : op2(t, c)` (likewise `swap2`
-///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
+/// * `Bin2` operand orientation: the fused intermediate always feeds the
+///   NEXT kernel, and `swap` records which SIDE it enters on —
+///   `t = op1(a, b); out = swap ? op2(c, t) : op2(t, c)`. The constituent
+///   kernels are applied strictly
 ///   in order — never contracted into a hardware FMA, which would change
 ///   bits.
 /// * `Scan` folds into `carries[carry + at % post]`, restarting at `init`
@@ -2716,32 +2370,6 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
                 binary_kernel_of(*op2)(cv, t)
             } else {
                 binary_kernel_of(*op2)(t, cv)
-            };
-        }
-        MicroOp::Bin3 {
-            op1,
-            a,
-            b,
-            op2,
-            c,
-            swap2,
-            op3,
-            d,
-            swap3,
-            out,
-        } => {
-            let t1 = binary_kernel_of(*op1)(get(a, regs), get(b, regs));
-            let cv = get(c, regs);
-            let t2 = if *swap2 {
-                binary_kernel_of(*op2)(cv, t1)
-            } else {
-                binary_kernel_of(*op2)(t1, cv)
-            };
-            let dv = get(d, regs);
-            regs[*out as usize] = if *swap3 {
-                binary_kernel_of(*op3)(dv, t2)
-            } else {
-                binary_kernel_of(*op3)(t2, dv)
             };
         }
     }

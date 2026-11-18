@@ -6,6 +6,8 @@
 use earthsci_ast::*;
 use serde_json::Value;
 
+use crate::common;
+
 #[test]
 fn enums_categorical_lookup_fixture_lowers_enum_ops() {
     let fixture = include_str!("../../../tests/valid/enums_categorical_lookup.esm");
@@ -37,14 +39,14 @@ fn enums_categorical_lookup_fixture_lowers_enum_ops() {
         panic!("season arg must be an Operator node after lowering");
     };
     assert_eq!(season_node.op, "const");
-    assert_eq!(season_node.value, Some(Value::Number(3.into())));
+    assert_eq!(season_node.value, Some(Value::Number(3.into()).into()));
 
     // args[2] (land_use_class) must have lowered to a `const` integer of value 3.
     let Expr::Operator(lu_node) = &node.args[2] else {
         panic!("land_use_class arg must be an Operator node after lowering");
     };
     assert_eq!(lu_node.op, "const");
-    assert_eq!(lu_node.value, Some(Value::Number(3.into())));
+    assert_eq!(lu_node.value, Some(Value::Number(3.into()).into()));
 }
 
 #[test]
@@ -186,14 +188,14 @@ fn zero_and_negative_enum_members_load_and_resolve_to_themselves() {
         panic!("values[0] must be an Operator node after lowering");
     };
     assert_eq!(zero_node.op, "const");
-    assert_eq!(zero_node.value, Some(Value::Number(0.into())));
+    assert_eq!(zero_node.value, Some(Value::Number(0.into()).into()));
 
     // values[1] — the negative member, lowered to `const -1`.
     let Expr::Operator(neg_node) = &values[1] else {
         panic!("values[1] must be an Operator node after lowering");
     };
     assert_eq!(neg_node.op, "const");
-    assert_eq!(neg_node.value, Some(Value::Number((-1).into())));
+    assert_eq!(neg_node.value, Some(Value::Number((-1).into()).into()));
 
     // values[2] — both read through ARITHMETIC: 0 + 10*1 + (-1) = 9. The
     // fixture's inline test asserts the evaluated 9; here we only pin that the
@@ -229,7 +231,7 @@ fn zero_and_negative_enum_members_round_trip() {
 /// `expected_errors.json`, so the pin follows the corpus.
 #[test]
 fn duplicate_enum_values_are_refused_at_load_with_the_pinned_code() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/invalid");
+    let dir = common::repo_fixture("invalid").display().to_string();
     let expected: Value = serde_json::from_str(
         &std::fs::read_to_string(format!("{dir}/expected_errors.json")).expect("read"),
     )

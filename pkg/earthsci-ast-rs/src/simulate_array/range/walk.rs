@@ -103,21 +103,10 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
-    fn shape(&self) -> Vec<usize> {
-        self.lo
-            .iter()
-            .zip(&self.hi)
-            .map(|(l, h)| (h - l + 1).max(0) as usize)
-            .collect()
-    }
-
     /// Classify `e` against this box, as the lowering classifies a subscript.
     fn role(&self, e: &Expr) -> Option<AxisRole> {
-        let shape = self.shape();
         let bx = VecBox {
             syms: &self.syms,
-            lo: &self.lo,
-            shape: &shape,
             cnames: &[],
             cvals: &[],
         };

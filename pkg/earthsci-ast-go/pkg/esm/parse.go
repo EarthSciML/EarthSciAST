@@ -191,7 +191,8 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 			// self-consistent. The floor only ever raises, and it is the same
 			// stamp emit applies — one step earlier. Pinned by
 			// TestRaisedFloorAdmitsAnInlinedFaqDocument. A mounted leaf's
-			// variable bounds raise it to 2.1.0 the same way.
+			// unit-bearing expression nodes raise it to 1.2.0, and its variable
+			// bounds to 2.1.0, the same way.
 			data = []byte(raiseEsmFloors(string(inlined)))
 			// The view no longer matches the text; loadPrepared decodes the text.
 			rootView = nil

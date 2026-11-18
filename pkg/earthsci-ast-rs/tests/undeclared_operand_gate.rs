@@ -31,9 +31,10 @@ use earthsci_ast::simulate_array::{Value as EvalValue, eval_expression};
 use earthsci_ast::{SolveOptions, load_path, run_inline_tests};
 use serde_json::json;
 
+use crate::common;
+
 fn fixture() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/undeclared_operand/undeclared_operand_in_max.esm")
+    common::repo_fixture("fixtures/undeclared_operand/undeclared_operand_in_max.esm")
 }
 
 /// The phrase both routes must produce. Pinned as a substring rather than

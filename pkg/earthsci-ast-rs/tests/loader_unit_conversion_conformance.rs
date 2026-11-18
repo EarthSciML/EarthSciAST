@@ -11,22 +11,16 @@
 #![cfg(feature = "esio")]
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use earthsci_ast::PrepareProvider;
+use earthsci_ast::DataProvider;
 use earthsci_ast::esio_provider::providers_from_document;
 use serde_json::Value;
 
-fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
-}
+use crate::common;
 
-fn read_json(path: &Path) -> Value {
-    serde_json::from_str(
-        &fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
-    )
-    .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+fn tests_dir() -> PathBuf {
+    common::repo_tests_dir()
 }
 
 /// f64 bit patterns — the comparison the manifest asks for, so `0.0`/`-0.0` and
@@ -57,7 +51,8 @@ struct Case {
 
 fn cases() -> Vec<Case> {
     let tests = tests_dir();
-    let manifest = read_json(&tests.join("conformance/loader_unit_conversion/manifest.json"));
+    let manifest =
+        common::read_json(tests.join("conformance/loader_unit_conversion/manifest.json"));
     let fixtures = manifest["fixtures"]
         .as_array()
         .expect("manifest has a fixtures array");
@@ -66,8 +61,8 @@ fn cases() -> Vec<Case> {
         .iter()
         .map(|f| {
             let id = f["id"].as_str().expect("fixture id").to_string();
-            let doc = read_json(&tests.join(f["document"].as_str().expect("document path")));
-            let golden = read_json(&tests.join(f["golden"].as_str().expect("golden path")));
+            let doc = common::read_json(tests.join(f["document"].as_str().expect("document path")));
+            let golden = common::read_json(tests.join(f["golden"].as_str().expect("golden path")));
             let mut overrides: HashMap<String, String> = HashMap::new();
             if let Some(map) = f.get("url_overrides").and_then(Value::as_object) {
                 for (loader, rel) in map {

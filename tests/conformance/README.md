@@ -328,6 +328,11 @@ Fields:
   `faq`). The labels `transforming` and `divergent` mirror the two
   ledgers for quick filtering; the ledgers themselves are authoritative.
 - `load_transforms` — optional; spec-mandated rewrites (see above).
+- `saved_esm` — optional; the `esm` that `save(load(F))` MUST declare
+  (esm-spec §4.7, "Save-time version floors"). A fixture that mounts a leaf
+  carrying a `faq` node, a unit-bearing `const` or a variable bound has the
+  construct inlined at load, so its saved version is raised to the construct's
+  floor; one that already declares more keeps its version.
 
 ## Adapter contract (per binding)
 
@@ -360,6 +365,10 @@ Each binding's test suite MUST provide an adapter that:
    tests do use — cannot be shared here, because the bindings genuinely
    differ on which optional transforms they apply. Shared, it would fail
    the *correct* binding.)
+9. **Asserts the saved version** — when a fixture carries `saved_esm`, the
+   `esm` of `save(load(F))` equals it. A binding whose plain load leaves
+   `{ref}` mounts as stubs resolves them before this check, since the floor is
+   about the document the mounts inline.
 
 Reference implementation:
 `pkg/EarthSciAST.jl/test/conformance_round_trip_test.jl`. The adapters run

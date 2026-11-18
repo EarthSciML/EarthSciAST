@@ -2,7 +2,7 @@
 //!
 //! This module owns the public [`ValidationResult`] / [`SchemaError`] /
 //! [`StructuralError`] types and the orchestrator entry points
-//! ([`validate`], [`validate_complete`], [`validate_with_schema`]). The
+//! ([`validate`], [`validate_text`], [`validate_complete`]). The
 //! actual checks are delegated to:
 //!
 //! - [`crate::structural`] — equation balance, model references, reactions,
@@ -14,7 +14,8 @@
 //! shared input both submodules consume.
 
 use crate::EsmFile;
-use crate::parse::{LoadOptions, load_string, load_string_with_options};
+use crate::parse::LoadOptions;
+use crate::types::HasSubsystems;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -115,256 +116,7 @@ pub struct StructuralError {
     pub details: serde_json::Value,
 }
 
-/// Error codes for structural validation
-///
-/// Serialized in `snake_case` so the wasm-boundary JSON matches this type's
-/// [`std::fmt::Display`] output and the cross-binding contract in
-/// `tests/invalid/expected_errors.json` (e.g. `undefined_variable`, not the
-/// default PascalCase `UndefinedVariable`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StructuralErrorCode {
-    /// Undefined variable reference
-    UndefinedVariable,
-    /// Number of equations doesn't match state variables
-    EquationCountMismatch,
-    /// Undefined species in reactions
-    UndefinedSpecies,
-    /// Undefined parameter in expressions
-    UndefinedParameter,
-    /// Reaction with both substrates and products null
-    NullReaction,
-    /// An equation whose left-hand side names a parameter (esm-spec §6.3.1)
-    EquationDefinesParameter,
-    /// A left-hand-side subscript bound by no `faq` (esm-spec §6.3.1)
-    UnboundIndexSymbol,
-    /// An event `affects` LHS names a PARAMETER (esm-spec §5.4/§5.5): esm
-    /// 1.0.0 events may affect UNKNOWNS only, and a parameter that changes
-    /// during a run declares its own `update` block instead.
-    EventAffectsParameter,
-    /// Scoped reference cannot be resolved
-    UnresolvedScopedRef,
-    /// Variable in event is not declared
-    EventVarUndeclared,
-    /// Operator referenced but not declared
-    UndefinedOperator,
-    /// A parameter `update` of kind `data` names a `data_sources` entry the
-    /// document does not declare (esm-spec §8.5).
-    DataSourceUndefined,
-    /// The deprecated `records_per_sample` on a non-`data` rule, or written
-    /// in disagreement with the record shape (esm-spec §8.5.1).
-    RecordsPerSampleInvalid,
-    /// A record axis whose `size` is not 2 (esm-spec §8.5.1).
-    RecordAxisInvalid,
-    /// A record axis anywhere but first in a data-fed record shape, or
-    /// record shapes that disagree about beginning with one (esm-spec §8.5.1).
-    RecordAxisMisplaced,
-    /// A record shape beginning with a record axis on a time-invariant source
-    /// (esm-spec §8.5.1).
-    RecordAxisTimeInvariantSource,
-    /// System referenced but not declared
-    UndefinedSystem,
-
-    /// Operator variable not available
-    OperatorVariableMissing,
-    /// Circular dependency detected
-    CircularDependency,
-    /// Reaction rate expression has incompatible units for reaction stoichiometry
-    UnitInconsistency,
-    /// A declared `units` string denotes no real unit (esm-spec §4.8.4)
-    UnitParseError,
-    /// An `ic`-op equation placed inside a reaction system's `constraint_equations`
-    IcInReactionSystem,
-    /// A `variable_map` expression transform carries a `factor` (esm-spec
-    /// §10.4: the expression spells its own arithmetic — fold scaling into it)
-    FactorWithExpressionTransform,
-    /// A subsystem `ref` (esm-spec §4.7) that could not be resolved — a missing
-    /// file, a remote URL, a cycle, or an otherwise unreadable document.
-    UnresolvedSubsystemRef,
-    /// A subsystem `ref` that resolved to a file NOT containing exactly one
-    /// top-level system (zero or several), so which system to mount is ambiguous.
-    AmbiguousSubsystemRef,
-    /// A §4.7 `{ref}` mount at a form a binding does not implement. Never
-    /// raised: this binding mounts both top-level forms (see
-    /// [`codes::MOUNT_FORM_UNSUPPORTED`]).
-    MountFormUnsupported,
-    /// A `variable_map` `identity` coupling whose `from`/`to` variables carry
-    /// declared, non-empty, and DIFFERING units (esm-spec §4.7.6). Static mirror
-    /// of the flatten-time [`crate::flatten::FlattenError::DomainUnitMismatch`].
-    DomainUnitMismatch,
-    /// A `faq` value-equality `join` whose key column ranges over a
-    /// categorical index set carrying a FLOAT or NULL member (RFC
-    /// semiring-faq-unified-ir §5.3 / §5.7 rule 1): floats are not portably
-    /// equality-comparable and a null key is unmatchable.
-    JoinKeyInvalidType,
-    /// A `join.on` key whose range symbol the document does not determine
-    /// (CONFORMANCE_SPEC §5.5.8).
-    JoinSideAmbiguous,
-    /// A `join.syms` entry that is not a range symbol of the node.
-    JoinSymsUnknownSymbol,
-    /// A `faq` whose range iterates a `kind: "ragged"` index set but whose body
-    /// never reads that set's `values` array (esm-spec §4.3.1 "Ragged ranges").
-    RaggedValuesNotGathered,
-    /// A `faq` `expr`/`filter` that reads a shaped variable by bare name in an
-    /// elementwise position (esm-spec §4.3.1, issue #441).
-    FaqBareArrayOperand,
-    /// A value-invention `faq` (`distinct: true`) whose `key`/`expr` reads
-    /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
-    /// relational work is forbidden on the per-step hot path (RFC
-    /// semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7.6 guard 2).
-    RelationalNodeInContinuous,
-    /// A causal self-read (esm-spec §4.3.1.1) that is not a well-founded
-    /// strictly-earlier read along exactly one axis: a provably same-cell or
-    /// forward read, an index that is not affine in its frame symbol with
-    /// coefficient 1, self-reads disagreeing on the axis, or a bare read of the
-    /// variable inside its own defining RHS.
-    RecurrenceNotWellfounded,
-    /// A causal self-read (esm-spec §4.3.1.1) the runtime cannot restrict to a
-    /// single cell: reached through a `makearray` region value or a
-    /// `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is
-    /// not a `faq` over the variable's own axes. The READ is causal; the
-    /// CARRIER cannot sequence it.
-    RecurrenceUnsupportedForm,
-    /// The members of a recurrence group (esm-spec §4.3.1.2) do not share one
-    /// cell frame — the same `output_idx` and ranges — and one recurrence axis.
-    RecurrenceGroupAxisMismatch,
-    /// A `faq` `ranges` entry `{ "from": NAME }` whose NAME is not a key
-    /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
-    /// no implicit interval is inferred for an undeclared name.
-    UndefinedIndexSet,
-    /// A `broadcast` node whose `fn` field is absent, does not name a scalar
-    /// operator in the registry, or is applied to an argument count that
-    /// operator does not accept (esm-spec §4.3.4: "the `fn` value MUST name a
-    /// scalar operator … loading MUST fail").
-    ///
-    /// `broadcast` is the one op whose OPERATOR is data — the node says
-    /// `broadcast` and the arithmetic is named by a sibling string field — so
-    /// no amount of `op`-keyed checking reaches it. Until this code existed,
-    /// `{"op":"broadcast","fn":"not_a_real_op","args":[x]}` validated clean and
-    /// then evaluated to `x` (issue #101).
-    InvalidBroadcastFn,
-    /// A BARE array-level expression whose operand is declared over an index set
-    /// the result does not have (esm-spec §4.3.4). Operands of an array-level
-    /// expression align by index-set NAME, so an operand declared over a SUBSET
-    /// of the result's index sets broadcasts along the missing ones; one
-    /// carrying an index set the result does not carry has no axis to align to.
-    /// Both shapes are declared, so this is decidable here — and it must be
-    /// decided here, because the alternative is a positional flatten that
-    /// produces plausible, non-`NaN`, zero-padded garbage.
-    ArrayShapeMismatch,
-    /// A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6):
-    /// each observed on the cycle is defined in terms of the next, so no
-    /// evaluation order satisfies every definition and the algebraic block is
-    /// not a substitutable one. Decidable from the equations alone, so it is
-    /// decided HERE — before a build reaches the cycle and reports whichever
-    /// name its walk happened to try next (issue #181).
-    ///
-    /// The self-edge of a §4.3.1.1 recurrence CANDIDATE is an ordering *within*
-    /// one variable, not a dependency between two, and is dropped
-    /// (CONFORMANCE_SPEC §5.19.5). Every other self-reference is a cycle of
-    /// length one and is reported here.
-    ObservedCycle,
-    /// A DECLARATION spelled with a globally-scoped name — the document's
-    /// independent variable (`domain.independent_variable`, default `"t"`) or
-    /// the §6.4 `_var` placeholder (esm-spec §4.9.1.1).
-    ///
-    /// Both names are implicitly declared in every component's expression scope
-    /// (§4.9.1) and are resolved BY NAME ahead of the declaration maps —
-    /// `ModelCtx::new` extends `defined_vars` with them, and every evaluator in
-    /// this crate resolves them first — so such a declaration is unreachable:
-    /// the implicit symbol shadows it, not the other way round. That is why it
-    /// is a hard error rather than a lint (issue #200). The reported document
-    /// VALIDATED, a bare build reported the observed as having no defining
-    /// expression, and a build with a subsystem mounted handed every reader of
-    /// `t` the simulation clock, so `log(t)` was `-inf` at `t = 0` and every
-    /// number downstream was finite, plausible and wrong.
-    ///
-    /// Reserved set defined by §4.9.1.1, shared with the sibling
-    /// `reserved_index_symbol` binder rule, and it follows the
-    /// document: renaming the independent variable moves the rejection onto the
-    /// new name and frees `t`.
-    ReservedVariableName,
-    /// An inline test's `initial_conditions` / `parameter_overrides` key that
-    /// matches no declared name under the esm-spec §6.6.2 override-key rules.
-    UnknownOverrideKey,
-    /// An assertion whose form does not match the declared rank of the variable
-    /// it names (esm-spec §6.6.5).
-    AssertionRankMismatch,
-    /// Inline ARRAY data as the `default` of a variable that declares no
-    /// `shape` — omitted, null or empty (esm-spec §6.3).
-    ///
-    /// Inline array data is a SHAPED variable's value: its nesting is matched
-    /// against the declared shape, so with no shape there is nothing for it to
-    /// fill and no scalar reading of it. Rejected at the declaration so the
-    /// document fails to load instead of reaching a runtime that would have to
-    /// drop the variable from scope or fabricate a value for it.
-    ArrayDefaultWithoutShape,
-    /// A variable bound referring to a variable whose declared shape is
-    /// neither scalar nor the bounded variable's (esm-spec §6.3.2).
-    VariableBoundShapeMismatch,
-    /// A variable bound referring to the variable it bounds, or to an observed
-    /// whose definition depends on it, transitively (esm-spec §6.3.2).
-    VariableBoundCircular,
-    /// Numeric bounds with `lb > ub` (esm-spec §6.3.2).
-    VariableBoundsInverted,
-}
-
-use crate::diagnostic::codes;
-
-impl std::fmt::Display for StructuralErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::UndefinedVariable => codes::UNDEFINED_VARIABLE,
-            Self::EquationCountMismatch => codes::EQUATION_COUNT_MISMATCH,
-            Self::UndefinedSpecies => codes::UNDEFINED_SPECIES,
-            Self::UndefinedParameter => codes::UNDEFINED_PARAMETER,
-            Self::NullReaction => codes::NULL_REACTION,
-            Self::EquationDefinesParameter => codes::EQUATION_DEFINES_PARAMETER,
-            Self::UnboundIndexSymbol => codes::UNBOUND_INDEX_SYMBOL,
-            Self::EventAffectsParameter => codes::EVENT_AFFECTS_PARAMETER,
-            Self::UnresolvedScopedRef => codes::UNRESOLVED_SCOPED_REF,
-            Self::EventVarUndeclared => codes::EVENT_VAR_UNDECLARED,
-            Self::UndefinedOperator => codes::UNDEFINED_OPERATOR,
-            Self::DataSourceUndefined => codes::DATA_SOURCE_UNDEFINED,
-            Self::RecordsPerSampleInvalid => codes::RECORDS_PER_SAMPLE_INVALID,
-            Self::RecordAxisInvalid => codes::RECORD_AXIS_INVALID,
-            Self::RecordAxisMisplaced => codes::RECORD_AXIS_MISPLACED,
-            Self::RecordAxisTimeInvariantSource => codes::RECORD_AXIS_TIME_INVARIANT_SOURCE,
-            Self::UndefinedSystem => codes::UNDEFINED_SYSTEM,
-            Self::OperatorVariableMissing => codes::OPERATOR_VARIABLE_MISSING,
-            Self::CircularDependency => codes::CIRCULAR_DEPENDENCY,
-            Self::UnitInconsistency => codes::UNIT_INCONSISTENCY,
-            Self::UnitParseError => codes::UNIT_PARSE_ERROR,
-            Self::IcInReactionSystem => codes::IC_IN_REACTION_SYSTEM,
-            Self::FactorWithExpressionTransform => codes::FACTOR_WITH_EXPRESSION_TRANSFORM,
-            Self::UnresolvedSubsystemRef => codes::UNRESOLVED_SUBSYSTEM_REF,
-            Self::AmbiguousSubsystemRef => codes::AMBIGUOUS_SUBSYSTEM_REF,
-            Self::MountFormUnsupported => codes::MOUNT_FORM_UNSUPPORTED,
-            Self::DomainUnitMismatch => codes::DOMAIN_UNIT_MISMATCH,
-            Self::JoinKeyInvalidType => codes::JOIN_KEY_INVALID_TYPE,
-            Self::JoinSideAmbiguous => codes::JOIN_SIDE_AMBIGUOUS,
-            Self::JoinSymsUnknownSymbol => codes::JOIN_SYMS_UNKNOWN_SYMBOL,
-            Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
-            Self::RaggedValuesNotGathered => codes::RAGGED_VALUES_NOT_GATHERED,
-            Self::FaqBareArrayOperand => codes::FAQ_BARE_ARRAY_OPERAND,
-            Self::RecurrenceNotWellfounded => codes::RECURRENCE_NOT_WELLFOUNDED,
-            Self::RecurrenceUnsupportedForm => codes::RECURRENCE_UNSUPPORTED_FORM,
-            Self::RecurrenceGroupAxisMismatch => codes::RECURRENCE_GROUP_AXIS_MISMATCH,
-            Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
-            Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
-            Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,
-            Self::ObservedCycle => codes::OBSERVED_CYCLE,
-            Self::ReservedVariableName => codes::RESERVED_VARIABLE_NAME,
-            Self::UnknownOverrideKey => codes::UNKNOWN_OVERRIDE_KEY,
-            Self::AssertionRankMismatch => codes::ASSERTION_RANK_MISMATCH,
-            Self::ArrayDefaultWithoutShape => codes::ARRAY_DEFAULT_WITHOUT_SHAPE,
-            Self::VariableBoundShapeMismatch => codes::VARIABLE_BOUND_SHAPE_MISMATCH,
-            Self::VariableBoundCircular => codes::VARIABLE_BOUND_CIRCULAR,
-            Self::VariableBoundsInverted => codes::VARIABLE_BOUNDS_INVERTED,
-        };
-        write!(f, "{s}")
-    }
-}
+pub use crate::diagnostic::StructuralErrorCode;
 
 /// Perform structural validation on an ESM file
 ///
@@ -565,68 +317,50 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
 ///
 /// * `ValidationResult` - Comprehensive validation results with both schema and structural errors
 pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
-    // First try to parse the JSON and ESM file, anchoring relative refs at the
-    // caller-provided base directory (mirrors Python's `validate(base_path=…)`).
-    let loaded = match base_path {
-        Some(base) => load_string_with_options(
-            json_str,
-            &LoadOptions {
-                base_path: Some(base.to_path_buf()),
-                ..Default::default()
-            },
-        ),
-        None => load_string(json_str),
-    };
-    match loaded {
-        Ok(esm_file) => {
-            // If parsing/schema validation succeeded, do structural validation
-            validate_with_schema(json_str, &esm_file)
-        }
-        Err(e) => {
-            // Load failed — but a load failure is usually a SCHEMA violation, and
-            // the wire contract (CONFORMANCE_SPEC.md §7.1.2) wants ONE record per
-            // violation, not a single collapsed blob. Re-parse the raw JSON and
-            // enumerate the individual schema errors so each pinned `(keyword,
-            // path)` surfaces. Only if the JSON itself is unparseable, or the
-            // document is schema-valid but failed a LATER load stage (structural /
-            // ref resolution), do we fall back to a single diagnostic record.
-            let schema_errors = match serde_json::from_str::<Value>(json_str) {
-                Ok(json_value) => {
-                    let mut errs = crate::parse::collect_schema_errors(&json_value);
-                    if errs.is_empty() {
-                        errs.push(SchemaError {
-                            path: "".to_string(),
-                            message: format!("Failed to load ESM file: {e}"),
-                            keyword: "parse".to_string(),
-                        });
-                    }
-                    errs
-                }
-                Err(je) => vec![SchemaError {
+    let json_value = match serde_json::from_str::<Value>(json_str) {
+        Ok(value) => value,
+        Err(je) => {
+            return ValidationResult {
+                schema_errors: vec![SchemaError {
                     path: "".to_string(),
                     message: format!("Invalid JSON: {je}"),
                     keyword: "format".to_string(),
                 }],
+                structural_errors: vec![],
+                unit_warnings: vec![],
+                is_valid: false,
             };
-            // A load rejection must STILL surface its structured `(code, path)`
-            // structural findings (CONFORMANCE_SPEC §7.1.2) rather than collapsing
-            // to an EMPTY `structural_errors` — otherwise a document rejected at
-            // load records `is_valid:false` with no structural records and every
-            // pin on it silently misses. Some structural defects (an undeclared
-            // event target, an invalid discrete parameter, a coupling cycle, an
-            // unresolvable coupling scoped ref) reject the load BEFORE the typed
-            // `validate()` pass runs, yet the document is otherwise deserializable
-            // — so run the typed structural pass on a best-effort raw parse and
-            // populate `structural_errors` from it. This never flips the verdict:
-            // `is_valid` stays false; it only recovers the `(code, path)` records.
-            // (Mirrors the conformance runner's recovery in the `esm` CLI, `cli/`.)
-            let structural_errors = match serde_json::from_str::<EsmFile>(json_str) {
-                Ok(esm_file) => validate(&esm_file).structural_errors,
-                Err(_) => vec![],
-            };
+        }
+    };
+    // Relative refs anchor at the caller-provided base directory (mirrors
+    // Python's `validate(base_path=…)`), or the working directory without one.
+    let options = LoadOptions {
+        base_path: base_path.map(std::path::Path::to_path_buf),
+        ..Default::default()
+    };
+    match crate::parse::load_document_with_options(&json_value, &options) {
+        Ok(esm_file) => validate_with_schema(&json_value, &esm_file),
+        Err(e) => {
+            // The wire contract (CONFORMANCE_SPEC.md §7.1.2) wants ONE schema
+            // record per violation of the document as written, not the load's
+            // collapsed message. A document the schema accepts was refused by a
+            // later load stage: one record carries the refusal, keyed by its
+            // diagnostic code when it has one.
+            let mut schema_errors = crate::parse::collect_schema_errors(&json_value);
+            if schema_errors.is_empty() {
+                schema_errors.push(SchemaError {
+                    path: "".to_string(),
+                    message: format!("Failed to load ESM file: {e}"),
+                    keyword: e.code().unwrap_or("parse").to_string(),
+                });
+            }
+            // The structured `(code, path)` findings the refusal located (a
+            // mount edge that does not resolve, an undeclared event variable,
+            // an unresolvable coupling reference, a cross-scope cycle), so a
+            // document refused at load still reports its pinned records.
             ValidationResult {
                 schema_errors,
-                structural_errors,
+                structural_errors: e.findings().to_vec(),
                 unit_warnings: vec![],
                 is_valid: false,
             }
@@ -647,42 +381,18 @@ pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) ->
     validate_text(json_str, base_path)
 }
 
-/// Validate an ESM file including schema validation
-///
-/// This function combines schema and structural validation.
-/// Note: Consider using `validate_text()` instead for a simpler API.
-pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationResult {
-    let mut schema_errors = Vec::new();
-    let mut structural_errors = Vec::new();
-    let mut unit_warnings = Vec::new();
-
-    // Schema validation
-    match serde_json::from_str::<Value>(json_str) {
-        Err(e) => {
-            schema_errors.push(SchemaError {
-                path: "".to_string(),
-                message: format!("Invalid JSON: {e}"),
-                keyword: "format".to_string(),
-            });
-        }
-        Ok(json_value) => {
-            // One record PER schema violation (RFC-6901 pointer + standard
-            // keyword), not a single collapsed blob (CONFORMANCE_SPEC.md §7.1.2).
-            schema_errors.extend(crate::parse::collect_schema_errors(&json_value));
-        }
-    }
-
-    // Continue with structural validation even if schema fails
+/// Schema and structural validation of a loaded document: one schema record
+/// PER violation of the document as written (RFC-6901 pointer + standard
+/// keyword, not a single collapsed blob; CONFORMANCE_SPEC.md §7.1.2), then
+/// [`validate`] of the typed file.
+fn validate_with_schema(json_value: &Value, esm_file: &EsmFile) -> ValidationResult {
+    let schema_errors = crate::parse::collect_schema_errors(json_value);
     let result = validate(esm_file);
-    structural_errors.extend(result.structural_errors);
-    unit_warnings.extend(result.unit_warnings);
-
-    let is_valid = schema_errors.is_empty() && structural_errors.is_empty();
-
+    let is_valid = schema_errors.is_empty() && result.structural_errors.is_empty();
     ValidationResult {
         schema_errors,
-        structural_errors,
-        unit_warnings,
+        structural_errors: result.structural_errors,
+        unit_warnings: result.unit_warnings,
         is_valid,
     }
 }
@@ -725,7 +435,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             // resolver (structural.rs) and the coupling system position
             // (coupling.rs) — without it, any reference more than two segments
             // deep is a spurious `unresolved_scoped_ref`/`undefined_system`.
-            register_subsystems(name, model.subsystems.as_ref(), &mut systems);
+            register_subsystems(name, model, &mut systems);
         }
     }
 
@@ -746,7 +456,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
             );
 
             // Reaction systems nest too (esm-spec §4.9.2).
-            register_subsystems(name, rs.subsystems.as_ref(), &mut systems);
+            register_subsystems(name, rs, &mut systems);
         }
     }
 
@@ -775,66 +485,66 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
     systems
 }
 
-/// Register a model's `subsystems` — recursively, at arbitrary depth — under
-/// their full dotted paths (`Parent.Child`, `Parent.Child.Grandchild`, …).
+/// Register every subsystem below `component` — at arbitrary depth — under
+/// its full dotted path (`Parent.Child`, `Parent.Child.Grandchild`, …).
 ///
-/// `Model::subsystems` is raw `serde_json::Value` (a subsystem may be an inline
-/// system object or an unresolved `{"ref": …}` edge), so this reads the nested
-/// shape structurally rather than through the typed `Model`. A `{"ref": …}` edge
-/// that has not been resolved contributes no variables — it is registered as an
-/// empty system so that the PATH resolves (the file may legitimately be inlined
-/// later) without claiming to know its contents.
-fn register_subsystems(
+/// A model subsystem's variables register as its `variables`, and those
+/// typed `parameter` as its `parameters` too; a reaction subsystem's species
+/// and parameters register as themselves. An unresolved `{"ref": …}` edge is
+/// registered as an empty system, so that the PATH resolves (the file may
+/// legitimately be inlined later) without claiming to know its contents.
+fn register_subsystems<C: RegisteredMembers>(
     prefix: &str,
-    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+    component: &C,
     systems: &mut HashMap<String, SystemInfo>,
 ) {
-    let Some(subsystems) = subsystems else {
-        return;
-    };
-    for (child_name, child) in subsystems {
+    for (child_name, child) in component.subsystems().into_iter().flatten() {
         let path = format!("{prefix}.{child_name}");
-
-        let variables: HashSet<String> = child
-            .get("variables")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        let species: HashSet<String> = child
-            .get("species")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        // Parameter-typed variables also resolve as scoped `<path>.<param>`
-        // refs, mirroring the top-level model case above.
-        let mut parameters: HashSet<String> = child
-            .get("variables")
-            .and_then(|v| v.as_object())
-            .map(|m| {
-                m.iter()
-                    .filter(|(_, v)| v.get("type").and_then(|t| t.as_str()) == Some("parameter"))
-                    .map(|(k, _)| k.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if let Some(params) = child.get("parameters").and_then(|v| v.as_object()) {
-            parameters.extend(params.keys().cloned());
+        match child.as_inline() {
+            Some(child) => {
+                systems.insert(path.clone(), child.system_info());
+                register_subsystems(&path, child, systems);
+            }
+            None => {
+                systems.insert(
+                    path,
+                    SystemInfo {
+                        variables: HashSet::new(),
+                        species: HashSet::new(),
+                        parameters: HashSet::new(),
+                    },
+                );
+            }
         }
+    }
+}
 
-        systems.insert(
-            path.clone(),
-            SystemInfo {
-                variables,
-                species,
-                parameters,
-            },
-        );
+/// A subsystem's members as [`register_subsystems`] registers them.
+trait RegisteredMembers: HasSubsystems {
+    fn system_info(&self) -> SystemInfo;
+}
 
-        // Recurse into this subsystem's own `subsystems` map.
-        if let Some(nested) = child.get("subsystems").and_then(|v| v.as_object()) {
-            let nested: indexmap::IndexMap<String, serde_json::Value> =
-                nested.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            register_subsystems(&path, Some(&nested), systems);
+impl RegisteredMembers for crate::Model {
+    fn system_info(&self) -> SystemInfo {
+        SystemInfo {
+            variables: self.variables.keys().cloned().collect(),
+            species: HashSet::new(),
+            parameters: self
+                .variables
+                .iter()
+                .filter(|(_, v)| v.var_type == crate::VariableType::Parameter)
+                .map(|(k, _)| k.clone())
+                .collect(),
+        }
+    }
+}
+
+impl RegisteredMembers for crate::ReactionSystem {
+    fn system_info(&self) -> SystemInfo {
+        SystemInfo {
+            variables: HashSet::new(),
+            species: self.species.keys().cloned().collect(),
+            parameters: self.parameters.keys().cloned().collect(),
         }
     }
 }
@@ -1593,9 +1303,9 @@ mod tests {
         );
         // The pinned `(code, path)` record must be present. Per §7.1.2 the pin is
         // a REQUIRED SUBSET of what the binding emits, so a load-Err document may
-        // additionally carry a `keyword:"parse"` load diagnostic in
-        // `schema_errors` — that is existing behavior and is not asserted here;
-        // what matters is that the structural pin is recovered rather than lost.
+        // additionally carry the load refusal in `schema_errors`, keyed by its
+        // diagnostic code — not asserted here; what matters is that the
+        // structural pin is carried by the refusal rather than lost.
         assert!(
             result.structural_errors.iter().any(|e| matches!(
                 e.code,

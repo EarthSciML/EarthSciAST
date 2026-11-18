@@ -7,7 +7,7 @@
 //! them rather than sitting beside them. What survives here is the pipeline
 //! itself ([`run_build_pipeline`], crate-internal) and the two things a caller
 //! genuinely reaches for — the build-time provider contract
-//! ([`PrepareProvider`]) and the build-observability seam ([`PreparePhase`],
+//! ([`DataProvider`]) and the build-observability seam ([`PreparePhase`],
 //! [`PrepareProgress`]), both extension seam under `API_SPEC.md` §3, neither
 //! stable API.
 //!
@@ -25,7 +25,7 @@
 //! are sampled once up front (never twice), and the surviving length binds the
 //! metaparameter every dependent index set is sized by. The caller no longer
 //! counts rows and passes the number in — see
-//! [`PrepareProvider::extent_metaparameter`].
+//! [`DataProvider::extent_metaparameter`].
 //!
 //! Those arrows are also [`PreparePhase`], and a host can watch them go by:
 //! [`crate::problem::ProblemOptions::progress`] is the build-time counterpart of
@@ -79,14 +79,18 @@ use ndarray::{ArrayD, Axis, IxDyn, Slice};
 use serde_json::Value as JsonValue;
 
 use crate::classification::DeclaredRank;
+use crate::compile_error::CompileError;
 use crate::faq::resolve_expr_ranges_with_extents;
 use crate::parse::LoadOptions;
+pub use crate::provider::AxisSel;
+use crate::provider::DataProvider;
 use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
+use crate::simulate::{KeyMatch, KeyPolicy, KeyResolver, SimulateError, namespace_scope};
 use crate::simulate_array::{
-    ArrMap, BuiltVariables, ConstArrayScope, Value as EvalValue,
-    eval_expression_with_extents_and_consts_shared, run_value_invention_with_params,
+    ArrMap, BuildInput, BuiltVariables, ConstArrayScope, MemberFactorColumn, NormalizedModel,
+    StandaloneScope, Value as EvalValue, member_factor_columns, run_value_invention_in_scope,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -104,144 +108,21 @@ pub use crate::simulate::Flow;
 
 /// A gated provider deferred by [`BuildState::inject_providers`]: its key, the
 /// provider itself, and the gate its fetch is planned against.
-type GatedProvider = (String, Box<dyn PrepareProvider>, ProviderGate);
+type GatedProvider = (String, Box<dyn DataProvider>, ProviderGate);
 
-/// A build-time preparation failure.
-#[derive(Debug, Clone)]
-pub struct PrepareError(pub String);
-
-impl PrepareError {
-    /// The prefix every observer-requested cancellation carries. Public so
-    /// [`PrepareError::is_cancelled`] rests on a documented contract rather
-    /// than a private convention.
-    pub const CANCELLED_PREFIX: &'static str = "cancelled by the caller during";
-
-    /// Whether this error is a build progress observer's own
-    /// [`Flow::Cancel`] rather than something going wrong — the counterpart of
-    /// matching [`crate::simulate::SimulateError::Cancelled`].
-    ///
-    /// ## Why a message prefix and not a variant
-    ///
-    /// `PrepareError` is a public single-field tuple struct: an out-of-crate
-    /// [`PrepareProvider`] constructs one as `PrepareError(msg)` and reads it
-    /// back as `e.0` (the in-repo `esio_provider` bridge does both). Turning it
-    /// into an enum, or adding a second field, breaks every one of them, while
-    /// adding a field to `PrepareOptions` breaks none — so the source-compatible
-    /// route wins, and the marker lives in the message, which is also the only
-    /// place a host that merely logs the error would ever see it.
-    ///
-    /// ## A host still records WHY it cancelled
-    ///
-    /// This reports that a cancel happened, not what the observer wanted. A
-    /// dispatcher distinguishing "the user pressed stop" from "the run hit its
-    /// billing cap" must record that inside the observer, because only the
-    /// observer knows — exactly as `earthscilab`'s `dispatch::solve` already
-    /// does around a solve, where the two bill differently. The message
-    /// names the phase and the item, so whichever it was, the stopping point is
-    /// attributable rather than "somewhere in the last eight minutes".
-    pub fn is_cancelled(&self) -> bool {
-        self.0.starts_with(Self::CANCELLED_PREFIX)
-    }
+/// An uncoded build failure of the pipeline, as the compile path reports
+/// one.
+fn err(msg: impl Into<String>) -> SimulateError {
+    SimulateError::Compile(CompileError::build_err(msg))
 }
 
-impl fmt::Display for PrepareError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PrepareError: {}", self.0)
-    }
-}
-
-impl std::error::Error for PrepareError {}
-
-fn err(msg: impl Into<String>) -> PrepareError {
-    PrepareError(msg.into())
-}
-
-/// One axis of the NEUTRAL per-axis selection handed to a gated provider —
-/// the Rust spelling of the Python engine's `"all" | [0-based indices]` form.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AxisSel {
-    /// The full native axis.
-    All,
-    /// The listed 0-based native indices, in order.
-    Indices(Vec<usize>),
-    /// The half-open strided range `[start, stop)` by `step` (`step >= 1`) —
-    /// the contiguous form, kept whole rather than expanded to indices so a
-    /// store-backed reader can push a slice down instead of a 52,411-long
-    /// index list.
-    Range {
-        /// Inclusive first index (0-based).
-        start: usize,
-        /// Exclusive last index.
-        stop: usize,
-        /// Stride (>= 1).
-        step: usize,
-    },
-}
-
-impl AxisSel {
-    /// The 0-based indices this selector picks over an axis of length
-    /// `dim_len` (the engine-side fallback for a provider that cannot push a
-    /// selection down).
-    pub fn indices(&self, dim_len: usize) -> Vec<usize> {
-        match self {
-            AxisSel::All => (0..dim_len).collect(),
-            AxisSel::Indices(v) => v.clone(),
-            AxisSel::Range { start, stop, step } => {
-                (*start..(*stop).min(dim_len)).step_by(*step).collect()
-            }
-        }
-    }
-}
-
-/// The CONST data-provider contract the build pipeline consumes: one provider feeds
-/// ONE field (the `providers["<ModelPath>.<param>"]` convention shared with the
-/// Julia/Python bindings). A gated provider may additionally honour a pushed-
-/// down per-axis selection; one that cannot is fetched whole and sliced
-/// engine-side (the fallback matches the pushdown result exactly).
-pub trait PrepareProvider {
-    /// CONST whole-field sample.
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError>;
-
-    /// Whether [`PrepareProvider::sample_with_selection`] pushes the selection
-    /// down to the reader (fetching only what intersects it).
-    fn supports_selection(&self) -> bool {
-        false
-    }
-
-    /// Sample with a per-axis selection pushed down. EVERY requested axis is
-    /// present in the result (a fixed axis comes back length-1 and is dropped
-    /// by the engine).
-    fn sample_with_selection(
-        &mut self,
-        _selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
-        Err(err("provider does not support selection pushdown"))
-    }
-
-    /// `false` for a DISCRETE provider (non-empty refresh times) — rejected by
-    /// the build pipeline, which is build-time-only.
-    fn is_const(&self) -> bool {
-        true
-    }
-
-    /// A provider-declared gate (the fallback protocol mirroring Julia's
-    /// `provider_gate_spec`); the record-derived gate takes precedence.
-    fn gate_spec(&self) -> Option<ProviderGate> {
-        None
-    }
-
-    /// The metaparameter this provider's own extent BINDS (esm-spec §8.9): a
-    /// loader that discovers its record count at read time — an FF10 point
-    /// inventory whose surviving-row count is not knowable until the table is
-    /// decoded and filtered — declares `extent: {"metaparameter": "N_REC"}`,
-    /// and the build closes that metaparameter with the length of this
-    /// provider's leading axis BEFORE the typed load, instead of the caller
-    /// counting rows and passing the number in.
-    ///
-    /// Every provider naming the same metaparameter must agree, which is also
-    /// the alignment check across a table's columns.
-    fn extent_metaparameter(&self) -> Option<String> {
-        None
+/// A stage's typed refusal: a coded one keeps its identity (and its code), an
+/// uncoded one is reported with `context` naming what the stage was doing.
+fn stage_err(context: impl fmt::Display, e: CompileError) -> SimulateError {
+    if e.code().is_some() {
+        SimulateError::Compile(e)
+    } else {
+        err(format!("{context}: {e}"))
     }
 }
 
@@ -282,7 +163,7 @@ pub enum PreparePhase {
     MemberFactors,
     /// The post-value-invention pre-sliced fetch of the gated providers. One
     /// unit per REQUEST, which is one per provider unless
-    /// [`PrepareOptions::gated_fetch_batch`] splits it further.
+    /// [`crate::problem::ProblemOptions::gated_fetch_batch`] splits it further.
     GatedFetch,
     /// Dependency-ordered evaluation of the observed graph, one unit per
     /// observed.
@@ -378,110 +259,24 @@ impl PrepareProgress<'_> {
 /// wasm host to accommodate and no reason to make native callers pay for one.
 pub type PrepareProgressFn = Arc<dyn Fn(&PrepareProgress<'_>) -> Flow + Send + Sync>;
 
-/// Build-time options for [`run_build_pipeline`]. Crate-internal: the public
-/// spelling of every one of these is a field of
-/// [`crate::problem::ProblemOptions`].
-#[derive(Clone, Default)]
-pub(crate) struct PrepareOptions {
-    /// Select one model when the document holds several; it is then built
-    /// alone, its names model-local. `None` builds the only model, or a
-    /// document of several WHOLE (see `BuildState::whole_document`).
-    pub model_name: Option<String>,
-    /// Metaparameter bindings closed at load (esm-spec §9.7.6 site 4).
-    pub metaparameters: BTreeMap<String, i64>,
-    /// Base path anchoring relative `{ref}`s.
-    pub base_path: Option<PathBuf>,
-    /// Opt in to the automatic projection-pushdown desugar.
-    pub pushdown_rewrite: bool,
-    /// Scalar parameter overrides (exact or bare names), baked into the build.
-    pub parameters: HashMap<String, f64>,
-    /// Per-step progress lines on stdout.
-    ///
-    /// This is the built-in observer: it prints at the same points
-    /// [`crate::problem::ProblemOptions::progress`] is called, and the two are independent —
-    /// setting both prints and observes.
-    pub verbose: bool,
-
-    /// If `Some`, called at every phase boundary and at every unit of work
-    /// inside [`PreparePhase::GatedFetch`] and [`PreparePhase::Observeds`].
-    /// Returning [`Flow::Cancel`] abandons the build with a [`PrepareError`]
-    /// for which [`PrepareError::is_cancelled`] is true.
-    ///
-    /// **Called unthrottled, deliberately**, for the same reason
-    /// [`crate::simulate::SolveOptions::progress`] is: `prepare` has no
-    /// portable clock to throttle against, and rate limiting therefore belongs
-    /// to the host, which does. Keep the observer cheap — a document with
-    /// hundreds of observeds reports hundreds of times in a build that may take
-    /// milliseconds.
-    ///
-    /// ## What this is for
-    ///
-    /// A dispatched static evaluation — a document with no ODEs, which
-    /// no solver ever touches — is otherwise a black box for as long as it
-    /// runs: no progress, no cancel, and no way for a caller to enforce a
-    /// resource cap except by killing the process. A watchdog thread is not a
-    /// substitute: it stops at an arbitrary point with no attributable elapsed
-    /// time, and cannot interrupt a single long fetch at all. Going through the
-    /// observer means the stopping point is a named phase and a named item.
-    pub progress: Option<PrepareProgressFn>,
-
-    /// Split a gated provider's pre-sliced fetch into requests of at most this
-    /// many native indices along the gated axis.
-    ///
-    /// `None` (the default) issues ONE request per gated provider, exactly as
-    /// before this option existed. That is the right default and also the
-    /// reason this option exists: one request is one
-    /// [`PreparePhase::GatedFetch`] report, and on the InMAP ISRM document that
-    /// single request is 15–25 GB over the network and the longest thing the
-    /// build does. A host that wants a moving bar — or a cancel that lands in
-    /// under several minutes — sets this and gets one report per batch instead.
-    ///
-    /// The result is IDENTICAL either way: the gated axis' index list is split
-    /// into contiguous runs and the pieces are written back in order into one
-    /// pre-allocated slab, so nothing is reordered and nothing is copied twice.
-    /// The cost of a small batch is at the seams — a chunked store re-reads the
-    /// chunk straddling each boundary, so `batches - 1` extra chunk reads —
-    /// which is why the library does not pick a size on the caller's behalf.
-    pub gated_fetch_batch: Option<usize>,
-
+/// What one run of the pipeline reads: the Problem's options, borrowed, and
+/// the two things construction decides for it.
+pub(crate) struct BuildContext<'o> {
+    /// The options the Problem is being built with. The pipeline reads
+    /// `model_name`, `metaparameters`, `base_path`, `pushdown_rewrite`, `p`
+    /// (scalar overrides, exact or bare names, baked into the build),
+    /// `verbose`, `progress`, `gated_fetch_batch` and `observed_cone`.
+    pub problem: &'o crate::problem::ProblemOptions,
+    /// The construction sample time (`sample_time`, else the start of the
+    /// time span): the `t` every build-time observed is evaluated at, as the
+    /// static route evaluates it.
+    pub t0: f64,
     /// Stop at the first evaluation that is interpreted PER CELL and hand it
     /// back as [`PreparedBuild::refused`] — set when the Problem's compiler is
     /// strict (esm-libraries-spec §2.5.10), so a `native` build refuses the
     /// document naming the observed instead of walking it. The walk itself
     /// stops at its first cell, so the refusal costs one cell, not the field.
     pub refuse_per_cell: bool,
-
-    /// Evaluate only the dependency cone of these observeds. See
-    /// [`crate::problem::ProblemOptions::observed_cone`].
-    pub observed_cone: Option<Vec<String>>,
-}
-
-// Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
-// `Debug`, and a `PrepareOptions` that no longer prints would be a regression
-// for every existing `{:?}` on a build error path. Mirrors the same treatment
-// `SolveOptions` needed when it grew an observer.
-impl fmt::Debug for PrepareOptions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PrepareOptions")
-            .field("model_name", &self.model_name)
-            .field("metaparameters", &self.metaparameters)
-            .field("base_path", &self.base_path)
-            .field("pushdown_rewrite", &self.pushdown_rewrite)
-            .field("parameters", &self.parameters)
-            .field("verbose", &self.verbose)
-            .field(
-                "progress",
-                &self
-                    .progress
-                    .as_ref()
-                    .map(|_| "<observer>")
-                    .unwrap_or("None"),
-            )
-            .field("gated_fetch_batch", &self.gated_fetch_batch)
-            .field("refuse_per_cell", &self.refuse_per_cell)
-            .field("observed_cone", &self.observed_cone)
-            .finish()
-    }
 }
 
 /// The product of [`run_build_pipeline`]: every build-time-evaluable observed of the
@@ -494,47 +289,46 @@ pub struct PreparedBuild {
     /// document: several models and none selected, built as one
     /// dot-namespaced system whose names (`Model.var`) are already qualified.
     pub model_name: Option<String>,
-    /// The whole-document build's flattened system, when the typed document
-    /// it was flattened from is exactly what loading [`Self::doc`] with no
-    /// loader-API metaparameters gives — the load the Problem makes next — so
-    /// the compile path may use it in place of flattening that document
-    /// again. `None` for a one-model build, and when the build bound
-    /// metaparameters at load.
+    /// [`Self::doc`] loaded, closed over the caller's metaparameters and the
+    /// discovered loader extents that it still declares: the one typed form
+    /// of the prepared document, which the Problem compiles.
+    pub(crate) file: crate::EsmFile,
+    /// The flattened system the pipeline built, when it is `flatten` of
+    /// [`Self::file`] — the whole-document build, or a model built alone in a
+    /// document that is that model and nothing else
+    /// ([`builds_alone_as_itself`]) — so the compile path may use it in place
+    /// of flattening that document again, and the pipeline's value invention
+    /// in place of running its own. `None` for a model built alone out of a
+    /// larger document.
     pub(crate) flattened: Option<crate::flatten::FlattenedSystem>,
-    /// Observed name → build-time field (dependency-complete).
-    pub fields: HashMap<String, ArrayD<f64>>,
+    /// What the Problem keeps of this build: the observed fields, the
+    /// value-invention members and extents, the gated provider keys and the
+    /// built variables. The rest of [`crate::problem::BuildProducts`] is
+    /// construction's to fill.
+    pub(crate) products: crate::problem::BuildProducts,
     /// Data-fed parameter name (model-local) → the values its provider
     /// supplied, as the build read them. A data-fed parameter is not an
-    /// observed, so it is not in [`Self::fields`], but it is as observable:
+    /// observed, so it is not in `products.fields`, but it is as observable:
     /// an inline-test assertion or an `observed_field` request may name it
     /// (finding F43).
     pub data_fields: HashMap<String, ArrayD<f64>>,
-    /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
-    pub members: HashMap<String, Vec<i64>>,
-    /// Value-invention producer id → derived index-set extent.
-    pub extents: HashMap<String, i64>,
-    /// Provider keys that were deferred + fetched pre-sliced (sorted).
-    pub gated_provider_keys: Vec<String>,
     /// Every evaluation the pipeline performed, in the order it performed
     /// them — what the Problem's compiler report shows for this route.
     pub rules: Vec<PipelineRule>,
     /// The per-cell evaluation that stopped the build, when
-    /// [`PrepareOptions::refuse_per_cell`] was set. `fields` then holds only
+    /// [`BuildContext::refuse_per_cell`] was set. `fields` then holds only
     /// what was evaluated before it.
     pub refused: Option<PipelineRule>,
-    /// Whether [`PrepareOptions::observed_cone`] narrowed a non-empty
-    /// observed graph. [`Self::fields`] is then this build's answer even when
+    /// Whether [`crate::problem::ProblemOptions::observed_cone`] narrowed a non-empty
+    /// observed graph. `products.fields` is then this build's answer even when
     /// it is empty (the request named only a data-fed parameter), so nothing
     /// re-evaluates the document to fill it.
     pub(crate) observed_cone_applied: bool,
-    /// What this build knows of the variables of the model it evaluated, by
-    /// name, spelled like [`Self::fields`]
-    /// ([`BuiltVariables`]).
-    pub(crate) built_variables: BuiltVariables,
 }
 
-/// One evaluation the build pipeline performed, and HOW: through the
-/// whole-array overlay, interpreted per cell by the oracle, or — for value
+/// One evaluation the build pipeline performed, and HOW: by the reference
+/// evaluator over whole arrays, on a standalone tape, interpreted per cell by
+/// the oracle, or — for value
 /// invention — by the relational engine.
 ///
 /// The pipeline evaluates the document's observed graph with the reference
@@ -556,10 +350,12 @@ pub(crate) struct PipelineRule {
 /// tier names.
 #[derive(Clone, Debug)]
 pub(crate) enum Route {
-    /// The whole-array overlay (tier `"vectorized"`).
-    Overlay,
-    /// A standalone tape: under a strict compiler, an observed the overlay
-    /// declines is lowered on the tape and run once (tier `"taped"`).
+    /// The reference evaluator over whole arrays, no `faq` walked per cell
+    /// (tier `"vectorized"`).
+    Whole,
+    /// A standalone tape: under a strict compiler, an observed the reference
+    /// evaluator would walk per cell is lowered on the tape and run once
+    /// (tier `"taped"`).
     Tape,
     /// The reference evaluator, walking cells one at a time, and why (tier
     /// `"oracle"`). The one route a strict compiler refuses.
@@ -573,178 +369,58 @@ pub(crate) enum Route {
     Relational,
 }
 
-impl Route {
-    /// An observed's route, from the per-cell reason its evaluation gave.
-    fn observed(per_cell: Option<String>) -> Route {
-        per_cell.map_or(Route::Overlay, Route::PerCell)
-    }
-}
-
-/// Why an observed the overlay did not take was walked per cell.
+/// Why an observed was walked per cell.
 const PER_CELL_FAQ: &str = "the build pipeline evaluated it through the reference evaluator, \
-    and a `faq` in it is not one the whole-array overlay takes, so its body was walked \
-    once per cell";
+    which walks a `faq` body once per cell";
 /// Why a causal self-reference is walked per cell.
 const PER_CELL_RECURRENCE: &str = "a causal self-reference (esm-spec §4.3.1.1), which the \
     build pipeline sweeps cell by cell through the reference evaluator";
 
 // --------------------------------------------------------------------------- //
-// Dependency order over the observeds (shared with the pushdown-era runner).
+// Dependency order over the observeds.
 // --------------------------------------------------------------------------- //
 
-/// The factor names an expression declares it reads (`aggregate.args` plus
-/// every gather / bare reference), gathered recursively. The dependency edges
-/// come from the MODEL, not from a re-derivation here. A subtree shared by
-/// several parents (an expanded template's body) is walked once.
-fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
-    fn walk(
-        expr: &Expr,
-        out: &mut HashSet<String>,
-        seen: &mut HashSet<*const crate::types::ExpressionNode>,
-    ) {
-        match expr {
-            Expr::Variable(name) if !out.contains(name) => {
-                out.insert(name.clone());
-            }
-            Expr::Operator(node) => {
-                if !seen.insert(std::sync::Arc::as_ptr(node)) {
-                    return;
-                }
-                for a in &node.args {
-                    walk(a, out, seen);
-                }
-                node.for_each_child(&mut |c| walk(c, out, seen));
-            }
-            _ => {}
-        }
-    }
-    walk(expr, out, &mut HashSet::new());
-}
-
-/// The key columns and envelope factors every `join` in `expr` names. They
-/// are strings on the clause rather than expressions, so [`declared_args`]
-/// does not see them.
-fn join_names(expr: &Expr, out: &mut HashSet<String>) {
-    fn walk(
-        expr: &Expr,
-        out: &mut HashSet<String>,
-        seen: &mut HashSet<*const crate::types::ExpressionNode>,
-    ) {
-        if let Expr::Operator(node) = expr {
-            if !seen.insert(std::sync::Arc::as_ptr(node)) {
-                return;
-            }
-            for clause in node.join.iter().flatten() {
-                out.extend(clause.on.iter().flatten().cloned());
-                if let Some(ov) = &clause.overlap {
-                    out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
-                }
-            }
-            for a in &node.args {
-                walk(a, out, seen);
-            }
-            node.for_each_child(&mut |c| walk(c, out, seen));
-        }
-    }
-    walk(expr, out, &mut HashSet::new());
-}
-
-/// The observeds whose definitions read a state, directly or through another
-/// observed.
-///
-/// The build-time observed pass does not evaluate these: there is no state at
-/// build time, so a read of one is unbound there. They are evaluated at run
-/// time like every other observed, by the compiler the Problem names. This
-/// includes a mounted subsystem's observeds, which join the model's own once
-/// the subsystem is mounted.
-fn state_dependent_observeds(model: &Model, defs: &HashMap<String, Expr>) -> HashSet<String> {
+/// The dependency summaries of the observed definitions `defs`
+/// ([`crate::dependency`]). A state of `model` (an unknown that is not an
+/// observed) is the one input that varies: the build-time observed pass does
+/// not evaluate an observed that reads one, directly or through another
+/// observed, because there is no state at build time. Those are evaluated at
+/// run time like every other observed, by the compiler the Problem names. A
+/// self-read is dropped: it is not an edge to another observed.
+fn observed_dependencies(
+    model: &Model,
+    defs: &HashMap<String, Expr>,
+) -> crate::dependency::DependencySummaries {
+    use crate::dependency::{DependencySummaries, Leaf, Reads};
     let class = crate::classification::Classification::of(model);
-    let states: HashSet<&str> = model
-        .variables
-        .iter()
-        .filter(|(name, var)| var.var_type == VariableType::Unknown && !class.is_observed(name))
-        .map(|(name, _)| name.as_str())
-        .collect();
-    let refs: HashMap<&str, HashSet<String>> = defs
-        .iter()
-        .map(|(name, e)| {
-            let mut a = HashSet::new();
-            declared_args(e, &mut a);
-            (name.as_str(), a)
-        })
-        .collect();
-    let mut dependent: HashSet<String> = HashSet::new();
-    loop {
-        let before = dependent.len();
-        for (name, reads) in &refs {
-            if !dependent.contains(*name)
-                && reads
-                    .iter()
-                    .any(|r| states.contains(r.as_str()) || dependent.contains(r))
-            {
-                dependent.insert((*name).to_string());
+    DependencySummaries::new(
+        defs.iter()
+            .map(|(n, e)| (n.clone(), Reads::of(e).without(n))),
+        |name| match model.variables.get(name) {
+            Some(var) if var.var_type == VariableType::Unknown && !class.is_observed(name) => {
+                Leaf::State
             }
-        }
-        if dependent.len() == before {
-            return dependent;
-        }
-    }
+            _ => Leaf::Const,
+        },
+    )
 }
 
 /// Dependency order over observed definitions: an observed follows every
 /// observed it names. A cycle is a malformed model and is a hard error.
-fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareError> {
-    let deps: HashMap<String, HashSet<String>> = defs
-        .iter()
-        .map(|(n, e)| {
-            let mut a = HashSet::new();
-            declared_args(e, &mut a);
-            a.retain(|x| defs.contains_key(x) && x != n);
-            (n.clone(), a)
-        })
-        .collect();
-
-    let mut ordered = Vec::new();
-    let mut done: HashSet<String> = HashSet::new();
-    let mut pending: HashSet<String> = defs.keys().cloned().collect();
-    while !pending.is_empty() {
-        let mut ready: Vec<String> = pending
-            .iter()
-            .filter(|n| deps[*n].iter().all(|d| done.contains(d)))
-            .cloned()
-            .collect();
-        if ready.is_empty() {
-            // Name the CYCLE, not the residue. "cyclic observed dependency
-            // among [a, b, c, d, e]" tells an author that five observeds are
-            // implicated and nothing about which edges close the loop; the
-            // whole value of this diagnostic is the path (esm-spec §4.9.6).
-            // Sorted roots and successors so the same cycle is named every run.
-            let mut stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-                std::collections::BTreeMap::new();
-            for n in &pending {
-                stuck.insert(n.clone(), deps[n].iter().cloned().collect());
-            }
-            let cycle = crate::classification::first_observed_cycle(&stuck)
-                // Unreachable in practice — the residue is non-empty precisely
-                // because nothing in it became ready, which requires an
-                // unsatisfied dependency inside it — but naming the residue
-                // beats a panic if that invariant ever moves.
-                .unwrap_or_else(|| stuck.keys().cloned().collect());
-            return Err(err(format!(
-                "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
-                 in terms of the next, so no evaluation order satisfies every definition \
-                 (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
-                cycle.join(" -> ")
-            )));
-        }
-        ready.sort(); // deterministic tie-break
-        for n in ready {
-            ordered.push(n.clone());
-            done.insert(n.clone());
-            pending.remove(&n);
-        }
+fn observed_order(
+    deps: &crate::dependency::DependencySummaries,
+) -> Result<Vec<String>, SimulateError> {
+    // Name the CYCLE, not the residue: the whole value of this diagnostic is
+    // the path (esm-spec §4.9.6).
+    if let Some(cycle) = deps.cycle() {
+        return Err(err(format!(
+            "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
+             in terms of the next, so no evaluation order satisfies every definition \
+             (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
+            cycle.join(" -> ")
+        )));
     }
-    Ok(ordered)
+    Ok(deps.order().to_vec())
 }
 
 /// name → defining expression, for every OBSERVED unknown of `model` that this
@@ -762,10 +438,7 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
 fn observed_defs(model: &Model) -> HashMap<String, Expr> {
     crate::classification::observed_definitions(model)
         .into_iter()
-        .filter(|(_, def)| {
-            serde_json::to_value(def)
-                .is_ok_and(|raw| !crate::value_invention::is_value_invention_assignment(&raw))
-        })
+        .filter(|(_, def)| !crate::value_invention::is_value_invention_expr(def))
         .collect()
 }
 
@@ -774,8 +447,9 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 ///
 /// Provider keys, gate targets, supplied arrays and scalar overrides all come
 /// spelled `"<ModelPath>.<var>"` or bare, while the built model spells its
-/// names one of two ways. [`Spelling::resolve`] is the one rule that maps a
-/// key onto them.
+/// names one of two ways, and each way has its rule ([`KeyPolicy`]): a model
+/// built alone reaches every name a key spells, the whole document follows
+/// esm-spec §6.6.2.
 #[derive(Clone, Debug)]
 enum Spelling {
     /// One model built alone, the selected or the only one: its names are
@@ -785,85 +459,24 @@ enum Spelling {
     Qualified,
 }
 
-/// How a key names a declared variable, strongest first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyMatch {
-    /// The key is the declared name.
-    Exact,
-    /// The key is the declared name under the built model's own prefix
-    /// (`Model.x` for `x`, `Model.Sub.x` for `Sub.x`).
-    ModelPrefixed,
-    /// The key is bare and is the declared name's last segment.
-    BareTail,
-}
-
 impl Spelling {
-    /// The names among `declared` that `key` spells, each with how.
-    ///
-    /// Model-local, a bare key reaches every name it is the last segment of,
-    /// the model's own scope. In the whole-document build a bare key that is
-    /// the last segment of several names of different models is refused,
-    /// naming them, rather than applied to all of them: the caller has to say
-    /// which one it means.
-    fn resolve<'n>(
+    /// A resolver over `names` by this spelling's rule, a rule-2 key's
+    /// leading segments checked against the namespaces of `scope`.
+    fn resolver<'a>(
         &self,
-        key: &str,
-        declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Vec<(&'n str, KeyMatch)>, PrepareError> {
-        let prefix = match self {
-            Spelling::ModelLocal(m) => Some(format!("{m}.")),
-            Spelling::Qualified => None,
+        names: impl IntoIterator<Item = &'a str>,
+        scope: impl IntoIterator<Item = &'a str>,
+    ) -> KeyResolver {
+        let policy = match self {
+            Spelling::ModelLocal(m) => KeyPolicy::EveryName { model: m.clone() },
+            Spelling::Qualified => KeyPolicy::Spec,
         };
-        let local = prefix.as_deref().and_then(|p| key.strip_prefix(p));
-        let bare = !key.contains('.');
-        let mut out: Vec<(&'n str, KeyMatch)> = declared
-            .into_iter()
-            .filter_map(|n| {
-                if n == key {
-                    Some((n.as_str(), KeyMatch::Exact))
-                } else if local == Some(n.as_str()) {
-                    Some((n.as_str(), KeyMatch::ModelPrefixed))
-                } else if bare && n.rsplit('.').next() == Some(key) {
-                    Some((n.as_str(), KeyMatch::BareTail))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        // Strongest first, then by name.
-        out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
-        if matches!(self, Spelling::Qualified)
-            && out.len() > 1
-            && out.iter().all(|(_, m)| *m == KeyMatch::BareTail)
-        {
-            let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
-            return Err(err(format!(
-                "'{key}' is a bare name and this document builds several models whose \
-                 variables it could mean; qualify it as one of: {}",
-                names.join(", ")
-            )));
-        }
-        Ok(out)
-    }
-
-    /// The one name among `declared` that `key` spells most strongly, or
-    /// `None` when it spells none, or several equally.
-    fn resolve_one<'n>(
-        &self,
-        key: &str,
-        declared: impl IntoIterator<Item = &'n String>,
-    ) -> Result<Option<&'n str>, PrepareError> {
-        let found = self.resolve(key, declared)?;
-        let Some(&(first, best)) = found.first() else {
-            return Ok(None);
-        };
-        let unique = found.iter().filter(|(_, m)| *m == best).count() == 1;
-        Ok(unique.then_some(first))
+        KeyResolver::new(policy, names, namespace_scope(scope, []))
     }
 }
 
 /// Every declared 0-D parameter's default (overridden by `overrides`, each key
-/// read through [`Spelling::resolve`]) — the scalar evaluation scope, sorted
+/// read by the spelling's rule, [`Spelling::resolver`]) — the scalar evaluation scope, sorted
 /// by name. A parameter with no `default` is in it only when an override
 /// gives its value.
 ///
@@ -888,7 +501,7 @@ fn scalar_params(
     model: &Model,
     spelling: &Spelling,
     overrides: &HashMap<String, f64>,
-) -> Result<(Vec<f64>, Vec<String>), PrepareError> {
+) -> Result<(Vec<f64>, Vec<String>), SimulateError> {
     // Every scalar parameter: one with no `default` takes its value from an
     // override alone, and is left out without one.
     let mut names: Vec<String> = model
@@ -901,25 +514,19 @@ fn scalar_params(
         .map(|(k, _)| k.clone())
         .collect();
     names.sort();
-    // Each override reaches the names its key spells; a name reached by
-    // several keys takes the strongest one's value (the exact name over the
-    // model-prefixed one over the bare last segment).
-    let mut chosen: HashMap<&str, (KeyMatch, f64)> = HashMap::new();
-    for (key, &value) in overrides {
-        for (n, how) in spelling.resolve(key, &names)? {
-            match chosen.get(n) {
-                Some((held, _)) if *held <= how => {}
-                _ => {
-                    chosen.insert(n, (how, value));
-                }
-            }
-        }
-    }
+    // Each name takes the value of the key that supplies it.
+    let chosen = spelling
+        .resolver(
+            names.iter().map(String::as_str),
+            model.variables.keys().map(String::as_str),
+        )
+        .canonical(overrides.keys().map(String::as_str))
+        .map_err(crate::simulate::param_key_error)?;
     let (vals, names): (Vec<f64>, Vec<String>) = names
         .iter()
         .filter_map(|n| {
             let v = match chosen.get(n.as_str()) {
-                Some(&(_, v)) => v,
+                Some(key) => overrides[*key],
                 None => model.variables[n].default_scalar()?,
             };
             Some((v, n.clone()))
@@ -1019,14 +626,14 @@ fn inject_aliases(arrays: &mut ArrMap, coupling: &[(String, String)]) {
 /// reference, i.e. the build-time coordinate closure.
 fn producer_seed_closure(
     seeds: &[&Expr],
-    defs: &HashMap<String, Expr>,
+    deps: &crate::dependency::DependencySummaries,
     join_free: &HashSet<String>,
 ) -> HashSet<String> {
     let mut needed: HashSet<String> = HashSet::new();
     let mut frontier: Vec<String> = Vec::new();
     let mut refs = HashSet::new();
     for s in seeds {
-        declared_args(s, &mut refs);
+        refs.extend(crate::dependency::Reads::of(s).names);
         // A producer's `join.on` columns that are plain observeds (the
         // per-component integer bin columns of a lib/relational.esm rewrite)
         // seed the closure too, so the coordinates they read are evaluated.
@@ -1042,11 +649,12 @@ fn producer_seed_closure(
         }
     }
     while let Some(cur) = frontier.pop() {
-        let mut refs = HashSet::new();
-        declared_args(&defs[&cur], &mut refs);
-        for r in refs {
-            if join_free.contains(&r) && needed.insert(r.clone()) {
-                frontier.push(r);
+        let Some(summary) = deps.get(&cur) else {
+            continue;
+        };
+        for r in &summary.reads.names {
+            if join_free.contains(r) && needed.insert(r.clone()) {
+                frontier.push(r.clone());
             }
         }
     }
@@ -1058,7 +666,8 @@ enum Evaluated {
     /// The dense field, and the route that evaluated it.
     Field(ArrayD<f64>, Route),
     /// Walked per cell under `refuse_per_cell`, and stopped at the first cell
-    /// (`StopAtFirstCell`): there is no field, only the reason to refuse.
+    /// ([`crate::simulate_array::CellWalks`]): there is no field, only the
+    /// reason to refuse.
     Refused(String),
 }
 
@@ -1067,25 +676,22 @@ enum Evaluated {
 /// the observed is not a recurrence the tape's sweep takes. Otherwise the outer
 /// `Err` is a fault the run latched — the interpreter's own diagnostic for the
 /// same document — and the inner one the tape's decline reason.
-#[allow(clippy::too_many_arguments)]
 fn compile_on_tape(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     recurrence_only: bool,
 ) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
     use crate::simulate_array::StandaloneError;
+    let scope = StandaloneScope {
+        derived_extents: crate::faq::empty_derived_extents(),
+        ..*scope
+    };
     match crate::simulate_array::eval_observed_taped(
         name,
         expr,
-        arrays,
-        param_vals,
-        param_names,
-        const_arrays,
+        &scope,
         fill_shape,
         recurrence_only,
     ) {
@@ -1116,32 +722,29 @@ fn resolve_observed(
     def: &Expr,
     index_sets: &HashMap<String, IndexSet>,
     extents: &HashMap<String, i64>,
-) -> Result<Expr, PrepareError> {
+) -> Result<Expr, SimulateError> {
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
-        .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
+        .map_err(|e| stage_err(format_args!("resolve ranges for {name}"), e))?;
     Ok(expr)
 }
 
-/// Evaluate one observed, its ranges already resolved ([`resolve_observed`]),
-/// through the full evaluator; returns the dense field.
+/// Evaluate one observed, its ranges already resolved ([`resolve_observed`]);
+/// returns the dense field.
 ///
-/// Under `refuse_per_cell` a per-cell walk stops at its first cell, so a
-/// document the strict compiler refuses is refused for the price of one cell
-/// rather than the whole reference evaluation.
-#[allow(clippy::too_many_arguments)]
+/// Under `refuse_per_cell` (a strict compiler) what the reference evaluator
+/// would walk per cell goes to the tape, and a walk stops at its first cell
+/// on the way, so a document the strict compiler refuses is refused for the
+/// price of one cell rather than the whole reference evaluation. Otherwise
+/// (the interpreter) the reference evaluator walks it.
 fn eval_observed(
     name: &str,
     expr: &Expr,
-    arrays: &ArrMap,
-    param_vals: &[f64],
-    param_names: &[String],
-    extents: &HashMap<String, i64>,
-    const_arrays: &ConstArrayScope,
+    scope: &StandaloneScope<'_>,
     fill_shape: Option<&[usize]>,
     scalar_shape: &[usize],
     refuse_per_cell: bool,
-) -> Result<Evaluated, PrepareError> {
+) -> Result<Evaluated, SimulateError> {
     // The observed is evaluated at the element type of the variable it defines
     // (esm-spec §11.3.1) — the document's unless that variable declared its
     // own. This is where the build pipeline materializes a relational
@@ -1168,18 +771,7 @@ fn eval_observed(
     // finite, plausible and wrong with nothing logged.
     // Under a strict compiler a recurrence goes to the tape's ordered sweep
     // first (`compile_on_tape`), and is refused only if the tape declines it.
-    if refuse_per_cell
-        && let Some(tape) = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            true,
-        )
-    {
+    if refuse_per_cell && let Some(tape) = compile_on_tape(name, expr, scope, fill_shape, true) {
         return tape
             .map_err(|why| err(format!("evaluate {name}: {why}")))
             .map(|r| match r {
@@ -1189,75 +781,50 @@ fn eval_observed(
                 )),
             });
     }
-    let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
-    let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
-    if let Some(res) = crate::simulate_array::eval_observed_recurrence(
-        name,
-        expr,
-        arrays,
-        param_vals,
-        param_names,
-        0.0,
-        extents,
-        const_arrays,
-    ) {
-        if refused() {
+    let mut walks = if refuse_per_cell {
+        crate::simulate_array::CellWalks::stopping()
+    } else {
+        crate::simulate_array::CellWalks::default()
+    };
+    if let Some(res) = scope.eval_recurrence(name, expr, &mut walks) {
+        if walks.refused() {
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
         return res
             .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
-            .map_err(|e| err(format!("evaluate {name}: {e}")));
+            .map_err(|e| stage_err(format_args!("evaluate {name}"), e));
     }
-    let walks_before = crate::simulate_array::per_cell_walks();
-    crate::simulate_array::take_overlay_decline();
-    let val = eval_expression_with_extents_and_consts_shared(
-        expr,
-        arrays,
-        param_vals,
-        param_names,
-        0.0,
-        extents,
-        const_arrays,
-    );
-    // Before the result is read: a stopped walk's value is a placeholder, and
-    // so is any error computed from it.
-    if refused() {
-        // The overlay declined a `faq` of this observed: lower the whole
-        // observed on the tape instead, from the same inputs.
-        let overlay = crate::simulate_array::take_overlay_decline()
-            .unwrap_or("a construct it has no whole-array form for");
-        drop(stop);
-        let tape = compile_on_tape(
-            name,
-            expr,
-            arrays,
-            param_vals,
-            param_names,
-            const_arrays,
-            fill_shape,
-            false,
-        )
-        .expect("a non-recurrence always reaches the tape");
-        return match tape {
-            Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
-            Ok(Ok(a)) => Ok(Evaluated::Field(
-                shape_like_interpreter(a, scalar_shape),
-                Route::Tape,
-            )),
-            Ok(Err(declined)) => Ok(Evaluated::Refused(format!(
-                "the whole-array overlay declined a `faq` in it ({overlay}), and the tape \
-                 declined it: {declined}"
-            ))),
-        };
-    }
-    let val = val.map_err(|e| err(format!("evaluate {name}: {e}")))?;
-    let per_cell =
-        (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
+    // Under a strict compiler, an observed with a `faq` the reference
+    // evaluator would walk per cell is lowered whole on the tape instead,
+    // from the same inputs, and refused when the tape declines it.
+    use crate::simulate_array::{BuildEval, BuildRoute, Routed};
+    let mode = if refuse_per_cell {
+        BuildEval::Fast { strict: true }
+    } else {
+        BuildEval::PerCell
+    };
+    let routed = scope
+        .eval_routed(name, expr, fill_shape, mode)
+        .map_err(|e| stage_err(format_args!("evaluate {name}"), e))?;
+    let (val, route) = match routed {
+        Routed::Refused(declined) => {
+            return Ok(Evaluated::Refused(format!(
+                "a `faq` in it would be walked once per cell, and the tape declined it: \
+                 {declined}"
+            )));
+        }
+        Routed::Value(v, route) => (v, route),
+    };
     let field = match val {
         EvalValue::Array(a) => *a,
         EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(scalar_shape), s),
     };
-    Ok(Evaluated::Field(field, Route::observed(per_cell)))
+    let route = match route {
+        BuildRoute::Whole => Route::Whole,
+        BuildRoute::Tape => Route::Tape,
+        BuildRoute::PerCell => Route::PerCell(PER_CELL_FAQ.to_string()),
+    };
+    Ok(Evaluated::Field(field, route))
 }
 
 // --------------------------------------------------------------------------- //
@@ -1286,7 +853,7 @@ fn gated_fetch_plan(
     index_sets: &HashMap<String, IndexSet>,
     members: &HashMap<String, Vec<i64>>,
     extents: &HashMap<String, i64>,
-) -> Result<GatedFetchPlan, PrepareError> {
+) -> Result<GatedFetchPlan, SimulateError> {
     let mut selection: Vec<AxisSel> = Vec::with_capacity(gate.axes.len());
     let mut drop_axes: Vec<usize> = Vec::new();
     let mut gated_pos: Option<usize> = None;
@@ -1353,7 +920,7 @@ fn gated_fetch_plan(
 /// The build pipeline's internal observation sink, erased so a helper can report
 /// without knowing whether an observer is attached or what it captured.
 type ReportFn<'a> =
-    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
+    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), SimulateError> + 'a;
 
 /// Run a gate's plan, reporting through `report` and honouring a cancel.
 ///
@@ -1367,13 +934,13 @@ type ReportFn<'a> =
 #[allow(clippy::too_many_arguments)]
 fn run_gated_fetch(
     key: &str,
-    prov: &mut dyn PrepareProvider,
+    prov: &mut dyn DataProvider,
     plan: &GatedFetchPlan,
     batch: Option<usize>,
     issued: &mut usize,
     total_requests: usize,
     report: &mut ReportFn<'_>,
-) -> Result<ArrayD<f64>, PrepareError> {
+) -> Result<ArrayD<f64>, SimulateError> {
     // A provider that cannot push the selection down fetches the WHOLE field in
     // one indivisible call and is sliced engine-side; there is no seam to batch
     // and reporting per batch would be a lie about work already done.
@@ -1445,7 +1012,7 @@ fn drop_fixed_axes(
     key: &str,
     arr: ArrayD<f64>,
     drop_axes: &[usize],
-) -> Result<ArrayD<f64>, PrepareError> {
+) -> Result<ArrayD<f64>, SimulateError> {
     if drop_axes.is_empty() {
         return Ok(arr);
     }
@@ -1528,7 +1095,7 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// artifact.
 ///
 /// `providers` maps the CONSUMING PARAMETER's namespaced name
-/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
+/// (`"<ModelPath>.<param>"`) to a CONST [`DataProvider`]; an entry the
 /// rewrite record's gate routes onto a gated array is DEFERRED and fetched
 /// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
 /// variables, so the consuming parameter is the only spelling that names one
@@ -1549,15 +1116,15 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
 /// quarter of an hour. [`crate::problem::ProblemOptions::progress`] observes it as it goes —
 /// per gated request and per observed, not merely per phase — and returning
 /// [`Flow::Cancel`] stops it at a named point. Pair it with
-/// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
+/// [`crate::problem::ProblemOptions::gated_fetch_batch`] so the fetch itself is interruptible.
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
-    providers: Vec<(String, Box<dyn PrepareProvider>)>,
-    opts: &PrepareOptions,
-) -> Result<PreparedBuild, PrepareError> {
+    providers: Vec<(String, Box<dyn DataProvider>)>,
+    opts: &BuildContext<'_>,
+) -> Result<PreparedBuild, SimulateError> {
     let mut providers = providers;
-    let mut metaparameters = opts.metaparameters.clone();
+    let mut metaparameters = opts.problem.metaparameters.clone();
     let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters)?;
 
     let resolved = resolve_pushdown_imports(doc, opts, &metaparameters)?;
@@ -1589,9 +1156,9 @@ pub(crate) fn run_prepare(
     Ok(st.finish(rw.rewritten.into_owned()))
 }
 
-/// Verbose-mode narration; a no-op unless [`PrepareOptions::verbose`] is set.
-fn vlog(opts: &PrepareOptions, msg: &str) {
-    if opts.verbose {
+/// Verbose-mode narration; a no-op unless [`crate::problem::ProblemOptions::verbose`] is set.
+fn vlog(opts: &BuildContext<'_>, msg: &str) {
+    if opts.problem.verbose {
         println!("{msg}");
     }
 }
@@ -1606,13 +1173,13 @@ fn vlog(opts: &PrepareOptions, msg: &str) {
 /// cancel is attributable to a point in the build rather than to a wall
 /// clock the library does not have.
 fn report_progress(
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     phase: PreparePhase,
     done: usize,
     total: Option<usize>,
     item: &str,
-) -> Result<(), PrepareError> {
-    let Some(cb) = &opts.progress else {
+) -> Result<(), SimulateError> {
+    let Some(cb) = &opts.problem.progress else {
         return Ok(());
     };
     let p = PrepareProgress {
@@ -1623,21 +1190,22 @@ fn report_progress(
     };
     match cb(&p) {
         Flow::Continue => Ok(()),
-        Flow::Cancel => Err(err(format!(
-            "{} {phase}{}",
-            PrepareError::CANCELLED_PREFIX,
-            if item.is_empty() {
-                match total {
-                    Some(t) => format!(" ({done} of {t} done)"),
-                    None => String::new(),
+        Flow::Cancel => Err(SimulateError::Cancelled {
+            details: format!(
+                "{phase}{}",
+                if item.is_empty() {
+                    match total {
+                        Some(t) => format!(" ({done} of {t} done)"),
+                        None => String::new(),
+                    }
+                } else {
+                    match total {
+                        Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
+                        None => format!(" at '{item}'"),
+                    }
                 }
-            } else {
-                match total {
-                    Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
-                    None => format!(" at '{item}'"),
-                }
-            }
-        ))),
+            ),
+        }),
     }
 }
 
@@ -1653,10 +1221,10 @@ fn report_progress(
 /// provider's OWN declared gate is caught here, the gate the rewrite record
 /// derives in the check after the rewrite.
 fn discover_loader_extents(
-    providers: &mut [(String, Box<dyn PrepareProvider>)],
-    opts: &PrepareOptions,
+    providers: &mut [(String, Box<dyn DataProvider>)],
+    opts: &BuildContext<'_>,
     metaparameters: &mut BTreeMap<String, i64>,
-) -> Result<HashMap<String, ArrayD<f64>>, PrepareError> {
+) -> Result<HashMap<String, ArrayD<f64>>, SimulateError> {
     let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
     let mut discovered_by: BTreeMap<String, (i64, String)> = BTreeMap::new();
     for (key, prov) in providers.iter_mut() {
@@ -1711,14 +1279,15 @@ fn discover_loader_extents(
 /// silently and fetch every provider-backed array whole.
 fn resolve_pushdown_imports(
     doc: &JsonValue,
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     metaparameters: &BTreeMap<String, i64>,
-) -> Result<Option<JsonValue>, PrepareError> {
+) -> Result<Option<JsonValue>, SimulateError> {
     report_progress(opts, PreparePhase::Rewrite, 0, None, "")?;
-    if opts.pushdown_rewrite && has_template_import_edge(doc) {
+    if opts.problem.pushdown_rewrite && has_template_import_edge(doc) {
         resolve_template_machinery(
             doc,
-            opts.base_path
+            opts.problem
+                .base_path
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .as_path(),
@@ -1745,11 +1314,11 @@ struct RewriteOutcome<'a> {
 /// metadata off the rewritten document.
 fn apply_pushdown_rewrite<'a>(
     doc: &'a JsonValue,
-    opts: &PrepareOptions,
+    opts: &BuildContext<'_>,
     provider_keys: &[String],
-) -> Result<RewriteOutcome<'a>, PrepareError> {
-    let rewritten = if opts.pushdown_rewrite {
-        desugar_pushdown_for_build(doc, opts.model_name.as_deref())?
+) -> Result<RewriteOutcome<'a>, SimulateError> {
+    let rewritten = if opts.problem.pushdown_rewrite {
+        desugar_pushdown_for_build(doc, opts.problem.model_name.as_deref())?
     } else {
         std::borrow::Cow::Borrowed(doc)
     };
@@ -1790,7 +1359,7 @@ fn apply_pushdown_rewrite<'a>(
 fn desugar_pushdown_for_build<'a>(
     doc: &'a JsonValue,
     model_name: Option<&str>,
-) -> Result<std::borrow::Cow<'a, JsonValue>, PrepareError> {
+) -> Result<std::borrow::Cow<'a, JsonValue>, SimulateError> {
     let models: Vec<&String> = match (model_name, doc.get("models").and_then(|m| m.as_object())) {
         (None, Some(models)) if models.len() > 1 => {
             let mut names: Vec<&String> = models.keys().collect();
@@ -1827,7 +1396,7 @@ fn desugar_pushdown_for_build<'a>(
 fn check_discovered_gate_conflict(
     discovered: &HashMap<String, ArrayD<f64>>,
     pd_gates: &HashMap<String, ProviderGate>,
-) -> Result<(), PrepareError> {
+) -> Result<(), SimulateError> {
     for key in discovered.keys() {
         if pd_gates.contains_key(key) {
             return Err(err(format!(
@@ -1840,23 +1409,22 @@ fn check_discovered_gate_conflict(
     Ok(())
 }
 
-/// [`BuildState::authored_model`]'s result: the model with `flatten`'s
-/// rewrites applied, the variables whose shape their data decides
-/// ([`crate::flatten::ConditionalShapes::data_shaped`]), and what the build
-/// knows of its variables by name.
-type AuthoredModel = (Model, HashMap<String, Vec<String>>, BuiltVariables);
-
 /// The build pipeline's accumulator state: the evaluation namespace plus the
 /// artifacts each phase deposits for the phases after it. One method per
 /// phase; [`run_prepare`] is the phase list.
 struct BuildState<'o> {
-    opts: &'o PrepareOptions,
+    opts: &'o BuildContext<'o>,
     /// The typed model under build: the selected (or only) model, or the
     /// whole document's flattened system.
     model: Model,
     /// How the built model's names are spelled: model-local for one model,
     /// `Model.var` for the whole document (see [`PreparedBuild::model_name`]).
     spelling: Spelling,
+    /// The built model's variable names, and the spelling's rule for
+    /// mapping a caller key onto them.
+    keys: KeyResolver,
+    /// See [`PreparedBuild::file`].
+    file: crate::EsmFile,
     /// See [`PreparedBuild::flattened`].
     flattened: Option<crate::flatten::FlattenedSystem>,
     index_sets: HashMap<String, IndexSet>,
@@ -1869,8 +1437,10 @@ struct BuildState<'o> {
     arrays: ArrMap,
     /// The CONST-ARRAY registry (see [`BuildState::seal_const_registry`]).
     const_scope: ConstArrayScope,
-    /// Observed definitions, their join-free partition, and dependency order.
+    /// Observed definitions, their dependency summaries, their join-free
+    /// partition, and dependency order.
     defs: HashMap<String, Expr>,
+    deps: crate::dependency::DependencySummaries,
     join_free: HashSet<String>,
     order: Vec<String>,
     /// Evaluated observed fields — the [`PreparedBuild::fields`] payload.
@@ -1891,11 +1461,10 @@ struct BuildState<'o> {
     obs_total: usize,
     /// [`PreparedBuild::observed_cone_applied`].
     cone_applied: bool,
-    /// The unshaped observeds whose shape the data of their unshaped
-    /// data-fed parameters decides (esm-spec §4.3.4,
-    /// [`crate::flatten::ConditionalShapes::data_shaped`]).
-    data_shaped: HashMap<String, Vec<String>>,
-    /// [`PreparedBuild::built_variables`].
+    /// [`PreparedBuild::built_variables`]: the build's shape table, which
+    /// also names the unshaped observeds whose shape the data of their
+    /// unshaped data-fed parameters decides (esm-spec §4.3.4,
+    /// [`crate::simulate_array::ShapeTable::data_shaped`]).
     built_variables: BuiltVariables,
 }
 
@@ -1906,15 +1475,16 @@ impl<'o> BuildState<'o> {
     /// shape — the build's, for an unshaped mixed-rank `ifelse` — or, for one
     /// whose shape the data of its data-fed parameters decides, the shape that
     /// data has here. `None` when neither gives one the registry can size.
+    /// Both come from the build's shape table; an inferred shape is not a
+    /// declared one, as rule lowering reads it.
     fn fill_shape(&self, name: &str) -> Option<Vec<usize>> {
-        self.model
-            .variables
-            .get(name)
-            .and_then(|v| v.shape.as_deref())
+        let shapes = &self.built_variables.shapes;
+        shapes
+            .declared(name)
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
             .or_else(|| {
-                let fed = self.data_shaped.get(name)?;
+                let fed = shapes.data_shaped(name)?;
                 crate::flatten::data_fill_shape(fed, |n| {
                     self.arrays.get(n).map(|a| a.shape().to_vec())
                 })
@@ -1931,22 +1501,36 @@ impl<'o> BuildState<'o> {
         vlog(self.opts, msg);
     }
 
+    /// The evaluation scope an observed is evaluated in: the namespace, the
+    /// scalar parameters, and `t` at the start of the time span, as the
+    /// static route evaluates it.
+    fn scope<'s>(&'s self, extents: &'s HashMap<String, i64>) -> StandaloneScope<'s> {
+        StandaloneScope {
+            inputs: &self.arrays,
+            params: &self.param_vals,
+            param_names: &self.param_names,
+            t: self.opts.t0,
+            derived_extents: extents,
+            const_arrays: &self.const_scope,
+        }
+    }
+
     fn report(
         &self,
         phase: PreparePhase,
         done: usize,
         total: Option<usize>,
         item: &str,
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         report_progress(self.opts, phase, done, total, item)
     }
 
     /// Typed load (metaparameters closed at the loader API).
     fn load_document(
         rewritten: &JsonValue,
-        opts: &'o PrepareOptions,
+        opts: &'o BuildContext<'o>,
         metaparameters: BTreeMap<String, i64>,
-    ) -> Result<Self, PrepareError> {
+    ) -> Result<Self, SimulateError> {
         report_progress(opts, PreparePhase::Load, 0, None, "")?;
         let text = serde_json::to_string(rewritten)
             .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
@@ -1968,14 +1552,13 @@ impl<'o> BuildState<'o> {
                 .filter(|(k, _)| declared.is_some_and(|d| d.contains_key(k)))
                 .collect()
         };
-        let unbound_load = metaparameters.is_empty();
         let load_opts = LoadOptions {
-            base_path: opts.base_path.clone(),
+            base_path: opts.problem.base_path.clone(),
             metaparameters,
         };
-        let file = crate::parse::load_string_with_options(&text, &load_opts)
+        let mut file = crate::parse::load_string_with_options(&text, &load_opts)
             .map_err(|e| err(format!("load rewritten document: {e}")))?;
-        let mut index_sets: HashMap<String, IndexSet> = file
+        let index_sets: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
             .unwrap_or_default()
@@ -1985,55 +1568,60 @@ impl<'o> BuildState<'o> {
             .models
             .as_ref()
             .ok_or_else(|| err("document has no models"))?;
-        let spelling = match &opts.model_name {
+        let spelling = match &opts.problem.model_name {
             Some(n) => Spelling::ModelLocal(n.clone()),
             None if models.len() == 1 => {
                 Spelling::ModelLocal(models.keys().next().cloned().unwrap_or_default())
             }
             None => Spelling::Qualified,
         };
-        let (model, flattened, data_shaped, built_variables) = match &spelling {
+        let (normalized, flattened, bound_inputs) = match &spelling {
             Spelling::ModelLocal(n) => {
-                let (model, data_shaped, built) = Self::authored_model(models, n, &mut index_sets)?;
-                (model, None, data_shaped, built)
-            }
-            Spelling::Qualified => {
-                let flat = Self::whole_document(&file, &mut index_sets)?;
-                crate::compile_error::refuse_reserved_lifting(&flat)
-                    .map_err(|e| err(e.to_string()))?;
-                let mut model = crate::simulate_array::model_from_flattened(&flat);
-                // The shape an unshaped mixed-rank `ifelse` is built at
-                // (esm-spec §4.3.4); the model-local route gets it from
-                // `apply_flatten_rewrites`.
-                // The elementwise lift runs inside it (esm-spec §9.6.11), so
-                // the bare-operand check reads the lifted equations.
-                let shapes =
-                    crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
-                        .map_err(|e| err(e.to_string()))?;
-                let axes = crate::simulate_array::refuse_faq_bare_array_operands(&model)
-                    .map_err(|e| err(e.to_string()))?;
-                let built = BuiltVariables::new(axes, flat.metadata.bound_inputs.clone());
+                let (normalized, flat) = Self::model_alone(&mut file, n, index_sets)?;
                 (
-                    model,
-                    unbound_load.then_some(flat),
-                    shapes.data_shaped,
-                    built,
+                    normalized,
+                    builds_alone_as_itself(&file).then_some(flat),
+                    None,
                 )
             }
+            Spelling::Qualified => {
+                let (flat, index_sets) = Self::whole_document(&file, index_sets)?;
+                crate::compile_error::refuse_reserved_lifting(&flat)
+                    .map_err(SimulateError::Compile)?;
+                let normalized = crate::simulate_array::normalize(
+                    BuildInput::Flattened {
+                        flat: &flat,
+                        inherited: None,
+                    },
+                    index_sets,
+                )
+                .map_err(SimulateError::Compile)?;
+                let bound = flat.metadata.bound_inputs.clone();
+                (normalized, Some(flat), Some(bound))
+            }
         };
-        // esm-spec §4.3.1.2: a recurrence group is swept as its stacked single
-        // recurrence on this route too, through the same rewrite the compiled
-        // route applies (CONFORMANCE_SPEC §5.19.3b).
-        let mut model = model;
-        crate::simulate_array::lower_recurrence_groups(&mut model, &mut index_sets)
-            .map_err(|e| err(e.to_string()))?;
+        let NormalizedModel {
+            model,
+            index_sets,
+            shapes,
+        } = normalized;
+        let built_variables = BuiltVariables {
+            shapes: std::sync::Arc::new(shapes),
+            bound_inputs: bound_inputs.unwrap_or_default(),
+        };
 
-        let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.parameters)?;
+        let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.problem.p)?;
+        let keys = spelling.resolver(
+            model.variables.keys().map(String::as_str),
+            model.variables.keys().map(String::as_str),
+        );
 
         Ok(BuildState {
             opts,
             model,
             spelling,
+            keys,
+            file,
             flattened,
             index_sets,
             param_vals,
@@ -2041,6 +1629,7 @@ impl<'o> BuildState<'o> {
             arrays: ArrMap::default(),
             const_scope: ConstArrayScope::default(),
             defs: HashMap::new(),
+            deps: Default::default(),
             join_free: HashSet::new(),
             order: Vec::new(),
             fields: HashMap::new(),
@@ -2053,44 +1642,60 @@ impl<'o> BuildState<'o> {
             obs_done: 0,
             obs_total: 0,
             cone_applied: false,
-            data_shaped,
             built_variables,
         })
     }
 
-    /// The model `name` as authored, with the rewrites `flatten` would have
-    /// made applied in place: a self-qualified `M.a` resolves to `a`, a
-    /// right-hand-side `D` to the tendency it names (or a refusal, never a
-    /// `NaN`), a `sin` of a `deg` angle takes radians — without that one
-    /// `sin(40 deg)` evaluated as `sin(40)` here and nowhere else — and an
-    /// unshaped variable whose `ifelse` arms differ in rank takes the array
-    /// arm's shape. The
-    /// rewrites run after the subsystems are mounted, as on the array runtime,
-    /// so a mounted subsystem's equations and declarations are in scope under
-    /// their mounted names (`D(North.u)`, a `deg` `North.theta`).
+    /// The model `name` built alone: the document with that model as its one
+    /// component flattened, so its subsystems are mounted, a self-qualified
+    /// `M.a` resolves to `a`, a right-hand-side `D` to the tendency it names
+    /// (or a refusal, never a `NaN`) and a `sin` of a `deg` angle takes
+    /// radians, as in every other build; then normalized
+    /// ([`crate::simulate_array::normalize`]) with its names model-local.
     ///
-    /// Names resolve in this model's scope, model-locally: an explicit
-    /// selection builds that model alone, so a name another top-level model
-    /// declares is not in scope (see [`Self::whole_document`]).
-    fn authored_model(
-        models: &IndexMap<String, Model>,
+    /// Names resolve in this model's scope: an explicit selection builds that
+    /// model alone, so a name another top-level model declares is not in
+    /// scope (see [`Self::whole_document`]).
+    fn model_alone(
+        file: &mut crate::EsmFile,
         name: &str,
-        index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<AuthoredModel, PrepareError> {
-        let mut model = models
-            .get(name)
+        mut index_sets: HashMap<String, IndexSet>,
+    ) -> Result<(NormalizedModel, crate::flatten::FlattenedSystem), SimulateError> {
+        let model = file
+            .models
+            .as_ref()
+            .and_then(|m| m.get(name))
             .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
             .clone();
-        crate::simulate_array::mount_subsystems(&mut model, index_sets)
-            .map_err(|e| err(format!("model '{name}': {e}")))?;
-        crate::simulate_array::resolve_model_self_references(&mut model, name);
-        let (shapes, axes) = crate::simulate_array::apply_flatten_rewrites(&mut model, index_sets)
-            .map_err(|e| err(format!("model '{name}': {e}")))?;
-        Ok((
-            model,
-            shapes.data_shaped,
-            BuiltVariables::new(axes, Default::default()),
-        ))
+        // The document without its components, cloned, then given the one.
+        let models = file.models.take();
+        let systems = file.reaction_systems.take();
+        let coupling = file.coupling.take();
+        let mut alone = file.clone();
+        file.models = models;
+        file.reaction_systems = systems;
+        file.coupling = coupling;
+        alone.models = Some(IndexMap::from([(name.to_string(), model)]));
+        let flat = crate::flatten::flatten(&alone).map_err(|e| {
+            if e.code().is_some() {
+                SimulateError::Compile(CompileError::Flatten(e))
+            } else {
+                err(format!("model '{name}': {e}"))
+            }
+        })?;
+        drop(alone);
+        for (k, v) in &flat.index_sets {
+            index_sets.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        let normalized = crate::simulate_array::normalize(
+            BuildInput::Local {
+                flat: &flat,
+                model: name,
+            },
+            index_sets,
+        )
+        .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
+        Ok((normalized, flat))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -2104,23 +1709,27 @@ impl<'o> BuildState<'o> {
     /// provider key is `"<ModelPath>.<param>"`, which is exactly the flattened
     /// name, so every model's data-fed parameters bind.
     ///
-    /// `flatten` makes the rewrites [`Self::authored_model`] stands in for
-    /// (the right-hand-side `D` resolution and the angle normalization) itself.
+    /// Returns the system and the registry it is built against: the
+    /// flattened registry carries every mounted subsystem's index sets as well
+    /// as the document's own, and the document's declaration wins.
     fn whole_document(
         file: &crate::EsmFile,
-        index_sets: &mut HashMap<String, IndexSet>,
-    ) -> Result<crate::flatten::FlattenedSystem, PrepareError> {
-        let flat = crate::flatten::flatten(file)
-            .map_err(|e| err(format!("flatten the document's models: {e}")))?;
-        // The flattened registry carries every mounted subsystem's index sets
-        // as well as the document's own; the document's declaration wins.
+        mut index_sets: HashMap<String, IndexSet>,
+    ) -> Result<(crate::flatten::FlattenedSystem, HashMap<String, IndexSet>), SimulateError> {
+        let flat = crate::flatten::flatten(file).map_err(|e| {
+            if e.code().is_some() {
+                SimulateError::Compile(CompileError::Flatten(e))
+            } else {
+                err(format!("flatten the document's models: {e}"))
+            }
+        })?;
         for (k, v) in &flat.index_sets {
             index_sets.entry(k.clone()).or_insert_with(|| v.clone());
         }
-        Ok(flat)
+        Ok((flat, index_sets))
     }
 
-    /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a
+    /// Record one evaluation. Under [`BuildContext::refuse_per_cell`] a
     /// per-cell one also stops the build, and the caller returns as soon as
     /// this answers `true`.
     fn record(&mut self, rule: PipelineRule) -> bool {
@@ -2144,13 +1753,21 @@ impl<'o> BuildState<'o> {
     fn inject_providers(
         &mut self,
         const_arrays: HashMap<String, ArrayD<f64>>,
-        providers: Vec<(String, Box<dyn PrepareProvider>)>,
+        providers: Vec<(String, Box<dyn DataProvider>)>,
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
-    ) -> Result<Vec<GatedProvider>, PrepareError> {
+    ) -> Result<Vec<GatedProvider>, SimulateError> {
         self.arrays = ArrMap::default();
+        let routes = self.array_routes(
+            const_arrays
+                .keys()
+                .chain(providers.iter().map(|(k, _)| k))
+                .map(String::as_str),
+        )?;
         for (k, a) in const_arrays {
-            let name = self.array_name(&k)?;
+            let Some(name) = routes[&k].clone() else {
+                continue;
+            };
             let rounded = round_external(&name, a);
             self.arrays.insert(name, rounded);
         }
@@ -2166,7 +1783,9 @@ impl<'o> BuildState<'o> {
             if let Some(a) = discovered.remove(&k) {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
-                let name = self.array_name(&k)?;
+                let Some(name) = routes[&k].clone() else {
+                    continue;
+                };
                 self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             } else if let Some(gate) = pd_gates.get(&k) {
@@ -2177,12 +1796,7 @@ impl<'o> BuildState<'o> {
             } else if let Some(gate) = prov.gate_spec() {
                 // Provider-declared gate (the fallback protocol) — also deferred.
                 gated.push((k, prov, gate));
-            } else if !prov.is_const() {
-                return Err(err(format!(
-                    "prepare: provider '{k}' is DISCRETE (non-empty refresh times); \
-                     prepare() is build-time-only"
-                )));
-            } else {
+            } else if let Some(name) = routes[&k].clone() {
                 let a = prov
                     .sample()
                     .map_err(|e| err(format!("materialize const provider '{k}': {}", e.0)))?;
@@ -2190,7 +1804,6 @@ impl<'o> BuildState<'o> {
                     "  [prepare] const provider {k} -> {:?}",
                     a.shape()
                 ));
-                let name = self.array_name(&k)?;
                 self.check_provider_shape(&k, &name, &a)?;
                 self.arrays.insert(name.clone(), round_external(&name, a));
             }
@@ -2221,7 +1834,7 @@ impl<'o> BuildState<'o> {
         key: &str,
         name: &str,
         a: &ArrayD<f64>,
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let vars = &self.model.variables;
         let Some(var) = vars
             .get(name)
@@ -2249,24 +1862,61 @@ impl<'o> BuildState<'o> {
         }
     }
 
-    /// The name the evaluation namespace holds an array supplied under `key`
-    /// (a caller's `const_arrays` entry or a provider's sample).
+    /// The name the evaluation namespace holds each array supplied under one
+    /// of `keys` (the caller's `const_arrays` keys and the provider keys), or
+    /// `None` for a key an exact key for the same variable shadows.
     ///
     /// In the whole-document build that is the declared `Model.var` the key
-    /// spells ([`Spelling::resolve`]), so a bare key reaches the one variable
-    /// it names. Model-locally the array is held under its key, and
-    /// [`Self::alias_pushdown_names`] publishes the model-local spellings
-    /// beside it. A key that names no declared variable (a whole source's
-    /// provider, a coupling's source side) is held as it is.
-    fn array_name(&self, key: &str) -> Result<String, PrepareError> {
-        Ok(match &self.spelling {
-            Spelling::Qualified => self
-                .spelling
-                .resolve_one(key, self.model.variables.keys())?
-                .unwrap_or(key)
-                .to_string(),
-            Spelling::ModelLocal(_) => key.to_string(),
-        })
+    /// designates (esm-spec §6.6.2): an exact key wins, a bare key reaches the
+    /// one variable it ends, and two keys for one variable, or a key several
+    /// variables end, are refused. Model-locally the array is held under its
+    /// key, and [`Self::alias_pushdown_names`] publishes the model-local
+    /// spellings beside it. A key that names no declared variable (a whole
+    /// source's provider, a coupling's source side) is held as it is.
+    fn array_routes<'k>(
+        &self,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<HashMap<String, Option<String>>, SimulateError> {
+        let keys: Vec<&str> = keys.into_iter().collect();
+        if let Spelling::ModelLocal(_) = self.spelling {
+            return Ok(keys
+                .into_iter()
+                .map(|k| (k.to_string(), Some(k.to_string())))
+                .collect());
+        }
+        let routed: HashMap<&str, String> = self
+            .keys
+            .canonical(keys.iter().copied())
+            .map_err(crate::problem::provider_key_error)?
+            .into_iter()
+            .map(|(name, k)| (k, name))
+            .collect();
+        let mut out = HashMap::with_capacity(keys.len());
+        for k in keys {
+            let name = match routed.get(k) {
+                Some(name) => Some(name.clone()),
+                None if self.keys.designates_any(k) => None,
+                None => Some(k.to_string()),
+            };
+            out.insert(k.to_string(), name);
+        }
+        Ok(out)
+    }
+
+    /// The name the evaluation namespace holds a declared variable `name`
+    /// under: in the whole-document build the `Model.var` it designates, else
+    /// `name` itself.
+    fn declared_name(&self, name: &str) -> Result<String, SimulateError> {
+        if let Spelling::ModelLocal(_) = self.spelling {
+            return Ok(name.to_string());
+        }
+        Ok(self
+            .keys
+            .designates(name)
+            .map_err(crate::problem::provider_key_error)?
+            .into_iter()
+            .next()
+            .map_or_else(|| name.to_string(), |(n, _)| n))
     }
 
     /// Provider-key name aliasing.
@@ -2283,7 +1933,7 @@ impl<'o> BuildState<'o> {
     ///
     /// `pd_coupling` routes an array supplied under a coupling's source side
     /// (`"<source>.<file_variable>"`) onto the variable it feeds. The
-    /// whole-document build needs nothing more: [`Self::array_name`] already
+    /// whole-document build needs nothing more: [`Self::array_routes`] already
     /// holds every array under the `Model.var` its expressions read.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
         if matches!(self.spelling, Spelling::Qualified) {
@@ -2319,11 +1969,12 @@ impl<'o> BuildState<'o> {
             .arrays
             .keys()
             .filter_map(|k| {
-                let found = self.spelling.resolve(k, self.model.variables.keys()).ok()?;
-                let (l, _) = found
+                let (l, _) = self
+                    .keys
+                    .spells(k)
                     .into_iter()
                     .find(|(l, how)| *how == KeyMatch::ModelPrefixed && l.contains('.'))?;
-                Some((k.clone(), l.to_string()))
+                Some((k.clone(), l))
             })
             .collect();
         for (k, l) in local {
@@ -2335,7 +1986,8 @@ impl<'o> BuildState<'o> {
     /// The model variable a gated provider's slab is published under (see
     /// [`Self::fetch_gated_providers`]): the variable the coupling routes the
     /// provider onto, else the one its key names, else the gate's own target,
-    /// each read through [`Spelling::resolve`]. Model-locally a key the
+    /// each the one name it spells most strongly ([`KeyResolver::strongest`]).
+    /// Model-locally a key the
     /// built model does not declare falls back to its last segment, the
     /// spelling the gate's `applies_to` carries.
     fn gated_target(
@@ -2343,7 +1995,7 @@ impl<'o> BuildState<'o> {
         key: &str,
         gate: &ProviderGate,
         pd_coupling: &[(String, String)],
-    ) -> Result<String, PrepareError> {
+    ) -> Result<String, SimulateError> {
         let routed = pd_coupling
             .iter()
             .find(|(frm, to)| frm == key || to == key)
@@ -2353,8 +2005,12 @@ impl<'o> BuildState<'o> {
             .chain([key])
             .chain(gate.applies_to.first().map(String::as_str));
         for c in candidates {
-            if let Some(n) = self.spelling.resolve_one(c, self.model.variables.keys())? {
-                return Ok(n.to_string());
+            if let Some(n) = self
+                .keys
+                .strongest(c)
+                .map_err(crate::problem::provider_key_error)?
+            {
+                return Ok(n);
             }
         }
         let last = routed.unwrap_or_else(|| gate.applies_to.first().map_or(key, String::as_str));
@@ -2371,7 +2027,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: &[GatedProvider],
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let targets: HashSet<String> = gated
             .iter()
             .map(|(k, _, g)| self.gated_target(k, g, pd_coupling))
@@ -2429,7 +2085,7 @@ impl<'o> BuildState<'o> {
     /// into `arrays` later by [`Self::feed_member_factors`], so it cannot be
     /// read off the map yet). Widening the bound set can only prevent a false
     /// positive, which is this gate's cardinal requirement.
-    fn check_free_names(&self) -> Result<(), PrepareError> {
+    fn check_free_names(&self) -> Result<(), SimulateError> {
         let mut extra: Vec<String> = self.arrays.keys().cloned().collect();
         extra.extend(self.param_names.iter().cloned());
         extra.extend(
@@ -2438,16 +2094,8 @@ impl<'o> BuildState<'o> {
                 .filter_map(|is| is.member_factor.clone()),
         );
         crate::simulate_array::check_free_variables(&self.model, &self.index_sets, &extra)
-            // The DETAILS, not the rendered error: `run_build_pipeline` re-wraps
-            // a `PrepareError` in `InterpreterBuildError`, so passing the whole
-            // `Display` through would print that prefix twice. The message the
-            // author reads is then byte-identical to the compile path's.
-            .map_err(|e| match e {
-                crate::compile_error::CompileError::InterpreterBuildError { details } => {
-                    err(details)
-                }
-                other => err(other.to_string()),
-            })
+            // The compile path's own refusal, unchanged.
+            .map_err(SimulateError::Compile)
     }
 
     /// Observed definitions + the join-free partition.
@@ -2469,17 +2117,19 @@ impl<'o> BuildState<'o> {
     ///   predicate nor the gate — an unfiltered full product, silently. A
     ///   genuinely unresolvable key column is a build error, as it is on the
     ///   compiled path.
-    fn collect_observed_defs(&mut self) -> Result<(), PrepareError> {
+    fn collect_observed_defs(&mut self) -> Result<(), SimulateError> {
         let mut defs = observed_defs(&self.model);
-        let state_dependent = state_dependent_observeds(&self.model, &defs);
         {
-            let var_shapes = crate::join::declared_var_shapes(&self.model);
+            let var_shapes = self
+                .built_variables
+                .shapes
+                .declared_map(|n| self.model.variables.contains_key(n));
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
                 crate::join::check_overlap_factor_ranks(e, &var_shapes)
-                    .map_err(|e| err(format!("resolve join: {e}")))?;
+                    .map_err(|e| stage_err("resolve join", e))?;
                 crate::join::resolve_expr_joins(e, &self.index_sets, &var_shapes)
-                    .map_err(|e| err(format!("resolve join: {e}")))?;
+                    .map_err(|e| stage_err("resolve join", e))?;
             }
         }
         self.join_free = defs
@@ -2490,10 +2140,12 @@ impl<'o> BuildState<'o> {
             })
             .map(|(n, _)| n.clone())
             .collect();
-        self.order = observed_order(&defs)?;
+        let deps = observed_dependencies(&self.model, &defs);
+        self.order = observed_order(&deps)?;
         self.order
-            .retain(|name| !state_dependent.contains(name.as_str()));
+            .retain(|name| deps.get(name).is_none_or(|s| !s.reads_state));
         self.defs = defs;
+        self.deps = deps;
         Ok(())
     }
 
@@ -2502,7 +2154,7 @@ impl<'o> BuildState<'o> {
     /// (The Rust analogue of Julia's `_derive_binning_coords` general-eval
     /// seeding; tolerant — an unresolved coordinate degrades to the engine's
     /// own fail-closed contract downstream, exactly as in Python.)
-    fn eval_buildtime_coordinates(&mut self) -> Result<(), PrepareError> {
+    fn eval_buildtime_coordinates(&mut self) -> Result<(), SimulateError> {
         let seeds: Vec<&Expr> = self
             .model
             .equations
@@ -2521,7 +2173,7 @@ impl<'o> BuildState<'o> {
         if seeds.is_empty() {
             return Ok(());
         }
-        let needed = producer_seed_closure(&seeds, &self.defs, &self.join_free);
+        let needed = producer_seed_closure(&seeds, &self.deps, &self.join_free);
         let no_extents: HashMap<String, i64> = HashMap::new();
         let coords: Vec<String> = self
             .order
@@ -2537,11 +2189,7 @@ impl<'o> BuildState<'o> {
                     eval_observed(
                         &name,
                         &expr,
-                        &self.arrays,
-                        &self.param_vals,
-                        &self.param_names,
-                        &no_extents,
-                        &self.const_scope,
+                        &self.scope(&no_extents),
                         self.fill_shape(&name).as_deref(),
                         &self.scalar_shape(&name),
                         self.opts.refuse_per_cell,
@@ -2576,7 +2224,7 @@ impl<'o> BuildState<'o> {
                     // needed this coordinate.
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} skipped ({})",
-                        e.0
+                        e
                     ));
                 }
             }
@@ -2586,31 +2234,26 @@ impl<'o> BuildState<'o> {
     }
 
     /// VALUE INVENTION: the graph derives its own support set.
-    fn invent_values(&mut self) -> Result<(), PrepareError> {
+    fn invent_values(&mut self) -> Result<(), SimulateError> {
         self.report(PreparePhase::ValueInvention, 0, None, "")?;
-        let vi = run_value_invention_with_params(
+        // The producers read each scalar parameter from this build's scalar
+        // scope, as its observeds do.
+        let params: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(self.param_vals.iter().copied())
+            .collect();
+        let vi = run_value_invention_in_scope(
             &self.model,
             &self.index_sets,
             Some(&self.arrays),
-            &self.opts.parameters,
+            &params,
         )
-        .map_err(|e| err(format!("value invention: {e}")))?;
+        .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
-        // a gated fetch). Every key is a scalar integer.
-        let members: HashMap<String, Vec<i64>> = vi
-            .members
-            .iter()
-            .map(|(faq, mem)| {
-                let ids = mem
-                    .iter()
-                    .map(|k| match k {
-                        crate::relational::Key::Int(i) => *i,
-                        other => unreachable!("value-invention keys are scalar: {other:?}"),
-                    })
-                    .collect();
-                (faq.clone(), ids)
-            })
-            .collect();
+        // a gated fetch).
+        let members = vi.member_ids();
         let mut producers: Vec<&String> = members.keys().collect();
         producers.sort();
         for faq in producers {
@@ -2621,30 +2264,24 @@ impl<'o> BuildState<'o> {
             });
         }
         self.members = members;
-        self.extents = vi.extents.clone();
+        self.extents = vi.extents;
         Ok(())
     }
 
-    /// Hook 1: derived-set member ids fed back as the member_factor.
-    ///
-    /// Collected and SORTED first, so both the observed event stream and the
-    /// verbose narration are deterministic; `index_sets` is a `HashMap` and
-    /// iterating it directly made the order vary run to run.
-    fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
-        let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
-            .index_sets
-            .iter()
-            .filter(|(_, is)| is.kind == "derived")
-            .filter_map(|(sname, is)| {
-                let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
-                Some((sname, mf, self.members.get(faq)?))
-            })
-            .collect();
-        mf_sets.sort_by(|a, b| a.0.cmp(b.0));
-        let n_mf = mf_sets.len();
-        for (i, (sname, mf, mem)) in mf_sets.into_iter().enumerate() {
+    /// Hook 1: derived-set member ids fed back as the member_factor, in
+    /// set-name order ([`member_factor_columns`], the compile's own columns),
+    /// so the observed event stream and the verbose narration are
+    /// deterministic.
+    fn feed_member_factors(&mut self) -> Result<(), SimulateError> {
+        let columns = member_factor_columns(&self.index_sets, &self.members, None);
+        let n_mf = columns.len();
+        for (i, column) in columns.into_iter().enumerate() {
+            let MemberFactorColumn {
+                set: sname,
+                factor: mf,
+                ids: v,
+            } = column;
             self.report(PreparePhase::MemberFactors, i, Some(n_mf), mf.as_str())?;
-            let v: Vec<f64> = mem.iter().map(|&m| m as f64).collect();
             self.log(&format!(
                 "  [prepare] member_factor {mf} <- |{sname}| = {}",
                 v.len()
@@ -2653,7 +2290,7 @@ impl<'o> BuildState<'o> {
                 .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
             // The registry names the factor as its model declares it; the
             // whole-document build reads it as `Model.<factor>`.
-            let name = self.array_name(mf)?;
+            let name = self.declared_name(&mf)?;
             self.arrays.insert(name, arr);
         }
         self.report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
@@ -2670,7 +2307,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: Vec<GatedProvider>,
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());
         for (key, prov, gate) in &gated {
             if gate.applies_to.len() != 1 {
@@ -2687,7 +2324,13 @@ impl<'o> BuildState<'o> {
                 match &plan.selection[plan.gated_pos] {
                     AxisSel::Indices(idx) => idx
                         .len()
-                        .div_ceil(self.opts.gated_fetch_batch.unwrap_or(usize::MAX).max(1))
+                        .div_ceil(
+                            self.opts
+                                .problem
+                                .gated_fetch_batch
+                                .unwrap_or(usize::MAX)
+                                .max(1),
+                        )
                         .max(1),
                     // Neither is a support set, so `run_gated_fetch` refuses them —
                     // but it refuses them THERE, with a message naming the provider.
@@ -2713,7 +2356,7 @@ impl<'o> BuildState<'o> {
                 &key,
                 prov.as_mut(),
                 &plan,
-                opts.gated_fetch_batch,
+                opts.problem.gated_fetch_batch,
                 &mut issued,
                 total_requests,
                 &mut report,
@@ -2763,7 +2406,7 @@ impl<'o> BuildState<'o> {
     }
 
     /// Narrow the observed graph to the dependency cone of
-    /// [`PrepareOptions::observed_cone`], when the built model has nothing to
+    /// [`crate::problem::ProblemOptions::observed_cone`], when the built model has nothing to
     /// integrate.
     ///
     /// Runs AFTER the coordinate pre-pass, value invention and member-factor
@@ -2795,7 +2438,7 @@ impl<'o> BuildState<'o> {
     /// right-hand side, and which of them it reads is the compiler's business,
     /// not the request's.
     fn prune_to_observed_cone(&mut self) {
-        let Some(requested) = &self.opts.observed_cone else {
+        let Some(requested) = &self.opts.problem.observed_cone else {
             return;
         };
         let class = crate::classification::Classification::of(&self.model);
@@ -2850,29 +2493,17 @@ impl<'o> BuildState<'o> {
         &mut self,
         gated: &[GatedProvider],
         pd_coupling: &[(String, String)],
-    ) -> Result<(), PrepareError> {
+    ) -> Result<(), SimulateError> {
         // A gate that does not name exactly one variable is refused by the
         // fetch itself, with its own message; nothing is moved ahead of that.
         if gated.is_empty() || gated.iter().any(|(_, _, g)| g.applies_to.len() != 1) {
             return Ok(());
         }
-        let mut after: HashSet<String> = gated
+        let gated_targets: HashSet<String> = gated
             .iter()
             .map(|(key, _, gate)| self.gated_target(key, gate, pd_coupling))
             .collect::<Result<_, _>>()?;
-        let seeds = after.clone();
-        // `order` is dependency order, so one pass closes the set.
-        for name in &self.order {
-            let mut reads = HashSet::new();
-            declared_args(&self.defs[name], &mut reads);
-            join_names(&self.defs[name], &mut reads);
-            if reads.iter().any(|r| after.contains(r)) {
-                after.insert(name.clone());
-            }
-        }
-        for s in &seeds {
-            after.remove(s);
-        }
+        let after = self.deps.reaching(&gated_targets);
         self.eval_observeds(&after, false)
     }
 
@@ -2881,14 +2512,14 @@ impl<'o> BuildState<'o> {
     /// Every observed that still needs evaluating, counted up front: `order`
     /// includes the coordinate pre-pass's products, and a `total` that a `continue`
     /// silently makes unreachable is a bar that never fills.
-    fn eval_observed_graph(&mut self) -> Result<(), PrepareError> {
+    fn eval_observed_graph(&mut self) -> Result<(), SimulateError> {
         self.eval_observeds(&HashSet::new(), true)
     }
 
     /// One pass over the pending observeds, skipping `skip` and what an
     /// earlier pass evaluated. The last pass (`last`) moves every evaluated
     /// observed into `fields`; so does any pass that ends in a refusal.
-    fn eval_observeds(&mut self, skip: &HashSet<String>, last: bool) -> Result<(), PrepareError> {
+    fn eval_observeds(&mut self, skip: &HashSet<String>, last: bool) -> Result<(), SimulateError> {
         let pending: Vec<String> = self
             .order
             .iter()
@@ -2936,11 +2567,7 @@ impl<'o> BuildState<'o> {
             let (a, route) = match eval_observed(
                 name,
                 &expr,
-                &self.arrays,
-                &self.param_vals,
-                &self.param_names,
-                &self.extents,
-                &self.const_scope,
+                &self.scope(&self.extents),
                 self.fill_shape(name).as_deref(),
                 &self.scalar_shape(name),
                 self.opts.refuse_per_cell,
@@ -2989,8 +2616,8 @@ impl<'o> BuildState<'o> {
 
     /// [`crate::row_dedup`]: evaluate `name` over one representative row per
     /// distinct key signature and scatter the result back, or `None` to
-    /// evaluate it as written. Only a rule the tape or the whole-array overlay
-    /// takes is kept; a per-cell walk or a refusal is evaluated as written, so
+    /// evaluate it as written. Only a rule the tape or the reference evaluator
+    /// takes over whole arrays is kept; a per-cell walk or a refusal is evaluated as written, so
     /// what is recorded or refused is what it would have been. That second
     /// evaluation happens only on a refusal, which ends the pipeline; the
     /// syntactic [`crate::row_dedup::plan`] declines every other rule before
@@ -2999,7 +2626,7 @@ impl<'o> BuildState<'o> {
         &mut self,
         name: &str,
         expr: &Expr,
-    ) -> Result<Option<(ArrayD<f64>, Route)>, PrepareError> {
+    ) -> Result<Option<(ArrayD<f64>, Route)>, SimulateError> {
         // Only under a strict compiler: the reference interpreter is the
         // oracle the fast tiers are checked against, and promises nothing
         // about speed.
@@ -3027,11 +2654,7 @@ impl<'o> BuildState<'o> {
         let res = eval_observed(
             name,
             &plan.expr,
-            &self.arrays,
-            &self.param_vals,
-            &self.param_names,
-            &self.extents,
-            &self.const_scope,
+            &self.scope(&self.extents),
             fill.as_deref(),
             &scalar,
             self.opts.refuse_per_cell,
@@ -3040,7 +2663,7 @@ impl<'o> BuildState<'o> {
             self.arrays.remove(n);
         }
         Ok(match res {
-            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Overlay))) => {
+            Ok(Evaluated::Field(a, route @ (Route::Tape | Route::Whole))) => {
                 let out = crate::row_dedup::expand(&plan, a).map(|a| (a, route));
                 if out.is_some() {
                     crate::row_dedup::note_applied();
@@ -3070,16 +2693,20 @@ impl<'o> BuildState<'o> {
                 Spelling::ModelLocal(m) => Some(m),
                 Spelling::Qualified => None,
             },
+            file: self.file,
             flattened: self.flattened,
-            fields: self.fields,
+            products: crate::problem::BuildProducts {
+                fields: self.fields,
+                members: self.members,
+                extents: self.extents,
+                gated_provider_keys: self.gated_keys,
+                built_variables: self.built_variables,
+                ..Default::default()
+            },
             data_fields,
-            members: self.members,
-            extents: self.extents,
-            gated_provider_keys: self.gated_keys,
             rules: self.rules,
             refused: self.refused,
             observed_cone_applied: self.cone_applied,
-            built_variables: self.built_variables,
         }
     }
 }
@@ -3088,42 +2715,49 @@ impl<'o> BuildState<'o> {
 // The adapter EsmProblem construction goes through.
 // --------------------------------------------------------------------------- //
 
-/// Run the build pipeline for [`crate::problem::esm_problem`], translating
-/// [`crate::problem::ProblemOptions`] into this module's internal option
-/// struct and its error into [`SimulateError`].
+/// Run the build pipeline for [`crate::problem::esm_problem`] over `opts`.
 ///
-/// Consumes `opts`'s build providers and const arrays: they are moved into the
+/// Consumes `opts`'s CONST providers and const arrays: they are moved into the
 /// pipeline, which is the one place they are used.
 pub(crate) fn run_build_pipeline(
     doc: &JsonValue,
+    t0: f64,
     opts: &mut crate::problem::ProblemOptions,
 ) -> Result<PreparedBuild, crate::simulate::SimulateError> {
-    let internal = PrepareOptions {
-        model_name: opts.model_name.clone(),
-        metaparameters: opts.metaparameters.clone(),
-        base_path: opts.base_path.clone(),
-        pushdown_rewrite: opts.pushdown_rewrite,
-        parameters: opts.p.clone(),
-        verbose: opts.verbose,
-        progress: opts.progress.clone(),
-        gated_fetch_batch: opts.gated_fetch_batch,
-        refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
-        observed_cone: opts.observed_cone.clone(),
-    };
     let const_arrays = std::mem::take(&mut opts.const_arrays);
-    let providers = std::mem::take(&mut opts.build_providers);
-    run_prepare(doc, const_arrays, providers, &internal).map_err(|e| {
-        // A cancel keeps its own identity across the boundary: `is_cancelled`
-        // must still answer "the caller stopped this" rather than "the build
-        // failed", which is the whole point of the marker.
-        if e.is_cancelled() {
-            crate::simulate::SimulateError::Cancelled { details: e.0 }
-        } else {
-            crate::simulate::SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError { details: e.0 },
-            )
-        }
-    })
+    // The CONST providers, in key order, when the caller asked for this
+    // pipeline; the run-time executor takes the rest.
+    let takes = crate::problem::pipeline_takes_providers(opts);
+    let mut keys: Vec<String> = opts
+        .providers
+        .iter()
+        .filter(|(_, p)| takes && p.refresh_times().is_empty())
+        .map(|(k, _)| k.clone())
+        .collect();
+    keys.sort();
+    let providers = keys
+        .into_iter()
+        .map(|k| {
+            let p = opts.providers.remove(&k).expect("a key of the map");
+            (k, p)
+        })
+        .collect();
+    let ctx = BuildContext {
+        problem: opts,
+        t0,
+        refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
+    };
+    run_prepare(doc, const_arrays, providers, &ctx)
+}
+
+/// Whether `file`'s one model built alone is the whole system `flatten(file)`
+/// builds: the document is that model, with no reaction system and no
+/// coupling beside it, which is exactly what [`BuildState::model_alone`]
+/// removes.
+fn builds_alone_as_itself(file: &crate::EsmFile) -> bool {
+    file.models.as_ref().is_some_and(|m| m.len() == 1)
+        && file.reaction_systems.as_ref().is_none_or(|r| r.is_empty())
+        && file.coupling.as_ref().is_none_or(|c| c.is_empty())
 }
 
 /// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
@@ -3249,18 +2883,22 @@ mod first_cell_stop_tests {
             .collect()
     }
 
+    /// Each of the two observeds is a `faq` the reference evaluator would
+    /// walk per cell, so each costs one walked cell before it goes to the
+    /// tape: two, whatever the size.
     #[test]
-    fn a_large_prefix_scan_is_taped_after_at_most_one_walked_cell() {
+    fn a_large_prefix_scan_is_taped_after_one_walked_cell_per_observed() {
         let (native, cells) = native_cells(&cumulative(LARGE));
         assert!(
-            cells <= 1,
-            "the walk must stop at its first cell, walked {cells}"
+            cells <= 2,
+            "each walk must stop at its first cell, walked {cells}"
         );
 
-        // The reference evaluator still walks every cell, to the same answer.
+        // The reference evaluator still walks every cell of both, to the same
+        // answer.
         let before = per_cell_cells();
         let prob = build(&cumulative(LARGE), Compiler::Interpreter).expect("interpreter");
-        assert_eq!(per_cell_cells() - before, LARGE as u64);
+        assert_eq!(per_cell_cells() - before, 2 * LARGE as u64);
         let cum = crate::problem::observed_field(&prob, "Rel.cum").expect("cum");
         let n = LARGE as f64;
         assert_eq!(cum.iter().last().copied(), Some(5.0 * n * (n + 1.0)));
@@ -3626,7 +3264,9 @@ mod whole_document_tests {
     //! The whole-document build (several models, none selected): how its names
     //! are spelled, and the flattened system it hands the compile path.
 
-    use super::{KeyMatch, PrepareOptions, Spelling, run_prepare};
+    use super::{BuildContext, Spelling, run_prepare};
+    use crate::problem::{ProblemOptions, esm_problem};
+    use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -3634,35 +3274,63 @@ mod whole_document_tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn a_model_local_bare_key_reaches_every_name_it_ends() {
-        let declared = names(&["k", "Leaf.k", "Other.k", "m"]);
-        let s = Spelling::ModelLocal("M".into());
-        let got = s.resolve("k", &declared).unwrap();
-        assert_eq!(
-            got,
-            vec![
-                ("k", KeyMatch::Exact),
-                ("Leaf.k", KeyMatch::BareTail),
-                ("Other.k", KeyMatch::BareTail)
-            ]
-        );
-        assert_eq!(
-            s.resolve("M.Leaf.k", &declared).unwrap(),
-            vec![("Leaf.k", KeyMatch::ModelPrefixed)]
-        );
-        assert_eq!(s.resolve_one("k", &declared).unwrap(), Some("k"));
+    fn resolver(s: &Spelling, declared: &[String]) -> crate::simulate::KeyResolver {
+        let names = declared.iter().map(String::as_str);
+        s.resolver(names.clone(), names)
     }
 
     #[test]
-    fn a_qualified_bare_key_reaches_one_name_or_is_refused() {
+    fn a_model_local_bare_key_reaches_every_name_it_ends() {
+        let declared = names(&["k", "Leaf.k", "Other.k", "m"]);
+        let r = resolver(&Spelling::ModelLocal("M".into()), &declared);
+        let got = r.designates("k").unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("k".to_string(), KeyMatch::Exact),
+                ("Leaf.k".to_string(), KeyMatch::Suffix),
+                ("Other.k".to_string(), KeyMatch::Suffix)
+            ]
+        );
+        assert_eq!(
+            r.designates("M.Leaf.k").unwrap(),
+            vec![("Leaf.k".to_string(), KeyMatch::ModelPrefixed)]
+        );
+        assert_eq!(r.strongest("k").unwrap().as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn a_qualified_key_designates_by_the_spec_rules() {
         let declared = names(&["A.k", "B.k", "A.m"]);
-        let s = Spelling::Qualified;
-        assert_eq!(s.resolve_one("m", &declared).unwrap(), Some("A.m"));
-        assert_eq!(s.resolve_one("A.k", &declared).unwrap(), Some("A.k"));
-        assert_eq!(s.resolve_one("nothing", &declared).unwrap(), None);
-        let e = s.resolve("k", &declared).unwrap_err().0;
-        assert!(e.contains("qualify it as one of: A.k, B.k"), "{e}");
+        let r = resolver(&Spelling::Qualified, &declared);
+        let one = |k: &str| {
+            r.designates(k)
+                .unwrap()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(one("m"), ["A.m"]);
+        assert_eq!(one("A.k"), ["A.k"]);
+        assert!(one("nothing").is_empty());
+        let nested = names(&["P.sub.g", "Q.g"]);
+        let rn = resolver(&Spelling::Qualified, &nested);
+        assert_eq!(rn.designates("sub.g").unwrap()[0].0, "P.sub.g");
+        // Rule 2: a leading segment that names a namespace is dropped; one
+        // that names nothing is not.
+        let rl = resolver(&Spelling::Qualified, &names(&["sub.k", "A.x"]));
+        assert_eq!(rl.designates("A.sub.k").unwrap()[0].0, "sub.k");
+        assert!(rl.designates("Typo.sub.k").unwrap().is_empty());
+        match r.designates("k") {
+            Err(crate::simulate::OverrideKeyError::Ambiguous { candidates, .. }) => {
+                assert_eq!(candidates, ["A.k", "B.k"])
+            }
+            other => panic!("{other:?}"),
+        }
+        // Two keys for one variable collide; an exact key shadows the rest.
+        assert!(r.canonical(["m", "A.m"]).unwrap()["A.m"] == "A.m");
+        let rk = resolver(&Spelling::Qualified, &names(&["A.k", "A.sub.m"]));
+        assert!(rk.canonical(["m", "sub.m"]).is_err());
     }
 
     fn model(rhs: f64) -> Value {
@@ -3676,25 +3344,115 @@ mod whole_document_tests {
         json!({"esm": "2.0.0", "metadata": {"name": "w"}, "models": models})
     }
 
-    #[test]
-    fn the_whole_document_build_hands_its_flattened_system_forward() {
-        let opts = PrepareOptions::default();
-        let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
-        let prepared = run_prepare(&two, HashMap::new(), Vec::new(), &opts).unwrap();
-        assert_eq!(prepared.model_name, None);
+    fn prepared_with(d: &Value, model_name: Option<&str>) -> super::PreparedBuild {
+        let problem = crate::problem::ProblemOptions {
+            model_name: model_name.map(str::to_string),
+            ..Default::default()
+        };
+        let opts = BuildContext {
+            problem: &problem,
+            t0: 0.0,
+            refuse_per_cell: false,
+        };
+        run_prepare(d, HashMap::new(), Vec::new(), &opts).unwrap()
+    }
+
+    /// The flattened system the pipeline hands forward is `flatten` of the
+    /// document it loaded.
+    fn assert_is_flatten_of(prepared: super::PreparedBuild, d: &Value) {
         let flat = prepared
             .flattened
-            .expect("the whole-document build's flattened system");
-        let again =
-            crate::flatten::flatten(&crate::load_string(&two.to_string()).unwrap()).unwrap();
+            .expect("a flattened system handed forward");
+        let again = crate::flatten::flatten(&crate::load_string(&d.to_string()).unwrap()).unwrap();
         assert_eq!(
             serde_json::to_value(&flat).unwrap(),
             serde_json::to_value(&again).unwrap()
         );
+    }
 
+    #[test]
+    fn the_pipeline_hands_its_flattened_system_forward_when_it_is_the_documents() {
+        let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
+        let prepared = prepared_with(&two, None);
+        assert_eq!(prepared.model_name, None);
+        assert_is_flatten_of(prepared, &two);
+
+        // A document that is one model: built alone, it is the whole system.
         let one = doc(json!({"A": model(1.0)}));
-        let prepared = run_prepare(&one, HashMap::new(), Vec::new(), &opts).unwrap();
+        let prepared = prepared_with(&one, None);
+        assert_eq!(prepared.model_name.as_deref(), Some("A"));
+        assert_is_flatten_of(prepared, &one);
+
+        // One model selected out of two is not the document's system.
+        let prepared = prepared_with(&two, Some("A"));
         assert_eq!(prepared.model_name.as_deref(), Some("A"));
         assert!(prepared.flattened.is_none());
+    }
+
+    struct Column(Vec<f64>);
+
+    impl crate::provider::DataProvider for Column {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
+            Ok(
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[self.0.len()]), self.0.clone())
+                    .unwrap(),
+            )
+        }
+    }
+
+    /// A dynamic document whose derived set is invented from a provider's
+    /// data: the compile sizes the set from the pipeline's value invention,
+    /// which read that data, so a rate over the set compiles.
+    #[test]
+    fn the_compile_sizes_a_derived_set_from_the_pipelines_value_invention() {
+        let key = json!({"op": "index", "args": ["code", "f"]});
+        let d = json!({
+            "esm": "2.0.0", "metadata": {"name": "Codes"},
+            "index_sets": {
+                "faces": {"kind": "interval", "size": 4},
+                "kinds": {"kind": "derived", "from_faq": "kind_set"}
+            },
+            "data_sources": {"src": {"kind": "static",
+                                     "source": {"url_template": "never-read.parquet"}}},
+            "models": {"Codes": {
+                "variables": {
+                    "code": {"type": "parameter", "shape": ["faces"], "default": 0.0,
+                             "update": {"kind": "data", "source": "src",
+                                        "from": {"file_variable": "code"}}},
+                    "kind_exists": {"type": "unknown", "shape": ["kinds"]},
+                    "n": {"type": "unknown"},
+                    "x": {"type": "unknown", "default": 0.0}
+                },
+                "equations": [
+                    {"lhs": {"op": "index", "args": ["kind_exists", "k"]},
+                     "rhs": {"op": "faq", "args": [], "id": "kind_set",
+                             "semiring": "bool_and_or", "distinct": true,
+                             "output_idx": ["k"], "ranges": {"f": {"from": "faces"}},
+                             "key": key, "expr": {"op": "true", "args": []}}},
+                    {"lhs": "n",
+                     "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                             "output_idx": [], "ranges": {"k": {"from": "kinds"}},
+                             "expr": 1.0}},
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "n"}
+                ]
+            }}
+        });
+        let mut providers: HashMap<String, Box<dyn crate::provider::DataProvider>> = HashMap::new();
+        providers.insert(
+            "Codes.code".to_string(),
+            Box::new(Column(vec![3.0, 1.0, 3.0, 2.0])),
+        );
+        let prob = esm_problem(
+            &d,
+            (0.0, 1.0),
+            ProblemOptions {
+                build_pipeline: true,
+                providers,
+                ..Default::default()
+            },
+        )
+        .expect("the compile takes the pipeline's three members");
+        assert_eq!(prob.extents().get("kind_set"), Some(&3));
+        assert_eq!(prob.members()["kind_set"], vec![1, 2, 3]);
     }
 }

@@ -548,8 +548,7 @@ reference-preserving byte form instead.
 """
 function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
-    _raise_faq_esm_floor!(serialized)
-    _raise_variable_bounds_esm_floor!(serialized)
+    _raise_esm_floors!(serialized)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
         # references / materialized registries emits in the canonical
@@ -833,35 +832,36 @@ function _contains_faq(node)::Bool
 end
 
 """
-    _raise_faq_esm_floor!(doc)
+    _raise_esm_floors!(doc)
 
-Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
-node but declares less.
+Raise an emitted document's declared `esm` to the lowest version that admits
+every floored construct it contains (esm-spec §4.7, "Save-time version
+floors"): a `faq` node 1.1.0, `units` on an expression node 1.2.0, `lb` / `ub`
+on a model variable 2.1.0. The highest that applies wins and the declared
+version is never lowered.
 
-Like the §9.6.4 rule-8 template stamp ([`_esm_stamp_floor`](@ref)) this is a
-FLOOR — it only ever raises. A document can come to CONTAIN `faq` without ever
-spelling it: a 1.0.0 parent that mounts a subsystem whose child uses `faq` has
-the child inlined at load, and emitting that as 1.0.0 writes a document the
-`faq_version_too_old` gate then refuses to read back. The load-time gate cannot
-catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here.
-See `docs/content/rfcs/faq-node-rename.md` §5.5.
+A document can come to contain one of these without ever spelling it: a 1.0.0
+document that mounts a 1.2.0 leaf carrying a unit-bearing `const` has the leaf
+inlined at load, and emitting that as 1.0.0 writes a document the
+`const_units_version_too_old` gate refuses to read back. The load gates cannot
+catch it, since the mounting file's authored bytes are legal. Like the §9.6.4
+rule-8 template stamp ([`_esm_stamp_floor`](@ref)) it only ever raises.
 """
-function _raise_faq_esm_floor!(doc)
+function _raise_esm_floors!(doc)
     doc isa AbstractDict || return doc
-    esm = nothing
-    key_found = nothing
-    for key in (:esm, "esm")
-        if haskey(doc, key)
-            esm = get(doc, key, nothing); key_found = key; break
+    declared = _declared_minor(doc)
+    declared === nothing && return doc
+    floors = (
+        ((1, 1), _contains_faq),
+        ((1, 2), d -> _find_units_bearing_node(d, "") !== nothing),
+        ((2, 1), _has_variable_bound),
+    )
+    raised = nothing
+    for (floor, present) in floors
+        if floor > declared && (raised === nothing || floor > raised) && present(doc)
+            raised = floor
         end
     end
-    esm isa AbstractString || return doc
-    parts = split(String(esm), '.')
-    length(parts) >= 2 || return doc
-    major = tryparse(Int, parts[1]); minor = tryparse(Int, parts[2])
-    (major === nothing || minor === nothing) && return doc
-    if (major, minor) < (1, 1) && _contains_faq(doc)
-        doc[key_found] = "1.1.0"
-    end
+    raised === nothing || (doc["esm"] = "$(raised[1]).$(raised[2]).0")
     return doc
 end

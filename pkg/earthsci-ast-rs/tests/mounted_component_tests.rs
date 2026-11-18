@@ -16,7 +16,8 @@
 
 use std::path::PathBuf;
 
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{AssertionResult, load_path};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 
 use crate::common;
 
@@ -30,7 +31,13 @@ fn fixture(name: &str) -> PathBuf {
 fn run(name: &str) -> Vec<AssertionResult> {
     let path = fixture(name);
     let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent())
+    run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+    )
 }
 
 /// The leaf standalone: `k = 1`, so `u(1) = 1/e` and its own assertion holds.

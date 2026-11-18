@@ -22,103 +22,23 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_inline_tests_with_base_dir;
-use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::load_string;
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
+use crate::common::tier::{GoldenCheck, Tier};
 
 /// The issue #432 regression fixture: a `min` reduction over a shaped,
 /// state-free document (repo-root `tests/` relative).
 const MIN_REDUCTION_FIXTURE: &str = "valid/faq/min_reduction_static_shaped_document.esm";
 
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/static_evaluation_assertions")
-}
-
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
-    let rs = &manifest["integrators"]["rust"];
-    assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    SolveOptions {
-        alg: Alg::Erk,
-        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
-        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
-        ..Default::default()
-    }
-}
-
 #[test]
 fn static_evaluation_assertions_match_golden() {
-    let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(
-        manifest["category"].as_str(),
-        Some("static_evaluation_assertions")
-    );
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
-
-    let rtol = manifest["tolerances"]["assertion_rtol"]
-        .as_f64()
-        .expect("rtol");
-    let atol = manifest["tolerances"]["assertion_atol"]
-        .as_f64()
-        .expect("atol");
-    let opts = manifest_opts(&manifest);
-
-    for fx in manifest["fixtures"].as_array().expect("fixtures") {
-        let esm_path = dir.join(fx["path"].as_str().expect("path"));
-        let golden = read_json(&dir.join(fx["golden"].as_str().expect("golden")));
-        assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
-
-        let text =
-            fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-        let file = load_string(&text)
-            .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
-
-        let expected = golden["assertions"].as_array().expect("golden assertions");
-        assert_eq!(
-            results.len(),
-            expected.len(),
-            "{}: assertion count",
-            fx["id"]
-        );
-
-        for g in expected {
-            let test_id = g["test_id"].as_str().expect("test_id");
-            let idx = g["assertion_idx"].as_u64().expect("assertion_idx") as usize;
-            let r = results
-                .iter()
-                .find(|r| r.test_id == test_id && r.assertion_idx == idx)
-                .unwrap_or_else(|| panic!("missing assertion {test_id}#{idx}"));
-            assert!(r.passed, "{test_id}#{idx}: {}", r.message);
-            let actual = r
-                .actual
-                .unwrap_or_else(|| panic!("{test_id}#{idx}: no actual"));
-            let want = g["actual"].as_f64().expect("golden actual");
-            let diff = (actual - want).abs();
-            assert!(
-                diff <= atol || diff <= rtol * want.abs().max(actual.abs()),
-                "{test_id}#{idx}: actual {actual} vs golden {want}"
-            );
-        }
-    }
+    Tier::open("static_evaluation_assertions").check_all(&GoldenCheck {
+        by_test_id: true,
+        ..Default::default()
+    });
 }
 
 /// The regression itself, stated without the golden machinery: the SAME
@@ -150,7 +70,12 @@ fn an_algebraic_document_is_evaluated_at_every_asserted_time() {
     };
     for (time, expected) in [(0.0, 0.0), (5.0, 10.0), (10.0, 20.0)] {
         let file = load_string(&doc(time, expected)).expect("document loads");
-        let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                ..Default::default()
+            },
+        );
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(
@@ -194,7 +119,12 @@ fn declaring_system_kind_nonlinear_changes_nothing() {
     };
     let run = |declared: &str| {
         let file = load_string(&doc(declared)).expect("document loads");
-        let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                ..Default::default()
+            },
+        );
         assert_eq!(results.len(), 1);
         (results[0].passed, results[0].actual)
     };
@@ -238,7 +168,12 @@ fn a_static_assertion_outside_the_declared_span_is_refused() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 3);
     for id in ["past_end", "before_start"] {
         let r = results
@@ -294,7 +229,12 @@ fn a_state_free_shaped_observed_is_answered_at_every_asserted_time() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 2);
     for r in &results {
         assert!(
@@ -342,7 +282,12 @@ fn a_shaped_state_free_observed_of_t_is_refused_by_name() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 2);
     let away = results
         .iter()
@@ -403,7 +348,12 @@ fn a_reference_that_mentions_t_is_refused() {
       }}
     }"#;
     let file = load_string(doc).expect("document loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), None);
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 1);
     let r = &results[0];
     assert!(!r.passed, "actual {:?}", r.actual);
@@ -449,8 +399,13 @@ fn a_min_reduction_over_a_shaped_static_document_is_not_its_identity() {
     let path = common::repo_fixture(MIN_REDUCTION_FIXTURE);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&text).unwrap_or_else(|e| panic!("fixture {path:?} does not load: {e}"));
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 7, "fixture assertion count");
     for r in &results {
         assert!(

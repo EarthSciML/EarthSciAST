@@ -315,7 +315,6 @@ fn run(
             compiler: Some(compiler),
             model_name: Some("J".into()),
             const_arrays: consts,
-            build_providers: Vec::new(),
             ..Default::default()
         },
     )

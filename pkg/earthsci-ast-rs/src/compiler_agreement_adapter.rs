@@ -27,128 +27,36 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+pub use crate::adapter_support::Report;
+use crate::adapter_support::{
+    self, Answer, Manifest, Tier, bare, nearest_index, number, required_compiler, solver_alg,
+    time_key,
+};
 use crate::compile_error::CompileError;
-use crate::compiled_rhs_adapter::resolve_fixture_path;
 use crate::problem::{Compiler, ProblemOptions, Rhs, esm_problem, observed_trajectories, solve};
-use crate::simulate::{Alg, SimulateError, Solution, SolveOptions};
+use crate::simulate::{SimulateError, Solution, SolveOptions};
 use crate::types::EsmFile;
 
-/// The adapter's parsed command line.
-pub struct Args {
-    /// Path to the tier manifest.
-    pub manifest: PathBuf,
-    /// Path the report is written to.
-    pub output: PathBuf,
-    /// The compiler to build every fixture with. REQUIRED: one adapter binary
-    /// serves every compiler its binding offers, and a default would make the
-    /// report's `compiler` field a guess.
-    pub compiler: Compiler,
-}
+/// The adapter's parsed command line: `--manifest <m> --output <o>
+/// --compiler <c>`.
+pub type Args = adapter_support::Args<Compiler>;
 
-/// Parse `--manifest <m> --output <o> --compiler <c>`, rejecting anything else.
-///
-/// A value outside API_SPEC §5.8's closed vocabulary is `compiler_unknown` and
-/// fails the invocation: it is a typo, not a missing runtime, and the two must
-/// not read alike ([`Compiler::parse_named`]).
+/// Parse `--manifest <m> --output <o> --compiler <c>`, rejecting anything else
+/// ([`required_compiler`]).
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
-    let mut manifest: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut compiler: Option<Compiler> = None;
-    let mut it = args.into_iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--manifest" => manifest = it.next().map(PathBuf::from),
-            "--output" => output = it.next().map(PathBuf::from),
-            "--compiler" => {
-                let v = it.next().ok_or("--compiler needs a value")?;
-                compiler = Some(Compiler::parse_named(&v)?);
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
-    }
-    match (manifest, output, compiler) {
-        (Some(manifest), Some(output), Some(compiler)) => Ok(Args {
-            manifest,
-            output,
-            compiler,
-        }),
-        _ => Err("--manifest, --output and --compiler are required".to_string()),
-    }
+    adapter_support::parse_args(args, Some("--compiler"), required_compiler)
 }
 
-/// What a manifest run produced: the report payload to write, plus the ids of
-/// the fixtures that answered with an `error`.
-///
-/// The two are separate because they go to different places: `payload` is the
-/// adapter's JSON output, and `failed` decides the process exit code. A
-/// non-zero exit WITH a parsable report is legal (the contract says so) and is
-/// how a run that broke on one fixture still hands the runner the rest.
-pub struct Report {
-    /// The document written to `--output`.
-    pub payload: Value,
-    /// Ids of fixtures whose entry is an `error`.
-    pub failed: Vec<String>,
-}
+/// This tier under one compiler.
+pub struct CompilerAgreement(pub Compiler);
 
-/// Strip a leading `Model.` namespace: the tier's keys are bare column-major
-/// element names, the spelling `compiled_rhs` and `pde_simulation` use.
-fn bare(name: &str) -> &str {
-    name.split_once('.').map(|x| x.1).unwrap_or(name)
-}
-
-/// A save-time key, the adapter's own float repr. The runner canonicalizes both
-/// sides and matches by numeric value, so only the round trip matters.
-fn time_key(t: f64) -> String {
-    format!("{t}")
-}
-
-/// One value as JSON. `json!(f64)` writes a non-finite as `null`, which reads
-/// back as NaN; the contract prefers the string `float()` parses, so a
-/// regression fails its own element's comparison by name instead of arriving
-/// as a silent NaN.
-fn num(v: f64) -> Value {
-    if v.is_finite() {
-        json!(v)
-    } else if v.is_nan() {
-        json!("NaN")
-    } else if v > 0.0 {
-        json!("Infinity")
-    } else {
-        json!("-Infinity")
-    }
-}
-
-/// Index of the solution sample closest to `t` (`total_cmp`, so a NaN sample
-/// cannot panic the comparison). `saveat` pins the grid; this matches
-/// defensively, exactly as the PDE-simulation adapter does.
-fn nearest_index(times: &[f64], t: f64) -> Option<usize> {
-    (0..times.len()).min_by(|&a, &b| (times[a] - t).abs().total_cmp(&(times[b] - t).abs()))
-}
-
-/// The algorithm this fixture integrates with.
-///
-/// esm-spec §2.2's `solver` block is the document's declaration about ITSELF,
-/// and `stiffness: "high"` selects the stiff family — the rule the reference
-/// adapter applies too, so a document that declares itself stiff is integrated
-/// the same way in both bindings. Everything else takes the explicit
-/// Runge-Kutta arm rather than this binding's stiff DEFAULT: the tier compares
-/// trajectories NUMERICALLY against a reference produced by the Tsitouras 5(4)
-/// tableau this arm implements, and two different integrators at the same
-/// tolerance disagree by more than the fixture's band for reasons that have
-/// nothing to do with the compiler under test.
-///
-/// The TOLERANCES are not taken from the block: the manifest's per-fixture
-/// `integration` is what the adapter passes to `solve`, because a conformance
-/// tier has an opinion about the integrator's error and states it per fixture.
-fn solver_alg(file: &EsmFile) -> Alg {
-    match file.solver.as_ref().and_then(|s| s.stiffness.as_deref()) {
-        Some("high") => Alg::Bdf,
-        _ => Alg::Erk,
-    }
+/// The tier the binary's `--compiler` names ([`required_compiler`]).
+pub fn configure(value: Option<&str>) -> Result<CompilerAgreement, String> {
+    required_compiler(value).map(CompilerAgreement)
 }
 
 /// The run one fixture describes: what to seed, how long for, and when to save.
@@ -310,7 +218,7 @@ fn state_rows(sol: &Solution, saveat: &[f64]) -> Result<Value, String> {
         let idx = nearest_index(&sol.time, t).ok_or("the solution has no time grid")?;
         let mut row = Map::new();
         for (r, name) in sol.state_variable_names.iter().enumerate() {
-            row.insert(bare(name).to_string(), num(sol.state[r][idx]));
+            row.insert(bare(name).to_string(), number(sol.state[r][idx]));
         }
         rows.insert(time_key(t), Value::Object(row));
     }
@@ -337,25 +245,15 @@ fn observed_series(
                 .get(idx)
                 .copied()
                 .ok_or_else(|| format!("observed {name:?} has no sample at t={t}"))?;
-            m.insert(time_key(t), num(v));
+            m.insert(time_key(t), number(v));
         }
         out.insert(bare(&name).to_string(), Value::Object(m));
     }
     Ok(Value::Object(out))
 }
 
-/// What one fixture answered: an entry for the report, or the whole-output
-/// `unavailable` this compiler forces.
-enum Answer {
-    Entry(Value),
-    /// The build said `compiler_unavailable`, which is a fact about this
-    /// binding rather than about this document.
-    Unavailable(String),
-}
-
-fn run_fixture(fx: &Value, manifest_dir: &Path, compiler: Compiler) -> Result<Answer, String> {
-    let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
-    let path = resolve_fixture_path(manifest_dir, rel)?;
+fn run_fixture(fx: &Value, manifest: &Manifest, compiler: Compiler) -> Result<Answer, String> {
+    let path = manifest.fixture_path(fx)?;
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let file = crate::load_string(&text).map_err(|e| format!("load: {e:?}"))?;
     let model = fx["model"].as_str().ok_or("fixture.model missing")?;
@@ -426,56 +324,20 @@ fn run_fixture(fx: &Value, manifest_dir: &Path, compiler: Compiler) -> Result<An
     })))
 }
 
-/// Run a whole manifest under one compiler and build the report payload.
-///
-/// Every fixture is attempted; one that throws becomes its own `error` entry
-/// and the run continues, so a single broken fixture cannot hide the rest. The
-/// first `compiler_unavailable` ends the run and replaces the whole payload:
-/// availability is a property of the binding, and reporting it per fixture
-/// would make a missing runtime look like a coverage gap.
-pub fn run_manifest(manifest_path: &Path, compiler: Compiler) -> Result<Report, String> {
-    let text = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("failed to read manifest {}: {e}", manifest_path.display()))?;
-    let manifest: Value =
-        serde_json::from_str(&text).map_err(|e| format!("failed to parse manifest: {e}"))?;
-    // Absolutize BEFORE taking the parent: fixture paths are resolved by
-    // walking up to the nearest ancestor `tests` directory, and a relative
-    // `--manifest` has no ancestors above its own first segment.
-    let abs = std::path::absolute(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
-    let manifest_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
-
-    let empty: Vec<Value> = Vec::new();
-    let mut fixtures = Map::new();
-    let mut failed = Vec::new();
-    for fx in manifest["fixtures"].as_array().unwrap_or(&empty) {
-        let id = fx["id"].as_str().unwrap_or("<unknown>").to_string();
-        let entry = match run_fixture(fx, &manifest_dir, compiler) {
-            Ok(Answer::Entry(v)) => v,
-            Ok(Answer::Unavailable(reason)) => {
-                return Ok(Report {
-                    payload: json!({
-                        "binding": "rust",
-                        "compiler": compiler.as_str(),
-                        "status": "unavailable",
-                        "reason": reason,
-                    }),
-                    failed: Vec::new(),
-                });
-            }
-            Err(e) => {
-                eprintln!("fixture {id}: {e}");
-                failed.push(id.clone());
-                json!({ "error": e })
-            }
-        };
-        fixtures.insert(id, entry);
+impl Tier for CompilerAgreement {
+    fn header(&self) -> Option<(&'static str, &'static str)> {
+        Some(("compiler", self.0.as_str()))
     }
-    Ok(Report {
-        payload: json!({
-            "binding": "rust",
-            "compiler": compiler.as_str(),
-            "fixtures": Value::Object(fixtures),
-        }),
-        failed,
-    })
+
+    fn run_fixture(&self, fx: &Value, manifest: &Manifest) -> Result<Answer, String> {
+        run_fixture(fx, manifest, self.0)
+    }
+}
+
+/// Run a whole manifest under one compiler and build the report
+/// ([`adapter_support::run_manifest`]): a fixture that throws is its own
+/// `error` entry, and the first `compiler_unavailable` replaces the whole
+/// payload.
+pub fn run_manifest(manifest_path: &Path, compiler: Compiler) -> Result<Report, String> {
+    adapter_support::run_manifest(&CompilerAgreement(compiler), manifest_path)
 }

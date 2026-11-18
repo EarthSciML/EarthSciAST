@@ -14,8 +14,7 @@
 //!
 //!   1. a declined rule is a `compiler_refused_rule` error naming the rule
 //!      and the reason;
-//!   2. a fully taped model solves, and its `SolutionMetadata::tape_fallbacks`
-//!      (kept for the metadata shape) is empty.
+//!   2. a fully taped model solves.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -277,13 +276,8 @@ fn a_declined_rule_is_a_named_refusal() {
 }
 
 #[test]
-fn a_fully_taped_model_reports_no_fallbacks() {
+fn a_fully_taped_model_solves() {
     let sol = run(TAPED_MODEL).expect("fixture simulates");
-    assert!(
-        sol.metadata.tape_fallbacks.is_empty(),
-        "nothing in this model is unvectorizable, so the list must be empty: {:?}",
-        sol.metadata.tape_fallbacks
-    );
     // The negative control is only worth anything if the model actually ran.
     assert!(sol.time.len() > 1, "the fixture must have integrated");
 }

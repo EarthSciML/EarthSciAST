@@ -51,6 +51,8 @@ use earthsci_ast::{
 };
 use serde_json::json;
 
+use crate::common;
+
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/evaluable_core")
@@ -75,7 +77,6 @@ fn a_true_body_counts_instead_of_panicking() {
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             ..Default::default()
         },
-        None,
     );
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {
@@ -358,8 +359,7 @@ fn an_ordinary_scalar_document_still_answers() {
 /// same as in the other four bindings.
 #[test]
 fn the_shared_unevaluable_operator_fixture_is_refused_by_evaluate() {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/unevaluable_operator/cases.json");
+    let path = common::repo_fixture("conformance/unevaluable_operator/cases.json");
     let fixture: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read fixture"))
             .expect("fixture is JSON");

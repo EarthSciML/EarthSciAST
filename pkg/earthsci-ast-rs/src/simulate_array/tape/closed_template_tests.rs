@@ -15,119 +15,30 @@
 //! agree with the oracle; a successor that does leave the array
 //! (`ifelse(k < n, k + 2, 1)`, `ifelse(k <= n, k + 1, 1)`) still declines.
 
-use super::super::{ArrayCompiled, RhsStats};
 use super::ir::Instr;
-use super::lowering_limit_tests::oracle_ab;
-use super::tests::seeded_state;
+use super::template_fixtures::{argmin_doc, calendar_doc, cells, overlap_doc, relational_doc};
+use super::test_support::{
+    apply, compile, count_where, d_lhs, document, faq, fast_dy, idx, ix, library, op, oracle_ab,
+    seeded_state,
+};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
-fn op(o: &str, args: Vec<Value>) -> Value {
-    json!({"op": o, "args": args})
-}
-
-fn ix(v: &str, subs: Vec<Value>) -> Value {
-    let mut args = vec![json!(v)];
-    args.extend(subs);
-    json!({"op": "index", "args": args})
-}
-
-fn apply(name: &str, bindings: Value) -> Value {
-    json!({"op": "apply_expression_template", "args": [], "name": name, "bindings": bindings})
-}
-
-fn faq(expr: Value, out: Vec<&str>, ranges: Value) -> Value {
-    json!({"op": "faq", "args": [], "output_idx": out, "ranges": ranges, "expr": expr})
-}
-
-fn d_lhs(v: &str, out: Vec<&str>, ranges: Value) -> Value {
-    let subs = out.iter().map(|s| json!(s)).collect();
-    faq(
-        json!({"op": "D", "args": [ix(v, subs)], "wrt": "t"}),
-        out,
-        ranges,
-    )
-}
-
-/// `lib/<file>`'s `expression_templates`.
-fn library(file: &str) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../lib")
-        .join(file);
-    let text = std::fs::read_to_string(&path).expect("library file");
-    let lib: Value = serde_json::from_str(&text).expect("library parses");
-    lib["expression_templates"].clone()
-}
-
-fn document(name: &str, sets: Value, model: Value) -> Value {
-    json!({"esm": "2.0.0", "metadata": {"name": name}, "index_sets": sets, "models": {"M": model}})
-}
-
 /// The taped `dy` of `doc` at a few seeded states, as bits.
 fn taped_dy(doc: &Value) -> Vec<Vec<u64>> {
-    let file = crate::parse::load_string(&doc.to_string()).expect("loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+    let compiled = compile(doc.clone());
     let n = compiled.state_variable_names().len();
     let p = compiled.debug_resolve_params(&HashMap::new());
     let mut scratch = compiled.debug_new_scratch_taped().expect("taped");
     (0..4u64)
         .map(|seed| {
             let state = seeded_state(n, seed, 0.25, 2.5);
-            let mut out = vec![0.0; n];
-            compiled.debug_eval_rhs_into(
-                &state,
-                0.7,
-                &p,
-                &mut out,
-                &mut scratch,
-                &mut RhsStats::default(),
-            );
-            out.iter().map(|x| x.to_bits()).collect()
+            fast_dy(&compiled, &mut scratch, &state, 0.7, &p)
+                .iter()
+                .map(|x| x.to_bits())
+                .collect()
         })
         .collect()
-}
-
-const FIELDS: [&str; 9] = [
-    "year",
-    "month",
-    "day",
-    "hour",
-    "minute",
-    "second",
-    "day_of_year",
-    "julian_day",
-    "is_leap_year",
-];
-
-/// Per cell `l` of 24, `tu[l] = t0 + 3601 l + 1e5 u[l]` (the state moves it
-/// across days and years), and each field relaxes a state of its own.
-pub(super) fn calendar_doc(t0: f64) -> Value {
-    let l = json!({"l": [1, 24]});
-    let mut vars = json!({
-        "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
-        "tu": {"type": "unknown", "shape": ["lev"]}
-    });
-    let mut eqs = vec![
-        json!({"lhs": "tu", "rhs": faq(op("+", vec![json!(t0), op("*", vec![json!(3601), json!("l")]),
-            op("*", vec![json!(1.0e5), ix("u", vec![json!("l")])])]), vec!["l"], l.clone())}),
-        json!({"lhs": d_lhs("u", vec!["l"], l.clone()),
-               "rhs": faq(op("*", vec![json!(-0.1), ix("u", vec![json!("l")])]), vec!["l"], l.clone())}),
-    ];
-    for f in FIELDS {
-        let at = ix("tu", vec![json!("l")]);
-        let call = apply(f, json!({"t": at}));
-        let s = format!("s_{f}");
-        vars[&s] = json!({"type": "unknown", "shape": ["lev"], "default": 0.0});
-        eqs.push(json!({"lhs": d_lhs(&s, vec!["l"], l.clone()),
-            "rhs": faq(op("-", vec![call, ix(&s, vec![json!("l")])]), vec!["l"], l.clone())}));
-    }
-    let mut model = json!({"variables": vars, "equations": eqs});
-    model["expression_templates"] = library("calendar.esm");
-    document(
-        "calendar_on_the_tape",
-        json!({"lev": {"kind": "interval", "size": 24}}),
-        model,
-    )
 }
 
 #[test]
@@ -137,132 +48,11 @@ fn calendar_templates_match_the_oracle() {
     }
 }
 
-/// Lat-lon cells, counter-clockwise from the south-west corner.
-fn cells(lons: &[f64], lats: &[f64]) -> Value {
-    let mut out = Vec::new();
-    for b in 0..lats.len() - 1 {
-        for a in 0..lons.len() - 1 {
-            out.push(json!([
-                [lons[a], lats[b]],
-                [lons[a + 1], lats[b]],
-                [lons[a + 1], lats[b + 1]],
-                [lons[a], lats[b + 1]]
-            ]));
-        }
-    }
-    Value::Array(out)
-}
-
-/// Every source x target pair's overlap area (2 x 2 one-degree cells onto
-/// the 3 x 3 grid of 2/3-degree cells over them, with one repeated vertex in
-/// a target ring), weighting a state per source cell into a state per target
-/// cell.
-pub(super) fn overlap_doc(spherical: bool) -> Value {
-    let src = cells(&[10.0, 11.0, 12.0], &[40.0, 41.0, 42.0]);
-    let th = [10.0, 10.0 + 2.0 / 3.0, 10.0 + 4.0 / 3.0, 12.0];
-    let ta = [40.0, 40.0 + 2.0 / 3.0, 40.0 + 4.0 / 3.0, 42.0];
-    let mut tgt = cells(&th, &ta);
-    // A padded ring: its first vertex repeated in the last slot.
-    let v0 = tgt[4][0].clone();
-    tgt[4][3] = v0;
-    let r = json!({"i": [1, 4], "j": [1, 9]});
-    let (a, b, name) = if spherical {
-        ("sx", "tx", "overlap_area_spherical")
-    } else {
-        ("src", "tgt", "overlap_area_planar")
-    };
-    let area = apply(
-        name,
-        json!({"ring_a": a, "cell_a": "i", "nv_a": 4, "ring_b": b, "cell_b": "j", "nv_b": 4}),
-    );
-    let mut vars = json!({
-        "src": {"type": "unknown", "shape": ["sc", "cv", "co"]},
-        "tgt": {"type": "unknown", "shape": ["tc", "cv", "co"]},
-        "A": {"type": "unknown", "shape": ["sc", "tc"]},
-        "u": {"type": "unknown", "shape": ["sc"], "default": 1.0},
-        "w": {"type": "unknown", "shape": ["tc"], "default": 0.0}
-    });
-    let mut eqs = vec![
-        json!({"lhs": "src", "rhs": {"op": "const", "args": [], "value": src}}),
-        json!({"lhs": "tgt", "rhs": {"op": "const", "args": [], "value": tgt}}),
-        json!({"lhs": "A", "rhs": faq(area, vec!["i", "j"], r.clone())}),
-        json!({"lhs": d_lhs("u", vec!["i"], json!({"i": [1, 4]})),
-               "rhs": faq(op("*", vec![json!(-0.1), ix("u", vec![json!("i")])]), vec!["i"], json!({"i": [1, 4]}))}),
-        json!({"lhs": d_lhs("w", vec!["j"], json!({"j": [1, 9]})),
-               "rhs": faq(op("-", vec![op("*", vec![ix("A", vec![json!("i"), json!("j")]), ix("u", vec![json!("i")])]),
-                    ix("w", vec![json!("j")])]), vec!["j"], r.clone())}),
-    ];
-    if spherical {
-        for (xyz, ring, n) in [("sx", "src", 4), ("tx", "tgt", 9)] {
-            vars[xyz] =
-                json!({"type": "unknown", "shape": [if n == 4 { "sc" } else { "tc" }, "cv", "d3"]});
-            eqs.push(json!({"lhs": xyz, "rhs": faq(apply("lonlat_to_unit",
-                json!({"ring": ring, "cell": "c", "vert": "v", "comp": "d"})),
-                vec!["c", "v", "d"], json!({"c": [1, n], "v": [1, 4], "d": [1, 3]}))}));
-        }
-    }
-    let mut model = json!({"variables": vars, "equations": eqs});
-    model["expression_templates"] = library("geometry.esm");
-    document(
-        "overlap_on_the_tape",
-        json!({"sc": {"kind": "interval", "size": 4}, "tc": {"kind": "interval", "size": 9},
-               "cv": {"kind": "interval", "size": 4}, "co": {"kind": "interval", "size": 2},
-               "d3": {"kind": "interval", "size": 3}}),
-        model,
-    )
-}
-
 #[test]
 fn overlap_area_templates_lower_and_match_the_oracle() {
     for spherical in [false, true] {
         oracle_ab(overlap_doc(spherical));
     }
-}
-
-/// `assign[i] = argmin_g (x[i] - gx[g])^2`, the candidates reading the state
-/// `x`; ties are real (generators at equal distances).
-pub(super) fn argmin_doc() -> Value {
-    let gx = json!([0.5, 1.0, 1.5, 1.0, 2.0, 2.5]);
-    let dist = op(
-        "*",
-        vec![
-            op(
-                "-",
-                vec![
-                    ix("x", vec![json!("i")]),
-                    ix("gx", vec![json!("k_argmin_1")]),
-                ],
-            ),
-            op(
-                "-",
-                vec![
-                    ix("x", vec![json!("i")]),
-                    ix("gx", vec![json!("k_argmin_1")]),
-                ],
-            ),
-        ],
-    );
-    let r = json!({"i": [1, 7]});
-    let mut model = json!({
-        "variables": {
-            "gx": {"type": "unknown", "shape": ["g"]},
-            "x": {"type": "unknown", "shape": ["p"], "default": 1.0},
-            "assign": {"type": "unknown", "shape": ["p"]}
-        },
-        "equations": [
-            {"lhs": "gx", "rhs": {"op": "const", "args": [], "value": gx}},
-            {"lhs": "assign", "rhs": faq(apply("argmin", json!({"f": dist, "n": 6})), vec!["i"], r.clone())},
-            {"lhs": d_lhs("x", vec!["i"], r.clone()),
-             "rhs": faq(op("-", vec![op("*", vec![json!(0.1), ix("assign", vec![json!("i")])]),
-                 ix("x", vec![json!("i")])]), vec!["i"], r.clone())}
-        ]
-    });
-    model["expression_templates"] = library("relational.esm");
-    document(
-        "argmin_on_the_tape",
-        json!({"p": {"kind": "interval", "size": 7}, "g": {"kind": "interval", "size": 6}}),
-        model,
-    )
 }
 
 #[test]
@@ -304,9 +94,9 @@ fn successor_doc(sub: Value) -> Value {
             },
             "equations": [
                 {"lhs": "P", "rhs": {"op": "const", "args": [], "value": p}},
-                {"lhs": "s", "rhs": faq(inner, vec!["c"], c.clone())},
-                {"lhs": d_lhs("u", vec!["c"], c.clone()),
-                 "rhs": faq(op("-", vec![ix("s", vec![json!("c")]), ix("u", vec![json!("c")])]), vec!["c"], c.clone())}
+                {"lhs": "s", "rhs": faq(&["c"], c.clone(), inner)},
+                {"lhs": d_lhs("u", &["c"], c.clone()),
+                 "rhs": faq(&["c"], c.clone(), op("-", vec![ix("s", vec![json!("c")]), ix("u", vec![json!("c")])]))}
             ]
         }),
     )
@@ -314,8 +104,7 @@ fn successor_doc(sub: Value) -> Value {
 
 /// Whether every rule of `doc` lowers.
 fn lowers(doc: &Value) -> bool {
-    let file = crate::parse::load_string(&doc.to_string()).expect("loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+    let compiled = compile(doc.clone());
     compiled.build_tape_opts(&HashSet::new(), None).0.is_ok()
 }
 
@@ -384,7 +173,10 @@ fn widest(prog: &super::ir::TapeProgram) -> usize {
         .map(|ins| match ins {
             Instr::Fused { spec } => prog.fused[*spec as usize].shape.iter().product::<usize>(),
             _ => ins.out().map_or(0, |o| {
-                prog.slots[o as usize].shape.iter().product::<usize>()
+                prog.tables.slots[o as usize]
+                    .shape
+                    .iter()
+                    .product::<usize>()
             }),
         })
         .max()
@@ -399,82 +191,17 @@ fn widest(prog: &super::ir::TapeProgram) -> usize {
 #[test]
 fn gated_pointwise_faq_compacts_to_its_candidate_cells() {
     let n = 100;
-    let sparse = super::tests::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
+    let sparse = super::test_support::ab_check(template_regrid(n, 2.0), 0.5, 2.0);
     assert!(
         widest(&sparse) <= n * n,
         "the overlap body ran over a box of {} elements",
         widest(&sparse)
     );
-    let dense = super::tests::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
+    let dense = super::test_support::ab_check(template_regrid(n, 1.0e6), 0.5, 2.0);
     assert!(
         widest(&dense) >= n * n * 4,
         "a gate keeping every cell is not compacted"
     );
-}
-
-/// The other lib/relational.esm templates per cell of a state: a gated
-/// arg-witness (`argmin_where` / `argmax_where`, a contracted `faq` with a
-/// `filter`; no candidate passing gives `n + 1`), the composite keys
-/// `pair_key` / `edge_key` (NaN for an out-of-range or non-integral
-/// component), `rank_of` over literal members and `rank_of_set` over an
-/// index set the call names.
-pub(super) fn relational_doc() -> Value {
-    let x = || ix("x", vec![json!("i")]);
-    let g = |k: &str| ix("gx", vec![json!(k)]);
-    let d = |k: &str| {
-        op(
-            "*",
-            vec![op("-", vec![x(), g(k)]), op("-", vec![x(), g(k)])],
-        )
-    };
-    // Candidates above the cell's own value compete (none for the largest).
-    let pass = |k: &str| op(">", vec![g(k), x()]);
-    let key_a = op("floor", vec![op("*", vec![json!(3), x()])]);
-    let key_b = op("floor", vec![op("*", vec![json!(2), x()])]);
-    let r = json!({"i": [1, 7]});
-    let cell = |e: Value| faq(e, vec!["i"], r.clone());
-    let sum = op(
-        "+",
-        vec![
-            apply(
-                "argmin_where",
-                json!({"f": d("k_argmin_where_1"), "p": pass("k_argmin_where_1"), "n": 6}),
-            ),
-            apply(
-                "argmax_where",
-                json!({"f": d("k_argmax_where_1"), "p": pass("k_argmax_where_1"), "n": 6}),
-            ),
-            apply(
-                "pair_key",
-                json!({"a": key_a, "b": key_b, "lo_a": 0, "lo_b": 1, "n_a": 8, "n_b": 5}),
-            ),
-            apply("edge_key", json!({"u": key_a, "v": key_b, "lo": 0, "n": 8})),
-            apply(
-                "rank_of",
-                json!({"x": x(), "members": {"op": "const", "args": [], "value": [0.5, 1.0, 1.5, 2.25]}, "n": 4}),
-            ),
-            apply("rank_of_set", json!({"x": x(), "members": "gx", "S": "g"})),
-        ],
-    );
-    let mut model = json!({
-        "variables": {
-            "gx": {"type": "unknown", "shape": ["g"]},
-            "x": {"type": "unknown", "shape": ["p"], "default": 1.0},
-            "y": {"type": "unknown", "shape": ["p"]}
-        },
-        "equations": [
-            {"lhs": "gx", "rhs": {"op": "const", "args": [], "value": [0.5, 1.0, 1.5, 1.0, 2.0, 2.5]}},
-            {"lhs": "y", "rhs": cell(sum)},
-            {"lhs": d_lhs("x", vec!["i"], r.clone()),
-             "rhs": cell(op("-", vec![op("*", vec![json!(0.01), ix("y", vec![json!("i")])]), x()]))}
-        ]
-    });
-    model["expression_templates"] = library("relational.esm");
-    document(
-        "relational_on_the_tape",
-        json!({"p": {"kind": "interval", "size": 7}, "g": {"kind": "interval", "size": 6}}),
-        model,
-    )
 }
 
 #[test]
@@ -501,9 +228,9 @@ fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
     };
     let face_sum = || {
         let mut s = faq(
-            ix("w", vec![ix_any(e.clone(), vec![json!("f"), json!("le")])]),
-            vec!["f"],
+            &["f"],
             fl.clone(),
+            ix("w", vec![idx(e.clone(), &[json!("f"), json!("le")])]),
         );
         s["semiring"] = json!("sum_product");
         s
@@ -514,10 +241,9 @@ fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
         "q": {"type": "unknown", "shape": ["faces"], "default": 0.0}
     });
     let mut eqs = vec![
-        json!({"lhs": d_lhs("w", vec!["e"], json!({"e": {"from": "edge_ids"}})),
-               "rhs": faq(op("-", vec![json!("e"), ix("w", vec![json!("e")])]), vec!["e"],
-                          json!({"e": {"from": "edge_ids"}}))}),
-        json!({"lhs": d_lhs("q", vec!["f"], f.clone()),
+        json!({"lhs": d_lhs("w", &["e"], json!({"e": {"from": "edge_ids"}})),
+               "rhs": faq(&["e"], json!({"e": {"from": "edge_ids"}}), op("-", vec![json!("e"), ix("w", vec![json!("e")])]))}),
+        json!({"lhs": d_lhs("q", &["f"], f.clone()),
                "rhs": op("-", vec![face_sum(), qf()])}),
     ];
     if observed_connectivity {
@@ -528,9 +254,9 @@ fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
         vars["r"] = json!({"type": "unknown", "shape": ["faces"]});
         vars["p"] = json!({"type": "unknown", "shape": ["faces"], "default": 0.0});
         eqs.push(json!({"lhs": ix("r", vec![json!("f")]),
-            "rhs": faq(op("-", vec![op("*", vec![json!(2.0), face_sum()]), qf()]), vec!["f"], f.clone())}));
-        eqs.push(json!({"lhs": d_lhs("p", vec!["f"], f.clone()),
-            "rhs": faq(ix("r", vec![json!("f")]), vec!["f"], f)}));
+            "rhs": faq(&["f"], f.clone(), op("-", vec![op("*", vec![json!(2.0), face_sum()]), qf()]))}));
+        eqs.push(json!({"lhs": d_lhs("p", &["f"], f.clone()),
+            "rhs": faq(&["f"], f, ix("r", vec![json!("f")]))}));
     }
     document(
         "mesh_face_sum",
@@ -543,25 +269,17 @@ fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
     )
 }
 
-fn ix_any(base: Value, subs: Vec<Value>) -> Value {
-    let mut args = vec![base];
-    args.extend(subs);
-    json!({"op": "index", "args": args})
-}
-
 /// The per-cell oracle reads an array-producing nested `faq` under an
-/// elementwise operator at the current output cell, as the whole-array
-/// overlay and the tape do: it used to answer NaN for every face.
+/// elementwise operator at the current output cell, as the tape does.
 #[test]
 fn nested_face_sum_through_connectivity_matches_the_oracle() {
     for observed_connectivity in [true, false] {
         for observed in [false, true] {
             let doc = mesh_face_sum_doc(observed_connectivity, observed);
-            let file = crate::parse::load_string(&doc.to_string()).expect("loads");
-            let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+            let compiled = compile(doc.clone());
             let n = compiled.state_variable_names().len();
             let state = seeded_state(n, 1, 0.25, 2.5);
-            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
             assert!(
                 dy.iter().all(|x| x.is_finite()),
                 "the per-cell oracle answers every face: {dy:?}"
@@ -575,7 +293,7 @@ fn nested_face_sum_through_connectivity_matches_the_oracle() {
 /// over `nested_range` instead (a sub-range, or the same range by another set).
 fn mismatched_nested_box_doc(nested: Value) -> Value {
     let f = json!({"f": {"from": "faces"}});
-    let mut inner = faq(ix("w", vec![json!("f")]), vec!["f"], json!({"f": nested}));
+    let mut inner = faq(&["f"], json!({"f": nested}), ix("w", vec![json!("f")]));
     inner["semiring"] = json!("sum_product");
     document(
         "nested_box",
@@ -589,9 +307,9 @@ fn mismatched_nested_box_doc(nested: Value) -> Value {
                 "q": {"type": "unknown", "shape": ["faces"], "default": 0.0}
             },
             "equations": [
-                {"lhs": d_lhs("w", vec!["f"], f.clone()),
-                 "rhs": faq(op("*", vec![json!(-0.5), ix("w", vec![json!("f")])]), vec!["f"], f.clone())},
-                {"lhs": d_lhs("q", vec!["f"], f),
+                {"lhs": d_lhs("w", &["f"], f.clone()),
+                 "rhs": faq(&["f"], f.clone(), op("*", vec![json!(-0.5), ix("w", vec![json!("f")])]))},
+                {"lhs": d_lhs("q", &["f"], f),
                  "rhs": op("-", vec![inner, ix("q", vec![json!("f")])])}
             ]
         }),
@@ -608,16 +326,15 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
     use crate::simulate_array::take_const_array_oob;
     for nested in [json!([2, 4]), json!([1, 3])] {
         let doc = mismatched_nested_box_doc(nested.clone());
-        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
-        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let compiled = compile(doc.clone());
         let names = compiled.state_variable_names();
         let state = seeded_state(names.len(), 1, 0.25, 2.5);
         take_const_array_oob();
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         let fault = take_const_array_oob().expect("the oracle latches a fault");
         assert!(
             fault.starts_with("E_TREEWALK_NESTED_BOX_MISMATCH")
-                && fault.contains("the equation for 'q'"),
+                && fault.contains("the equation for 'M.q'"),
             "{nested}: {fault}"
         );
         for (name, v) in names.iter().zip(&dy) {
@@ -625,7 +342,7 @@ fn nested_faq_over_another_box_is_not_read_at_the_cell() {
         }
         let (_, report) = compiled.build_tape_opts(&HashSet::new(), None);
         assert!(
-            report.fallbacks.iter().any(|(rule, _)| rule == "D(q)"),
+            report.fallbacks.iter().any(|(rule, _)| rule == "D(M.q)"),
             "{nested}: the tape refuses the rule: {:?}",
             report.fallbacks
         );
@@ -781,10 +498,6 @@ fn scalar_select_doc(rhs: Value) -> Value {
     )
 }
 
-fn count_of(prog: &super::ir::TapeProgram, pred: impl Fn(&Instr) -> bool) -> usize {
-    prog.instrs.iter().filter(|i| pred(i)).count()
-}
-
 /// A scalar `ifelse` whose arms are values already computed, or at most two
 /// pure instructions, lowers to `Instr::Select` instead of a jump and two
 /// copies: the flat clamp `ifelse(x <= ax[1], ax[1], ifelse(x >= ax[8],
@@ -816,11 +529,11 @@ fn small_pure_scalar_branches_become_selects() {
     for rhs in [clamp.clone(), op("*", vec![clamp, nan_x])] {
         let (prog, _) = oracle_ab(scalar_select_doc(rhs.clone()));
         assert_eq!(
-            count_of(&prog, |i| matches!(i, Instr::JmpIfZero { .. })),
+            count_where(&prog, |i| matches!(i, Instr::JmpIfZero { .. })),
             0,
             "{rhs}"
         );
-        let selects = count_of(&prog, |i| matches!(i, Instr::Select { .. }))
+        let selects = count_where(&prog, |i| matches!(i, Instr::Select { .. }))
             + prog
                 .lanes
                 .iter()
@@ -851,13 +564,11 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
             "ifelse",
             vec![op(">", vec![json!("x"), json!(2.0)]), arm, json!(1.0)],
         );
-        let file =
-            crate::parse::load_string(&scalar_select_doc(rhs.clone()).to_string()).expect("loads");
-        let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+        let compiled = compile(scalar_select_doc(rhs.clone()));
         let (prog, _) = compiled.tape(&HashSet::new());
         let prog = prog.as_ref().expect("taped");
         assert_eq!(
-            count_of(prog, |i| matches!(i, Instr::JmpIfZero { .. })),
+            count_where(prog, |i| matches!(i, Instr::JmpIfZero { .. })),
             1,
             "{rhs}"
         );
@@ -872,7 +583,7 @@ fn large_or_faulting_scalar_branches_keep_the_jump() {
 #[test]
 fn repeated_build_time_instructions_are_computed_once() {
     let (prog, _) = oracle_ab(overlap_doc(false));
-    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
+    let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
     let guarded = prog.guarded_positions();
     let mut seen = HashSet::new();
     for pc in 0..prog.n_const as usize {
@@ -891,12 +602,12 @@ fn repeated_build_time_instructions_are_computed_once() {
 #[test]
 fn different_build_time_instructions_stay_apart() {
     let (prog, _) = oracle_ab(scalar_select_doc(op("+", vec![json!("x"), json!(1)])));
-    let canon: Vec<u32> = (0..prog.slots.len() as u32).collect();
-    let out = (0..prog.slots.len() as u32)
-        .find(|&s| prog.slots[s as usize].scalar)
+    let canon: Vec<u32> = (0..prog.tables.slots.len() as u32).collect();
+    let out = (0..prog.tables.slots.len() as u32)
+        .find(|&s| prog.tables.slots[s as usize].scalar)
         .expect("a scalar slot");
-    let other = (out + 1..prog.slots.len() as u32)
-        .find(|&s| prog.slots[s as usize].scalar)
+    let other = (out + 1..prog.tables.slots.len() as u32)
+        .find(|&s| prog.tables.slots[s as usize].scalar)
         .expect("another scalar slot");
     use super::ir::Operand;
     use crate::simulate_array::BinCode;

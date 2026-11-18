@@ -13,7 +13,7 @@ use super::kernels::{
     ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis, reduce_rows, scan_axis,
     seg_reduce, table_gather,
 };
-use super::resolve::{Rv, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
+use super::resolve::{Rv, Slab, resolve_rv, resolve_scalar, resolve_src, rm_strides, src_base};
 use super::*;
 use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -22,10 +22,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// slots, 1-based, as the interpreter binds the frame symbols.
 ///
 /// # Safety
-/// `slab_ptr` must be the slab `slot_off` lays out.
-unsafe fn write_coords(sw: &SweepSpec, cell: &[usize], slab_ptr: *mut f64, slot_off: &[usize]) {
+/// No other thread may be touching the coordinate slots.
+unsafe fn write_coords(sw: &SweepSpec, cell: &[usize], slab: Slab) {
     for (&slot, &c) in sw.coords.iter().zip(cell) {
-        unsafe { *slab_ptr.add(slot_off[slot as usize]) = (c + 1) as f64 };
+        // SAFETY: the caller's contract.
+        unsafe { slab.write(slot, (c + 1) as f64) };
     }
 }
 
@@ -44,103 +45,40 @@ pub(super) fn run_range(
     // The call's split width (see `par`), for the copies and lanes below.
     let call_split = call_ways(exec);
     let TapeExec {
-        slab,
+        slab: slab_vec,
         slot_off,
         obs,
         parked,
         pending,
-        scode,
-        slanes,
-        sblocks,
-        sblock_at,
-        sregs,
-        plan_full,
-        asm_covered,
+        scalar,
+        layout,
         scratch,
         idx_tables,
         lscratch,
         exports_active,
         simd,
-        dy_home,
-        dy_home_quiet,
-        #[cfg(not(target_arch = "wasm32"))]
-        seg_chains,
         #[cfg(not(target_arch = "wasm32"))]
         chain_scratch,
         ..
     } = exec;
     let exports_active = *exports_active;
     let dy_home: &[usize] = if exports_active {
-        dy_home
+        &env.prep.dy.home
     } else {
-        dy_home_quiet
+        &env.prep.dy.home_quiet
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let seg_chains = &env.prep.seg_chains;
     let simd = *simd;
     let prog = env.prog;
-    let slab_ptr = slab.as_mut_ptr();
     let slot_off: &[usize] = slot_off;
+    let slab = Slab::new(slab_vec, slot_off, &prog.tables.slots);
     pending.clear();
 
     // The open recurrence sweep, if any: the `Sweep` instruction's position
     // and the 0-based frame cell its body is evaluating.
     let mut sweep: Option<(usize, SmallVec<[usize; 4]>)> = None;
-    if scode.len() != prog.instrs.len() {
-        slanes.clear();
-        *scode = prog
-            .instrs
-            .iter()
-            .map(|i| ScalarOp::decode(prog, i, slot_off, slanes))
-            .collect();
-        // A segmented-reduction chain starts through its own path below.
-        #[cfg(not(target_arch = "wasm32"))]
-        for ch in seg_chains.iter() {
-            scode[ch.start] = ScalarOp::None;
-        }
-        sblocks.clear();
-        sblock_at.clear();
-        sblock_at.resize(scode.len(), u32::MAX);
-        if prog.precision.is_empty() {
-            // A block lies inside one arm of every conditional region around
-            // it: it may not span a region's start, the start of its false
-            // arm or its end (a jump or a pending skip lands there), nor sit in
-            // a recurrence body.
-            let n = scode.len();
-            let mut cut = vec![false; n + 1];
-            let mut guarded = vec![false; n];
-            for (j, ins) in prog.instrs.iter().enumerate() {
-                match ins {
-                    Instr::JmpIfZero {
-                        n_true, n_false, ..
-                    } => {
-                        let t = j + 1 + *n_true as usize;
-                        for b in [j + 1, t, t + *n_false as usize] {
-                            cut[b.min(n)] = true;
-                        }
-                    }
-                    Instr::Sweep { spec } => {
-                        let len = prog.sweeps[*spec as usize].body_len as usize;
-                        guarded[j + 1..(j + 1 + len).min(n)].fill(true);
-                    }
-                    _ => {}
-                }
-            }
-            let mut pc = 0;
-            while pc < scode.len() {
-                match ScalarBlock::build(prog, scode, slanes, &guarded, &cut, pc) {
-                    Some(b) => {
-                        sblock_at[pc] = sblocks.len() as u32;
-                        pc = b.end;
-                        sblocks.push(b);
-                    }
-                    None => pc += 1,
-                }
-            }
-        }
-    }
-    // Runs of scalar elementwise ops execute in the loop at the top of each
-    // step (see `ScalarOp`); a per-instruction precision keeps the general
-    // path, which arms it.
-    let scalar_runs = prog.precision.is_empty();
+    scalar.ensure(prog, slot_off, *layout);
     let mut pc = range.start;
     // The next segmented-reduction chain that may split (see `chain`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -165,19 +103,19 @@ pub(super) fn run_range(
             let Instr::Sweep { spec } = &prog.instrs[*spc] else {
                 unreachable!("an open sweep starts at a Sweep")
             };
-            let sw = &prog.sweeps[*spec as usize];
+            let sw = &prog.tables.sweeps[*spec as usize];
             let body = *spc + 1;
             if pc == body + sw.body_len as usize {
-                let v = resolve_scalar(&sw.result, env, slab_ptr, slot_off);
+                let v = resolve_scalar(&sw.result, env, slab);
                 let prec = prog
                     .precision
                     .get(*spc)
                     .copied()
                     .unwrap_or_else(crate::precision::active);
-                let out = unsafe { slab_ptr.add(slot_off[sw.out as usize]) };
+                let out = slab.slot(sw.out);
                 unsafe { *out.add(sw.flat(cell)) = prec.round(v) };
                 if sw.advance(cell) {
-                    unsafe { write_coords(sw, cell, slab_ptr, slot_off) };
+                    unsafe { write_coords(sw, cell, slab) };
                     pc = body;
                     continue;
                 }
@@ -190,48 +128,66 @@ pub(super) fn run_range(
         if pc >= range.end {
             break;
         }
-        if scalar_runs && sweep.is_none() {
-            let start = pc;
-            loop {
-                // The end of a taken true region skips its false region, as
-                // at the top of the step.
-                if let Some(&(pos, skip)) = pending.last() {
-                    if pos as usize == pc {
-                        pending.pop();
-                        pc += skip as usize;
-                        continue;
+        // The decoded scalar code (see `ScalarCode`), up to the range's end
+        // or, inside a recurrence body, the body's end, where the step above
+        // publishes the cell.
+        let limit = match &sweep {
+            Some((spc, _)) => {
+                let Instr::Sweep { spec } = &prog.instrs[*spc] else {
+                    unreachable!("an open sweep starts at a Sweep")
+                };
+                spc + 1 + prog.tables.sweeps[*spec as usize].body_len as usize
+            }
+            None => range.end,
+        };
+        let start = pc;
+        loop {
+            // The end of a taken true region skips its false region, as at
+            // the top of the step.
+            if let Some(&(pos, skip)) = pending.last()
+                && pos as usize == pc
+            {
+                pending.pop();
+                pc += skip as usize;
+                continue;
+            }
+            if pc >= limit {
+                break;
+            }
+            match scalar.at[pc] {
+                Entry::Block(b) => {
+                    let b = scalar.blocks[b as usize];
+                    if b.end > limit {
+                        break;
+                    }
+                    // SAFETY: decoded against this call's layout (`ensure`
+                    // above), every instruction before it has run, and the
+                    // instruction loop runs on the calling thread alone.
+                    match unsafe { b.run(scalar, env, slab, dy) } {
+                        Some(end) => pc = end,
+                        // A gather faulted: the general path latches it.
+                        None => break,
                     }
                 }
-                if pc >= range.end {
-                    break;
-                }
-                if let Some(b) = sblocks.get(sblock_at[pc] as usize)
-                    && b.end <= range.end
-                {
-                    pc = unsafe { b.run(env, slab_ptr, dy, sregs) };
-                    continue;
-                }
-                let op = &scode[pc];
-                if let ScalarOp::Jmp {
+                Entry::Jmp {
                     cond,
                     n_true,
                     n_false,
-                } = *op
-                {
+                } => {
                     // `Instr::JmpIfZero`'s arm below.
-                    if unsafe { scalar_get(&cond, env, slab_ptr) } != 0.0 {
+                    // SAFETY: as for the block above.
+                    if unsafe { scalar_get(&cond, env, slab) } != 0.0 {
                         pending.push(((pc + 1 + n_true as usize) as u32, n_false));
                     } else {
                         pc += n_true as usize;
                     }
-                } else if !unsafe { op.run(env, slab_ptr, slot_off, lscratch, slanes, dy) } {
-                    break;
+                    pc += 1;
                 }
-                pc += 1;
+                Entry::None => break,
             }
-            if pc != start {
-                continue;
-            }
+        }
+        if pc != start {
+            continue;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if next_chain < seg_chains.len() {
@@ -243,19 +199,17 @@ pub(super) fn run_range(
                 .filter(|c| c.start == pc && c.end <= range.end)
             {
                 next_chain += 1;
+                let cx = Cx {
+                    env,
+                    slab,
+                    idx_tables,
+                    simd,
+                    dy_home,
+                    dy: dy.as_mut_ptr(),
+                    dy_len: dy.len(),
+                };
                 let split = unsafe {
-                    super::chain::run_chain(
-                        ch,
-                        env,
-                        slab_ptr,
-                        slot_off,
-                        chain_scratch,
-                        &mut scratch.fscratch,
-                        idx_tables,
-                        simd,
-                        dy_home,
-                        dy.as_mut_ptr(),
-                    )
+                    super::chain::run_chain(ch, &cx, chain_scratch, &mut scratch.fscratch)
                 };
                 if split {
                     pc = ch.end;
@@ -270,20 +224,11 @@ pub(super) fn run_range(
             .get(pc)
             .filter(|&&p| p != crate::precision::active())
             .map(|&p| crate::precision::enter(p));
-        // A scalar instruction runs here, in a few lines, instead of through
-        // the general dispatch below: a scalar right-hand side (a template's
-        // lookup at one query) is mostly such instructions, each a few
-        // flops, so their dispatch was most of its cost.
-        if unsafe { exec_scalar(&prog.instrs[pc], env, slab_ptr, slot_off) } {
-            pc += 1;
-            continue;
-        }
         match &prog.instrs[pc] {
             Instr::LoadForcing { forcing, out } => {
                 let fr = &prog.forcings[*forcing as usize];
-                let off = slot_off[*out as usize];
-                let dst =
-                    unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
+                let off = slab.off(*out);
+                let dst = unsafe { std::slice::from_raw_parts_mut(slab.at(off), forcing_len(fr)) };
                 match env.forcing {
                     super::ForcingView::Map(buffer) => {
                         load_forcing(fr, buffer, env.declared, prog.col_major, dst)
@@ -295,42 +240,42 @@ pub(super) fn run_range(
                 }
             }
             Instr::Fault { fault } => {
-                let (rule, key) = &prog.fault_order[*fault as usize];
-                latch_ordered_fault(*rule, key, || prog.faults[*fault as usize].clone());
+                let (rule, key) = &prog.tables.fault_order[*fault as usize];
+                latch_ordered_fault(*rule, key, || prog.tables.faults[*fault as usize].clone());
             }
             Instr::FaultScan { spec } => {
-                let scan = &prog.fault_scans[*spec as usize];
-                let first = scan.first(&prog.faults, |op, cell| match (op, cell) {
+                let scan = &prog.tables.fault_scans[*spec as usize];
+                let first = scan.first(&prog.tables.faults, |op, cell| match (op, cell) {
                     (Operand::Slot(s), Some((shape, c))) => unsafe {
-                        *slab_ptr.add(slot_off[*s as usize] + slab_flat(shape, c, prog.col_major))
+                        *slab.at(slab.off(*s) + slab_flat(shape, c, prog.col_major))
                     },
-                    _ => resolve_scalar(op, env, slab_ptr, slot_off),
+                    _ => resolve_scalar(op, env, slab),
                 });
                 if let Some((key, msg)) = first {
                     latch_ordered_fault(scan.rule, &key, || msg);
                 }
             }
             Instr::Sweep { spec } => {
-                let sw = &prog.sweeps[*spec as usize];
+                let sw = &prog.tables.sweeps[*spec as usize];
                 debug_assert!(sweep.is_none(), "recurrence sweeps do not nest");
                 if sw.n_cells() == 0 {
                     pc += 1 + sw.body_len as usize;
                     continue;
                 }
                 let cell: SmallVec<[usize; 4]> = SmallVec::from_elem(0, sw.shape.len());
-                unsafe { write_coords(sw, &cell, slab_ptr, slot_off) };
+                unsafe { write_coords(sw, &cell, slab) };
                 sweep = Some((pc, cell));
             }
             Instr::ScalarRead { src, spec, out } => {
-                let sp = &prog.scalar_reads[*spec as usize];
-                let sv = resolve_src(src, env, slab_ptr, slot_off);
+                let sp = &prog.tables.scalar_reads[*spec as usize];
+                let sv = resolve_src(src, env, slab);
                 let raw: SmallVec<[i64; 4]> = sp
                     .subs
                     .iter()
-                    .map(|o| subscript_of(resolve_scalar(o, env, slab_ptr, slot_off)))
+                    .map(|o| subscript_of(resolve_scalar(o, env, slab)))
                     .collect();
                 let cur = sweep.as_ref().map_or(&[][..], |(_, c)| &c[..]);
-                let v = match sp.resolve(&raw, &sv.shape, &prog.sweeps, cur) {
+                let v = match sp.resolve(&raw, &sv.shape, &prog.tables.sweeps, cur) {
                     ScalarReadAt::Elem(ix) => {
                         let off: i64 = ix
                             .iter()
@@ -350,14 +295,14 @@ pub(super) fn run_range(
                         f64::NAN
                     }
                 };
-                unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
+                unsafe { *slab.slot(*out) = v };
             }
             Instr::JmpIfZero {
                 cond,
                 n_true,
                 n_false,
             } => {
-                let c = resolve_scalar(cond, env, slab_ptr, slot_off);
+                let c = resolve_scalar(cond, env, slab);
                 if c != 0.0 {
                     // Execute the true region, then skip the false one.
                     pending.push(((pc + 1 + *n_true as usize) as u32, *n_false));
@@ -379,16 +324,16 @@ pub(super) fn run_range(
                 let a = obs
                     .get_mut(&prog.exports[e].0)
                     .expect("export array published");
-                let desc = &prog.slots[*slot as usize];
-                let off = slot_off[*slot as usize];
+                let desc = &prog.tables.slots[*slot as usize];
+                let off = slab.off(*slot);
                 if desc.scalar {
-                    a[IxDyn(&[])] = unsafe { *slab_ptr.add(off) };
+                    a[IxDyn(&[])] = unsafe { *slab.at(off) };
                 } else {
                     // `a.len()`, not `desc.elems()`: an empty box keeps a
                     // one-element storage but publishes an empty array.
                     debug_assert_eq!(a.len(), desc.shape.iter().product::<usize>());
                     let n = a.len();
-                    let src = unsafe { std::slice::from_raw_parts(slab_ptr.add(off), n) };
+                    let src = unsafe { std::slice::from_raw_parts(slab.at(off), n) };
                     if prog.col_major && !super::super::layout::order_free(&desc.shape) {
                         // The slot is the logical array axis-reversed; the
                         // reversed view of the export walks in slot order.
@@ -402,33 +347,22 @@ pub(super) fn run_range(
                     }
                 }
             }
-            Instr::Lanes { spec } => unsafe {
-                super::lanes::exec_lanes(
-                    *spec as usize,
-                    &prog.lanes[*spec as usize],
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    lscratch,
-                    dy,
-                    simd,
-                    call_split,
-                )
-            },
-            _ => {
+            ins => {
                 let cx = Cx {
                     env,
-                    slab_ptr,
-                    slot_off,
-                    plan_full,
-                    asm_covered,
+                    slab,
                     idx_tables,
                     simd,
                     dy_home,
                     dy: dy.as_mut_ptr(),
                     dy_len: dy.len(),
                 };
-                unsafe { exec_straight(&cx, &prog.instrs[pc], scratch, call_split) };
+                match ins {
+                    Instr::Lanes { spec } => unsafe {
+                        super::lanes::exec_lanes(*spec as usize, &cx, lscratch, call_split)
+                    },
+                    _ => unsafe { exec_straight(&cx, ins, scratch, call_split) },
+                }
             }
         }
         pc += 1;
@@ -436,8 +370,8 @@ pub(super) fn run_range(
 }
 
 /// A scalar operand, decoded: a slot at its slab offset (decoded against the
-/// call's slot layout, see [`TapeExec`]'s `scode`), a literal, a parameter,
-/// `t`, or a 0-d state at its flat offset.
+/// call's slot layout, see [`ScalarCode`]), a literal, a parameter, `t`, or
+/// a 0-d state at its flat offset.
 #[derive(Clone, Copy)]
 pub(super) enum ScalarSrc {
     Slot(usize),
@@ -448,24 +382,22 @@ pub(super) enum ScalarSrc {
 }
 
 /// Where a decoded load, gather or count reads its source: the slab at a
-/// slot's offset, or a state variable (through [`src_base`], which picks the
-/// row-major mirror when there is one).
+/// slot's offset, or a state variable (through
+/// [`state_ptr`](super::resolve::state_ptr), which picks the row-major
+/// mirror when there is one).
 #[derive(Clone, Copy)]
 pub(super) enum ScalarBase {
     Slab(usize),
     State(u32),
 }
 
-/// A decoded binary kernel: the arithmetic, comparisons and NaN-propagating
-/// `min`/`max` written out as `dispatch_bin_kernel` writes them, so they
-/// inline; every other kernel (and every kernel under Float32) through
+/// A decoded binary kernel other than `+ - * /` (which [`BlockOp`] holds as
+/// variants of their own): the comparisons and NaN-propagating `min`/`max`
+/// written out as `dispatch_bin_kernel` writes them, so they inline; every
+/// other kernel (and every kernel under Float32) through
 /// [`binary_kernel_of`]'s function.
 #[derive(Clone, Copy)]
 pub(super) enum ScalarBin {
-    Add,
-    Sub,
-    Mul,
-    Div,
     Lt,
     Le,
     Gt,
@@ -478,35 +410,10 @@ pub(super) enum ScalarBin {
 }
 
 impl ScalarBin {
-    fn of(op: BinCode) -> ScalarBin {
-        if crate::precision::is_f32() {
-            return ScalarBin::Fn(binary_kernel_of(op));
-        }
-        match op {
-            BinCode::Add => ScalarBin::Add,
-            BinCode::Sub => ScalarBin::Sub,
-            BinCode::Mul => ScalarBin::Mul,
-            BinCode::Div => ScalarBin::Div,
-            BinCode::Lt => ScalarBin::Lt,
-            BinCode::Le => ScalarBin::Le,
-            BinCode::Gt => ScalarBin::Gt,
-            BinCode::Ge => ScalarBin::Ge,
-            BinCode::Eq => ScalarBin::Eq,
-            BinCode::Ne => ScalarBin::Ne,
-            BinCode::Min => ScalarBin::Min,
-            BinCode::Max => ScalarBin::Max,
-            _ => ScalarBin::Fn(binary_kernel_of(op)),
-        }
-    }
-
     /// [`binary_kernel_of`]'s binary64 arm, for the written-out kernels.
     #[inline(always)]
     fn apply(self, x: f64, y: f64) -> f64 {
         match self {
-            ScalarBin::Add => x + y,
-            ScalarBin::Sub => x - y,
-            ScalarBin::Mul => x * y,
-            ScalarBin::Div => x / y,
             ScalarBin::Lt => (x < y) as i32 as f64,
             ScalarBin::Le => (x <= y) as i32 as f64,
             ScalarBin::Gt => (x > y) as i32 as f64,
@@ -520,63 +427,50 @@ impl ScalarBin {
     }
 }
 
-/// One instruction's scalar form: what its [`exec_straight`] (or
-/// [`run_range`]) arm does for a scalar `out`, with the kernel, the operands
-/// and the slab offsets decoded once instead of matched on every call. A
-/// scalar right-hand side (a template's lookup at one query) is mostly such
-/// instructions, a few flops each, so their dispatch was most of its cost;
-/// consecutive ones run in one loop.
-///
-/// The loads, gathers and counts a scalar lookup is built from, the `ifelse`
-/// short circuit between them, and a one-lane lane program run in the same
-/// loop: a one-element load at its offset, a one-element gather (one that
-/// faults leaves the loop, so the general path latches it), a count at one
-/// query, the jump (see [`run_range`]), and the lane block [`exec_lanes`]
-/// would run.
-///
-/// [`exec_lanes`]: super::lanes::exec_lanes
+/// One operation of a [`Block`], on its register file: the scalar branch of
+/// the instruction's [`exec_straight`] arm, with the kernel and the operand
+/// registers decoded.
 #[derive(Clone, Copy)]
-pub(super) enum ScalarOp {
-    None,
-    Bin(ScalarBin, ScalarSrc, ScalarSrc, usize),
-    Un(fn(f64) -> f64, ScalarSrc, usize),
-    Neg(ScalarSrc, usize),
-    Copy(ScalarSrc, usize),
-    Select(ScalarSrc, ScalarSrc, ScalarSrc, usize),
-    /// [`Instr::LoadElem`]: the source's element at row-major offset `off`.
-    Load(ScalarBase, usize, usize),
+enum BlockOp {
+    Add(u16, u16, u16),
+    Sub(u16, u16, u16),
+    Mul(u16, u16, u16),
+    Div(u16, u16, u16),
+    Bin(ScalarBin, u16, u16, u16),
+    Un(fn(f64) -> f64, u16, u16),
+    Neg(u16, u16),
+    Select(u16, u16, u16, u16),
+    /// [`Instr::LoadElem`]: the source's element at row-major offset `at`.
+    Load(ScalarBase, usize, u16),
     /// [`Instr::DataGather`] of a rank-1 source of extent `n` at one
     /// subscript; `spec` resolves a subscript outside `1..=n`.
     Gather1 {
         src: ScalarBase,
-        sub: ScalarSrc,
+        x: u16,
         n: usize,
         spec: u32,
-        out: usize,
+        out: u16,
     },
-    /// `+ - * /` on two scalar slots (slab offsets), or a slot and a
-    /// literal on either side: the commonest scalar instruction, with its
-    /// kernel and operand kinds decoded into the variant.
-    Arith(Arith, usize, usize, usize),
-    ArithL(Arith, usize, f64, usize),
-    ArithR(Arith, f64, usize, usize),
     /// [`Instr::DataGather`] of a rank-2 source at two subscripts: whole
     /// numbers inside the source read their element directly, anything else
     /// resolves through `spec`.
     Gather2 {
         src: ScalarBase,
-        a: ScalarSrc,
-        b: ScalarSrc,
+        a: u16,
+        b: u16,
         n0: u32,
         n1: u32,
         spec: u32,
-        out: usize,
+        out: u16,
     },
-    /// [`Instr::DataGather`] at one element, any rank: its spec.
+    /// [`Instr::DataGather`] at one element, any rank up to four
+    /// subscripts: its spec, the subscripts in `subs`'s first `n` registers.
     Gather {
         src: ScalarBase,
+        subs: [u16; 4],
+        n: u8,
         spec: u32,
-        out: usize,
+        out: u16,
     },
     /// [`Instr::Count`] at one query; its window lies in the axis's box.
     Count {
@@ -585,232 +479,470 @@ pub(super) enum ScalarOp {
         lo: u32,
         n: u32,
         sorted: bool,
-        x: ScalarSrc,
-        out: usize,
+        x: u16,
+        out: u16,
     },
-    /// [`Instr::JmpIfZero`].
+}
+
+/// Where a [`Block`] puts a value at its end.
+#[derive(Clone, Copy)]
+enum BlockOut {
+    Slab(usize),
+    Dy(usize),
+}
+
+/// A straight run of scalar instructions run as one program over a register
+/// file: each operand the run reads from before it is read into a register,
+/// every value it computes stays in one, and at the end each slab offset it
+/// wrote gets its last value and each `dy` position its value, in program
+/// order. Within the run nothing reads a value it stores (a scalar run writes
+/// only scalar slots and `dy`; the arrays it reads were written before it),
+/// so deferring the stores changes no read, and each operation is its
+/// instruction's scalar kernel on the same operand values. A one-lane lane
+/// program is inlined, its micro-ops on the same registers.
+///
+/// Because every store waits for the end, a gather that faults stops the
+/// block having written nothing, and the instruction loop runs the run's
+/// instructions one by one instead, where the fault is latched.
+///
+/// A block's inputs, operations and outputs lie in [`ScalarCode`]'s shared
+/// arrays, `[lo, hi)` each, so the blocks of a program sit together in
+/// program order.
+#[derive(Clone, Copy)]
+struct Block {
+    /// One past its last instruction.
+    end: usize,
+    inputs: (u32, u32),
+    ops: (u32, u32),
+    outs: (u32, u32),
+}
+
+/// A block as [`Block::build`] decodes it, before it joins the shared
+/// arrays.
+struct Built {
+    end: usize,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    outs: Vec<(u16, BlockOut)>,
+    n_regs: usize,
+}
+
+/// What the instruction loop does at one position (see [`ScalarCode`]).
+#[derive(Clone, Copy)]
+enum Entry {
+    /// No decoded form: the general dispatch.
+    None,
+    /// The [`Block`] starting here.
+    Block(u32),
+    /// [`Instr::JmpIfZero`] with a scalar condition.
     Jmp {
         cond: ScalarSrc,
         n_true: u32,
         n_false: u32,
     },
-    /// [`Instr::Lanes`] of one lane and no lane inputs, decoded:
-    /// `TapeExec`'s `slanes[i]`.
-    Lane(u32),
-    /// [`Instr::Lanes`] of one lane and no lane inputs, as [`exec_lanes`]
-    /// runs it: its spec.
-    ///
-    /// [`exec_lanes`]: super::lanes::exec_lanes
-    Lanes(u32),
 }
 
-/// The four arithmetic kernels of [`ScalarOp::Arith`].
-#[derive(Clone, Copy)]
-pub(super) enum Arith {
-    Add,
-    Sub,
-    Mul,
-    Div,
+/// The decoded form of a program's scalar instructions, for one slot layout
+/// and one active precision (`key`): per instruction what the loop does
+/// there, and the blocks. A scalar right-hand side (a template's lookup at
+/// one query) is mostly scalar instructions of a few flops each, so a
+/// dispatch per instruction would be most of its cost.
+#[derive(Default)]
+pub(super) struct ScalarCode {
+    /// The slot-layout generation and the precision it was decoded under;
+    /// `None` before the first decode.
+    key: Option<(u64, crate::precision::Precision)>,
+    at: Vec<Entry>,
+    blocks: Vec<Block>,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    outs: Vec<(u16, BlockOut)>,
+    /// The blocks' register file.
+    regs: Vec<f64>,
 }
 
-impl Arith {
-    #[inline(always)]
-    fn apply(self, x: f64, y: f64) -> f64 {
-        match self {
-            Arith::Add => x + y,
-            Arith::Sub => x - y,
-            Arith::Mul => x * y,
-            Arith::Div => x / y,
+impl ScalarCode {
+    /// Decode `prog` against the slot layout `slot_off` (generation
+    /// `layout`) unless it already is, under the active precision.
+    fn ensure(&mut self, prog: &TapeProgram, slot_off: &[usize], layout: u64) {
+        let key = (layout, crate::precision::active());
+        if self.key == Some(key) {
+            return;
+        }
+        self.key = Some(key);
+        self.at.clear();
+        self.at.resize(prog.instrs.len(), Entry::None);
+        self.blocks.clear();
+        self.inputs.clear();
+        self.ops.clear();
+        self.outs.clear();
+        let mut n_regs = 0;
+        let cuts = &prog.prepared().block_cuts;
+        let mut pc = 0;
+        while pc < prog.instrs.len() {
+            if let Instr::JmpIfZero {
+                cond,
+                n_true,
+                n_false,
+            } = &prog.instrs[pc]
+            {
+                if let Some(cond) = scalar_src(prog, cond, slot_off) {
+                    self.at[pc] = Entry::Jmp {
+                        cond,
+                        n_true: *n_true,
+                        n_false: *n_false,
+                    };
+                }
+                pc += 1;
+                continue;
+            }
+            match Block::build(prog, slot_off, cuts, pc) {
+                Some(b) => {
+                    self.at[pc] = Entry::Block(self.blocks.len() as u32);
+                    pc = b.end;
+                    n_regs = n_regs.max(b.n_regs);
+                    let span = |lo: usize, hi: usize| (lo as u32, hi as u32);
+                    let (i, o, u) = (self.inputs.len(), self.ops.len(), self.outs.len());
+                    self.inputs.extend(b.inputs);
+                    self.ops.extend(b.ops);
+                    self.outs.extend(b.outs);
+                    self.blocks.push(Block {
+                        end: b.end,
+                        inputs: span(i, self.inputs.len()),
+                        ops: span(o, self.ops.len()),
+                        outs: span(u, self.outs.len()),
+                    });
+                }
+                None => pc += 1,
+            }
+        }
+        if self.regs.len() < n_regs {
+            self.regs.resize(n_regs, 0.0);
         }
     }
 }
 
-/// A lane program's register or scalar operand, decoded.
-#[derive(Clone, Copy)]
-pub(super) enum LaneRef {
-    Reg(u8),
-    Scal(u8),
-}
-
-/// One micro-op of a decoded one-lane program.
-#[derive(Clone, Copy)]
-pub(super) enum LaneOp {
-    Bin(ScalarBin, LaneRef, LaneRef, u8),
-    Un(fn(f64) -> f64, LaneRef, u8),
-    Neg(LaneRef, u8),
-    Select(LaneRef, LaneRef, LaneRef, u8),
-    Mov(LaneRef, u8),
-}
-
-/// Where a decoded one-lane program writes: `dy` at a flat position, or the
-/// slab at a slot's offset.
-#[derive(Clone, Copy)]
-pub(super) enum LaneOut {
-    Dy(usize),
-    Slab(usize),
-}
-
-/// The most registers or scalars a decoded one-lane program holds.
-const LANE_MAX: usize = 16;
-
-/// A one-lane lane program with no lane inputs decoded as [`ScalarOp`]s are:
-/// what `exec_block` computes from the same micro-ops, in the same order,
-/// with the scalars read straight into a register file of its own (every
-/// register is written before it is read, so no value carries over from a
-/// previous call).
-pub(super) struct ScalarLane {
-    scalars: SmallVec<[ScalarSrc; 8]>,
-    micro: SmallVec<[LaneOp; 8]>,
-    writes: SmallVec<[(LaneRef, LaneOut); 4]>,
-}
-
-impl ScalarLane {
-    /// Decode `ls` against `slot_off`, or `None` for a program outside the
-    /// decoded form (Float32 kernels, more than [`LANE_MAX`] registers or
-    /// scalars, an array scalar operand, a superop, a register read before
-    /// it is written).
-    fn decode(
-        ls: &LaneSpec,
-        slot_off: &[usize],
-        src: impl Fn(&Operand) -> Option<ScalarSrc>,
-    ) -> Option<ScalarLane> {
-        if crate::precision::is_f32()
-            || ls.lanes != 1
-            || !ls.inputs.is_empty()
-            || ls.n_regs as usize > LANE_MAX
-            || ls.scalars.len() > LANE_MAX
-        {
-            return None;
+/// `o` as a decoded scalar operand, or `None` for an array operand.
+fn scalar_src(prog: &TapeProgram, o: &Operand, slot_off: &[usize]) -> Option<ScalarSrc> {
+    Some(match o {
+        Operand::Slot(s) if prog.tables.slots[*s as usize].scalar => {
+            ScalarSrc::Slot(slot_off[*s as usize])
         }
-        let scalars = ls.scalars.iter().map(&src).collect::<Option<_>>()?;
-        let mut written = [false; LANE_MAX];
-        let rd = |m: &MRef, written: &[bool; LANE_MAX]| -> Option<LaneRef> {
-            match *m {
-                MRef::Reg(r) if (r as usize) < LANE_MAX && written[r as usize] => {
-                    Some(LaneRef::Reg(r as u8))
-                }
-                MRef::Scal(i) if (i as usize) < ls.scalars.len() => Some(LaneRef::Scal(i as u8)),
-                _ => None,
-            }
-        };
-        let mut micro = SmallVec::new();
-        for op in &ls.micro {
-            let (dop, out) = match op {
-                MicroOp::Bin { op, a, b, out } => (
-                    LaneOp::Bin(
-                        ScalarBin::of(*op),
-                        rd(a, &written)?,
-                        rd(b, &written)?,
-                        *out as u8,
-                    ),
-                    *out,
-                ),
-                MicroOp::Un { op, a, out } => (
-                    LaneOp::Un(unary_kernel_of(*op), rd(a, &written)?, *out as u8),
-                    *out,
-                ),
-                MicroOp::Neg { a, out } => (LaneOp::Neg(rd(a, &written)?, *out as u8), *out),
-                MicroOp::Select { cond, a, b, out } => (
-                    LaneOp::Select(
-                        rd(cond, &written)?,
-                        rd(a, &written)?,
-                        rd(b, &written)?,
-                        *out as u8,
-                    ),
-                    *out,
-                ),
-                MicroOp::Mov { a, out } => (LaneOp::Mov(rd(a, &written)?, *out as u8), *out),
-                _ => return None,
-            };
-            if out as usize >= ls.n_regs as usize {
+        Operand::Lit(v) => ScalarSrc::Lit(*v),
+        Operand::Param(p) => ScalarSrc::Param(*p),
+        Operand::Time => ScalarSrc::Time,
+        Operand::State(ix) => {
+            let sv = &prog.state_vars[*ix as usize];
+            if !sv.shape.is_empty() {
                 return None;
             }
-            written[out as usize] = true;
-            micro.push(dop);
+            ScalarSrc::State(sv.flat_offset)
         }
-        let mut writes = SmallVec::new();
-        for w in &ls.writes {
-            let dst = match &w.dst {
-                LaneDst::Dy(pos) => LaneOut::Dy(pos.at(0) as usize),
-                LaneDst::Slot(k) => LaneOut::Slab(slot_off[*k as usize]),
+        _ => return None,
+    })
+}
+
+/// The value of a decoded scalar operand.
+///
+/// # Safety
+/// A [`ScalarSrc::Slot`] offset must be one of `slab`'s layout, and no other
+/// thread may be writing it.
+#[inline(always)]
+unsafe fn scalar_get(s: &ScalarSrc, env: &Env, slab: Slab) -> f64 {
+    match *s {
+        // SAFETY: the caller's contract.
+        ScalarSrc::Slot(o) => unsafe { *slab.at(o) },
+        ScalarSrc::Lit(v) => v,
+        ScalarSrc::Param(p) => env.params[p as usize],
+        ScalarSrc::Time => env.t,
+        ScalarSrc::State(off) => env.state[off],
+    }
+}
+
+/// The element a one-element [`Instr::DataGather`] reads at subscript values
+/// `v` from the source at `base`: its element, `+0.0` for a ghost, or `None`
+/// where the read faults.
+///
+/// # Safety
+/// `base` must address the gather's whole source box.
+#[inline]
+unsafe fn gather_one(sp: &DataGatherSpec, base: *const f64, v: &[f64]) -> Option<f64> {
+    match sp.at(|d| v[d]) {
+        // SAFETY: the spec resolves only positions inside its source box.
+        DataAt::Elem(p) => Some(unsafe { *base.add(p) }),
+        DataAt::Ghost => Some(0.0),
+        DataAt::Fault { .. } => None,
+    }
+}
+
+/// `op(a, b)` into `o` as a block operation, under the active precision: the
+/// written-out kernels in binary64, [`binary_kernel_of`]'s function
+/// otherwise (the binary32 kernel under Float32).
+fn bin_op(op: BinCode, a: u16, b: u16, o: u16) -> BlockOp {
+    if crate::precision::is_f32() {
+        return BlockOp::Bin(ScalarBin::Fn(binary_kernel_of(op)), a, b, o);
+    }
+    let k = match op {
+        BinCode::Add => return BlockOp::Add(a, b, o),
+        BinCode::Sub => return BlockOp::Sub(a, b, o),
+        BinCode::Mul => return BlockOp::Mul(a, b, o),
+        BinCode::Div => return BlockOp::Div(a, b, o),
+        BinCode::Lt => ScalarBin::Lt,
+        BinCode::Le => ScalarBin::Le,
+        BinCode::Gt => ScalarBin::Gt,
+        BinCode::Ge => ScalarBin::Ge,
+        BinCode::Eq => ScalarBin::Eq,
+        BinCode::Ne => ScalarBin::Ne,
+        BinCode::Min => ScalarBin::Min,
+        BinCode::Max => ScalarBin::Max,
+        _ => ScalarBin::Fn(binary_kernel_of(op)),
+    };
+    BlockOp::Bin(k, a, b, o)
+}
+
+impl Block {
+    /// The block starting at `start`: instructions `start..` up to the
+    /// first that has no scalar form or the next cut (a section start, a
+    /// boundary of a conditional region or a recurrence body, a chain's
+    /// start; see `Prepared::block_cuts`), or `None` when `start` itself has
+    /// none. Each instruction is decoded under its own precision. A gather
+    /// that may fault is a block of its own, so a fault stops a block before
+    /// any other instruction of it.
+    fn build(prog: &TapeProgram, slot_off: &[usize], cuts: &[bool], start: usize) -> Option<Built> {
+        let mut b = Builder::default();
+        let mut pc = start;
+        while pc < prog.instrs.len() && !(pc > start && cuts[pc]) {
+            let ins = &prog.instrs[pc];
+            let may_fault = matches!(ins, Instr::DataGather { faults: true, .. });
+            if may_fault && pc > start {
+                break;
+            }
+            let ok = {
+                let _precision = prog
+                    .precision
+                    .get(pc)
+                    .filter(|&&p| p != crate::precision::active())
+                    .map(|&p| crate::precision::enter(p));
+                b.decode(prog, ins, slot_off)
             };
-            writes.push((rd(&w.src, &written)?, dst));
+            if !ok {
+                break;
+            }
+            pc += 1;
+            if may_fault || b.regs > u16::MAX as usize - 64 {
+                break;
+            }
         }
-        Some(ScalarLane {
-            scalars,
-            micro,
-            writes,
+        if pc == start {
+            return None;
+        }
+        let mut outs: Vec<(u16, BlockOut)> = b
+            .written
+            .iter()
+            .map(|&off| (b.at[&off], BlockOut::Slab(off)))
+            .collect();
+        outs.extend(b.dy.iter().map(|&(r, p)| (r, BlockOut::Dy(p))));
+        Some(Built {
+            end: pc,
+            inputs: b.inputs,
+            ops: b.ops,
+            outs,
+            n_regs: b.regs,
         })
     }
 
-    /// Run the program.
+    /// Run the block (its parts in `code`'s arrays) and return the position
+    /// after it, or `None`, having stored nothing, when its gather faults.
     ///
     /// # Safety
-    /// As [`ScalarOp::run`].
-    #[inline]
-    unsafe fn run(&self, env: &Env, slab_ptr: *mut f64, dy: &mut [f64]) {
-        let mut sv = [0.0f64; LANE_MAX];
-        for (v, s) in sv.iter_mut().zip(&self.scalars) {
-            *v = unsafe { scalar_get(s, env, slab_ptr) };
-        }
-        let mut regs = [0.0f64; LANE_MAX];
-        let get = |m: LaneRef, regs: &[f64; LANE_MAX]| match m {
-            LaneRef::Reg(r) => regs[r as usize],
-            LaneRef::Scal(i) => sv[i as usize],
+    /// The block was decoded against `slab`'s slot layout, every
+    /// instruction before it has run, and no other thread touches the slab
+    /// slots it reads or writes.
+    #[inline(never)]
+    unsafe fn run(
+        &self,
+        code: &mut ScalarCode,
+        env: &Env,
+        slab: Slab,
+        dy: &mut [f64],
+    ) -> Option<usize> {
+        let span = |(lo, hi): (u32, u32)| lo as usize..hi as usize;
+        let inputs = &code.inputs[span(self.inputs)];
+        let ops = &code.ops[span(self.ops)];
+        let outs = &code.outs[span(self.outs)];
+        let r = code.regs.as_mut_ptr();
+        let base_ptr = |b: &ScalarBase| -> *const f64 {
+            match *b {
+                ScalarBase::Slab(o) => slab.at(o),
+                ScalarBase::State(ix) => super::resolve::state_ptr(env, ix),
+            }
         };
-        for op in &self.micro {
-            match *op {
-                LaneOp::Bin(k, a, b, out) => {
-                    let (x, y) = (get(a, &regs), get(b, &regs));
-                    regs[out as usize] = k.apply(x, y);
+        let gathers = &env.prog.tables.data_gathers;
+        // SAFETY (every register access below): the builder numbered the
+        // registers below its `n_regs`, which `regs` holds (`ensure`); the slab offsets and
+        // sources were decoded against this call's layout (the caller's
+        // contract), and a decoded window or position lies in its source.
+        unsafe {
+            for &(s, i) in inputs {
+                *r.add(i as usize) = scalar_get(&s, env, slab);
+            }
+            let g = |i: u16| *r.add(i as usize);
+            let put = |i: u16, v: f64| *r.add(i as usize) = v;
+            for op in ops {
+                match *op {
+                    BlockOp::Add(a, b, o) => put(o, g(a) + g(b)),
+                    BlockOp::Sub(a, b, o) => put(o, g(a) - g(b)),
+                    BlockOp::Mul(a, b, o) => put(o, g(a) * g(b)),
+                    BlockOp::Div(a, b, o) => put(o, g(a) / g(b)),
+                    BlockOp::Bin(k, a, b, o) => put(o, k.apply(g(a), g(b))),
+                    BlockOp::Un(f, a, o) => put(o, f(g(a))),
+                    BlockOp::Neg(a, o) => put(o, -g(a)),
+                    BlockOp::Select(c, a, b, o) => {
+                        let (c, x, y) = (g(c), g(a), g(b));
+                        put(o, if c != 0.0 { x } else { y });
+                    }
+                    BlockOp::Load(b, at, o) => put(o, *base_ptr(&b).add(at)),
+                    BlockOp::Gather1 {
+                        src,
+                        x,
+                        n,
+                        spec,
+                        out,
+                    } => {
+                        let v = g(x);
+                        let k = subscript_of(v);
+                        let base = base_ptr(&src);
+                        let y = if k >= 1 && k <= n as i64 {
+                            *base.add((k - 1) as usize)
+                        } else {
+                            gather_one(&gathers[spec as usize], base, &[v])?
+                        };
+                        put(out, y);
+                    }
+                    BlockOp::Gather2 {
+                        src,
+                        a,
+                        b,
+                        n0,
+                        n1,
+                        spec,
+                        out,
+                    } => {
+                        let v = [g(a), g(b)];
+                        let base = base_ptr(&src);
+                        let y = match DataGatherSpec::direct_offset(&[n0 as usize, n1 as usize], &v)
+                        {
+                            Some(p) => *base.add(p),
+                            None => gather_one(&gathers[spec as usize], base, &v)?,
+                        };
+                        put(out, y);
+                    }
+                    BlockOp::Gather {
+                        src,
+                        subs,
+                        n,
+                        spec,
+                        out,
+                    } => {
+                        let mut v = [0.0f64; 4];
+                        for d in 0..n as usize {
+                            v[d] = g(subs[d]);
+                        }
+                        let base = base_ptr(&src);
+                        put(
+                            out,
+                            gather_one(&gathers[spec as usize], base, &v[..n as usize])?,
+                        );
+                    }
+                    BlockOp::Count {
+                        rel,
+                        axis,
+                        lo,
+                        n,
+                        sorted,
+                        x,
+                        out,
+                    } => {
+                        let win = std::slice::from_raw_parts(
+                            base_ptr(&axis).add(lo as usize),
+                            n as usize,
+                        );
+                        let bisect = count_bisects(win, sorted);
+                        put(out, count_one(rel, win, bisect, g(x)));
+                    }
                 }
-                LaneOp::Un(f, a, out) => regs[out as usize] = f(get(a, &regs)),
-                LaneOp::Neg(a, out) => regs[out as usize] = -get(a, &regs),
-                LaneOp::Select(c, a, b, out) => {
-                    let (c, x, y) = (get(c, &regs), get(a, &regs), get(b, &regs));
-                    regs[out as usize] = if c != 0.0 { x } else { y };
+            }
+            for &(i, o) in outs {
+                match o {
+                    BlockOut::Slab(off) => *slab.at(off) = g(i),
+                    BlockOut::Dy(p) => dy[p] = g(i),
                 }
-                LaneOp::Mov(a, out) => regs[out as usize] = get(a, &regs),
             }
         }
-        for &(src, dst) in &self.writes {
-            let v = get(src, &regs);
-            match dst {
-                LaneOut::Dy(p) => dy[p] = v,
-                LaneOut::Slab(o) => unsafe { *slab_ptr.add(o) = v },
-            }
-        }
+        Some(self.end)
     }
 }
 
-impl ScalarOp {
-    /// Decode `ins` against the slot layout `slot_off`, adding a decoded
-    /// lane program to `slanes`.
-    pub(super) fn decode(
-        prog: &TapeProgram,
-        ins: &Instr,
-        slot_off: &[usize],
-        slanes: &mut Vec<ScalarLane>,
-    ) -> ScalarOp {
-        let src = |o: &Operand| -> Option<ScalarSrc> {
-            Some(match o {
-                Operand::Slot(s) if prog.slots[*s as usize].scalar => {
-                    ScalarSrc::Slot(slot_off[*s as usize])
-                }
-                Operand::Lit(v) => ScalarSrc::Lit(*v),
-                Operand::Param(p) => ScalarSrc::Param(*p),
-                Operand::Time => ScalarSrc::Time,
-                Operand::State(ix) => {
-                    let sv = &prog.state_vars[*ix as usize];
-                    if !sv.shape.is_empty() {
-                        return None;
-                    }
-                    ScalarSrc::State(sv.flat_offset)
-                }
-                _ => return None,
-            })
-        };
-        let scalar = |out: &SlotId| prog.slots[*out as usize].scalar;
+/// [`Block::build`]'s register assignment.
+#[derive(Default)]
+struct Builder {
+    regs: usize,
+    inputs: Vec<(ScalarSrc, u16)>,
+    ops: Vec<BlockOp>,
+    /// Slab offset -> the register holding its current value.
+    at: FxHashMap<usize, u16>,
+    /// Slab offsets written, in first-write order.
+    written: Vec<usize>,
+    seen: FxHashSet<usize>,
+    dy: Vec<(u16, usize)>,
+}
+
+impl Builder {
+    fn fresh(&mut self) -> u16 {
+        self.regs += 1;
+        (self.regs - 1) as u16
+    }
+
+    /// The register an operand is read from: a slab offset written earlier
+    /// in the block is its register, anything else an input read at entry.
+    fn src(&mut self, s: ScalarSrc) -> u16 {
+        if let ScalarSrc::Slot(off) = s
+            && let Some(&r) = self.at.get(&off)
+        {
+            return r;
+        }
+        let r = self.fresh();
+        self.inputs.push((s, r));
+        if let ScalarSrc::Slot(off) = s {
+            self.at.insert(off, r);
+        }
+        r
+    }
+
+    /// A fresh register for a write to slab offset `off`.
+    fn def(&mut self, off: usize) -> u16 {
+        let r = self.fresh();
+        self.bind(off, r);
+        r
+    }
+
+    /// Slab offset `off` holds register `r` from here on.
+    fn bind(&mut self, off: usize, r: u16) {
+        self.at.insert(off, r);
+        if self.seen.insert(off) {
+            self.written.push(off);
+        }
+    }
+
+    /// Append `ins`'s scalar form, or return `false` (having appended
+    /// nothing) when it has none: what its [`exec_straight`] arm does for a
+    /// scalar `out` (and [`exec_lanes`] for a one-lane program), operation
+    /// for operation.
+    ///
+    /// [`exec_lanes`]: super::lanes::exec_lanes
+    fn decode(&mut self, prog: &TapeProgram, ins: &Instr, slot_off: &[usize]) -> bool {
+        let src = |o: &Operand| scalar_src(prog, o, slot_off);
+        let scalar = |out: &SlotId| prog.tables.slots[*out as usize].scalar;
         let off = |out: &SlotId| slot_off[*out as usize];
         let base = |s: &SrcRef| match s {
             SrcRef::Slot(k) => ScalarBase::Slab(slot_off[*k as usize]),
@@ -818,104 +950,112 @@ impl ScalarOp {
         };
         let src_shape = |s: &SrcRef| -> &[usize] {
             match s {
-                SrcRef::Slot(k) => &prog.slots[*k as usize].shape[..],
+                SrcRef::Slot(k) => &prog.tables.slots[*k as usize].shape[..],
                 SrcRef::State(ix) => &prog.state_vars[*ix as usize].shape[..],
             }
         };
-        let arith = |op: &BinCode| match op {
-            BinCode::Add => Some(Arith::Add),
-            BinCode::Sub => Some(Arith::Sub),
-            BinCode::Mul => Some(Arith::Mul),
-            BinCode::Div => Some(Arith::Div),
-            _ => None,
-        };
-        let op = match ins {
+        match ins {
             Instr::Bin { op, a, b, out } if scalar(out) => {
-                // The f64 arithmetic fast path: one slot operand at least, the
-                // other a slot or a literal.
-                let fast = if crate::precision::is_f32() {
-                    None
-                } else {
-                    match (arith(op), src(a), src(b)) {
-                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Slot(q))) => {
-                            Some(ScalarOp::Arith(k, p, q, off(out)))
-                        }
-                        (Some(k), Some(ScalarSrc::Slot(p)), Some(ScalarSrc::Lit(v))) => {
-                            Some(ScalarOp::ArithL(k, p, v, off(out)))
-                        }
-                        (Some(k), Some(ScalarSrc::Lit(v)), Some(ScalarSrc::Slot(q))) => {
-                            Some(ScalarOp::ArithR(k, v, q, off(out)))
-                        }
-                        _ => None,
-                    }
+                let (Some(a), Some(b)) = (src(a), src(b)) else {
+                    return false;
                 };
-                fast.or_else(|| {
-                    Some(ScalarOp::Bin(
-                        ScalarBin::of(*op),
-                        src(a)?,
-                        src(b)?,
-                        off(out),
-                    ))
-                })
+                let (x, y) = (self.src(a), self.src(b));
+                let o = self.def(off(out));
+                self.ops.push(bin_op(*op, x, y, o));
             }
             Instr::Un { op, a, out } if scalar(out) => {
-                (|| Some(ScalarOp::Un(unary_kernel_of(*op), src(a)?, off(out))))()
+                let Some(a) = src(a) else { return false };
+                let x = self.src(a);
+                let o = self.def(off(out));
+                self.ops.push(BlockOp::Un(unary_kernel_of(*op), x, o));
             }
-            Instr::Neg { a, out } if scalar(out) => (|| Some(ScalarOp::Neg(src(a)?, off(out))))(),
-            Instr::Copy { a, out } if scalar(out) => (|| Some(ScalarOp::Copy(src(a)?, off(out))))(),
+            Instr::Neg { a, out } if scalar(out) => {
+                let Some(a) = src(a) else { return false };
+                let x = self.src(a);
+                let o = self.def(off(out));
+                self.ops.push(BlockOp::Neg(x, o));
+            }
+            Instr::Copy { a, out } if scalar(out) => {
+                // A copy is its source's value under a new offset.
+                let Some(a) = src(a) else { return false };
+                let x = self.src(a);
+                self.bind(off(out), x);
+            }
             Instr::Select { cond, a, b, out } if scalar(out) => {
-                (|| Some(ScalarOp::Select(src(cond)?, src(a)?, src(b)?, off(out))))()
+                let (Some(c), Some(a), Some(b)) = (src(cond), src(a), src(b)) else {
+                    return false;
+                };
+                let (c, x, y) = (self.src(c), self.src(a), self.src(b));
+                let o = self.def(off(out));
+                self.ops.push(BlockOp::Select(c, x, y, o));
             }
             Instr::LoadElem { src: s, idx, out } if scalar(out) => {
                 let shape = src_shape(s);
-                (idx.len() == shape.len()).then(|| {
-                    let mut at = 0usize;
-                    let mut stride = 1usize;
-                    for d in (0..idx.len()).rev() {
-                        at += idx[d] * stride;
-                        stride *= shape[d];
-                    }
-                    ScalarOp::Load(base(s), at, off(out))
-                })
+                if idx.len() != shape.len() {
+                    return false;
+                }
+                let mut at = 0usize;
+                let mut stride = 1usize;
+                for d in (0..idx.len()).rev() {
+                    at += idx[d] * stride;
+                    stride *= shape[d];
+                }
+                let o = self.def(off(out));
+                self.ops.push(BlockOp::Load(base(s), at, o));
             }
             Instr::DataGather {
                 src: s, spec, out, ..
             } if scalar(out) => {
-                let sp = &prog.data_gathers[*spec as usize];
+                let sp = &prog.tables.data_gathers[*spec as usize];
                 if !sp.shape.is_empty() || sp.subs.len() > 4 {
-                    None
-                } else if sp.subs.len() == 2 && sp.src_shape.len() == 2 {
-                    (|| {
-                        Some(ScalarOp::Gather2 {
-                            src: base(s),
-                            a: src(&sp.subs[0])?,
-                            b: src(&sp.subs[1])?,
-                            n0: u32::try_from(sp.src_shape[0]).ok()?,
-                            n1: u32::try_from(sp.src_shape[1]).ok()?,
-                            spec: *spec,
-                            out: off(out),
-                        })
-                    })()
-                    .or(Some(ScalarOp::Gather {
+                    return false;
+                }
+                let Some(subs) = sp
+                    .subs
+                    .iter()
+                    .map(src)
+                    .collect::<Option<SmallVec<[_; 4]>>>()
+                else {
+                    return false;
+                };
+                let regs: SmallVec<[u16; 4]> = subs.iter().map(|&s| self.src(s)).collect();
+                let o = self.def(off(out));
+                let dims = (
+                    sp.subs.len(),
+                    sp.src_shape.len(),
+                    sp.src_shape.first().and_then(|&n| u32::try_from(n).ok()),
+                    sp.src_shape.get(1).and_then(|&n| u32::try_from(n).ok()),
+                );
+                let op = match dims {
+                    (1, 1, _, _) => BlockOp::Gather1 {
                         src: base(s),
-                        spec: *spec,
-                        out: off(out),
-                    }))
-                } else if sp.subs.len() == 1 && sp.src_shape.len() == 1 {
-                    src(&sp.subs[0]).map(|sub| ScalarOp::Gather1 {
-                        src: base(s),
-                        sub,
+                        x: regs[0],
                         n: sp.src_shape[0],
                         spec: *spec,
-                        out: off(out),
-                    })
-                } else {
-                    Some(ScalarOp::Gather {
+                        out: o,
+                    },
+                    (2, 2, Some(n0), Some(n1)) => BlockOp::Gather2 {
                         src: base(s),
+                        a: regs[0],
+                        b: regs[1],
+                        n0,
+                        n1,
                         spec: *spec,
-                        out: off(out),
-                    })
-                }
+                        out: o,
+                    },
+                    _ => {
+                        let mut r = [0u16; 4];
+                        r[..regs.len()].copy_from_slice(&regs);
+                        BlockOp::Gather {
+                            src: base(s),
+                            subs: r,
+                            n: regs.len() as u8,
+                            spec: *spec,
+                            out: o,
+                        }
+                    }
+                };
+                self.ops.push(op);
             }
             Instr::Count {
                 rel,
@@ -929,248 +1069,108 @@ impl ScalarOp {
                 // A window outside the axis's box is left to the general
                 // path, which refuses it.
                 let ashape = src_shape(axis);
-                (ashape.len() == 1 && *lo as usize + *n as usize <= ashape[0])
-                    .then(|| {
-                        Some(ScalarOp::Count {
-                            rel: *rel,
-                            axis: base(axis),
-                            lo: *lo,
-                            n: *n,
-                            sorted: *sorted,
-                            x: src(x)?,
-                            out: off(out),
-                        })
-                    })
-                    .flatten()
-            }
-            Instr::JmpIfZero {
-                cond,
-                n_true,
-                n_false,
-            } => src(cond).map(|cond| ScalarOp::Jmp {
-                cond,
-                n_true: *n_true,
-                n_false: *n_false,
-            }),
-            Instr::Lanes { spec } => {
-                let ls = &prog.lanes[*spec as usize];
-                if let Some(lane) = ScalarLane::decode(ls, slot_off, src) {
-                    slanes.push(lane);
-                    Some(ScalarOp::Lane(slanes.len() as u32 - 1))
-                } else {
-                    (ls.lanes == 1 && ls.inputs.is_empty()).then_some(ScalarOp::Lanes(*spec))
+                if ashape.len() != 1 || *lo as usize + *n as usize > ashape[0] {
+                    return false;
                 }
+                let Some(x) = src(x) else { return false };
+                let x = self.src(x);
+                let o = self.def(off(out));
+                self.ops.push(BlockOp::Count {
+                    rel: *rel,
+                    axis: base(axis),
+                    lo: *lo,
+                    n: *n,
+                    sorted: *sorted,
+                    x,
+                    out: o,
+                });
             }
-            _ => None,
-        };
-        op.unwrap_or(ScalarOp::None)
-    }
-
-    /// Run the op, or return `false` for [`ScalarOp::None`], for a gather
-    /// that faults (having written nothing) and for [`ScalarOp::Jmp`], which
-    /// the loop in [`run_range`] takes.
-    ///
-    /// # Safety
-    /// As [`exec_straight`], with `self` decoded against `slab_ptr`'s slot
-    /// layout.
-    #[inline(always)]
-    pub(super) unsafe fn run(
-        &self,
-        env: &Env,
-        slab_ptr: *mut f64,
-        slot_off: &[usize],
-        lscratch: &mut super::lanes::LaneScratch,
-        slanes: &[ScalarLane],
-        dy: &mut [f64],
-    ) -> bool {
-        let get = |s: &ScalarSrc| unsafe { scalar_get(s, env, slab_ptr) };
-        let put = |out: usize, v: f64| unsafe { *slab_ptr.add(out) = v };
-        let base_ptr = |b: &ScalarBase| -> *const f64 {
-            match *b {
-                ScalarBase::Slab(o) => unsafe { slab_ptr.add(o) },
-                ScalarBase::State(ix) => super::resolve::state_ptr(env, ix),
-            }
-        };
-        match self {
-            ScalarOp::None => return false,
-            ScalarOp::Bin(k, a, b, out) => put(*out, k.apply(get(a), get(b))),
-            ScalarOp::Un(f, a, out) => put(*out, f(get(a))),
-            ScalarOp::Neg(a, out) => put(*out, -get(a)),
-            ScalarOp::Copy(a, out) => put(*out, get(a)),
-            ScalarOp::Select(c, a, b, out) => {
-                let c = get(c);
-                let x = get(a);
-                let y = get(b);
-                put(*out, if c != 0.0 { x } else { y });
-            }
-            ScalarOp::Load(b, at, out) => put(*out, unsafe { *base_ptr(b).add(*at) }),
-            ScalarOp::Gather1 {
-                src,
-                sub,
-                n,
-                spec,
-                out,
-            } => {
-                let v = get(sub);
-                let r = subscript_of(v);
-                let base = base_ptr(src);
-                if r >= 1 && r <= *n as i64 {
-                    put(*out, unsafe { *base.add((r - 1) as usize) });
-                } else {
-                    match env.prog.data_gathers[*spec as usize].at(|_| v) {
-                        DataAt::Elem(p) => put(*out, unsafe { *base.add(p) }),
-                        DataAt::Ghost => put(*out, 0.0),
-                        DataAt::Fault { .. } => return false,
-                    }
-                }
-            }
-            ScalarOp::Arith(k, a, b, out) => unsafe {
-                *slab_ptr.add(*out) = k.apply(*slab_ptr.add(*a), *slab_ptr.add(*b))
-            },
-            ScalarOp::ArithL(k, a, v, out) => unsafe {
-                *slab_ptr.add(*out) = k.apply(*slab_ptr.add(*a), *v)
-            },
-            ScalarOp::ArithR(k, v, b, out) => unsafe {
-                *slab_ptr.add(*out) = k.apply(*v, *slab_ptr.add(*b))
-            },
-            ScalarOp::Gather2 {
-                src,
-                a,
-                b,
-                n0,
-                n1,
-                spec,
-                out,
-            } => {
-                let v = [get(a), get(b)];
-                let base = base_ptr(src);
-                if let Some(p) = DataGatherSpec::direct_offset(&[*n0 as usize, *n1 as usize], &v) {
-                    put(*out, unsafe { *base.add(p) });
-                } else {
-                    match env.prog.data_gathers[*spec as usize].at(|d| v[d]) {
-                        DataAt::Elem(p) => put(*out, unsafe { *base.add(p) }),
-                        DataAt::Ghost => put(*out, 0.0),
-                        DataAt::Fault { .. } => return false,
-                    }
-                }
-            }
-            ScalarOp::Gather { src, spec, out } => {
-                let sp = &env.prog.data_gathers[*spec as usize];
-                let mut v = [0.0f64; 4];
-                for (d, o) in sp.subs.iter().enumerate() {
-                    v[d] = resolve_scalar(o, env, slab_ptr, slot_off);
-                }
-                let base = base_ptr(src);
-                match sp.at(|d| v[d]) {
-                    DataAt::Elem(p) => put(*out, unsafe { *base.add(p) }),
-                    DataAt::Ghost => put(*out, 0.0),
-                    DataAt::Fault { .. } => return false,
-                }
-            }
-            ScalarOp::Count {
-                rel,
-                axis,
-                lo,
-                n,
-                sorted,
-                x,
-                out,
-            } => {
-                // The decode checked the window against the axis's box.
-                let win = unsafe {
-                    std::slice::from_raw_parts(base_ptr(axis).add(*lo as usize), *n as usize)
-                };
-                let bisect = count_bisects(win, *sorted);
-                put(*out, count_one(*rel, win, bisect, get(x)));
-            }
-            ScalarOp::Jmp { .. } => return false,
-            ScalarOp::Lane(i) => unsafe { slanes[*i as usize].run(env, slab_ptr, dy) },
-            ScalarOp::Lanes(spec) => unsafe {
-                super::lanes::exec_one_lane(
-                    &env.prog.lanes[*spec as usize],
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    lscratch,
-                    dy,
-                )
-            },
+            Instr::Lanes { spec } => return self.lane(prog, &prog.lanes[*spec as usize], slot_off),
+            _ => return false,
         }
         true
     }
-}
 
-/// The value of a decoded scalar operand.
-///
-/// # Safety
-/// A [`ScalarSrc::Slot`] offset must lie in the slab.
-#[inline(always)]
-unsafe fn scalar_get(s: &ScalarSrc, env: &Env, slab_ptr: *const f64) -> f64 {
-    match *s {
-        ScalarSrc::Slot(o) => unsafe { *slab_ptr.add(o) },
-        ScalarSrc::Lit(v) => v,
-        ScalarSrc::Param(p) => env.params[p as usize],
-        ScalarSrc::Time => env.t,
-        ScalarSrc::State(off) => env.state[off],
+    /// Inline a lane program of one lane and no lane inputs: its scalars
+    /// read as operands, its micro-ops on fresh registers (a move is its
+    /// source's register), its writes bound at the end. `false` (having
+    /// appended nothing) for any other lane program.
+    fn lane(&mut self, prog: &TapeProgram, ls: &LaneSpec, slot_off: &[usize]) -> bool {
+        let plain = ls.micro.iter().all(|m| {
+            matches!(
+                m,
+                MicroOp::Bin { .. }
+                    | MicroOp::Un { .. }
+                    | MicroOp::Neg { .. }
+                    | MicroOp::Select { .. }
+                    | MicroOp::Mov { .. }
+            )
+        });
+        if ls.lanes != 1 || !ls.inputs.is_empty() || !plain {
+            return false;
+        }
+        let Some(scalars) = ls
+            .scalars
+            .iter()
+            .map(|o| scalar_src(prog, o, slot_off))
+            .collect::<Option<SmallVec<[_; 8]>>>()
+        else {
+            return false;
+        };
+        let sc: SmallVec<[u16; 8]> = scalars.iter().map(|&s| self.src(s)).collect();
+        let mut lr: SmallVec<[Option<u16>; 16]> = SmallVec::from_elem(None, ls.n_regs as usize);
+        let rd = |b: &mut Builder, m: &MRef, lr: &mut SmallVec<[Option<u16>; 16]>| match *m {
+            MRef::Reg(x) => *lr[x as usize].get_or_insert_with(|| {
+                // The lowering writes every register before it reads it.
+                debug_assert!(false, "a one-lane program reads register {x} unwritten");
+                b.fresh()
+            }),
+            MRef::Scal(i) => sc[i as usize],
+            MRef::In(_) => unreachable!("a one-lane block has no lane inputs"),
+        };
+        for op in &ls.micro {
+            match op {
+                MicroOp::Bin { op, a, b, out } => {
+                    let (x, y) = (rd(self, a, &mut lr), rd(self, b, &mut lr));
+                    let o = self.fresh();
+                    self.ops.push(bin_op(*op, x, y, o));
+                    lr[*out as usize] = Some(o);
+                }
+                MicroOp::Un { op, a, out } => {
+                    let x = rd(self, a, &mut lr);
+                    let o = self.fresh();
+                    self.ops.push(BlockOp::Un(unary_kernel_of(*op), x, o));
+                    lr[*out as usize] = Some(o);
+                }
+                MicroOp::Neg { a, out } => {
+                    let x = rd(self, a, &mut lr);
+                    let o = self.fresh();
+                    self.ops.push(BlockOp::Neg(x, o));
+                    lr[*out as usize] = Some(o);
+                }
+                MicroOp::Select { cond, a, b, out } => {
+                    let c = rd(self, cond, &mut lr);
+                    let (x, y) = (rd(self, a, &mut lr), rd(self, b, &mut lr));
+                    let o = self.fresh();
+                    self.ops.push(BlockOp::Select(c, x, y, o));
+                    lr[*out as usize] = Some(o);
+                }
+                MicroOp::Mov { a, out } => {
+                    let x = rd(self, a, &mut lr);
+                    lr[*out as usize] = Some(x);
+                }
+                _ => unreachable!("checked above"),
+            }
+        }
+        for w in &ls.writes {
+            let r = rd(self, &w.src, &mut lr);
+            match &w.dst {
+                LaneDst::Dy(pos) => self.dy.push((r, pos.at(0) as usize)),
+                LaneDst::Slot(k) => self.bind(slot_off[*k as usize], r),
+            }
+        }
+        true
     }
-}
-
-/// Run `ins` if it is a scalar instruction with a scalar form here, and say
-/// whether it ran. Each arm is the scalar branch of its [`exec_straight`]
-/// arm, operation for operation: an elementwise op on scalar slots, a
-/// one-element load, a one-element gather that does not fault (a faulting
-/// one is left to the general path, which latches it), a count at one query.
-///
-/// # Safety
-/// As [`exec_straight`].
-#[inline]
-unsafe fn exec_scalar(ins: &Instr, env: &Env, slab_ptr: *mut f64, slot_off: &[usize]) -> bool {
-    let prog = env.prog;
-    let scalar_out = |out: &SlotId| prog.slots[*out as usize].scalar;
-    let put = |out: &SlotId, v: f64| unsafe { *slab_ptr.add(slot_off[*out as usize]) = v };
-    let get = |o: &Operand| resolve_scalar(o, env, slab_ptr, slot_off);
-    match ins {
-        Instr::Bin { op, a, b, out } if scalar_out(out) => {
-            put(out, binary_kernel_of(*op)(get(a), get(b)));
-        }
-        Instr::Un { op, a, out } if scalar_out(out) => put(out, unary_kernel_of(*op)(get(a))),
-        Instr::Neg { a, out } if scalar_out(out) => put(out, -get(a)),
-        Instr::Copy { a, out } if scalar_out(out) => put(out, get(a)),
-        Instr::Select { cond, a, b, out } if scalar_out(out) => {
-            let c = get(cond);
-            let x = get(a);
-            let y = get(b);
-            put(out, if c != 0.0 { x } else { y });
-        }
-        Instr::LoadElem { src, idx, out } => {
-            let (base, shape) = src_base(src, env, slab_ptr, slot_off);
-            let mut soff = 0usize;
-            let mut stride = 1usize;
-            for d in (0..idx.len()).rev() {
-                soff += idx[d] * stride;
-                stride *= shape[d];
-            }
-            put(out, unsafe { *base.add(soff) });
-        }
-        Instr::DataGather { src, spec, out, .. } => {
-            let spec = &prog.data_gathers[*spec as usize];
-            if !spec.shape.is_empty() || spec.subs.len() > 4 {
-                return false;
-            }
-            let mut v = [0.0f64; 4];
-            for (d, o) in spec.subs.iter().enumerate() {
-                v[d] = get(o);
-            }
-            let (base, _) = src_base(src, env, slab_ptr, slot_off);
-            match spec.at(|d| v[d]) {
-                DataAt::Elem(p) => put(out, unsafe { *base.add(p) }),
-                DataAt::Ghost => put(out, 0.0),
-                DataAt::Fault { .. } => return false,
-            }
-        }
-        _ => return false,
-    }
-    true
 }
 
 /// Everything a straight-line instruction reads besides its own scratch:
@@ -1178,10 +1178,7 @@ unsafe fn exec_scalar(ins: &Instr, env: &Env, slab_ptr: *mut f64, slot_off: &[us
 #[derive(Clone, Copy)]
 pub(super) struct Cx<'a> {
     pub(super) env: &'a Env<'a>,
-    pub(super) slab_ptr: *mut f64,
-    pub(super) slot_off: &'a [usize],
-    pub(super) plan_full: &'a [bool],
-    pub(super) asm_covered: &'a [bool],
+    pub(super) slab: Slab<'a>,
     pub(super) idx_tables: &'a [Vec<Option<super::fused::IndexTable>>],
     pub(super) simd: SimdLevel,
     pub(super) dy_home: &'a [usize],
@@ -1189,66 +1186,66 @@ pub(super) struct Cx<'a> {
     pub(super) dy_len: usize,
 }
 
-/// Whether `ins` is straight-line: it reads and writes only slab slots, the
-/// state, the parameters, `t` and `dy`, moves no control and publishes
-/// nothing, so [`exec_straight`] runs it on any thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) fn is_straight(ins: &Instr) -> bool {
-    !matches!(
-        ins,
-        Instr::LoadForcing { .. }
-            | Instr::Fault { .. }
-            | Instr::FaultScan { .. }
-            | Instr::Sweep { .. }
-            | Instr::ScalarRead { .. }
-            | Instr::DataGather { faults: true, .. }
-            | Instr::JmpIfZero { .. }
-            | Instr::Export { .. }
-            | Instr::Lanes { .. }
-    )
-}
-
-/// Execute one straight-line instruction (see [`is_straight`]) with this
+/// Execute one straight-line instruction (see [`Instr::may_run_on_worker`]) with this
 /// thread's `scratch`, splitting it under width `call_split`.
 ///
 /// # Safety
 /// `cx` must describe the current call, and every instruction this one
 /// depends on must have run.
 pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, call_split: usize) {
+    // SAFETY (every slab, state and `dy` access below): each pointer comes
+    // from the call's slab handle, its state or its `dy` at a slot,
+    // variable or position the program defines over the box the access
+    // walks; `out` never shares storage with an operand the slab coloring
+    // keeps live; and nothing another thread runs meanwhile touches what
+    // this instruction writes (the caller's contract).
     let Cx {
         env,
-        slab_ptr,
-        slot_off,
-        plan_full,
-        asm_covered,
-        idx_tables,
-        simd,
+        slab,
         dy_home,
         dy,
         dy_len,
+        ..
     } = *cx;
     let prog = env.prog;
+    // An instruction that splits under this call's width runs as one
+    // fork-join over its share function, as a call plan's task would.
+    #[cfg(not(target_arch = "wasm32"))]
+    if call_split > 1 && !matches!(ins, Instr::Fused { .. }) && shares(prog, ins) {
+        let ways = super::par::split_width(prog, ins, call_split);
+        if ways > 1
+            && let Some(op) = unsafe { resolve_split(cx, ins, &mut scratch.asm_parts) }
+        {
+            let precision = crate::precision::active();
+            super::pool::run(ways, &|w| {
+                // The caller's precision is thread-local; carry it over.
+                let _p = crate::precision::enter(precision);
+                // SAFETY: the shares of one split write disjoint parts of
+                // its output, and read only what instructions before it
+                // wrote.
+                unsafe { run_split_share(&op, w, ways) }
+            });
+            return;
+        }
+    }
     let Scratch {
-        fregs,
-        fscratch,
-        #[cfg(not(target_arch = "wasm32"))]
-        asm_parts,
+        fregs, fscratch, ..
     } = scratch;
     #[cfg(target_arch = "wasm32")]
     let _ = call_split;
     match ins {
         Instr::Bin { op, a, b, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
                 let f = binary_kernel_of(*op);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                let y = resolve_scalar(b, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = f(x, y) };
+                let x = resolve_scalar(a, env, slab);
+                let y = resolve_scalar(b, env, slab);
+                unsafe { *slab.at(off) = f(x, y) };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let bv = resolve_rv(b, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 let sh = &desc.shape;
                 // Monomorphized over the shared table
                 // (`dispatch_bin_kernel`) — one indirect call per NODE
@@ -1262,15 +1259,15 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Un { op, a, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
                 let f = unary_kernel_of(*op);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = f(x) };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = f(x) };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 let sh = &desc.shape;
                 // Step 4: monomorphized arms for the common unaries via
                 // the shared table (`dispatch_un_kernel`) — one
@@ -1284,57 +1281,57 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Neg { a, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = -x };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = -x };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                unsafe { ew1(slab_ptr.add(off), &desc.shape, &av, |x| -x) };
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                unsafe { ew1(slab.at(off), &desc.shape, &av, |x| -x) };
             }
         }
         Instr::Select { cond, a, b, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let c = resolve_scalar(cond, env, slab_ptr, slot_off);
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                let y = resolve_scalar(b, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = if c != 0.0 { x } else { y } };
+                let c = resolve_scalar(cond, env, slab);
+                let x = resolve_scalar(a, env, slab);
+                let y = resolve_scalar(b, env, slab);
+                unsafe { *slab.at(off) = if c != 0.0 { x } else { y } };
             } else {
-                let cv = resolve_rv(cond, &desc.shape, env, slab_ptr, slot_off);
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
-                let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off);
-                unsafe { ew_select(slab_ptr.add(off), &desc.shape, &cv, &av, &bv) };
+                let cv = resolve_rv(cond, &desc.shape, env, slab);
+                let av = resolve_rv(a, &desc.shape, env, slab);
+                let bv = resolve_rv(b, &desc.shape, env, slab);
+                unsafe { ew_select(slab.at(off), &desc.shape, &cv, &av, &bv) };
             }
         }
         Instr::Gather { src, plan, out } => {
-            let full = plan_full[*plan as usize];
-            let plan = &prog.plans[*plan as usize];
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let off = slot_off[*out as usize];
-            unsafe { exec_gather(plan, &sv, slab_ptr.add(off), full, call_split) };
+            let full = env.prep.plan_full[*plan as usize];
+            let plan = &prog.tables.plans[*plan as usize];
+            let sv = resolve_src(src, env, slab);
+            let off = slab.off(*out);
+            unsafe { exec_gather(plan, &sv, slab.at(off), full) };
         }
         Instr::LoadElem { src, idx, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(idx.len(), sv.shape.len());
             let mut soff = 0i64;
             for (d, &i0) in idx.iter().enumerate() {
                 debug_assert!(i0 < sv.shape[d], "LoadElem index out of bounds");
                 soff += sv.strides[d] * i0 as i64;
             }
-            let off = slot_off[*out as usize];
-            unsafe { *slab_ptr.add(off) = *sv.ptr.offset(soff as isize) };
+            let off = slab.off(*out);
+            unsafe { *slab.at(off) = *sv.ptr.offset(soff as isize) };
         }
         Instr::Ramp { axis, lo, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             let a = *axis as usize;
             let pre: usize = desc.shape[..a].iter().product();
             let ax = desc.shape[a];
             let post: usize = desc.shape[a + 1..].iter().product();
-            let mut p = unsafe { slab_ptr.add(off) };
+            let mut p = slab.at(off);
             for _ in 0..pre.max(1) {
                 for q in 0..ax {
                     let v = (*lo + q as i64) as f64;
@@ -1348,15 +1345,15 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Fill { v, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let s = resolve_scalar(v, env, slab_ptr, slot_off);
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
+            let s = resolve_scalar(v, env, slab);
             if desc.scalar {
-                unsafe { *slab_ptr.add(off) = s };
+                unsafe { *slab.at(off) = s };
             } else {
                 let n = desc.elems();
                 unsafe {
-                    let p = slab_ptr.add(off);
+                    let p = slab.at(off);
                     for k in 0..n {
                         *p.add(k) = s;
                     }
@@ -1364,19 +1361,18 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Copy { a, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let x = resolve_scalar(a, env, slab_ptr, slot_off);
-                unsafe { *slab_ptr.add(off) = x };
+                let x = resolve_scalar(a, env, slab);
+                unsafe { *slab.at(off) = x };
             } else {
-                let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off);
+                let av = resolve_rv(a, &desc.shape, env, slab);
                 match av {
                     Rv::S(_) => panic!("array Copy from a scalar operand"),
                     Rv::V { ptr, strides } => unsafe {
-                        copy_strided_maybe_split(
-                            call_split,
-                            slab_ptr.add(off),
+                        copy_strided(
+                            slab.at(off),
                             &rm_strides(&desc.shape),
                             ptr,
                             &strides,
@@ -1392,20 +1388,16 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             region,
             out,
         } => {
-            let spec = &prog.regions[*region as usize];
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let base_off = slot_off[*base as usize];
+            let spec = &prog.tables.regions[*region as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
+            let base_off = slab.off(*base);
             let n = desc.elems();
             unsafe {
                 // `out = base` (skip when the coloring aliased them, which
                 // it can only do at identical offsets).
                 if base_off != off {
-                    std::ptr::copy_nonoverlapping(
-                        slab_ptr.add(base_off) as *const f64,
-                        slab_ptr.add(off),
-                        n,
-                    );
+                    std::ptr::copy_nonoverlapping(slab.at(base_off) as *const f64, slab.at(off), n);
                 }
             }
             // Overwrite the region sub-block.
@@ -1414,8 +1406,8 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             for d in 0..desc.shape.len() {
                 dbase += out_rm[d] * spec.dest_lo[d] as i64;
             }
-            let sub_dst = unsafe { slab_ptr.add(off).offset(dbase as isize) };
-            let sv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
+            let sub_dst = unsafe { slab.at(off).offset(dbase as isize) };
+            let sv = resolve_rv(src, &spec.shape, env, slab);
             match sv {
                 Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
                 Rv::V { ptr, strides } => unsafe {
@@ -1424,59 +1416,27 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::Assemble { table, out } => {
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
-            let dst = unsafe { slab_ptr.add(off) };
-            let parts = &prog.assemblies[*table as usize].parts;
-            let covered = asm_covered[*table as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
+            let dst = slab.at(off);
+            let parts = &prog.tables.assemblies[*table as usize].parts;
+            let covered = env.prep.asm_covered[*table as usize];
             let out_rm = rm_strides(&desc.shape);
-            // A large assembly splits across the call's workers, each
-            // assembling its own share of the box (see `par`).
-            #[cfg(not(target_arch = "wasm32"))]
-            let split = super::par::ways_for(desc.elems(), call_split);
-            #[cfg(target_arch = "wasm32")]
-            let split = 1;
-            if split > 1 && !desc.shape.is_empty() {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    asm_parts.clear();
-                    for (src, region) in parts {
-                        let spec = &prog.regions[*region as usize];
-                        let mut dbase = 0i64;
-                        for d in 0..desc.shape.len() {
-                            dbase += out_rm[d] * spec.dest_lo[d] as i64;
-                        }
-                        let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
-                        asm_parts.push(super::par::AsmPart::new(*region, dbase, rv));
-                    }
-                    unsafe {
-                        super::par::assemble(
-                            split,
-                            dst,
-                            &desc.shape,
-                            &prog.regions,
-                            asm_parts,
-                            covered,
-                        )
-                    };
+            if !covered {
+                unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
+            }
+            for (src, region) in parts {
+                let spec = &prog.tables.regions[*region as usize];
+                let mut dbase = 0i64;
+                for d in 0..desc.shape.len() {
+                    dbase += out_rm[d] * spec.dest_lo[d] as i64;
                 }
-            } else {
-                if !covered {
-                    unsafe { std::slice::from_raw_parts_mut(dst, desc.elems()).fill(0.0) };
-                }
-                for (src, region) in parts {
-                    let spec = &prog.regions[*region as usize];
-                    let mut dbase = 0i64;
-                    for d in 0..desc.shape.len() {
-                        dbase += out_rm[d] * spec.dest_lo[d] as i64;
-                    }
-                    let sub_dst = unsafe { dst.offset(dbase as isize) };
-                    match resolve_rv(src, &spec.shape, env, slab_ptr, slot_off) {
-                        Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
-                        Rv::V { ptr, strides } => unsafe {
-                            copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
-                        },
-                    }
+                let sub_dst = unsafe { dst.offset(dbase as isize) };
+                match resolve_rv(src, &spec.shape, env, slab) {
+                    Rv::S(v) => unsafe { fill_strided(sub_dst, &out_rm, &spec.shape, v) },
+                    Rv::V { ptr, strides } => unsafe {
+                        copy_strided(sub_dst, &out_rm, ptr, &strides, &spec.shape);
+                    },
                 }
             }
         }
@@ -1489,7 +1449,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             x,
             out,
         } => {
-            let (aptr, ashape) = src_base(axis, env, slab_ptr, slot_off);
+            let (aptr, ashape) = src_base(axis, env, slab);
             // The window is read unchecked below, so it is checked here, once
             // per execution, in every build: an axis whose run-time box no
             // longer holds the window the lowering saw is refused, as the
@@ -1504,24 +1464,24 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             // Rank 1, row-major: the window is contiguous. `out` never shares
             // storage with the axis (the slab coloring keeps them apart).
             let win = unsafe { std::slice::from_raw_parts(aptr.add(*lo as usize), *n as usize) };
-            let desc = &prog.slots[*out as usize];
-            let off = slot_off[*out as usize];
+            let desc = &prog.tables.slots[*out as usize];
+            let off = slab.off(*out);
             if desc.scalar {
-                let xv = resolve_scalar(x, env, slab_ptr, slot_off);
+                let xv = resolve_scalar(x, env, slab);
                 let bisect = count_bisects(win, *sorted);
-                unsafe { *slab_ptr.add(off) = count_one(*rel, win, bisect, xv) };
+                unsafe { *slab.at(off) = count_one(*rel, win, bisect, xv) };
             } else {
-                let xv = resolve_rv(x, &desc.shape, env, slab_ptr, slot_off);
-                let dst = unsafe { slab_ptr.add(off) };
+                let xv = resolve_rv(x, &desc.shape, env, slab);
+                let dst = slab.at(off);
                 unsafe { count_many(dst, &desc.shape, &xv, *rel, win, *sorted) };
             }
         }
         Instr::ConstArray { data, out } => {
-            let d = &prog.const_data[*data as usize];
-            let off = slot_off[*out as usize];
-            debug_assert_eq!(d.values.len(), prog.slots[*out as usize].elems());
+            let d = &prog.tables.const_data[*data as usize];
+            let off = slab.off(*out);
+            debug_assert_eq!(d.values.len(), prog.tables.slots[*out as usize].elems());
             unsafe {
-                std::ptr::copy_nonoverlapping(d.values.as_ptr(), slab_ptr.add(off), d.values.len());
+                std::ptr::copy_nonoverlapping(d.values.as_ptr(), slab.at(off), d.values.len());
             }
         }
         Instr::Reduce {
@@ -1534,11 +1494,11 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
         } => {
             let f = binary_kernel_of(*op);
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Reduce source box");
-            let desc = &prog.slots[*out as usize];
-            let ooff = slot_off[*out as usize];
-            let dst = unsafe { slab_ptr.add(ooff) };
+            let desc = &prog.tables.slots[*out as usize];
+            let ooff = slab.off(*out);
+            let dst = slab.at(ooff);
             // Seed every output position with the identity, then fold.
             let n_out = desc.elems();
             unsafe {
@@ -1634,9 +1594,9 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             src_shape,
             out,
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Scan source box");
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             let (a, init, inclusive, reverse) = (*axis as usize, *init, *inclusive, *reverse);
             macro_rules! scan {
                 ($f:expr) => {
@@ -1651,10 +1611,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             spec,
             out,
         } => {
-            let spec = &prog.index_gathers[*spec as usize];
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let iv = resolve_rv(idx, &spec.shape, env, slab_ptr, slot_off);
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let spec = &prog.tables.index_gathers[*spec as usize];
+            let sv = resolve_src(src, env, slab);
+            let iv = resolve_rv(idx, &spec.shape, env, slab);
+            let dst = slab.slot(*out);
             unsafe { index_gather(dst, spec, &sv, &iv) };
         }
         Instr::DataGather {
@@ -1663,7 +1623,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             out,
             faults,
         } => {
-            let spec = &prog.data_gathers[*spec as usize];
+            let spec = &prog.tables.data_gathers[*spec as usize];
             // One element read at scalar subscripts: the position straight
             // from the subscripts' values, no source view, no subscript
             // views. A read that faults takes the general path below, which
@@ -1671,26 +1631,22 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             if spec.shape.is_empty() && spec.subs.len() <= 4 {
                 let mut v = [0.0f64; 4];
                 for (d, o) in spec.subs.iter().enumerate() {
-                    v[d] = resolve_scalar(o, env, slab_ptr, slot_off);
+                    v[d] = resolve_scalar(o, env, slab);
                 }
-                let (base, _) = src_base(src, env, slab_ptr, slot_off);
-                let x = match spec.at(|d| v[d]) {
-                    DataAt::Elem(p) => Some(unsafe { *base.add(p) }),
-                    DataAt::Ghost => Some(0.0),
-                    DataAt::Fault { .. } => None,
-                };
-                if let Some(x) = x {
-                    unsafe { *slab_ptr.add(slot_off[*out as usize]) = x };
+                let (base, _) = src_base(src, env, slab);
+                // SAFETY: `base` addresses the gather's source box.
+                if let Some(x) = unsafe { gather_one(spec, base, &v[..spec.subs.len()]) } {
+                    unsafe { *slab.slot(*out) = x };
                     return;
                 }
             }
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             let subs: SmallVec<[Rv; 4]> = spec
                 .subs
                 .iter()
-                .map(|o| resolve_rv(o, &spec.shape, env, slab_ptr, slot_off))
+                .map(|o| resolve_rv(o, &spec.shape, env, slab))
                 .collect();
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             let faulted = unsafe { data_gather(dst, spec, &sv, &subs) };
             // A gather in a lazily evaluated position reads `NaN` at a fault
             // and leaves the latching to its rule's `FaultScan`.
@@ -1703,10 +1659,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
         }
         Instr::TableGather { src, table, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let tbl = &prog.gather_tables[*table as usize];
+            let sv = resolve_src(src, env, slab);
+            let tbl = &prog.tables.gather_tables[*table as usize];
             debug_assert_eq!(&sv.shape[..], &tbl.src_shape[..], "TableGather source box");
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             unsafe { table_gather(dst, &sv, &tbl.pos) };
         }
         Instr::SegReduce {
@@ -1717,10 +1673,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             table,
             out,
         } => {
-            let rows = &prog.seg_tables[*table as usize].rows;
-            let src = unsafe { slab_ptr.add(slot_off[*src as usize]) as *const f64 };
-            let mask = mask.map(|m| unsafe { slab_ptr.add(slot_off[m as usize]) as *const f64 });
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let rows = &prog.tables.seg_tables[*table as usize].rows;
+            let src = slab.slot(*src) as *const f64;
+            let mask = mask.map(|m| slab.slot(m) as *const f64);
+            let dst = slab.slot(*out);
             let init = *init;
             macro_rules! fold {
                 ($f:expr) => {
@@ -1730,54 +1686,41 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             dispatch_bin_kernel!(op, fold);
         }
         Instr::Reshape { src, out } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let sv = resolve_src(src, env, slab);
             debug_assert_eq!(
                 sv.shape.iter().product::<usize>(),
-                prog.slots[*out as usize].shape.iter().product::<usize>(),
+                prog.tables.slots[*out as usize]
+                    .shape
+                    .iter()
+                    .product::<usize>(),
                 "Reshape element count"
             );
             // The source walked in its own row-major order, written
             // contiguously: `out`'s row-major layout over its own box.
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let dst = slab.slot(*out);
             unsafe { copy_strided(dst, &rm_strides(&sv.shape), sv.ptr, &sv.strides, &sv.shape) };
         }
-        Instr::Fused { spec } => {
-            let idx = &idx_tables[*spec as usize];
-            unsafe {
-                exec_fused(
-                    *spec as usize,
-                    env,
-                    slab_ptr,
-                    slot_off,
-                    fregs,
-                    fscratch,
-                    idx,
-                    simd,
-                    dy_home,
-                    dy,
-                )
-            };
-        }
+        Instr::Fused { spec } => unsafe { exec_fused(*spec as usize, cx, fregs, fscratch) },
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             // Its fused group already stored the slot into `dy`.
             if dy_home[w.slot as usize] != usize::MAX {
                 return;
             }
-            let desc = &prog.slots[w.slot as usize];
-            let off = slot_off[w.slot as usize];
+            let desc = &prog.tables.slots[w.slot as usize];
+            let off = slab.off(w.slot);
             if let Some(pos) = &w.scatter {
                 // The slot is contiguous row-major, the order `pos` lists.
                 debug_assert_eq!(pos.len(), desc.elems());
                 for (k, &p) in pos.iter().enumerate() {
-                    unsafe { *dy.add(p) = *slab_ptr.add(off + k) };
+                    unsafe { *dy.add(p) = *slab.at(off + k) };
                 }
                 return;
             }
             match w.scalar_flat {
                 Some(flat) => {
                     debug_assert!(desc.scalar);
-                    unsafe { *dy.add(flat) = *slab_ptr.add(off) };
+                    unsafe { *dy.add(flat) = *slab.at(off) };
                 }
                 None => {
                     // A column-major program's slot has the state block's
@@ -1792,11 +1735,10 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                         sv.flat_offset + sv.shape.iter().product::<usize>().max(1) <= dy_len
                     );
                     unsafe {
-                        copy_strided_maybe_split(
-                            call_split,
+                        copy_strided(
                             dy.offset(dbase as isize),
                             &cm,
-                            slab_ptr.add(off) as *const f64,
+                            slab.at(off) as *const f64,
                             &rm_strides(&desc.shape),
                             &desc.shape,
                         );
@@ -1808,19 +1750,22 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
     }
 }
 
-/// Whether [`exec_share`] can run `ins` share by share, and so whether a
-/// split of it can be one task of a call plan (see `plan`).
+/// Whether [`exec_share`] can run `ins` share by share: whether it splits
+/// at all, from the instruction loop or as one task of a call plan (see
+/// `plan`).
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn shares(prog: &TapeProgram, ins: &Instr) -> bool {
     match ins {
         Instr::Fused { .. } | Instr::Assemble { .. } => true,
-        Instr::Copy { out, .. } => !prog.slots[*out as usize].scalar,
+        Instr::Copy { out, .. } | Instr::Gather { out, .. } => {
+            !prog.tables.slots[*out as usize].scalar
+        }
         Instr::Reduce { axes, out, .. } => {
-            !prog.slots[*out as usize].scalar
+            !prog.tables.slots[*out as usize].scalar
                 && axes.iter().enumerate().all(|(k, &a)| a as usize == k)
         }
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             w.scatter.is_none() && w.scalar_flat.is_none()
         }
         Instr::Scan { axis: 0, .. } => true,
@@ -1842,64 +1787,162 @@ pub(super) unsafe fn exec_share(
     w: usize,
     ways: usize,
 ) {
+    if let Instr::Fused { spec } = ins {
+        // SAFETY: the caller's contract.
+        unsafe {
+            super::fused::exec_fused_share(*spec as usize, cx, &mut scratch.fscratch, w, ways)
+        };
+        return;
+    }
+    // SAFETY: the caller's contract.
+    match unsafe { resolve_split(cx, ins, &mut scratch.asm_parts) } {
+        Some(op) => unsafe { run_split_share(&op, w, ways) },
+        // Not the layout a split assumes: one share runs it whole.
+        None if w == 0 => unsafe { exec_straight(cx, ins, scratch, 1) },
+        None => {}
+    }
+}
+
+/// A split instruction other than a fused group, resolved for one call:
+/// what every share of it reads (see [`run_split_share`]).
+#[cfg(not(target_arch = "wasm32"))]
+enum SplitOp<'a> {
+    /// Nothing to do (a `DyWrite` whose fused group stored into `dy`).
+    Skip,
+    Assemble {
+        dst: *mut f64,
+        shape: &'a [usize],
+        regions: &'a [RegionSpec],
+        parts: &'a [super::par::AsmPart],
+        covered: bool,
+    },
+    /// A block copy (`Copy`, `DyWrite`).
+    Copy {
+        dst: *mut f64,
+        dstr: DimI,
+        src: *const f64,
+        sstr: DimI,
+        shape: &'a [usize],
+    },
+    /// The leading axes of a contiguous source folded into `n_out` cells.
+    Reduce {
+        op: BinCode,
+        init: f64,
+        reverse: bool,
+        src: *const f64,
+        rows: usize,
+        n_out: usize,
+        dst: *mut f64,
+    },
+    /// A scan along the leading axis of a contiguous `[len, post]` box.
+    Scan {
+        op: BinCode,
+        init: f64,
+        inclusive: bool,
+        reverse: bool,
+        src: *const f64,
+        len: usize,
+        post: usize,
+        dst: *mut f64,
+    },
+    Gather {
+        plan: &'a GatherPlan,
+        src: super::resolve::SrcView,
+        out: *mut f64,
+        full: bool,
+    },
+}
+
+// SAFETY: the pointers address the slab, the state and `dy`, which outlive
+// the fork-join that shares the resolved instruction; each share writes only
+// its own part of the output (`run_split_share`).
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for SplitOp<'_> {}
+
+/// `ins` (an instruction [`shares`] admits, not a fused group) resolved for
+/// this call, or `None` when its operands are not in the layout its split
+/// assumes, so it runs whole. An assembly's parts are resolved into
+/// `parts`.
+///
+/// # Safety
+/// As for [`exec_straight`].
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn resolve_split<'a>(
+    cx: &Cx<'a>,
+    ins: &'a Instr,
+    parts: &'a mut Vec<super::par::AsmPart>,
+) -> Option<SplitOp<'a>> {
     let Cx {
         env,
-        slab_ptr,
-        slot_off,
-        asm_covered,
-        idx_tables,
-        simd,
+        slab,
         dy_home,
         dy,
         ..
     } = *cx;
     let prog = env.prog;
-    match ins {
-        Instr::Fused { spec } => unsafe {
-            super::fused::exec_fused_share(
-                *spec as usize,
-                env,
-                slab_ptr,
-                slot_off,
-                &mut scratch.fscratch,
-                &idx_tables[*spec as usize],
-                simd,
-                dy_home,
-                dy,
-                w,
-                ways,
-            )
-        },
+    let slot = |s: SlotId| slab.slot(s);
+    Some(match ins {
         Instr::Assemble { table, out } => {
-            let desc = &prog.slots[*out as usize];
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let desc = &prog.tables.slots[*out as usize];
+            if desc.shape.is_empty() {
+                return None;
+            }
             let out_rm = rm_strides(&desc.shape);
-            let parts = &mut scratch.asm_parts;
             parts.clear();
-            for (src, region) in &prog.assemblies[*table as usize].parts {
-                let spec = &prog.regions[*region as usize];
+            for (src, region) in &prog.tables.assemblies[*table as usize].parts {
+                let spec = &prog.tables.regions[*region as usize];
                 let mut dbase = 0i64;
                 for d in 0..desc.shape.len() {
                     dbase += out_rm[d] * spec.dest_lo[d] as i64;
                 }
-                let rv = resolve_rv(src, &spec.shape, env, slab_ptr, slot_off);
+                let rv = resolve_rv(src, &spec.shape, env, slab);
                 parts.push(super::par::AsmPart::new(*region, dbase, rv));
             }
-            unsafe {
-                super::par::assemble_share(
-                    w,
-                    ways,
-                    dst,
-                    &desc.shape,
-                    &prog.regions,
-                    parts,
-                    asm_covered[*table as usize],
-                )
-            };
+            SplitOp::Assemble {
+                dst: slot(*out),
+                shape: &desc.shape,
+                regions: &prog.tables.regions,
+                parts,
+                covered: env.prep.asm_covered[*table as usize],
+            }
         }
-        // The leading axes folded out of a contiguous source: worker `w`
-        // owns a run of output cells and folds each of them whole, row by
-        // row in the serial order.
+        Instr::Copy { a, out } => {
+            let desc = &prog.tables.slots[*out as usize];
+            match resolve_rv(a, &desc.shape, env, slab) {
+                Rv::S(_) => panic!("array Copy from a scalar operand"),
+                Rv::V { ptr, strides } => SplitOp::Copy {
+                    dst: slot(*out),
+                    dstr: rm_strides(&desc.shape),
+                    src: ptr,
+                    sstr: strides,
+                    shape: &desc.shape,
+                },
+            }
+        }
+        Instr::DyWrite { write } => {
+            let wr = &prog.tables.dy_writes[*write as usize];
+            // Its fused group already stored the slot into `dy`.
+            if dy_home[wr.slot as usize] != usize::MAX {
+                return Some(SplitOp::Skip);
+            }
+            if wr.scatter.is_some() || wr.scalar_flat.is_some() {
+                return None;
+            }
+            let desc = &prog.tables.slots[wr.slot as usize];
+            let sv = &prog.state_vars[wr.var as usize];
+            let cm = dy_strides(prog, &sv.shape);
+            let mut dbase = sv.flat_offset as isize;
+            for d in 0..sv.shape.len() {
+                dbase += wr.dest_lo[d] as isize * cm[d] as isize;
+            }
+            SplitOp::Copy {
+                dst: dy.wrapping_offset(dbase),
+                dstr: cm,
+                src: slot(wr.slot),
+                sstr: rm_strides(&desc.shape),
+                shape: &desc.shape,
+            }
+        }
         Instr::Reduce {
             op,
             init,
@@ -1909,38 +1952,20 @@ pub(super) unsafe fn exec_share(
             out,
             ..
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let n_out = prog.slots[*out as usize].elems();
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let sv = resolve_src(src, env, slab);
             if sv.strides[..] != rm_strides(&sv.shape)[..] {
-                // Not the contiguous layout the split assumes: one worker
-                // runs it whole.
-                if w == 0 {
-                    unsafe { exec_straight(cx, ins, scratch, 1) };
-                }
-                return;
+                return None;
             }
-            let (lo, hi) = super::par::share_at(n_out, w, ways, dst);
-            let rows: usize = sv.shape[..axes.len()].iter().product();
-            unsafe {
-                for k in lo..hi {
-                    *dst.add(k) = *init;
-                }
+            SplitOp::Reduce {
+                op: *op,
+                init: *init,
+                reverse: *reverse,
+                src: sv.ptr,
+                rows: sv.shape[..axes.len()].iter().product(),
+                n_out: prog.tables.slots[*out as usize].elems(),
+                dst: slot(*out),
             }
-            let src = sv.ptr;
-            macro_rules! fold_rows {
-                ($f:expr) => {
-                    for k in 0..rows {
-                        // A reverse fold takes its rows from the last.
-                        let r = if *reverse { rows - 1 - k } else { k };
-                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
-                    }
-                };
-            }
-            dispatch_bin_kernel!(op, fold_rows);
         }
-        // A scan along the leading axis: worker `w` sweeps the inner
-        // positions (lanes) of its own share, every one whole and in order.
         Instr::Scan {
             op,
             init,
@@ -1951,520 +1976,127 @@ pub(super) unsafe fn exec_share(
             src_shape,
             out,
         } => {
-            let sv = resolve_src(src, env, slab_ptr, slot_off);
-            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let sv = resolve_src(src, env, slab);
             if sv.strides[..] != rm_strides(&sv.shape)[..] || src_shape.is_empty() {
-                if w == 0 {
-                    unsafe { exec_straight(cx, ins, scratch, 1) };
-                }
-                return;
+                return None;
             }
-            let len = src_shape[0];
-            let post: usize = src_shape[1..].iter().product();
-            let (lo, hi) = super::par::share_at(post, w, ways, dst);
-            let (init, inclusive, reverse, src) = (*init, *inclusive, *reverse, sv.ptr);
+            SplitOp::Scan {
+                op: *op,
+                init: *init,
+                inclusive: *inclusive,
+                reverse: *reverse,
+                src: sv.ptr,
+                len: src_shape[0],
+                post: src_shape[1..].iter().product(),
+                dst: slot(*out),
+            }
+        }
+        Instr::Gather { src, plan, out } => SplitOp::Gather {
+            plan: &prog.tables.plans[*plan as usize],
+            src: resolve_src(src, env, slab),
+            out: slot(*out),
+            full: env.prep.plan_full[*plan as usize],
+        },
+        _ => unreachable!("not a split instruction: {}", ins.opcode()),
+    })
+}
+
+/// Share `w` of a split `ways` wide: the same part of the output whichever
+/// thread runs it, and every element computed as the serial arm computes
+/// it.
+///
+/// # Safety
+/// `op` was resolved for the current call, every instruction it depends on
+/// has run, and no other thread writes what this share reads or touches
+/// what it writes.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn run_split_share(op: &SplitOp, w: usize, ways: usize) {
+    use super::par::{assemble_share, copy_strided_share, share_at};
+    match *op {
+        SplitOp::Skip => {}
+        SplitOp::Assemble {
+            dst,
+            shape,
+            regions,
+            parts,
+            covered,
+        } => unsafe { assemble_share(w, ways, dst, shape, regions, parts, covered) },
+        SplitOp::Copy {
+            dst,
+            ref dstr,
+            src,
+            ref sstr,
+            shape,
+        } => unsafe { copy_strided_share(ways, w, dst, dstr, src, sstr, shape) },
+        // Worker `w` owns a run of output cells and folds each of them whole,
+        // row by row in the serial order.
+        SplitOp::Reduce {
+            op,
+            init,
+            reverse,
+            src,
+            rows,
+            n_out,
+            dst,
+        } => {
+            let (lo, hi) = share_at(n_out, w, ways, dst);
+            // SAFETY: cells `[lo, hi)` are this share's; every row holds
+            // `n_out` cells.
+            unsafe {
+                for k in lo..hi {
+                    *dst.add(k) = init;
+                }
+            }
+            macro_rules! fold_rows {
+                ($f:expr) => {
+                    for k in 0..rows {
+                        // A reverse fold takes its rows from the last.
+                        let r = if reverse { rows - 1 - k } else { k };
+                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
+                    }
+                };
+            }
+            dispatch_bin_kernel!(&op, fold_rows);
+        }
+        // Worker `w` sweeps the inner positions (lanes) of its own share,
+        // every one whole and in order.
+        SplitOp::Scan {
+            op,
+            init,
+            inclusive,
+            reverse,
+            src,
+            len,
+            post,
+            dst,
+        } => {
+            let (lo, hi) = share_at(post, w, ways, dst);
             macro_rules! scan {
                 ($f:expr) => {
+                    // SAFETY: lanes `[lo, hi)` are this share's.
                     unsafe {
                         scan_leading_cols(dst, src, len, post, init, inclusive, reverse, lo, hi, $f)
                     }
                 };
             }
-            dispatch_bin_kernel!(op, scan);
+            dispatch_bin_kernel!(&op, scan);
         }
-        Instr::Copy { a, out } => {
-            let desc = &prog.slots[*out as usize];
-            match resolve_rv(a, &desc.shape, env, slab_ptr, slot_off) {
-                Rv::S(_) => panic!("array Copy from a scalar operand"),
-                Rv::V { ptr, strides } => unsafe {
-                    super::par::copy_strided_share(
-                        ways,
-                        w,
-                        slab_ptr.add(slot_off[*out as usize]),
-                        &rm_strides(&desc.shape),
-                        ptr,
-                        &strides,
-                        &desc.shape,
-                    )
-                },
-            }
-        }
-        Instr::DyWrite { write } => {
-            let wr = &prog.dy_writes[*write as usize];
-            // Its fused group already stored the slot into `dy`.
-            if dy_home[wr.slot as usize] != usize::MAX {
-                return;
-            }
-            let desc = &prog.slots[wr.slot as usize];
-            let sv = &prog.state_vars[wr.var as usize];
-            let cm = dy_strides(prog, &sv.shape);
-            let mut dbase = sv.flat_offset as i64;
-            for d in 0..sv.shape.len() {
-                dbase += wr.dest_lo[d] as i64 * cm[d];
-            }
-            unsafe {
-                super::par::copy_strided_share(
-                    ways,
-                    w,
-                    dy.offset(dbase as isize),
-                    &cm,
-                    slab_ptr.add(slot_off[wr.slot as usize]) as *const f64,
-                    &rm_strides(&desc.shape),
-                    &desc.shape,
-                )
+        // Share 0 zeroes exactly the ghosts, which no segment copy writes,
+        // and every share copies its part of each segment block.
+        SplitOp::Gather {
+            plan,
+            ref src,
+            out,
+            full,
+        } => unsafe {
+            let zero = if !full && w == 0 {
+                super::kernels::Zero::Exact
+            } else {
+                super::kernels::Zero::No
             };
-        }
-        _ => unreachable!("not a shared instruction: {}", ins.opcode()),
-    }
-}
-
-/// The fewest scalar instructions worth running as one [`ScalarBlock`].
-const BLOCK_MIN: usize = 6;
-
-/// One operation of a [`ScalarBlock`], on its register file.
-#[derive(Clone, Copy)]
-enum BlockOp {
-    Arith(Arith, u16, u16, u16),
-    Bin(ScalarBin, u16, u16, u16),
-    Un(fn(f64) -> f64, u16, u16),
-    Neg(u16, u16),
-    Select(u16, u16, u16, u16),
-    Load(ScalarBase, usize, u16),
-    Gather1 {
-        src: ScalarBase,
-        x: u16,
-        n: usize,
-        spec: u32,
-        out: u16,
-    },
-    Gather2 {
-        src: ScalarBase,
-        a: u16,
-        b: u16,
-        n0: u32,
-        n1: u32,
-        spec: u32,
-        out: u16,
-    },
-    Count {
-        rel: CountRel,
-        axis: ScalarBase,
-        lo: u32,
-        n: u32,
-        sorted: bool,
-        x: u16,
-        out: u16,
-    },
-}
-
-/// Where a [`ScalarBlock`] puts a value at its end.
-#[derive(Clone, Copy)]
-enum BlockOut {
-    Slab(usize),
-    Dy(usize),
-}
-
-/// A straight run of scalar instructions (their [`ScalarOp`] forms, one-lane
-/// programs inlined) run as one program over a register file of its own:
-/// each operand the run reads from before it is read into a register, every
-/// value it computes stays in one, and at the end each slab offset it wrote
-/// gets its last value and each `dy` position its value, in program order.
-/// Within the run nothing reads a value it stores (a scalar run writes only
-/// scalar slots and `dy`; its arrays are read from the slab, written before
-/// it), so deferring the stores changes no read, and each operation is the
-/// [`ScalarOp`] arm's kernel on the same operand values.
-pub(super) struct ScalarBlock {
-    /// One past its last instruction.
-    end: usize,
-    inputs: Vec<(ScalarSrc, u16)>,
-    ops: Vec<BlockOp>,
-    outs: Vec<(u16, BlockOut)>,
-    n_regs: usize,
-}
-
-impl ScalarBlock {
-    /// The block starting at `start` (instructions `start..` up to the first
-    /// that has no block form, the end of a section, a boundary of a
-    /// conditional region (`cut`) or a recurrence body (`guarded`)), or
-    /// `None` when that run is shorter than [`BLOCK_MIN`].
-    pub(super) fn build(
-        prog: &TapeProgram,
-        scode: &[ScalarOp],
-        slanes: &[ScalarLane],
-        guarded: &[bool],
-        cut: &[bool],
-        start: usize,
-    ) -> Option<ScalarBlock> {
-        let sec = prog.section_of(start);
-        let mut b = Builder::default();
-        let mut pc = start;
-        while pc < scode.len()
-            && !guarded[pc]
-            && !(pc > start && cut[pc])
-            && prog.section_of(pc) == sec
-        {
-            let gather_ok = || matches!(prog.instrs[pc], Instr::DataGather { faults: false, .. });
-            let ok = match scode[pc] {
-                ScalarOp::Arith(k, a, c, out) => {
-                    let (x, y) = (b.slab(a), b.slab(c));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Arith(k, x, y, o));
-                    true
-                }
-                ScalarOp::ArithL(k, a, v, out) => {
-                    let (x, y) = (b.slab(a), b.src(ScalarSrc::Lit(v)));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Arith(k, x, y, o));
-                    true
-                }
-                ScalarOp::ArithR(k, v, c, out) => {
-                    let (x, y) = (b.src(ScalarSrc::Lit(v)), b.slab(c));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Arith(k, x, y, o));
-                    true
-                }
-                ScalarOp::Bin(k, a, c, out) => {
-                    let (x, y) = (b.src(a), b.src(c));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Bin(k, x, y, o));
-                    true
-                }
-                ScalarOp::Un(f, a, out) => {
-                    let x = b.src(a);
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Un(f, x, o));
-                    true
-                }
-                ScalarOp::Neg(a, out) => {
-                    let x = b.src(a);
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Neg(x, o));
-                    true
-                }
-                ScalarOp::Copy(a, out) => {
-                    // A copy is its source's value under a new offset.
-                    let x = b.src(a);
-                    b.alias(out, x);
-                    true
-                }
-                ScalarOp::Select(c, a, d, out) => {
-                    let (c, x, y) = (b.src(c), b.src(a), b.src(d));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Select(c, x, y, o));
-                    true
-                }
-                ScalarOp::Load(base, at, out) => {
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Load(base, at, o));
-                    true
-                }
-                ScalarOp::Gather1 {
-                    src,
-                    sub,
-                    n,
-                    spec,
-                    out,
-                } if gather_ok() => {
-                    let x = b.src(sub);
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Gather1 {
-                        src,
-                        x,
-                        n,
-                        spec,
-                        out: o,
-                    });
-                    true
-                }
-                ScalarOp::Gather2 {
-                    src,
-                    a,
-                    b: c,
-                    n0,
-                    n1,
-                    spec,
-                    out,
-                } if gather_ok() => {
-                    let (x, y) = (b.src(a), b.src(c));
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Gather2 {
-                        src,
-                        a: x,
-                        b: y,
-                        n0,
-                        n1,
-                        spec,
-                        out: o,
-                    });
-                    true
-                }
-                ScalarOp::Count {
-                    rel,
-                    axis,
-                    lo,
-                    n,
-                    sorted,
-                    x,
-                    out,
-                } => {
-                    let x = b.src(x);
-                    let o = b.def(out);
-                    b.ops.push(BlockOp::Count {
-                        rel,
-                        axis,
-                        lo,
-                        n,
-                        sorted,
-                        x,
-                        out: o,
-                    });
-                    true
-                }
-                ScalarOp::Lane(i) => {
-                    b.inline_lane(&slanes[i as usize]);
-                    true
-                }
-                _ => false,
-            };
-            if !ok || b.regs > u16::MAX as usize - 64 {
-                break;
-            }
-            pc += 1;
-        }
-        if pc - start < BLOCK_MIN {
-            return None;
-        }
-        let mut outs: Vec<(u16, BlockOut)> = b
-            .written
-            .iter()
-            .map(|&off| (b.at[&off], BlockOut::Slab(off)))
-            .collect();
-        outs.extend(b.dy.iter().map(|&(r, p)| (r, BlockOut::Dy(p))));
-        Some(ScalarBlock {
-            end: pc,
-            inputs: b.inputs,
-            ops: b.ops,
-            outs,
-            n_regs: b.regs,
-        })
-    }
-
-    /// Run the block; `regs` is scratch the block sizes.
-    ///
-    /// # Safety
-    /// As [`ScalarOp::run`].
-    #[inline(never)]
-    pub(super) unsafe fn run(
-        &self,
-        env: &Env,
-        slab_ptr: *mut f64,
-        dy: &mut [f64],
-        regs: &mut Vec<f64>,
-    ) -> usize {
-        if regs.len() < self.n_regs {
-            regs.resize(self.n_regs, 0.0);
-        }
-        let r = regs.as_mut_ptr();
-        let base_ptr = |b: &ScalarBase| -> *const f64 {
-            match *b {
-                ScalarBase::Slab(o) => unsafe { slab_ptr.add(o) },
-                ScalarBase::State(ix) => super::resolve::state_ptr(env, ix),
-            }
-        };
-        unsafe {
-            for &(s, i) in &self.inputs {
-                *r.add(i as usize) = scalar_get(&s, env, slab_ptr);
-            }
-            let g = |i: u16| *r.add(i as usize);
-            let put = |i: u16, v: f64| *r.add(i as usize) = v;
-            for op in &self.ops {
-                match *op {
-                    BlockOp::Arith(k, a, b, o) => put(o, k.apply(g(a), g(b))),
-                    BlockOp::Bin(k, a, b, o) => put(o, k.apply(g(a), g(b))),
-                    BlockOp::Un(f, a, o) => put(o, f(g(a))),
-                    BlockOp::Neg(a, o) => put(o, -g(a)),
-                    BlockOp::Select(c, a, b, o) => {
-                        let (c, x, y) = (g(c), g(a), g(b));
-                        put(o, if c != 0.0 { x } else { y });
-                    }
-                    BlockOp::Load(b, at, o) => put(o, *base_ptr(&b).add(at)),
-                    BlockOp::Gather1 {
-                        src,
-                        x,
-                        n,
-                        spec,
-                        out,
-                    } => {
-                        let v = g(x);
-                        let k = subscript_of(v);
-                        let base = base_ptr(&src);
-                        let y = if k >= 1 && k <= n as i64 {
-                            *base.add((k - 1) as usize)
-                        } else {
-                            gather_at(env, spec, base, &[v])
-                        };
-                        put(out, y);
-                    }
-                    BlockOp::Gather2 {
-                        src,
-                        a,
-                        b,
-                        n0,
-                        n1,
-                        spec,
-                        out,
-                    } => {
-                        let v = [g(a), g(b)];
-                        let base = base_ptr(&src);
-                        let y = match DataGatherSpec::direct_offset(&[n0 as usize, n1 as usize], &v)
-                        {
-                            Some(p) => *base.add(p),
-                            None => gather_at(env, spec, base, &v),
-                        };
-                        put(out, y);
-                    }
-                    BlockOp::Count {
-                        rel,
-                        axis,
-                        lo,
-                        n,
-                        sorted,
-                        x,
-                        out,
-                    } => {
-                        let win = std::slice::from_raw_parts(
-                            base_ptr(&axis).add(lo as usize),
-                            n as usize,
-                        );
-                        let bisect = count_bisects(win, sorted);
-                        put(out, count_one(rel, win, bisect, g(x)));
-                    }
-                }
-            }
-            for &(i, o) in &self.outs {
-                match o {
-                    BlockOut::Slab(off) => *slab_ptr.add(off) = g(i),
-                    BlockOut::Dy(p) => dy[p] = g(i),
-                }
-            }
-        }
-        self.end
-    }
-}
-
-/// A gather a block reads at subscripts outside the fast path: the spec's
-/// own resolution. The block holds only gathers the lowering proved cannot
-/// fault (`faults: false`).
-#[inline(never)]
-fn gather_at(env: &Env, spec: u32, base: *const f64, v: &[f64]) -> f64 {
-    match env.prog.data_gathers[spec as usize].at(|d| v[d]) {
-        DataAt::Elem(p) => unsafe { *base.add(p) },
-        DataAt::Ghost => 0.0,
-        DataAt::Fault { .. } => unreachable!("a non-faulting gather faulted"),
-    }
-}
-
-/// [`ScalarBlock::build`]'s register assignment.
-#[derive(Default)]
-struct Builder {
-    regs: usize,
-    inputs: Vec<(ScalarSrc, u16)>,
-    ops: Vec<BlockOp>,
-    /// Slab offset -> the register holding its current value.
-    at: FxHashMap<usize, u16>,
-    /// Slab offsets written, in first-write order.
-    written: Vec<usize>,
-    seen: FxHashSet<usize>,
-    dy: Vec<(u16, usize)>,
-}
-
-impl Builder {
-    fn fresh(&mut self) -> u16 {
-        self.regs += 1;
-        (self.regs - 1) as u16
-    }
-
-    fn slab(&mut self, off: usize) -> u16 {
-        self.src(ScalarSrc::Slot(off))
-    }
-
-    /// The register an operand is read from: a slab offset written earlier
-    /// in the block is its register, anything else an input read at entry.
-    fn src(&mut self, s: ScalarSrc) -> u16 {
-        if let ScalarSrc::Slot(off) = s
-            && let Some(&r) = self.at.get(&off)
-        {
-            return r;
-        }
-        let r = self.fresh();
-        self.inputs.push((s, r));
-        if let ScalarSrc::Slot(off) = s {
-            self.at.insert(off, r);
-        }
-        r
-    }
-
-    /// A fresh register for a write to slab offset `off`.
-    fn def(&mut self, off: usize) -> u16 {
-        let r = self.fresh();
-        self.bind(off, r);
-        r
-    }
-
-    fn bind(&mut self, off: usize, r: u16) {
-        self.at.insert(off, r);
-        if self.seen.insert(off) {
-            self.written.push(off);
-        }
-    }
-
-    fn alias(&mut self, off: usize, r: u16) {
-        self.bind(off, r);
-    }
-
-    fn inline_lane(&mut self, l: &ScalarLane) {
-        let sc: SmallVec<[u16; 8]> = l.scalars.iter().map(|&s| self.src(s)).collect();
-        let mut lr = [0u16; LANE_MAX];
-        let rd = |m: LaneRef, lr: &[u16; LANE_MAX]| match m {
-            LaneRef::Reg(x) => lr[x as usize],
-            LaneRef::Scal(i) => sc[i as usize],
-        };
-        for op in &l.micro {
-            let (bop, out) = match *op {
-                LaneOp::Bin(k, a, b, out) => {
-                    let o = self.fresh();
-                    (BlockOp::Bin(k, rd(a, &lr), rd(b, &lr), o), (out, o))
-                }
-                LaneOp::Un(f, a, out) => {
-                    let o = self.fresh();
-                    (BlockOp::Un(f, rd(a, &lr), o), (out, o))
-                }
-                LaneOp::Neg(a, out) => {
-                    let o = self.fresh();
-                    (BlockOp::Neg(rd(a, &lr), o), (out, o))
-                }
-                LaneOp::Select(c, a, b, out) => {
-                    let o = self.fresh();
-                    (
-                        BlockOp::Select(rd(c, &lr), rd(a, &lr), rd(b, &lr), o),
-                        (out, o),
-                    )
-                }
-                LaneOp::Mov(a, out) => {
-                    // A move is its source's register.
-                    lr[out as usize] = rd(a, &lr);
-                    continue;
-                }
-            };
-            self.ops.push(bop);
-            lr[out.0 as usize] = out.1;
-        }
-        for &(src, dst) in &l.writes {
-            let r = rd(src, &lr);
-            match dst {
-                LaneOut::Dy(p) => self.dy.push((r, p)),
-                LaneOut::Slab(off) => self.bind(off, r),
-            }
-        }
+            super::kernels::gather_with(plan, src, out, zero, |d, ds, s, ss, sh| {
+                copy_strided_share(ways, w, d, ds, s, ss, sh)
+            })
+        },
     }
 }

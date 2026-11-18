@@ -75,10 +75,11 @@ const RELATIONAL_OPS: [&str; 2] = ["distinct", "join"];
 /// The per-pass context the §5.7.2 leaf seeds need.
 ///
 /// It exists because ONE leaf seed is not a local property of the leaf: an
-/// OBSERVED unknown seeds from the class of its DEFINING EQUATION's RHS, which
-/// is itself classified by this same pass. That resolution is transitive, so it
-/// is memoised here and guarded against a cycle (a cycle is a defect and MUST
-/// be reported, never silently seeded — §5.7.2).
+/// OBSERVED unknown seeds from the class of its DEFINING EQUATION's RHS. That
+/// is the observed's [`crate::dependency::DependencySummary`] cadence, the one
+/// every executor reads too; the summaries are built once per pass, on the
+/// first observed leaf, and a cycle among the definitions is reported, never
+/// silently seeded (§5.7.2).
 ///
 /// Every category comes from [`crate::classification`] — the esm-spec §6.3.1
 /// functions — rather than being re-derived locally. §5.7.2 states the leaf-seed
@@ -90,13 +91,8 @@ struct Ctx<'a> {
     model: &'a Value,
     /// The §6.3.1 classification of this model.
     class: crate::classification::Classification,
-    /// Each observed unknown's defining equation RHS, as raw JSON — the node
-    /// this pass recurses into for that leaf's seed.
-    observed_rhs: HashMap<String, &'a Value>,
-    /// Memoised observed seeds.
-    memo: HashMap<String, Cadence>,
-    /// Observed names on the current resolution stack, for the cycle guard.
-    resolving: Vec<String>,
+    /// The observeds' dependency summaries, built on first use.
+    observeds: std::cell::OnceCell<crate::dependency::DependencySummaries>,
 }
 
 impl<'a> Ctx<'a> {
@@ -106,71 +102,66 @@ impl<'a> Ctx<'a> {
                 "model does not deserialize for classification: {e}"
             ))
         })?;
-
-        // Pair each observed unknown with the RAW JSON of its defining
-        // equation's RHS. The LHS form is decided by the one shared
-        // `classification::lhs_form`, so "which equation defines this observed"
-        // has a single answer across the binding.
-        let mut observed_rhs: HashMap<String, &'a Value> = HashMap::new();
-        if let Some(equations) = model.get("equations").and_then(|v| v.as_array()) {
-            for eq in equations {
-                let (Some(lhs), Some(rhs)) = (eq.get("lhs"), eq.get("rhs")) else {
-                    continue;
-                };
-                let Ok(lhs_expr) = serde_json::from_value::<crate::types::Expr>(lhs.clone()) else {
-                    continue;
-                };
-                if let crate::classification::LhsForm::Bare(name) =
-                    crate::classification::lhs_form(&lhs_expr)
-                    && class.is_observed(&name)
-                {
-                    observed_rhs.entry(name).or_insert(rhs);
-                }
-            }
-        }
-
         Ok(Ctx {
             model,
             class,
-            observed_rhs,
-            memo: HashMap::new(),
-            resolving: Vec::new(),
+            observeds: std::cell::OnceCell::new(),
+        })
+    }
+
+    /// Each observed unknown's defining equation, summarized. The LHS form is
+    /// decided by the one shared `classification::lhs_form`, so "which
+    /// equation defines this observed" has a single answer across the
+    /// binding; the first defining equation wins.
+    fn observed_summaries(&self) -> &crate::dependency::DependencySummaries {
+        use crate::dependency::Leaf;
+        self.observeds.get_or_init(|| {
+            let equations: Vec<crate::types::Equation> = self
+                .model
+                .get("equations")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|eq| serde_json::from_value(eq.clone()).ok())
+                .collect();
+            observed_summaries_of(&self.class, &equations, |name| {
+                match self.non_observed_seed(name) {
+                    Cadence::Const => Leaf::Const,
+                    Cadence::Discrete => Leaf::Discrete,
+                    Cadence::Continuous => Leaf::State,
+                }
+            })
         })
     }
 
     /// The §5.7.2 leaf-seed table.
-    fn seed_leaf(&mut self, leaf: &Value) -> Result<Cadence, CadenceError> {
+    fn seed_leaf(&self, leaf: &Value) -> Result<Cadence, CadenceError> {
         match leaf {
             // A numeric literal (int or float) is CONST. JSON booleans are not
             // valid value leaves (they only appear as op bodies like
             // `{op:"true"}`).
             Value::Number(_) => Ok(Cadence::Const),
-            Value::String(s) => {
-                // The independent variable is CONTINUOUS: an explicit
-                // continuous-`t` forcing is not piecewise-constant between
-                // events.
-                if s == "t" {
-                    return Ok(Cadence::Continuous);
-                }
-                if self.class.is_observed(s) {
-                    return self.seed_observed(s);
-                }
-                if self.class.is_ode_state(s)
-                    || self.class.algebraic_unknowns.iter().any(|n| n == s)
-                    || self.class.is_brownian(s)
-                {
-                    return Ok(Cadence::Continuous);
-                }
-                if self.class.is_discrete_parameter(s) {
-                    return Ok(self.discrete_parameter_seed(s));
-                }
-                // A sampled or constant parameter is CONST — and so is an
-                // index-set name, a bound index symbol (i, k, e, f, le), a
-                // relation tag ("edge"), or a numeric-string literal.
-                Ok(Cadence::Const)
-            }
+            Value::String(s) if self.class.is_observed(s) => self.seed_observed(s),
+            Value::String(s) => Ok(self.non_observed_seed(s)),
             other => Err(err(format!("unexpected leaf {other}"))),
         }
+    }
+
+    /// The seed of a name that is not an observed unknown.
+    fn non_observed_seed(&self, s: &str) -> Cadence {
+        // The independent variable is CONTINUOUS: an explicit
+        // continuous-`t` forcing is not piecewise-constant between
+        // events.
+        if seeds_continuous(&self.class, s) {
+            return Cadence::Continuous;
+        }
+        if self.class.is_discrete_parameter(s) {
+            return self.discrete_parameter_seed(s);
+        }
+        // A sampled or constant parameter is CONST — and so is an
+        // index-set name, a bound index symbol (i, k, e, f, le), a
+        // relation tag ("edge"), or a numeric-string literal.
+        Cadence::Const
     }
 
     /// Source-seeded refinement (§5.7.2 / RFC pure-io-data-loaders §4.6): a
@@ -212,43 +203,27 @@ impl<'a> Ctx<'a> {
     }
 
     /// An OBSERVED unknown's seed is the class of its DEFINING EQUATION's RHS,
-    /// resolved transitively, memoised, with a cycle guard.
+    /// resolved transitively: its dependency summary's cadence.
     ///
-    /// This is the one place the cadence pass must follow the 1.0.0 relocation:
-    /// an observed's definition used to live in `variables[v].expression` and
-    /// now lives in the model's `equations`. Neither shortcut works — seeding
-    /// every unknown CONTINUOUS stops a state-free observed folding at bind,
-    /// and seeding an observed CONST (what the 0.x code did) is unsound the
-    /// other way, since an observed reading a state IS continuous.
-    fn seed_observed(&mut self, name: &str) -> Result<Cadence, CadenceError> {
-        if let Some(c) = self.memo.get(name) {
-            return Ok(*c);
-        }
-        if self.resolving.iter().any(|n| n == name) {
-            let mut cycle = self.resolving.clone();
-            cycle.push(name.to_string());
-            return Err(err(format!(
-                "observed-definition cycle: {} — an observed unknown's cadence seed is its \
-                 defining equation's RHS, so a cycle is an implicit solve (§5.7.2)",
-                cycle.join(" -> ")
-            )));
-        }
-        let Some(rhs) = self.observed_rhs.get(name).copied() else {
+    /// Neither shortcut works — seeding every unknown CONTINUOUS stops a
+    /// state-free observed folding at bind, and seeding an observed CONST is
+    /// unsound the other way, since an observed reading a state IS continuous.
+    fn seed_observed(&self, name: &str) -> Result<Cadence, CadenceError> {
+        let summaries = self.observed_summaries();
+        let Some(summary) = summaries.get(name) else {
             // An observed with no defining equation is an UNBALANCED system,
             // reported by `equation_count_mismatch`; the classification cannot
             // put it here, so this is unreachable in a validated document.
             return Ok(Cadence::Const);
         };
-        self.resolving.push(name.to_string());
-        let result = self.classify(rhs);
-        self.resolving.pop();
-        let class = result?;
-        self.memo.insert(name.to_string(), class);
-        Ok(class)
+        if summary.unordered {
+            return Err(observed_cycle(summaries));
+        }
+        Ok(summary.cadence())
     }
 
     /// `class = max` over children; a leaf seeds from the table above.
-    fn classify(&mut self, node: &Value) -> Result<Cadence, CadenceError> {
+    fn classify(&self, node: &Value) -> Result<Cadence, CadenceError> {
         let Value::Object(map) = node else {
             return self.seed_leaf(node);
         };
@@ -258,6 +233,114 @@ impl<'a> Ctx<'a> {
         }
         Ok(acc)
     }
+}
+
+/// Whether a name that is not an observed unknown seeds CONTINUOUS
+/// (§5.7.2): the independent variable, an ODE state, an algebraic unknown or
+/// a Brownian parameter.
+fn seeds_continuous(class: &crate::classification::Classification, s: &str) -> bool {
+    s == crate::dependency::TIME
+        || class.is_ode_state(s)
+        || class.algebraic_unknowns.iter().any(|n| n == s)
+        || class.is_brownian(s)
+}
+
+/// Each observed unknown's defining equation among `equations`, summarized,
+/// with `seed` classing every name that is not an observed. The LHS form is
+/// decided by the one shared `classification::lhs_form`, so "which equation
+/// defines this observed" has a single answer across the binding; the first
+/// defining equation wins.
+fn observed_summaries_of(
+    class: &crate::classification::Classification,
+    equations: &[crate::types::Equation],
+    seed: impl Fn(&str) -> crate::dependency::Leaf,
+) -> crate::dependency::DependencySummaries {
+    use crate::dependency::{DependencySummaries, Reads};
+    let mut defs: HashMap<String, Reads> = HashMap::new();
+    for eq in equations {
+        if let crate::classification::LhsForm::Bare(name) = crate::classification::lhs_form(&eq.lhs)
+            && class.is_observed(&name)
+        {
+            // The lattice classes value reads; a join's key columns are a
+            // build-time match set, not an input the class flows from.
+            defs.entry(name).or_insert_with(|| Reads {
+                join_names: Default::default(),
+                ..Reads::of(&eq.rhs)
+            });
+        }
+    }
+    DependencySummaries::new(defs, seed)
+}
+
+/// The error for an observed whose definition is on a cycle.
+fn observed_cycle(summaries: &crate::dependency::DependencySummaries) -> CadenceError {
+    let cycle = summaries.cycle().unwrap_or_default();
+    err(format!(
+        "observed-definition cycle: {} — an observed unknown's cadence seed is its \
+         defining equation's RHS, so a cycle is an implicit solve (§5.7.2)",
+        cycle.join(" -> ")
+    ))
+}
+
+/// Whether `node` classifies CONTINUOUS in `model` ([`classify`] on the typed
+/// forms). The walk reads the fields [`child_exprs`] reads, and a leaf seeds
+/// as [`seed_leaf`] seeds it; a discretely fed parameter is never
+/// CONTINUOUS, so the source refinement of its seed does not arise.
+pub(crate) fn is_continuous(
+    node: &crate::types::Expr,
+    model: &crate::types::Model,
+) -> Result<bool, CadenceError> {
+    use crate::dependency::Leaf;
+    use crate::types::Expr;
+    let class = crate::classification::Classification::of(model);
+    let summaries = std::cell::OnceCell::new();
+    let summaries = || {
+        summaries.get_or_init(|| {
+            observed_summaries_of(&class, &model.equations, |name| {
+                if seeds_continuous(&class, name) {
+                    Leaf::State
+                } else {
+                    Leaf::Const
+                }
+            })
+        })
+    };
+    fn walk(
+        e: &Expr,
+        leaf: &mut dyn FnMut(&str) -> Result<bool, CadenceError>,
+    ) -> Result<bool, CadenceError> {
+        let n = match e {
+            Expr::Variable(s) => return leaf(s),
+            Expr::Integer(_) | Expr::Number(_) => return Ok(false),
+            Expr::Operator(n) => n,
+        };
+        let fields = [&n.expr, &n.key, &n.filter, &n.lower, &n.upper];
+        let mut found = false;
+        for c in n
+            .args
+            .iter()
+            .chain(fields.into_iter().flatten().map(|b| &**b))
+        {
+            found |= walk(c, leaf)?;
+        }
+        if n.op == "apply_expression_template" {
+            for c in n.bindings.iter().flat_map(|b| b.values()) {
+                found |= walk(c, leaf)?;
+            }
+        }
+        Ok(found)
+    }
+    walk(node, &mut |s| {
+        if !class.is_observed(s) {
+            return Ok(seeds_continuous(&class, s));
+        }
+        let summaries = summaries();
+        match summaries.get(s) {
+            None => Ok(false),
+            Some(summary) if summary.unordered => Err(observed_cycle(summaries)),
+            Some(summary) => Ok(summary.cadence() == Cadence::Continuous),
+        }
+    })
 }
 
 /// Seed a leaf's cadence (§5.7.2 leaf-seed table). Every category is DERIVED

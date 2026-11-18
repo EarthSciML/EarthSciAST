@@ -12,8 +12,7 @@ use std::path::Path;
 use earthsci_ast::esio_provider::{
     DocumentProviderOptions, EsioProvider, providers_from_document_with,
 };
-use earthsci_ast::provider::CadenceProvider;
-use earthsci_ast::{AxisSel, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
@@ -114,13 +113,10 @@ fn options(rps: Option<u32>) -> DocumentProviderOptions {
     }
 }
 
-fn values(p: &mut dyn CadenceProvider, t: f64) -> Vec<f64> {
-    let fields = p.refresh(t).unwrap().expect("a sample");
-    fields
-        .values()
-        .next()
+fn values(p: &mut dyn DataProvider, t: f64) -> Vec<f64> {
+    p.refresh(t)
         .unwrap()
-        .array
+        .expect("a sample")
         .iter()
         .copied()
         .collect()
@@ -264,7 +260,7 @@ fn a_monthly_record_table_follows_time() {
     d["data_sources"]["NEI"]["record_filter"] = json!({"require_finite": ["NOX"]});
     let mut p = build(&d, dir.path(), &options(None));
     // materialize primes at the window's start: January
-    let jan = CadenceProvider::materialize(&mut p).unwrap();
+    let jan = p.materialize_fields().unwrap();
     let jan: Vec<f64> = jan.values().next().unwrap().array.iter().copied().collect();
     assert_eq!(jan, vec![20.0, 22.0]);
     // the record has not advanced
@@ -305,7 +301,7 @@ fn a_time_varying_source_selects_engine_side() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = build(&doc(dir.path()), dir.path(), &options(None));
     // a reader-side select would address the file's record axis too
-    assert!(!PrepareProvider::supports_selection(&p));
+    assert!(!DataProvider::supports_selection(&p));
     // reached anyway: the record a time-less sample reads (the window's
     // start), sliced here, every requested axis kept
     let a = p
@@ -362,10 +358,9 @@ fn two_record_doc(dir: &Path, source_rps: Option<u32>) -> Value {
 }
 
 /// The values and the shape of the one field `p` returns at `t`.
-fn field(p: &mut dyn CadenceProvider, t: f64) -> (Vec<f64>, Vec<usize>) {
-    let fields = p.refresh(t).unwrap().expect("a sample");
-    let f = fields.values().next().unwrap();
-    (f.array.iter().copied().collect(), f.array.shape().to_vec())
+fn field(p: &mut dyn DataProvider, t: f64) -> (Vec<f64>, Vec<usize>) {
+    let a = p.refresh(t).unwrap().expect("a sample");
+    (a.iter().copied().collect(), a.shape().to_vec())
 }
 
 fn by_key(provs: &[(String, earthsci_ast::esio_provider::EsioProvider)], key: &str) -> usize {

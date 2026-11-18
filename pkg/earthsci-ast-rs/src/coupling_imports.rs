@@ -290,63 +290,55 @@ pub(crate) fn collect_role_segments(edge: &Value) -> HashSet<String> {
 // ---------------------------------------------------------------------------
 
 fn default_load_ref(ref_str: &str, base_path: &str) -> Result<Value, DiagnosticError> {
+    use crate::ref_reader::RefError;
     // esm-spec §10.10: a `coupling_import` ref "resolves by the §4.7 reference
     // formats (relative path, absolute path, URL, `${VAR}`), with the same
-    // per-binding capability rules as a template import" — so `${VAR}` expands
-    // here too, before the remote classification.
-    let expanded = crate::stdlib::expand_ref(ref_str);
+    // per-binding capability rules as a template import" — so it is read
+    // through the same reader.
+    let expanded = crate::ref_reader::expand(ref_str);
     let ref_str: &str = &expanded;
-    let base = std::path::Path::new(base_path);
-    let (path, content) = match crate::stdlib::resolve(ref_str, base) {
-        Some(Ok((identity, text))) => (std::path::PathBuf::from(identity), text.to_string()),
-        Some(Err(why)) => {
-            return Err(err(
-                codes::COUPLING_IMPORT_UNRESOLVED,
-                format!("coupling_import ref '{ref_str}' does not resolve: {why}"),
-            ));
-        }
-        None => {
-            if ref_str.starts_with("http://") || ref_str.starts_with("https://") {
-                return Err(err(
-                    codes::COUPLING_IMPORT_UNRESOLVED,
-                    format!(
-                        "remote coupling_import ref '{ref_str}' cannot be loaded synchronously; \
-                         download the file and import it by local path"
-                    ),
-                ));
-            }
-            let path = base.join(ref_str);
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                err(
-                    codes::COUPLING_IMPORT_UNRESOLVED,
-                    format!(
-                        "coupling-library file not found or unreadable: {} (from ref \
-                         '{ref_str}'): {e}",
-                        path.display()
-                    ),
-                )
-            })?;
-            (path, content)
-        }
-    };
-    let mut raw: Value = serde_json::from_str(&content).map_err(|e| {
-        err(
+    let read_error = |e: RefError| match e {
+        RefError::Bundled(why) => err(
+            codes::COUPLING_IMPORT_UNRESOLVED,
+            format!("coupling_import ref '{ref_str}' does not resolve: {why}"),
+        ),
+        RefError::Remote => err(
+            codes::COUPLING_IMPORT_UNRESOLVED,
+            format!(
+                "remote coupling_import ref '{ref_str}' cannot be loaded synchronously; \
+                 download the file and import it by local path"
+            ),
+        ),
+        RefError::Missing { path, err: e } | RefError::Read { path, err: e } => err(
+            codes::COUPLING_IMPORT_UNRESOLVED,
+            format!(
+                "coupling-library file not found or unreadable: {} (from ref \
+                 '{ref_str}'): {e}",
+                path.display()
+            ),
+        ),
+        RefError::Parse { path, err: e } => err(
             codes::COUPLING_IMPORT_UNRESOLVED,
             format!(
                 "coupling-library ref '{}' is not valid JSON: {e}",
                 path.display()
             ),
-        )
-    })?;
+        ),
+    };
+    let located =
+        crate::ref_reader::locate(ref_str, std::path::Path::new(base_path)).map_err(read_error)?;
     // A coupling library is a document too — same wire-boundary treatment as
     // the root (docs/content/rfcs/faq-node-rename.md §5.2).
-    crate::parse::prepare_document_ops(&mut raw).map_err(|e| {
-        err(
-            codes::COUPLING_IMPORT_UNRESOLVED,
-            format!("{}: {e}", path.display()),
-        )
-    })?;
-    Ok(raw)
+    crate::ref_reader::open(&located, crate::version_gates::DocKind::CouplingLibrary).map_err(|e| {
+        match e {
+            crate::ref_reader::OpenError::Ref(e) => read_error(e),
+            crate::ref_reader::OpenError::Wire(e) => err(
+                codes::COUPLING_IMPORT_UNRESOLVED,
+                format!("{}: {e}", located.identity.display()),
+            ),
+            crate::ref_reader::OpenError::Gate(e) => e,
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------

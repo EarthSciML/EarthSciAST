@@ -20,11 +20,11 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use earthsci_ast::load_path;
-use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
+use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem};
+
+use crate::common::rhs::ProblemRhs;
 
 /// The four cells' initial temperature, and the forcing's mean: at `t = 0` the
 /// column is isothermal at exactly the surface value.
@@ -40,34 +40,35 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn compiled(name: &str) -> ArrayCompiled {
-    let path = fixture(name);
-    let file = load_path(&path).unwrap_or_else(|e| panic!("{name} does not load: {e}"));
-    ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("{name} does not compile: {e}"))
+/// The fixture's right-hand side under `compiler`, through the public program.
+fn rhs(name: &str, compiler: Compiler) -> ProblemRhs {
+    // The fixtures leave their states' starting values to the caller; the
+    // probes pass the state explicitly, so any value builds the Problem.
+    let text = std::fs::read_to_string(fixture(name)).expect("the fixture reads");
+    let mut doc: serde_json::Value = serde_json::from_str(&text).expect("the fixture parses");
+    crate::common::supply_state_defaults(&mut doc);
+    let prob = esm_problem(
+        &doc,
+        (0.0, 1.0),
+        ProblemOptions {
+            compiler: Some(compiler),
+            rhs: Rhs::Always,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("{name} does not build under {compiler}: {e}"));
+    ProblemRhs::new(&prob)
 }
 
-/// The production route: a scratch with the compiled tape installed, which is
-/// what the solver's RHS closure carries.
-fn taped_rhs(c: &ArrayCompiled, state: &[f64], t: f64) -> Vec<f64> {
-    let params = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    assert!(
-        scratch.has_tape(),
-        "this test is about the TAPED path; without a tape it proves nothing"
-    );
-    let mut dy = vec![0.0f64; c.state_variable_names().len()];
-    let mut stats = RhsStats::default();
-    c.debug_eval_rhs_into(state, t, &params, &mut dy, &mut scratch, &mut stats);
-    assert!(stats.taped_rules > 0, "no rule was taped");
-    dy
+/// The production route: the strict tape, which refuses the program if any
+/// rule leaves it.
+fn taped(name: &str) -> ProblemRhs {
+    rhs(name, Compiler::Native)
 }
 
-/// The per-cell oracle — the legacy interpreter, unchanged by #255.
-fn oracle_rhs(c: &ArrayCompiled, state: &[f64], t: f64) -> Vec<f64> {
-    let (dy, _) = c.debug_eval_rhs(state, t, &HashMap::new(), true);
-    dy
+/// The per-cell oracle.
+fn oracle(name: &str) -> ProblemRhs {
+    rhs(name, Compiler::Interpreter)
 }
 
 /// States and times that exercise the alias at its mean and away from it.
@@ -87,7 +88,7 @@ fn probe_points() -> Vec<(Vec<f64>, f64)> {
 /// signature of the alias reaching the consumer as the preallocated zero.
 #[test]
 fn the_alias_value_reaches_a_per_cell_observed() {
-    let dy = taped_rhs(&compiled("bare_alias_observed.esm"), &[T_UNIFORM; 4], 0.0);
+    let dy = taped("bare_alias_observed.esm").eval(&[T_UNIFORM; 4], 0.0);
     for (k, v) in dy.iter().enumerate() {
         assert!(
             v.abs() < 1e-12,
@@ -101,11 +102,7 @@ fn the_alias_value_reaches_a_per_cell_observed() {
 /// intermediate per-cell observed. Both spellings were corrupted.
 #[test]
 fn the_alias_value_reaches_a_derivative_rule() {
-    let dy = taped_rhs(
-        &compiled("bare_alias_in_derivative.esm"),
-        &[T_UNIFORM; 4],
-        0.0,
-    );
+    let dy = taped("bare_alias_in_derivative.esm").eval(&[T_UNIFORM; 4], 0.0);
     for (k, v) in dy.iter().enumerate() {
         assert!(
             v.abs() < 1e-12,
@@ -122,10 +119,10 @@ fn the_alias_value_reaches_a_derivative_rule() {
 #[test]
 fn the_taped_path_agrees_with_the_oracle() {
     for name in ["bare_alias_observed.esm", "bare_alias_in_derivative.esm"] {
-        let c = compiled(name);
+        let (mut tape, mut walk) = (taped(name), oracle(name));
         for (state, t) in probe_points() {
-            let taped = taped_rhs(&c, &state, t);
-            let oracle = oracle_rhs(&c, &state, t);
+            let taped = tape.eval(&state, t);
+            let oracle = walk.eval(&state, t);
             for (k, (a, b)) in taped.iter().zip(oracle.iter()).enumerate() {
                 assert_eq!(
                     a.to_bits(),
@@ -142,11 +139,11 @@ fn the_taped_path_agrees_with_the_oracle() {
 /// export ordering regressed.
 #[test]
 fn the_alias_changes_no_number_against_the_inlined_control() {
-    let aliased = compiled("bare_alias_observed.esm");
-    let control = compiled("no_alias_control.esm");
+    let mut aliased = taped("bare_alias_observed.esm");
+    let mut control = taped("no_alias_control.esm");
     for (state, t) in probe_points() {
-        let a = taped_rhs(&aliased, &state, t);
-        let b = taped_rhs(&control, &state, t);
+        let a = aliased.eval(&state, t);
+        let b = control.eval(&state, t);
         for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             assert_eq!(
                 x.to_bits(),

@@ -1639,6 +1639,46 @@ remove. Your code stops compiling (Rust), or raises `UndefVarError` /
 | Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
 | Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
+## Unreleased
+
+### Rust — `earthsci-ast`
+
+The `performance` module is deleted with its five Cargo features. No
+production path used it: it carried its own expression evaluator, separate from
+the one every build runs, with different semantics. The optional dependencies
+only it used (`wide`, `bumpalo`, `simd-json`, `bytemuck`) and the empty `cli`
+feature go with it.
+
+| Before | After | Kind |
+|---|---|---|
+| `earthsci_ast::performance::*` (`CompactExpr`, `PerformanceError`, `ParallelEvaluator`, `ModelAllocator`, `fast_parse`, `simd_math`) | — | `deleted` |
+| `stoichiometric_matrix_parallel` (feature `parallel`) | `stoichiometric_matrix` | `deleted` |
+| wasm export `create_compact_expression` | — | `deleted` |
+| features `parallel`, `simd`, `zero_copy`, `custom_alloc`, `performance`, `cli` | — (the tape executor's threading needs no feature) | `deleted` |
+
+### The `esm` command-line tool
+
+Eight subcommands that printed fixed thresholds and canned recommendations
+rather than anything the format defines are gone, with the library's
+`extension::analysis` helpers that existed only to serve them.
+
+| Before | After | Kind |
+|---|---|---|
+| `esm analyze`, `esm coupling-analysis`, `esm performance-profile`, `esm optimize` | `esm info`, `esm graph`, `esm units` for what the document declares | `deleted` |
+| `esm compare` | `esm diff` | `deleted` |
+| `esm init` | — | `deleted` |
+| `esm benchmark` | — | `deleted` |
+| `esm schema-check` | `esm validate` | `deleted` |
+| `earthsci_ast::extension::analysis::*` | — | `deleted` |
+
+### Never-constructed error variants and `ArrayCompiled::from_model`
+
+| Before | After | Kind |
+|---|---|---|
+| `EsmError::ExpressionEvaluation`, `EsmError::UnitValidation`, `EsmError::Other` | — (nothing returned them) | `deleted` |
+| `FlattenError::ContributionsOutOfStep`, `FlattenError::MalformedLoaderSubsystem` | — (nothing returned them) | `deleted` |
+| `simulate_array::ArrayCompiled::from_model(model, index_sets)` | `ArrayCompiled::from_model_with_arrays(model, index_sets, None)` | `deleted` |
+
 ---
 
 ## The plain-text expression surface is retired
@@ -1684,6 +1724,59 @@ instead. A `D` with no `wrt` and one with `wrt: "t"` are different documents to
 the lossless printer and print differently; the old renderers showed both as a
 time derivative. A flattened name with a dot prints as a quoted name joined by
 `"."` in Typst math.
+
+---
+
+## Unreleased
+
+### Rust — `earthsci-ast`
+
+| Old | New | Kind |
+|---|---|---|
+| `Compile` (deprecated alias since 0.2.0) | `Rhs` | `deleted` |
+| `ArrayCompiled::debug_eval_rhs(state, t, params, force_scalar)` | `debug_eval_rhs(state, t, params)`, always the per-cell oracle | `deleted` |
+| `ArrayCompiled::debug_new_scratch()` and `ArrayCompiled::debug_cadence_partition(…)` (hidden test seams) | the per-cell oracle through the public program: `rhs_program` on a Problem built with `compiler: Some(Compiler::Interpreter)`, evaluated with `RhsProgram::new_workspace` and `RhsProgram::eval_into`; the cadence split is crate-internal | `deleted` |
+| `EsmProblem::debug_array_compiled()` and `ArrayCompiled::debug_eval_rhs`, `debug_eval_rhs_into`, `debug_new_scratch_taped`, `debug_resolve_params`, `debug_precision_env`, `debug_build_tape_report`, `debug_tape_listing`, `debug_dump_fuse_stats` (hidden or diagnostic seams) | a right-hand side: `rhs_program` (`interpreter` for the per-cell oracle). The solve's own taped right-hand side, its positional parameter vector and its tape report, listing and fusion statistics: the hidden handle `EsmProblem::debug_solve_rhs()` / `simulate_array::SolveRhs::{new, oracle}` (`eval_into`, `params`, `tape_report`, `tape_listing`, `fuse_stats`), which arms the model's precision itself. `examples/fuse_stats.rs` prints what `debug_dump_fuse_stats` wrote to stderr | `deleted` |
+| a `const` array mixing integer and float spellings (`[1, 2.5]`) held as JSON: `ConstValue::as_json()` is `Some`, `as_dense()` is `None` | held dense with each element's spelling: `as_dense()` is `Some`, `as_json()` is `None`; `to_json()` and the written bytes are unchanged | `changed` |
+| `RhsStats::kernel_ops`, `vectorized_rules`, `obs_vectorized_rules` | none: the right-hand side no longer runs on the whole-array overlay | `deleted` |
+| a field `ic`, initialization equation or build-pipeline observed with a `faq` reported as tier `"vectorized"` (the whole-array overlay) under `native`/`xla` | tier `"taped"`: what the reference evaluator would walk per cell runs as a standalone tape program, and a construct the tape declines is refused naming the tape's reason. `"vectorized"` now means the reference evaluator evaluated it over whole arrays with no cell walked; every such row is `"oracle"` under `interpreter`; `eval_expression*` keep their names and values | `changed` |
+| a coded load refusal (a reference, template-import, version-gate or other diagnostic with a code) as `EsmError::SchemaValidation(String)` / `StructuralValidation(String)` | `EsmError::SchemaDiagnostic { code, message, findings }` / `StructuralDiagnostic { code, message, findings }`, rendering the same text; `EsmError::code()` and `EsmError::findings()` read them | `changed` |
+| a load refused for an unresolvable coupling `from`, a cross-scope dependency cycle or an undeclared event variable: `StructuralValidation("Structural validation failed: coupling[0]/from: reference … to undefined system …")` | `StructuralDiagnostic` carrying `validate`'s own findings (`unresolved_scoped_ref`, `circular_dependency`, `event_var_undeclared` / `undefined_variable`), each rendered `[code] /pointer: message` | `changed` |
+| — | `mount_edge_errors(document, base_dir)`: a document's own mount edges that do not resolve, as `(code, path)` findings | `added` |
+| `Model::subsystems` / `ReactionSystem::subsystems: Option<IndexMap<String, serde_json::Value>>` | `Option<IndexMap<String, Subsystem<Model>>>` / `Option<IndexMap<String, Subsystem<ReactionSystem>>>`: each entry is `Subsystem::Inline(Box<…>)` or an unresolved `Subsystem::Reference(SubsystemRef)`; the `HasSubsystems` trait reads them (`inline_subsystems()`, `inline_subsystem(name)`, `inline_subsystem_at(path)`) | `changed` |
+| a subsystem that does not decode as its component kind, read as JSON and skipped by validation, flattening, units and strip-and-expose | a load error, like any other component that does not decode | `changed` |
+| a subsystem holding a whole referenced document (`{"esm": …, "models": {…}}`) in a document built in code | not accepted: the loader splices the component in, and a hand-built document writes the component itself | `deleted` |
+| `precision::subsystem_component`, `precision::subsystem_component_mut` (unwrapped that whole-document form) | — | `deleted` |
+| `run_inline_tests_with_base_dir`, `run_inline_tests_with_providers`, `run_inline_tests_filtered` | `run_inline_tests_with_options` with `InlineTestOptions { base_dir, providers, test_filter, .. }`; the provider factory is the new `InlineTestOptions::providers` field, which `run_inline_tests_paths` also honours | `deleted` |
+| `PrepareProvider` (build time) and `provider::CadenceProvider` (run time), two traits for one parameter's data | `DataProvider`: one trait keyed by the parameter it feeds — `sample()`, `refresh(t)`, `refresh_times()`, `supports_selection()` / `sample_with_selection(sel)`, `gate_spec()`, `extent_metaparameter()`; `sample` and `refresh` deliver the parameter's array (`ArrayD<f64>`) rather than a map of `NativeField`s, and `is_const()` is `refresh_times().is_empty()` | `changed` |
+| `ProblemOptions::build_providers` beside `ProblemOptions::providers` | one `providers` map of `Box<dyn DataProvider>`; when the build pipeline is asked for (`build_pipeline` or `pushdown_rewrite`), it consumes every CONST provider, and the run-time refresh executor consumes the rest (all of them when the pipeline runs only because of `const_arrays`). Supplying providers no longer turns the build pipeline on by itself: set `build_pipeline: true` | `changed` |
+| `PrepareError(String)` | `ProviderError` (`ProviderError::new(msg)`; the message is read as `.0` as before) | `deleted` |
+| `RefreshExecutor::new(model, doc, providers)` keyed by loader | keyed by the variable each provider feeds (its declared name, or that name under any prefix, `Box.src` for `src`); each array is written under its key | `changed` |
+| `forcing_from_sample(&HashMap<String, NativeField>, &ForcingSlot)` | `forcing_from_sample(&ArrayD<f64>, &ForcingSlot)` | `changed` |
+| `EsioProvider` as `CadenceProvider` (`materialize`, `refresh`) | `EsioProvider` as `DataProvider`; its whole field maps are `materialize_fields()` / `refresh_fields(t)` | `changed` |
+| `SolutionMetadata::tape_fallbacks`, and `metadata.tapeFallbacks` in the wasm/JS `solve` result (always empty) | none: a rule the tape cannot compile refuses the solve with `compiler_refused_rule`; `compiler_report` and the `tape_report` entry point name such rules without solving | `deleted` |
+| `PrepareError::is_cancelled`, `PrepareError::CANCELLED_PREFIX` | `SimulateError::is_cancelled` (a cancelled build is `SimulateError::Cancelled`, whose details no longer repeat the prefix) | `deleted` |
+| a coded refusal raised inside the build pipeline as `CompileError::InterpreterBuildError` text | the typed error itself (`SimulateError::Compile(CompileError::ValueInventionRefused { .. })`, …), so its code survives | `changed` |
+| — | `code()` on `CompileError`, `FlattenError` and `SimulateError`; `StructuralErrorCode::as_str()` | `added` |
+| a `faq`-valued `initialization_equations` entry seeded the initial state only for a document of one model | `FlattenedSystem::initialization_faqs` carries them, namespaced, from every component and subsystem, and every build seeds them; a struct literal of `FlattenedSystem` names the new field | `added` |
+| `run_inline_tests_with_options(file, opts, build_providers)` | `run_inline_tests_with_options(file, opts)`; the factory goes in `InlineTestOptions::providers` (an `Arc<BuildProviderFactory<'static>>`) | `changed` |
+| `BuildProviderFactory`, exported only with the `solve` feature | exported in every build (it is `bind_data_sources`'s factory type) | `changed` |
+| the `esm` tool's own data-source binding (sample the sources that measure their extent, re-load with those metaparameters closed, build the providers) | `bind_data_sources(file, cache_root, reload) -> Result<BoundDocument, ProviderError>`, which a build without the `esio` feature answers with a refusal naming the sources | `added` |
+| the build refusals `E_TREEWALK_JOIN_OVERLAP`, `unbound_index_symbol`, `indexed_definition_unsupported_form`, `recurrence_unsupported_form` (and the other recurrence refusals), `equation_defines_parameter`, and a coded load refusal of the authored document, as `CompileError::InterpreterBuildError` with the code only in the text | `CompileError::CodedBuildError { code, details }`, rendering the same text; `code()` returns the code | `changed` |
+| `ExpressionNode::value: Option<serde_json::Value>` | `Option<ConstValue>`: a rectangular all-float or all-integer array is held dense (`as_dense()`), any other literal as its JSON (`as_json()`); `to_json()` gives the JSON of either, `ConstValue::from_dense(shape, values)` builds one from data, and `From<serde_json::Value>` builds one from JSON (`Some(json!(…).into())`). The serialized form is unchanged | `changed` |
+| `compile_array`, `ArrayCompiled::from_file` / `from_file_owned` / `from_model_with_arrays` compiled a one-model document's model as authored | every build flattens the document (for `from_file`, the document's one model alone) and compiles the flattened system; a one-model document's names are shown without its model's name (the public name lists, the rows and inspection of `ArrayCompiled::solve`, and errors), as before | `semantics` |
+| `ArrayCompiled::forcing_handle()` of a one-model document from `compile_array` / `from_file` / `from_file_owned` was keyed by bare names (`k`) | keyed by the qualified name (`M.k`; `Model.k` from `from_model_with_arrays`), as it already was for a flattened system: an entry keyed `k` is not read | `changed` |
+| `rhs_program` compiled the Problem's document a second time, without the Problem's `CompilerRewrites` | it copies the Problem's compiled model, rewrites included | `semantics` |
+| the build pipeline's whole-document build (several models, none selected) matched a `p`, `const_arrays` or provider key to every name it spells, refusing only a key several names end | the esm-spec §6.6.2 rules, as Julia and Python apply them: an exact key wins over every other spelling of its name, a dotted key's leading segments must name a component or subsystem, and two keys for one name are refused; a bare key two models' variables end is refused as `AmbiguousParameter` (`p`) or a provider error (arrays). A model built alone keeps its rule: a key reaches every name it spells | `semantics` |
+| `remake` accepted a new `p` key that was a parameter's name or its last segment, and left an ambiguous key to the next solve | each new key designates one parameter by the §6.6.2 rules (`sub.k` for `M.sub.k` is accepted); an ambiguous key or two keys for one parameter are refused at `remake` | `semantics` |
+| `materialize_value_invention(model_json, …)` walked the raw JSON, and found a producer in a `variables.<v>.expression` field as well as in `equations` | it reads `model_json` as a typed model (its `index_sets` beside `variables` and `equations`; an operator node written without `args` is given an empty one) and runs the same engine `run_value_invention` runs; a model that does not read as one is a `ValueInventionError`, and a producer is found in `equations` only, where esm 1.0.0 places it | `semantics` |
+| a build through the build pipeline compiled its right-hand side after running value invention a second time, over the document's own `const` factors only (not the caller's or providers' arrays the pipeline read) | when the pipeline built the system the compile builds (the whole document, or a document that is one model and nothing else), the compile sizes the derived index sets and binds their `member_factor` columns from the pipeline's value invention, and compiles the pipeline's flattened system; a dynamic document whose producer reads provider or caller data now has its derived sets sized | `semantics` |
+| the build pipeline's value invention read a scalar `p` key by exact name or by the parameter's last segment | by the pipeline's own key rule, as its build-time observeds read the same key | `semantics` |
+
+`compile_array`, the `ArrayCompiled::from_*` constructors and the `debug_*`
+right-hand-side seams build the `native` compiler, the default of
+`esm_problem`: a solve of a model they built runs every rule, and every
+observed pass, on the tape.
 
 ---
 

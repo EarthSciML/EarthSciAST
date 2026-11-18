@@ -24,6 +24,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::common;
+
 /// An observed unknown's defining expression: from esm 1.0.0 that is the RHS of
 /// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
 /// on the variable.
@@ -32,16 +34,8 @@ fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("repo root from CARGO_MANIFEST_DIR")
-        .to_path_buf()
-}
-
 fn conf(parts: &[&str]) -> PathBuf {
-    let mut p = repo_root().join("tests/conformance/expression_templates");
+    let mut p = common::repo_root().join("tests/conformance/expression_templates");
     for part in parts {
         p = p.join(part);
     }
@@ -515,7 +509,7 @@ fn import_rename_diamond_matches_golden() {
 /// (size 4) is brought in.
 #[test]
 fn subsystem_index_sets_merge_into_document() {
-    let valid = repo_root().join("tests/valid");
+    let valid = common::repo_root().join("tests/valid");
     let f = load_path(valid.join("subsystem_index_set_merge.esm")).expect("merge load");
     let isets = f.index_sets.as_ref().expect("index_sets");
     assert_eq!(isets["cells"].size, Some(5));
@@ -538,7 +532,7 @@ fn subsystem_index_sets_merge_into_document() {
 /// silently dropped and an assembly had to redeclare its leaves' axes.
 #[test]
 fn toplevel_ref_mount_merges_leaf_index_sets() {
-    let valid = repo_root().join("tests/valid");
+    let valid = common::repo_root().join("tests/valid");
     let f =
         load_path(valid.join("toplevel_ref_index_set_merge.esm")).expect("top-level mount load");
     let isets = f.index_sets.as_ref().expect("index_sets");
@@ -555,7 +549,8 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
     // A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
     // diagnostic the subsystems-edge form raises, not last-writer-wins.
     let e = load_path(
-        repo_root().join("tests/invalid/template_imports/toplevel_ref_index_set_conflict.esm"),
+        common::repo_root()
+            .join("tests/invalid/template_imports/toplevel_ref_index_set_conflict.esm"),
     )
     .expect_err("size disagreement must be rejected");
     assert!(
@@ -585,7 +580,7 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
 /// N = 1 folds it to `[2, 0]`, INVERTED, rejected with `makearray_region_inverted`.
 #[test]
 fn makearray_empty_region_min_extent_and_inverted() {
-    let path = repo_root().join("tests/valid/makearray_empty_region_min_extent.esm");
+    let path = common::repo_root().join("tests/valid/makearray_empty_region_min_extent.esm");
     // Default N = 2 → interior region [2, 1] (empty, legal): loads clean.
     load_path(&path).expect("empty min-extent region loads clean");
 
@@ -718,7 +713,10 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         // Typed anchors through the full load.
         let f = load_path(&wrapper_path).expect("typed load");
         let sweep = &f.models.as_ref().expect("models")["Sweep"];
-        let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
+        let problem =
+            serde_json::to_value(&sweep.subsystems.as_ref().expect("subsystems")["Problem"])
+                .expect("subsystem serializes");
+        let problem = &problem;
         // Expression position: bare "N" substituted as an integer literal.
         assert_eq!(
             *earthsci_ast::observed_definition_json(problem, "npts")
@@ -775,7 +773,7 @@ fn loader_api_bindings_and_defaults() {
 /// minimal consumer lowers the imported match rule at load.
 #[test]
 fn valid_suite_library_and_minimal_consumer() {
-    let valid = repo_root().join("tests/valid");
+    let valid = common::repo_root().join("tests/valid");
     let lib = load_path(valid.join("template_import_lib.esm")).expect("library load");
     assert!(lib.models.is_none());
     assert_eq!(
@@ -851,7 +849,7 @@ fn consumer_round_trip_emits_expanded_folded_form() {
 #[test]
 fn template_library_round_trips_to_itself() {
     for lib in ["template_import_lib.esm", "template_import_rename_lib.esm"] {
-        let path = repo_root().join("tests/valid").join(lib);
+        let path = common::repo_root().join("tests/valid").join(lib);
         let original: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read"))
                 .expect("parse source");
@@ -901,9 +899,9 @@ fn template_library_round_trips_to_itself() {
 /// `ExpressionTemplateError` through `load_string()`.
 #[test]
 fn invalid_fixtures_fail_with_exact_codes() {
-    let invalid_dir = repo_root().join("tests/invalid/template_imports");
+    let invalid_dir = common::repo_root().join("tests/invalid/template_imports");
     let expected: Value = serde_json::from_str(
-        &std::fs::read_to_string(repo_root().join("tests/invalid/expected_errors.json"))
+        &std::fs::read_to_string(common::repo_root().join("tests/invalid/expected_errors.json"))
             .expect("read expected_errors.json"),
     )
     .expect("parse expected_errors.json");
@@ -1575,7 +1573,7 @@ fn root_templates_beside_component_payload_rejected() {
 /// the two mount cases should follow it.
 #[test]
 fn mount_edge_injection_reaches_the_leafs_own_nested_subsystem() {
-    let dir = repo_root().join("tests/fixtures/mount_edge_injection_nested");
+    let dir = common::repo_root().join("tests/fixtures/mount_edge_injection_nested");
 
     // The rewrite target lives in the grandchild; lowering it yields `x_in`,
     // whose default is 3.0. A surviving `{"op": "input_x"}` anywhere in the

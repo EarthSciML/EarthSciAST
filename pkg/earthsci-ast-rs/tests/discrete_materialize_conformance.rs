@@ -28,7 +28,6 @@ use earthsci_ast::{Alg, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
 
@@ -38,24 +37,6 @@ const TRAJ_ATOL: f64 = 1e-6;
 
 /// The forcing-buffer key the RHS looks up for `src` (namespaced post-flatten).
 const SRC_KEY: &str = "M.src";
-
-fn fixture_dir() -> PathBuf {
-    common::repo_fixture("conformance/discrete_materialize")
-}
-
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    let diff = (actual - expected).abs();
-    if diff <= abs {
-        return true;
-    }
-    let scale = expected.abs().max(actual.abs());
-    diff <= rel * scale
-}
 
 /// Segment endpoints within `tspan`: `t0`, the interior `refresh_times` anchors,
 /// then `t_end`.
@@ -107,7 +88,8 @@ fn final_value(sol: &earthsci_ast::Solution, name: &str) -> f64 {
 /// `test_flatten_keeps_contraction_observeds_and_single_state`.
 #[test]
 fn discrete_materialize_flatten_keeps_observeds_and_single_state() {
-    let path = fixture_dir().join("fixtures/discrete_materialize_contraction.esm");
+    let path = common::category_dir("discrete_materialize")
+        .join("fixtures/discrete_materialize_contraction.esm");
     let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
     let flat = flatten(&file).unwrap_or_else(|e| panic!("flatten: {e}"));
@@ -137,8 +119,12 @@ fn discrete_materialize_flatten_keeps_observeds_and_single_state() {
 /// visibly wrong slope, so the refresh is load-bearing.
 #[test]
 fn discrete_materialize_trajectory_matches_golden() {
-    let fixture = fixture_dir().join("fixtures/discrete_materialize_contraction.esm");
-    let golden = read_json(&fixture_dir().join("golden/discrete_materialize_contraction.json"));
+    let fixture = common::category_dir("discrete_materialize")
+        .join("fixtures/discrete_materialize_contraction.esm");
+    let golden = common::read_json(
+        common::category_dir("discrete_materialize")
+            .join("golden/discrete_materialize_contraction.json"),
+    );
 
     let json = fs::read_to_string(&fixture).unwrap_or_else(|e| panic!("read {fixture:?}: {e}"));
     let file = load_string(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
@@ -206,7 +192,7 @@ fn discrete_materialize_trajectory_matches_golden() {
             let want = expected[cell].as_f64().unwrap();
             let g = got[cell];
             assert!(
-                approximately_equal(g, want, TRAJ_RTOL, TRAJ_ATOL),
+                common::close(g, want, TRAJ_RTOL, TRAJ_ATOL),
                 "{cell} @ t={t}: expected {want}, got {g} (rtol={TRAJ_RTOL}, atol={TRAJ_ATOL})"
             );
         }

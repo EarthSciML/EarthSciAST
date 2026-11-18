@@ -1501,6 +1501,7 @@ def _resolve_import_entry(
     scope, instantiate at this edge's ``bindings``, then apply ``only``
     visibility filtering."""
     from .lower_expression_templates import reject_expression_templates_pre_v04
+    from .units import reject_const_units_pre_v12
 
     if not _is_object(entry):
         raise ExpressionTemplateError(
@@ -1522,8 +1523,13 @@ def _resolve_import_entry(
         )
 
     raw, target_dir = _load_import_raw(ref, base_dir, origin)
+    # Version gates on the target, judged against the library's own `esm`
+    # (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+    # version"): the template-machinery constructs, and declared `units` on an
+    # expression node in a template body (§4.8.5 item 6).
     reject_expression_templates_pre_v04(raw)
     reject_template_imports_pre_v08(raw)
+    reject_const_units_pre_v12(raw)
 
     # Library purity (esm-spec §9.7.1): the reference mechanisms are disjoint —
     # a coupling-library file (top-level `coupling_roles`) is imported via a

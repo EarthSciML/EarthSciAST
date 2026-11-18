@@ -7,104 +7,36 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{Compiler, ProblemOptions, SlotKind, esm_problem, rhs_program};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-fn suite_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/provider_forcing")
-        .canonicalize()
-        .expect("suite directory")
-}
+use crate::common;
+use crate::common::LinearProvider;
 
 fn bits(v: &[f64]) -> Vec<u64> {
     v.iter().map(|x| x.to_bits()).collect()
 }
 
-fn floats(v: &Value) -> Vec<f64> {
-    v.as_array()
-        .expect("an array")
-        .iter()
-        .map(|x| x.as_f64().expect("a number"))
-        .collect()
-}
-
-/// One field, `base + slope * t` elementwise (the manifest's `provider`).
-struct Linear {
-    key: String,
-    times: Vec<f64>,
-    shape: Vec<usize>,
-    /// Row-major.
-    base: Vec<f64>,
-    slope: f64,
-}
-
-impl Linear {
-    fn from_manifest(p: &Value) -> Self {
-        let shape: Vec<usize> = p["shape"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|d| d.as_u64().unwrap() as usize)
-            .collect();
-        let mut base = Vec::new();
-        fn flatten(v: &Value, out: &mut Vec<f64>) {
-            match v {
-                Value::Array(a) => a.iter().for_each(|x| flatten(x, out)),
-                x => out.push(x.as_f64().expect("a number")),
-            }
-        }
-        flatten(&p["base"], &mut base);
-        Linear {
-            key: p["key"].as_str().unwrap().to_string(),
-            times: floats(&p["refresh_times"]),
-            shape,
-            base,
-            slope: p["slope"].as_f64().unwrap(),
-        }
-    }
-
-    fn at(&self, t: f64) -> HashMap<String, NativeField> {
-        let values = self.base.iter().map(|b| b + self.slope * t).collect();
-        let a = ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("field");
-        HashMap::from([(self.key.clone(), NativeField::new(a))])
-    }
-}
-
-impl CadenceProvider for Linear {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        assert!(self.slope == 0.0, "only a const provider is materialized");
-        Ok(self.at(0.0))
-    }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(Some(self.at(t)))
-    }
-    fn refresh_times(&self) -> Vec<f64> {
-        self.times.clone()
-    }
-}
-
 #[test]
 fn provider_forcing_conformance() {
-    let dir = suite_dir();
+    let dir = common::category_dir("provider_forcing");
     let m: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
     let doc = dir.join(m["document"].as_str().unwrap());
-    let tspan = floats(&m["tspan"]);
+    let tspan = common::floats(&m["tspan"]);
     let tspan = (tspan[0], tspan[1]);
     for c in m["cases"].as_array().unwrap() {
         let id = c["id"].as_str().unwrap();
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+        let providers: HashMap<String, Box<dyn DataProvider>> = c["providers"]
             .as_array()
             .unwrap()
             .iter()
             .map(|p| {
-                let p = Linear::from_manifest(p);
-                (p.key.clone(), Box::new(p) as Box<dyn CadenceProvider>)
+                let p = LinearProvider::from_manifest(p);
+                (p.key.clone(), Box::new(p) as Box<dyn DataProvider>)
             })
             .collect();
         let prob = esm_problem(
@@ -150,14 +82,14 @@ fn provider_forcing_conformance() {
         for (k, s) in prog.forcing_slots().iter().enumerate() {
             assert_eq!(
                 bits(d.buffer(k)),
-                bits(&floats(&c["default_forcing"][&s.name])),
+                bits(&common::floats(&c["default_forcing"][&s.name])),
                 "{id}: default forcing of {}: {:?}",
                 s.name,
                 d.buffer(k)
             );
         }
 
-        let du_want = floats(&c["du_default"]);
+        let du_want = common::floats(&c["du_default"]);
         let (u, aux) = prog.default_state();
         let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
         let mut ws = prog.new_workspace();
@@ -167,41 +99,32 @@ fn provider_forcing_conformance() {
         assert_eq!(bits(&du), bits(&du_want), "{id}: program du {du:?}");
 
         // The Problem's own right-hand side reads its forcing buffer.
-        let compiled = prob.debug_array_compiled().expect("array backend");
-        let pv = compiled.debug_resolve_params(&HashMap::new());
-        let mut scratch = compiled.debug_new_scratch_taped().expect("taped scratch");
+        let mut rhs = prob.debug_solve_rhs().expect("a taped right-hand side");
         let y = earthsci_ast::initial_state(&prob).expect("initial state");
-        let mut dy = vec![f64::NAN; compiled.n_states()];
-        compiled.debug_eval_rhs_into(
-            &y,
-            tspan.0,
-            &pv,
-            &mut dy,
-            &mut scratch,
-            &mut Default::default(),
-        );
+        let dy = rhs.eval(&y, tspan.0);
         assert_eq!(bits(&dy), bits(&du_want), "{id}: Problem du {dy:?}");
     }
 }
 
 /// A scalar provider for `Fed.s` that answers only at its own refresh times
-/// (the `CadenceProvider` contract allows `None` anywhere else), logging
+/// (the `DataProvider` contract allows `None` anywhere else), logging
 /// every time it is asked.
 struct Scheduled {
     schedule: Vec<(f64, f64)>,
     log: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
 }
 
-impl CadenceProvider for Scheduled {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for Scheduled {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         unreachable!("a discrete provider is never materialized")
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         self.log.borrow_mut().push(t);
-        Ok(self.schedule.iter().find(|(a, _)| *a == t).map(|&(_, v)| {
-            let a = ArrayD::from_shape_vec(IxDyn(&[]), vec![v]).expect("0-d field");
-            HashMap::from([("Fed.s".to_string(), NativeField::new(a))])
-        }))
+        Ok(self
+            .schedule
+            .iter()
+            .find(|(a, _)| *a == t)
+            .map(|&(_, v)| ArrayD::from_shape_vec(IxDyn(&[]), vec![v]).expect("0-d field")))
     }
     fn refresh_times(&self) -> Vec<f64> {
         self.schedule.iter().map(|&(t, _)| t).collect()
@@ -225,10 +148,12 @@ fn scheduled_problem(
     };
     let providers = HashMap::from([(
         "Fed.s".to_string(),
-        Box::new(provider) as Box<dyn CadenceProvider>,
+        Box::new(provider) as Box<dyn DataProvider>,
     )]);
     let prob = esm_problem(
-        suite_dir().join("fixtures/provider_forcing.esm").as_path(),
+        common::category_dir("provider_forcing")
+            .join("fixtures/provider_forcing.esm")
+            .as_path(),
         tspan,
         ProblemOptions {
             compiler: Some(Compiler::Native),
@@ -311,15 +236,18 @@ fn solve_refreshes_at_every_refresh_time() {
 /// The suite's document as JSON.
 fn fixture() -> Value {
     serde_json::from_str(
-        &std::fs::read_to_string(suite_dir().join("fixtures/provider_forcing.esm")).unwrap(),
+        &std::fs::read_to_string(
+            common::category_dir("provider_forcing").join("fixtures/provider_forcing.esm"),
+        )
+        .unwrap(),
     )
     .unwrap()
 }
 
 /// A 0-d provider keyed `key` giving `value` at every time, discrete with
 /// `times` (const when empty).
-fn constant(key: &str, times: &[f64], value: f64) -> Box<dyn CadenceProvider> {
-    Box::new(Linear {
+fn constant(key: &str, times: &[f64], value: f64) -> Box<dyn DataProvider> {
+    Box::new(LinearProvider {
         key: key.to_string(),
         times: times.to_vec(),
         shape: Vec::new(),
@@ -330,14 +258,26 @@ fn constant(key: &str, times: &[f64], value: f64) -> Box<dyn CadenceProvider> {
 
 fn build(
     doc: &Value,
-    providers: Vec<(&str, Box<dyn CadenceProvider>)>,
+    providers: Vec<(&str, Box<dyn DataProvider>)>,
     const_arrays: &[(&str, f64)],
+) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
+    build_with(doc, providers, const_arrays, false)
+}
+
+/// [`build`], with the build pipeline asked for when `pipeline` is set: it
+/// then consumes the CONST providers itself.
+fn build_with(
+    doc: &Value,
+    providers: Vec<(&str, Box<dyn DataProvider>)>,
+    const_arrays: &[(&str, f64)],
+    pipeline: bool,
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
     esm_problem(
         doc,
         (0.0, 1.0),
         ProblemOptions {
             compiler: Some(Compiler::Native),
+            build_pipeline: pipeline,
             providers: providers
                 .into_iter()
                 .map(|(k, p)| (k.to_string(), p))
@@ -452,14 +392,11 @@ fn unchanged_at_an_own_refresh_time_is_not_replaced() {
         log: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
     }
     const ANCHORS: [f64; 3] = [0.0, 1.0, 2.0];
-    impl CadenceProvider for Stateful {
-        fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+    impl DataProvider for Stateful {
+        fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
             unreachable!()
         }
-        fn refresh(
-            &mut self,
-            t: f64,
-        ) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
             self.log.borrow_mut().push(t);
             let Some(i) = ANCHORS.iter().position(|&a| a == t) else {
                 return Ok(None);
@@ -469,10 +406,7 @@ fn unchanged_at_an_own_refresh_time_is_not_replaced() {
             }
             self.last = Some(i);
             let a = ArrayD::from_shape_vec(IxDyn(&[]), vec![i as f64 + 1.0]).unwrap();
-            Ok(Some(HashMap::from([(
-                "s".to_string(),
-                NativeField::new(a),
-            )])))
+            Ok(Some(a))
         }
         fn refresh_times(&self) -> Vec<f64> {
             ANCHORS.to_vec()
@@ -484,13 +418,15 @@ fn unchanged_at_an_own_refresh_time_is_not_replaced() {
         log: log.clone(),
     };
     let prob = esm_problem(
-        suite_dir().join("fixtures/provider_forcing.esm").as_path(),
+        common::category_dir("provider_forcing")
+            .join("fixtures/provider_forcing.esm")
+            .as_path(),
         (1.0, 3.0),
         ProblemOptions {
             compiler: Some(Compiler::Native),
             providers: HashMap::from([(
                 "Fed.s".to_string(),
-                Box::new(provider) as Box<dyn CadenceProvider>,
+                Box::new(provider) as Box<dyn DataProvider>,
             )]),
             ..Default::default()
         },
@@ -579,29 +515,53 @@ fn a_provider_and_a_const_array_for_one_parameter_are_refused() {
     .expect("no overlap");
 }
 
+/// The same refusal when the build pipeline is asked for and consumes the
+/// CONST provider itself, for a CONST and a DISCRETE provider alike.
+#[test]
+fn a_provider_and_a_const_array_for_one_parameter_are_refused_on_the_build_pipeline() {
+    for times in [&[][..], &[0.5][..]] {
+        for (pk, ck) in [("s", "Fed.s"), ("Fed.s", "s"), ("Fed.s", "Fed.s")] {
+            let err = build_with(
+                &fixture(),
+                vec![(pk, constant(pk, times, 3.0))],
+                &[(ck, 9.0)],
+                true,
+            )
+            .expect_err("two sources");
+            let (name, details) = provider_error(err);
+            assert_eq!(name, pk, "{times:?}");
+            assert!(
+                details.contains("both supply the parameter"),
+                "{times:?} {pk} / {ck}: {details}"
+            );
+        }
+    }
+    let err = build_with(
+        &two_models(true),
+        vec![("Fed.s", constant("Fed.s", &[], 3.0))],
+        &[("s", 9.0)],
+        true,
+    )
+    .expect_err("ambiguous const key");
+    let msg = err.to_string();
+    assert!(msg.contains("Fed.s") && msg.contains("Other.s"), "{msg}");
+}
+
 /// A provider that fails at a refresh inside a solve is named by the key
 /// the caller passed it under, as at construction.
 #[test]
 fn a_solve_time_failure_names_the_callers_key() {
     struct Failing;
-    impl CadenceProvider for Failing {
-        fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+    impl DataProvider for Failing {
+        fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
             unreachable!()
         }
-        fn refresh(
-            &mut self,
-            t: f64,
-        ) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
             if t == 0.5 {
-                return Err(ProviderError {
-                    0: "unreadable record".into(),
-                });
+                return Err(ProviderError::new("unreadable record"));
             }
             let a = ArrayD::from_shape_vec(IxDyn(&[]), vec![3.0]).unwrap();
-            Ok(Some(HashMap::from([(
-                "s".to_string(),
-                NativeField::new(a),
-            )])))
+            Ok(Some(a))
         }
         fn refresh_times(&self) -> Vec<f64> {
             vec![0.0, 0.5]

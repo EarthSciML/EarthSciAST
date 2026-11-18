@@ -7,17 +7,14 @@
 //! document dynamic: on the static backend `solve` answers `NotDynamic` for a
 //! model that plainly integrates.
 
-use std::path::Path;
-
 use earthsci_ast::{
     CompileError, Compiler, ProblemOptions, Rhs, SimulateError, SolveOptions, esm_problem,
     load_string, solve,
 };
 
-const PDE_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm"
-);
+use crate::common;
+
+const PDE_FIXTURE: &str = "conformance/pde_simulation/fixtures/diffusion_1d_periodic_n4.esm";
 
 fn auto(compiler: Compiler) -> ProblemOptions {
     ProblemOptions {
@@ -40,8 +37,12 @@ fn seeded(compiler: Compiler) -> ProblemOptions {
 #[test]
 fn an_faq_derivative_routes_dynamic_under_auto() {
     for compiler in [Compiler::Native, Compiler::Interpreter] {
-        let prob = esm_problem(Path::new(PDE_FIXTURE), (0.0, 0.01), seeded(compiler))
-            .unwrap_or_else(|e| panic!("[{compiler}] esm_problem: {e}"));
+        let prob = esm_problem(
+            common::repo_fixture(PDE_FIXTURE).as_path(),
+            (0.0, 0.01),
+            seeded(compiler),
+        )
+        .unwrap_or_else(|e| panic!("[{compiler}] esm_problem: {e}"));
         assert!(prob.is_dynamic(), "[{compiler}] routed static");
         assert_eq!(prob.backend_kind(), "array", "[{compiler}]");
         assert_eq!(prob.state_variable_names().len(), 4, "[{compiler}]");
@@ -62,7 +63,7 @@ fn an_faq_derivative_routes_dynamic_under_auto() {
     }
     // The default compiler is native, and the default options are `Auto`.
     let prob = esm_problem(
-        Path::new(PDE_FIXTURE),
+        common::repo_fixture(PDE_FIXTURE).as_path(),
         (0.0, 0.01),
         ProblemOptions {
             u0: seeded(Compiler::Native).u0,

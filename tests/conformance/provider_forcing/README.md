@@ -32,7 +32,7 @@ provider, and otherwise it is discrete with those refresh times.
 
 - Julia: `provider_sample(p, t)` returns `Dict(key => field)` (a 0-d field as a
   one-element vector) and `provider_refresh_times(p)` the times.
-- Rust: a `CadenceProvider` whose `materialize()` returns the field (const
+- Rust: a `DataProvider` whose `sample()` returns the field (const
   providers only, `slope = 0`), whose `refresh(t)` returns `Some` of the field
   at `t`, and whose `refresh_times()` returns the times.
 
@@ -49,7 +49,7 @@ with `sample_time` when a case gives one.
    parameter vector, `t = tspan[0]` and the default forcing set equals
    `du_default` bitwise.
 4. The Problem's own right-hand side (Julia `prob.f!`; Rust
-   `debug_eval_rhs_into` on the Problem's compiled model with a taped scratch)
+   `EsmProblem::debug_solve_rhs`, the taped right-hand side the solve integrates)
    at its initial state, its parameters and `t = tspan[0]` equals `du_default`
    bitwise.
 

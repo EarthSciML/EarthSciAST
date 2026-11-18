@@ -245,7 +245,6 @@ fn options(const_arrays: HashMap<String, ArrayD<f64>>) -> ProblemOptions {
     ProblemOptions {
         model_name: Some("J".into()),
         const_arrays,
-        build_providers: Vec::new(),
         // The join-gate planner lives INSIDE the per-cell oracle: an
         // aggregate carrying a driving overlap gate is refused by both tape
         // lowerings up front, so the gate this file measures is only

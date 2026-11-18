@@ -6,200 +6,17 @@
 //! reduction, and a shaped observed defined by a scalar-condition `ifelse`.
 //!
 //! Every case builds with NO fallback rule and is compared bit for bit
-//! against the per-cell oracle (the `interpreter` compiler) and the
-//! whole-array overlay, on the reference executor and on the fast executor,
-//! fused and unfused — together with the fault the evaluation latches, which
-//! is part of what the interpreter answers.
+//! against the per-cell oracle (the `interpreter` compiler), on the
+//! reference executor and on the fast executor, fused and unfused — together
+//! with the fault the evaluation latches, which is part of what the
+//! interpreter answers.
 
-use super::super::{ArrayCompiled, ConstArrayScope, RhsScratch, RhsStats};
-use super::ir::*;
-use super::refexec::run_reference;
+use super::super::{ArrayCompiled, ConstArrayScope, RhsStats};
 use super::taped;
-use crate::simulate_array::take_const_array_oob;
+use super::test_support::*;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-
-pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
-    let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
-    ArrayCompiled::from_file(&file).expect("fixture compiles")
-}
-
-fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
-    let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
-    (0..n)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let u = (x >> 11) as f64 / (1u64 << 53) as f64;
-            lo + u * (hi - lo)
-        })
-        .collect()
-}
-
-fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
-    assert_eq!(a.len(), b.len(), "{what}: length");
-    for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-        assert_eq!(
-            x.to_bits(),
-            y.to_bits(),
-            "{what}: dy[{k}] diverged: {x:?} ({:016x}) vs {y:?} ({:016x})",
-            x.to_bits(),
-            y.to_bits()
-        );
-    }
-}
-
-fn cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    }
-}
-
-/// A fresh scratch carrying `prog`.
-fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
-    let mut s = RhsScratch::new(&compiled.var_shapes);
-    s.set_const_arrays(std::sync::Arc::clone(&compiled.const_scope));
-    s.install_tape(std::sync::Arc::new(prog));
-    s
-}
-
-/// Build the fused and unfused tapes — neither may carry a fallback — and
-/// compare `dy` and the latched fault against the oracle and the overlay at
-/// several states, times and parameter maps. The fast executor is compared
-/// on a FRESH scratch per evaluation: a CONST-section fault latches when the
-/// section primes, which a warm scratch has already done. Returns the fused
-/// program.
-pub(super) fn ab(compiled: &ArrayCompiled, param_maps: &[HashMap<String, f64>]) -> TapeProgram {
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg())));
-    assert!(
-        report.fallbacks.is_empty(),
-        "fallbacks: {:?}",
-        report.fallbacks
-    );
-    let n = compiled.state_variable_names().len();
-    for params in param_maps {
-        for seed in 0..3u64 {
-            let state = seeded_state(n, seed, -2.0, 2.0);
-            for &t in &[0.0, 0.7] {
-                compare_at(compiled, params, &state, t);
-            }
-        }
-    }
-    prog
-}
-
-/// Compare the fused and unfused tapes, in both executors, against the
-/// oracle and the overlay at one state, time and parameter map: `dy` bit for
-/// bit and the latched fault.
-fn compare_at(compiled: &ArrayCompiled, params: &HashMap<String, f64>, state: &[f64], t: f64) {
-    compare_tape_at(compiled, params, state, t, true);
-}
-
-/// [`compare_at`], checking the overlay against the oracle only when
-/// `overlay` is set: the tapes are always compared against the oracle.
-pub(super) fn compare_tape_at(
-    compiled: &ArrayCompiled,
-    params: &HashMap<String, f64>,
-    state: &[f64],
-    t: f64,
-    overlay: bool,
-) {
-    let n = state.len();
-    let pv = compiled.debug_resolve_params(params);
-    take_const_array_oob();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, t, params, true);
-    let f_oracle = take_const_array_oob();
-    if overlay {
-        let (dy_overlay, _) = compiled.debug_eval_rhs(state, t, params, false);
-        let f_overlay = take_const_array_oob();
-        assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
-        assert_eq!(f_overlay, f_oracle, "overlay fault");
-    }
-    for fused in [true, false] {
-        let label = if fused { "fused" } else { "unfused" };
-        let p = taped(compiled.build_tape_opts(&HashSet::new(), fused.then(cfg))).0;
-        let mut dy = vec![0.0f64; n];
-        run_reference(&p, compiled, state, &pv, t, &mut dy);
-        let f_ref = take_const_array_oob();
-        assert_bits_eq(&dy, &dy_oracle, &format!("{label} reference executor"));
-        assert_eq!(f_ref, f_oracle, "{label} reference executor fault");
-        let mut scratch = scratch_with(compiled, p);
-        let mut dy = vec![0.0f64; n];
-        compiled.debug_eval_rhs_into(
-            state,
-            t,
-            &pv,
-            &mut dy,
-            &mut scratch,
-            &mut RhsStats::default(),
-        );
-        let f_fast = take_const_array_oob();
-        assert_bits_eq(&dy, &dy_oracle, &format!("{label} fast executor"));
-        assert_eq!(f_fast, f_oracle, "{label} fast executor fault");
-    }
-}
-
-/// The tape's refusals when it refuses any rule; otherwise [`compare_at`] at
-/// each of `states` under each parameter map, and no refusals.
-pub(super) fn agrees_or_refuses(
-    compiled: &ArrayCompiled,
-    param_maps: &[HashMap<String, f64>],
-    states: &[Vec<f64>],
-) -> Vec<(String, String)> {
-    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
-    if !report.fallbacks.is_empty() {
-        return report.fallbacks;
-    }
-    for params in param_maps {
-        for state in states {
-            compare_at(compiled, params, state, 0.0);
-        }
-    }
-    Vec::new()
-}
-
-pub(super) fn no_params() -> Vec<HashMap<String, f64>> {
-    vec![HashMap::new()]
-}
-
-pub(super) fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
-
-/// `D(u[i]) = rhs` over `i ∈ [1, n]`.
-pub(super) fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
-    json!({
-        "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
-                "ranges": {"i": [1, n]}},
-        "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, n]}, "expr": rhs}
-    })
-}
-
-pub(super) fn idx(base: serde_json::Value, subs: &[serde_json::Value]) -> serde_json::Value {
-    let mut args = vec![base];
-    args.extend(subs.iter().cloned());
-    json!({"op": "index", "args": args})
-}
-
-pub(super) fn plus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
-    json!({"op": "+", "args": [a, b]})
-}
-
-pub(super) fn lit(v: &[f64]) -> serde_json::Value {
-    json!({"op": "const", "args": [], "value": v})
-}
-
-pub(super) fn doc(vars: serde_json::Value, eqs: Vec<serde_json::Value>) -> serde_json::Value {
-    json!({
-        "esm": "2.0.0",
-        "metadata": {"name": "tape_array_forms"},
-        "models": {"M": {"variables": vars, "equations": eqs}}
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Const-array gathers out of range.
@@ -223,11 +40,11 @@ fn const_gather_out_of_range_faults_at_the_oracles_first_cell() {
     ));
     let prog = ab(&compiled, &no_params());
     assert_eq!(opcount(&prog, "Fault"), 1, "one fault per rule");
-    assert_eq!(prog.faults.len(), 1);
+    assert_eq!(prog.tables.faults.len(), 1);
     assert!(
-        prog.faults[0].contains("index 0 out of range 1..4 in dim 0"),
+        prog.tables.faults[0].contains("index 0 out of range 1..4 in dim 0"),
         "{}",
-        prog.faults[0]
+        prog.tables.faults[0]
     );
 }
 
@@ -374,7 +191,7 @@ fn index_on_a_scalar_parameter_faults() {
     ));
     let prog = ab(&compiled, &no_params());
     assert_eq!(opcount(&prog, "Fault"), 1);
-    assert!(prog.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'rate'"));
+    assert!(prog.tables.faults[0].starts_with("E_TREEWALK_INDEX_ON_SCALAR: 'M.rate'"));
 }
 
 // ---------------------------------------------------------------------------
@@ -385,8 +202,7 @@ fn index_on_a_scalar_parameter_faults() {
 /// `faq` and two boundary faces whose values are aggregates over the face's
 /// one free axis — the leading-singleton face `[[1,1],[1,m]]` holding an
 /// `[m]` value, and the trailing-singleton face `[[1,n],[1,1]]` an `[n]`
-/// one. The oracle used to poison such a makearray with `NaN`; esm-spec
-/// §4.3.2 places the value over the non-singleton axes.
+/// one. Esm-spec §4.3.2 places the value over the non-singleton axes.
 #[test]
 fn makearray_lower_rank_region_values() {
     let (n, m) = (5i64, 4i64);
@@ -464,8 +280,7 @@ fn makearray_empty_region_is_skipped() {
 
 /// An empty region's value is still evaluated by the oracle, and an ARRAY
 /// value that does not fit the (empty) region poisons the whole makearray
-/// with `NaN`, as a mismatched value in any region does. The overlay agrees,
-/// and the tape, which cannot place that `NaN`, refuses the rule.
+/// with `NaN`, as a mismatched value in any region does, and the tape, which cannot place that `NaN`, refuses the rule.
 #[test]
 fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     let n = 3;
@@ -487,10 +302,8 @@ fn makearray_empty_region_with_a_mismatched_value_is_the_oracles_nan() {
     }));
     let state = vec![0.5, -1.25, 2.0];
     let params = HashMap::new();
-    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
-    let (dy_overlay, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     assert!(dy_oracle.iter().all(|x| x.is_nan()), "{dy_oracle:?}");
-    assert_bits_eq(&dy_overlay, &dy_oracle, "overlay vs oracle");
     let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
     assert!(
         !refused.is_empty(),
@@ -801,7 +614,7 @@ fn undeclared_ifelse_observed_takes_its_array_arms_box() {
             var,
             declared_shape,
             ..
-        } if var == "X" => Some(declared_shape.clone()),
+        } if var == "M.X" => Some(declared_shape.clone()),
         _ => None,
     });
     assert_eq!(declared, Some(Some(vec![3])));
@@ -823,7 +636,7 @@ fn undeclared_ifelse_consumed_whole_is_still_refused() {
             json!({"G": {"type": "parameter", "shape": ["other"], "default": 1.0}}),
             vec![],
         ));
-        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+        let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
         assert!(
             report
                 .fallbacks
@@ -843,14 +656,14 @@ fn declared_box(compiled: &ArrayCompiled, name: &str) -> Option<Option<Vec<usize
             var,
             declared_shape,
             ..
-        } if var == name => Some(declared_shape.clone()),
+        } if *var == format!("M.{name}") => Some(declared_shape.clone()),
         _ => None,
     })
 }
 
 /// Whether native refused some rule because its `ifelse` arms differ in box.
 fn refuses_mixed_arms(compiled: &ArrayCompiled) -> bool {
-    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(cfg()));
+    let (_, report) = compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()));
     report
         .fallbacks
         .iter()
@@ -918,7 +731,7 @@ fn data_fed_mixed(
         "source": {"url_template": "file:///nonexistent/f.nc"}}});
     let compiled = compile(doc);
     compiled.forcing_handle().borrow_mut().insert(
-        "F".to_string(),
+        "M.F".to_string(),
         ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[3]), vec![1.5, -2.0, 0.75])
             .expect("shape"),
     );
@@ -1002,16 +815,16 @@ fn data_fed_ifelse_observed_takes_the_datas_shape() {
     for (lev, want) in [(1.0, vec![3.0, -4.0, 1.5]), (3.0, vec![0.25; 3])] {
         let params = HashMap::from([("lev".to_string(), lev)]);
         let pv = compiled.debug_resolve_params(&params);
-        let mut oracle = compiled.debug_new_scratch();
-        let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg()))).0;
+        let mut oracle = compiled.new_scratch();
+        let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0;
         let mut tape = scratch_with(&compiled, prog);
         tape.set_exports_active(true);
         for scratch in [&mut oracle, &mut tape] {
             compiled.debug_eval_rhs_into(&[], 0.0, &pv, &mut [], scratch, &mut RhsStats::default());
         }
-        let tape_x = tape.taped_observeds().expect("a tape")["X"].clone();
+        let tape_x = tape.taped_observeds().expect("a tape")["M.X"].clone();
         for (who, x) in [
-            ("oracle", &oracle.observed_arrays()["X"]),
+            ("oracle", &oracle.observed_arrays()["M.X"]),
             ("tape", &tape_x),
         ] {
             assert_eq!(x.shape(), &[3], "{who}, lev = {lev}");
@@ -1053,7 +866,10 @@ fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
         vars["D"] = json!({"type": "unknown"});
         readers.push(d.clone());
         let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-        assert_eq!(compiled.conditional_shapes["X"], ["cell"]);
+        assert_eq!(
+            compiled.built_variables().shapes.built_axes("M.X"),
+            Some(&["cell".to_string()][..])
+        );
         assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])));
         ab(&compiled, &both_arms());
         // Unread, as `NEI2016Emis.CO` is in reseact.
@@ -1096,7 +912,11 @@ fn ifelse_reading_a_scalar_const_node_takes_the_array_arms_box() {
             vars["H"] = json!({"type": "unknown"});
             readers.push(h.clone());
             let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-            assert_eq!(compiled.conditional_shapes["X"], ["cell"], "{x}");
+            assert_eq!(
+                compiled.built_variables().shapes.built_axes("M.X"),
+                Some(&["cell".to_string()][..]),
+                "{x}"
+            );
             assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])), "{x}");
             ab(&compiled, &both_arms());
             // Unread, as `NEI2016Emis.CO` is in reseact.
@@ -1117,7 +937,13 @@ fn ifelse_reading_an_array_const_node_is_not_promoted() {
     let arr = json!({"op": "const", "args": [], "value": [1.0, 2.0, 3.0]});
     let x = mixed_ifelse(json!({"op": "*", "args": ["F", arr]}), json!(0.0));
     let compiled = compile(undeclared_mixed_doc(x, json!({}), vec![]));
-    assert!(!compiled.conditional_shapes.contains_key("X"));
+    assert!(
+        compiled
+            .built_variables()
+            .shapes
+            .built_axes("M.X")
+            .is_none()
+    );
 }
 
 /// Where the data arm is consumed whole, or meets an array of another shape,

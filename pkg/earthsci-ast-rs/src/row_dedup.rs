@@ -609,7 +609,12 @@ mod tests {
             .into_iter()
             .collect();
         let mut model = parsed.models.as_ref().unwrap()["M"].clone();
-        crate::join::resolve_aggregate_joins(&mut model, &index_sets).unwrap();
+        crate::join::resolve_aggregate_joins(
+            &mut model,
+            &index_sets,
+            crate::join::declared_var_shapes,
+        )
+        .unwrap();
         let rule = |lhs: &str| {
             let eq = model
                 .equations

@@ -104,11 +104,11 @@ fn the_regrid_apply_is_one_split_chain() {
         .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
-    assert_eq!(exec.seg_chains.len(), 1, "one chain");
-    let ch = &exec.seg_chains[0];
+    let chains = &prog.prepared().seg_chains;
+    assert_eq!(chains.len(), 1, "one chain");
+    let ch = &chains[0];
     assert!(ch.fused.is_some(), "the target cells' fused group joins it");
     assert!(ch.start < ch.seg, "the pair gather and product join it");
 
@@ -153,11 +153,12 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
         .join("../../tests/conformance/scaling/fixtures/regrid/regrid_N100.esm");
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
     assert!(
-        exec.seg_chains[0].compact.is_some_and(|p| p.w.is_some()),
+        prog.prepared().seg_chains[0]
+            .compact
+            .is_some_and(|p| p.w.is_some()),
         "the regrid chain compacts its pairs and weights"
     );
 
@@ -186,7 +187,7 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
         // drops every half overlap; going back re-admits them.
         for a in [1e-12, 0.6, 1e-12] {
             let p: HashMap<String, f64> = [(atol.clone(), a)].into_iter().collect();
-            let (oracle, _) = c.debug_eval_rhs(&state, 0.0, &p, true);
+            let (oracle, _) = c.debug_eval_rhs(&state, 0.0, &p);
             let params = c.debug_resolve_params(&p);
             force_split(Some(ways));
             for _ in 0..2 {
@@ -215,11 +216,11 @@ fn the_ragged_chain_runs_its_tuples_through_block_buffers() {
     );
     let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
     let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
-    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let compiled = crate::simulate_array::tape::test_support::compile(doc);
     let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
-    let exec = super::TapeExec::new(&prog);
-    assert_eq!(exec.seg_chains.len(), 1, "one chain");
-    let ch = &exec.seg_chains[0];
+    let chains = &prog.prepared().seg_chains;
+    assert_eq!(chains.len(), 1, "one chain");
+    let ch = &chains[0];
     assert!(ch.private, "nothing else reads the chain's tuples");
     assert!(
         ch.seg - ch.start >= 3,
@@ -235,7 +236,7 @@ fn the_ragged_chain_runs_its_tuples_through_block_buffers() {
     let c = prob.debug_array_compiled().expect("a right-hand side");
     let n = c.state_variable_names().len();
     let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
-    let (oracle, _) = c.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    let (oracle, _) = c.debug_eval_rhs(&state, 0.0, &HashMap::new());
     let params = c.debug_resolve_params(&HashMap::new());
     for ways in [1, 2, 3, 4, 7] {
         let mut scratch = c

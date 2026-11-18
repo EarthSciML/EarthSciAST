@@ -1,8 +1,9 @@
 //! The evaluations construction performs OUTSIDE the compiled model's rule set
 //! are under the compiler the caller named (issue #484, esm-libraries-spec
 //! §2.5.10): a state-free document's observed graph, the build pipeline, and a
-//! field initial condition. Each reports a row in the compiler report, and one
-//! a strict compiler could only walk per cell is refused, naming it.
+//! field initial condition. Each reports a row in the compiler report; what
+//! the reference evaluator would walk per cell a strict compiler lowers on a
+//! standalone tape, and refuses, naming it, when the tape declines it.
 
 use std::path::{Path, PathBuf};
 
@@ -12,10 +13,10 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
+use crate::common;
+
 fn fixture(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
+    common::repo_root().join(rel)
 }
 
 fn opts(compiler: Compiler) -> ProblemOptions {
@@ -223,8 +224,8 @@ fn the_build_pipeline_tapes_a_per_cell_observed_under_native() {
     assert_eq!(row.tier, "taped");
     assert!(row.reason.is_none());
 
-    // The interpreter takes it, and its rows say which evaluator served each
-    // observed: the pipeline keeps the overlay under every compiler.
+    // The interpreter takes it, and every one of its rows is the per-cell
+    // oracle.
     let prob = build_json(&doc, with_pipeline(Compiler::Interpreter)).expect("interpreter");
     let tier_of = |name: &str| {
         let r = prob
@@ -242,7 +243,7 @@ fn the_build_pipeline_tapes_a_per_cell_observed_under_native() {
         );
         r.tier
     };
-    assert_eq!(tier_of("Rel.left"), "vectorized");
+    assert_eq!(tier_of("Rel.left"), "oracle");
     assert_eq!(tier_of("Rel.cum"), "oracle");
     assert_eq!(values(&prob, "Rel.cum"), vec![10.0, 30.0, 60.0]);
     let bits =
@@ -250,12 +251,12 @@ fn the_build_pipeline_tapes_a_per_cell_observed_under_native() {
     assert_eq!(bits(&native), bits(&prob));
 }
 
-/// A rank-0 reduction — the shape of every total over ingested rows — is not a
-/// per-cell walk: its terms are one whole-array map folded once, so native
-/// builds it through the pipeline, reports it vectorized, and agrees bit for
-/// bit with the interpreter's pipeline and with the tape.
+/// A rank-0 reduction — the shape of every total over ingested rows — is
+/// lowered on a standalone tape by native, which builds it through the
+/// pipeline, reports it taped, and agrees bit for bit with the interpreter's
+/// pipeline and with the model's own tape.
 #[test]
-fn a_rank0_reduction_in_the_pipeline_is_vectorized() {
+fn a_rank0_reduction_in_the_pipeline_is_taped() {
     let doc = relational(true);
     let native = build_json(&doc, with_pipeline(Compiler::Native)).expect("native builds");
     let row = native
@@ -266,7 +267,7 @@ fn a_rank0_reduction_in_the_pipeline_is_vectorized() {
         .unwrap_or_else(|| panic!("no row: {}", native.compiler_report()))
         .clone();
     assert_eq!(row.kind, "build-time observed");
-    assert_eq!(row.tier, "vectorized");
+    assert_eq!(row.tier, "taped");
     let interp = build_json(&doc, with_pipeline(Compiler::Interpreter)).expect("interpreter");
     let taped = build_json(&doc, opts(Compiler::Native)).expect("the tape");
     let bits = |p: &EsmProblem| -> Vec<u64> {
@@ -277,10 +278,10 @@ fn a_rank0_reduction_in_the_pipeline_is_vectorized() {
     assert_eq!(bits(&native), bits(&taped));
 }
 
-/// An observed the whole-array overlay serves is not a per-cell walk: it is
-/// reported as `"vectorized"`, and native builds.
+/// A `faq` observed the reference evaluator would walk per cell is lowered on
+/// a standalone tape under native: reported as `"taped"`, with no reason.
 #[test]
-fn a_pipeline_observed_the_overlay_takes_is_reported_vectorized() {
+fn a_pipeline_map_observed_is_reported_taped() {
     let doc = relational(false);
     let prob = build_json(&doc, with_pipeline(Compiler::Native)).expect("native builds");
     let report = prob.compiler_report();
@@ -290,14 +291,48 @@ fn a_pipeline_observed_the_overlay_takes_is_reported_vectorized() {
         .find(|r| r.rule == "Rel.left")
         .unwrap_or_else(|| panic!("no pipeline row: {report}"));
     assert_eq!(row.kind, "build-time observed");
-    assert_eq!(row.tier, "vectorized");
+    assert_eq!(row.tier, "taped");
     assert!(row.reason.is_none());
-    assert_eq!(report.n_vectorized(), 1);
-    assert!(
-        report.to_string().contains("whole-array overlay"),
-        "{report}"
-    );
+    assert_eq!(report.n_vectorized(), 0);
     assert_eq!(values(&prob, "Rel.left"), vec![10.0, 20.0, 30.0]);
+}
+
+/// An ingesting document built through the pipeline without its data has
+/// zero-length tables: a join over one has no term, and native builds it to
+/// the semiring's identity, as the interpreter does, without reading the
+/// table's absent columns.
+#[test]
+fn a_join_over_a_table_with_no_rows_builds_to_the_identity() {
+    for (rel, names) in [
+        (
+            "tests/conformance/native_model_shapes/ingest/join_ingested_column_computed_key.esm",
+            &[
+                "JoinIngestedColumnComputedKey.count",
+                "JoinIngestedColumnComputedKey.total",
+            ][..],
+        ),
+        (
+            "tests/conformance/native_model_shapes/ingest/overlap_join_over_ingested_cells.esm",
+            &["OverlapJoinOverIngestedCells.out"][..],
+        ),
+    ] {
+        let path = fixture(rel);
+        let opts = |compiler| ProblemOptions {
+            base_path: path.parent().map(Path::to_path_buf),
+            ..with_pipeline(compiler)
+        };
+        let native = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Native))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        let interp = esm_problem(path.as_path(), (0.0, 1.0), opts(Compiler::Interpreter))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"));
+        for name in names {
+            let bits = |p: &EsmProblem| -> Vec<u64> {
+                values(p, name).iter().map(|x| x.to_bits()).collect()
+            };
+            assert_eq!(values(&native, name), vec![0.0; 3], "{name}");
+            assert_eq!(bits(&native), bits(&interp), "{name}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +367,7 @@ fn a_field_initial_condition_is_reported() {
                              "expr": {"op": "*", "args": [0.5, "i"]}}));
     let file = load_string(&doc.to_string()).expect("loads");
     for (compiler, tier) in [
-        (Compiler::Native, "vectorized"),
+        (Compiler::Native, "taped"),
         (Compiler::Interpreter, "oracle"),
     ] {
         let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
@@ -355,26 +390,36 @@ fn a_field_initial_condition_is_reported() {
 }
 
 /// An `ic` the reference evaluator can only walk per cell — a cumulative sum,
-/// which it sweeps as a prefix scan — is refused by native at CONSTRUCTION,
-/// naming the target, and built by the interpreter.
+/// which it sweeps as a prefix scan — is lowered on a standalone tape by
+/// native, and walked by the interpreter, to the same values.
 #[test]
-fn native_refuses_a_per_cell_initial_condition() {
+fn native_tapes_a_per_cell_initial_condition() {
     let doc = with_ic(json!({"op": "faq", "args": [], "output_idx": ["i"],
                              "ranges": {"i": {"from": "x"}, "j": [1, 3]},
                              "filter": {"op": "<=", "args": ["j", "i"]},
                              "expr": 1.0}));
     let file = load_string(&doc.to_string()).expect("loads");
-    let err = esm_problem(&file, (0.0, 1.0), opts(Compiler::Native)).expect_err("per cell");
-    let (_, kind, rule, _) = refusal(err);
-    assert_eq!(kind, "initial condition");
-    assert_eq!(rule.rsplit('.').next(), Some("u"));
-
-    let prob = esm_problem(&file, (0.0, 1.0), opts(Compiler::Interpreter)).expect("builds");
-    let sol = solve(&prob, &SolveOptions::default()).expect("solves");
-    assert_eq!(
-        sol.state.iter().map(|r| r[0]).collect::<Vec<_>>(),
-        [1.0, 2.0, 3.0]
-    );
+    for (compiler, tier) in [
+        (Compiler::Native, "taped"),
+        (Compiler::Interpreter, "oracle"),
+    ] {
+        let prob = esm_problem(&file, (0.0, 1.0), opts(compiler))
+            .unwrap_or_else(|e| panic!("[{compiler}] {e}"));
+        let row = prob
+            .compiler_report()
+            .rules()
+            .iter()
+            .find(|r| r.kind == "initial condition")
+            .unwrap_or_else(|| panic!("[{compiler}] no ic row"));
+        assert_eq!(row.rule.rsplit('.').next(), Some("u"), "[{compiler}]");
+        assert_eq!(row.tier, tier, "[{compiler}]");
+        let sol = solve(&prob, &SolveOptions::default()).expect("solves");
+        assert_eq!(
+            sol.state.iter().map(|r| r[0]).collect::<Vec<_>>(),
+            [1.0, 2.0, 3.0],
+            "[{compiler}]"
+        );
+    }
 }
 
 /// The build-time scope an `ic` reads holds only the TRANSITIVELY state-free
