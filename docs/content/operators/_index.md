@@ -32,8 +32,8 @@ evaluator in every binding. The set is closed: adding one is a specification
 change. That closure is what lets a conforming reader in any language evaluate
 any document without executing author-supplied code.
 
-**Rewrite-target (open).** `grad`, `div`, `laplacian`, `integral`, a `D` with a
-spatial `wrt`, and any operator you invent have **no evaluator**. They must be
+**Rewrite-target (open).** `integral`, a `D` with a spatial `wrt`, and any
+operator you invent have **no evaluator**. They must be
 eliminated by a [template rewrite](../templates/) before evaluation. A document
 may *load* with them present; one that reaches evaluation still carrying them is
 rejected with `unlowered_operator`.
@@ -113,11 +113,12 @@ The operators esm 2.0.0 removed (`fn`, `table_lookup`, `skolem`, `rank`, the
 `argmin`/`argmax` operator forms, the two polygon operators, and `aggregate`, the
 old spelling of `faq`) are rejected at load with `removed_op`; [removed operators](closed-functions/) lists the
 standard-library template that replaces each, and [geometry](geometry/) covers
-polygon overlap areas.
+polygon overlap areas. The operators esm 3.0.0 removed (`grad`, `div` and
+`laplacian`) are rejected the same way; the [calculus](calculus/) page shows how
+to write each with a spatial `D`.
 
-Rewrite-target sugar — `grad`, `div`, `laplacian`, `integral`, and a spatial
-`D` — is covered on the [calculus](calculus/) page. It is *not* part of the set
-above.
+The rewrite targets `integral` and a spatial `D` are covered on the
+[calculus](calculus/) page. They are *not* part of the set above.
 
 ## Dimensional rules
 

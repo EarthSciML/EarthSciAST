@@ -15,8 +15,9 @@ carries three coordinated bodies of change:
 
 It also carries changes to the **`.esm` document format** itself, which
 affect your documents rather than your code: the **esm 2.0.0** break, which
-removes every external function from the expression AST (next section), and
-two smaller changes in Part II.
+removes every external function from the expression AST (next section), two
+smaller changes in Part II, and the **esm 3.0.0** break, which removes the
+`grad`, `div` and `laplacian` sugar ops (Part IV, "esm 3.0.0").
 
 This guide is organised for someone with a working codebase who wants to know
 what breaks and what to write instead. If you have five minutes, read Part I.
@@ -1560,6 +1561,49 @@ binding.
 the same thing; replace them with `-` and `^` to silence the warning. A
 consumer that compares canonical forms byte for byte now sees units in the
 canonical spelling and no `units` on a dimensionless `const`.
+
+## esm 3.0.0: `grad`, `div` and `laplacian` are removed
+
+esm 3.0.0 is a break that only removes. The open-tier sugar ops `grad`, `div`
+and `laplacian` are gone (esm-spec §4.2, "Removed ops"). Nothing else in the
+format changes: spatial `D` (with its trailing boundary operands), `integral`,
+operators you invent, and the rewrite-rule engine are as they were.
+
+| Removed | Write instead | Kind |
+|---|---|---|
+| `grad(f, dim: x)` | `D(f, wrt: x)` | `format` |
+| `div(F)` | the sum over axes of `D(F_i, wrt: x_i)`; for a scheme not written per axis (an unstructured-mesh finite-volume divergence, for example), an operator you invent, matched by your rewrite rule | `format` |
+| `laplacian(u)` | the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`; or an operator you invent for a one-shot stencil | `format` |
+| a rewrite rule whose `match` is one of the three | the same rule matching the spatial `D` it stands for, or matching your own operator name | `format` |
+
+For example, a two-dimensional diffusion term `k * laplacian(u)` becomes
+
+```json
+{ "op": "*", "args": ["k", { "op": "+", "args": [
+  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "x" }], "wrt": "x" },
+  { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "y" }], "wrt": "y" }
+] }] }
+```
+
+**Loading.** A 3.0.0 binding rejects a document that uses any of the three,
+whatever `esm` it declares, with the hard error `removed_op`, naming the op and
+the node path. There is **no codemod**: which axes a `laplacian` or `div`
+ranges over, and how a vector field's components are named, are not in the
+node, so the rewrite is the author's.
+
+**Older documents.** The library implements major 3 and still loads majors 1
+and 2: a 1.x or 2.x document that uses no removed construct loads unchanged,
+on its own or mounted or imported into a 3.0.0 document, and its own version
+gates still apply. `migrate()` / `can_migrate` relabel such a document as
+3.0.0; a document that uses one of the three is refused with `removed_op`.
+
+**Format version.** `esm: 3.0.0`; the schema `$id` is
+`https://earthsciml.org/schemas/esm/3.0.0/esm.schema.json`. Each binding's
+`SCHEMA_VERSION` constant reads `3.0.0`.
+
+**Not removed.** The deprecated `records_per_sample` fields and the deprecated
+`neg` / `pow` spellings are unchanged; they are removed in a later major
+version.
 
 ---
 

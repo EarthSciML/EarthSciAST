@@ -292,5 +292,5 @@ edges, exactly as if you had written them inline.
 
 Because that expansion happens *after* the template-rewrite fixpoint, a library
 edge's transform must expand to an **already-lowered** form. A transform
-template that would introduce `grad`, `div`, or a spatial `D` is rejected with
+template that would introduce a spatial `D`, `integral`, or an invented operator is rejected with
 `coupling_library_illegal_payload`.

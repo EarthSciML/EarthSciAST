@@ -68,8 +68,8 @@ valid file declares nothing but its own identity.
 - **`coupling_roles`** — formal component roles, for a coupling-library file.
 - **`expression_templates`** / **`expression_template_imports`** — `match`
   rewrite rules and the imports that bring in a template library. This is how
-  spatial discretization is expressed: continuous operators such as `grad`,
-  `div`, and `laplacian` are rewritten into explicit stencils.
+  spatial discretization is expressed: spatial derivatives (`D` with a spatial
+  `wrt`) are rewritten into explicit stencils.
 
 **Data and shape:**
 
@@ -91,7 +91,7 @@ invention — and every binding implements all of it. Calendar fields,
 interpolation, keys and ranks, and polygon overlap are standard-library
 templates over that core (`lib/*.esm`). That is deliberate: a conforming reader in any language can evaluate any
 document without executing author-supplied code. The second tier is
-**rewrite-target** ops (`grad`, `div`, `laplacian`, a spatial `D`, or an op you
+**rewrite-target** ops (a spatial `D`, `integral`, or an op you
 invent); these have no evaluator and must be lowered by a template rewrite
 before a document can run.
 
