@@ -47,10 +47,14 @@ print_typst(doc::AbstractDict)::String =
 Print an ESM document in the source format `format`: `:markdown`
 ([`print_markdown`](@ref)) or `:typst` ([`print_typst`](@ref)).
 """
-function print_document(doc::AbstractDict, format::Symbol)::String
-    format === :markdown && return print_markdown(doc)
-    format === :typst && return print_typst(doc)
-    throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+print_document(doc::AbstractDict, format::Symbol)::String =
+    _check_format(format) === :markdown ? print_markdown(doc) : print_typst(doc)
+
+# `format`, when it names a source format; an `ArgumentError` otherwise.
+function _check_format(format::Symbol)
+    (format === :markdown || format === :typst) ||
+        throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+    return format
 end
 
 """
@@ -63,7 +67,8 @@ LaTeX for `:markdown` (Lean `Math.printLatex`), Typst math for `:typst`
 `expr` is a decoded ESM expression (a number, a name or an operator node) or an
 equation, an object with `lhs` and `rhs` (other fields, such as `_comment`, are
 not printed), which prints as its two sides around `=` as in a document
-(`Source.eqExpr`). `names` (any collection of strings) plays the part of the
+(`Source.eqExpr`). A typed [`ASTExpr`](@ref) or [`Equation`](@ref) is printed
+through its serialized form. `names` (any collection of strings) plays the part of the
 variables a component declares: a name in it prints in its declared shape, and
 the printer avoids spellings that would collide with it. The result is what a
 document display holds, without its delimiters; it is meant for showing one
@@ -75,8 +80,8 @@ julia> print_math(Dict("lhs" => "y", "rhs" => Dict("op" => "+", "args" => ["a", 
 ```
 """
 function print_math(expr, names, format::Symbol)::String
-    (format === :markdown || format === :typst) ||
-        throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+    _check_format(format)
+    expr = _math_value(expr)
     DJ = DocumentFormats.DJson
     e = DJ.sort_keys(
         DJ.from_value(
@@ -126,48 +131,26 @@ parse_math("y = 2 k", ["k", "y"], :typst)
 ```
 """
 function parse_math(text::AbstractString, names, format::Symbol)
-    (format === :markdown || format === :typst) ||
-        throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
+    _check_format(format)
     DF = DocumentFormats
     DJ = DF.DJson
-    DL = DF.DLimits
-    str = String(text)
-    isvalid(str) ||
-        throw(ParseError("the text is not valid UTF-8"; code = ERROR_CODES.PARSE_ERROR))
     sym = DF.MExpr.Sym(String[String(n) for n in names], Tuple{String, Vector{String}}[])
-    e, found = DL.reading() do
-        format === :markdown ? DF.DMath.parse_latex(sym, str) : DF.DMath.parse_typst(sym, str)
-    end
-    if e !== nothing
+    what = format === :markdown ? "an ESM expression in LaTeX math" :
+        "an ESM expression in Typst math"
+    return _checked_read(text, format, what) do str
+        e = format === :markdown ? DF.DMath.parse_latex(sym, str) : DF.DMath.parse_typst(sym, str)
+        e === nothing && return nothing
         sides = DF.SEquation.eq_sides(e)
-        sides === nothing || (e = DJ.JObj(DJ.Kvs(["lhs" => sides[1], "rhs" => sides[2]])))
-    end
-    if found.too_deep || (e !== nothing && DL.json_depth(e) > DL.MAX_JSON_DEPTH)
-        throw(
-            ParseError(
-                "the document nests too deeply for the reader (at most $(DL.MAX_NESTING) " *
-                    "constructs open at once, and $(DL.MAX_JSON_DEPTH) levels of arrays and objects)";
-                code = ERROR_CODES.PARSE_ERROR
-            )
-        )
-    end
-    if e === nothing
-        found.removed_op === nothing || throw(_document_refusal(found.removed_op, format))
-        what = format === :markdown ? "LaTeX" : "Typst"
-        throw(ParseError("not an ESM expression in $what math"; code = ERROR_CODES.PARSE_ERROR))
-    end
-    return try
-        DJ.to_value(e)
-    catch err
-        err isa DJ.OutOfRange || rethrow()
-        throw(
-            ParseError(
-                "the number `$(String(DF.DNumber.print(err.n)))` is outside the binary64 range";
-                code = ERROR_CODES.PARSE_ERROR
-            )
-        )
+        return sides === nothing ? e : DJ.JObj(DJ.Kvs(["lhs" => sides[1], "rhs" => sides[2]]))
     end
 end
+
+# The JSON form `print_math` prints: a typed expression or equation serialized,
+# a decoded value as it is.
+_math_value(x) = x
+_math_value(x::ASTExpr) = serialize_expression(x)
+_math_value(x::Equation) =
+    Dict{String, Any}("lhs" => serialize_expression(x.lhs), "rhs" => serialize_expression(x.rhs))
 
 """
     parse_markdown(text::AbstractString) -> OrderedDict{String, Any}
@@ -202,29 +185,38 @@ parse_typst(text::AbstractString) = _read_document(text, :typst)
 Read an ESM document written in the source format `format`: `:markdown`
 ([`parse_markdown`](@ref)) or `:typst` ([`parse_typst`](@ref)).
 """
-function parse_document(text::AbstractString, format::Symbol)
-    format === :markdown && return parse_markdown(text)
-    format === :typst && return parse_typst(text)
-    throw(ArgumentError("unknown document format :$format (expected :markdown or :typst)"))
-end
+parse_document(text::AbstractString, format::Symbol) =
+    _check_format(format) === :markdown ? parse_markdown(text) : parse_typst(text)
 
 # The value the printers take: `canonicalize_document` applied, then every
 # object's keys sorted, as the Lean printers require (`Source.canonDoc`).
 _printable_document(doc::AbstractDict) =
     DocumentFormats.DJson.sort_keys(DocumentFormats.DJson.from_value(canonicalize_document(doc)))
 
-# Read a document, and turn a refusal into its diagnostic (Rust `read` and
-# `checked`).
+# Read a document.
 function _read_document(text::AbstractString, format::Symbol)
+    DF = DocumentFormats
+    what = format === :markdown ? "an ESM Markdown document" : "an ESM Typst document"
+    return _checked_read(text, format, what) do str
+        format === :markdown ? DF.DSource.parse_md(str) : DF.DSource.parse_typ(str)
+    end::OrderedDict{String, Any}
+end
+
+# The one checked read (Rust `checked`): the UTF-8 check, `read(str)` under the
+# reader's limits, and each refusal turned into its diagnostic. The Lean reader
+# refuses every bad input alike (`read` returns `nothing`); the code comes from
+# the specification: a removed operator the math writes in the call form or
+# the escape form is refused by name (CONFORMANCE §7.1), a text past a bound of
+# the reader or holding a number beyond binary64 is a parse error, and so is
+# everything else that is not `what`.
+function _checked_read(read::F, text::AbstractString, format::Symbol, what::String) where {F}
     DF = DocumentFormats
     DL = DF.DLimits
     str = String(text)
     isvalid(str) ||
         throw(ParseError("the text is not valid UTF-8"; code = ERROR_CODES.PARSE_ERROR))
-    d, found = DL.reading() do
-        format === :markdown ? DF.DSource.parse_md(str) : DF.DSource.parse_typ(str)
-    end
-    if found.too_deep || (d !== nothing && DL.json_depth(d) > DL.MAX_JSON_DEPTH)
+    v, found = DL.reading(() -> read(str))
+    if found.too_deep || (v !== nothing && DL.json_depth(v) > DL.MAX_JSON_DEPTH)
         throw(
             ParseError(
                 "the document nests too deeply for the reader (at most $(DL.MAX_NESTING) " *
@@ -233,9 +225,17 @@ function _read_document(text::AbstractString, format::Symbol)
             )
         )
     end
-    d === nothing && throw(_document_refusal(found.removed_op, format))
+    if v === nothing
+        found.removed_op === nothing || throw(
+            ParseError(
+                "`$(found.removed_op)` was removed from the format (esm-spec §4.2)";
+                code = ERROR_CODES.REMOVED_OP
+            )
+        )
+        throw(ParseError("not $what"; code = ERROR_CODES.PARSE_ERROR))
+    end
     return try
-        DF.DJson.to_value(d)::OrderedDict{String, Any}
+        DF.DJson.to_value(v)
     catch e
         e isa DF.DJson.OutOfRange || rethrow()
         throw(
@@ -245,19 +245,4 @@ function _read_document(text::AbstractString, format::Symbol)
             )
         )
     end
-end
-
-# The diagnostic for a text the reader refused. The Lean reader refuses every
-# bad input alike; the code comes from the specification: a removed operator
-# the math writes in the call form or the escape form is refused by name
-# (CONFORMANCE §7.1), everything else is a parse error.
-function _document_refusal(removed_op::Union{Nothing, String}, format::Symbol)
-    if removed_op !== nothing
-        return ParseError(
-            "`$removed_op` was removed from the format (esm-spec §4.2)";
-            code = ERROR_CODES.REMOVED_OP
-        )
-    end
-    what = format === :markdown ? "Markdown" : "Typst"
-    return ParseError("not an ESM $what document"; code = ERROR_CODES.PARSE_ERROR)
 end

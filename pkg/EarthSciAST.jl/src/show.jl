@@ -1,11 +1,6 @@
 # The Typst math of an expression or an equation for messages and `show`
-# (`print_math` under the names it uses). A typed expression is serialized to
-# its JSON form first.
-function _math_text(x)
-    v = x isa Equation ? Dict{String, Any}("lhs" => serialize_expression(x.lhs), "rhs" => serialize_expression(x.rhs)) :
-        x isa ASTExpr ? serialize_expression(x) : x
-    return print_math(v, expression_names(v), :typst)
-end
+# (`print_math` under the names it uses).
+_math_text(x) = print_math(x, expression_names(x), :typst)
 
 # `show` of an expression or an equation: its Typst math. An expression the
 # printer cannot take (e.g. a malformed node built by hand) shows as its JSON
@@ -15,9 +10,7 @@ function _show_math(io::IO, x)
         _math_text(x)
     catch err
         err isa InterruptException && rethrow()
-        v = x isa Equation ? Dict("lhs" => serialize_expression(x.lhs), "rhs" => serialize_expression(x.rhs)) :
-            serialize_expression(x)
-        JSON3.write(v)
+        JSON3.write(_math_value(x))
     end
     return print(io, text)
 end

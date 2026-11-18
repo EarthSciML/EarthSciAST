@@ -591,3 +591,17 @@ end
     @test isempty(intersect(DF.MParse.ATOM_KWS, DF.MLatex.ATOM_END_KWS))
     @test isempty(intersect(DF.MSurface.BIN_KWS, DF.MParse.ATOM_KWS))
 end
+
+@testset "print_math takes a typed expression or equation" begin
+    E = EarthSciAST
+    e = E.OpExpr("+", E.ASTExpr[E.VarExpr("a"), E.IntExpr(1)])
+    raw = Dict("op" => "+", "args" => Any["a", 1])
+    for f in (:markdown, :typst)
+        @test print_math(e, ["a"], f) == print_math(raw, ["a"], f)
+        eq = E.Equation(E.VarExpr("y"), e)
+        @test print_math(eq, ["a", "y"], f) ==
+            print_math(Dict("lhs" => "y", "rhs" => raw), ["a", "y"], f)
+    end
+    @test sprint(show, e) == print_math(e, expression_names(e), :typst)
+    @test_throws ArgumentError print_math(raw, ["a"], :latex)
+end
