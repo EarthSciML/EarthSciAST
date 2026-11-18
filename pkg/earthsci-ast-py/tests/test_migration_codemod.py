@@ -26,7 +26,7 @@ from earthsci_ast import load_string
 from earthsci_ast.migration import (
     CODEMOD_TARGET_VERSION,
     REMOVED_OPS,
-    REMOVED_OPS_3_0_0,
+    REMOVED_OPS_2_4_0,
     CodemodError,
     MigrationError,
     find_removed,
@@ -995,13 +995,13 @@ def test_find_removed_names_every_removed_op():
     assert find_removed({"function_tables": {"T": {}}}) == [("/function_tables", "function_tables")]
 
 
-def test_find_removed_reports_the_3_0_0_ops_only_when_asked():
+def test_find_removed_reports_the_2_4_0_ops_only_when_asked():
     """`grad`/`div`/`laplacian` were legal at 2.0.0, so the codemod (which writes
     2.0.0) does not report or rewrite them; marker migration asks for them."""
-    for op in REMOVED_OPS_3_0_0:
+    for op in REMOVED_OPS_2_4_0:
         doc = _doc({"op": op, "args": ["x"]})
         assert find_removed(doc) == []
-        assert find_removed(doc, include_3_0_0=True) == [("/models/M/equations/0/rhs", op)]
+        assert find_removed(doc, include_2_4_0=True) == [("/models/M/equations/0/rhs", op)]
 
 
 def test_command_line(tmp_path, capsys):

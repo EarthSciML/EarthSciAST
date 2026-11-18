@@ -394,7 +394,7 @@ def test_integral_renders_identically_to_an_arbitrary_user_op():
 
 
 # ---------------------------------------------------------------------------
-# Removed ops (esm 0.8.0, 2.0.0, 3.0.0) are not in the vocabulary
+# Removed ops (esm 0.8.0, 2.0.0, 2.4.0) are not in the vocabulary
 # ---------------------------------------------------------------------------
 
 
@@ -405,9 +405,9 @@ def test_removed_ops_are_not_registered():
         assert op not in reg.OPS, op
 
 
-def test_spatial_ops_removed_at_3_0_0():
-    # esm 3.0.0 removed `grad`, `div` and `laplacian` (a spatial derivative is a
-    # `D` with a spatial `wrt`): each is in the removed-op table at 3.0.0 and is
+def test_spatial_ops_removed_at_2_4_0():
+    # esm 2.4.0 removed `grad`, `div` and `laplacian` (a spatial derivative is a
+    # `D` with a spatial `wrt`): each is in the removed-op table at 2.4.0 and is
     # refused BY NAME at load, whatever `esm` the document declares, with a
     # message that points at spatial `D` and MIGRATION.md, not the 2.0.0 codemod.
     import json
@@ -416,8 +416,8 @@ def test_spatial_ops_removed_at_3_0_0():
     from earthsci_ast.errors import ParseError
 
     for op in ("grad", "div", "laplacian"):
-        assert reg.REMOVED_OPS[op] == "3.0.0"
-        for version in ("1.3.0", "2.3.0", "3.0.0"):
+        assert reg.REMOVED_OPS[op] == "2.4.0"
+        for version in ("1.3.0", "2.3.0", "2.4.0"):
             doc = {
                 "esm": version,
                 "metadata": {"name": "M"},
@@ -438,7 +438,7 @@ def test_spatial_ops_removed_at_3_0_0():
             assert info.value.code == "removed_op"
             msg = str(info.value)
             assert f'"op": "{op}"' in msg and "/models/M/equations/0/rhs" in msg
-            assert "removed at esm 3.0.0" in msg and 'MIGRATION.md, "esm 3.0.0"' in msg
+            assert "removed at esm 2.4.0" in msg and 'MIGRATION.md, "esm 2.4.0"' in msg
             assert "earthsci_ast.migrate" not in msg
 
 
@@ -451,8 +451,8 @@ def _removed_op_fixtures():
 @pytest.mark.parametrize("path", _removed_op_fixtures(), ids=lambda p: p.name)
 def test_removed_op_fixtures_are_refused_at_load(path):
     # Every tests/invalid/removed_ops/ fixture is refused at load with
-    # `removed_op` (the 3.0.0 ones declare esm 2.3.0, a version that still loads,
-    # so the refusal comes from the op alone). A 3.0.0 removal names MIGRATION.md
+    # `removed_op` (the 2.4.0 ones declare esm 2.3.0, a version that still loads,
+    # so the refusal comes from the op alone). A 2.4.0 removal names MIGRATION.md
     # and never the 2.0.0 codemod.
     from earthsci_ast import load_path
     from earthsci_ast.errors import ParseError
@@ -461,8 +461,8 @@ def test_removed_op_fixtures_are_refused_at_load(path):
         load_path(str(path))
     assert info.value.code == "removed_op", str(info.value)
     name = path.stem.removeprefix("removed_op_")
-    if reg.REMOVED_OPS.get(name) == "3.0.0":
-        assert "removed at esm 3.0.0" in str(info.value)
+    if reg.REMOVED_OPS.get(name) == "2.4.0":
+        assert "removed at esm 2.4.0" in str(info.value)
         assert "earthsci_ast.migrate" not in str(info.value)
 
 
