@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { loadString, toJson } from './index'
+import { resolveSubsystemRefsSync } from './ref-loading'
 
 const BINDING = 'typescript'
 
@@ -44,6 +45,7 @@ interface Fixture {
   id: string
   path: string
   load_transforms?: unknown[]
+  saved_esm?: string
 }
 interface Manifest {
   category: string
@@ -189,6 +191,15 @@ describe('Conformance: round-trip (manifest-driven)', () => {
       .filter(([key]) => preserved.has(key))
       .map(([, where]) => where)
     expect(lost, `${fixture.id}: dropped preserved field(s)`).toEqual([])
+
+    // 2b. SAVED VERSION (esm-spec §4.7, "Save-time version floors"). This
+    //     binding's loadString leaves `{ref}` mounts as stubs, so the mounts
+    //     are resolved first: the floor is about the document they inline.
+    if (fixture.saved_esm !== undefined) {
+      const resolved = loadString(authoredText, { basePath })
+      resolveSubsystemRefsSync(resolved, basePath)
+      expect(JSON.parse(toJson(resolved)).esm, `${fixture.id}: saved esm`).toBe(fixture.saved_esm)
+    }
 
     // 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer alone.
     //    A ledger-excused fixture whose emit is not RE-LOADABLE (a drop that

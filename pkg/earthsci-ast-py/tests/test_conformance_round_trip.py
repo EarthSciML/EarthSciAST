@@ -166,6 +166,12 @@ def test_round_trip(fixture: dict) -> None:
     lost = [where for key, where in _dropped_keys(authored, emitted) if key in PRESERVED_KEYS]
     assert not lost, f"{fid}: dropped preserved field(s) at {lost}"
 
+    # 2b. SAVED VERSION (esm-spec §4.7, "Save-time version floors").
+    if "saved_esm" in fixture:
+        assert emitted["esm"] == fixture["saved_esm"], (
+            f"{fid}: saved esm {emitted['esm']!r}, want {fixture['saved_esm']!r}"
+        )
+
     # 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer alone.
     #    A ledger-excused fixture may fail here for a reason the ledger already
     #    records: a drop that removes a SCHEMA-REQUIRED field emits a document
