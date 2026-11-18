@@ -5561,9 +5561,9 @@ Whether an argument is array-valued is decided on the **flattened** system (§10
 
 **Several array arguments.** The array-valued arguments read in value positions, together with every other array operand of the elementwise expression the application sits in, follow §4.3.4 broadcast compatibility over their declared index sets:
 
-- The result's index sets are those of the equation's target when the target declares a `shape`. Otherwise they are the index sets of the one operand whose index sets contain every other operand's.
+- The result's index sets are those of the equation's target when the target declares a `shape`. Otherwise they are the union of the operands' index sets, in order of first appearance (§4.3.4, "An undeclared result takes the union").
 - Each argument supplies the axes it names and replicates along the rest. A `[lev]` column argument and a `[lon, lat, lev]` field therefore agree, the column replicating over `lon` and `lat`, and `bilinear` with `x` and `y` over the same index sets reads both at the same element.
-- Two arguments neither of whose index sets contains the other's (`[x]` and `[y]`) have no elementwise result, nor does an argument naming an index set the target's declared shape lacks, or one whose index sets would put one name on two axes. Each MUST be rejected with `array_shape_mismatch`.
+- Arguments on disjoint index sets (`[x]` and `[y]`) give the outer product over the union. An argument naming an index set the target's declared shape lacks, or one whose index sets would put one name on two axes, has no elementwise result and MUST be rejected with `array_shape_mismatch`.
 
 **When the shape checks run.** An argument's shape is known only on the flattened system, so `array_shape_mismatch` for an elementwise application MUST be decided at build, by every evaluating binding, on the flattened system. This is an explicit exception to §4.3.4's rule that a shape mismatch is decided at validation time: `validate()` reads a component alone, where a coupled argument still has its declared scalar shape, and does not decide it.
 
