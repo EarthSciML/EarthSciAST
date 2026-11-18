@@ -75,40 +75,40 @@ function validate_single_event_consistency(
         # Continuous event conditions should be mathematical expressions (zero-crossing)
         # This is automatically satisfied by the type system (Vector{ASTExpr})
 
-        # Validate affect variable declarations. The undeclared target is pinned
-        # `event_var_undeclared` at the affect's `lhs` field (§7.1 / §7.1.3(h)).
-        for (j, affect) in enumerate(event.affects)
-            _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            _report!(
-                errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
-                "$event_path/affects/$(j - 1)/lhs",
-                "Variable '$(affect.lhs)' in event affects is not declared",
-                Dict{String, Any}("variable" => affect.lhs)
-            )
+        # A continuous event's `affects` and its `affect_neg` (the affects of a
+        # falling crossing) write the same way and are checked the same way.
+        for (field, affects) in (("affects", event.affects), ("affect_neg", event.affect_neg))
+            affects === nothing && continue
+            _check_event_affect_targets!(errors, model, affects, "$event_path/$field", is_coupled)
+            _check_event_affects_unknowns!(errors, model, event, affects, "$event_path/$field", "continuous")
         end
-        _check_event_affects_unknowns!(errors, model, event, event_path, "continuous")
-
     elseif isa(event, DiscreteEvent)
-        # Validate affect targets. Same pin as the continuous case:
-        # `event_var_undeclared` at the affect's `lhs` field.
-        for (j, affect) in enumerate(event.affects)
-            _is_declared_event_target(model, affect.lhs, is_coupled) && continue
-            _report!(
-                errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
-                "$event_path/affects/$(j - 1)/lhs",
-                "Variable '$(affect.lhs)' in event affects is not declared",
-                Dict{String, Any}("variable" => affect.lhs)
-            )
-        end
-        _check_event_affects_unknowns!(errors, model, event, event_path, "discrete")
-
+        _check_event_affect_targets!(errors, model, event.affects, "$event_path/affects", is_coupled)
+        _check_event_affects_unknowns!(errors, model, event, event.affects, "$event_path/affects", "discrete")
     end
 
     return errors
 end
 
+# An affect's target must be declared: `event_var_undeclared` at the affect's
+# `lhs` field (§7.1 / §7.1.3(h)).
+function _check_event_affect_targets!(
+        errors::Vector{StructuralError}, model::Model, affects, at::String, is_coupled::Bool
+    )
+    for (j, affect) in enumerate(affects)
+        _is_declared_event_target(model, affect.lhs, is_coupled) && continue
+        _report!(
+            errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
+            "$at/$(j - 1)/lhs",
+            "Variable '$(affect.lhs)' in event affects is not declared",
+            Dict{String, Any}("variable" => affect.lhs)
+        )
+    end
+    return errors
+end
+
 """
-    _check_event_affects_unknowns!(errors, model, event, event_path, event_kind)
+    _check_event_affects_unknowns!(errors, model, event, affects, at, event_kind)
 
 esm-spec §5.4 / §6.3.1: **an event may affect UNKNOWNS only.** From 1.0.0 a
 parameter that changes during a run declares its own `update` block, so the
@@ -123,10 +123,9 @@ a `condition`, and a continuous event's zero crossing becomes a `crossing`.
 """
 function _check_event_affects_unknowns!(
         errors::Vector{StructuralError},
-        model::Model, event, event_path::String,
+        model::Model, event, affects, at::String,
         event_kind::String
     )
-    affects = event.affects
     for (j, affect) in enumerate(affects)
         var = get(model.variables, affect.lhs, nothing)
         (var !== nothing && var.type == ParameterVariable) || continue
@@ -143,7 +142,7 @@ function _check_event_affects_unknowns!(
         subject = ename === nothing ? "Event" : "Event '$(ename)'"
         _report!(
             errors, ERROR_CODES.EVENT_AFFECTS_PARAMETER,
-            "$event_path/affects/$(j - 1)",
+            "$at/$(j - 1)",
             "$(subject) affects '$(affect.lhs)', which is a parameter; " *
                 "an event may affect unknowns only",
             details
