@@ -23,7 +23,7 @@
 #      mock in tests. EarthSciAST never imports EarthSciIO; it calls these
 #      generics, which the data binding fills in.
 #   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
-#      `Array{Float64}` objects passed to `build_evaluator`'s `param_arrays`.
+#      `Array{Float64}` objects passed to `_build_evaluator`'s `param_arrays`.
 #      `affect!` writes the freshly sampled native forcing straight into them
 #      (`_write_forcing!`); any native→sim regrid is an in-model coupling
 #      expression the RHS evaluates, not a refresh-time transform.
@@ -78,7 +78,7 @@ provider_refresh_times(p) = throw(
     provider_is_const(provider) -> Bool
 
 True if `provider`'s data is time-invariant (no cadence). CONST providers are
-materialized once into `const_arrays` at `build_evaluator` time and are absent
+materialized once into `const_arrays` at `_build_evaluator` time and are absent
 from the refresh callback. Defaults to "no refresh times"; a concrete impl may
 override (e.g. EarthSciIO's `is_const`).
 """

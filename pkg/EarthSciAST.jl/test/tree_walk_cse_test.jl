@@ -51,20 +51,20 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
             ),
             ESM.Equation(_cse_D("b"), _cse_op("*", _cse_v("k"), apb)),
         ]
-        f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map, rep = ESM.Internal.build(ESM.Model(vars, eqs))
 
         # Exactly one distinct canonical subexpression (a+b) is cached, across
         # its three textual occurrences — the evaluate-once witness.
-        @test diag.n_cse_slots == 1
-        @test diag.n_cse_occurrences == 3
+        @test rep.stats.n_cse_slots == 1
+        @test rep.stats.n_cse_occurrences == 3
 
         # Bit-exact: CSE dedupes the identical `a+b`, so the result equals the
         # naive hand-evaluation to the last bit.
         a, b, k = 0.3, 0.5, 2.0
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["a"]] === sin(a + b) + cos(a + b)
-        @test du[var_map["b"]] === k * (a + b)
+        @test du[var_map["M.a"]] === sin(a + b) + cos(a + b)
+        @test du[var_map["M.b"]] === k * (a + b)
     end
 
     # ----------------------------------------------------------------
@@ -89,21 +89,21 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
             ESM.Equation(_cse_D("b"), _cse_op("cos", ss)),
             ESM.Equation(_cse_D("c"), s),
         ]
-        f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map, rep = ESM.Internal.build(ESM.Model(vars, eqs))
 
         # Both `a+b` and `(a+b)*(a+b)` are shared, so ≥2 slots are allocated and
         # the dedup removed strictly more occurrences than slots.
-        @test diag.n_cse_slots >= 2
-        @test diag.n_cse_occurrences > diag.n_cse_slots
+        @test rep.stats.n_cse_slots >= 2
+        @test rep.stats.n_cse_occurrences > rep.stats.n_cse_slots
 
         a, b = 0.7, 0.2
         sval = a + b
         ssval = sval * sval
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["a"]] === sin(ssval)
-        @test du[var_map["b"]] === cos(ssval)
-        @test du[var_map["c"]] === sval
+        @test du[var_map["M.a"]] === sin(ssval)
+        @test du[var_map["M.b"]] === cos(ssval)
+        @test du[var_map["M.c"]] === sval
     end
 
     # ----------------------------------------------------------------
@@ -120,14 +120,14 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
             ESM.Equation(_cse_D("x"), _cse_op("*", _cse_op("neg", _cse_v("r")), _cse_v("x"))),
             ESM.Equation(_cse_D("y"), _cse_op("*", _cse_v("r"), _cse_v("y"))),
         ]
-        f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
-        @test diag.n_cse_slots == 0
-        @test diag.n_cse_occurrences == 0
+        f!, u0, p, _tspan, var_map, rep = ESM.Internal.build(ESM.Model(vars, eqs))
+        @test rep.stats.n_cse_slots == 0
+        @test rep.stats.n_cse_occurrences == 0
 
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["x"]] === -0.5 * 1.0
-        @test du[var_map["y"]] === 0.5 * 2.0
+        @test du[var_map["M.x"]] === -0.5 * 1.0
+        @test du[var_map["M.y"]] === 0.5 * 2.0
     end
 
     # ----------------------------------------------------------------
@@ -151,33 +151,33 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
             ESM.Equation(_cse_D("B"), _cse_op("-", f2(), f1())),
             ESM.Equation(_cse_D("C"), _cse_op("-", f1(), f2())),
         ]
-        f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+        f!, u0, p, _tspan, var_map, rep = ESM.Internal.build(ESM.Model(vars, eqs))
 
         # Both fluxes (k1*A*B and k2*C) recur across the three balances.
-        @test diag.n_cse_slots >= 2
-        @test diag.n_cse_occurrences >= 6
+        @test rep.stats.n_cse_slots >= 2
+        @test rep.stats.n_cse_occurrences >= 6
 
         A, B, C, k1, k2 = 1.5, 0.8, 0.4, 0.3, 0.7
         f1v = k1 * A * B
         f2v = k2 * C
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["A"]] === f2v - f1v
-        @test du[var_map["B"]] === f2v - f1v
-        @test du[var_map["C"]] === f1v - f2v
+        @test du[var_map["M.A"]] === f2v - f1v
+        @test du[var_map["M.B"]] === f2v - f1v
+        @test du[var_map["M.C"]] === f1v - f2v
 
         # Cache freshness: a second call at a different state must recompute the
         # prelude (no stale cache carried across calls). Fill u in var_map order
         # so state slots line up regardless of layout.
         uu = similar(u0)
-        statevals = Dict("A" => 2.0, "B" => 1.0, "C" => 0.5)
+        statevals = Dict("M.A" => 2.0, "M.B" => 1.0, "M.C" => 0.5)
         for (nm, i) in var_map
             uu[i] = statevals[nm]
         end
         f!(du, uu, p, 0.0)
         A2, B2, C2 = 2.0, 1.0, 0.5
-        @test du[var_map["A"]] === k2 * C2 - k1 * A2 * B2
-        @test du[var_map["C"]] === k1 * A2 * B2 - k2 * C2
+        @test du[var_map["M.A"]] === k2 * C2 - k1 * A2 * B2
+        @test du[var_map["M.C"]] === k1 * A2 * B2 - k2 * C2
     end
 
     # ----------------------------------------------------------------
@@ -198,18 +198,18 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
             "+", _cse_op("neg", lamN()),
             _cse_op("+", _cse_op("neg", lamN()), lamN())
         )
-        f!, u0, p, _tspan, var_map, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _tspan, var_map, rep = ESM.Internal.build(
             ESM.Model(vars, ESM.Equation[ESM.Equation(_cse_D("N"), rhs)])
         )
-        @test diag.n_cse_slots >= 1
-        @test diag.n_cse_occurrences >= 3
+        @test rep.stats.n_cse_slots >= 1
+        @test rep.stats.n_cse_occurrences >= 3
 
         prob = OrdinaryDiffEqTsit5.ODEProblem(f!, u0, (0.0, 1.5), p)
         sol = OrdinaryDiffEqTsit5.solve(
             prob, OrdinaryDiffEqTsit5.Tsit5();
             reltol = 1.0e-10, abstol = 1.0e-12
         )
-        @test isapprox(sol.u[end][var_map["N"]], N0 * exp(-λ * 1.5); rtol = 1.0e-6)
+        @test isapprox(sol.u[end][var_map["M.N"]], N0 * exp(-λ * 1.5); rtol = 1.0e-6)
     end
 end
 
@@ -238,9 +238,9 @@ end
     # into a buffer before dispatch would evaluate the guarded branch and throw on
     # models the lazy one runs fine, with or without CSE.
     function _guard_rhs(model)
-        f, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(model)
+        f, u0, p, _ts, var_map, rep = ESM.Internal.build(model)
         du = (d = similar(u0); f(d, u0, p, 0.0); d)
-        return du, var_map, diag
+        return du, var_map, rep
     end
 
     # ----------------------------------------------------------------
@@ -267,18 +267,18 @@ end
         )
 
         # Guard NOT taken (a < 0): `sqrt(a)` must never be evaluated.
-        du, vm, diag = _guard_rhs(model(-1.0))
-        @test du[vm["a"]] === 0.0
-        @test du[vm["b"]] === 0.0
+        du, vm, rep = _guard_rhs(model(-1.0))
+        @test du[vm["M.a"]] === 0.0
+        @test du[vm["M.b"]] === 0.0
         # The guarded `sqrt(a)` is left inline (behind its guard), but the whole
         # `ifelse` — which IS unconditional, twice — is still shared.
-        @test diag.n_cse_slots >= 1
-        @test !isnan(du[vm["a"]])
+        @test rep.stats.n_cse_slots >= 1
+        @test !isnan(du[vm["M.a"]])
 
         # Guard TAKEN (a >= 0): the shared branch still computes, and shares.
         du4, vm4, _ = _guard_rhs(model(4.0))
-        @test du4[vm4["a"]] === sqrt(4.0)
-        @test du4[vm4["b"]] === 2.0 * sqrt(4.0)
+        @test du4[vm4["M.a"]] === sqrt(4.0)
+        @test du4[vm4["M.b"]] === 2.0 * sqrt(4.0)
     end
 
     # ----------------------------------------------------------------
@@ -303,11 +303,11 @@ end
             ]
         )
 
-        du, vm, _diag = _guard_rhs(m)
+        du, vm, _rep = _guard_rhs(m)
         # `a < 0` is true, so the disjunction short-circuits to 1.0 without ever
         # touching `log(-1.0)`.
-        @test du[vm["a"]] === 1.0
-        @test du[vm["b"]] === 1.0
+        @test du[vm["M.a"]] === 1.0
+        @test du[vm["M.b"]] === 1.0
     end
 
     # `and` is the mirror image: arg 2 runs only when arg 1 is TRUE.
@@ -328,8 +328,8 @@ end
             ]
         )
         du, vm, _ = _guard_rhs(m)
-        @test du[vm["a"]] === 0.0
-        @test du[vm["b"]] === 0.0
+        @test du[vm["M.a"]] === 0.0
+        @test du[vm["M.b"]] === 0.0
     end
 
     # ----------------------------------------------------------------
@@ -360,14 +360,14 @@ end
                 ESM.Equation(_cse_D("c"), apb()),
             ]
         )
-        f!, u0, p, _ts, var_map, diag = ESM._build_evaluator_impl(m)
-        @test diag.n_cse_slots >= 1            # `a+b` IS cached
-        @test diag.n_cse_occurrences >= 2      # both occurrences replaced
+        f!, u0, p, _ts, var_map, rep = ESM.Internal.build(m)
+        @test rep.stats.n_cse_slots >= 1            # `a+b` IS cached
+        @test rep.stats.n_cse_occurrences >= 2      # both occurrences replaced
 
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["a"]] === sin(0.3 + 0.5)
-        @test du[var_map["c"]] === 0.3 + 0.5
+        @test du[var_map["M.a"]] === sin(0.3 + 0.5)
+        @test du[var_map["M.c"]] === 0.3 + 0.5
     end
 end
 
@@ -410,39 +410,39 @@ end
     @test ESM.canonical_json(left()) == ESM.canonical_json(right())
 
     _du(eqs) = begin
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(_vars(), eqs))
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(_vars(), eqs))
         du = similar(u0); f!(du, u0, p, 0.0)
-        (du, vm, diag)
+        (du, vm, rep)
     end
 
     # Alone: nothing to share, so `D(y) = a+(b+c)` evaluates exactly as written.
-    du1, vm1, diag1 = _du(ESM.Equation[_held()..., ESM.Equation(_cse_D("y"), right())])
-    @test diag1.n_cse_slots == 0
-    @test du1[vm1["y"]] === 0.0
+    du1, vm1, rep1 = _du(ESM.Equation[_held()..., ESM.Equation(_cse_D("y"), right())])
+    @test rep1.stats.n_cse_slots == 0
+    @test du1[vm1["M.y"]] === 0.0
 
     # Add a canonically-equal sibling that is seen FIRST: one slot for both, and
     # `D(y)` now reads back `(a+b)+c` — the first-seen association.
-    du2, vm2, diag2 = _du(
+    du2, vm2, rep2 = _du(
         ESM.Equation[
             _held()...,
             ESM.Equation(_cse_D("x"), left()), ESM.Equation(_cse_D("y"), right()),
         ]
     )
-    @test diag2.n_cse_slots == 1
-    @test diag2.n_cse_occurrences == 2
-    @test du2[vm2["x"]] === 1.0
-    @test du2[vm2["y"]] === 1.0      # ← NOT 0.0: `D(y)`'s own equation is unchanged
+    @test rep2.stats.n_cse_slots == 1
+    @test rep2.stats.n_cse_occurrences == 2
+    @test du2[vm2["M.x"]] === 1.0
+    @test du2[vm2["M.y"]] === 1.0      # ← NOT 0.0: `D(y)`'s own equation is unchanged
 
     # Swap the order and the OTHER association wins for both — "first-seen", exactly.
-    du3, vm3, diag3 = _du(
+    du3, vm3, rep3 = _du(
         ESM.Equation[
             _held()...,
             ESM.Equation(_cse_D("y"), right()), ESM.Equation(_cse_D("x"), left()),
         ]
     )
-    @test diag3.n_cse_slots == 1
-    @test du3[vm3["y"]] === 0.0
-    @test du3[vm3["x"]] === 0.0      # ← NOT 1.0, for the same reason
+    @test rep3.stats.n_cse_slots == 1
+    @test du3[vm3["M.y"]] === 0.0
+    @test du3[vm3["M.x"]] === 0.0      # ← NOT 1.0, for the same reason
 end
 
 # ================================================================
@@ -482,30 +482,30 @@ end
     @testset "a shared expression over a LIVE forcing buffer is cached (ess-qic)" begin
         # Baseline: bound as a FROZEN const array the gather folds to a literal, so
         # `F[1]*k` is a plain parameter product — 1 slot, 3 occurrences.
-        _, _, _, _, _, d_const = ESM._build_evaluator_impl(
+        _, _, _, _, _, d_const = ESM.Internal.build(
             _pg_shared_model();
             const_arrays = Dict("F" => [5.0, 6.0])
         )
-        @test d_const.n_cse_slots == 1
-        @test d_const.n_cse_occurrences == 3
+        @test d_const.stats.n_cse_slots == 1
+        @test d_const.stats.n_cse_occurrences == 3
 
         # The SAME model with `F` bound as a LIVE buffer must share identically.
         # Before ess-qic this reported 0 slots / 0 occurrences.
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, d_live = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, d_live = ESM.Internal.build(
             _pg_shared_model();
             param_arrays = Dict("F" => buf)
         )
-        @test d_live.n_cse_slots == 1
-        @test d_live.n_cse_occurrences == 3
+        @test d_live.stats.n_cse_slots == 1
+        @test d_live.stats.n_cse_occurrences == 3
 
         # Bit-exact against the un-CSE'd evaluation: the cached slot holds exactly
         # the `F[1]*k` an inline walk would have computed, so `===`, not `≈`.
         k, F1 = 2.0, 5.0
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === sin(F1 * k) + cos(F1 * k)
-        @test du[vm["y"]] === F1 * k
+        @test du[vm["M.x"]] === sin(F1 * k) + cos(F1 * k)
+        @test du[vm["M.y"]] === F1 * k
     end
 
     @testset "live-gather keys are distinct per OFFSET and per BUFFER (ess-qic)" begin
@@ -533,24 +533,24 @@ end
         ]
         F = [3.0, 5.0]
         G = [7.0, 11.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
             ESM.Model(vars, eqs);
             param_arrays = Dict("F" => F, "G" => G)
         )
 
         # THREE slots, not one: F[1]*k, F[2]*k, G[1]*k are three distinct values.
-        @test diag.n_cse_slots == 3
-        @test diag.n_cse_occurrences == 7   # 3 + 2 + 2
+        @test rep.stats.n_cse_slots == 3
+        @test rep.stats.n_cse_occurrences == 7   # 3 + 2 + 2
 
         # And — the assertion that actually matters — every equation still computes
         # its OWN gather. A key collision would make two of these four agree.
         k = 2.0
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === sin(3.0 * k) + cos(3.0 * k)
-        @test du[vm["y"]] === sin(5.0 * k) + cos(5.0 * k)
-        @test du[vm["z"]] === sin(7.0 * k) + cos(7.0 * k)
-        @test du[vm["w"]] === 3.0 * k
+        @test du[vm["M.x"]] === sin(3.0 * k) + cos(3.0 * k)
+        @test du[vm["M.y"]] === sin(5.0 * k) + cos(5.0 * k)
+        @test du[vm["M.z"]] === sin(7.0 * k) + cos(7.0 * k)
+        @test du[vm["M.w"]] === 3.0 * k
     end
 
     @testset "a CSE'd live gather still reads the buffer LIVE (ess-qic)" begin
@@ -561,25 +561,25 @@ end
         # in-tree write paths `_write_forcing!`/`materialize!` bump it themselves),
         # and through the `t` key at any new `t`.
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
             _pg_shared_model();
             param_arrays = Dict("F" => buf)
         )
-        @test diag.n_cse_slots >= 1          # the expression IS cached...
+        @test rep.stats.n_cse_slots >= 1          # the expression IS cached...
         k = 2.0
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["y"]] === 5.0 * k
+        @test du[vm["M.y"]] === 5.0 * k
 
         buf[1] = 42.0                        # ...and still tracks the live buffer:
         ESM.notify_forcing_refresh!()        # refresh at the SAME t, epoch-keyed
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
-        @test du[vm["y"]] === 42.0 * k
+        @test du[vm["M.x"]] === sin(42.0 * k) + cos(42.0 * k)
+        @test du[vm["M.y"]] === 42.0 * k
 
         buf[1] = 9.0                         # refresh seen at a NEW t, t-keyed
         f!(du, u0, p, 0.5)
-        @test du[vm["y"]] === 9.0 * k
+        @test du[vm["M.y"]] === 9.0 * k
     end
 
     # ---- discrete-cadence caches ride the same `pgather` channel ----
@@ -633,40 +633,40 @@ end
     @testset "discrete-cadence cache gathers are CSE'd, distinct, and refresh (ess-qic)" begin
         src = [1.0, 1.0]
         dm = ESM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
             _pg_discrete_model();
             const_arrays = Dict("W" => _PG_W), param_arrays = Dict("src" => src),
             materialize_out = dm
         )
-        @test haskey(dm.caches, "g") && haskey(dm.caches, "h")
+        @test haskey(dm.caches, "M.g") && haskey(dm.caches, "M.h")
 
         # TWO slots — `g[1]*k` and `h[1]*k` gather two DIFFERENT cache buffers at the
         # SAME offset, so a name-blind key would collapse them into one.
-        @test diag.n_cse_slots == 2
-        @test diag.n_cse_occurrences == 5   # 3 × g[1]*k + 2 × h[1]*k
+        @test rep.stats.n_cse_slots == 2
+        @test rep.stats.n_cse_occurrences == 5   # 3 × g[1]*k + 2 × h[1]*k
 
         k = 2.0
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        g1, h1 = dm.caches["g"][1], dm.caches["h"][1]
+        g1, h1 = dm.caches["M.g"][1], dm.caches["M.h"][1]
         @test g1 ≈ 1.0 * 1.0 + 4.0 * 1.0      # Σᵢ W[i,1]·src[i]
         @test h1 ≈ 3.0 * g1
-        @test du[vm["x"]] === sin(g1 * k) + cos(g1 * k)
-        @test du[vm["y"]] === g1 * k
-        @test du[vm["z"]] === sin(h1 * k) + cos(h1 * k)
+        @test du[vm["M.x"]] === sin(g1 * k) + cos(g1 * k)
+        @test du[vm["M.y"]] === g1 * k
+        @test du[vm["M.z"]] === sin(h1 * k) + cos(h1 * k)
 
         # A data-refresh event: the raw buffer changes in place and `materialize!`
         # refills the caches. The CSE'd readers must track — the prelude re-gathers
         # the cache on every call.
         src .= [2.0, 3.0]
         dm.materialize!()
-        g1n, h1n = dm.caches["g"][1], dm.caches["h"][1]
+        g1n, h1n = dm.caches["M.g"][1], dm.caches["M.h"][1]
         @test g1n ≈ 1.0 * 2.0 + 4.0 * 3.0
         @test g1n != g1
         f!(du, u0, p, 0.0)
-        @test du[vm["x"]] === sin(g1n * k) + cos(g1n * k)
-        @test du[vm["y"]] === g1n * k
-        @test du[vm["z"]] === sin(h1n * k) + cos(h1n * k)
+        @test du[vm["M.x"]] === sin(g1n * k) + cos(g1n * k)
+        @test du[vm["M.y"]] === g1n * k
+        @test du[vm["M.z"]] === sin(h1n * k) + cos(h1n * k)
     end
 end
 
@@ -722,7 +722,7 @@ _ct_arrhenius() = ESM.Model(
     end
 )
 
-_ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
+_ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
 
 @testset "tree_walk CSE const-cadence tier (4qf)" begin
 
@@ -733,22 +733,22 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # BIT-IDENTICAL to the untiered evaluator.
     # ----------------------------------------------------------------
     @testset "the Arrhenius probe: 5/5 prelude slots are const-cadence" begin
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(_ct_arrhenius())
 
-        @test diag.n_cse_slots == 5              # neg · * · / · exp · *
-        @test diag.n_const_slots == 5
-        @test diag.n_time_slots == 0
-        @test diag.n_dynamic_slots == 0
+        @test rep.stats.n_cse_slots == 5              # neg · * · / · exp · *
+        @test rep.stats.n_const_slots == 5
+        @test rep.stats.n_time_slots == 0
+        @test rep.stats.n_dynamic_slots == 0
         # The three counters partition the FINAL prelude (its CSE slots).
-        @test diag.n_const_slots + diag.n_time_slots + diag.n_dynamic_slots ==
-            diag.n_cse_slots
+        @test rep.stats.n_const_slots + rep.stats.n_time_slots + rep.stats.n_dynamic_slots ==
+            rep.stats.n_cse_slots
 
         # Bit-exact — `===`, not `≈`. Skipping the const refill must not perturb a
         # single bit of the arithmetic the untiered prelude did.
         k = _ct_k(p)
         du = _ct_call(f!, u0, p, 0.0)
-        @test du[vm["x"]] === k * u0[vm["x"]]
-        @test du[vm["y"]] === -k * u0[vm["y"]]
+        @test du[vm["M.x"]] === k * u0[vm["M.x"]]
+        @test du[vm["M.y"]] === -k * u0[vm["M.y"]]
 
         # ...and it stays bit-exact on the SECOND call, the one that actually takes
         # the skip. (A first call fills the const slots; a stale-but-plausible tier
@@ -770,8 +770,8 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # seed, and silently return the wrong gradient. `===` (egal) sees the partials.
     # ----------------------------------------------------------------
     @testset "ForwardDiff over PARAMETERS through a const-tier slot" begin
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
-        @test diag.n_const_slots == 5
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(_ct_arrhenius())
+        @test rep.stats.n_const_slots == 5
 
         syms = keys(p)
         pv = collect(values(p))
@@ -802,10 +802,10 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
 
         # The closed form, for the one the chain rule makes easiest to get wrong:
         # ∂/∂A [k*x + (-k)*y] = exp(-Ea/(R*Tref)) * (x - y).
-        E = exp(-p.Ea / (p.R * p.Tref))
+        E = exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
         @test isapprox(
-            g[findfirst(==(:A), collect(syms))],
-            E * (u0[vm["x"]] - u0[vm["y"]]); rtol = 1.0e-12
+            g[findfirst(==(Symbol("M.A")), collect(syms))],
+            E * (u0[vm["M.x"]] - u0[vm["M.y"]]); rtol = 1.0e-12
         )
     end
 
@@ -816,13 +816,13 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # be read as GARBAGE on the very first Dual call.
     # ----------------------------------------------------------------
     @testset "ForwardDiff over the STATE, through the const tier" begin
-        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        f!, u0, p, _ts, vm, _rep = ESM.Internal.build(_ct_arrhenius())
         u = [1.25, -0.75]
         J = ForwardDiff.jacobian((d, uu) -> f!(d, uu, p, 0.0), zeros(2), u)
 
-        # D(x) = k*x, D(y) = -k*y ⇒ J = diag(k, -k) in var_map order.
+        # D(x) = k*x, D(y) = -k*y ⇒ J = rep(k, -k) in var_map order.
         k = _ct_k(p)
-        ix, iy = vm["x"], vm["y"]
+        ix, iy = vm["M.x"], vm["M.y"]
         @test J[ix, ix] ≈ k
         @test J[iy, iy] ≈ -k
         @test J[ix, iy] == 0.0
@@ -836,18 +836,18 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # refill them. This is the plain-Float64 half of the staleness question.
     # ----------------------------------------------------------------
     @testset "a changed `p` refills the const slots (remake / sweep)" begin
-        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        f!, u0, p, _ts, vm, _rep = ESM.Internal.build(_ct_arrhenius())
 
         du1 = _ct_call(f!, u0, p, 0.0)
-        @test du1[vm["x"]] === _ct_k(p) * u0[vm["x"]]
+        @test du1[vm["M.x"]] === _ct_k(p) * u0[vm["M.x"]]
 
         # A DIFFERENT NamedTuple, same shape — exactly what `remake(prob; p = …)` hands
         # the RHS. Every equation depends on these only through const-tier slots.
-        p2 = merge(p, (; A = 2.0 * p.A, Tref = 350.0))
+        p2 = merge(p, (; var"M.A" = 2.0 * p.var"M.A", var"M.Tref" = 350.0))
         du2 = _ct_call(f!, u0, p2, 0.0)
-        @test du2[vm["x"]] === _ct_k(p2) * u0[vm["x"]]
-        @test du2[vm["y"]] === -_ct_k(p2) * u0[vm["y"]]
-        @test du2[vm["x"]] != du1[vm["x"]]
+        @test du2[vm["M.x"]] === _ct_k(p2) * u0[vm["M.x"]]
+        @test du2[vm["M.y"]] === -_ct_k(p2) * u0[vm["M.y"]]
+        @test du2[vm["M.x"]] != du1[vm["M.x"]]
 
         # ...and back again. A stamp that only ever moved forward would fail here.
         du3 = _ct_call(f!, u0, p, 0.0)
@@ -871,7 +871,7 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # identity compare could not see) refills.
     # ----------------------------------------------------------------
     @testset "a vector `p` is stamped by content, in-place changes included" begin
-        f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+        f!, u0, p, _ts, vm, _rep = ESM.Internal.build(_ct_arrhenius())
         pm = ESM.param_map(p)
         pv = zeros(length(pm))
         for (k, i) in pm
@@ -879,10 +879,10 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         end
         du1 = _ct_call(f!, u0, pv, 0.0)
         @test du1 == _ct_call(f!, u0, p, 0.0)
-        pv[pm["A"]] *= 2.0                       # same object, new value
+        pv[pm["M.A"]] *= 2.0                       # same object, new value
         du2 = _ct_call(f!, u0, pv, 0.0)
-        @test du2[vm["x"]] === _ct_k(merge(p, (; A = 2.0 * p.A))) * u0[vm["x"]]
-        pv[pm["A"]] /= 2.0
+        @test du2[vm["M.x"]] === _ct_k(merge(p, (; var"M.A" = 2.0 * p.var"M.A"))) * u0[vm["M.x"]]
+        pv[pm["M.A"]] /= 2.0
         @test _ct_call(f!, u0, pv, 0.0) == du1
         if VERSION >= v"1.12"
             du = similar(u0)
@@ -929,7 +929,7 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # ----------------------------------------------------------------
     @testset "alternating Float64 and Dual calls, both orders" begin
         for float_first in (true, false)
-            f!, u0, p, _ts, vm, _diag = ESM._build_evaluator_impl(_ct_arrhenius())
+            f!, u0, p, _ts, vm, _rep = ESM.Internal.build(_ct_arrhenius())
             k = _ct_k(p)
             pd = _ct_dualp(p)
             D1 = ForwardDiff.Dual{Nothing, Float64, 1}
@@ -939,17 +939,17 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
 
             for _ in 1:3
                 duf = _ct_call(f!, u0, p, 0.0)
-                @test duf[vm["x"]] === k * u0[vm["x"]]
-                @test duf[vm["y"]] === -k * u0[vm["y"]]
+                @test duf[vm["M.x"]] === k * u0[vm["M.x"]]
+                @test duf[vm["M.y"]] === -k * u0[vm["M.y"]]
 
                 dud = _ct_call(f!, u0, pd, 0.0, D1)
                 # Primal AND partials — a garbage/stale const slot in the Dual buffer
                 # shows up in one or the other.
-                @test ForwardDiff.value(dud[vm["x"]]) ≈ ForwardDiff.value(kd * u0[vm["x"]])
-                @test ForwardDiff.partials(dud[vm["x"]], 1) ≈
-                    ForwardDiff.partials(kd * u0[vm["x"]], 1)
-                @test ForwardDiff.partials(dud[vm["y"]], 1) ≈
-                    ForwardDiff.partials(-kd * u0[vm["y"]], 1)
+                @test ForwardDiff.value(dud[vm["M.x"]]) ≈ ForwardDiff.value(kd * u0[vm["M.x"]])
+                @test ForwardDiff.partials(dud[vm["M.x"]], 1) ≈
+                    ForwardDiff.partials(kd * u0[vm["M.x"]], 1)
+                @test ForwardDiff.partials(dud[vm["M.y"]], 1) ≈
+                    ForwardDiff.partials(-kd * u0[vm["M.y"]], 1)
                 @test all(isfinite ∘ ForwardDiff.value, dud)
                 @test any(!iszero, ForwardDiff.partials.(dud, 1))
             end
@@ -989,21 +989,21 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
             ),
         ]
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
             ESM.Model(vars, eqs);
             param_arrays = Dict("F" => buf)
         )
 
         # 3 slots: `k*m` and `exp(k*m)` are const; `F[1]*k` reads the live buffer.
-        @test diag.n_cse_slots == 3
-        @test diag.n_const_slots == 2
-        @test diag.n_time_slots == 1
-        @test diag.n_dynamic_slots == 0
+        @test rep.stats.n_cse_slots == 3
+        @test rep.stats.n_const_slots == 2
+        @test rep.stats.n_time_slots == 1
+        @test rep.stats.n_dynamic_slots == 0
 
         k, m = 2.0, 3.0
         du = _ct_call(f!, u0, p, 0.0)
-        @test du[vm["y"]] === 5.0 * k
-        @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)
+        @test du[vm["M.y"]] === 5.0 * k
+        @test du[vm["M.z"]] === exp(k * m) + 2.0 * exp(k * m)
 
         # THE ASSERTION, half A. Refresh the buffer in place and notify (the two
         # in-tree refresh surfaces — `_write_forcing!` and `materialize!` — bump the
@@ -1014,15 +1014,15 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         buf[1] = 42.0
         ESM.notify_forcing_refresh!()
         du = _ct_call(f!, u0, p, 0.0)
-        @test du[vm["x"]] === sin(42.0 * k) + cos(42.0 * k)
-        @test du[vm["y"]] === 42.0 * k
-        @test du[vm["z"]] === exp(k * m) + 2.0 * exp(k * m)   # the const chain holds
+        @test du[vm["M.x"]] === sin(42.0 * k) + cos(42.0 * k)
+        @test du[vm["M.y"]] === 42.0 * k
+        @test du[vm["M.z"]] === exp(k * m) + 2.0 * exp(k * m)   # the const chain holds
 
         # Half B: a refresh is also seen WITHOUT a notify at any `t` the memo has
         # not stamped — the stamp is keyed on `t`, so moving `t` refills.
         buf[1] = 7.0
         du = _ct_call(f!, u0, p, 0.25)
-        @test du[vm["y"]] === 7.0 * k
+        @test du[vm["M.y"]] === 7.0 * k
     end
 
     # ----------------------------------------------------------------
@@ -1049,26 +1049,26 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         )
         bufA = [5.0 6.0; 7.0 8.0]
         bufB = [1.0, 2.0]
-        fA, uA, pA, _, vmA, dA = ESM._build_evaluator_impl(
+        fA, uA, pA, _, vmA, dA = ESM.Internal.build(
             mk(_i(1), _i(1));
             param_arrays = Dict("F" => bufA)
         )
-        fB, uB, pB, _, vmB, dB = ESM._build_evaluator_impl(
+        fB, uB, pB, _, vmB, dB = ESM.Internal.build(
             mk(_i(1));
             param_arrays = Dict("F" => bufB)
         )
-        @test dA.n_time_slots >= 1
+        @test dA.stats.n_time_slots >= 1
         eA = getfield(fA, :cse_cache).epoch
         eB = getfield(fB, :cse_cache).epoch
         @test eA !== eB
-        @test _ct_call(fA, uA, pA, 0.5)[vmA["y"]] === 5.0 * 2.0 + 5.0 * 2.0
+        @test _ct_call(fA, uA, pA, 0.5)[vmA["M.y"]] === 5.0 * 2.0 + 5.0 * 2.0
         _ct_call(fB, uB, pB, 0.5)
         a0, b0 = eA[], eB[]
         ESM._write_forcing!(bufA, "F", Dict("F" => [40.0 6.0; 7.0 8.0]))
         @test eA[] == a0 + 1
         @test eB[] == b0
-        @test _ct_call(fA, uA, pA, 0.5)[vmA["y"]] === 40.0 * 2.0 + 40.0 * 2.0
-        @test _ct_call(fB, uB, pB, 0.5)[vmB["y"]] === 1.0 * 2.0 + 1.0 * 2.0
+        @test _ct_call(fA, uA, pA, 0.5)[vmA["M.y"]] === 40.0 * 2.0 + 40.0 * 2.0
+        @test _ct_call(fB, uB, pB, 0.5)[vmB["M.y"]] === 1.0 * 2.0 + 1.0 * 2.0
         ESM.notify_forcing_refresh!(bufB)
         @test eB[] == b0 + 1 && eA[] == a0 + 1
     end
@@ -1093,15 +1093,15 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
             ESM.Equation(_cse_D("a"), _cse_op("+", Q(), _cse_op("cos", Q()))),
             ESM.Equation(_cse_D("b"), _cse_op("*", _cse_n(2.0), Q())),
         ]
-        f!, u0, p, _ts, vm, diag = ESM._build_evaluator_impl(ESM.Model(vars, eqs))
+        f!, u0, p, _ts, vm, rep = ESM.Internal.build(ESM.Model(vars, eqs))
 
         # The classification itself: BOTH slots dynamic. The naive scan says 1 const.
-        @test diag.n_cse_slots == 2
-        @test diag.n_const_slots == 0
-        @test diag.n_dynamic_slots == 2
+        @test rep.stats.n_cse_slots == 2
+        @test rep.stats.n_const_slots == 0
+        @test rep.stats.n_dynamic_slots == 2
 
         # And the values, which is what the misclassification would actually corrupt.
-        ia, ib = vm["a"], vm["b"]
+        ia, ib = vm["M.a"], vm["M.b"]
         for u in ([0.3, 0.5], [1.1, -0.4], [-2.0, 0.25])
             uu = zeros(2); uu[ia] = u[1]; uu[ib] = u[2]
             s = uu[ia] + uu[ib]
@@ -1118,8 +1118,8 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # integrator makes. Reading it back and comparing with `===` must not box.
     # ----------------------------------------------------------------
     @testset "zero-allocation `f!` on repeated same-`p` calls" begin
-        f!, u0, p, _ts, _vm, diag = ESM._build_evaluator_impl(_ct_arrhenius())
-        @test diag.n_const_slots == 5
+        f!, u0, p, _ts, _vm, rep = ESM.Internal.build(_ct_arrhenius())
+        @test rep.stats.n_const_slots == 5
         du = similar(u0)
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0
     end
@@ -1133,8 +1133,8 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
     # makes it usable as an oracle here.)
     # ----------------------------------------------------------------
     @testset "`form=:inplace` (tiered) agrees bit-for-bit with the interpreter" begin
-        fi, u0, p, _ts, _vm, di = ESM._build_evaluator_impl(_ct_arrhenius(); form = :inplace)
-        fu, _u0, _p, _ts2, _vm2, dun = ESM._build_evaluator_impl(
+        fi, u0, p, _ts, _vm, di = ESM.Internal.build(_ct_arrhenius(); form = :inplace)
+        fu, _u0, _p, _ts2, _vm2, dun = ESM.Internal.build(
             _ct_arrhenius();
             form = :inplace, compiler = :interpreter
         )
@@ -1142,12 +1142,12 @@ _ct_k(p) = p.A * exp(-p.Ea / (p.R * p.Tref))
         # The classification is a property of the PRELUDE; the compiler only
         # changes which tier each slot is ROUTED to, and the interpreter routes
         # them all to dynamic.
-        @test di.n_const_slots == 5 && di.n_dynamic_slots == 0
-        @test dun.n_const_slots == 0 && dun.n_time_slots == 0
-        @test dun.n_dynamic_slots == 5
-        @test di.n_cse_slots == dun.n_cse_slots
+        @test di.stats.n_const_slots == 5 && di.stats.n_dynamic_slots == 0
+        @test dun.stats.n_const_slots == 0 && dun.stats.n_time_slots == 0
+        @test dun.stats.n_dynamic_slots == 5
+        @test di.stats.n_cse_slots == dun.stats.n_cse_slots
 
-        p2 = merge(p, (; A = 7.0 * p.A, R = 8.0))
+        p2 = merge(p, (; var"M.A" = 7.0 * p.var"M.A", var"M.R" = 8.0))
         for (u, pp) in ((u0, p), (u0, p2), ([0.4, -1.3], p), (u0, p), ([2.0, 2.0], p2))
             @test _ct_call(fi, u, pp, 0.0) == _ct_call(fu, u, pp, 0.0)
         end

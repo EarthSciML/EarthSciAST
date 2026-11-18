@@ -114,26 +114,22 @@ end
         doc = _hrs_doc(nx, ny)
         ics = Dict{String, Any}()
         for i in 1:nx, j in 1:ny
-            ics["u[$i,$j]"] = 1.0 + 0.3 * sin(i + 2.0 * j)
-            ics["v[$i,$j]"] = 0.0
+            ics["M.u[$i,$j]"] = 1.0 + 0.3 * sin(i + 2.0 * j)
+            ics["M.v[$i,$j]"] = 0.0
         end
         dus = map((:native, :interpreter)) do c
-            f!, u0, p, _t, vm = HRS._build_evaluator(
+            f!, u0, p, _t, vm = HRS.Internal.build(
                 doc; initial_conditions = ics,
                 compiler = c
             )
             du = fill(NaN, length(u0))
             f!(du, u0, p, 0.0)
-            [du[vm["$s[$i,$j]"]] for s in ("u", "v") for i in 1:nx for j in 1:ny]
+            [du[vm["M.$s[$i,$j]"]] for s in ("u", "v") for i in 1:nx for j in 1:ny]
         end
         @test reinterpret(UInt64, dus[1]) == reinterpret(UInt64, dus[2])
         @test !any(isnan, dus[1]) && any(!iszero, dus[1])
-        insp = BuildInspection()
-        HRS._build_evaluator(
-            doc; initial_conditions = ics, compiler = :native,
-            inspect = insp
-        )
-        @test any(r -> occursin("hoisted region term", r.rule), insp.compiler_report.rules)
+        rep = HRS.Internal.build(doc; initial_conditions = ics, compiler = :native).report
+        @test any(r -> occursin("hoisted region term", r.rule), rep.compiler_report.rules)
     end
 
     # The lift on the typed model: which operands qualify, and the sharing.

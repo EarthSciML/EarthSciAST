@@ -314,17 +314,14 @@ end
 # admitted leaf SET is identical either way.
 # =========================================================================== #
 
-# Instrumentation: number of leaf bindings an OVERLAP-GATED enumerator VISITED
-# (a tuple its callback was invoked on / a product tuple its unroll entered).
-# Reset by callers/tests; proves that an overlap-gated walk — the value-invention
-# producer and the dense aggregate expansion alike — visits
-# O(|candidates|·∏ungated) tuples, NOT the full O(∏ranges) product
-# (projection-pushdown Wall #1).
-#
-# Counted ONLY when an overlap gate is present, so every ungated / bin-equality
-# expansion (the overwhelming majority, and the engine's hottest loop) keeps its
-# exact current instruction stream.
-const _VI_ENUM_VISITS = Ref{Int}(0)
+# Engagement count `:vi_enum_visits` (`_count!`, compiler.jl): the leaf
+# bindings an OVERLAP-GATED enumerator visited (a tuple its callback was invoked
+# on / a product tuple its unroll entered). It shows that an overlap-gated walk
+# — the value-invention producer and the dense aggregate expansion alike —
+# visits O(|candidates|·∏ungated) tuples, not the full O(∏ranges) product.
+# Counted only when an overlap gate is present, so every ungated or
+# bin-equality expansion (the engine's hottest loop) keeps its instruction
+# stream.
 
 const _NO_PARTNERS = Int[]
 

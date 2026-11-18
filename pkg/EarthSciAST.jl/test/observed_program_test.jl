@@ -430,7 +430,7 @@ end
     route(name, ext) = _OP._with_compiler_plan(_OP._compiler_plan(:native)) do
         _OP._counting_program_reads() do
             _OP._authored_via_programs(
-                ctx, pn.inspection, name, _OP._row_major_cells(ext),
+                ctx, pn.build.products, name, _OP._row_major_cells(ext),
                 pn.u0, 0.0, pn.p, "M", sa, ss
             )
         end

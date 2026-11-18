@@ -527,15 +527,13 @@ end
 # differential oracle for the driven sweeps.
 _geom_overlap_drive_disabled() = !_compiler_plan_now().geom_overlap_gate
 
-# ENGAGEMENT DIAGNOSTICS. DRIVE counts sweeps whose enumeration was driven from
-# the candidate set (the O(#candidates) path); GATE_ONLY those where a gate
-# resolved but `_overlap_drive_plan` declined to drive it, so the sweep stayed
-# dense with a per-tuple membership test; NONE those with no usable overlap
-# clause. Purely observational — reset (`[] = 0`) around a build to attribute
-# counts to one run. A silently-declining drive shows up as DRIVE=0.
-const _GEOM_OVERLAP_DRIVE = Ref{Int}(0)
-const _GEOM_OVERLAP_GATE_ONLY = Ref{Int}(0)
-const _GEOM_OVERLAP_NONE = Ref{Int}(0)
+# Engagement counts (`_count!`, compiler.jl): `:geom_overlap_drive` for a sweep
+# whose enumeration was driven from the candidate set (the O(#candidates) path);
+# `:geom_overlap_gate_only` for one where a gate resolved but
+# `_overlap_drive_plan` declined to drive it, so the sweep stayed dense with a
+# per-tuple membership test; `:geom_overlap_none` for one with no usable
+# overlap clause. A silently-declining drive shows up as no
+# `:geom_overlap_drive`.
 
 # A resolved setup-time OVERLAP gate: the shared `_JoinGate` (so it can be
 # handed straight to `_overlap_drive_plan`) plus the frame slots its two range
@@ -728,7 +726,7 @@ end
 # driver: off (`compiler = :interpreter`), the sweep is the dense one, which is
 # the oracle. A gate whose key column is shorter than its range, or whose keys
 # are of a kind the index declines, keeps the dense sweep.
-const _GEOM_EQ_DRIVE = Ref{Int}(0)
+# Counted as `:geom_eq_drive` when the key drives the sweep.
 
 function _geo_equality_drive(
         gates, out::Vector{String}, contract::Vector{String},
@@ -947,11 +945,11 @@ function _materialize_geom_array(
         )
     ovdense = drive === nothing ? ov : nothing     # gate per tuple only if not driven
     if ov === nothing
-        _GEOM_OVERLAP_NONE[] += 1
+        _count!(:geom_overlap_none)
     elseif drive === nothing
-        _GEOM_OVERLAP_GATE_ONLY[] += 1
+        _count!(:geom_overlap_gate_only)
     else
-        _GEOM_OVERLAP_DRIVE[] += 1
+        _count!(:geom_overlap_drive)
     end
     # With no overlap gate, a bin-equality (`on`) gate drives instead, through
     # the same two sweep shapes (see `_geo_equality_drive`). `dov` is the gate
@@ -964,13 +962,13 @@ function _materialize_geom_array(
         )
         if eq !== nothing
             dov, drive = eq
-            _GEOM_EQ_DRIVE[] += 1
+            _count!(:geom_eq_drive)
         end
     end
     # A candidate-driven MAP writes only the cells its pairs reach.
     arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
     # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
-    # A candidate-driven sweep is counted by `_GEOM_OVERLAP_DRIVE`; the overlap
+    # A candidate-driven sweep is counted as `:geom_overlap_drive`; the overlap
     # gate is what returns an overlap-gated array to the ungated dense path.
     if isempty(contract)
         if drive !== nothing
@@ -1116,13 +1114,10 @@ end
 # comparison is between the two compilers on the same document.
 _setup_map_compile_once_disabled() = !_setup_compile_once_enabled()
 
-# ENGAGEMENT DIAGNOSTICS. HITS counts MAPs materialized by a compiled path (the
-# fill of setup_fill.jl or the compile-once sweep), MISS those that fell back to
-# the per-cell loop (a decline, or an
-# eval-time error). Purely observational — reset (`[] = 0`) around a build to
-# attribute counts to one run.
-const _SETUP_MAP_FASTPATH_HITS = Ref{Int}(0)
-const _SETUP_MAP_FASTPATH_MISS = Ref{Int}(0)
+# Engagement counts (`_count!`, compiler.jl): `:setup_map_fastpath_hit` for a
+# MAP a compiled path materialized (the fill of setup_fill.jl or the
+# compile-once sweep), `:setup_map_fastpath_miss` for one that fell back to the
+# per-cell loop (a decline, or an eval-time error).
 
 # The ops on which `_eval_const_int` (integer) and `_eval_node` (Float64 +
 # `round(Int, …)`) can disagree for integer operands. Only `/` qualifies:
@@ -1197,7 +1192,7 @@ function _materialize_setup_general_map(
         rhs, exts; const_arrays = ca, params = params
     )
     if filled !== nothing
-        _SETUP_MAP_FASTPATH_HITS[] += 1
+        _count!(:setup_map_fastpath_hit)
         _record_rule!(_current_rule_label(), :setup_array, :setup_codegen)
         return filled
     end
@@ -1228,12 +1223,12 @@ function _materialize_setup_general_map(
             nothing
         end
         if fast !== nothing
-            _SETUP_MAP_FASTPATH_HITS[] += 1
+            _count!(:setup_map_fastpath_hit)
             _record_rule!(_current_rule_label(), :setup_array, :setup_compiled)
             return fast
         end
     end
-    _SETUP_MAP_FASTPATH_MISS[] += 1
+    _count!(:setup_map_fastpath_miss)
     # A map no form can evaluate is the document's error, not a compiler's
     # refusal, so a strict compiler's probe runs the per-cell reference at one
     # cell, for its diagnostic only, before the refusal is raised: the cell the

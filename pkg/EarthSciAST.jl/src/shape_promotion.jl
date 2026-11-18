@@ -373,7 +373,7 @@ authored as states (Rothermel R, midflame U, EMC, …) the same as expression-de
 observeds. Returns a new system; the input is untouched.
 
 A name carrying BOTH forms stays a state here and keeps both of its equations,
-but no run reaches that state: `build_evaluator` refuses such a document at its
+but no run reaches that state: `_build_evaluator` refuses such a document at its
 entry with `equation_count_mismatch`, because esm-spec §4.9.4 counts an equation
 whichever form its LHS takes and the system is therefore unbalanced — which is
 what `validate` reports for the same file.

@@ -7,26 +7,12 @@
 # ========================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BUILD-TIME BENCHMARK COUNTERS (RFC out-of-line-expression-templates §12).
-#
-# The RFC's headline metric is "node-lowerings" — distinct objects `_compile`
-# lowers — and "spine templates" — `_build_branch_template` calls. These
-# `Ref`s let a benchmark script (`scripts/bench-out-of-line.jl`) and the tests
-# that assert build work does not grow with the grid count them without a
-# bespoke instrument. OFF by default: `_BENCH_ON[]` is a single Ref
-# read per call on the COLD build path (never per RHS evaluation), so the effect
-# on a normal build is negligible and on a normal solve is zero. A benchmark
-# sets `_BENCH_ON[] = true`, zeroes the counters, builds, and reads them back.
-const _BENCH_ON = Ref(false)
-const _BENCH_COMPILE_CALLS = Ref(0)
-const _BENCH_BRANCH_TEMPLATES = Ref(0)
-# Compile-once tier (RFC §7.7 "compile references natively"): distinct template-
-# body variants compiled — one per (use site, region class). The RFC's ~21.
-const _BENCH_BODY_VARIANTS = Ref(0)
-_bench_reset!() = (
-    _BENCH_COMPILE_CALLS[] = 0; _BENCH_BRANCH_TEMPLATES[] = 0;
-    _BENCH_BODY_VARIANTS[] = 0; nothing
-)
+# Build-work counts (RFC out-of-line-expression-templates §12), through the
+# engagement sink (`_count!`, compiler.jl): `:compile_calls` for each object
+# `_compile` lowers, `:branch_templates` for each `_build_branch_template`
+# call, and `:body_variants` for each compile-once template-body variant (one
+# per use site and region class). A benchmark or a test that asserts build work
+# does not grow with the grid reads them from `Internal.build`'s report.
 
 # Lockstep site translation (compile-once template tier): a SHAPE-PRESERVING
 # equation rewrite — join-gate or index-set-range resolution rebuilds a node's

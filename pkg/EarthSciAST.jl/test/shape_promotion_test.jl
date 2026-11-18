@@ -56,9 +56,8 @@ end
     end
 
     @testset "equations rewritten to faqs; evaluates per-cell" begin
-        doc = E.flattened_to_esm(prom)
-        f!, u0, p, _t, vmap = E._build_evaluator(
-            doc;
+        f!, u0, p, _t, vmap = E.Internal.build(
+            prom;
             const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
@@ -87,7 +86,7 @@ end
         f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
         p2 = E.promote_downstream_shapes(f2)
         @test all(v -> v.shape === nothing || isempty(v.shape), values(p2.observed_variables))
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(p2); initial_conditions = Dict("M.z" => 0.0))
+        f!, u0, p, _t, vmap = E.Internal.build(p2; initial_conditions = Dict("M.z" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0           # y = x*3 = 6, unchanged
     end
@@ -117,21 +116,21 @@ end
         @test !haskey(norm.state_variables, "M.a")
         @test haskey(norm.state_variables, "M.z")        # ODE state preserved
         # runs: a = x*2 = 6, D(z) = a = 6
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(norm); initial_conditions = Dict("M.z" => 0.0))
+        f!, u0, p, _t, vmap = E.Internal.build(norm; initial_conditions = Dict("M.z" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0
     end
 end
 
-@testset "build_evaluator folds elementwise array observeds (WS4)" begin
+@testset "the build folds elementwise array observeds" begin
     # A spatial state psi[c] fed by a chain of ELEMENTWISE array observeds
     # (a = psi + 1, b = a * 2, both shape [c]) with D(psi,t) = -b. This is the
     # readable PDE-leaf decomposition the level-set uses (`grad_safe`, `U_n`,
-    # `S_n`, …). Without `_fold_elementwise_array_observeds`, build_evaluator
+    # `S_n`, …). Without `_fold_elementwise_array_observeds`, the build
     # rejects a, b as E_TREEWALK_UNSUPPORTED_SHAPE; the fold inlines them so the
     # state RHS carries `-((psi+1)*2)` and evaluates per cell.
     d = Dict{String, Any}(
-        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "P"),
         "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -151,15 +150,15 @@ end
             )
         )
     )
-    f!, u0, p, _t, vmap = E._build_evaluator(
+    f!, u0, p, _t, vmap = E.Internal.build(
         d;
-        initial_conditions = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
+        initial_conditions = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
     )
     # The elementwise array observeds are gone from the ODE partition (folded).
-    @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
+    @test !any(k -> occursin(r"^M\.[ab]\[", k), keys(vmap))
     du = similar(u0); f!(du, u0, p, 0.0)
     for (i, expect) in zip(1:3, (-4.0, -6.0, -8.0))   # -b = -((psi+1)*2)
-        @test du[vmap["psi[$i]"]] ≈ expect
+        @test du[vmap["M.psi[$i]"]] ≈ expect
     end
 end
 

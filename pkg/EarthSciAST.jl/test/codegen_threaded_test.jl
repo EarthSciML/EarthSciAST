@@ -62,7 +62,7 @@ function _cgt_1d_model(N)
     return ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
 _cgt_1d_ics(N) = Dict(
-    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+    "M.$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         for (j, x) in enumerate(("u", "v")), k in 1:N
 )
 
@@ -90,7 +90,7 @@ function _cgt_2d_model(N)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_2d_ics(N) = Dict(
-    "u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
+    "M.u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
         for i in 1:N, j in 1:N
 )
 
@@ -118,7 +118,7 @@ function _cgt_3d_model(Ni, Nj, Nk)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_3d_ics(Ni, Nj, Nk) = Dict(
-    "u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
+    "M.u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
         for i in 1:Ni, j in 1:Nj, k in 1:Nk
 )
 
@@ -147,18 +147,17 @@ function _cgt_4d_model(Ni, Nj, Nk, Nl)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 _cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict(
-    "u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
+    "M.u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
         for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl
 )
 
 function _cgt_build(model, ics; compiler::Symbol = :native, env...)
     return withenv((String(k) => v for (k, v) in pairs(env))...) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, compiler = compiler
         )
-        (f!, u0, p, copy(ESM._CASCADE_TALLY))
+        (f!, u0, p, rep.counts)
     end
 end
 
@@ -373,9 +372,9 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         end
 
         @testset "dual numbers thread: threaded ≡ serial, partials included" begin
-            if Base.find_package("ForwardDiff") === nothing
-                @info "ForwardDiff not in the active environment; skipping"
-            else
+            # ForwardDiff is a test dependency: missing, this fails.
+            @test Base.find_package("ForwardDiff") !== nothing
+            if Base.find_package("ForwardDiff") !== nothing
                 @eval using ForwardDiff
                 fA, uA, pA, _ = _cgt_build(model, ics)
                 fS, _, pS, _ = _cgt_serial(model, ics)
@@ -405,7 +404,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                     ),
                 ]
             )
-            ic = Dict("u[$k]" => 1.0 + k for k in 1:Ns)
+            ic = Dict("M.u[$k]" => 1.0 + k for k in 1:Ns)
             fE, uE, pE, _ = _cgt_build(m, ic)
             du = similar(uE)
             fE(du, uE, pE, 0.0)

@@ -3,7 +3,7 @@
 # buffer is cut out of the per-step RHS into a cache buffer filled once per refresh,
 # gathered live by the hot RHS — instead of inlined + recomputed every step (which,
 # for a deep regrid->physics chain, collapses into an un-lowerable RHS). Opt-in via
-# the `materialize_out` sink; without it, the pre-cut inline path is byte-identical.
+# the `materialize_out` sink; without it, the field stays inlined.
 #
 # This is solver-free (builds the RHS, evaluates it directly): the fill/cache
 # semantics and the classification are the contract, not the integration.
@@ -20,68 +20,68 @@ _dm_k(offset) = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
 
 @testset "discrete-cadence materialization (DiscreteMaterializer)" begin
     file = _DM_ESS.load_path(_dm_fixture())
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
 
     @testset "cut matches the inline baseline; only the param-tainted var is cached" begin
         # Inline baseline (no sink): g and k are both inlined into the state RHS.
         srcA = [1.0, 1.0]
-        f0!, u00, p0, _, vm0 = _DM_ESS._build_evaluator(
+        f0!, u00, p0, _, vm0 = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcA)
         )
         du0 = zero(u00); f0!(du0, u00, p0, 0.0)
-        base = [du0[vm0["c[$j]"]] for j in 1:3]
+        base = [du0[vm0["M.c[$j]"]] for j in 1:3]
         @test base ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)   # offset default = 1.0
 
         # Cut (sink): g becomes a discrete cache; k (const-fed) stays inline.
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
             materialize_out = dm
         )
-        @test haskey(dm.caches, "g")             # param-tainted, state-free -> cached
-        @test !haskey(dm.caches, "k")            # const-fed -> NOT cached (regression guard)
-        @test dm.caches["g"] == _dm_g([1.0, 1.0])
+        @test haskey(dm.caches, "M.g")             # param-tainted, state-free -> cached
+        @test !haskey(dm.caches, "M.k")            # const-fed -> NOT cached (regression guard)
+        @test dm.caches["M.g"] == _dm_g([1.0, 1.0])
         du = zero(u0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] == base   # cut is numerically identical
+        @test [du[vm["M.c[$j]"]] for j in 1:3] == base   # cut is numerically identical
     end
 
     @testset "the cache is discrete: stale until materialize!, then tracks" begin
         srcB = [1.0, 1.0]
         dm = _DM_ESS.DiscreteMaterializer()
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => srcB),
             materialize_out = dm
         )
         du = zero(u0); f!(du, u0, p, 0.0)
-        initial = [du[vm["c[$j]"]] for j in 1:3]
+        initial = [du[vm["M.c[$j]"]] for j in 1:3]
 
         # Refresh the raw buffer in place but DON'T re-materialize: the RHS reads the
         # cache, so it must be STALE — it did NOT recompute g from the new src.
         srcB .= [2.0, 3.0]
         fill!(du, 0.0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] == initial
+        @test [du[vm["M.c[$j]"]] for j in 1:3] == initial
 
         # Re-materialize (what the refresh callback's post_refresh hook does): the
         # cache updates and the RHS tracks.
         dm.materialize!()
-        @test dm.caches["g"] == _dm_g([2.0, 3.0])
+        @test dm.caches["M.g"] == _dm_g([2.0, 3.0])
         fill!(du, 0.0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
+        @test [du[vm["M.c[$j]"]] for j in 1:3] ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
     end
 
     @testset "no sink ⇒ no discrete cut (opt-in), build still succeeds" begin
-        # Without the sink the param-tainted g stays inlined — the pre-cut path.
+        # Without the sink the param-tainted g stays inlined.
         src = [1.0, 1.0]
-        f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+        f!, u0, p, _, vm = _DM_ESS.Internal.build(
             file; initial_conditions = ics,
             const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src)
         )
         du = zero(u0); f!(du, u0, p, 0.0)
-        @test [du[vm["c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
+        @test [du[vm["M.c[$j]"]] for j in 1:3] ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
     end
 end
 
@@ -332,16 +332,16 @@ _dmn_doc(N) = Dict{String, Any}(
 )
 
 function _dmn_build(N, compiler)
-    dm = _DM_ESS.DiscreteMaterializer(); insp = _DM_ESS.BuildInspection()
+    dm = _DM_ESS.DiscreteMaterializer()
     W = [sin(0.1 * i * j) for i in 1:2, j in 1:N]
-    ics = Dict{String, Float64}("c[$j]" => 0.0 for j in 1:N)
-    _DM_ESS._build_evaluator(
+    ics = Dict{String, Float64}("M.c[$j]" => 0.0 for j in 1:N)
+    b = _DM_ESS.Internal.build(
         _dmn_doc(N); initial_conditions = ics,
         const_arrays = Dict("W" => W),
-        param_arrays = Dict("src" => [0.7, -1.3], "F" => [cos(0.2j) for j in 1:N]),
-        materialize_out = dm, inspect = insp, compiler = compiler
+        param_arrays = Dict("M.src" => [0.7, -1.3], "M.F" => [cos(0.2j) for j in 1:N]),
+        materialize_out = dm, compiler = compiler
     )
-    return dm, insp.compiler_report
+    return dm, b.report.compiler_report
 end
 
 # Every RuntimeGeneratedFunction type reachable from `root` (the walk
@@ -383,7 +383,7 @@ end
 
 @testset "the compiled discrete fill is shared across N" begin
     (dmA, repA), (dmB, repB) = _dmn_build(16, :native), _dmn_build(160, :native)
-    tier(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "g"]
+    tier(rep) = [(r.kind, r.tier) for r in rep.rules if r.rule == "M.g"]
     @test tier(repA) == tier(repB)
     @test only(tier(repA))[1] === :observed
     @test only(tier(repA))[2] in (:affine, :codegen, :array_contraction_codegen)
@@ -392,7 +392,7 @@ end
     @test tA == tB
     for (N, dm) in ((16, dmA), (160, dmB))
         dmi, repi = _dmn_build(N, :interpreter)
-        @test all(dm.caches["g"] .=== dmi.caches["g"])
+        @test all(dm.caches["M.g"] .=== dmi.caches["M.g"])
         @test tier(repi) == [(:observed, :discrete_percell)]
     end
 end
@@ -416,27 +416,27 @@ end
 _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
 
 @testset "a discrete fill that reads a parameter follows the call's p" begin
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
     src = [1.0, 2.0]
     for compiler in (:native, :interpreter)
         @testset "$compiler" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            f!, u0, p, _, vm = _DM_ESS.Internal.build(
                 _dmp_file(); compiler = compiler,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
                 param_arrays = Dict("src" => src), materialize_out = dm
             )
-            @test haskey(dm.caches, "g")
+            @test haskey(dm.caches, "M.g")
             key = only(k for k in keys(p) if endswith(String(k), "offset"))
-            rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            rhs(q) = (du = zero(u0); f!(du, u0, q, 0.0); [du[vm["M.c[$j]"]] for j in 1:3])
             @test rhs(p) ≈ _dmp_expected(src, 1.0)
             p2 = merge(p, NamedTuple{(key,)}((2.0,)))
             @test rhs(p2) ≈ _dmp_expected(src, 2.0)
-            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            @test dm.caches["M.g"] ≈ _dm_g(src) .* 2.0
             # A refresh with no `p` refills with the one the caches hold.
             src .= [3.0, 5.0]
             dm.materialize!()
-            @test dm.caches["g"] ≈ _dm_g(src) .* 2.0
+            @test dm.caches["M.g"] ≈ _dm_g(src) .* 2.0
             @test rhs(p) ≈ _dmp_expected(src, 1.0)          # and back again
             src .= [1.0, 2.0]
             dm.materialize!()
@@ -463,7 +463,7 @@ _dmp_expected(src, offset) = _dm_g(src) .* offset .+ _dm_k(offset)
     if VERSION >= v"1.12"
         @testset "a same-p call does not allocate" begin
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, _ = _DM_ESS._build_evaluator(
+            f!, u0, p, _, _ = _DM_ESS.Internal.build(
                 _dmp_file(); compiler = :native,
                 initial_conditions = ics, const_arrays = Dict("W" => _DM_W),
                 param_arrays = Dict("src" => copy(src)), materialize_out = dm
@@ -485,39 +485,39 @@ end
 # beside raw reads of the new one.
 using ForwardDiff
 @testset "an announced direct write reaches the discrete caches" begin
-    ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+    ics = Dict{String, Float64}("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0)
     for compiler in (:native, :interpreter)
-        @testset "$compiler, build_evaluator" begin
+        @testset "$compiler, Internal.build" begin
             src = [1.0, 1.0]
             dm = _DM_ESS.DiscreteMaterializer()
-            f!, u0, p, _, vm = _DM_ESS._build_evaluator(
+            f!, u0, p, _, vm = _DM_ESS.Internal.build(
                 _DM_ESS.load_path(_dm_fixture()); compiler = compiler, initial_conditions = ics,
                 const_arrays = Dict("W" => _DM_W), param_arrays = Dict("src" => src),
                 materialize_out = dm
             )
-            @test haskey(dm.caches, "g")
-            rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["c[$j]"]] for j in 1:3])
+            @test haskey(dm.caches, "M.g")
+            rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["M.c[$j]"]] for j in 1:3])
             @test rhs() ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
             src .= [2.0, 3.0]
             _DM_ESS.notify_forcing_refresh!(src)                 # the buffer's builds
             @test rhs() ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
-            @test dm.caches["g"] ≈ _dm_g([2.0, 3.0])
+            @test dm.caches["M.g"] ≈ _dm_g([2.0, 3.0])
             src .= [5.0, 7.0]
             _DM_ESS.notify_forcing_refresh!()                    # every build
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)
             # Refilled once per announcement, not on every call.
-            g = copy(dm.caches["g"]); src .= [0.0, 0.0]
+            g = copy(dm.caches["M.g"]); src .= [0.0, 0.0]
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)       # unannounced: stale, as before
-            @test dm.caches["g"] == g
+            @test dm.caches["M.g"] == g
             # `refresh!` is the same refill for a reader that is not `f!`: a
             # no-op while the caches are current, a refill after an announcement.
             e = dm.epoch[]
             dm.refresh!()
-            @test dm.epoch[] == e && dm.caches["g"] == g
+            @test dm.epoch[] == e && dm.caches["M.g"] == g
             src .= [3.0, 1.0]
             _DM_ESS.notify_forcing_refresh!(src)
             dm.refresh!()
-            @test dm.caches["g"] ≈ _dm_g([3.0, 1.0])
+            @test dm.caches["M.g"] ≈ _dm_g([3.0, 1.0])
             e = dm.epoch[]
             @test rhs() ≈ _dm_g([3.0, 1.0]) .+ _dm_k(1.0)
             @test dm.epoch[] == e                               # f! found them current

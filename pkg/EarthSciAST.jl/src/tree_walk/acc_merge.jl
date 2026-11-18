@@ -276,7 +276,7 @@ end
 # (`faq`) equations evaluate through `acc_kernels` as whole-array access
 # kernels (codegen-compiled loop nests, the eltype-generic scalar walk for
 # declined kernels). Accepts any AbstractVector so both the pre-allocated and the
-# dynamically-grown forms produced by build_evaluator work. The whole RHS is
+# dynamically-grown forms produced by _build_evaluator work. The whole RHS is
 # allocation-free in steady state (ess-9cc), so it can be reused across every
 # RK stage without GC pressure — pinned by the `@allocated f!(du,u,p,t) == 0`
 # test.

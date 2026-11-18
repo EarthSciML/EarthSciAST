@@ -15,13 +15,14 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 function _cse_build(model, ics; affine::Bool, const_arrays = Dict())
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, const_arrays = const_arrays,
+        initial_conditions = Dict("M.$k" => v for (k, v) in ics),
+        const_arrays = const_arrays,
         compiler = affine ? :native : :interpreter
     )
     du = zero(u0); f!(du, u0, p, 0.0)
-    return (du, u0, vm, diag)
+    return (du, u0, vm, rep.stats)
 end
 
 # D(u[i]) = s*s + s,  s = (u[i-1] − 2u[i] + u[i+1]).  `s` occurs 3× → shared.

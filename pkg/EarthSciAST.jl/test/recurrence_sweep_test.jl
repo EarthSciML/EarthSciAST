@@ -453,10 +453,11 @@ end
         @test n >= 10
     end
 
-    @testset "build inspection never changes which error a build raises" begin
+    @testset "a recorded build raises the sweep's own refusal" begin
         # A forward self-read is not well founded. Built as the out-of-place
         # product, the sweep's own refusal (the rule, by name) comes first;
-        # asking for the inspection must not swap in the axis analysis's code.
+        # recording the build's products (as every build does) must not swap
+        # in the axis analysis's code.
         file = load_string(
             JSON3.write(
                 _rs_static(
@@ -469,17 +470,14 @@ end
                 )
             )
         )
-        codes = map((nothing, _RS.BuildInspection())) do insp
-            err = try
-                _RS._build_evaluator(file; form = :oop, inspect = insp)
-                nothing
-            catch e
-                e
-            end
-            @test err isa _RS.TreeWalkError
-            err.code
+        err = try
+            _RS.Internal.build(file; form = :oop)
+            nothing
+        catch e
+            e
         end
-        @test codes[1] == codes[2] == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
+        @test err isa _RS.TreeWalkError
+        @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
     end
 
     @testset "build inspection reports the sweep's own extents" begin
@@ -720,16 +718,16 @@ end
             "01_recurrence_doubling.esm"
         )
         err = try
-            _RS._build_evaluator(load_path(path); form = :oop)
+            _RS.Internal.build(path; form = :oop)
             nothing
         catch e
             e
         end
         @test err isa _RS.TreeWalkError
         @test err.code == _RS.ERROR_CODES.COMPILER_REFUSED_RULE
-        @test occursin("refuses 's'", err.detail)
+        @test occursin("refuses 'RecurrenceDoubling.s'", err.detail)
         @test occursin("out-of-place", err.detail)
         # The rule is a field, not something a caller parses out of the text.
-        @test err.rule == "s"
+        @test err.rule == "RecurrenceDoubling.s"
     end
 end

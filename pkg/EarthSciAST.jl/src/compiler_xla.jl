@@ -434,7 +434,7 @@ end
 """
     direct_rhs(f; var_map = nothing, client = nothing, sharding = nothing, options) -> DirectRHS
 
-Wrap the out-of-place build product `f` (`_build_evaluator(doc; form = :oop)[1]`)
+Wrap the out-of-place build product `f` (`Internal.build(doc; form = :oop).f!`)
 in the direct StableHLO emitter; compile the result with `Reactant.@compile`.
 Needs Reactant loaded. See docs/src/compiled-backend-devices.md.
 """

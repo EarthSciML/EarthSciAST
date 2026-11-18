@@ -341,7 +341,8 @@ end
     @test vi.extents[FAQ] == length(HAND_MEMBERS)
 
     # ============================================================
-    # BUILD through the front door WITH the rewrite ON (pushdown_rewrite=true).
+    # BUILD the problem WITH the rewrite ON (pushdown_rewrite=true), the
+    # source-receptor arrays from a gated provider.
     # ============================================================
     gate = Dict{String, Any}(
         "axes" => Any[Dict("fixed" => [0]), Dict("gated_by" => SET), "all"],
@@ -349,11 +350,10 @@ end
     )
     mock = MockSRAuto(fullSR, gate, Any[])
     insp = EA.BuildInspection()
-    f!, u0, p, _tspan, var_map = EA._build_evaluator(
-        doc;
-        model_name = "ISRM", const_arrays = ca, inspect = insp,
-        pushdown_rewrite = true,
-        _gated_providers = Dict{String, Any}("ISRM_SR" => mock), _sample_time = 0.0
+    prob = EA.esm_problem(
+        doc, (0.0, 0.0);
+        const_arrays = Dict{String, Any}("ISRM.$k" => v for (k, v) in ca), inspect = insp,
+        pushdown_rewrite = true, providers = Dict{String, Any}("ISRM_SR" => mock)
     )
 
     # ============================================================
@@ -372,12 +372,12 @@ end
     # ============================================================
     # ASSERTION 3b — members fed back as the generated member_factor; compact SR.
     # ============================================================
-    @test haskey(insp.const_arrays, MF)
-    @test Vector{Float64}(insp.const_arrays[MF]) == Float64.(HAND_MEMBERS)
+    @test haskey(insp.const_arrays, "ISRM.$MF")
+    @test Vector{Float64}(insp.const_arrays["ISRM.$MF"]) == Float64.(HAND_MEMBERS)
     for name in PATHS
-        @test haskey(insp.const_arrays, name)
-        @test size(insp.const_arrays[name]) == (NP, N_RCV)
-        @test insp.const_arrays[name] ≈ srC(name)
+        @test haskey(insp.const_arrays, "ISRM.$name")
+        @test size(insp.const_arrays["ISRM.$name"]) == (NP, N_RCV)
+        @test insp.const_arrays["ISRM.$name"] ≈ srC(name)
     end
 
     # ============================================================
@@ -385,10 +385,7 @@ end
     # ============================================================
     cell_cells = [[c] for c in 1:NP]
     ev(name) = (
-        expr = get(
-            insp.observed_exprs, "ISRM.$name",
-            get(insp.observed_exprs, name, nothing)
-        );
+        expr = get(insp.observed_exprs, "ISRM.$name", nothing);
         expr === nothing ? error("no observed expr for $name") :
             EA.evaluate_cellwise(
                 expr, cell_cells; const_arrays = insp.const_arrays,
@@ -401,10 +398,7 @@ end
     @test ev("E_SOx") ≈ oracle_E(is_SOx)
     @test ev("E_PM25") ≈ oracle_E(is_PM25)
 
-    rt(name) = (
-        fld = EA._observed_field(insp, f, "ISRM", name);
-        fld === nothing ? error("observed $name not evaluable") : fld[1]
-    )
+    rt(name) = observed_field(prob, "ISRM.$name")
     @test rt("conc_SOA") ≈ oracle_conc("SR_SOA")
     @test rt("conc_pNO3") ≈ oracle_conc("SR_pNO3")
     @test rt("conc_pNH4") ≈ oracle_conc("SR_pNH4")

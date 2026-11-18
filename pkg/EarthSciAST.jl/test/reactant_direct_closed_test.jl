@@ -96,8 +96,8 @@ _ct_members(vals) = (
 
 # The direct program, compiled once, and the interpreter's `f!`.
 function _ct_build(doc)
-    fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
-    fi!, _, _, _, _ = EarthSciAST._build_evaluator(doc)
+    fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
+    fi!, _, _, _, _ = EarthSciAST.Internal.build(doc)
     d = CT_EXT.direct_rhs(fo; var_map = vmap)
     pr = p === nothing ? nothing : NamedTuple{keys(p)}(map(CT_RX.ConcreteRNumber, values(p)))
     ur = CT_RX.ConcreteRArray(copy(u0)); tr = CT_RX.ConcreteRNumber(0.0)
@@ -256,7 +256,7 @@ end
         doc = _ct_doc(
             _ct_ix(_ct_cst([1.0, 2.0, 3.0]), _ct_o("floor", CT_X)), String[]
         )
-        fo, u0, p, _, vmap = EarthSciAST._build_evaluator(doc; form = :oop)
+        fo, u0, p, _, vmap = EarthSciAST.Internal.build(doc; form = :oop)
         d = CT_EXT.direct_rhs(fo; var_map = vmap)
         err = try
             CT_RX.@compile sync = true d(

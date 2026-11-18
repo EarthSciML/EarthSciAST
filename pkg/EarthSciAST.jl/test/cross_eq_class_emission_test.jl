@@ -114,8 +114,8 @@ end
 _xq_W(N) = Float64[sin(1.7i * k) + 0.05i for i in 1:N, k in 1:3]
 
 _xq_ics(N) = merge(
-    Dict("u[$k]" => 0.4 + 1.5 * (k / N) for k in 1:N),
-    Dict("v[$k]" => 0.9 + 1.1 * ((N - k) / N) for k in 1:N)
+    Dict("M.u[$k]" => 0.4 + 1.5 * (k / N) for k in 1:N),
+    Dict("M.v[$k]" => 0.9 + 1.1 * ((N - k) / N) for k in 1:N)
 )
 _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 
@@ -123,8 +123,8 @@ _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 
 # `compiler=:interpreter` is the per-cell scalar reference: no pooled emitter,
 # no class merge, no kernels at all. `codegen=false` puts the primary
-# emission's node budget at zero — a retained tuning threshold — so the class
-# kernels stay on `kernel_section.kernels` and can be introspected.
+# emission's node budget at zero — a retained tuning threshold — so no class
+# kernel is emitted; the report's `kernels` lists them either way.
 #
 # The default build is `native`'s tier plan with `strict` off: a strict
 # `native` refuses the in-place per-cell build this file is about (it grows with
@@ -135,13 +135,12 @@ function _xq_build(
         const_arrays = Dict{String, Any}()
     )
     return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
-        ESM._reset_cascade_tally!()
-        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, const_arrays = const_arrays,
             compiler = compiler
         )
-        (f = f, u0 = u0, p = p, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY))
+        (f = f, u0 = u0, p = p, vm = vm, diag = rep.stats, tally = rep.tally, kernels = rep.kernels)
     end
 end
 
@@ -152,7 +151,6 @@ _xq_repair(t) = get(t, :classmerge_round1_merge, 0) +
 _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
     get(t, :direct_classmerge_round2_merge, 0)
 
-_xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
 # ---- tests ------------------------------------------------------------------
 
@@ -283,16 +281,16 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                 sum(length(d.arr) + length(d.conn) for d in K.acc; init = 0)
                 for K in ks; init = 0
         )
-        dA, dB = data(_xq_kernels(A.f)), data(_xq_kernels(B.f))
+        dA, dB = data(A.kernels), data(B.kernels)
         @test dA > 0
         @test dA * N2 == dB * N1
     end
 
     # ---- (e) repo fixture sweep: the repair pass finds nothing anywhere ----
     # Every .esm under tests/valid and tests/conformance that builds through
-    # the tree-walk evaluator is built once and its cascade tally read. Models
-    # that cannot build standalone (MTK-only surfaces, providers, missing
-    # data) are skipped. Cross-COMPILER agreement over this corpus is the
+    # the tree-walk evaluator is built once, whole (flattened), and its cascade
+    # counts read. Documents that cannot build standalone (MTK-only surfaces,
+    # providers, missing data) are skipped. Cross-COMPILER agreement over this corpus is the
     # conformance tier's job, not this file's; what this sweep owns is the
     # claim no fixture can make on its own — that across the whole corpus the
     # repair pass performs no merge, because every class was emitted directly.
@@ -311,12 +309,11 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         sort!(esms)
         @test length(esms) >= 100
 
-        function corpus_build(file, name)
+        function corpus_build(file)
             withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
-                ESM._reset_cascade_tally!()
                 try
-                    f!, u0, p, _t, _vm = ESM._build_evaluator(file; model_name = name)
-                    return (f = f!, u0 = u0, p = p, tally = copy(ESM._CASCADE_TALLY))
+                    f!, u0, p, _t, _vm, rep = ESM.Internal.build(file)
+                    return (f = f!, u0 = u0, p = p, tally = rep.counts)
                 catch e
                     corpus_is_resource_error(e) && rethrow()
                     return nothing
@@ -337,16 +334,14 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
                 continue
             end
             file.models === nothing && (skipped += 1; continue)
-            for name in sort!(collect(String.(keys(file.models))))
-                ron = corpus_build(file, name)
-                if ron === nothing
-                    skipped += 1
-                    continue
-                end
-                built += 1
-                repair_total += _xq_repair(ron.tally)
-                direct_total += _xq_directmerge(ron.tally)
+            ron = corpus_build(file)
+            if ron === nothing
+                skipped += 1
+                continue
             end
+            built += 1
+            repair_total += _xq_repair(ron.tally)
+            direct_total += _xq_directmerge(ron.tally)
         end
         # The sweep is real (a corpus regression that stops fixtures building
         # would otherwise pass this vacuously) …

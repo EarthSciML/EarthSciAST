@@ -53,16 +53,11 @@ end
 
 _rc_same(a, b) = keys(a) == keys(b) && all(a[k] === b[k] for k in keys(a))
 
-# `du` by state name at the initial state, and the build's tally, from an
+# `du` by state name at the initial state, and the build's counts, from an
 # in-memory document (whose constants may hold NaN and Inf, which JSON cannot).
 function _rc_du_doc(doc, compiler)
-    _RC._reset_cascade_tally!()
-    f!, u0, p, _, vm = compiler isa Symbol ?
-        _RC._build_evaluator(doc; compiler = compiler) :
-        _RC._with_compiler_plan(compiler) do
-            _RC._build_evaluator_dict(doc; compiler = compiler)
-    end
-    tally = copy(_RC._CASCADE_TALLY)
+    f!, u0, p, _, vm, rep = _RC.Internal.build(doc; compiler = compiler)
+    tally = rep.counts
     du = similar(u0); fill!(du, NaN)
     f!(du, u0, p, 0.3)
     return (Dict(k => du[v] for (k, v) in vm), tally)
@@ -73,9 +68,9 @@ end
 function _rc_du_file(doc, compiler::Symbol)
     path = joinpath(mktempdir(), "doc.esm")
     write(path, JSON3.write(doc))
-    _RC._reset_cascade_tally!()
-    prob = _RC.esm_problem(path, (0.0, 1.0); compiler = compiler)
-    tally = copy(_RC._CASCADE_TALLY)
+    prob, tally = _RC.Internal.counting(
+        () -> _RC.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    )
     du = similar(prob.u0); fill!(du, NaN)
     prob.f!(du, prob.u0, prob.p, 0.3)
     return (Dict(k => du[v] for (k, v) in prob.var_map), tally)
@@ -257,7 +252,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         @test get(tn, :count_fold_setup, 0) >= 1
         # Anchored on the count itself.
         want = [1.0 + count(v -> (yes == 1) == f(v, x), ks) for x in queries]
-        @test all(dn["s[$i]"] === want[i] for i in eachindex(queries))
+        @test all(dn["M.s[$i]"] === want[i] for i in eachindex(queries))
     end
 
     near = (
@@ -393,7 +388,7 @@ _rc_rel(op, flip, yes = 1, no = 0) = (a, x) -> _rc_op("ifelse", flip ? _rc_op(op
         @test _rc_same(dn, di)
         # D(u) = acc - u at u = 0.5, acc the first extreme candidate's index.
         vals = [(x - 0.013) * (x - 0.013) for x in _rc_gens]
-        @test dn["u"] === Float64(which == "argmin" ? argmin(vals) : argmax(vals)) - 0.5
+        @test dn["M.u"] === Float64(which == "argmin" ? argmin(vals) : argmax(vals)) - 0.5
         @test get(tn, :geo_kernel, 0) >= 1
         @test get(ti, :geo_kernel, 0) == 0
         dw, tw = _rc_du_doc(tp, _RC_NOCOMPILE)

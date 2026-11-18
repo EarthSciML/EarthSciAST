@@ -378,6 +378,9 @@ reasoning is worth reading once rather than five times.
 | `build_reference_graph(model, name)` on a 1.0.0 document | takes an optional trailing `index_sets`; `resolve_references` threads it | `semantics` (bug fix) |
 | diagnostic pointer `…/update/0/…` for a scalar `update` | `…/update/…` | `semantics` |
 | `from_faq` / node `id` uniqueness | see [Part II](#part-ii--the-document-format-changed) | `format` |
+| `build_evaluator(input; …)` (deprecated alias) | `esm_problem(input, tspan; …)`, then `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`; `compiler = :xla` for what `form = :oop` handed a compiled backend. The alias is removed (`API_SPEC.md` §8 item 23). | `deleted` |
+| `insp.observed_defs`, `.derived_extents`, `.forcing_buffers`, `.forcing_buffer_index`, `.unvalued_slots`, `.ic_reseed`, `.program_seed`, `.observed_memo` and the other undocumented `BuildInspection` fields | gone from the record; `forcing_buffers(prob)` / `forcing_buffer_index(prob)` for the forcing buffers. A `BuildInspection` keeps `setup_arrays`, `const_arrays`, `observed_exprs`, `params`, `param_classes`, `recurrences`, `compiler_report`. | `deleted` |
+| one `BuildInspection` passed to two `esm_problem` calls | raises `ArgumentError`; pass a fresh record to each | `semantics` |
 
 ### `unknown_names` and `parameter_names` stay exported
 
@@ -1549,7 +1552,7 @@ Listed because knowing the boundary is what stops you over-migrating.
   `extension`-tier seam, on the strength of its downstream call sites. It has
   since been RETIRED by `API_SPEC.md` §8 item 23, once `compiler = :xla` gave
   the compiled right-hand side a Problem-shaped entry point: it is private
-  behind `esm_problem` with a deprecated alias for one minor, and the
+  behind `esm_problem`, its deprecated alias is removed, and the
   forcing-buffer seam and the build report re-hang on the Problem.
 - **`load_path` (Rust) and `LoadString` (Go)** already meant what they now mean
   and are untouched.

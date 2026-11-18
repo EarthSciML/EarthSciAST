@@ -83,24 +83,25 @@ function _join_doc(
 end
 
 # Build + evaluate one such document, returning `(du, visits, seconds)`.
-# `_VI_ENUM_VISITS` counts leaves a GATE-DRIVEN enumerator entered, so 0 means
-# the driver declined and the ungated product ran.
+# The build's `:vi_enum_visits` count is the leaves a GATE-DRIVEN enumerator
+# entered, so 0 means the driver declined and the ungated product ran.
 function _run(doc, const_arrays; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     let
-        ESS._VI_ENUM_VISITS[] = 0
         du = nothing
+        visits = 0
         t = @elapsed begin
-            f!, u0, p, _, _ = EarthSciAST._build_evaluator(
-                file; model_name = "Rollup",
-                const_arrays = Dict{String, Any}(const_arrays),
-                initial_conditions = Dict("count" => 0.0),
+            f!, u0, p, _, _, rep = EarthSciAST.Internal.build(
+                file;
+                const_arrays = Dict{String, Any}("Rollup.$k" => v for (k, v) in const_arrays),
+                initial_conditions = Dict("Rollup.count" => 0.0),
                 compiler = disable ? :interpreter : :native
             )
+            visits = get(rep.counts, :vi_enum_visits, 0)
             du = similar(u0)
             f!(du, u0, p, 0.0)
         end
-        return (du[1], ESS._VI_ENUM_VISITS[], t)
+        return (du[1], visits, t)
     end
 end
 
@@ -127,12 +128,11 @@ end
     )
     @test isfile(path)
     file = ESS.load_path(path)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        file; model_name = "DataColumnJoin",
-        initial_conditions = Dict("count" => 0.0)
+    f!, u0, p, _, vmap = EarthSciAST.Internal.build(
+        file; initial_conditions = Dict("DataColumnJoin.count" => 0.0)
     )
     du = similar(u0); f!(du, u0, p, 0.0)
-    @test du[vmap["count"]] == 5.0            # NOT 12.0 (the ungated product)
+    @test du[vmap["DataColumnJoin.count"]] == 5.0            # NOT 12.0 (the ungated product)
 
     # (b) The same shape with the columns supplied as const-array data rather
     #     than document-literal `makearray` observeds — the other storage a

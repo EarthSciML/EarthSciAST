@@ -42,18 +42,9 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
         @testset "$(case.id)" begin
             if case.expect == "refuse"
                 construct = String(case.construct)
-                # The build itself refuses, with the registered code. Only a
-                # single-model document has a model to select; anything else —
-                # several models, or a reaction system, whose events reach the
-                # evaluator only through `flatten` — is built the way
-                # `esm_problem` builds it: flattened first.
-                doc = EarthSciAST.load_path(path)
-                n_models = doc.models === nothing ? 0 : length(doc.models)
-                n_rs = doc.reaction_systems === nothing ? 0 :
-                    length(doc.reaction_systems)
-                target = (n_models == 1 && n_rs == 0) ? doc : EarthSciAST.flatten(doc)
+                # The build itself refuses, with the registered code.
                 err = try
-                    EarthSciAST._build_evaluator(target)
+                    EarthSciAST.Internal.build(path)
                     nothing
                 catch e
                     e

@@ -72,12 +72,12 @@ function _ts_build(ref, name, calls, params; compiler)
             )
         )
     )
-    f!, u0, p, _, vm = EarthSciAST._build_evaluator(load_string(JSON3.write(doc)); compiler = compiler)
+    f!, u0, p, _, vm = EarthSciAST.Internal.build(load_string(JSON3.write(doc)); compiler = compiler)
     du = similar(u0)
     return function (vals::NamedTuple)
         fill!(du, NaN)
         f!(du, u0, merge(p, vals), 0.0)
-        return [du[vm["s_$i"]] for i in eachindex(calls)]
+        return [du[vm["M.s_$i"]] for i in eachindex(calls)]
     end
 end
 
@@ -110,7 +110,7 @@ end
         for (_, q) in calls, (k, v) in q
             queries[k] = _ts_decode(v)
         end
-        vals = NamedTuple{Tuple(Symbol.(keys(queries)))}(Tuple(values(queries)))
+        vals = NamedTuple{Tuple(Symbol("M." * k) for k in keys(queries))}(Tuple(values(queries)))
         for compiler in _TS_COMPILERS
             @testset "$(name) ($(compiler))" begin
                 eval_at = _ts_build(
@@ -201,7 +201,7 @@ const _TS_EDGES = (
                     compiler = compiler
                 )
                 for (sname, t, want, tol) in cases
-                    actual = only(eval_at((tu = t,)))
+                    actual = only(eval_at(NamedTuple{(Symbol("M.tu"),)}((t,))))
                     ok = _ts_agrees(actual, want, tol)
                     ok || @info "calendar template mismatch" fdir compiler sname t actual want
                     @test ok

@@ -144,11 +144,9 @@ _bits(v) = reinterpret(UInt64, Float64.(v))
 @testset "overlap-gated overlap_area_planar (the ISRM binning shape)" begin
     @testset "construction-time sweep: native == interpreter, bit for bit" begin
         doc, arrays = _binning_doc(4, 12)
-        d0 = EA._GEOM_OVERLAP_DRIVE[]
-        k0 = get(EA._CASCADE_TALLY, :geo_kernel, 0)
-        native = _values(doc, arrays, :native)
-        @test EA._GEOM_OVERLAP_DRIVE[] > d0                       # the candidates drove it
-        @test get(EA._CASCADE_TALLY, :geo_kernel, 0) > k0         # through the generated kernel
+        native, counts = EA.Internal.counting(() -> _values(doc, arrays, :native))
+        @test get(counts, :geom_overlap_drive, 0) > 0             # the candidates drove it
+        @test get(counts, :geo_kernel, 0) > 0                     # through the generated kernel
         @test _bits(native) == _bits(_values(doc, arrays, :interpreter))
         @test sum(native) > 0
     end
@@ -162,9 +160,8 @@ _bits(v) = reinterpret(UInt64, Float64.(v))
 
     @testset "kernel memo handling: native == interpreter, bit for bit" begin
         doc, arrays = _binning_doc(4, 12; expr = _memo_body())
-        k0 = get(EA._CASCADE_TALLY, :geo_kernel, 0)
-        native = _values(doc, arrays, :native)
-        @test get(EA._CASCADE_TALLY, :geo_kernel, 0) > k0
+        native, counts = EA.Internal.counting(() -> _values(doc, arrays, :native))
+        @test get(counts, :geo_kernel, 0) > 0
         @test _bits(native) == _bits(_values(doc, arrays, :interpreter))
         @test any(iszero, native) && !all(iszero, native)  # cells with no candidate hold 0̄
         bare = deepcopy(doc)

@@ -159,7 +159,7 @@ EarthSciAST.provider_sample(p::_PbtConst, ::Real; selection = nothing) = (p.n +=
     # A re-lowering of the Problem's program writes into none of the Problem's
     # build sinks: a class it records stays as it was.
     @test EarthSciAST._relower_kwargs(prog.front)[:_param_classes] === nothing
-    @test EarthSciAST._relower_kwargs(prog.front)[:inspect] === nothing
+    @test EarthSciAST._relower_kwargs(prog.front)[:products] === nothing
     classes = copy(shared.param_classes)
     shared.param_classes["M.k"] = :pbt_sentinel
     # (`halo`, `restrict` and `lanes` re-lower through `_relower`; this model's
@@ -400,7 +400,7 @@ end
     @test forcing_slots(prog) == forcing_slots(rhs_program(base))
     # The seed recipe holds the document after the rewrite, so a program built
     # later neither rewrites again nor repeats its diagnostics.
-    recipe = base.inspection.program_seed
+    recipe = base.build.program_seed
     @test recipe isa EarthSciAST._ProgramSeedRecipe
     @test recipe.input isa AbstractDict && EarthSciAST._pushdown_record(recipe.input) !== nothing
     # Each const provider is sampled once, at construction, and each gated one

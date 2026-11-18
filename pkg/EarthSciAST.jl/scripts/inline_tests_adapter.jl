@@ -46,32 +46,13 @@
 # A refusal is never a fallback: nothing here retries a refused fixture under
 # another compiler, and nothing here weakens an assertion to make one pass.
 
-# Self-contained environment bootstrap, the shape compiler_agreement_adapter.jl
-# uses. This adapter reuses THAT tier's project rather than adding a third:
-# it needs exactly the same four packages (EarthSciAST, JSON3, Tsit5 for the
-# ordinary arm and Rosenbrock for a document whose §2.2 `solver` block declares
+# The environment is compiler_agreement_adapter.jl's: this adapter needs exactly
+# the same four packages (EarthSciAST, JSON3, Tsit5 for the ordinary arm and
+# Rosenbrock for a document whose §2.2 `solver` block declares
 # `stiffness: "high"`), and a second env carrying the same list would be one
 # more Manifest to keep alive for no coverage.
-import Pkg
-let env = normpath(joinpath(@__DIR__, "compiler_agreement_env")),
-        manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # A Manifest.toml is a machine-local CACHE that can lag a Project.toml
-        # that has moved on and then contradict it; one that cannot instantiate
-        # has no value, so rebuild rather than fail the gate.
-        @warn "compiler_agreement_env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+include(joinpath(@__DIR__, "adapter_support.jl"))
+activate_adapter_env(normpath(joinpath(@__DIR__, "compiler_agreement_env")))
 
 using EarthSciAST
 using JSON3
@@ -79,11 +60,6 @@ import OrdinaryDiffEqTsit5
 import OrdinaryDiffEqRosenbrock
 
 const BINDING = "julia"
-
-# API_SPEC §5.8's closed vocabulary, checked here as well as in the runner. A
-# value outside it is a broken invocation rather than a compiler this binding
-# happens not to have, and the two must not arrive at the same answer.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 
 # The coded diagnostics a refusal can carry. A message naming one of these is
 # this binding declining to evaluate the document, which the tier gates as a
@@ -129,11 +105,7 @@ function parse_args(args)
         o === nothing && error("--output is required (for --manifest $m)")
     end
     compiler === nothing && error("--compiler is required")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return ([(String(m), String(o)) for (m, o) in pairs], compiler)
 end
 

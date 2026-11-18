@@ -397,7 +397,7 @@ end
         fixture_files = sort(filter(f -> endswith(f, ".esm"), readdir(fixtures_dir)))
         @test !isempty(fixture_files)
 
-        # Fixtures that require the tree-walk evaluator (build_evaluator) and cannot
+        # Fixtures that require the tree-walk evaluator and cannot
         # be lowered through the MTK symbolic path. The MTK array indexing system
         # requires each subscript to be a function of a single symbolic variable;
         # generalized-einsum fixtures whose stencil body mixes output and contracted
@@ -477,7 +477,7 @@ end
         # Exactly-representable summands (powers of two), no cancellation, so
         # the canonical term order cannot change the result: bit-identity here
         # is a real property of THIS fixture, not a general guarantee.
-        f!, u0, p, _tspan, vm = EarthSciAST._build_evaluator(file)
+        f!, u0, p, _tspan, vm = EarthSciAST.Internal.build(file)
         fill!(u0, 0.0)
         du_tw = zeros(length(u0))
         f!(du_tw, u0, p, 0.0)
@@ -493,8 +493,8 @@ end
                 string(u), "(t)" => "", "$(mname)_" => "",
                 "(" => "", ")" => ""
             )
-            @test haskey(vm, name)
-            @test du_mtk[k] == du_tw[vm[name]]   # bit-identical, not approx
+            @test haskey(vm, "$(mname).$(name)")
+            @test du_mtk[k] == du_tw[vm["$(mname).$(name)"]]   # bit-identical, not approx
         end
 
         # ---- 3. accumulation order: the limitation, pinned as broken ----
@@ -551,13 +551,13 @@ end
             index_sets = Dict("x" => EarthSciAST.IndexSet("interval"; size = 4))
         )
 
-        cf!, cu0, cp, _cts, cvm = EarthSciAST._build_evaluator(cfile)
+        cf!, cu0, cp, _cts, cvm = EarthSciAST.Internal.build(cfile)
         fill!(cu0, 0.0)
         cdu_tw = zeros(length(cu0))
         cf!(cdu_tw, cu0, cp, 0.0)
         # The tree-walk IS the normative left fold — assert that outright.
-        @test cdu_tw[cvm["c[3]"]] == 0.0
-        @test cdu_tw[cvm["c[4]"]] == 1.0
+        @test cdu_tw[cvm["Cancel.c[3]"]] == 0.0
+        @test cdu_tw[cvm["Cancel.c[4]"]] == 1.0
 
         csimp = MTK2.mtkcompile(_fixture_system(cfile, "Cancel", cancel))
         cunk = MTK2.unknowns(csimp)
@@ -572,11 +572,11 @@ end
                 for (k, u) in enumerate(cunk)
         )
         # Cells 1-2: nothing has cancelled, so the orders still coincide.
-        @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["c[1]"]]
-        @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["c[2]"]]
+        @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["Cancel.c[1]"]]
+        @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["Cancel.c[2]"]]
         # Cells 3-4: the re-association bites. SHOULD hold per §4.3.1; does not.
-        @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["c[3]"]]
-        @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["c[4]"]]
+        @test_broken cdu_mtk[cell["c[3]"]] == cdu_tw[cvm["Cancel.c[3]"]]
+        @test_broken cdu_mtk[cell["c[4]"]] == cdu_tw[cvm["Cancel.c[4]"]]
     end
 
     @testset "faq honours a stepped range and its semiring" begin

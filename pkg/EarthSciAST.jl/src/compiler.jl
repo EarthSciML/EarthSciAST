@@ -284,9 +284,8 @@ What a build did, per rule. [`compiler_report`](@ref) returns one.
 * `compiler` — the vocabulary value that built this problem.
 * `rules` — a [`CompilerRuleRecord`](@ref) per equation / observed / setup
   array, in build order.
-* `tally` — this build's cascade counters (the per-build twin of the
-  process-global `_CASCADE_TALLY`), for the counts a per-rule row does not
-  carry: emitted kernels, class merges, subtree-table rescues.
+* `tally` — this build's cascade counters, for the counts a per-rule row does
+  not carry: emitted kernels, class merges, subtree-table rescues.
 
 `tier_histogram(report)` folds `rules` into tier → count, which is what
 `show(::EsmProblem)` prints.
@@ -347,10 +346,9 @@ end
 # The per-build record
 # ---------------------------------------------------------------------------
 #
-# The process-global `_CASCADE_TALLY` cannot answer "what did THIS build do" —
-# two builds in one session add into the same Dict, and a caller holding two
-# problems cannot tell them apart. This record is per build: `build_evaluator`
-# installs one for the duration of the build and the problem keeps it.
+# What ONE build did. `_build_evaluator_impl` installs a record for the duration
+# of the build (task-local, so concurrent builds keep their own), and the
+# finished report goes to the build's products and its problem.
 mutable struct _BuildRecord
     plan::CompilerPlan
     rules::Vector{CompilerRuleRecord}
@@ -374,6 +372,56 @@ _build_record()::Union{Nothing, _BuildRecord} =
 
 _with_build_record(f, rec::_BuildRecord) =
     task_local_storage(f, _BUILD_RECORD_KEY, rec)
+
+# ---------------------------------------------------------------------------
+# Engagement counts
+# ---------------------------------------------------------------------------
+#
+# How often a build path engaged: every cascade tally key, plus the counters
+# below that no `CompilerReport` row carries (a geometry sweep that took the
+# candidate drive, a setup map served by its fast path, a value-invention
+# binding visited). They are observations only; nothing reads them to decide
+# what to build. They land in the task-local `Dict` that
+# `Internal.counting` (or `Internal.build`) opens, and nowhere when none is
+# open, so an `esm_problem` build pays one lookup per event and keeps nothing.
+#
+#   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
+#                          — an overlap-gated setup geometry sweep, by how its
+#                            candidate set was driven (geometry_setup.jl)
+#   :geom_eq_drive         — an equality-gated setup sweep driven by its key
+#   :setup_map_fastpath_hit / :setup_map_fastpath_miss
+#                          — a setup map compiled once / walked per cell
+#   :cellwise_fastpath_hit / :cellwise_fastpath_miss
+#                          — `_cellwise_compile_once` compiled / declined
+#   :vi_enum_visits        — one binding visited by a value-invention or
+#                            overlap-gated enumeration
+#   :compile_calls / :branch_templates / :body_variants
+#                          — node lowerings, stencil spine templates and
+#                            stencil body variants
+const _COUNTS_KEY = :earthsci_build_counts
+
+_counts_sink()::Union{Nothing, Dict{Symbol, Int}} =
+    get(task_local_storage(), _COUNTS_KEY, nothing)
+
+function _count!(k::Symbol, n::Int = 1)
+    c = _counts_sink()
+    c === nothing || (c[k] = get(c, k, 0) + n)
+    return nothing
+end
+
+# `(f(), counts)`: the value and every count `f` produced on this task. A nested
+# call also adds its counts into the enclosing one.
+function _with_counts(f)
+    outer = _counts_sink()
+    c = Dict{Symbol, Int}()
+    v = task_local_storage(f, _COUNTS_KEY, c)
+    if outer !== nothing
+        for (k, n) in c
+            outer[k] = get(outer, k, 0) + n
+        end
+    end
+    return v, c
+end
 
 # Name the rule the cascade is about to work on. Declines recorded while it is
 # open attach to it; `_land_rule!` closes it.
@@ -449,9 +497,9 @@ end
 # ---------------------------------------------------------------------------
 #
 # `observed_field` files one report row per name, saying whether the read walked
-# per cell. That is a question about ONE CALL, which the process-global
-# `_CASCADE_TALLY` cannot answer: another task's evaluations add into it, and so
-# does an attempt the read made and then abandoned. So the read installs a
+# per cell. That is a question about ONE CALL: another task's evaluations must
+# not add into it, and neither may an attempt the read made and then abandoned.
+# So the read installs a
 # task-local counter, the per-cell cellwise route bumps it once it has SERVED a
 # value, and a caller that swallows a failed attempt drops what the attempt
 # counted (`_percell_mark` / `_percell_restore!`).

@@ -8,7 +8,7 @@
 # `integral | mean | max | min` — or point-sample it via `coords`. The
 # MTK-based `run_esm_tests` cannot compile
 # `faq`/`makearray` discretizations; this runner drives the official
-# tree-walk pipeline instead: `esm_problem` + `solve` (build_evaluator → seed ICs → solve
+# tree-walk pipeline instead: `esm_problem` + `solve` (_build_evaluator → seed ICs → solve
 # via the SciMLBase extension) then per-assertion field reduction.
 #
 # `[[library-exposes-rhs-not-solver]]`: the caller supplies the ODE algorithm
@@ -534,7 +534,7 @@ Evaluate an array-valued expression (elementwise ops over array-producing
 `faq`/`makearray` nodes — e.g. a grid-geometry template expanded by a
 §9.7 import, or a §6.6.5 analytic `reference`) at each 1-based integer cell of
 `cells`, returning one Float64 per cell. This is the public entry to the same
-build-time machinery `build_evaluator` uses to seed coordinate-expression `ic`
+build-time machinery `_build_evaluator` uses to seed coordinate-expression `ic`
 fields.
 
 STATE references are not in scope. Model PARAMETERS (load-time constants) ARE:
@@ -902,7 +902,7 @@ end
 # per-cell lift of an author-level observed body, so both enumerate the same
 # cells from the same index-set registry.
 function _shape_extents(
-        insp::BuildInspection, file::EsmFile,
+        insp::BuildProducts, file::EsmFile,
         shape
     )::Union{Vector{Int}, Nothing}
     exts = Int[]
@@ -942,7 +942,7 @@ end
 # exists would answer an `M2` assertion with `M1`'s buffer, which is exactly
 # what the two-pass rule elsewhere in this file exists to prevent.
 function _const_array_key(
-        insp::BuildInspection, mname::AbstractString,
+        insp::BuildProducts, mname::AbstractString,
         name::AbstractString
     )::Union{String, Nothing}
     qual = String(mname) * "." * String(name)
@@ -991,7 +991,7 @@ end
 # the set of everything visited: two siblings that read the same dead observed
 # are a DIAMOND, not a cycle, and each must resolve it.
 function _authored_observed_body(
-        insp::BuildInspection, file::EsmFile, model::Model,
+        insp::BuildProducts, file::EsmFile, model::Model,
         mname::AbstractString, variable::AbstractString,
         exts::Vector{Int},
         chain::Vector{String} = String[];
@@ -1247,7 +1247,7 @@ function _params_at(params::AbstractDict, p::AbstractVector, ctx)
 end
 
 function _observed_field(
-        insp::BuildInspection, file::EsmFile,
+        insp::BuildProducts, file::EsmFile,
         mname::AbstractString, variable::AbstractString;
         state_arrays::AbstractDict = Dict{String, Any}(),
         state_scalars::AbstractDict = Dict{String, Float64}(),
@@ -1474,7 +1474,7 @@ end
 # form, or the body does not compile once; the caller then takes the authored
 # route.
 function _authored_via_programs(
-        ctx, insp::BuildInspection, qualified::String, cells,
+        ctx, insp::BuildProducts, qualified::String, cells,
         u, t::Float64, p, mname::String,
         state_arrays::AbstractDict, state_scalars::AbstractDict
     )
@@ -1675,7 +1675,7 @@ when there is nothing to materialize, so models whose observeds are scalar or
 independent keep the previous behaviour and cost.
 """
 function _materialized_obs_scope(
-        insp::BuildInspection, file::EsmFile,
+        insp::BuildProducts, file::EsmFile,
         mname::AbstractString, target::AbstractString,
         params::AbstractDict;
         base::AbstractDict = insp.const_arrays,
@@ -2214,7 +2214,7 @@ const _SAVED_TIME_RTOL = 1.0e-9
 # ---------------------------------------------------------------------------
 function _evaluate_assertion(
         a, sim, var_map::AbstractDict,
-        insp::BuildInspection, eval_file::EsmFile,
+        insp::BuildProducts, eval_file::EsmFile,
         mname::AbstractString,
         resolved_base::AbstractString,
         renames::AbstractDict = Dict{String, String}();
@@ -2433,7 +2433,7 @@ SimulateTestEngine(
 struct _SimulateHandle
     sim::Any                      # the SciML solution `solve(prob, alg)` returned
     var_map::AbstractDict{String, Int}     # state-element name → flat index (from the problem)
-    insp::BuildInspection
+    insp::BuildProducts
     eval_file::EsmFile
     # The states an `operator_compose` renaming match DELETED, mapped onto the
     # survivors (issue #230). An assertion names its component's LOCAL variable,
@@ -2459,7 +2459,7 @@ end
 # one of the state and throws `BoundsError: attempt to access 0-element
 # Vector{Float64} at index [1]` as soon as a saved time is not the span's start
 # (issue #406). Such a document's answers are its OBSERVED graph, which
-# `_evaluate_assertion` already evaluates out of the `BuildInspection` with `t`
+# `_evaluate_assertion` already evaluates out of the build's `BuildProducts` with `t`
 # bound to the sampled time, so the runner needs nothing from a solver here
 # except the time grid — which is exactly what this carries. Duck-typed on `.t`
 # / `.u` / `.retcode`, the three members `_evaluate_assertion` and
@@ -2578,7 +2578,6 @@ function _engine_setup(e::SimulateTestEngine, t)
     target = _resolve_test_target(e.file, e.input, e.mname, t, e.resolved_base)
     target isa String && return target   # injection failed
     times = sort!(unique(Float64[a.time for a in t.assertions]))
-    insp = BuildInspection()
     local prob, sim
     try
         prob = esm_problem(
@@ -2593,8 +2592,7 @@ function _engine_setup(e::SimulateTestEngine, t)
                 _seeded_overrides(e.seed_u0, t.initial_conditions),
                 e.mname, target
             ),
-            compiler = e.compiler,
-            inspect = insp
+            compiler = e.compiler
         )
         # A document with NOTHING TO INTEGRATE is EVALUATED, not solved — the
         # same route `simulate` takes for it, and the one this runner did not
@@ -2631,7 +2629,7 @@ function _engine_setup(e::SimulateTestEngine, t)
     Symbol(sim.retcode) === :Success ||
         return "solver retcode $(sim.retcode)"
     return _SimulateHandle(
-        sim, prob.var_map, insp, target,
+        sim, prob.var_map, prob.build.products, target,
         Dict{String, String}(prob.merged_renames),
         compiler(prob), _obs_ctx(prob)
     )

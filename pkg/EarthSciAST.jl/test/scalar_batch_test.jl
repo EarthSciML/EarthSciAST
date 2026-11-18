@@ -98,9 +98,9 @@ function _sb_halo(M::Int)
             )
         )
     )
-    ics = Dict{String, Any}("out[1,1]" => 0.0, "out[1,2]" => 0.0, "out[2,1]" => 0.0, "out[2,2]" => 0.0)
+    ics = Dict{String, Any}("R.out[1,1]" => 0.0, "R.out[1,2]" => 0.0, "R.out[2,1]" => 0.0, "R.out[2,2]" => 0.0)
     for a in 1:NQ, b in 1:NQ
-        ics["q[$a,$b]"] = Float64(10a + b)
+        ics["R.q[$a,$b]"] = Float64(10a + b)
     end
     return (doc, ics, NI, NJ)
 end
@@ -110,7 +110,7 @@ end
     @testset "rhs_list contraction loops: one group, every lane in it" begin
         doc, ics, NI, NJ = _sb_halo(8)
         fo, _, _, _, _ = withenv(_sb_env()...) do
-            EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop)
+            EarthSciAST.Internal.build(doc; initial_conditions = ics, form = :oop)
         end
         ir = _sb_ir(fo)
         # The fixture must actually reach the per-cell tier, or every assertion
@@ -132,7 +132,7 @@ end
 
         # Grouping off: every entry stays single, `rest` is the whole surface.
         fn, _, _, _, _ = withenv(_sb_env()...) do
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 doc; initial_conditions = ics, form = :oop,
                 compiler = :interpreter
             )
@@ -207,15 +207,15 @@ end
             ),
         ]
         model = _SB_ESS.Model(vars, eqs)
-        ics = Dict{String, Any}("v[$j]" => 0.0 for j in 1:N)
+        ics = Dict{String, Any}("M.v[$j]" => 0.0 for j in 1:N)
         for j in 1:N, k in 1:M
-            ics["q[$j,$k]"] = Float64(3j + k)
+            ics["M.q[$j,$k]"] = Float64(3j + k)
         end
         bld(batch) = withenv(_sb_env()...) do
-            EarthSciAST._build_evaluator(
+            EarthSciAST.Internal.build(
                 model; index_sets = isets, initial_conditions = ics,
                 form = :oop, compiler = _sb_compiler(batch)
-            )[1]
+            ).f!
         end
 
         ir = _sb_ir(bld(true))
@@ -246,7 +246,7 @@ end
     # keeps a group from blending the power rule under a Dual walk.
     @testset "a differing pow exponent is not taken into the group" begin
         doc = Dict{String, Any}(
-            "esm" => "0.8.0", "metadata" => Dict("name" => "sb_pow"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "sb_pow"),
             "models" => Dict(
                 "P" => Dict{String, Any}(
                     "variables" => Dict(
@@ -273,22 +273,22 @@ end
                 )
             )
         )
-        ics = Dict("x" => 1.5, "y" => -2.5, "a" => 0.0, "b" => 0.0, "c" => 0.0)
-        fo, _, _, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop)
+        ics = Dict("P.x" => 1.5, "P.y" => -2.5, "P.a" => 0.0, "P.b" => 0.0, "P.c" => 0.0)
+        fo, _, _, _, vm = EarthSciAST.Internal.build(doc; initial_conditions = ics, form = :oop)
         rb = getfield(_sb_ir(fo), :rhs_batches)
         pow = [
             g for g in rb.groups if g.root.kind == _SB_ESS._NK_OP &&
                 (g.root.op === :^ || g.root.op === :pow)
         ]
         @test length(pow) == 1                 # the two `^2` entries, and only those
-        @test sort(pow[1].slots) == sort([vm["a"], vm["b"]])
+        @test sort(pow[1].slots) == sort([vm["P.a"], vm["P.b"]])
         # The exponent is PINNED in the lowered tree: a shared literal, not a
         # per-lane column, so the group cannot have blended 2 with 3.
         e = pow[1].root.children[2]
         @test e.kind == _SB_ESS._NK_LITERAL && isempty(e.lanes_f) && e.literal == 2.0
         # …and `^3` is in `rest`, not in any group.
-        @test vm["c"] in first.(rb.rest)
-        @test !any(g -> vm["c"] in g.slots, rb.groups)
+        @test vm["P.c"] in first.(rb.rest)
+        @test !any(g -> vm["P.c"] in g.slots, rb.groups)
     end
 
     # ── The signature itself, on hand-built nodes ────────────────────────────

@@ -1,4 +1,4 @@
-# The kernel-CLASS merge (src/tree_walk/oop_merge.jl): `_build_evaluator_impl`
+# The kernel-CLASS merge (src/tree_walk/oop_merge.jl): the build
 # groups structurally identical `_AccKernel`s (before the xcse gate and the
 # emitter branch, so BOTH `:oop` and `:inplace` get it) and merges each class
 # into one lane-batched kernel whose varying leaves are per-lane tables.
@@ -24,14 +24,20 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Out-of-place builds with the class merge on / off. Kernel counts are read off
-# the compiled IR's own field — the same reflection a compiled backend uses.
+# The build flattens its model into component `M`, so every declared name it
+# takes is qualified (the live `forcing` buffer is not declared and keeps its
+# spelling).
+_om_q(d) = Dict{String, Any}("M.$k" => v for (k, v) in d)
+
+# Out-of-place builds. Kernel counts are read off the compiled IR's own field —
+# the same reflection a compiled backend uses — and the structural counts off
+# the build report's `stats`.
 function _om_build(model, ics; param_arrays = Dict{String, Any}())
-    fo, u0, p, _t, vm, d = ESM._build_evaluator_impl(
+    fo, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
-        initial_conditions = ics, form = :oop, param_arrays = param_arrays
+        initial_conditions = _om_q(ics), form = :oop, param_arrays = param_arrays
     )
-    return (fo, u0, p, vm, d)
+    return (fo, u0, p, vm, rep.stats)
 end
 _om_nkernels(fo) = length(getfield(getfield(fo, :rhs), :acc_kernels))
 # The pass fired iff it left fewer kernels than it was handed. `n_classmerge_in`
@@ -124,7 +130,7 @@ function _om_twin_inv_model(N; g = 3.0, h = 7.0)
 end
 
 @testset "the out-of-place build receives the merged kernels (oop_merge.jl)" begin
-    # The merge runs in `_build_evaluator_impl` phase 4, before the emitter
+    # The merge runs in the build's last phase, before the emitter
     # branch, so it is a property of the BUILD. What is checked here is that the
     # out-of-place product carries the merged list — the values are pinned by the
     # in-place testsets below, which run the same models through `f!`.
@@ -161,10 +167,9 @@ end
 end
 
 # ============================================================================
-# The `:inplace` side of the SAME pass. Since the hoist into
-# `_build_evaluator_impl` phase 4 (build.jl, before the xcse gate and before
-# the emitter branch), the class merge applies to the production in-place
-# `f!` too. The `:native` build must be BIT-IDENTICAL (`==`, never `isapprox`)
+# The `:inplace` side of the SAME pass. The class merge runs in the build's
+# last phase (build.jl, before the xcse gate and before the emitter branch), so
+# it applies to the production in-place `f!` too. The `:native` build must be BIT-IDENTICAL (`==`, never `isapprox`)
 # to `compiler=:interpreter` on the twin pointwise model, the twin stencil
 # (ghost boundary) model, and the live-forcing model incl. an in-place buffer
 # refresh; and the pass must observably FIRE (`n_acc_kernels` below
@@ -184,12 +189,12 @@ function _im_build(
         param_arrays = Dict{String, Any}()
     )
     return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
-        f!, u0, p, _t, vm, d = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
-            initial_conditions = ics, param_arrays = param_arrays,
+            initial_conditions = _om_q(ics), param_arrays = param_arrays,
             compiler = compiler
         )
-        (f!, u0, p, vm, d)
+        (f!, u0, p, vm, rep.stats)
     end
 end
 # Full kernel count of the in-place closure — the whole list when the primary

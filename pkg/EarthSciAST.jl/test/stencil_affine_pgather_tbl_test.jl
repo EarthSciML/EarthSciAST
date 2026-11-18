@@ -22,16 +22,20 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-# Build `model` under both compilers; returns tag → (f!, u0, p, tally).
+# The build flattens the model into component `M`: the state names it takes
+# are qualified, while the undeclared forcing buffers keep the spelling the
+# equations use.
+_pgt_q(ics) = Dict("M.$k" => v for (k, v) in ics)
+
+# Build `model` under both compilers; returns tag → (f!, u0, p, counts).
 function _pgt_build3(model, ics, bufs)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, _vm, _diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, _vm, rep = ESM.Internal.build(
             model;
-            initial_conditions = ics, param_arrays = bufs, compiler = compiler
+            initial_conditions = _pgt_q(ics), param_arrays = bufs, compiler = compiler
         )
-        out[tag] = (f!, u0, p, copy(ESM._CASCADE_TALLY))
+        out[tag] = (f!, u0, p, rep.counts)
     end
     return out
 end
@@ -190,11 +194,11 @@ end
         counts = map((8, 32, 128)) do N
             buf = Float64[0.2k for k in 1:N]
             ics = Dict("u[$k]" => 0.1k for k in 1:N)
-            _f, _u, _p, _t, _vm, diag = ESM._build_evaluator_impl(
-                _pgt_mixed_model(N); initial_conditions = ics,
+            _f, _u, _p, _t, _vm, rep = ESM.Internal.build(
+                _pgt_mixed_model(N); initial_conditions = _pgt_q(ics),
                 param_arrays = Dict("forcing" => Float64[0.2k for k in 1:N])
             )
-            diag.n_acc_kernels
+            rep.stats.n_acc_kernels
         end
         @test all(==(counts[1]), counts)
     end
@@ -207,9 +211,9 @@ end
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("u[$k]" => 0.1k for k in 1:N)
         model = _pgt_clamped_model(N)
-        build(compiler) = ESM._build_evaluator_impl(
+        build(compiler) = ESM.Internal.build(
             model;
-            initial_conditions = ics, param_arrays = Dict("forcing" => buf),
+            initial_conditions = _pgt_q(ics), param_arrays = Dict("forcing" => buf),
             compiler = compiler
         )
         f!, u0, p, _t, _vm, _d = build(:native)

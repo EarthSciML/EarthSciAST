@@ -179,8 +179,8 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", "transport_3axis_7cubed.esm")
         file = _LC.load_path(path)
         lax = _LC._plan_with(_LC._compiler_plan(:native); strict = false, codegen = false)
-        f_lax = first(_LC._build_evaluator(file; compiler = lax))
-        f_nat = first(_LC._build_evaluator(file; compiler = :native))
+        f_lax = first(_LC.Internal.build(file; compiler = lax))
+        f_nat = first(_LC.Internal.build(file; compiler = :native))
         sec = _lc_section(f_lax)
         @test sec.walk isa _LC._PerCellLicense && !isempty(sec.kernels)
         rebuild(walk) = _LC._KernelSection(
@@ -203,9 +203,9 @@ _lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_sect
         function build(c)
             dm = _LC.DiscreteMaterializer()
             f! = first(
-                _LC._build_evaluator(
+                _LC.Internal.build(
                     file;
-                    initial_conditions = Dict("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0),
+                    initial_conditions = Dict("M.c[1]" => 0.0, "M.c[2]" => 0.0, "M.c[3]" => 0.0),
                     const_arrays = Dict("W" => [1.0 2.0 3.0; 4.0 5.0 6.0]),
                     param_arrays = Dict("src" => [0.3, 1.7]), materialize_out = dm,
                     compiler = c

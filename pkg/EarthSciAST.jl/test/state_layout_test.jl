@@ -249,7 +249,7 @@ end
 @testset "a built model with a multi-byte array name" begin
     _θ(i) = Dict{String, Any}("op" => "index", "args" => Any["θ", i])
     _faq(e) = Dict{String, Any}(
-        "op" => "faq", "output_idx" => Any["i"],
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
         "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "cells")), "expr" => e
     )
     model = Dict{String, Any}(
@@ -266,7 +266,7 @@ end
         ]
     )
     doc = Dict{String, Any}(
-        "esm" => "0.6.0", "metadata" => Dict{String, Any}("name" => "theta"),
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "theta"),
         "index_sets" => Dict{String, Any}("cells" => Dict{String, Any}("kind" => "interval", "size" => 3)),
         "models" => Dict{String, Any}("M" => model)
     )
@@ -275,11 +275,13 @@ end
             (Dict{String, Any}("θ[1]" => 5.0), [5.0, 1.0, 1.0]),
             (Dict{String, Any}("θ" => [1.0, 2.0, 3.0]), [1.0, 2.0, 3.0]),
         )
-        f!, u0, p, _, vm = ESM._build_evaluator(doc; initial_conditions = ics)
-        @test [u0[vm["θ[$i]"]] for i in 1:3] == want
-        @test haskey(vm, "θ[3]") && !haskey(vm, "θ[4]")
+        f!, u0, p, _, vm = ESM.Internal.build(
+            doc; initial_conditions = Dict{String, Any}("M." * k => v for (k, v) in ics)
+        )
+        @test [u0[vm["M.θ[$i]"]] for i in 1:3] == want
+        @test haskey(vm, "M.θ[3]") && !haskey(vm, "M.θ[4]")
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test [du[vm["θ[$i]"]] for i in 1:3] == -2 .* want
+        @test [du[vm["M.θ[$i]"]] for i in 1:3] == -2 .* want
     end
 end

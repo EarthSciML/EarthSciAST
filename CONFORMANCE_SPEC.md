@@ -4386,7 +4386,7 @@ never an integrator one.
 
 Per-binding runners drive it and gate every assertion against BOTH the golden
 actual and the fixture's own declared `expected`: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_state_dependent_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** —
 `pkg/earthsci-ast-py/tests/test_pde_inline_observed_state_dependent_conformance.py`;
 **Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_observed_state_dependent_conformance.rs`.
@@ -4547,7 +4547,7 @@ contract.
 
 Per-binding runners drive the fixtures and gate every assertion actual against
 the committed goldens: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_pde_inline_array_overrides_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** —
 `pkg/earthsci-ast-py/tests/test_pde_inline_array_overrides_conformance.py`;
 **Rust** —
@@ -4616,7 +4616,7 @@ output index). It must NOT descend into, or re-wrap:
 #### 5.29.2 Gate
 
 `tests/conformance/elementwise_observed_gather/`, run by
-`conformance_elementwise_observed_gather_test.jl` (Julia),
+`conformance_inline_golden_test.jl` (Julia),
 `test_elementwise_observed_gather_conformance.py` (Python) and
 `elementwise_observed_gather_conformance.rs` (Rust). The category carries a
 CONTROLLED PAIR of fixtures: `elementwise_gather.esm` is the shape under test,
@@ -4733,7 +4733,7 @@ binding that leaves the name unbound fails the first three; one that wraps
 blindly fails the rebinding case.
 
 Per-binding runners: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_pde_inline_reference_dimension_names_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** —
 `pkg/earthsci-ast-py/tests/test_pde_inline_reference_dimension_names_conformance.py`;
 **Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_reference_dimension_names_conformance.rs`.
@@ -4962,7 +4962,7 @@ the array compile then lowers); the assertion actual is what conforms.
 
 Per-binding runners drive the fixture and gate every assertion actual against the
 committed golden: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_shaped_parameter_broadcast_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** —
 `pkg/earthsci-ast-py/tests/test_shaped_parameter_broadcast_conformance.py`;
 **Rust** —
@@ -5489,7 +5489,7 @@ here is a semantics divergence, never an integrator one.
 
 Per-binding runners drive it and gate every assertion against BOTH the golden
 actual and the fixture's own declared `expected`: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_indexed_lhs_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** — `pkg/earthsci-ast-py/tests/test_pde_inline_observed_indexed_lhs_conformance.py`;
 **Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_observed_indexed_lhs_conformance.rs`.
 `bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
@@ -6071,7 +6071,7 @@ golden is integrator-independent.
 
 Per-binding runners gate every assertion against BOTH the golden actual and the
 fixture's own declared `expected`: **Julia** —
-`pkg/EarthSciAST.jl/test/conformance_shaped_observed_scalar_broadcast_test.jl`;
+`pkg/EarthSciAST.jl/test/conformance_inline_golden_test.jl`;
 **Python** —
 `pkg/earthsci-ast-py/tests/test_shaped_observed_scalar_broadcast_conformance.py`;
 **Rust** — `pkg/earthsci-ast-rs/tests/shaped_observed_scalar_broadcast_conformance.rs`.

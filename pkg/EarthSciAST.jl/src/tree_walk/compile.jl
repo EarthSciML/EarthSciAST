@@ -534,7 +534,7 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
     throw(TreeWalkError("E_TREEWALK_UNBOUND_VARIABLE", name))
 end
 function _compile(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo = nothing)
-    _BENCH_ON[] && (_BENCH_COMPILE_CALLS[] += 1)   # §12 node-lowering counter (off by default)
+    _count!(:compile_calls)
     memo === nothing && return _compile_op(expr, var_map, param_syms, nothing)
     m = memo.compile
     r = get(m, expr, nothing)
@@ -1438,7 +1438,7 @@ _CSECache() = _CSECache(
     notify_forcing_refresh!(buffer)
 
 Tell the tree-walk evaluator that the contents of a live forcing buffer (a
-`param_arrays` buffer bound into `build_evaluator`) were mutated in place. Two
+`param_arrays` buffer bound into `_build_evaluator`) were mutated in place. Two
 kinds of build product are derived from such a buffer, and both are brought up
 to the new contents by the next in-place `f!` call (or [`observed_field`](@ref)
 read):

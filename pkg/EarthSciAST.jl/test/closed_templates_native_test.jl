@@ -328,9 +328,10 @@ end
         # The setup body runs as native code under native, walked under the
         # interpreter (which gave the same bits above).
         for (c, want) in ((:native, true), (:interpreter, false))
-            _CT._reset_cascade_tally!()
-            _CT.esm_problem(tp, (0.0, 1.0); compiler = c)
-            @test (get(_CT._CASCADE_TALLY, :geo_kernel, 0) >= 1) == want
+            _, counts = _CT.Internal.counting(
+                () -> _CT.esm_problem(tp, (0.0, 1.0); compiler = c)
+            )
+            @test (get(counts, :geo_kernel, 0) >= 1) == want
         end
         # The overlap areas are materialized at setup: no per-pair work is
         # left in the right-hand side.

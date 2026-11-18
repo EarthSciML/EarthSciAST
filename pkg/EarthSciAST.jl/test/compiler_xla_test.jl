@@ -352,20 +352,18 @@ _cx_du(prob, u, t) = (
         # The in-place evaluator is `native`'s; handing it back under an `:xla`
         # report would be a fallback in everything but name.
         err = _cx_catch(
-            () -> CX._build_evaluator(
+            () -> CX.Internal.build(
                 load_path(CX_SCALAR);
                 compiler = :xla
             )
         )
         @test err isa ArgumentError
         @test occursin("form = :oop", err.msg)
-        insp = BuildInspection()
-        fo, _, _, _, _ = CX._build_evaluator(
-            load_path(CX_SCALAR); compiler = :xla,
-            form = :oop, inspect = insp
+        fo, _, _, _, _, rep = CX.Internal.build(
+            load_path(CX_SCALAR); compiler = :xla, form = :oop
         )
         @test fo isa CX._OopRHS
-        @test insp.compiler_report.compiler === :xla
+        @test rep.compiler_report.compiler === :xla
     end
 
     @testset "a stiff algorithm runs on the compiled program, with no setting" begin

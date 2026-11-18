@@ -8,7 +8,8 @@
 # the same terms in the same order. So every case compares the driven array
 # against `compiler=:interpreter` (plan field `join_on_gate` off: the dense
 # sweep) with `isequal` element by element, and the fold values are chosen so
-# a reordered sum would round differently. The engagement counter keeps each
+# a reordered sum would round differently. The engagement count
+# (`:geom_eq_drive`, read through `EarthSciAST.Internal.counting`) keeps each
 # comparison non-vacuous.
 
 module GeomOnDriveTests
@@ -56,9 +57,10 @@ const ENV0 = Dict{String, Any}(
 
 function both_ways(json, env = ENV0)
     rhs = EA.expression_from_json(json)
-    e0 = EA._GEOM_EQ_DRIVE[]
-    got = EA._materialize_geom_array(rhs, copy(env), nothing, IDX, SHAPES)
-    de = EA._GEOM_EQ_DRIVE[] - e0
+    got, counts = EA.Internal.counting(
+        () -> EA._materialize_geom_array(rhs, copy(env), nothing, IDX, SHAPES)
+    )
+    de = get(counts, :geom_eq_drive, 0)
     ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
         EA._materialize_geom_array(rhs, copy(env), nothing, IDX, SHAPES)
     end
@@ -175,11 +177,12 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
                 join = _on("sb", "tb")
             )
         )
-        e0 = EA._GEOM_EQ_DRIVE[]
-        EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+        _, counts = EA.Internal.counting() do
+            EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
+                EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
+            end
         end
-        @test EA._GEOM_EQ_DRIVE[] == e0
+        @test get(counts, :geom_eq_drive, 0) == 0
     end
 
     @testset "the match index" begin

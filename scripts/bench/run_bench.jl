@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 # Phase-0 bench harness for the perf-gap-closure plan: one command that, per
 # fixture, records build wall time, the compile-once tier counters
-# (_BENCH_BODY_VARIANTS / _BENCH_COMPILE_CALLS), warm RHS time + allocations at
+# (the build report's `:body_variants` / `:compile_calls` counts), warm RHS time + allocations at
 # Float64 AND ForwardDiff.Dual eltype, and peak RSS — printed as a table and
 # written as JSON. A hand-written monotone-PPM reference kernel provides the
 # denominator for the "within 2-3x of hand-written" runtime gate.
@@ -106,20 +106,18 @@ function peak_rss_mb()
     return NaN
 end
 
-"build_evaluator with the compile-once tier counters on; returns result + stats."
+"One build through `EarthSciAST.Internal.build`; returns the result + its compile-once counts."
 function timed_build(doc; kwargs...)
     GC.gc()
-    EA._BENCH_ON[] = true
-    EA._bench_reset!()
     t0 = time()
-    built = EA.build_evaluator(doc; kwargs...)
+    built = EA.Internal.build(doc; kwargs...)
     build_s = time() - t0
+    counts = built.report.counts
     stats = (
         build_s = build_s,
-        body_variants = EA._BENCH_BODY_VARIANTS[],
-        compile_calls = EA._BENCH_COMPILE_CALLS[],
+        body_variants = get(counts, :body_variants, 0),
+        compile_calls = get(counts, :compile_calls, 0),
     )
-    EA._BENCH_ON[] = false
     return built, stats
 end
 

@@ -77,7 +77,7 @@ using JSON3
 using EarthSciAST
 
 # `testutils.jl` provides TESTUTILS_REPO_ROOT. `Test` must already be imported
-# before it is included (its guard block expands `@test_skip` at lowering time).
+# before it is included (its guard block expands `@test` at lowering time).
 if !isdefined(Main, :ESM_TESTUTILS_LOADED)
     include("testutils.jl")
 end

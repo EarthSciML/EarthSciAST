@@ -30,7 +30,7 @@
 # Like `operator_compose_merge` the category carries no golden: what it pins is
 # REACH, asserted as structure.
 
-# `using Test` MUST precede the testutils include: testutils.jl uses `@test_skip`
+# `using Test` MUST precede the testutils include: testutils.jl uses `@test`
 # at top level, so `Test` has to be in scope in `Main` already.
 using Test
 using EarthSciAST

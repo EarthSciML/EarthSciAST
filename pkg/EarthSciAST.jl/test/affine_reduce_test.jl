@@ -59,10 +59,13 @@ function _ar_doc(
     )
 end
 
+# The document's one component is `R`; the build takes and returns its names
+# qualified.
 function _ar_build(doc, ics; compiler = :native)
-    _AR._reset_cascade_tally!()
-    f!, u0, p, _, vm = _AR._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
-    return f!, u0, p, vm, copy(_AR._CASCADE_TALLY)
+    f!, u0, p, _, vm, rep = _AR.Internal.build(
+        doc; initial_conditions = Dict("R.$k" => v for (k, v) in ics), compiler = compiler
+    )
+    return f!, u0, p, vm, rep.counts
 end
 
 # A perturbed state with no exact zeros and no integers.

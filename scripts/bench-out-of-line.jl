@@ -16,9 +16,7 @@
 
 using EarthSciAST
 using EarthSciAST: resolve_template_machinery, lower_expression_templates, Expand,
-    JSONLikeDict, _BENCH_ON, _BENCH_COMPILE_CALLS, _BENCH_BRANCH_TEMPLATES,
-    _BENCH_BODY_VARIANTS, _bench_reset!,
-    build_evaluator, load, flatten
+    JSONLikeDict, load, flatten
 using JSON3
 
 const ROOT = normpath(joinpath(@__DIR__, ".."))
@@ -65,18 +63,16 @@ function build_once(fix::AbstractString, disable::Bool)
         # load already expanded, so no references reach flatten and the build
         # fuses the expanded spine. Both are bit-identical (gate 3); this
         # measures the build cost.
-        build_evaluator(flatten(load_path(fix)))
+        EarthSciAST.Internal.build(flatten(load_path(fix)))
     end
 end
 
 function build_measure(fix::AbstractString, label; disable::Bool)
-    _BENCH_ON[] = true
-    _bench_reset!()
-    t = @elapsed build_once(fix, disable)
-    branches = _BENCH_BRANCH_TEMPLATES[]
-    compiles = _BENCH_COMPILE_CALLS[]
-    variants = _BENCH_BODY_VARIANTS[]
-    _BENCH_ON[] = false
+    t = @elapsed built = build_once(fix, disable)
+    counts = built.report.counts
+    branches = get(counts, :branch_templates, 0)
+    compiles = get(counts, :compile_calls, 0)
+    variants = get(counts, :body_variants, 0)
     println("── build ($label) ──")
     println("  _build_branch_template calls (spine templates): ", branches)
     println("  compiled template-body variants (sub-kernels):  ", variants)

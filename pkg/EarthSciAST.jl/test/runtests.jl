@@ -1,513 +1,327 @@
+# The package's test suite (`Pkg.test()`), as named groups of files.
+#
+# Each file runs in a module of its own, so a helper one file defines cannot
+# shadow another's, and a file that runs here also runs standalone
+# (`julia --project -e 'include("test/<file>")'`, which `test_file_prelude_test.jl`
+# checks). `ESM_TEST_GROUPS=build,simulate` runs only the named groups; unset,
+# every group runs. The `reactant` group needs Reactant in the environment and
+# runs only with `ESM_TEST_REACTANT=1`.
 using Test
-using EarthSciAST
-using JSON3
 
-include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _require_fixture
+const GROUPS = [
+    :contract => [
+        "api_surface_test.jl",
+        "invalidations_test.jl",
+        "error_hierarchy_test.jl",
+        "test_file_prelude_test.jl",
+    ],
+    :document => [
+        "types_test.jl",
+        "solver_block_test.jl",
+        "classification_test.jl",
+        "parse_test.jl",
+        "migration_test.jl",
+        "version_constants_test.jl",
+        "validate_test.jl",
+        "schema_match_parity_test.jl",
+        "structural_validation_test.jl",
+        "recurrence_validation_test.jl",
+        "recurrence_sweep_test.jl",
+        "observed_cycle_validation_test.jl",
+        "variable_bounds_test.jl",
+        "expression_test.jl",
+        "expression_sites_test.jl",
+        "show_test.jl",
+        "reactions_test.jl",
+        "reaction_species_order_test.jl",
+        "reaction_lowering_form_test.jl",
+        "units_test.jl",
+        "unit_exact_scale_test.jl",
+        "transcendental_scale_test.jl",
+        "const_units_test.jl",
+        "dimensionless_literal_conformance_test.jl",
+        "graph_test.jl",
+        "graph_conformance_test.jl",
+        "round_trip_regression_test.jl",
+        "corpus_fidelity_test.jl",
+        "conformance_round_trip_test.jl",
+        "conformance_pushdown_test.jl",
+        "run_esm_tests_test.jl",
+        "wrt_default_omitted_test.jl",
+        "units_fixture_consumption_test.jl",
+        "array_ops_test.jl",
+    ],
+    :flatten => [
+        "reference_resolution_test.jl",
+        "codegen_test.jl",
+        "flatten_test.jl",
+        "flatten_conformance_test.jl",
+        "flatten_wire_conformance_test.jl",
+        "term_provenance_test.jl",
+        "operator_compose_merge_conformance_test.jl",
+        "merged_rename_reach_conformance_test.jl",
+        "unsupported_construct_conformance_test.jl",
+        "doubly_defined_state_conformance_test.jl",
+        "data_source_unbound_conformance_test.jl",
+        "records_per_sample_conformance_test.jl",
+        "pointwise_lift_axis_names_test.jl",
+        "coupling_imports_test.jl",
+        "flattened_to_esm_test.jl",
+        "shape_promotion_test.jl",
+        "shape_promotion_consumer_refs_test.jl",
+        "ifelse_mixed_arm_shape_test.jl",
+        "subsystem_ref_test.jl",
+        "mount_index_set_rename_test.jl",
+        "toplevel_mount_edge_pipeline_test.jl",
+        "native_subsystem_walk_test.jl",
+        "resolve_subsystem_refs_wrapper_test.jl",
+        "mount_remote_leaf_test.jl",
+        "data_source_extent_scope_test.jl",
+        "reaction_system_ref_test.jl",
+        "editing_test.jl",
+        "data_loader_fixtures_test.jl",
+        "arrayed_vars_test.jl",
+        "canonicalize_test.jl",
+        "document_format_test.jl",
+        "deprecated_ops_test.jl",
+        "relational_test.jl",
+    ],
+    :simulate => [
+        "simulate_run_test.jl",
+        "esm_problem_test.jl",
+        "loaded_ic_bc_simulation_test.jl",
+        "subsystem_loader_conformance_test.jl",
+        "build_once_spatial_field_conformance_test.jl",
+        "wildfire_simulation_test.jl",
+        "compiler_selection_test.jl",
+        "range_restricted_rhs_test.jl",
+        "conformance_range_restricted_rhs_test.jl",
+        "public_rhs_program_test.jl",
+        "program_build_test.jl",
+        "conformance_public_rhs_program_test.jl",
+        "strip_and_expose_conformance_test.jl",
+        "conformance_provider_forcing_test.jl",
+        "conformance_ic_at_start_test.jl",
+        "percell_route_refusal_test.jl",
+        "percell_license_test.jl",
+        "observed_program_test.jl",
+    ],
+    :build => [
+        "tree_walk_test.jl",
+        "state_layout_test.jl",
+        "compiled_lane_eval_test.jl",
+        "dag_walk_memo_test.jl",
+        "flatten_template_chain_test.jl",
+        "intern_oracle_test.jl",
+        "xeq_variant_oracle_test.jl",
+        "expand_memo_oracle_test.jl",
+        "template_instantiation_cache_test.jl",
+        "tree_walk_faq_test.jl",
+        "broadcast_alignment_test.jl",
+        "tree_walk_inline_const_index_test.jl",
+        "tree_walk_elementwise_obs_gather_test.jl",
+        "tree_walk_indexed_observed_lhs_test.jl",
+        "tree_walk_vectorized_test.jl",
+        "access_kernel_foundation_test.jl",
+        "stencil_affine_lowering_test.jl",
+        "stencil_affine_diff_test.jl",
+        "stencil_affine_ad_test.jl",
+        "stencil_affine_pgather_test.jl",
+        "stencil_affine_pgather_tbl_test.jl",
+        "stencil_affine_contract_test.jl",
+        "stencil_affine_const_fold_test.jl",
+        "stencil_subtree_tbl_test.jl",
+        "scan_prefix_test.jl",
+        "equality_scatter_test.jl",
+        "conformance_faq_equality_scatter_test.jl",
+        "makearray_scan_region_test.jl",
+        "hoist_region_split_test.jl",
+        "stencil_affine_cse_test.jl",
+        "stencil_affine_invariant_test.jl",
+        "stencil_affine_cross_shape_test.jl",
+        "grid_invariance_test.jl",
+        "array_obs_materialize_test.jl",
+        "cadence_refresh_test.jl",
+        "codegen_kernel_test.jl",
+        "dual_fast_path_test.jl",
+        "f64_overflow_codegen_test.jl",
+        "cg_foreign_scratch_test.jl",
+        "scalar_codegen_test.jl",
+        "codegen_threaded_test.jl",
+        "codegen_body_split_test.jl",
+        "stencil_indexed_contraction_test.jl",
+        "cross_eq_class_emission_test.jl",
+        "scalar_ops_test.jl",
+        "scalar_batch_test.jl",
+        "oop_merge_test.jl",
+        "tree_walk_iip_generic_test.jl",
+        "parameter_gradient_test.jl",
+        "parameter_vector_abi_test.jl",
+        "parameter_classes_test.jl",
+        "tree_walk_allocation_test.jl",
+        "tree_walk_param_gather_test.jl",
+        "data_refresh_test.jl",
+        "data_refresh_e2e_test.jl",
+        "refresh_conformance_test.jl",
+        "data_output_test.jl",
+        "provider_selection_test.jl",
+        "esio_document_cadence_test.jl",
+        "unit_conversion_test.jl",
+        "loader_ingest_and_select_test.jl",
+        "data_source_url_conformance_test.jl",
+        "url_substitutions_conformance_test.jl",
+        "solver_external_conformance_test.jl",
+        "solver_time_span_conformance_test.jl",
+        "loader_unit_conversion_conformance_test.jl",
+        "forcing_from_sample_test.jl",
+        "unit_registry_conformance_test.jl",
+        "zarr_sink_e2e_test.jl",
+        "streaming_coords_test.jl",
+        "streaming_checkpoint_test.jl",
+        "streaming_multigrid_test.jl",
+        "streaming_flush_gap_test.jl",
+        "output_derivation_conformance_test.jl",
+        "discrete_materialize_test.jl",
+        "discrete_materialize_conformance_test.jl",
+        "tree_walk_cse_test.jl",
+        "tree_walk_observed_slots_test.jl",
+        "contraction_loop_test.jl",
+        "contraction_tier_order_test.jl",
+        "array_contraction_test.jl",
+        "array_contraction_table_test.jl",
+        "count_fold_test.jl",
+        "closed_interp_native_test.jl",
+        "template_nested_observed_test.jl",
+        "relational_templates_test.jl",
+        "closed_templates_native_test.jl",
+        "template_scenarios_test.jl",
+        "relational_rewrites_test.jl",
+        "rank_count_setup_test.jl",
+        "makearray_nested_reduction_test.jl",
+        "makearray_output_idx_test.jl",
+        "affine_reduce_test.jl",
+        "native_probe_fixtures_test.jl",
+        "native_lifted_makearray_test.jl",
+        "tree_walk_tcadence_test.jl",
+        "tree_walk_untiered_test.jl",
+        "tree_walk_xcse_test.jl",
+        "tree_walk_const_array_boundary_test.jl",
+        "tree_walk_semiring_test.jl",
+        "tree_walk_join_test.jl",
+        "tree_walk_binning_alias_test.jl",
+        "op_registry_test.jl",
+        "tree_walk_op_table_test.jl",
+        "unevaluable_operator_test.jl",
+        "op_capability_audit_test.jl",
+        "tree_walk_audit_fixes_test.jl",
+    ],
+    :analysis => [
+        "reference_graph_test.jl",
+        "cadence_test.jl",
+        "value_invention_frontdoor_test.jl",
+        "value_invention_materialize_conformance_test.jl",
+    ],
+    :conformance => [
+        "faq_conformance_test.jl",
+        "removed_op_test.jl",
+        "expression_ic_conformance_test.jl",
+        "inverse_trig_conformance_test.jl",
+        "geometry_templates_test.jl",
+        "setup_map_compile_once_test.jl",
+        "evaluate_cellwise_blas_accel_test.jl",
+        "setup_fill_test.jl",
+        "geom_sweep_specialize_test.jl",
+        "geom_overlap_drive_test.jl",
+        "overlap_gated_template_test.jl",
+        "geom_on_drive_test.jl",
+        "broad_phase_conformance_test.jl",
+        "overlap_gate_conformance_test.jl",
+        "overlap_gate_live_forcing_test.jl",
+        "join_namespacing_test.jl",
+        "join_on_equality_gate_test.jl",
+        "join_on_self_join_test.jl",
+        "vi_overlap_scaling_test.jl",
+        "vi_on_drive_test.jl",
+        "pushdown_edge_test.jl",
+        "auto_pushdown_rewrite_test.jl",
+        "pushdown_template_ref_test.jl",
+        "phase5_clean_auto_test.jl",
+        "prepare_pushdown_record_gate_test.jl",
+        "prepare_pushdown_single_member_test.jl",
+        "pushdown_cell_geometry_test.jl",
+        "observed_materialization_test.jl",
+        "gated_sibling_loaders_test.jl",
+        "build_inspection_test.jl",
+        "observed_field_static_test.jl",
+        "inline_tests_test.jl",
+        "pde_inline_scalar_slot_collision_test.jl",
+        "pde_inline_dead_observed_test.jl",
+        "mounted_component_tests_test.jl",
+        "enum_lowering_test.jl",
+        "mount_enums_test.jl",
+        "mount_element_type_test.jl",
+        "toplevel_reaction_system_ref_test.jl",
+        "scoped_assertion_variable_test.jl",
+        "conformance_inline_golden_test.jl",
+        "conformance_pde_inline_dead_observed_test.jl",
+        "conformance_pde_inline_ic_param_override_test.jl",
+        "conformance_assertion_nonfinite_test.jl",
+        "conformance_const_array_gather_bounds_test.jl",
+        "assertion_tolerance_symmetry_test.jl",
+        "conformance_assertion_tolerance_test.jl",
+        "conformance_tolerance_resolution_test.jl",
+        "conformance_scalar_ic_test.jl",
+        "conformance_static_evaluation_assertions_test.jl",
+        "conformance_shaped_parameter_const_arrays_test.jl",
+        "conformance_missing_data_test.jl",
+        "conformance_override_key_diagnostics_test.jl",
+        "rhs_time_derivative_resolution_test.jl",
+        "unlowered_operator_walk_test.jl",
+        "template_array_args_test.jl",
+    ],
+    :templates => [
+        "expression_templates_test.jl",
+        "template_imports_test.jl",
+        "stdlib_refs_test.jl",
+        "scope_injection_test.jl",
+        "out_of_line_templates_test.jl",
+        "compile_once_templates_test.jl",
+        "expanded_model_seam_test.jl",
+    ],
+    :fixtures => [
+        "fixture_sweeps_test.jl",
+    ],
+    :reactant => [
+        "reactant_locate_test.jl",
+        "reactant_direct_emit_test.jl",
+        "reactant_direct_closed_test.jl",
+        "reactant_direct_sharding_test.jl",
+        "compiler_xla_test.jl",
+    ],
+]
 
-# `verbose = true` prints the per-testset table — name, counts, and TIME — for
-# every testset one level down, on every run. Without it a fully passing
-# `DefaultTestSet` collapses to a single summary line and the only way to learn
-# where the ~30-45 minutes go is to find a run that happened to FAIL, because a
-# failure is what makes Julia print the tree — so the profile was only ever
-# observable on a red run. One word, no runtime cost, and the suite reports its
-# own cost from here on.
+const _SELECTED = Set(split(get(ENV, "ESM_TEST_GROUPS", ""), ','; keepempty = false))
+_selected(group::Symbol) =
+    (isempty(_SELECTED) || String(group) in _SELECTED) &&
+    (group !== :reactant || get(ENV, "ESM_TEST_REACTANT", "0") == "1")
+
+# A fresh named module per file: `module … end` gives it its own `include` and
+# `eval`, which `Module()` would not.
+function _run_file(path::String)
+    name = Symbol("Test_", replace(splitext(basename(path))[1], r"[^A-Za-z0-9_]" => "_"))
+    m = Core.eval(Main, Expr(:module, true, name, Expr(:block)))
+    return Base.include(m, path)
+end
+
 @testset verbose = true "EarthSciAST.jl Tests" begin
-
-    # ---- Public API surface (api-surface.json at the repo root; API_SPEC.md) ----
-    # First, deliberately: if the export block and the manifest have diverged,
-    # that is the failure you want to read before 200 other tests scroll past.
-    include("api_surface_test.jl")
-    include("invalidations_test.jl")  # loading the solvers keeps the cached code valid
-
-    # ---- Exception hierarchy + diagnostic-code registry (src/errors.jl,
-    #      src/error_codes.jl) ----
-    # Also early: these guard the two package-wide invariants a new file can
-    # break without any local test noticing — an exception outside the
-    # `EarthSciASTError` root, or a diagnostic code spelled as an inline literal.
-    include("error_hierarchy_test.jl")
-
-    # ---- Test-file prelude hygiene (this directory) ----
-    # The third such invariant, and the one THIS file is complicit in: every
-    # name is already in `Main` by the time a given include runs, so a file that
-    # imports nothing passes here and dies standalone. Early, and reading only
-    # text, so it costs nothing and reports before the run it cannot trust.
-    include("test_file_prelude_test.jl")
-
-    # ---- Core types, parse, validate (src/types.jl, parse.jl,
-    #      validate.jl, graph.jl) ----
-    include("types_test.jl")
-    include("solver_block_test.jl")
-    include("classification_test.jl")
-    include("parse_test.jl")
-    # Version-marker migration (src/migration.jl, esm-libraries-spec §8.3) —
-    # the Julia mirror of pkg/earthsci-ast-ts/src/migration.test.ts, pinned
-    # against tests/version_compatibility/compatibility_matrix.json.
-    include("migration_test.jl")
-    # The two public version constants (SCHEMA_VERSION / LIBRARY_VERSION) and
-    # the schema-$id pin that keeps the first from hand-drifting.
-    include("version_constants_test.jl")
-    include("validate_test.jl")
-    # `validate_schema`'s own schema walk ≡ JSONSchema.jl's verdict.
-    include("schema_match_parity_test.jl")
-    include("structural_validation_test.jl")
-    # Causal self-reference well-foundedness (esm-spec §4.3.1.1). A VALIDATION
-    # category (CONFORMANCE_SPEC §5.19.5), so it sits with the other structural
-    # checks rather than with the tree-walk tests.
-    include("recurrence_validation_test.jl")
-    # …and its evaluation: the ordered sweep, under both compilers and on every
-    # route (CONFORMANCE_SPEC §5.19).
-    include("recurrence_sweep_test.jl")
-    # Observed dependency cycles (esm-spec §4.9.6). Sits beside the
-    # recurrence pass because the two share the CANDIDACY gate that decides
-    # which of them owns a self-edge (CONFORMANCE_SPEC §5.19.5).
-    include("observed_cycle_validation_test.jl")
-    # Variable bounds `lb` / `ub` (esm-spec §6.3.2): round-trip, the esm 2.1.0
-    # gate, the four validity rules and the flatten rewrite.
-    include("variable_bounds_test.jl")
-    include("expression_test.jl")
-    include("show_test.jl")
-    include("reactions_test.jl")
-    include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
-    include("reaction_lowering_form_test.jl")  # exact lowered tree (esm-libraries-spec §4.6.2)
-    include("units_test.jl")
-    include("unit_exact_scale_test.jl")
-    include("transcendental_scale_test.jl")
-    include("const_units_test.jl")
-    include("dimensionless_literal_conformance_test.jl")  # esm-spec §4.8.6 warning stage
-    include("graph_test.jl")
-    include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
-
-    # ---- Serialization round-trips (src/serialize.jl + conformance adapter) ----
-    include("round_trip_regression_test.jl")
-    # `save(load(F))` against **F itself** over the corpus. A different question
-    # from the conformance test below, which compares emit pass 2 against pass
-    # 3: a field lost on the FIRST load is invisible to a fixed-point check,
-    # because passes 2 and 3 agree perfectly about not having it.
-    include("corpus_fidelity_test.jl")
-    include("conformance_round_trip_test.jl")
-    include("conformance_pushdown_test.jl")
-
-    # ---- run_esm_tests discovery, the `wrt` default, unit fixtures, array-op nodes ----
-    # Every ModelingToolkit / Catalyst test (ext/EarthSciASTMTKExt.jl,
-    # ext/EarthSciASTCatalystExt.jl, `compiler = :mtk`, the `run_esm_tests`
-    # runs that compile through MTK) lives in test/mtk/, a separate suite with
-    # its own environment (test/mtk/Project.toml) that the ModelingToolkit CI
-    # workflow runs. THIS suite's environment does not carry ModelingToolkit or
-    # Catalyst at all; see test/mtk/runtests.jl for why.
-    include("run_esm_tests_test.jl")   # discovery + JUnit arithmetic; compiled runs are test/mtk/
-    # esm-spec §4.2's `wrt` default — an absent `wrt` on `D` MEANS `t` — on the
-    # tree-walk runner exactly as in `classification.jl`.
-    include("wrt_default_omitted_test.jl")
-    include("units_fixture_consumption_test.jl")
-    include("array_ops_test.jl")       # parse round trips + shape inference; the runtime is test/mtk/
-
-    # ---- References, codegen, flatten, editing (reference helpers in
-    #      src/types.jl; codegen.jl; flatten.jl and its split passes
-    #      (flatten_errors.jl, namespacing.jl, coupling_apply.jl,
-    #      pointwise_lift.jl, array_shape_inference.jl, shape_promotion.jl);
-    #      edit.jl) ----
-    include("reference_resolution_test.jl")
-    include("codegen_test.jl")
-    include("flatten_test.jl")
-    include("flatten_conformance_test.jl")  # FlattenedSystem field set ≡ Python oracle
-    include("flatten_wire_conformance_test.jl")  # the flattened system on the wire, byte for byte
-    include("term_provenance_test.jl")      # per-term provenance invariant (§4.7.5)
-    # operator_compose merge intent: the §4.7.1 step 5 diagnostic, `require_match`,
-    # and step 3's owner-based bare-name rename.
-    include("operator_compose_merge_conformance_test.jl")
-    # How far the merged-away rename REACHES: past the equation ASTs, onto the
-    # by-name endpoints of every coupling entry that has not run yet and onto a
-    # runner's override keys.
-    include("merged_rename_reach_conformance_test.jl")
-    # A continuous or discrete event, or an implicit equation, is refused by the
-    # tree-walk evaluator with `unsupported_construct`, never run without it.
-    include("unsupported_construct_conformance_test.jl")
-    # An unknown carrying BOTH a derivative equation and an algebraic one is
-    # refused at the build with `equation_count_mismatch`, never resolved by
-    # letting the derivative win (esm-spec §4.9.4).
-    include("doubly_defined_state_conformance_test.jl")
-    # A DATA-FED parameter with nothing bound to it is refused at construction,
-    # never bound from its `default` and integrated (esm-spec §9.6.6
-    # `data_source_unbound`, CONFORMANCE_SPEC §5.46).
-    include("data_source_unbound_conformance_test.jl")
-    # Record axes: a data-fed parameter's record shape says how many records
-    # it receives, and every loader field reports that; the deprecated
-    # `records_per_sample` is checked against it and warned about (esm-spec §8.5.1).
-    include("records_per_sample_conformance_test.jl")
-    include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
-    include("coupling_imports_test.jl")
-    include("flattened_to_esm_test.jl")
-    include("shape_promotion_test.jl")
-    include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
-    include("ifelse_mixed_arm_shape_test.jl")  # §4.3.4 one array arm + one scalar arm; data-fed shape adoption
-    include("subsystem_ref_test.jl")
-    include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
-    include("toplevel_mount_edge_pipeline_test.jl")  # §4.7 edge pipeline, top-level {ref}
-    include("native_subsystem_walk_test.jl")  # §4.7 subsystems.<k> form on the native dict
-    include("resolve_subsystem_refs_wrapper_test.jl")  # the typed wrapper runs the load's mount pipeline
-    include("mount_remote_leaf_test.jl")  # http(s) leaves take the same pipeline
-    # §8.9.4 discovered `extent` + §9.7.6 site 4 widened past the root's own
-    # declarations; the shared fixtures both mount forms are pinned against.
-    include("data_source_extent_scope_test.jl")
-    include("reaction_system_ref_test.jl")
-    include("editing_test.jl")
-    include("data_loader_fixtures_test.jl")
-    include("arrayed_vars_test.jl")
-    include("canonicalize_test.jl")
-    # Markdown and Typst document source formats: the golden set and the
-    # whole-corpus round trip (CONFORMANCE_SPEC §5.58).
-    include("document_format_test.jl")
-    # `neg` / `pow` are deprecated: rewritten to `-` / `^` on load with one
-    # `deprecated_op` warning per document (esm-spec §4.2).
-    include("deprecated_ops_test.jl")
-    include("relational_test.jl")
-
-    # ---- End-to-end simulation runs ----
-    include("simulate_run_test.jl")
-    include("esm_problem_test.jl")
-    include("loaded_ic_bc_simulation_test.jl")
-    include("subsystem_loader_conformance_test.jl")
-    include("build_once_spatial_field_conformance_test.jl")
-    include("wildfire_simulation_test.jl")
-
-    # ---- Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10) ----
-    # The closed vocabulary, the strict `native` tier report, and the agreement
-    # of `native` with the `:interpreter` oracle — the whole point of the
-    # compiler keyword.
-    include("compiler_selection_test.jl")
-    include("range_restricted_rhs_test.jl")               # select / halo / restrict / lanes (API_SPEC §5.8)
-    include("conformance_range_restricted_rhs_test.jl")   # CONFORMANCE_SPEC §5.50
-    include("public_rhs_program_test.jl")                 # reentrant rhs! (API_SPEC §5.8)
-    include("program_build_test.jl")                      # esm_problem(…; program_build = true)
-    include("conformance_public_rhs_program_test.jl")     # CONFORMANCE_SPEC §5.51
-    include("strip_and_expose_conformance_test.jl")       # CONFORMANCE_SPEC §5.57
-    include("conformance_provider_forcing_test.jl")      # providers and the default forcing (API_SPEC §5.8)
-    include("conformance_ic_at_start_test.jl")           # an `ic` is evaluated at the run's start (esm-spec §11.4.2)
-    # Every per-cell route under a strict `native`: refused by name, or compiled
-    # once and reported under a tier that says so.
-    include("percell_route_refusal_test.jl")
-    include("percell_license_test.jl")
-    # The compiled observed program: observed_field(prob, name; u, t), inline
-    # assertions and sink fields read through it, bit for bit the interpreter's.
-    include("observed_program_test.jl")
-
-    # ---- Tree-walk evaluator (src/tree_walk.jl) + discrete-cadence data refresh ----
-    include("tree_walk_test.jl")
-    include("state_layout_test.jl")                # the flat state layout ≡ the per-cell name map it replaced
-    include("compiled_lane_eval_test.jl")          # the affine tier's compiled lane evaluator ≡ _eval_recipe
-    include("dag_walk_memo_test.jl")               # a DAG walk stays linear in distinct nodes, not paths
-    include("flatten_template_chain_test.jl")      # flatten visits a deep chain of template expansions once per shared subtree
-    include("intern_oracle_test.jl")               # hash-consed (interned) nodes ≡ the interpreter (differential)
-    include("xeq_variant_oracle_test.jl")          # cross-equation variant memo ≡ the interpreter (differential)
-    include("expand_memo_oracle_test.jl")          # template-expansion memo ≡ expand_flattened_refs (differential)
-    include("template_instantiation_cache_test.jl") # template sites from cached skeletons ≡ the direct expansion
-    include("tree_walk_faq_test.jl")
-    include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
-    include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target
-    include("tree_walk_elementwise_obs_gather_test.jl")  # elementwise array observed reached only via an aggregate gather
-    include("tree_walk_indexed_observed_lhs_test.jl")    # array observed defined by the INDEXED LHS spelling (§6.3.1)
-    include("tree_walk_vectorized_test.jl")
-    include("access_kernel_foundation_test.jl")     # access-kernel (affine) IR foundation
-    include("stencil_affine_lowering_test.jl")       # affine lowering, _lower_to_access
-    include("stencil_affine_diff_test.jl")           # affine tier ≡ per-cell (differential)
-    include("stencil_affine_ad_test.jl")             # affine tier AD Jacobian + out-of-place
-    include("stencil_affine_pgather_test.jl")        # affine tier live forcing ≡ per-cell
-    include("stencil_affine_pgather_tbl_test.jl")    # non-affine forcing table ≡ per-cell (interpreter oracle)
-    include("stencil_affine_contract_test.jl")       # affine tier const-bound contraction ≡ per-cell
-    include("stencil_affine_const_fold_test.jl")     # affine tier LANE_CONST fold is index-derived, not value-sampled
-    include("stencil_subtree_tbl_test.jl")           # subterm-granular fallback: const-evaluable subtree → per-box table (interpreter oracle)
-    include("scan_prefix_test.jl")                   # O(N) prefix reduction ≡ per-cell
-    include("equality_scatter_test.jl")              # one-pass scatter for an equality filter ≡ interpreter
-    include("conformance_faq_equality_scatter_test.jl")  # equality-filter scatter: native ≡ interpreter ≡ naive golden
-    include("makearray_scan_region_test.jl")         # a scan makearray region / filtered operand under native
-    include("hoist_region_split_test.jl")            # region-split operands combined elementwise, each lifted to an observed
-    include("stencil_affine_cse_test.jl")            # affine tier per-cell CSE ≡ per-cell
-    include("stencil_affine_invariant_test.jl")      # affine tier invariant hoist ≡ per-cell
-    # Cross-shape state gather (a state array read from a loop of a DIFFERENT
-    # shape): the cut signature and the box lowering must both stay O(1) in the
-    # grid. Sits next to grid_invariance_test.jl because it pins the same
-    # property on the tier that was violating it.
-    include("stencil_affine_cross_shape_test.jl")
-    include("grid_invariance_test.jl")               # compiled IR size is O(1) in the grid
-    include("array_obs_materialize_test.jl")         # factored array observeds ≡ the interpreter's inlining build
-    include("cadence_refresh_test.jl")               # every refresh kind reaches the const/time memoized tiers
-    include("codegen_kernel_test.jl")                # codegen tier ≡ the uncompiled walk (differential)
-    include("dual_fast_path_test.jl")                # Dual overflow tier ≡ interpreter
-    include("f64_overflow_codegen_test.jl")          # overflow RGF serves budget-declined Float64 kernels (interpreter oracle)
-    include("cg_foreign_scratch_test.jl")            # codegen emits cross-kernel CSE shared-prelude reads (interpreter oracle)
-    include("scalar_codegen_test.jl")                # scalar equations + prelude as generated code, emitted by structure (interpreter oracle)
-    include("codegen_threaded_test.jl")              # codegen threaded cell axis: chunk instances ≡ serial, disjointness, threaded subprocess
-    include("codegen_body_split_test.jl")            # oversized kernel body split across @noinline helpers ≡ un-split (node-cap oracle)
-    include("stencil_indexed_contraction_test.jl")   # reduced-rank + contracted makearray region values fire affine ≡ per-cell (interpreter oracle)
-    include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (corpus sweep)
-    include("scalar_ops_test.jl")                    # the shared op ladder + gather-subscript resolver
-    include("scalar_batch_test.jl")                  # lane-batched grouping of the per-cell scalar surface
-    include("oop_merge_test.jl")                     # kernel-CLASS merge ≡ unmerged (both build forms)
-    include("tree_walk_iip_generic_test.jl")
-    include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
-    include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
-    include("parameter_classes_test.jl")             # numeric/structural/const-folded/forcing partition + the narrowed solve-time refusal
-    # The Reactant/XLA backend (ext/EarthSciASTReactantExt.jl). OPT-IN: Reactant
-    # bundles an XLA runtime; it is in the test target so `Pkg.test()` resolves
-    # it, but it is only LOADED when ESM_TEST_REACTANT=1 — the default suite must
-    # keep running (and passing) without it. See the header of
-    # test/reactant_direct_emit_test.jl.
-    if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
-        include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
-        include("reactant_direct_emit_test.jl")      # the COMPILED backend: StableHLO built directly from the _Node IR
-        include("reactant_direct_closed_test.jl")    # the closed-AST library shapes: the count, computed-subscript table reads
-        include("reactant_direct_sharding_test.jl") # multi-device: needs ESM_TEST_REACTANT_GPU=1 too, else self-skips
-        include("compiler_xla_test.jl")              # esm_problem(; compiler = :xla): the emitter on the SOLVE path
-    else
-        @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
-            "with Reactant in the environment, to run the compiled backend)"
-    end
-    include("tree_walk_allocation_test.jl")
-    include("tree_walk_param_gather_test.jl")
-    include("data_refresh_test.jl")
-    include("data_refresh_e2e_test.jl")
-    include("refresh_conformance_test.jl")
-    # Streaming output sinks — the OUTPUT mirror of the data-refresh input seam
-    # (streaming-output-sinks RFC §16, Wave 1). Loads DiffEqCallbacks + SciMLBase
-    # (the test target), which activates the EarthSciASTCallbacksExt extension.
-    include("data_output_test.jl")
-    # Phase 1b projection pushdown across the EarthSciIO provider seam. Loads
-    # EarthSciIO (+ Blosc/JSON/SHA) from the test target (Project.toml
-    # [targets].test), which activates the EarthSciASTEarthSciIOExt extension.
-    include("provider_selection_test.jl")
-    include("esio_document_cadence_test.jl")
-    # esm-spec §8.5 `unit_conversion` at the unit level (parse + apply).
-    include("unit_conversion_test.jl")
-    # The loader-ingest surface of esm-spec §8.9 (reader_options / codes /
-    # record_filter / extent / select), over local FF10-zip + Zarr-v2 fixtures.
-    # The Rust mirror is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs.
-    include("loader_ingest_and_select_test.jl")
-    # esm-spec §8.2.1: WHERE a data source points -- the shared
-    # cross-binding pin in tests/conformance/data_source_url/manifest.json.
-    include("data_source_url_conformance_test.jl")
-    # esm-spec §4.7 mount-edge `url_substitutions`: the cross-binding pin in
-    # tests/conformance/url_substitutions/manifest.json.
-    include("url_substitutions_conformance_test.jl")
-    # esm-spec §2.2.6: WHERE `solver.external` points -- the shared
-    # cross-binding pin in tests/conformance/solver_external/manifest.json.
-    include("solver_external_conformance_test.jl")
-    # esm-spec §2.2.7: `solver.time_span` -- the shared cross-binding pin in
-    # tests/conformance/solver_time_span/manifest.json.
-    include("solver_time_span_conformance_test.jl")
-    # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
-    # manifest-driven cross-binding conformance adapter.
-    include("loader_unit_conversion_conformance_test.jl")
-    # The public sample-to-buffer conversion `esm_problem` uses (API_SPEC §5.8,
-    # "Forcing sets"), against the Problem's own buffers.
-    include("forcing_from_sample_test.jl")
-    include("unit_registry_conformance_test.jl")
-    # Streaming output sinks (Wave 2): end-to-end ZarrSink write → ZarrReader
-    # read-back round-trip through the EarthSciIO write boundary (RFC §16).
-    include("zarr_sink_e2e_test.jl")
-    # Streaming output sinks (Wave 3): the `coordinates` registry → CF
-    # dimension-coordinate emission (real dim names + values + standard_name/units/axis).
-    include("streaming_coords_test.jl")
-    # Streaming output sinks (Wave 3): predicate-driven checkpoint (DiscreteCallback
-    # + SLURM/spot/any_of builtins) + manifest-driven `zarr_restart_state`.
-    include("streaming_checkpoint_test.jl")
-    # Streaming output sinks (Wave 3): multi-grid — partition variables by
-    # spatial-dim signature (`group_gridding_by_grid`) → one sink per grid/store.
-    include("streaming_multigrid_test.jl")
-    # Streaming output sinks (regression): `sink_flush!` interleaved with ordinary
-    # records must not move, drop, or duplicate a record — no fill-valued phantom
-    # slots at shard tails, no records written past the declared `shape[time]`.
-    include("streaming_flush_gap_test.jl")
-    # Streaming output sinks: the CROSS-LANGUAGE derivation gate
-    # (`tests/conformance/output_derivation/`, RFC §16.12). Julia and Rust each
-    # derive the same plan from the same .esm fixtures + flat slot names and
-    # assert the same committed golden, so golden agreement IS cross-language
-    # agreement. Needs no solver and no EarthSciIO — it is pure derivation.
-    include("output_derivation_conformance_test.jl")
-    include("discrete_materialize_test.jl")
-    include("discrete_materialize_conformance_test.jl")
-    include("tree_walk_cse_test.jl")
-    include("tree_walk_observed_slots_test.jl")
-    include("contraction_loop_test.jl")             # runtime contraction loop
-    include("contraction_tier_order_test.jl")       # loop-vs-affine tier ORDER
-    include("array_contraction_test.jl")            # whole-array contraction loop nest
-    include("array_contraction_table_test.jl")      # …its gated / ragged / filtered form, table-driven
-    include("count_fold_test.jl")                   # the indicator sum emitted as a count
-    include("closed_interp_native_test.jl")         # the interp templates under native; repeated sub-trees shared
-    include("template_nested_observed_test.jl")     # a template read at an inlined makearray observed chain
-    include("relational_templates_test.jl")         # the lib/relational.esm argmin/argmax templates
-    include("closed_templates_native_test.jl")      # the phase-3 library templates under strict native
-    include("template_scenarios_test.jl")           # tests/closed_functions scenarios through the stdlib templates (§9.8)
-    include("relational_rewrites_test.jl")          # the lib/relational.esm template forms of the relational fixtures
-    include("rank_count_setup_test.jl")             # rank_of_set lookups as a setup table; the count over sorted constant keys
-    include("makearray_nested_reduction_test.jl")   # a nested scalar reduction in a makearray region
-    include("makearray_output_idx_test.jl")         # makearray output_idx binds its loop symbols (esm-spec §4.3)
-    include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
-    include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
-    include("native_lifted_makearray_test.jl")      # a makearray gathered in a lifted equation (EarthSciIntegrator #34)
-    include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
-    # `compiler=:interpreter`: an in-place build that skips no prelude slot,
-    # which is what the tiering tests above use as their differential oracle.
-    include("tree_walk_untiered_test.jl")
-    include("tree_walk_xcse_test.jl")
-    include("tree_walk_const_array_boundary_test.jl")
-    include("tree_walk_semiring_test.jl")
-    include("tree_walk_join_test.jl")
-    include("tree_walk_binning_alias_test.jl")
-    include("op_registry_test.jl")
-    include("tree_walk_op_table_test.jl")
-    include("unevaluable_operator_test.jl")         # §9.6.6 core op with no rule, refused at build
-    include("op_capability_audit_test.jl")          # cross-tier op/fn-payload capability drift
-    include("tree_walk_audit_fixes_test.jl")
-
-    # ---- Analysis passes (src/reference_graph.jl, src/cadence.jl,
-    #      value invention) ----
-    include("reference_graph_test.jl")
-    include("cadence_test.jl")
-    include("value_invention_frontdoor_test.jl")
-    include("value_invention_materialize_conformance_test.jl")  # distinct over a derived axis counts its members
-
-    # ---- Cross-binding conformance harness adapters (tests/conformance/*) ----
-    include("faq_conformance_test.jl")
-    include("removed_op_test.jl")
-    include("expression_ic_conformance_test.jl")
-    include("inverse_trig_conformance_test.jl")
-    include("geometry_templates_test.jl")  # lib/geometry.esm overlap templates vs reference areas
-    include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
-    include("evaluate_cellwise_blas_accel_test.jl")  # evaluate_cellwise's opt-in BLAS mat-vec path
-    include("setup_fill_test.jl")  # construction-time fills through the cascade: bitwise, one compile across N
-    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == hand-computed arrays, bitwise
-    include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
-    include("overlap_gated_template_test.jl")  # the ISRM binning shape: overlap-gated overlap_area_planar, native == interpreter
-    include("geom_on_drive_test.jl")          # setup bin-equality broad phase: key matches DRIVE the sweep
-    include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
-    include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
-    include("overlap_gate_live_forcing_test.jl")  # §5.5.6 ring envelope factors when the gated apply stays in the RHS
-    include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
-    include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
-    include("join_on_self_join_test.jl")          # §5.5.8 a relation joined to ITSELF: two ranges, one index set
-    include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
-    include("vi_on_drive_test.jl")                # value invention: bin-equality key matches DRIVE the join
-    include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
-    include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)
-    include("pushdown_template_ref_test.jl")      # the desugar THROUGH surviving template refs (§9.6.4 Option B)
-    include("phase5_clean_auto_test.jl")          # projection-pushdown Phase 5 (LCC@build + fully-automatic)
-    include("prepare_pushdown_record_gate_test.jl") # Phase 1 consolidation (public prepare + record-derived gating)
-    include("prepare_pushdown_single_member_test.jl") # n=1 support-set pin (cross-language scalarisation footgun)
-    include("pushdown_cell_geometry_test.jl")     # rank-preserving cell-axis gathers (polygon allocation)
-    include("observed_materialization_test.jl")   # build-time producer materialization (line allocation)
-    include("gated_sibling_loaders_test.jl")      # hook 2: sibling loaders sharing a variable name
-    include("build_inspection_test.jl")
-    include("observed_field_static_test.jl")  # §5.8 name resolution on a state-free document
-    include("inline_tests_test.jl")
-    include("pde_inline_scalar_slot_collision_test.jl")
-    include("pde_inline_dead_observed_test.jl")  # an observed no live equation consumes
-    include("mounted_component_tests_test.jl")   # a mount does not carry the leaf's tests
-    include("enum_lowering_test.jl")             # esm-spec §9.3 lowering, error codes, zero/negative members
-    include("expression_sites_test.jl")          # every expression site of a typed document
-    include("mount_enums_test.jl")               # a mounted file's enum ops resolve in its own block
-    include("mount_element_type_test.jl")        # §4.7: a mounted leaf's element_type crosses the mount
-    include("toplevel_reaction_system_ref_test.jl")  # §4.7: a top-level reaction_systems.<k> {ref} mounts
-    include("scoped_assertion_variable_test.jl")  # an assertion may name a scoped reference
-    include("conformance_pde_inline_observed_rank2_test.jl")
-    include("conformance_pde_inline_dead_observed_test.jl")
-    include("conformance_elementwise_observed_gather_test.jl")
-    include("conformance_pde_inline_observed_param_rank2_test.jl")
-    include("conformance_pde_inline_observed_state_dependent_test.jl")  # §6.6.5 state-dependent array observed
-    include("conformance_pde_inline_observed_indexed_lhs_test.jl")      # §6.3.1 INDEXED-LHS array observed
-    include("conformance_pde_inline_ic_param_override_test.jl")
-    include("conformance_pde_inline_array_overrides_test.jl")
-    include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
-    include("conformance_const_array_gather_bounds_test.jl")  # §5.5.5 out-of-range const-array gather
-    include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
-    include("conformance_assertion_tolerance_test.jl")  # §6.6.3 pass predicate (data-only)
-    include("conformance_tolerance_resolution_test.jl")  # §6.6.4 per-field tolerance merge
-    include("conformance_scalar_ic_test.jl")
-    include("conformance_static_evaluation_assertions_test.jl")  # §6.6.3 an assertion's `time` is when it is EVALUATED
-    include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
-    include("conformance_shaped_parameter_const_arrays_test.jl")  # §5.32.5 const_arrays keys for a shaped parameter
-    include("conformance_missing_data_test.jl")  # §10.10 a shaped parameter with no data is refused by name
-    include("conformance_shaped_observed_scalar_broadcast_test.jl")  # §4.3.4 scalar right-hand side on a shaped observed
-    include("conformance_override_key_diagnostics_test.jl")
-    include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
-    include("rhs_time_derivative_resolution_test.jl")   # §4.2 right-hand-side D: Julia resolves; its exclusion
-    include("unlowered_operator_walk_test.jl")          # §9.6.3 c.6: unlowered op in a tree the build discards
-    include("template_array_args_test.jl")  # §9.6.11 a template applied elementwise over an array
-
-    # ---- Expression templates & scoped imports
-    #      (src/templates/) ----
-    include("expression_templates_test.jl")
-    include("template_imports_test.jl")
-    include("stdlib_refs_test.jl")       # §4.7 esm:std/ refs to the bundled lib/
-    include("scope_injection_test.jl")
-    include("out_of_line_templates_test.jl")
-    include("compile_once_templates_test.jl")
-    include("expanded_model_seam_test.jl")
-
-    # ---- Shared fixture sweeps (tests/valid, tests/invalid) ----
-    # Smoke coverage across the shared fixture tree. Deeper checks live in the
-    # dedicated files: manifest-driven round-trip idempotence in
-    # conformance_round_trip_test.jl, expected-error assertions for specific
-    # invalid fixtures in validate_test.jl / structural_validation_test.jl.
-    @testset "Fixture sweeps" begin
-
-        @testset "Valid fixtures load" begin
-            valid_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
-            @test isdir(valid_dir)
-            for filename in filter(f -> endswith(f, ".esm"), readdir(valid_dir))
-                @testset "load: $filename" begin
-                    esm_data = EarthSciAST.load_path(joinpath(valid_dir, filename))
-                    @test esm_data isa EarthSciAST.EsmFile
-                    @test !isnothing(esm_data.esm)
-                    @test !isnothing(esm_data.metadata)
+    for (group, files) in GROUPS
+        _selected(group) || continue
+        @testset verbose = true "$group" begin
+            for f in files
+                @testset "$f" begin
+                    _run_file(joinpath(@__DIR__, f))
                 end
             end
         end
-
-        @testset "Invalid fixtures rejected" begin
-            invalid_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid")
-            @test isdir(invalid_dir)
-            for filename in filter(f -> endswith(f, ".esm"), readdir(invalid_dir))
-                filepath = joinpath(invalid_dir, filename)
-                @testset "reject: $filename" begin
-                    # A fixture counts as rejected when load throws a documented
-                    # rejection error or validate() reports errors. Any OTHER
-                    # exception propagates with its full stack trace.
-                    rejected = try
-                        result = EarthSciAST.validate(
-                            EarthSciAST.load_path(filepath)
-                        )
-                        !result.is_valid
-                    catch e
-                        # `ExpressionTemplateError` is the carrier for the
-                        # LOWERING-pass diagnostics -- esm-spec §9.6/§9.7
-                        # template + metaparameter codes, §10.9-§10.11 coupling
-                        # codes, and §8.2.1 `data_source_url_unresolved`.
-                        # The code-carrying load rejection the `resolver_only`
-                        # fixtures pin: `enum_duplicate_value` (§9.3).
-                        (
-                            e isa EarthSciAST.ParseError ||
-                                e isa EarthSciAST.SchemaValidationError ||
-                                e isa EarthSciAST.SubsystemRefError ||
-                                e isa EarthSciAST.ExpressionTemplateError ||
-                                e isa EarthSciAST.EnumLoweringError
-                        ) || rethrow()
-                        true
-                    end
-                    if rejected
-                        @test rejected
-                    else
-                        # Known gap: some shared invalid fixtures (several
-                        # units_* dimensional checks, undefined-variable rate
-                        # references, ...) are rejected by other language
-                        # bindings but pass Julia's load+validate. Kept broken
-                        # (not skipped) so a src-side fix flips them visibly.
-                        @test_broken rejected
-                    end
-                end
-            end
-        end
-
-        # Substitution fixture tests live in expression_test.jl, where they
-        # assert each case's expected output (not just that substitute runs).
     end
 end
