@@ -98,3 +98,54 @@ fn faq_below_v11_is_rejected() {
         "got: {err}"
     );
 }
+
+// --- every fixture under tests/invalid/removed_ops/ ------------------------
+
+/// Every `tests/invalid/removed_ops/*.esm` fixture is refused at load with
+/// `removed_op`, naming its op. The three ops esm 3.0.0 removed (`grad`, `div`,
+/// `laplacian`) are refused even though their fixtures declare esm 2.3.0, and
+/// their message points at spatial `D` and MIGRATION.md, never at the 2.0.0
+/// codemod.
+#[test]
+fn every_removed_ops_fixture_is_refused_with_removed_op() {
+    let dir = common::repo_fixture("invalid/removed_ops");
+    let mut seen_v3 = Vec::new();
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("read removed_ops dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("esm") {
+            continue;
+        }
+        let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let op = stem
+            .strip_prefix("removed_op_")
+            .unwrap_or(&stem)
+            .to_string();
+        let src = std::fs::read_to_string(&path).expect("read fixture");
+        let e = load_string(&src)
+            .expect_err(&format!("{stem} must be refused"))
+            .to_string();
+        assert!(e.contains("removed_op"), "{stem}: {e}");
+        if op != "function_tables" {
+            assert!(
+                e.contains(&format!("\"{op}\"")),
+                "{stem} must name `{op}`: {e}"
+            );
+        }
+        if ["grad", "div", "laplacian"].contains(&op.as_str()) {
+            let doc: serde_json::Value = serde_json::from_str(&src).expect("fixture is JSON");
+            assert_eq!(doc["esm"], "2.3.0", "{stem} declares 2.3.0");
+            assert!(e.contains("esm 3.0.0"), "{stem}: {e}");
+            assert!(e.contains("MIGRATION.md"), "{stem}: {e}");
+            assert!(!e.contains("earthsci_ast.migrate"), "{stem}: {e}");
+            seen_v3.push(op);
+        }
+        count += 1;
+    }
+    seen_v3.sort();
+    assert_eq!(seen_v3, ["div", "grad", "laplacian"]);
+    assert!(
+        count >= 13,
+        "expected the full removed_ops corpus, saw {count}"
+    );
+}

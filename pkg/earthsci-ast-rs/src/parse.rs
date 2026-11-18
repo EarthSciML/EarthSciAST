@@ -1372,9 +1372,9 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
 
 /// Reject files whose major version this library cannot read.
 ///
-/// A 1.x document loads at 2.0.0: the removed ops are refused by name at the
-/// wire boundary (`removed_op`) and the 1.x version gates stay live, so the
-/// major version alone never refuses a 1.x document. A pre-1.0.0 document and
+/// A 1.x or 2.x document loads at 3.0.0: the removed ops are refused by name
+/// at the wire boundary (`removed_op`) and the older version gates stay live,
+/// so the major version alone never refuses a 1.x or 2.x document. A pre-1.0.0 document and
 /// one from a major newer than this library's are refused here, with the
 /// standardized message string the Julia / Python libraries use.
 fn check_version_compatibility(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
@@ -1775,8 +1775,9 @@ fn is_iso8601_duration(s: &str) -> bool {
 }
 
 /// The wire-boundary op checks: a removed op (`arrayop`, removed at esm 0.8.0,
-/// and the ops and the `function_tables` block esm 2.0.0 removed,
-/// [`REMOVED_AT_V2`], `aggregate` among them) is rejected by name with
+/// the ops and the `function_tables` block esm 2.0.0 removed,
+/// [`REMOVED_AT_V2`], `aggregate` among them, and the `grad` / `div` /
+/// `laplacian` ops esm 3.0.0 removed, [`REMOVED_AT_V3`]) is rejected by name with
 /// `removed_op`, `faq` is refused in a document declaring esm below 1.1.0, and
 /// the deprecated spellings `neg` and `pow`
 /// ([`crate::op_registry::deprecated_op`]) are rewritten
@@ -1885,9 +1886,15 @@ pub(crate) const REMOVED_AT_V2: [&str; 9] = [
     "argmax",
 ];
 
+/// The spatial-calculus ops esm 3.0.0 removed (esm-spec §4.2 "Removed ops"):
+/// each is written with spatial `D`, one `D` per axis, or with a user op
+/// lowered by a rewrite rule. There is no codemod for these.
+pub(crate) const REMOVED_AT_V3: [&str; 3] = ["grad", "div", "laplacian"];
+
 /// The first removed construct a document uses, and where.
 pub(crate) enum Removed {
-    /// An `"op"` naming a removed op (`arrayop`, or one of [`REMOVED_AT_V2`]).
+    /// An `"op"` naming a removed op (`arrayop`, or one of [`REMOVED_AT_V2`] or
+    /// [`REMOVED_AT_V3`]).
     Op { path: String, op: String },
     /// The `function_tables` block, removed at esm 2.0.0.
     FunctionTables { path: String },
@@ -1907,6 +1914,12 @@ impl Removed {
                  `\"op\": \"faq\"`, was removed at esm 2.0.0; write `faq` (the codemod, \
                  `python -m earthsci_ast.migrate`, renames it)."
             ),
+            Removed::Op { path, op } if REMOVED_AT_V3.contains(&op.as_str()) => format!(
+                "removed_op at {path}: `\"op\": \"{op}\"` was removed at esm 3.0.0; write the \
+                 derivative with spatial `D`, one `D` per axis (`grad(f, dim: x)` is \
+                 `D(f, wrt: x)`), or with a user op lowered by a rewrite rule (MIGRATION.md, \
+                 \"esm 3.0.0\")."
+            ),
             Removed::Op { path, op } => format!(
                 "removed_op at {path}: `\"op\": \"{op}\"` was removed at esm 2.0.0; its \
                  replacement is an `esm:std/*.esm` expression template. Convert the document \
@@ -1924,7 +1937,7 @@ impl Removed {
 
 /// Is `op` an op name a loader rejects by name with `removed_op`?
 pub(crate) fn is_removed_op(op: &str) -> bool {
-    op == "arrayop" || REMOVED_AT_V2.contains(&op)
+    op == "arrayop" || REMOVED_AT_V2.contains(&op) || REMOVED_AT_V3.contains(&op)
 }
 
 /// The path of a `function_tables` block in a raw document: at the top level,
@@ -2203,6 +2216,27 @@ mod tests {
         assert!(e.contains("file declares 1.0.0"), "{e}");
         let v = run(json!({"esm": "2.0.0", "a": {"op": "faq"}})).unwrap();
         assert_eq!(v, json!({"esm": "2.0.0", "a": {"op": "faq"}}));
+    }
+
+    /// `grad`, `div` and `laplacian` are refused by name whatever `esm` the
+    /// document declares, with a message pointing at spatial `D` and
+    /// MIGRATION.md, never at the 2.0.0 codemod.
+    #[test]
+    fn the_ops_removed_at_v3_are_refused_without_a_codemod_pointer() {
+        use serde_json::json;
+        for op in REMOVED_AT_V3 {
+            for esm in ["1.3.0", "2.3.0", crate::SCHEMA_VERSION] {
+                let mut v =
+                    json!({"esm": esm, "m": {"rhs": {"op": op, "args": ["u"], "dim": "x"}}});
+                let e = prepare_document_ops(&mut v).unwrap_err().to_string();
+                assert!(e.contains("removed_op at /m/rhs:"), "{e}");
+                assert!(e.contains(&format!("\"{op}\"")), "{e}");
+                assert!(e.contains("removed at esm 3.0.0"), "{e}");
+                assert!(e.contains("spatial `D`"), "{e}");
+                assert!(e.contains("MIGRATION.md"), "{e}");
+                assert!(!e.contains("earthsci_ast.migrate"), "{e}");
+            }
+        }
     }
 
     #[test]

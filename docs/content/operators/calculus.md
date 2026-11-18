@@ -115,7 +115,7 @@ the one that can carry an expression.
 ## Gradient, divergence and Laplacian — written with `D`
 
 The format has no gradient, divergence or Laplacian operator. The sugar ops
-`grad`, `div` and `laplacian` were removed at esm 3.0.0, and a document that
+`grad`, `div` and `laplacian` were removed at esm 2.4.0, and a document that
 uses one is rejected at load with `removed_op`, whatever `esm` it declares.
 Write each with a spatial `D`, one per axis:
 

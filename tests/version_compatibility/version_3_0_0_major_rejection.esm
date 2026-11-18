@@ -1,0 +1,12 @@
+{
+  "esm": "3.0.0",
+  "metadata": {
+    "name": "Version_3_0_0_MajorRejection",
+    "description": "Test file with version 3.0.0 - should be rejected by 1.x.x and 2.x.x libraries",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-01-01T00:00:00Z"
+  },
+  "models": {}
+}

@@ -1,7 +1,7 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 3.0.0, which only removed the `grad`, `div` and `laplacian` ops (each a `removed_op` load error, with no codemod), so the library implements major 3 AND still loads majors 2 and 1 (a 2.x document that uses no removed construct loads as written, and its 2.x version gates still apply). The 2.x history (2.0.0, library then at 2.3.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 3. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
-    "library_version": "3.0.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 2.0.0 (library at 2.4.0: 2.1.0 added `lb` / `ub` variable bounds, esm-spec §6.3.2, 2.2.0 widened the pointwise lift, esm-spec §10.5, with no on-disk change, and 2.3.0 deprecated `neg` / `pow`, esm-spec §4.2, and added the canonical unit spelling, esm-spec §4.8.2, and the Markdown / Typst source formats, esm-spec §1.2, also with no on-disk change, and 2.4.0 removed the `grad`, `div` and `laplacian` sugar ops, each a `removed_op` load error with no codemod): 2.0.0 removed the operators and fields that needed code outside the expression AST (fn, function_tables/table_lookup, skolem, rank, argmin/argmax, the geometry leaves, the aggregate alias) and otherwise changed nothing, so the library implements major version 2 AND still loads major 1 (user ruling): a 1.x document that uses no removed construct loads as written, its own 1.x version gates (solver_*, const units, faq too old) still apply, and one that uses a removed construct is refused with `removed_op`, naming `python -m earthsci_ast.migrate`. Major 0 is REJECTED (the 1.0.0 break carries no deprecation path), and so is any major above 2. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "2.4.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
         "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
@@ -32,13 +32,13 @@
           "python -m earthsci_ast.migrate FILE... rewrites each removed construct as its template call, adds the expression_template_imports and sets esm to 2.0.0 (MIGRATION.md, esm 2.0.0 section)."
         ]
       },
-      "2.x_to_3.0.0": {
-        "summary": "The `grad`, `div` and `laplacian` ops are removed. A 2.x (or 1.x) document that uses none of them loads at 3.0.0 unchanged; one that does is refused with `removed_op`. There is no codemod.",
+      "2.3.0_to_2.4.0": {
+        "summary": "The `grad`, `div` and `laplacian` sugar ops are removed. A document that uses none of them loads at 2.4.0 unchanged; one that does is refused with `removed_op`, whatever `esm` it declares. There is no codemod.",
         "breaking_changes": [
           "`grad`, `div` and `laplacian` are a `removed_op` load error, whatever `esm` the document declares."
         ],
         "migration_path": [
-          "Write each with spatial `D`, one per axis: `grad(f, dim: x)` is `D(f, wrt: x)`; `div(F)` is the sum over axes of `D(F_i, wrt: x_i)`; `laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`. A scheme that is not written per axis (an unstructured-mesh divergence, for example) becomes a user op lowered by a rewrite rule (MIGRATION.md, esm 3.0.0 section)."
+          "Write each with spatial `D`, one per axis: `grad(f, dim: x)` is `D(f, wrt: x)`; `div(F)` is the sum over axes of `D(F_i, wrt: x_i)`; `laplacian(u)` is the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)`. A scheme that is not written per axis (an unstructured-mesh divergence, for example) becomes a user op lowered by a rewrite rule (MIGRATION.md, esm 2.4.0 section)."
         ]
       }
     },
@@ -116,17 +116,17 @@
         "file": "version_2_3_0_deprecated_neg.esm",
         "file_version": "2.3.0",
         "expected_behavior": "load_success",
-        "description": "The last 2.x minor - loads at 3.0.0 with no warning (a 2.x document with no removed op still loads). It held the exact-version-match role while the library was 2.3.0; version_3_0_0_baseline.esm now holds that role. 2.3.0 changes no on-disk shape; it deprecates the word spellings `neg` and `pow` (esm-spec §4.2 \"Deprecated ops\"), adds the canonical unit spelling (§4.8.2) and specifies the Markdown / Typst source formats (§1.2). This document spells unary minus `neg`, so the load also emits exactly one `deprecated_op` warning, naming the rewritten node by the JSON pointer listed in `deprecated_op`, and the loaded node is unary `-`. `warnings` lists version warnings only; `deprecated_op` lists the nodes the deprecation warning names.",
+        "description": "An EARLIER minor of the supported major since the esm 2.4.0 bump, loaded without warning. It held the exact-version-match role while the library was 2.3.0; version_2_4_0_baseline.esm now holds that role. 2.3.0 changes no on-disk shape; it deprecates the word spellings `neg` and `pow` (esm-spec §4.2 \"Deprecated ops\"), adds the canonical unit spelling (§4.8.2) and specifies the Markdown / Typst source formats (§1.2). This document spells unary minus `neg`, so the load also emits exactly one `deprecated_op` warning, naming the rewritten node by the JSON pointer listed in `deprecated_op`, and the loaded node is unary `-`. `warnings` lists version warnings only; `deprecated_op` lists the nodes the deprecation warning names.",
         "warnings": [],
         "deprecated_op": [
           "/models/Decay/equations/0/rhs/args/0"
         ]
       },
       {
-        "file": "version_3_0_0_baseline.esm",
-        "file_version": "3.0.0",
+        "file": "version_2_4_0_baseline.esm",
+        "file_version": "2.4.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully, with no version warning. 3.0.0 only removes the `grad`, `div` and `laplacian` ops (esm-spec §4.2 \"Removed ops\"), so this document is the 2.0.0 baseline restamped.",
+        "description": "Exact version match - should load successfully, with no version warning. 2.4.0 only removes the `grad`, `div` and `laplacian` ops (esm-spec §4.2 \"Removed ops\"), so this document is the 2.0.0 baseline restamped.",
         "warnings": []
       },
       {
@@ -170,17 +170,17 @@
         "file": "version_2_5_1_major_rejection.esm",
         "file_version": "2.5.1",
         "expected_behavior": "load_with_warning",
-        "description": "2.5.1 - a NEWER minor of the older supported major 2: loaded with a warning naming 2.3.0, the last 2.x minor, as version_1_10_0_double_digit.esm does for 1.x. It was the future-major rejection while the library was 1.x; while the library was 2.x it was a newer minor of the library's own major.",
+        "description": "2.5.1 - a NEWER minor of the supported major 2: loaded with a warning. It was the future-major rejection while the library was 1.x; version_3_0_0_major_rejection.esm took that role.",
         "warnings": [
-          "2.5.1 is newer than the current library version 2.3.0. Some features may not be supported."
+          "2.5.1 is newer than the current library version 2.4.0. Some features may not be supported."
         ]
       },
       {
-        "file": "version_4_0_0_major_rejection.esm",
-        "file_version": "4.0.0",
+        "file": "version_3_0_0_major_rejection.esm",
+        "file_version": "3.0.0",
         "expected_behavior": "reject",
-        "description": "Major version 4.x.x - a FUTURE major, rejected. Until esm 3.0.0 this role was held by a 3.0.0 document (version_3_0_0_major_rejection.esm), which version_3_0_0_baseline.esm replaced.",
-        "error": "Unsupported major version 4. This library supports major versions 1, 2, 3."
+        "description": "Major version 3.x.x - a FUTURE major, rejected",
+        "error": "Unsupported major version 3. This library supports major versions 1, 2."
       },
       {
         "file": "version_12_34_56_large_numbers.esm",
@@ -232,7 +232,7 @@
       }
     ],
     "validation_rules": {
-      "major_version_compatibility": "Libraries must reject files whose major version they do not implement, in EITHER direction. A 3.x library implements majors 1, 2 and 3 (esm 2.0.0 and esm 3.0.0 only removed constructs, each refused with removed_op) and rejects 0.x and 4.x alike.",
+      "major_version_compatibility": "Libraries must reject files whose major version they do not implement, in EITHER direction. A 2.x library implements majors 1 and 2 (esm 2.0.0 only removed constructs, each refused with removed_op) and rejects 0.x and 3.x alike.",
       "minor_version_backward_compatibility": "Libraries must accept files with minor version <= their supported minor version, within the same major",
       "minor_version_forward_compatibility": "Libraries should warn but attempt to load files with minor version > their supported minor version, within the same major",
       "patch_version_compatibility": "Patch versions are fully compatible within the same major.minor",

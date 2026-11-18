@@ -36,10 +36,6 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The `wrt` value naming the independent (time) variable.
 const TIME: &str = "t";
 
-/// Sugar ops that ARE a spatial derivative regardless of any `wrt`/`dim`
-/// (esm-spec §4.2 calculus ops; the §6.3.1 `pde` test).
-const SPATIAL_SUGAR_OPS: [&str; 3] = ["grad", "div", "laplacian"];
-
 /// The derived system kind (esm-spec §6.3.1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SystemKind {
@@ -877,13 +873,12 @@ fn derive_system_kind(
 }
 
 /// True when the expression contains a SPATIAL derivative anywhere: a `D` whose
-/// `wrt` is present and is not `"t"`, or a `grad` / `div` / `laplacian` sugar
-/// op. The walk descends EVERY expression child, not just `args` (§4.9.5).
+/// `wrt` is present and is not `"t"`. The walk descends EVERY expression
+/// child, not just `args` (§4.9.5).
 pub fn has_spatial_derivative(expr: &Expr) -> bool {
     match expr {
         Expr::Operator(node) => {
-            let here = (node.op == "D" && node.wrt.as_deref().is_some_and(|w| w != TIME))
-                || SPATIAL_SUGAR_OPS.contains(&node.op.as_str());
+            let here = node.op == "D" && node.wrt.as_deref().is_some_and(|w| w != TIME);
             here || node.any_child(&mut has_spatial_derivative)
         }
         _ => false,
@@ -1111,7 +1106,10 @@ mod tests {
         // A steady-state PDE has no time derivative but is still a PDE.
         let steady = model(serde_json::json!({
             "variables": { "phi": { "type": "unknown" }, "f": { "type": "parameter" } },
-            "equations": [ { "lhs": { "op": "laplacian", "args": ["phi"] }, "rhs": "f" } ]
+            "equations": [ { "lhs": { "op": "+", "args": [
+                { "op": "D", "args": [{ "op": "D", "args": ["phi"], "wrt": "x" }], "wrt": "x" },
+                { "op": "D", "args": [{ "op": "D", "args": ["phi"], "wrt": "y" }], "wrt": "y" }
+            ] }, "rhs": "f" } ]
         }));
         assert_eq!(system_kind(&steady), SystemKind::Pde);
 
@@ -1124,7 +1122,7 @@ mod tests {
                         "update": { "kind": "wiener" } }
             },
             "equations": [ { "lhs": { "op": "D", "args": ["v"], "wrt": "t" },
-                             "rhs": { "op": "*", "args": [{ "op": "grad", "args": ["v"], "dim": "x" }, "xi"] } } ]
+                             "rhs": { "op": "*", "args": [{ "op": "D", "args": ["v"], "wrt": "x" }, "xi"] } } ]
         }));
         assert_eq!(system_kind(&both), SystemKind::Sde);
 

@@ -467,8 +467,8 @@ pub enum UnitError {
 ///   could not conclude, NOT a defect in the file, so it stays a non-blocking
 ///   warning and the affected subexpression propagates as [`Dim::Unknown`].
 ///
-/// An operator with NO dimensional rule (a rewrite-target sugar op such as
-/// `grad`/`div`/`laplacian`, or any unregistered user op) is the one
+/// An operator with NO dimensional rule (an open-tier rewrite target such as
+/// `integral`, or any unregistered user op) is the one
 /// undeterminable case that emits NO finding at all: per esm-spec §4.8.4 the
 /// checker reports UNKNOWN and skips silently, matching the other four bindings
 /// (Julia/TS/Python/Go). See [`propagate_operator_dim`].
@@ -1008,8 +1008,8 @@ fn propagate_operator_dim(
 
 /// The dimension of a node whose `op` is not an evaluable-core operator.
 ///
-/// An unregistered user op, or a rewrite-target sugar op (`grad`/`div`/
-/// `laplacian`/`godunov_hamiltonian`/…), has a dimension that is
+/// An unregistered user op (`godunov_hamiltonian`/…), or an open-tier rewrite
+/// target such as `integral`, has a dimension that is
 /// UNDETERMINABLE until a discretization rule lowers it (esm-spec §4.8.4). The
 /// checker reports UNKNOWN and SKIPS: it emits NO finding, matching the other
 /// four bindings, which return an unknown dimension and let their callers skip
@@ -5490,19 +5490,19 @@ mod tests {
         ));
     }
 
-    /// The spatial-calculus sugar ops (`grad` / `div` / `laplacian` / `curl` /
-    /// `∇` / `integral`) are ORDINARY open-tier rewrite targets with NO
+    /// Open-tier rewrite targets (`curl` / `∇` / `integral` / a user op such
+    /// as `godunov_hamiltonian`) are ORDINARY rewrite targets with NO
     /// privileged dimensional rule (esm-spec §4.2 / §4.8.3). Their dimension is
     /// UNDETERMINABLE until a discretization rule lowers them, so propagation
     /// yields an unknown dimension via the same no-rule path as any unregistered
     /// user op — never the old bespoke "divide by a metre denominator"
     /// behaviour. Per esm-spec §4.8.4 an unlowered op is reported as UNKNOWN and
     /// SKIPPED: it emits NO finding at all, matching the other four bindings
-    /// (Julia/TS/Python/Go). `grad` is not singled out.
+    /// (Julia/TS/Python/Go).
     #[test]
-    fn propagate_spatial_sugar_ops_are_undeterminable() {
+    fn propagate_open_tier_ops_are_undeterminable() {
         let env = env_of(&[("c", "mol/m^3")]);
-        for op_name in ["grad", "div", "laplacian", "curl", "∇", "integral"] {
+        for op_name in ["curl", "∇", "integral", "godunov_hamiltonian"] {
             let e = op(op_name, vec![Expr::Variable("c".into())]);
             // No dimensional rule ⇒ undeterminable, so `propagate` cannot
             // conclude a unit.

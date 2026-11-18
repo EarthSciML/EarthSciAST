@@ -83,7 +83,7 @@ open-op-namespace RFC (`docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md`
 A spatial `D` (a `wrt` naming an axis) and the user ops here are **rewrite
 targets**, privileged in no way — this format ships no discretization rules (they
 live in `../earthscidiscretizations`). The `grad`/`div`/`laplacian` sugar these
-fixtures once used was removed at esm 3.0.0; each fixture now spells the same
+fixtures once used was removed at esm 2.4.0; each fixture now spells the same
 pattern with spatial `D`, or with a user op where a `D` pattern would change what
 the fixture tests (said in its section below).
 
@@ -114,7 +114,7 @@ parts.
 The user op `lap_xy(u)` lowered by a sugar rule to `D(D(u,x),x) + D(D(u,y),y)`
 (pass 1), whose nested `D`s are then lowered to stencils by second-derivative rules
 (pass 2). The pass-1 rule is a user op (it was the `laplacian` sugar until esm
-3.0.0): a spatial-`D` pattern for it would also match its own nested-`D` output,
+2.4.0): a spatial-`D` pattern for it would also match its own nested-`D` output,
 and the fixture needs a pass-1 rewrite target that only pass 1 lowers.
 Asserts convergence in exactly 2 productive passes to
 `inv_dx2·u + inv_dy2·u`, identical in every binding — exercising the bounded
@@ -160,7 +160,7 @@ each `where`-scoped to its own mesh's edge set (`edges_a` / `edges_b`). Each
 `fv_div` lowers by its own mesh's rule. Without the constraints, the §9.6.3
 declaration-order tie-break would send both nodes to the first-declared rule —
 the two-grids-two-schemes inexpressibility this mechanism closes. `fv_div` is a
-user op (the fixture used the `div` sugar until esm 3.0.0): a finite-volume
+user op (the fixture used the `div` sugar until esm 2.4.0): a finite-volume
 divergence from edges to cells on an unstructured mesh is not a derivative along
 one axis, so it cannot be written as spatial `D`.
 
@@ -190,7 +190,7 @@ in lockstep with the index set, and each instance then fires only on its own
 mesh's field. The unknown-index-set variant (`fv_div_grid_badwhere.esm`)
 constrains on an index set the library never declares, which the rename leaves
 as spelled, and is rejected at rule registration. The pattern is a user op (the
-`div` sugar until esm 3.0.0) because it must name NO axis: a spatial-`D` pattern
+`div` sugar until esm 2.4.0) because it must name NO axis: a spatial-`D` pattern
 carries its axis in `wrt`, which the same rename rewrites, so the instances
 would differ by `wrt` and the renamed `where` would no longer be the only thing
 telling them apart. The `wrt`-renaming case is `import_rename_two_instances/`.

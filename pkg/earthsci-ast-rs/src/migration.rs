@@ -5,13 +5,22 @@
 //! run of schema releases each of which introduced its changes as additive,
 //! backward-compatible fields, so an older file already loads under the newer
 //! schema without any mechanical transform. The current additive line is
-//! `2.0.0 … <current schema version>` ([`crate::SCHEMA_VERSION`]).
+//! `3.0.0 … <current schema version>` ([`crate::SCHEMA_VERSION`]).
+//!
+//! **esm 3.0.0 is a break that ends the 2.x line.** It removes the `grad`,
+//! `div` and `laplacian` ops; each is written with spatial `D`, one `D` per
+//! axis, or with a user op lowered by a rewrite rule. A 2.x document that uses
+//! none of them (and none of the ops 2.0.0 removed) is a 3.0.0 document
+//! already, so [`migrate`] relabels it to the current version. One that uses
+//! any of them is refused with the `removed_op` diagnostic, which points at
+//! MIGRATION.md "esm 3.0.0": there is no codemod for these three.
 //!
 //! **esm 2.0.0 is a break that ends the 1.x line.** It removes the `aggregate`
 //! spelling of `faq` and the external function ops — `fn`, `table_lookup` with the `function_tables` block,
 //! `skolem`, `rank`, `intersect_polygon`, `polygon_intersection_area`,
 //! `argmin`, `argmax` — in favour of the `esm:std/*.esm` expression templates.
-//! A 1.x document that uses none of them is a 2.0.0 document already, so
+//! A 1.x document that uses none of them (and none of the three ops 3.0.0
+//! removed) is a current document already, so
 //! [`migrate`] relabels it to the current version. One that uses any of them needs a rewrite this
 //! binding does not carry: [`migrate`] refuses it with the `removed_op`
 //! diagnostic, naming the offline codemod (Python `earthsci_ast.migration`,
@@ -94,18 +103,22 @@ type SemVer = (u32, u32, u32);
 
 /// The oldest version a marker bump can carry forward.
 ///
-/// It is 2.0.0: the 1.x line ended at a break, as the 0.x line did before it.
-/// [`on_additive_line`] already requires the majors to agree, which makes a
-/// 1.x source ineligible on its own; the floor is stated as well so the intent
-/// survives the next major. A 1.x source reaches the 2.x line only through
-/// the relabel-or-refuse step ([`LAST_1X`]).
-const ADDITIVE_FLOOR: SemVer = (2, 0, 0);
+/// It is 3.0.0: the 2.x line ended at a break, as the 1.x and 0.x lines did
+/// before it. [`on_additive_line`] already requires the majors to agree, which
+/// makes a 1.x or 2.x source ineligible on its own; the floor is stated as well
+/// so the intent survives the next major. A 1.x or 2.x source reaches the 3.x
+/// line only through the relabel-or-refuse step ([`LAST_1X`], [`LAST_2X`]).
+const ADDITIVE_FLOOR: SemVer = (3, 0, 0);
 
 /// The last release of the 1.x line. A source on `1.0.0 …= LAST_1X` may be
 /// RELABELLED to the current schema version when it uses none of the ops
-/// 2.0.0 removed: such a document is a 2.0.0 document already, and every
-/// later 2.x release is additive.
+/// 2.0.0 and 3.0.0 removed: such a document is a current document already.
 const LAST_1X: SemVer = (1, 3, 0);
+
+/// The last release of the 2.x line. A source on `2.0.0 …= LAST_2X` may be
+/// RELABELLED to the current schema version when it uses none of the removed
+/// ops (`grad`, `div` and `laplacian` being the ones 3.0.0 removed).
+const LAST_2X: SemVer = (2, 3, 0);
 
 /// [`crate::SCHEMA_VERSION`] parsed. Derived from the crate's own constant —
 /// itself pinned to the bundled schema's `$id` by
@@ -116,7 +129,7 @@ fn current_version() -> SemVer {
         .expect("SCHEMA_VERSION is a valid major.minor.patch string")
 }
 
-/// True when `version` sits on the additive line `2.0.0 … <current>` and can
+/// True when `version` sits on the additive line `3.0.0 … <current>` and can
 /// therefore be carried to the current schema version by a marker-only, no-op
 /// migration.
 fn on_additive_line(version: SemVer) -> bool {
@@ -124,17 +137,19 @@ fn on_additive_line(version: SemVer) -> bool {
     version.0 == current.0 && version >= ADDITIVE_FLOOR && version <= current
 }
 
-/// True when `version` is a 1.x release ([`LAST_1X`] or older).
-fn on_1x_line(version: SemVer) -> bool {
-    version.0 == 1 && version <= LAST_1X
+/// True when `version` is a 1.x release ([`LAST_1X`] or older) or a 2.x
+/// release ([`LAST_2X`] or older): a source the relabel-or-refuse step takes.
+fn on_relabel_line(version: SemVer) -> bool {
+    (version.0 == 1 && version <= LAST_1X) || (version.0 == 2 && version <= LAST_2X)
 }
 
 /// The schema versions `from_version` can be migrated to.
 ///
-/// - any version on the additive line `2.0.0 … <current schema version>` →
+/// - any version on the additive line `3.0.0 … <current schema version>` →
 ///   `[SCHEMA_VERSION]` (a no-op marker bump to the current schema);
-/// - any 1.x version → `[SCHEMA_VERSION]`, the relabel step. It is listed because a
-///   1.x document that uses none of the removed ops IS migratable; whether a
+/// - any released 1.x or 2.x version → `[SCHEMA_VERSION]`, the relabel step. It is
+///   listed because a 1.x or 2.x document that uses none of the removed ops IS
+///   migratable; whether a
 ///   particular document is depends on its content, which [`migrate`] checks;
 /// - everything else — including EVERY 0.x version, which 1.0.0's clean break
 ///   puts out of reach of a marker bump, plus newer-than-current, other majors
@@ -145,7 +160,7 @@ fn on_1x_line(version: SemVer) -> bool {
 pub fn supported_migration_targets(from_version: &str) -> Vec<String> {
     match crate::diagnostic::parse_semver(from_version) {
         Some(version) if on_additive_line(version) => vec![crate::SCHEMA_VERSION.to_string()],
-        Some(version) if on_1x_line(version) => vec![crate::SCHEMA_VERSION.to_string()],
+        Some(version) if on_relabel_line(version) => vec![crate::SCHEMA_VERSION.to_string()],
         _ => Vec::new(),
     }
 }
@@ -168,8 +183,8 @@ pub fn get_supported_migration_targets(from_version: &str) -> Vec<String> {
 ///
 /// Deliberately consults the same single source of truth `migrate` does, so a
 /// caller is never told a pair is migratable and then handed a
-/// [`MigrationError`] for the versions. The one content check is the 1.x →
-/// 2.0.0 step: `migrate` refuses a document that uses an op 2.0.0 removed.
+/// [`MigrationError`] for the versions. The one content check is the 1.x / 2.x
+/// relabel step: `migrate` refuses a document that uses a removed op.
 pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
     supported_migration_targets(from_version)
         .iter()
@@ -179,10 +194,11 @@ pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
 /// Migrate an ESM file from the version it declares to `target_version`.
 ///
 /// Every supported step is a pure version-marker bump with no structural
-/// transform: an additive-line source (`2.0.0 … <current>`) advanced to the
-/// current schema version, or a 1.x source relabelled to it (see the module
-/// header). A 1.x document that uses an op 2.0.0 removed is refused with a
-/// `removed_op` message naming the op, its path and the codemod. Any other
+/// transform: an additive-line source (`3.0.0 … <current>`) advanced to the
+/// current schema version, or a 1.x or 2.x source relabelled to it (see the
+/// module header). A 1.x or 2.x document that uses a removed op is refused with
+/// a `removed_op` message naming the op and its path, and for an op 2.0.0
+/// removed the codemod (the three 3.0.0 removals have none). Any other
 /// version pair — a 0.x source included — yields a [`MigrationError`].
 /// Content-level changes are not performed here.
 ///
@@ -209,7 +225,7 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
         });
     }
 
-    if crate::diagnostic::parse_semver(source_version).is_some_and(on_1x_line)
+    if crate::diagnostic::parse_semver(source_version).is_some_and(on_relabel_line)
         && let Some(message) = removed_construct(file)
     {
         return Err(MigrationError {
@@ -224,7 +240,7 @@ pub fn migrate(file: &EsmFile, target_version: &str) -> Result<EsmFile, Migratio
     Ok(migrated)
 }
 
-/// The `removed_op` message for the first op 2.0.0 removed that `file` uses, in
+/// The `removed_op` message for the first removed op that `file` uses, in
 /// the loader's pre-order, or `None`. The typed file has no `function_tables`
 /// field, so a table block cannot reach here; its `table_lookup` nodes can.
 fn removed_construct(file: &EsmFile) -> Option<String> {
@@ -270,7 +286,7 @@ mod tests {
 
     #[test]
     fn additive_line_sources_bump_to_the_current_schema() {
-        for source in ["2.0.0", CURRENT] {
+        for source in ["3.0.0", CURRENT] {
             assert_eq!(
                 supported_migration_targets(source),
                 vec![CURRENT.to_string()],
@@ -280,8 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn every_1x_source_is_offered_the_relabel_to_current() {
-        for source in ["1.0.0", "1.1.0", "1.2.3", "1.3.0"] {
+    fn every_1x_and_2x_source_is_offered_the_relabel_to_current() {
+        for source in [
+            "1.0.0", "1.1.0", "1.2.3", "1.3.0", "2.0.0", "2.1.0", "2.2.0", "2.3.0",
+        ] {
             assert_eq!(
                 supported_migration_targets(source),
                 vec![CURRENT.to_string()]
@@ -292,7 +310,7 @@ mod tests {
     #[test]
     fn sources_off_the_additive_line_have_no_targets() {
         // Past the ceiling, and other majors in both directions.
-        for source in ["1.99.0", "2.99.0", "3.0.0", "12.34.56"] {
+        for source in ["1.99.0", "2.99.0", "3.99.0", "4.0.0", "12.34.56"] {
             assert_eq!(supported_migration_targets(source), Vec::<String>::new());
         }
     }
@@ -329,6 +347,7 @@ mod tests {
         // on-line source has no targets. Deriving it keeps the witness a patch
         // of whatever minor is current. Mirrors
         // `pkg/EarthSciAST.jl/test/migration_test.jl`.
+        assert_eq!(supported_migration_targets("3.10.0"), Vec::<String>::new());
         assert_eq!(supported_migration_targets("2.10.0"), Vec::<String>::new());
         assert_eq!(supported_migration_targets("1.10.0"), Vec::<String>::new());
         let (major, minor, patch) = current_version();
@@ -349,6 +368,7 @@ mod tests {
 
     #[test]
     fn can_migrate_accepts_an_additive_line_source_to_current() {
+        assert!(can_migrate("3.0.0", CURRENT));
         assert!(can_migrate("2.0.0", CURRENT));
         assert!(can_migrate("1.0.0", CURRENT));
         // Identity no-op: the current version migrated to itself.
@@ -369,7 +389,7 @@ mod tests {
         // and keeps a non-current MINOR in it (`1.2.0`) now that `1.1.0` is
         // current. Mirrors `pkg/EarthSciAST.jl/test/migration_test.jl`.
         for target in [
-            "1.0.1", "1.1.0", "1.2.0", "1.3.0", "2.0.1", "2.1.0", "2.2.0", "2.3.0",
+            "1.0.1", "1.1.0", "1.2.0", "1.3.0", "2.0.1", "2.1.0", "2.2.0", "2.3.0", "3.0.1",
         ] {
             if target == CURRENT {
                 continue;
@@ -393,10 +413,10 @@ mod tests {
     fn can_migrate_migrate_and_targets_agree_across_the_grid() {
         let sources = [
             "0.0.5", "0.1.0", "0.9.0", "1.0.0", "1.3.0", CURRENT, "1.0.1", "1.99.0", "2.0.0",
-            "2.0.1", "nonsense",
+            "2.0.1", "2.3.0", "2.99.0", "3.0.0", "3.0.1", "4.0.0", "nonsense",
         ];
         let targets = [
-            CURRENT, "0.1.0", "1.0.0", "1.0.1", "2.0.0", "2.0.1", "nonsense",
+            CURRENT, "0.1.0", "1.0.0", "1.0.1", "2.0.0", "2.0.1", "2.3.0", "3.0.1", "nonsense",
         ];
 
         for source in sources {
@@ -463,6 +483,42 @@ mod tests {
         }
     }
 
+    /// A 1.x or 2.x document that uses `grad`, `div` or `laplacian` (removed
+    /// at 3.0.0) is refused with `removed_op`, pointing at spatial `D` and
+    /// MIGRATION.md rather than at the codemod, never relabelled.
+    #[test]
+    fn migrate_refuses_a_1x_or_2x_file_that_uses_an_op_removed_at_v3() {
+        for op in crate::parse::REMOVED_AT_V3 {
+            for version in ["1.3.0", "2.0.0", "2.3.0"] {
+                let source: EsmFile = serde_json::from_value(serde_json::json!({
+                    "esm": version,
+                    "metadata": {"name": "test"},
+                    "models": {"M": {
+                        "variables": {"x": {"type": "unknown"}},
+                        "equations": [{
+                            "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                            "rhs": {"op": op, "args": ["x"], "dim": "x"},
+                        }],
+                    }},
+                }))
+                .expect("document deserializes");
+                let err = migrate(&source, CURRENT).expect_err("removed op must refuse");
+                assert!(err.message.starts_with("removed_op at "), "{err}");
+                assert!(err.message.contains(&format!("\"{op}\"")), "{err}");
+                assert!(err.message.contains("esm 3.0.0"), "{err}");
+                assert!(!err.message.contains("earthsci_ast.migrate"), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn migrate_relabels_a_2x_file_that_uses_no_removed_op() {
+        let source = file_at("2.3.0");
+        let migrated = migrate(&source, CURRENT).expect("2.x relabel");
+        assert_eq!(migrated.esm, CURRENT);
+        assert_eq!(source.esm, "2.3.0");
+    }
+
     #[test]
     fn migrate_is_a_no_op_for_a_current_version_file() {
         let source = file_at(CURRENT);
@@ -474,6 +530,7 @@ mod tests {
     fn migrate_errors_for_unsupported_version_pairs() {
         assert!(migrate(&file_at("1.0.0"), "2.0.1").is_err());
         assert!(migrate(&file_at("2.0.0"), "1.3.0").is_err());
+        assert!(migrate(&file_at("2.0.0"), "2.3.0").is_err());
         assert!(migrate(&file_at("1.0.0"), "1.0.1").is_err());
         assert!(migrate(&file_at("0.1.0"), CURRENT).is_err());
         assert!(migrate(&file_at("1.0.0"), "not-a-version").is_err());
