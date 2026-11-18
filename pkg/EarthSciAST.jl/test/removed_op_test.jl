@@ -125,6 +125,9 @@ end
             "const_units_version_too_old"
         @test code(joinpath(inv, "version_gate_newer_mounts_older_solver.esm")) ==
             "solver_version_too_old"
+        # A template library is a file held to its own version too (§4.8.5 item 6).
+        @test code(joinpath(inv, "version_gate_library_older_const_units.esm")) ==
+            "const_units_version_too_old"
         @test EarthSciAST.load_path(
             joinpath(
                 TESTUTILS_REPO_ROOT, "tests", "valid",

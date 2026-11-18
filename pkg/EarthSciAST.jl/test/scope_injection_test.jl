@@ -58,6 +58,23 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "D"
     end
 
+    @testset "form A — the injected ref resolves against the mounting directory" begin
+        # esm-spec §4.7 / §9.7.10: the edge's injected import ref is written by
+        # the mounting document, so it resolves against THAT document's
+        # directory at both mount forms. The leaf sits in leaves/, where the
+        # injected relative ref names nothing.
+        for (file, mounted) in (
+                ("subsystem_form.esm", f -> f.models["Assembly"].subsystems["Runoff"]),
+                ("toplevel_form.esm", f -> f.models["Runoff"]),
+            )
+            f = EarthSciAST.expanded_file(
+                EarthSciAST.load_path(conf("inject_mounting_directory", file))
+            )
+            @test mounted(f).equations[1].rhs.args[2].op == "makearray"
+            @test f.index_sets["lon"].size == 288
+        end
+    end
+
     @testset "form B — coupling-entry injection (§10.8 / §9.7.10)" begin
         # Option B: pin the Option-A `expanded.esm` golden with `expanded_file`.
         f = EarthSciAST.expanded_file(
