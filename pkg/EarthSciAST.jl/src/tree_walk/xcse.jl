@@ -45,7 +45,7 @@
 #      bare `_NK_CACHED` read of that slot — `_fill_invariant!` then copies one
 #      field load into the kernel's inv scratch instead of re-walking the
 #      subtree, and the kernel's spine / cell recipes are
-#      byte-identical to before (they keep reading the kernel-local inv slot);
+#      unchanged (they keep reading the kernel-local inv slot);
 #   5. scalar `rhs_list` occurrences of a NEWLY slotted value are rewritten to
 #      cache reads too (the kernel↔scalar direction the scalar count pass
 #      cannot see).

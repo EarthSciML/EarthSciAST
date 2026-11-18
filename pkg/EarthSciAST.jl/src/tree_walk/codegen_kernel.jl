@@ -81,8 +81,8 @@ _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 # only ever invoked from inside that section, so every accepted read lands on
 # a slot filled this call. Call sites
 # that cannot pin that ordering (the materialized-observed fill sections in
-# build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
-# today's decline — as does ANY payload that is not that one cache object.
+# build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and
+# decline the read — as does ANY payload that is not that one cache object.
 #
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
 # carrying at least one shared-prelude read (a kernel that later declines for
@@ -909,7 +909,7 @@ end
 # ITS OWN cell set for chunk `_cgci` of `_cgnc`, where `(a, b)` is the shared
 # static partition (`_chunk_ordinals`, access_kernel.jl — one arithmetic, not
 # re-derived). The serial call is the `(1, 1)` instance: `a == 0, b == ncells`
-# reproduces today's full loops with the inner-loop body instruction-identical
+# is the full loops, with the inner-loop body instruction-identical
 # (outs/contig/rank-1 boxes differ only in loop-bound arithmetic; rank-2/3
 # boxes add two per-ROW range clamps that select the full range at `(1, 1)`).
 # Partition and iteration order are pure functions of `(ncells, nchunks)`, and
@@ -1107,8 +1107,8 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     # of `(i, j, k)` is `(i-i0) + ni·((j-j0) + nj·(k-k0))` — exactly the serial
     # enumeration position — and a chunk `[a, b)` is walked as whole i-ROWS
     # with the FIRST and LAST row's i-range clamped to the chunk boundary
-    # (the decode is hoisted to the row level so the inner loop stays today's
-    # instructions).
+    # (the decode is hoisted to the row level so the inner loop stays a plain
+    # counted loop).
     nd = length(cs.strides)
     nd <= 3 || return _cg_emit_box_rank_n(ctx, K, cs, sm, hdr, av, bv)
     st = Any[_cg_geo!(ctx, cs.strides[d], (cs, d, :stride), true) for d in 1:nd]
