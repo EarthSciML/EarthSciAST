@@ -1,0 +1,34 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "library_v110_const_units",
+    "description": "A template library that declares esm 1.1.0 but carries a unit-bearing `const` in a template body; declared `units` on an expression node arrive at 1.2.0 (esm-spec §4.8.5 item 6). tests/invalid/version_gate_library_older_const_units.esm imports it from a 1.2.0 document: a library is a file held to its own declared version (esm-spec §4.7), so the import is rejected.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": [
+      "version",
+      "template-library"
+    ]
+  },
+  "expression_templates": {
+    "absolute_pressure": {
+      "params": [
+        "p_gauge"
+      ],
+      "body": {
+        "op": "+",
+        "args": [
+          "p_gauge",
+          {
+            "op": "const",
+            "args": [],
+            "value": 101325.0,
+            "units": "Pa"
+          }
+        ]
+      }
+    }
+  }
+}

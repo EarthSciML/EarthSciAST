@@ -1,0 +1,50 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "version_gate_library_older_const_units",
+    "description": "An esm 1.2.0 document that imports tests/fixtures/version_gate/library_v110_const_units.esm, an esm 1.1.0 template library whose template body carries a unit-bearing `const`. Each file is held to its OWN declared version (esm-spec §4.7), a template library included: the importing document being new enough does not make the library legal, so this MUST be rejected with `const_units_version_too_old`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": [
+      "version",
+      "template-library"
+    ]
+  },
+  "models": {
+    "Station": {
+      "expression_template_imports": [
+        {
+          "ref": "../fixtures/version_gate/library_v110_const_units.esm"
+        }
+      ],
+      "variables": {
+        "p_gauge": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 2500.0,
+          "description": "Gauge pressure."
+        },
+        "p_abs": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Absolute pressure."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_abs",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "absolute_pressure",
+            "bindings": {
+              "p_gauge": "p_gauge"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

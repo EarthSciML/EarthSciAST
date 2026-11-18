@@ -424,6 +424,17 @@ survive `parse → emit`. `no_inject.esm` is the negative twin: the same mount
 without injection loads cleanly (the `D` survives) but is `unlowered_operator`
 at the evaluation gate (parse/validate-only bindings mark it N/A).
 
+### `inject_mounting_directory/` (form A — which directory an injected ref resolves against)
+
+`subsystem_form.esm` (a `subsystems.<k>` mount) and `toplevel_form.esm` (a
+top-level `models.<k>` mount) each mount `leaves/leaf.esm` and inject
+`../inject_subsystem_ref/central_D_lon_zero_grad_bc.esm`. The injected entry
+is written by the mounting document, so its relative `ref` resolves against
+the mounting document's directory (esm-spec §4.7, "relative to the directory
+of the referencing file"), never the leaf's: from `leaves/` the same relative
+path names nothing. Both documents MUST load, with the leaf's derivative
+lowered to the `makearray` stencil, in every binding.
+
 ### `inject_coupling_entry/` (form B — §10.8 / §9.7.10)
 
 `fixture.esm` composes a 0-D system (`Emit`) and a spatial model (`Advection`,
