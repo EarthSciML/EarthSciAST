@@ -151,7 +151,8 @@ mutable struct _CGCtx
     tblcbs::Vector{Symbol}
     # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
     # rule its loop body folds each cell's term with — `(acc, a, b, op,
-    # inclusive)`, the nest running ordinals `[a, b)` (one lane).
+    # inclusive, cons)`, the nest running ordinals `[a, b)` (one lane), `cons`
+    # the consumer taken in (`_cg_consumer`) or `nothing`.
     scanmode::Any
     # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
