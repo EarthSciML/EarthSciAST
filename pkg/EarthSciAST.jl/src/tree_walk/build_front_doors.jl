@@ -198,19 +198,21 @@ solve(remake(prob; p = Dict(θ[1] => 2.0)), Tsit5())
 parameter_classes(insp::BuildInspection) = insp.param_classes
 
 """
-    _build_evaluator(file::EsmFile; model_name=nothing, kwargs...)
+    _build_selected(file::EsmFile; model_name = nothing, kwargs...)
 
-Delegate to the typed entry point after selecting the model.
+The build of `file`'s selected model from the products of the front door
+(`_front_door`): the build itself, with no pre-pass. A re-lowering of a
+range-restricted program re-enters here with the keywords the front door
+produced.
 """
-function _build_evaluator(
+function _build_selected(
         file::EsmFile;
         model_name::Union{Nothing, AbstractString} = nothing,
         kwargs...
     )
-    _refuse_float32(file, model_name)
     model = _select_model(file, model_name)
     # Thread the document-scoped index-set registry into the typed evaluator.
-    return _build_evaluator(
+    return _build_evaluator_impl(
         model; index_sets = file.index_sets,
         _template_reg = _component_template_reg(file, model_name),
         kwargs...
@@ -261,355 +263,96 @@ function expanded_model(
     return model
 end
 
-# The const-array keys an authored bare factor name resolves to in THIS build.
-# The front-door build keeps bare names, but `esm_problem` flattens first — every
-# variable is namespaced to `<OrigModel>.<name>` (the model itself renamed
-# `Flattened`), while document-scoped index-set fields (`member_factor`) and gate
-# `applies_to` stay bare. So a bare authored name must be injected under BOTH the
-# bare key AND every model-variable key whose final dotted segment matches it, so
-# the gather (which reads the namespaced ref) resolves in either build path.
-function _const_factor_aliases(model, bare::AbstractString)
-    keys_out = Set{String}([String(bare)])
-    if model !== nothing
-        for k in keys(model.variables)
-            ks = String(k)
-            (
-                ks == bare || (
-                    occursin('.', ks) &&
-                        String(split(ks, '.')[end]) == bare
-                )
-            ) && push!(keys_out, ks)
-        end
-    end
-    return keys_out
-end
-
-# The const-array keys ONE GATED PROVIDER may publish its fetched variable `nm`
-# under, given every gate issued in the same fetch.
-#
-# `_const_factor_aliases` resolves a bare authored name against EVERY model
-# variable whose final dotted segment matches it. That is exactly what a
-# document-scoped `member_factor` wants, and it is WRONG for a gated provider:
-# sibling loaders may expose the SAME variable name — `ISRM_SR_L0.SOA`,
-# `ISRM_SR_L1.SOA` and `ISRM_SR_L2.SOA` are three DIFFERENT slabs of one zarr
-# store, told apart only by which loader they came from — so tail-matching makes
-# each of those three providers claim all three aliases. Whichever provider the
-# `gated` collection happens to visit last then silently wins for all of them,
-# and every model array is contracted against one arbitrary sibling's slab. The
-# collection is a `Dict`, so which sibling wins is hash order: a wrong answer
-# that is stable within a run, differs per variable name, and raises nothing.
-#
-# A provider claims an alias when it is the SOLE claimant, or when the alias IS
-# its own provider key — the post-flatten `"<Loader>.<var>"` spelling of exactly
-# that provider's variable, which no sibling can also be. An alias that several
-# providers claim and none owns is AMBIGUOUS and is left unwritten: a missing
-# const array is a loud failure at gather time, an arbitrarily chosen one is
-# this bug.
-function _gated_alias_claims(gated::AbstractDict, model)
-    claims = Dict{String, Set{String}}()      # alias => the provider keys claiming it
-    for (key, entry) in gated
-        _, gate = _unbundle_gated(entry)
-        gate === nothing && continue
-        applies = get(gate, "applies_to", nothing)
-        applies === nothing && continue
-        for name in applies
-            for a in _const_factor_aliases(model, String(name))
-                push!(get!(claims, a, Set{String}()), String(key))
-            end
-        end
-    end
-    return claims
-end
-
-function _gated_const_keys(
-        claims::AbstractDict, model, key::AbstractString,
-        nm::AbstractString
-    )
-    aliases = _const_factor_aliases(model, nm)
-    ks = String[
-        a for a in aliases
-            if length(get(claims, a, Set{String}([String(key)]))) == 1 ||
-            a == String(key)
-    ]
-    isempty(ks) && throw(
-        RefreshError(
-            "gated provider '$key' variable '$nm': every const-array key it resolves " *
-                "to ($(sort!(collect(aliases)))) is also claimed by another gated " *
-                "provider, so the fetched slab has no unambiguous name to be published " *
-                "under. Key the provider \"<Loader>.<var>\" so its own spelling can win, " *
-                "or give the sibling loaders' variables distinct names"
-        )
-    )
-    return ks
-end
-
-# ---- Phase 2b Hook 1 helper: members-fed-back-as-const-factor ----------------
-# Scan the document index-set registry for `kind:"derived"` sets that name a
-# `member_factor`; for each, surface its value-invention MEMBERS (the invented,
-# sorted-distinct, 1-based full-grid ids in `vi_members[from_faq]`) as a dense
-# 1-D Float64 const array keyed by the factor name (and its namespaced aliases,
-# see `_const_factor_aliases`). Returns a `name => vector` dict to merge into
-# `const_arrays`. A derived set with no `member_factor`, or whose producer did
-# not materialise, contributes nothing.
-function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
-    out = Dict{String, Any}()
-    index_sets === nothing && return out
-    for (_, is) in index_sets
-        is isa IndexSet || continue
-        is.kind == "derived" || continue
-        mf = is.member_factor
-        (mf === nothing || is.from_faq === nothing) && continue
-        faq = String(is.from_faq)
-        haskey(vi_members, faq) || continue
-        mem = vi_members[faq]
-        # members are scalar integer keys (value_invention.jl).
-        vec = Vector{Float64}(undef, length(mem))
-        ok = true
-        for (i, m) in enumerate(mem)
-            if m isa Real
-                vec[i] = Float64(m)
-            else
-                ok = false
-                break
-            end
-        end
-        ok || throw(
-            TreeWalkError(
-                "E_TREEWALK_VI_MEMBER_FACTOR",
-                "derived index set member_factor '$mf' requires SCALAR members; " *
-                    "got a non-numeric member for faq '$faq'"
-            )
-        )
-        for k in _const_factor_aliases(model, String(mf))
-            out[k] = vec
-        end
-    end
-    return out
-end
-
-# ---- Phase 2b Hook 2 helper: gated-provider deferral → selective fetch -------
-# Resolve each stashed GATED provider's `selection` from the now-materialised
-# value-invention members, fetch ONLY the compact slab, and return a
-# `model-var-name => compact Float64 array` dict to merge into `const_arrays`.
-#
-# `gated` maps a provider KEY to either the bare provider or a `(prov=…, gate=…)`
-# bundle; `provider_gate_spec(prov)` supplies the gate when the bundle omits it.
-# A gate is `Dict("axes"=>[…], "applies_to"=>[names…])` where each native axis is
-# one of `Dict("fixed"=>[i])` (0-based native index → DROPPED length-1 axis),
-# `Dict("range"=>Dict("start"=>a,"stop"=>b,"step"=>s))` (a half-open strided
-# window, axis KEPT), `Dict("gated_by"=>"<derived set>")` (the set's members,
-# 1-based, as the new axis), or `"all"` (whole axis) — ONE vocabulary, whether
-# the author wrote it as a loader `select` (esm-spec §8.9.2) or the pushdown
-# rewrite generated it (CONFORMANCE_SPEC §5.5). The compact gated axis length is
-# asserted to equal the gating set's materialised extent.
-function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64, model)
-    out = Dict{String, Any}()
-    (vi === nothing) && isempty(gated) && return out
-    # Who may publish under which const-array key — computed over ALL the gates
-    # up front, because "am I the only claimant?" is not a per-provider question.
-    alias_claims = _gated_alias_claims(gated, model)
-    # derived set name → its producer faq id (for `gated_by` resolution).
-    set_to_faq = Dict{String, String}()
-    if index_sets !== nothing
-        for (sname, is) in index_sets
-            is isa IndexSet || continue
-            is.kind == "derived" && is.from_faq !== nothing &&
-                (set_to_faq[String(sname)] = String(is.from_faq))
-        end
-    end
-    vi_members = vi === nothing ? Dict{String, Vector{Any}}() : vi.members
-    vi_extents = vi === nothing ? Dict{String, Int}() : vi.extents
-
-    for (key, entry) in gated
-        prov, gate = _unbundle_gated(entry)
-        gate === nothing && continue
-        axes = get(gate, "axes", nothing)
-        applies = get(gate, "applies_to", nothing)
-        (axes === nothing || applies === nothing) && throw(
-            RefreshError(
-                "gated provider '$key' gate spec needs both `axes` and `applies_to`"
-            )
-        )
-
-        selection = Vector{Any}(undef, length(axes))
-        drop_axes = Int[]                 # positions of `fixed` axes (dropped)
-        gated_pos = 0                     # position of the single gated axis
-        gated_extent = 0
-        for (ax_i, ax) in enumerate(axes)
-            if ax == "all"
-                selection[ax_i] = Colon()
-            elseif ax isa AbstractDict && haskey(ax, "fixed")
-                fx = ax["fixed"]
-                fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
-                selection[ax_i] = fi + 1          # 0-based native → 1-based neutral
-                push!(drop_axes, ax_i)
-            elseif ax isa AbstractDict && haskey(ax, "range")
-                # The half-open strided window of the SAME per-axis vocabulary a
-                # loader's `select` writes (esm-spec §8.9.2) — the axis is kept,
-                # so it neither drops nor gates. Bounds are already integers here
-                # (a metaparameter name resolves where the select is parsed).
-                r = ax["range"]
-                start = Int(get(r, "start", 0))
-                stop = Int(r["stop"])
-                step = Int(get(r, "step", 1))
-                step >= 1 || throw(
-                    RefreshError(
-                        "gated provider '$key' axis $ax_i: range.step must be >= 1, got $step"
-                    )
-                )
-                selection[ax_i] = collect((start + 1):step:stop)   # 0-based → 1-based
-            elseif ax isa AbstractDict && haskey(ax, "gated_by")
-                sname = String(ax["gated_by"])
-                haskey(set_to_faq, sname) || throw(
-                    RefreshError(
-                        "gated provider '$key' gates on '$sname' which is not a " *
-                            "derived index set with a from_faq"
-                    )
-                )
-                faq = set_to_faq[sname]
-                haskey(vi_members, faq) || throw(
-                    RefreshError(
-                        "gated provider '$key' gates on '$sname' (faq '$faq') but its " *
-                            "value-invention members were not materialised"
-                    )
-                )
-                mem = Int[Int(m) for m in vi_members[faq]]   # 1-based ids, set order
-                selection[ax_i] = mem
-                gated_pos = ax_i
-                gated_extent = get(vi_extents, faq, length(mem))
-            else
-                throw(
-                    RefreshError(
-                        "gated provider '$key' axis $ax_i is malformed " *
-                            "(expected \"all\", {\"fixed\":[i]}, {\"range\":{start,stop,step}}, " *
-                            "or {\"gated_by\":set})"
-                    )
-                )
-            end
-        end
-        gated_pos == 0 && throw(
-            RefreshError(
-                "gated provider '$key' declares no {\"gated_by\":…} axis"
-            )
-        )
-
-        # position of the compact gated axis AFTER dropping the fixed axes.
-        gated_pos_out = gated_pos - count(<(gated_pos), drop_axes)
-        drop_tuple = Tuple(drop_axes)
-
-        supports = provider_supports_selection(prov)
-        if supports
-            sample = provider_sample(prov, t0; selection = selection)
-            for name in applies
-                nm = String(name)
-                field = _sample_field(sample, nm)
-                isempty(drop_tuple) || (field = dropdims(field; dims = drop_tuple))
-                # The slab, a bare-array sample, takes the conversion a whole
-                # sample does (`forcing_from_sample`).
-                arr = forcing_from_sample(field, nm)
-                size(arr, gated_pos_out) == gated_extent || throw(
-                    RefreshError(
-                        "gated provider '$key' variable '$nm': fetched compact axis is " *
-                            "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"
-                    )
-                )
-                for k in _gated_const_keys(alias_claims, model, key, nm)
-                    out[k] = arr
-                end
-            end
-        else
-            # FALLBACK: reader cannot push down — fetch whole, then slice by the
-            # same per-axis selection (a fixed `Int` DROPS the axis, a gated or
-            # range axis is an index vector, `all` is `Colon()`), so the sliced
-            # result matches the pushdown result exactly.
-            sample = provider_sample(prov, t0)
-            for name in applies
-                nm = String(name)
-                full = _sample_field(sample, nm)
-                field = full[selection...]
-                arr = forcing_from_sample(field, nm)
-                size(arr, gated_pos_out) == gated_extent || throw(
-                    RefreshError(
-                        "gated provider '$key' variable '$nm' (fallback slice): compact axis " *
-                            "is $(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"
-                    )
-                )
-                for k in _gated_const_keys(alias_claims, model, key, nm)
-                    out[k] = arr
-                end
-            end
-        end
-    end
-    return out
-end
-
-# A stashed gated entry is either the bare provider (gate via `provider_gate_spec`)
-# or a `(prov=…, gate=…)` / `Dict("prov"=>…, "gate"=>…)` bundle.
-function _unbundle_gated(entry)
-    if entry isa NamedTuple && haskey(entry, :prov)
-        return entry.prov, (
-                haskey(entry, :gate) && entry.gate !== nothing ?
-                entry.gate : provider_gate_spec(entry.prov)
-            )
-    elseif entry isa AbstractDict && haskey(entry, "prov")
-        g = get(entry, "gate", nothing)
-        return entry["prov"], (g === nothing ? provider_gate_spec(entry["prov"]) : g)
-    else
-        return entry, provider_gate_spec(entry)
-    end
-end
-
 """
-    _build_evaluator(esm::AbstractDict; model_name=nothing, kwargs...)
+    _build_evaluator(file::EsmFile; compiler = :native, model_name = nothing, kwargs...)
+    _build_evaluator(esm::AbstractDict; pushdown_rewrite = false, model_name = nothing, kwargs...)
 
-Parse a raw ESM dict, then delegate to the typed entry point, which is faster
-for callers that already have a parsed `Model`.
+Build the selected model of a document: the front door's pre-passes
+(`_front_door`), then the build. A native document is coerced first, after the
+projection-pushdown desugar when `pushdown_rewrite` asks for it.
 
-`const_arrays` (forwarded via kwargs) accepts pre-computed float arrays keyed
-by name; a read `index(name, i…)` at constant subscripts is inlined as a
-literal value.
+`const_arrays` accepts pre-computed float arrays keyed by name; a read
+`index(name, i…)` at constant subscripts is inlined as a literal value.
 """
 function _build_evaluator(
-        esm::AbstractDict; compiler::Union{Symbol, CompilerPlan} = :native, kwargs...
+        file::EsmFile; compiler::Union{Symbol, CompilerPlan} = :native,
+        model_name::Union{Nothing, AbstractString} = nothing, kwargs...
     )
-    # Before the pre-build work below, which is not cheap and which a refusal
-    # would throw away.
+    # Before the pre-build work, which is not cheap and which a refusal would
+    # throw away.
     _xla_check_form(
         compiler isa Symbol ? compiler : compiler.name, get(kwargs, :form, :inplace)
     )
-    # The requested plan is installed HERE, not only at `_build_evaluator_impl`:
-    # the binning-coordinate derivation and value invention below run first and
-    # hand their results to the build as const arrays, so a per-cell setup sweep
-    # they perform is never seen again. Outside this scope they would run under
-    # the process default, which is not strict and not the interpreter.
+    # The plan is installed for the front door as well as the build: the
+    # binning-coordinate derivation and value invention run first and hand their
+    # results to the build as const arrays, so a per-cell setup sweep they perform
+    # is never seen again. Outside this scope they would run under the process
+    # default, which is not strict and not the interpreter.
     return _with_compiler_plan(_plan_for(compiler)) do
-        _build_evaluator_dict(esm; compiler = compiler, kwargs...)
+        _build_front(_front_door(file, model_name; compiler = compiler, kwargs...))
     end
 end
 
-function _build_evaluator_dict(
-        esm::AbstractDict;
-        model_name::Union{Nothing, AbstractString} = nothing,
-        kwargs...
+function _build_evaluator(
+        esm::AbstractDict; pushdown_rewrite::Bool = false,
+        model_name::Union{Nothing, AbstractString} = nothing, kwargs...
     )
+    pushdown_rewrite && (esm = desugar_pushdown(esm; model_name = model_name))
+    return _build_evaluator(_coerce_or_load(esm); model_name = model_name, kwargs...)
+end
+
+"""
+    _FrontDoor
+
+What the build's pre-passes produced for one document: the document and the
+model they selected, the value-invention result, and the build's keywords with
+the pre-passes' products added (the canonical override and const-array keys,
+the derived const arrays, the value-invention extents, variables and maps, the
+build-time parameter-read set). `_build_front` builds from it; a
+range-restricted program keeps it to re-lower without re-reading the document.
+"""
+struct _FrontDoor
+    file::EsmFile
+    model_name::Union{Nothing, String}
+    model::Union{Nothing, Model}
+    vi::Any
+    kwd::Dict{Symbol, Any}
+end
+
+# Add `extra` to the const arrays the build of `front` reads (the gated
+# provider fetch's slabs). The registry is copied first: it may be the caller's.
+function _merge_front_const_arrays!(front::_FrontDoor, extra::AbstractDict)
+    isempty(extra) && return front
+    ca = Dict{String, Any}(
+        String(k) => v for (k, v) in get(front.kwd, :const_arrays, Dict{String, Any}())
+    )
+    merge!(ca, extra)
+    front.kwd[:const_arrays] = ca
+    return front
+end
+
+# The build from a front door's product. A range-restricted program's build
+# records the product first, so a restriction of it re-lowers from there.
+function _build_front(front::_FrontDoor)
+    kwd = front.kwd
+    kwd[:_vi_extents] = front.vi === nothing ? Dict{String, Int}() : front.vi.extents
+    kwd[:_vi_vars] = front.vi === nothing ? Set{String}() : front.vi.vi_var_names
+    kwd[:_vi_maps] = front.vi === nothing ? _EMPTY_VI_MAPS :
+        (maps = front.vi.maps, map_sets = front.vi.map_sets)
+    _range_front_door_done(_range_spec_now(), front.file, front.model_name, kwd)
+    return _build_selected(front.file; model_name = front.model_name, kwd...)
+end
+
+# The build's pre-passes over `file`'s selected model: the binary32 refusal,
+# template expansion and the unlowered-operator gate for the passes below,
+# caller-key canonicalization, the binning-coordinate derivation, value
+# invention, the value-invention members fed back as const factors, and the
+# overlap envelope factors.
+function _front_door(
+        file::EsmFile, model_name::Union{Nothing, AbstractString};
+        kwargs...
+    )::_FrontDoor
     kwd = Dict{Symbol, Any}(kwargs)
-
-    # ---- Phase 4: AUTOMATIC projection-pushdown desugar (opt-in) ----
-    # When `pushdown_rewrite=true`, recognise the ISRM-shaped `+`-aggregate /
-    # sparse-binned-factor pattern in a CLEAN model and generate the four
-    # hand-authored Phase-2b constructs (derived set + `distinct` producer +
-    # member_factor + gated_select) BEFORE parsing, so the value-invention
-    # front door and the impl re-parse both see them. A no-op (returns `esm`
-    # unchanged) when the pattern does not match or the semiring guard fails.
-    # OFF by default: every existing build path is byte-identical.
-    if get(kwd, :pushdown_rewrite, false) === true
-        esm = desugar_pushdown(esm; model_name = model_name)
-    end
-    delete!(kwd, :pushdown_rewrite)
-
-    # `coerce_esm_file` normalizes every dict-like carrier (JSON3 object,
-    # native Dict, JSONLikeDict) itself — no JSON-string round-trip.
-    file = _coerce_or_load(esm)
     _refuse_float32(file, model_name)
 
     # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
@@ -780,35 +523,9 @@ function _build_evaluator_dict(
         end
     end
 
-    # ---- Phase 2b Hook 2: gated-provider deferral → post-VI selective fetch ----
-    # A GATED provider (its `.esm` data_loader declares a `gated_select`; the
-    # runner reports it via `provider_gate_spec`) was SKIPPED by the eager const
-    # loop in `esm_problem` and stashed in `_gated_providers`. Now that value-invention
-    # has materialised the gating derived set's members + extent, push that set
-    # down to the provider as a per-axis `selection` and fetch ONLY the compact
-    # slab, merging it into `const_arrays` under the model variable name(s) the
-    # gate's `applies_to` lists. This is the const-tier dependency edge:
-    # value-invention (above) → gated provider_sample(selection) → const merge.
-    _gated = get(kwd, :_gated_providers, nothing)
-    if _gated !== nothing && !isempty(_gated)
-        _t0 = Float64(get(kwd, :_sample_time, 0.0))
-        _fetched = _fetch_gated_providers(_gated, file.index_sets, _vi, _t0, model)
-        if !isempty(_fetched)
-            merge!(_ca, _fetched)
-            kwd[:const_arrays] = _ca
-        end
-    end
-    # These are consumed here; do not forward to the typed impl entry point.
-    delete!(kwd, :_gated_providers)
-    delete!(kwd, :_sample_time)
-
-    kwd[:_vi_extents] = _vi === nothing ? Dict{String, Int}() : _vi.extents
-    kwd[:_vi_vars] = _vi === nothing ? Set{String}() : _vi.vi_var_names
-    kwd[:_vi_maps] = _vi === nothing ? _EMPTY_VI_MAPS : (maps = _vi.maps, map_sets = _vi.map_sets)
-    # A range-restricted program keeps what the front door produced, so a later
-    # restriction of it re-lowers without re-reading the document.
-    _range_front_door_done(_range_spec_now(), file, model_name, kwd)
-    return _build_evaluator(file; model_name = model_name, kwd...)
+    return _FrontDoor(
+        file, model_name === nothing ? nothing : String(model_name), model, _vi, kwd
+    )
 end
 
 # Does any equation / variable expression of `model` (or a subsystem) carry a

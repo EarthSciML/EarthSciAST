@@ -493,16 +493,8 @@ end
 """
     _document_solver(prob) -> Union{Solver,Nothing}
 
-The §2.2 `solver` block of the document an `EsmProblem` was built from.
-
-Read from the problem's own run document rather than from a separate typed
-field, so the §2.2.2 chain holds however the problem was built. Returns
-`nothing` when the document declares no block, or when `prob` carries no
-document at all (the direct-`f!` construction paths).
+The §2.2 `solver` block of the document an `EsmProblem` was built from, or
+`nothing` when the document declares none or `prob` carries no document (the
+direct-`f!` construction paths).
 """
-function _document_solver(prob)
-    isdefined(prob, :run_doc) || return nothing
-    doc = getfield(prob, :run_doc)
-    doc isa AbstractDict || return nothing
-    return coerce_solver(get(doc, "solver", nothing))
-end
+_document_solver(prob) = isdefined(prob, :run_file) ? getfield(prob, :run_file).solver : nothing

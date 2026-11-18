@@ -180,6 +180,7 @@ end
 
 @testset "derive_output_meta leaves its document unchanged" begin
     doc = Dict{String, Any}(
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "meta"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(

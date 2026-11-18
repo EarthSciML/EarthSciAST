@@ -1414,11 +1414,10 @@ function _build_evaluator_impl_inner(
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
     # without its events would report a wrong answer. This check covers a model
-    # handed to the builder directly. A FLATTENED system reaches this entry
-    # through `flattened_to_esm`, which does not carry events, so `simulate` (and
-    # with it `run_inline_tests`) and `_build_evaluator(::FlattenedSystem)` refuse
-    # it earlier, while the events are still in hand. The ModelingToolkit export
-    # runs both kinds of event and does not come through here.
+    # handed to the builder directly. A FLATTENED system reaches this entry as a
+    # run file, which carries no events, so `_prepare_run` refuses them earlier,
+    # while the events are still in hand. The ModelingToolkit compiler runs both
+    # kinds of event and does not come through here.
     ev = _first_event(model)
     ev === nothing || throw(_event_refusal(ev))
     # An unknown carrying BOTH `D(x) ~ f` and `x ~ g` is one more equation than
@@ -1427,8 +1426,8 @@ function _build_evaluator_impl_inner(
     # before classification files the two equations into competing buckets and
     # the bare one falls out as an `E_TREEWALK_UNSUPPORTED_EQUATION` naming
     # neither the unknown nor either equation. A flattened system reaches this
-    # entry through `flattened_to_esm`, which namespaces every name, so the
-    # message names the unknown as the run document spells it.
+    # entry as a run file, whose names are namespaced, so the message names the
+    # unknown as the run document spells it.
     _refuse_doubly_defined_unknown(model.equations)
     # A DATA-FED parameter with nothing bound to it is refused here too, and for
     # the same reason (esm-spec §9.6.6 `data_source_unbound`, CONFORMANCE_SPEC

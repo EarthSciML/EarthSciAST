@@ -332,10 +332,9 @@ end
 
 @testset "the producers of a build-time field are materialized ONCE" begin
     prep, insp, _ = _prepared()
-    # `observed_field` coerces this lazily on first use; do the same so the
-    # scope call below sees exactly the file the production path passes.
-    prep.run_file[] === nothing && (prep.run_file[] = EA.coerce_esm_file(prep.run_doc))
-    file = prep.run_file[]
+    # The run file `observed_field` reads, so the scope call below sees exactly
+    # the file the production path passes.
+    file = prep.run_file
     mname = String(first(keys(file.models)))
     vars = keys(file.models[mname].variables)
     qual(n) = String(

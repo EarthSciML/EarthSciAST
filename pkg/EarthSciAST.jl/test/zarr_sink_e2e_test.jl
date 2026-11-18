@@ -116,6 +116,7 @@ end
 # exactly the state vector a solve would hand over.
 @testset "0-D model: scalars share one grid and write [time]-only arrays" begin
     doc = Dict{String, Any}(
+        "esm" => "2.0.0", "metadata" => Dict{String, Any}("name" => "zero_d"),
         "domain" => Dict{String, Any}("independent_variable" => "time"),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -123,7 +124,8 @@ end
                     "a" => Dict{String, Any}("type" => "unknown", "units" => "K"),
                     "b" => Dict{String, Any}("type" => "unknown", "units" => "kg"),
                     "c" => Dict{String, Any}("type" => "unknown")
-                )
+                ),
+                "equations" => Any[]
             )
         )
     )

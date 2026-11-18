@@ -1298,3 +1298,72 @@ function materialize_value_invention(
         maps = ctx.maps, map_sets = map_sets,
     )
 end
+
+# ============================================================================
+# Value-invention members fed back as const factors
+# ============================================================================
+
+# The const-array keys an authored bare factor name resolves to. Flatten
+# namespaces every variable (`<Component>.<name>`), while document-scoped
+# index-set fields (`member_factor`) and gate `applies_to` stay bare, so a bare
+# authored name is published under the bare key AND every model-variable key
+# whose final dotted segment matches it, which is the name a gather reads.
+function _const_factor_aliases(model, bare::AbstractString)
+    keys_out = Set{String}([String(bare)])
+    if model !== nothing
+        for k in keys(model.variables)
+            ks = String(k)
+            (
+                ks == bare || (
+                    occursin('.', ks) &&
+                        String(split(ks, '.')[end]) == bare
+                )
+            ) && push!(keys_out, ks)
+        end
+    end
+    return keys_out
+end
+
+# ---- Phase 2b Hook 1 helper: members-fed-back-as-const-factor ----------------
+# Scan the document index-set registry for `kind:"derived"` sets that name a
+# `member_factor`; for each, surface its value-invention MEMBERS (the invented,
+# sorted-distinct, 1-based full-grid ids in `vi_members[from_faq]`) as a dense
+# 1-D Float64 const array keyed by the factor name (and its namespaced aliases,
+# see `_const_factor_aliases`). Returns a `name => vector` dict to merge into
+# `const_arrays`. A derived set with no `member_factor`, or whose producer did
+# not materialise, contributes nothing.
+function _feed_back_vi_members(index_sets, vi_members::AbstractDict, model)
+    out = Dict{String, Any}()
+    index_sets === nothing && return out
+    for (_, is) in index_sets
+        is isa IndexSet || continue
+        is.kind == "derived" || continue
+        mf = is.member_factor
+        (mf === nothing || is.from_faq === nothing) && continue
+        faq = String(is.from_faq)
+        haskey(vi_members, faq) || continue
+        mem = vi_members[faq]
+        # members are scalar integer keys (value_invention.jl).
+        vec = Vector{Float64}(undef, length(mem))
+        ok = true
+        for (i, m) in enumerate(mem)
+            if m isa Real
+                vec[i] = Float64(m)
+            else
+                ok = false
+                break
+            end
+        end
+        ok || throw(
+            TreeWalkError(
+                "E_TREEWALK_VI_MEMBER_FACTOR",
+                "derived index set member_factor '$mf' requires SCALAR members; " *
+                    "got a non-numeric member for faq '$faq'"
+            )
+        )
+        for k in _const_factor_aliases(model, String(mf))
+            out[k] = vec
+        end
+    end
+    return out
+end

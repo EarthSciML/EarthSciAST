@@ -167,6 +167,7 @@ include("data_output.jl")
 # `compiler=:xla` (API_SPEC §5.8): after the tree walk, because it names the
 # emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
 include("compiler_xla.jl")
+include("prepared_run.jl")
 include("simulate.jl")
 include("rhs_program.jl")
 include("range_restricted.jl")

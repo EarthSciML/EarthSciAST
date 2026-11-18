@@ -380,8 +380,7 @@ function _collect_model!(
     # Every parameter — constant, sampled, or discrete-cadence — partitions with
     # the parameters, because a parameter is never differentiated. A
     # discrete-cadence one is the forcing buffer the update machinery writes;
-    # its `update` block travels with it, so `flattened_to_esm` re-emits it
-    # losslessly.
+    # its `update` block travels with it into the run file.
     _observed_here = Set(observed_unknowns(model))
     _inlineable_here = _inlineable_observed_unknowns(model)
     for (name, var) in model.variables

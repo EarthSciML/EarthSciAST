@@ -570,30 +570,29 @@ function _meta_lookup(table::AbstractDict, base::AbstractString)
     return get(table, String(bare), nothing)
 end
 
-# Static axis length of an index-set entry: interval `size`; categorical member
-# count; 0 (unknown-here) for derived/ragged whose extent needs the build.
-function _index_set_axis_len(is::AbstractDict)
-    kind = get(is, "kind", nothing)
-    if kind == "interval"
-        return Int(get(is, "size", 0))
-    elseif kind == "categorical"
-        m = get(is, "members", nothing)
-        return m isa AbstractVector ? length(m) : 0
+# Static axis length of an index set: interval `size`; categorical member count;
+# 0 (unknown here) for a derived or ragged set whose extent needs the build.
+function _index_set_axis_len(is::IndexSet)
+    if is.kind == "interval"
+        return something(is.size, 0)
+    elseif is.kind == "categorical"
+        return is.members === nothing ? 0 : length(is.members)
     else
-        sz = get(is, "size", nothing)
-        return sz === nothing ? 0 : Int(sz)
+        return something(is.size, 0)
     end
 end
 
 """
-    derive_output_meta(doc) -> OutputMeta
+    derive_output_meta(file::EsmFile) -> OutputMeta
+    derive_output_meta(doc::AbstractDict) -> OutputMeta
 
 Distill the flattened run document into [`OutputMeta`](@ref): the model names, the
 `index_sets` axis lengths, each variable's declared `shape` (real dim names) +
 retained CF attrs + declared kind, the additive `coordinates` registry (§8.3), and
 the record-axis name (`domain.independent_variable`). Returns an empty
-`OutputMeta` for a document with no `models` (nothing to name). Reads only the doc
-— no build artifacts — so it composes with `derive_output_gridding`.
+`OutputMeta` for a document with no `models` (nothing to name). Reads only the
+document — no build artifacts — so it composes with `derive_output_gridding`. A
+native document is coerced first.
 
 Variable tables are keyed by BOTH the bare name and its `Model.`-qualified form,
 so a namespaced flat state (`Model.u[…]`) resolves its real dim names instead of
@@ -601,24 +600,31 @@ silently falling back to positional ones. A bare name claimed by more than one
 model is ambiguous and only the qualified key survives.
 """
 function derive_output_meta(doc::AbstractDict)
-    idx = Dict{String, Int}()
-    isets = get(doc, "index_sets", nothing)
-    if isets isa AbstractDict
-        for (nm, is) in isets
-            is isa AbstractDict && (idx[String(nm)] = _index_set_axis_len(is))
-        end
-    end
-
+    meta = derive_output_meta(coerce_esm_file(doc))
+    # The `coordinates` registry and the independent variable as the document
+    # writes them: coercion does not keep the first, and an authored
+    # `independent_variable` names the record axis even when it is `t`.
     coords = get(doc, "coordinates", nothing)
-    cdict = coords isa AbstractDict ?
-        Dict{String, Any}(String(k) => v for (k, v) in coords) : Dict{String, Any}()
-
     dom = get(doc, "domain", nothing)
     iv = dom isa AbstractDict ? get(dom, "independent_variable", nothing) : nothing
-    tdim = iv === nothing ? DEFAULT_TIME_DIM : String(iv)
+    return OutputMeta(
+        meta.model_name, meta.index_sets, meta.var_dims, meta.var_attrs, meta.var_types,
+        coords isa AbstractDict ? Dict{String, Any}(String(k) => v for (k, v) in coords) :
+            Dict{String, Any}(),
+        iv === nothing ? DEFAULT_TIME_DIM : String(iv)
+    )
+end
 
-    models = get(doc, "models", nothing)
-    (models isa AbstractDict && !isempty(models)) || return OutputMeta(
+function derive_output_meta(file::EsmFile)
+    idx = Dict{String, Int}(k => _index_set_axis_len(is) for (k, is) in file.index_sets)
+    cdict = file.coordinates === nothing ? Dict{String, Any}() :
+        Dict{String, Any}(String(k) => v for (k, v) in file.coordinates)
+    # The domain's independent variable names the record axis; the default `t`
+    # (which a run document does not spell out) falls back to `"time"`.
+    iv = file.domain === nothing ? "t" : file.domain.independent_variable
+    tdim = iv == "t" ? DEFAULT_TIME_DIM : iv
+    models = file.models
+    (models === nothing || isempty(models)) && return OutputMeta(
         "", idx, Dict{String, Vector{String}}(), Dict{String, Dict{String, Any}}(),
         Dict{String, String}(), cdict, tdim
     )
@@ -628,14 +634,8 @@ function derive_output_meta(doc::AbstractDict)
     # A bare variable name claimed by two models cannot disambiguate a flat base
     # name, so only the qualified key is registered for it.
     bare_counts = Dict{String, Int}()
-    for mn in mnames
-        vars = models[mn]
-        vars = vars isa AbstractDict ? get(vars, "variables", nothing) : nothing
-        vars isa AbstractDict || continue
-        for vn in keys(vars)
-            k = String(vn)
-            bare_counts[k] = get(bare_counts, k, 0) + 1
-        end
+    for mn in mnames, vn in keys(models[mn].variables)
+        bare_counts[vn] = get(bare_counts, vn, 0) + 1
     end
 
     vdims = Dict{String, Vector{String}}()
@@ -643,34 +643,25 @@ function derive_output_meta(doc::AbstractDict)
     vtypes = Dict{String, String}()
     for mn in mnames
         model = models[mn]
-        vars = model isa AbstractDict ? get(model, "variables", nothing) : nothing
-        vars isa AbstractDict || continue
         observed = _output_observed_names(model)
-        for vn in sort!(String[String(k) for k in keys(vars)])
-            v = vars[vn]
-            v isa AbstractDict || continue
+        for vn in sort!(collect(String, keys(model.variables)))
+            v = model.variables[vn]
             keys_for_var = String["$mn.$vn"]
             get(bare_counts, vn, 0) > 1 || push!(keys_for_var, vn)
-
-            shp = get(v, "shape", nothing)
             a = Dict{String, Any}()
-            for k in ("units", "standard_name", "description")
-                haskey(v, k) && v[k] !== nothing && (a[k] = v[k])
-            end
+            v.units === nothing || (a["units"] = v.units)
+            v.description === nothing || (a["description"] = v.description)
             # The kind recorded here is the DERIVED role, not the declared type
             # (esm-spec §6.3.1). From esm 1.0.0 every solved-for quantity
             # declares `type: "unknown"`, so gating observed output on the
             # declared string would gate on a constant and write every observed
             # unconditionally. An unknown DEFINED by a bare-variable-LHS
             # equation is the observed one.
-            vt = get(v, "type", nothing)
-            vt = (vt == "unknown" && vn in observed) ?
-                "observed" : (vt === nothing ? nothing : String(vt))
-
+            vt = vn in observed ? "observed" : serialize_model_variable_type(v.type)
             for key in keys_for_var
-                shp isa AbstractVector && (vdims[key] = String[String(s) for s in shp])
+                v.shape === nothing || (vdims[key] = copy(v.shape))
                 isempty(a) || (vattrs[key] = copy(a))
-                vt === nothing || (vtypes[key] = vt)
+                vtypes[key] = vt
             end
         end
     end
@@ -678,27 +669,15 @@ function derive_output_meta(doc::AbstractDict)
     return OutputMeta(sname, idx, vdims, vattrs, vtypes, cdict, tdim)
 end
 
-"""
-    _output_observed_names(model) -> Set{String}
-
-The OBSERVED unknowns of a RAW (unparsed) model dict: those an equation defines
-with a bare-variable LHS (esm-spec §6.3.1). `model` is not modified.
-
-This is the raw-JSON twin of `observed_unknowns`, for `derive_output_meta`,
-which walks the raw document rather than the typed IR.
-"""
-function _output_observed_names(model)
-    vars = get(model, "variables", nothing)
+# The OBSERVED unknowns of `model`: those an equation defines with a
+# bare-variable left-hand side (esm-spec §6.3.1).
+function _output_observed_names(model::Model)
     out = Set{String}()
-    if vars isa AbstractDict
-        for eq in get(model, "equations", ())
-            eq isa AbstractDict || continue
-            lhs = get(eq, "lhs", nothing)
-            lhs isa AbstractString || continue
-            v = get(vars, String(lhs), nothing)
-            (v isa AbstractDict && get(v, "type", nothing) == "unknown") || continue
-            push!(out, String(lhs))
-        end
+    for eq in model.equations
+        eq.lhs isa VarExpr || continue
+        name = (eq.lhs::VarExpr).name
+        v = get(model.variables, name, nothing)
+        (v !== nothing && serialize_model_variable_type(v.type) == "unknown") && push!(out, name)
     end
     return out
 end
