@@ -144,10 +144,10 @@ function _geo_compile_uncached(expr, g::_GeoCompileCtx)::_Node
         # A scalar `env` entry folded to a literal is the setup-time geometry's
         # read of a model parameter (`atol`, `dx`, a projection constant) — the
         # value is baked into the materialized array, so the name is STRUCTURAL.
-        # See `_PARAM_READS` (build.jl); the sink is `nothing` outside a
+        # See `_record_param_read` (build_caller_data.jl); the sink is `nothing` outside a
         # build-time evaluation scope.
         if v isa Real
-            _PARAM_READS[] === nothing || _record_param_read(expr.name)
+            _record_param_read(expr.name)
             return _mknode(kind = _NK_LITERAL, literal = Float64(v))
         end
         v === nothing && throw(

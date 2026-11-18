@@ -1750,8 +1750,9 @@ function _faq_diagnostic_cell(
     end
     sub_rhs = _sub_preserving(rhs_body, idx_exprs)
     # A scalar aggregate nested in the body unrolls, as it does in the per-cell
-    # build (`_ARRAY_CELL_DEPTH`).
-    _ARRAY_CELL_DEPTH[] += 1
+    # build (`_BuildState.array_cell_depth`).
+    cell_state = _build_state()
+    cell_state.array_cell_depth += 1
     try
         if isempty(contract_names)
             build(sub_rhs)
@@ -1785,7 +1786,7 @@ function _faq_diagnostic_cell(
         end
         return (whole && !capped) ? :cell : n == 0 ? :none : :part
     finally
-        _ARRAY_CELL_DEPTH[] -= 1
+        cell_state.array_cell_depth -= 1
     end
 end
 
@@ -2104,7 +2105,8 @@ function _compile_faq_percell!(
     # `_resolve_scalar_faq` confines the runtime contraction loop to scalar
     # contexts (ess-runtime-contraction). try/finally: the guard must unwind even
     # if a cell resolve throws.
-    _ARRAY_CELL_DEPTH[] += 1
+    cell_state = _build_state()
+    cell_state.array_cell_depth += 1
     try
         for idx_tuple in Iterators.product(range_iters...)
             idx_env = Dict{String, Int}(
@@ -2257,7 +2259,7 @@ function _compile_faq_percell!(
             end
         end
     finally
-        _ARRAY_CELL_DEPTH[] -= 1
+        cell_state.array_cell_depth -= 1
     end
     if contraction_loop || _stencil_disabled()
         # Loop cells evaluate through the plain scalar walker (`_eval_node`),

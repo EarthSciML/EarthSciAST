@@ -1,23 +1,20 @@
 # tree_walk/compile.jl — `_compile` / `_compile_op`: an expression to `_Node`, with the
-# per-equation build memo and the build-scoped loop and slot registries.
+# per-equation build memo and the runtime loop-variable names.
 
-# Reserved loop-variable name (Symbol) → its shared counter `Ref`, populated by
-# `_resolve_scalar_faq` and read by `_compile`'s `VarExpr` arm to lower a
-# loop-var reference to an `_NK_LOOPVAR` node. Cleared at the top of every build
-# (`_build_evaluator_impl`) so it never grows across builds; a loop-var name is
-# GLOBALLY UNIQUE (a monotonic counter), so a stale entry can never be confused
-# with a fresh one within a build. Build is single-threaded, so no locking.
-const _LOOPVAR_REFS = Dict{Symbol, Base.RefValue{Int}}()
-const _LOOPVAR_COUNTER = Ref(0)
+# A reserved runtime loop variable: a name no document spells, minted where the
+# resolve keeps a contracted index symbolic. Its counter `Ref` is registered on
+# the build state (`_register_loopvar!`) and read by `_compile`'s `VarExpr` arm,
+# which lowers the name to an `_NK_LOOPVAR` node. The numbering is the build's
+# own (`_BuildState.loopvar_count`, compiler.jl), so a build names its loops the
+# same way every time.
 const _LOOPVAR_PREFIX = "__esm_lv_"
-_fresh_loopvar_name() = (_LOOPVAR_COUNTER[] += 1; "$(_LOOPVAR_PREFIX)$(_LOOPVAR_COUNTER[])")
-
-# Build-scoped cache of a state array's flat slot table (vname → (slot_flat,
-# strides)). The table maps a state cell's per-dim logical index to its flat `u`
-# slot; it depends ONLY on the state array's `var_map` layout, so it is built once
-# per state var per build and shared across every output cell's loop node. Cleared
-# at the top of every build (`_build_evaluator_impl`).
-const _STATE_SLOT_TABLES = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+function _fresh_loopvar_name()
+    c = _build_state().loopvar_count
+    c[] += 1
+    return string(_LOOPVAR_PREFIX, c[])
+end
+_register_loopvar!(name::AbstractString, ref::Base.RefValue{Int}) =
+    (_build_state().loopvars[Symbol(name)] = ref; nothing)
 
 # ── Per-equation build memo (ess-perf: compile one representative per group) ──
 # Within one array equation's cell loop every cell resolves/compiles against the
@@ -88,21 +85,21 @@ function _compile(expr::VarExpr, var_map, param_syms, memo::_MaybeMemo = nothing
     if idx != 0
         # Inside a build-time evaluation scope (`_with_param_reads`) this arm IS
         # a parameter read: `evaluate_expr` binds the resolved parameter scope as
-        # pseudo-state. Outside one it is an ordinary state slot and the sink is
-        # `nothing`, so this is a load + branch. See `_PARAM_READS` (build.jl).
-        _PARAM_READS[] === nothing || _record_param_read(name)
+        # pseudo-state. Outside one it is an ordinary state slot and nothing is
+        # recorded. See `_record_param_read` (build_caller_data.jl).
+        _record_param_read(name)
         return _mknode(kind = _NK_STATE, idx = idx)
     end
     sym = Symbol(name)
     if _is_param(param_syms, sym)
-        _PARAM_READS[] === nothing || _record_param_read(name)
+        _record_param_read(name)
         return _mknode(kind = _NK_PARAM, sym = sym, idx = _param_index(param_syms, sym))
     end
     # A reserved runtime-contraction loop variable (ess-runtime-contraction):
     # `_resolve_scalar_faq` kept the contracted index symbolic and registered
     # its shared counter `Ref` here. Lower to an `_NK_LOOPVAR` leaf that reads the
     # ref at eval time (the enclosing `_NK_CONTRACTION_LOOP` writes it per iteration).
-    lref = get(_LOOPVAR_REFS, sym, nothing)
+    lref = get(_build_state().loopvars, sym, nothing)
     if lref !== nothing
         return _mknode(kind = _NK_LOOPVAR, payload = lref)
     end

@@ -730,24 +730,34 @@ end
 # The sink is `nothing` outside those scopes — in particular during the ODE RHS
 # compile, where a parameter read is a RUNTIME read of `p` and therefore
 # NUMERIC, the exact opposite conclusion.
-const _PARAM_READS = Ref{Union{Nothing, Set{String}}}(nothing)
+#
+# The sink lives on the build state (`_BuildState.param_reads`, compiler.jl), so
+# a build records only its own reads. `_PARAM_SINKS_OPEN` counts the scopes open
+# on any task; while it is zero a resolution site skips the task-local lookup.
+# It decides nothing on its own: a nonzero count only sends the site to its own
+# build's sink, which is `nothing` outside a scope.
+const _PARAM_SINKS_OPEN = Threads.Atomic{Int}(0)
 
 @inline function _record_param_read(name)
-    s = _PARAM_READS[]
+    _PARAM_SINKS_OPEN[] == 0 && return nothing
+    s = _build_state().param_reads
     s === nothing || push!(s, String(name))
     return nothing
 end
 
 # Run `f` with build-time name resolutions recorded into `sink`. Save/restore
-# (not clear-on-exit) so a nested build cannot clobber an outer one's sink.
+# (not clear-on-exit) so a nested scope cannot clobber an outer one's sink.
 function _with_param_reads(f, sink::Union{Nothing, Set{String}})
     sink === nothing && return f()
-    prev = _PARAM_READS[]
-    _PARAM_READS[] = sink
+    st = _build_state()
+    prev = st.param_reads
+    st.param_reads = sink
+    Threads.atomic_add!(_PARAM_SINKS_OPEN, 1)
     try
         return f()
     finally
-        _PARAM_READS[] = prev
+        Threads.atomic_sub!(_PARAM_SINKS_OPEN, 1)
+        st.param_reads = prev
     end
 end
 
@@ -757,7 +767,7 @@ end
 #
 #   `:numeric`      — a scalar that lands in the runtime `p`. Differentiable,
 #                     and overridable at solve time by swapping `p`.
-#   `:structural`   — read at BUILD time (see `_PARAM_READS`). Its value can
+#   `:structural`   — read at BUILD time (see `_record_param_read`). Its value can
 #                     change the shape of the problem, so changing it is a
 #                     rebuild, not a `p` swap. Per NAME, not per use: a name
 #                     read once at build is structural even if the RHS also

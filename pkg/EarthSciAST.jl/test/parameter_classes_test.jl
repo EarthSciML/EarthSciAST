@@ -20,7 +20,7 @@
 #   :forcing      — bound to a live buffer a discrete provider rewrites.
 #
 # The classification is a record of what the build actually READ (the
-# `_PARAM_READS` seam), not a second static reading of the document — so the
+# `_record_param_read` seam), not a second static reading of the document — so the
 # test that matters most is the one below where the SAME parameter name is
 # structural in one document and numeric in another, differing only in whether
 # an `ic()` equation reads it.

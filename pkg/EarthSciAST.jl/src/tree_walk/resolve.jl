@@ -847,7 +847,7 @@ function _resolve_ragged_faq_loop(
         body, array_var_info, var_map, const_arrays, pgather,
         nothing, kbsyms
     )
-    _LOOPVAR_REFS[Symbol(kname)] = kref
+    _register_loopvar!(kname, kref)
     return OpExpr(
         "__ragged_loop", ASTExpr[resolved, lo, hi];
         value = _RaggedLoopBuild(
@@ -1365,8 +1365,8 @@ end
 # stencil_affine.jl, oop_merge.jl), which model unrolled scalar terms — so the
 # loop node is confined to SCALAR contexts (rhs_list / scalar observeds), where the
 # eval-time consumer is exactly `_eval_node` (which handles it) and the CSE keyer
-# (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
-const _ARRAY_CELL_DEPTH = Ref(0)
+# (xcse.jl, which safely DECLINES an unknown kind → leaves it inline). The depth
+# is the build's (`_BuildState.array_cell_depth`, compiler.jl).
 
 # A member of a symbolic resolve's bound names that no index name can be: the
 # whole-array nest puts it in the bound names it resolves its term with
@@ -1388,11 +1388,11 @@ const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
 # under `native`, because which side of it a reduction falls on decides which
 # tier compiles the equation and therefore whether the compiler can express it.
 _contraction_loop_enabled() = _compiler_plan_now().contraction_loop
-function _contraction_loop_min()
-    v = get(ENV, "ESS_CONTRACTION_LOOP_MIN", "")
-    n = tryparse(Int, v)
-    return (n === nothing || n < 1) ? 8 : n
-end
+# The build reads it once, when it starts (`_BuildContext`, compiler.jl).
+_contraction_loop_min() = (
+    c = _build_ctx();
+    c === nothing ? _env_floor("ESS_CONTRACTION_LOOP_MIN", 8) : c.contraction_loop_min
+)
 
 # Resolve `body` with each of `names` replaced by a fresh reserved loop-var
 # name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
@@ -1405,7 +1405,7 @@ end
 # cause erased — and a programming error would otherwise surface only as a
 # tier that declined. `memo` is `nothing` or one made for this symbolic resolve
 # alone, never the concrete RHS build's. The refs are published to
-# `_LOOPVAR_REFS`, so `_compile` lowers each surviving loop-var `VarExpr` to an
+# the build state (`_register_loopvar!`), so `_compile` lowers each surviving loop-var `VarExpr` to an
 # `_NK_LOOPVAR` reading its ref, only after a clean resolve.
 function _resolve_symbolic(
         body::ASTExpr, names::Vector{String}, extra_syms::Set{String},
@@ -1424,7 +1424,7 @@ function _resolve_symbolic(
         return nothing
     end
     for d in eachindex(fresh)
-        _LOOPVAR_REFS[Symbol(fresh[d])] = refs[d]
+        _register_loopvar!(fresh[d], refs[d])
     end
     return refs, resolved
 end
@@ -1487,11 +1487,10 @@ end
 # between this tier and the per-cell build.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
-function _array_contraction_min()
-    v = get(ENV, "ESS_ARRAY_CONTRACTION_MIN", "")
-    n = tryparse(Int, v)
-    return (n === nothing || n < 1) ? 1024 : n
-end
+_array_contraction_min() = (
+    c = _build_ctx();
+    c === nothing ? _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024) : c.array_contraction_min
+)
 
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
@@ -1576,7 +1575,7 @@ function _resolve_scalar_faq(
     # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else keeps
     # unrolling exactly as before. Gated conservatively (correctness first):
     #   * enabled (env), and NOT already inside an array-equation cell resolve
-    #     (loop node is confined to scalar-walker contexts — see `_ARRAY_CELL_DEPTH`);
+    #     (loop node is confined to scalar-walker contexts — see `_BuildState.array_cell_depth`);
     #   * NOT the symbolic compile-once cellwise path (`bound_syms` empty) — that
     #     path binds its own reserved symbols and runs a separate evaluator;
     #   * a plain arithmetic reducer ∈ {+,*,max,min}, no join gates / filter;
@@ -1585,7 +1584,7 @@ function _resolve_scalar_faq(
     #   * total reduction length ≥ the coverage floor;
     #   * the body resolves with the index symbolic (`_try_build_contraction_loop`
     #     returns `nothing` otherwise → unroll).
-    if _contraction_loop_enabled() && _ARRAY_CELL_DEPTH[] == 0 &&
+    if _contraction_loop_enabled() && _build_state().array_cell_depth == 0 &&
             isempty(bound_syms) && gates === nothing && filt0 === nothing &&
             _is_numeric_reducer(oplus) &&
             all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
@@ -2033,7 +2032,7 @@ _refs_loopvar(::ASTExpr) = false
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
 # (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
 # frozen slot table maps every in-bounds state cell to its flat `u` slot (built
-# once per state var per build, shared across output cells via `_STATE_SLOT_TABLES`);
+# once per state var per build, shared across output cells via the build state's slot tables);
 # the subscript expressions resolve normally (a loop var → `_NK_LOOPVAR`; an indirect
 # `index(conn,i,k)` → a nested `_NK_CONST_GATHER`) and become the node's children,
 # evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
@@ -2051,7 +2050,7 @@ function _resolve_state_gather(
             pgather, memo, bound_syms
         ) for a in idx_args
     ]
-    slot_flat, strides = get!(_STATE_SLOT_TABLES, vname) do
+    slot_flat, strides = get!(_build_state().slot_tables, vname) do
         dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
         strd = Vector{Int}(undef, nd)
         strd[1] = 1

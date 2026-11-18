@@ -1491,6 +1491,9 @@ is "already flattened". **Snapshot semantics**: the document is fully parsed
 here, so mutating `input` afterwards does not affect the problem (forcing arrays
 are aliased by design; see [`EsmProblem`](@ref)).
 
+Two problems may be built at once on two tasks: each build keeps its state to
+itself. One problem's `f!` is not to be called from several threads at once.
+
 Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 
 * `p::AbstractDict` — parameter overrides. Baked into the build (they feed

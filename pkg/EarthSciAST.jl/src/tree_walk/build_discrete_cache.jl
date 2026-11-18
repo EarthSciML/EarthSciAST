@@ -488,7 +488,7 @@ function _compile_discrete_fill(
     feqs = _materialized_fill_equations(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
-    se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
+    se, pcs, aks, sfs, acs = _with_own_slot_tables() do
         _with_rule_alias(name, name) do
             _compile_derivative_equations(
                 feqs, resolved_obs, avi, L,

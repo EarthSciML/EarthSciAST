@@ -171,7 +171,7 @@ Parameter NAME → what KIND of parameter it is in the build that produced `x`
 The partition is **derived, not declared**: every one of these is spelled
 `"type": "parameter"` in the document, so the discriminator is where the value is
 CONSUMED. The build records the names its build-time consumers resolve (see the
-`_PARAM_READS` seam) and anything they touched is `:structural` — by
+`_record_param_read` seam) and anything they touched is `:structural` — by
 construction, not by a second static reading of the document.
 
 `:structural` is per NAME, not per use: a name read once at build stays
@@ -691,7 +691,7 @@ function _build_evaluator_dict(
     # observed exists.
     _params = get(kwd, :parameter_overrides, Dict{String, Float64}())
     _ca = Dict{String, Any}(String(k) => v for (k, v) in get(kwd, :const_arrays, Dict{String, Any}()))
-    # The build-time parameter-read sink (see `_PARAM_READS`) is created HERE,
+    # The build-time parameter-read sink (see `_record_param_read`) is created HERE,
     # not in the impl: two of the build-time consumers — the binning-coordinate
     # derivation and value invention (whose `_vi_param` reads decide an index-set
     # EXTENT, i.e. `length(u)`) — run at this front door, before the impl entry.

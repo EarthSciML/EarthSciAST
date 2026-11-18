@@ -218,8 +218,4 @@ const _WORKLOAD_DOCS = (
         end
         observed_field(esm_problem(keyed, (0.0, 0.0); compiler = :native), "M.total")
     end
-    # The process-wide counters and build-scoped tables the builds above touched
-    # start empty in a session, as they would without the workload.
-    empty!(_STATE_SLOT_TABLES)
-    empty!(_LOOPVAR_REFS)
 end

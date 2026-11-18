@@ -194,21 +194,18 @@ function _compiler_plan(compiler::Symbol)
     )
 end
 
-# The plan in force. Task-local so a nested build cannot leak its plan into the
-# caller's, with a process-wide default for the entry points that never go
-# through `_with_compiler_plan` (a direct `_compile` call in a test, say).
-# `Base.ScopedValues` would say this more directly but is 1.11+, and this
-# package supports 1.10. That default is NON-strict: outside a build there is
-# no `compiler` keyword to have been strict about, and a refusal raised there
-# would name a compiler nobody asked for.
-const _COMPILER_PLAN_KEY = :earthsci_compiler_plan
+# The plan in force is the build context's (below), with a process-wide default
+# for the entry points that never go through `_with_compiler_plan` (a direct
+# `_compile` call in a test, say). That default is NON-strict: outside a build
+# there is no `compiler` keyword to have been strict about, and a refusal raised
+# there would name a compiler nobody asked for.
 const _DEFAULT_COMPILER_PLAN = _plan_all(:native, false, true)
 
 _compiler_plan_now()::CompilerPlan =
-    get(task_local_storage(), _COMPILER_PLAN_KEY, _DEFAULT_COMPILER_PLAN)
+    (c = _build_ctx(); c === nothing ? _DEFAULT_COMPILER_PLAN : c.plan)
 
 _with_compiler_plan(f, plan::CompilerPlan) =
-    task_local_storage(f, _COMPILER_PLAN_KEY, plan)
+    _with_build_ctx(f, _ctx_with(_build_ctx(); plan = plan))
 
 # The plan a `compiler` keyword produces. The keyword has no "unset" value: a
 # caller who names nothing gets the strict `:native` a caller who names it
@@ -365,13 +362,133 @@ _BuildRecord(plan::CompilerPlan) =
     Pair{Symbol, Symbol}[]
 )
 
-const _BUILD_RECORD_KEY = :earthsci_build_record
-
 _build_record()::Union{Nothing, _BuildRecord} =
-    get(task_local_storage(), _BUILD_RECORD_KEY, nothing)
+    (c = _build_ctx(); c === nothing ? nothing : c.record)
 
 _with_build_record(f, rec::_BuildRecord) =
-    task_local_storage(f, _BUILD_RECORD_KEY, rec)
+    _with_build_ctx(f, _ctx_with(_build_ctx(); record = rec))
+
+# ---------------------------------------------------------------------------
+# The build context
+# ---------------------------------------------------------------------------
+#
+# Everything that decides what ONE build produces and is not an argument: the
+# plan, the record, the build's mutable scratch (`_BuildState`) and the tuning
+# floors, read from the environment once when the build starts. It is
+# installed under one task-local key, so two builds on two tasks never share
+# any of it; concurrent builds are supported.
+#
+# The state is per build. `_build_evaluator_impl` starts every build with a
+# fresh one (`_new_build_ctx`); an output-time compile, which builds against a
+# layout of its own, starts a child (`_child_build_ctx`). Changing only the
+# plan or the record (`_with_compiler_plan`, `_with_build_record`) keeps the
+# state of the context it narrows.
+mutable struct _BuildState
+    # A state array's flat slot table, by array name (`_resolve_state_gather`).
+    # It depends on the layout the build resolves against.
+    slot_tables::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    # A reserved runtime loop variable's counter `Ref`, by name: written where
+    # the resolve keeps an index symbolic, read by `_compile(::VarExpr)`.
+    loopvars::Dict{Symbol, Base.RefValue{Int}}
+    # The counter that names those variables. A child state shares its parent's,
+    # so a name is unique across a build and everything it starts.
+    loopvar_count::Base.RefValue{Int}
+    # Depth of the array-equation per-cell resolve (`_compile_faq_percell!`);
+    # a scalar reduction nested inside one unrolls rather than loops.
+    array_cell_depth::Int
+    # The build-time parameter-read sink (`_with_param_reads`), or `nothing`.
+    param_reads::Union{Nothing, Set{String}}
+end
+_BuildState(count::Base.RefValue{Int} = Ref(0)) = _BuildState(
+    Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+    Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing
+)
+
+struct _BuildContext
+    plan::CompilerPlan
+    record::Union{Nothing, _BuildRecord}
+    state::_BuildState
+    # The reduction length at and above which a scalar reduction loops at run
+    # time (`ESS_CONTRACTION_LOOP_MIN`, default 8), and the one for the
+    # whole-array contraction nest (`ESS_ARRAY_CONTRACTION_MIN`, default 1024).
+    contraction_loop_min::Int
+    array_contraction_min::Int
+end
+
+function _env_floor(name::String, default::Int)
+    n = tryparse(Int, get(ENV, name, ""))
+    return (n === nothing || n < 1) ? default : n
+end
+
+_BuildContext(plan::CompilerPlan, record, state::_BuildState) = _BuildContext(
+    plan, record, state,
+    _env_floor("ESS_CONTRACTION_LOOP_MIN", 8),
+    _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024)
+)
+
+const _BUILD_CTX_KEY = :earthsci_build_context
+
+_build_ctx()::Union{Nothing, _BuildContext} =
+    get(task_local_storage(), _BUILD_CTX_KEY, nothing)
+
+_with_build_ctx(f, ctx::_BuildContext) = task_local_storage(f, _BUILD_CTX_KEY, ctx)
+
+# `c` with its plan or record replaced, the state kept; a fresh context when no
+# build is open.
+function _ctx_with(c::Union{Nothing, _BuildContext}; plan = nothing, record = nothing)
+    c === nothing && return _BuildContext(
+        something(plan, _DEFAULT_COMPILER_PLAN), record, _BuildState()
+    )
+    return _BuildContext(
+        something(plan, c.plan), something(record, Some(c.record)), c.state,
+        c.contraction_loop_min, c.array_contraction_min
+    )
+end
+
+# The context a build runs in: its plan and record, fresh state, the floors
+# read now. The loop-variable counter continues the enclosing context's.
+function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord})
+    outer = _build_ctx()
+    count = outer === nothing ? Ref(0) : outer.state.loopvar_count
+    return _BuildContext(plan, record, _BuildState(count))
+end
+
+# A compile against a layout of its own, inside or after a build: the current
+# plan, record and floors, fresh slot tables and loop registry, no
+# parameter-read sink.
+function _child_build_ctx()
+    outer = _build_ctx()
+    outer === nothing && return _BuildContext(_DEFAULT_COMPILER_PLAN, nothing, _BuildState())
+    return _BuildContext(
+        outer.plan, outer.record, _BuildState(outer.state.loopvar_count),
+        outer.contraction_loop_min, outer.array_contraction_min
+    )
+end
+
+# Run `f` with slot tables of its own on the current build state, for a compile
+# inside a build against a layout of its own (a discrete materializer's fill);
+# the build's tables are back afterwards.
+function _with_own_slot_tables(f)
+    st = _build_state()
+    saved = st.slot_tables
+    st.slot_tables = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    try
+        return f()
+    finally
+        st.slot_tables = saved
+    end
+end
+
+# The state a resolve or compile writes to: the open build's, else this task's
+# own (a resolve or compile called outside any build, as a test does), kept for
+# the life of the task.
+const _TASK_STATE_KEY = :earthsci_build_state
+
+function _build_state()::_BuildState
+    c = _build_ctx()
+    c === nothing || return c.state
+    return get!(_BuildState, task_local_storage(), _TASK_STATE_KEY)::_BuildState
+end
 
 # ---------------------------------------------------------------------------
 # Engagement counts

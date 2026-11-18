@@ -158,6 +158,7 @@ const GROUPS = [
         "parameter_gradient_test.jl",
         "parameter_vector_abi_test.jl",
         "parameter_classes_test.jl",
+        "concurrent_build_test.jl",
         "tree_walk_allocation_test.jl",
         "tree_walk_param_gather_test.jl",
         "data_refresh_test.jl",

@@ -191,7 +191,7 @@ function _build_partition_and_materialize(
         index_sets::AbstractDict, const_arrays::AbstractDict,
         param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars, vi_extents::AbstractDict,
         vi_maps,
-        # Build-time parameter-read sink (see `_PARAM_READS`): the two consumers
+        # Build-time parameter-read sink (see `_record_param_read`): the two consumers
         # below (`_materialize_geometry_setup`, the `ic` evaluation) record the
         # names they resolve, which is what makes a parameter STRUCTURAL.
         param_reads::Union{Nothing, Set{String}} = nothing,
@@ -410,7 +410,7 @@ end
 function _build_state_layout(
         model::Model, cls, parts;
         initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars,
-        # Build-time parameter-read sink (see `_PARAM_READS`): the field-ic fold
+        # Build-time parameter-read sink (see `_record_param_read`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
         param_reads::Union{Nothing, Set{String}} = nothing,
         # Filled with the slots nothing gave a starting value (`_build_u0`).
@@ -1286,15 +1286,16 @@ function _build_evaluator_impl(
     plan = _plan_for(compiler)
     record = _BuildRecord(plan)
     products = get(kwargs, :products, nothing)
-    return _with_compiler_plan(plan) do
-        _with_build_record(record) do
-            try
-                return _build_evaluator_impl_pools(model; kwargs...)
-            finally
-                # The report is filled even when the build THREW: a refusal is
-                # exactly the case a caller wants the partial tier record for.
-                products === nothing || (products.compiler_report = _finish_report(record))
-            end
+    # The build's own context (compiler.jl): its plan and record, and fresh
+    # build-scoped state, so nothing an earlier or a concurrent build left
+    # behind is read.
+    return _with_build_ctx(_new_build_ctx(plan, record)) do
+        try
+            return _build_evaluator_impl_pools(model; kwargs...)
+        finally
+            # The report is filled even when the build THREW: a refusal is
+            # exactly the case a caller wants the partial tier record for.
+            products === nothing || (products.compiler_report = _finish_report(record))
         end
     end
 end
@@ -1362,7 +1363,7 @@ function _build_evaluator_impl_inner(
         # the pre-cut behavior, byte-identical.
         materialize_out::Union{Nothing, DiscreteMaterializer} = nothing,
         # Internal: the build-time parameter-READ set (see
-        # `_PARAM_READS`). The AbstractDict front-door records
+        # `_record_param_read`). The AbstractDict front-door records
         # the two consumers that run BEFORE this entry
         # (`_derive_binning_coords`, `materialize_value_invention`)
         # and hands the same sink down, so the classification
@@ -1452,12 +1453,6 @@ function _build_evaluator_impl_inner(
     # A parameter recomputed by a symbolic update is an event in all but name.
     symbolic = _first_symbolic_update(model)
     symbolic === nothing || throw(_symbolic_update_refusal(symbolic...))
-    # Runtime contraction-loop var registry (ess-runtime-contraction) is a
-    # build-scoped resolve→compile side channel; clear any stale entries from a
-    # prior build so it never accumulates across builds. Loop-var names are
-    # globally unique, so this only drops dead entries.
-    empty!(_LOOPVAR_REFS)
-    empty!(_STATE_SLOT_TABLES)   # build-scoped state-gather slot tables (ess-runtime-contraction)
     # ---- Compile-once template tier: expand references at the entry, keeping
     # the SITES (RFC out-of-line-expression-templates §7.7). Every phase and
     # every fallback path below sees exactly the fused expanded tree Option A
