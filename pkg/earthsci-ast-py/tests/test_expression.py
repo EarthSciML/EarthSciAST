@@ -247,14 +247,13 @@ class TestSymPyBridge:
         assert back_to_esm.op == "+"
 
     def test_to_sympy_open_tier_op_is_opaque_placeholder(self):
-        """An open-tier op with no evaluable-core meaning — a custom user op or
-        the demoted sugar ops — is preserved by ``to_sympy`` as an opaque
+        """An open-tier op with no evaluable-core meaning — a custom user op,
+        `integral` or `curl` — is preserved by ``to_sympy`` as an opaque
         :class:`sympy.Function` placeholder (structure survives for symbolic
-        analysis). They are all treated UNIFORMLY with no privilege: `grad` is no
-        longer special-cased into an `sp.Derivative`.
+        analysis). They are all treated UNIFORMLY with no privilege.
         """
         x = sp.Symbol("x")
-        for op in ("godunov_hamiltonian", "grad", "div", "laplacian", "curl"):
+        for op in ("godunov_hamiltonian", "integral", "curl"):
             result = to_sympy(ExprNode(op=op, args=["x"]))
             assert result == sp.Function(op)(x)
             assert result.func.__name__ == op

@@ -1614,7 +1614,7 @@ export const schema: AnySchemaObject = {
             2
           ],
           "deprecated": true,
-          "description": "DEPRECATED (esm-spec §8.5.1); REMOVED at esm 3.0.0. The number of records a data-fed parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `\"records\": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. The parameter's written value (this field, else the source's `temporal.records_per_sample`) MUST equal the count the record shape gives — 2 requires a record-axis first dimension, 1 forbids one — else `records_per_sample_invalid`; a 2 over a plain size-2 first axis is therefore an error, fixed by marking that axis `\"records\": true`. Valid only on a `data` rule (`records_per_sample_invalid`)."
+          "description": "DEPRECATED (esm-spec §8.5.1); REMOVED in a later major version. The number of records a data-fed parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `\"records\": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. The parameter's written value (this field, else the source's `temporal.records_per_sample`) MUST equal the count the record shape gives — 2 requires a record-axis first dimension, 1 forbids one — else `records_per_sample_invalid`; a 2 over a plain size-2 first axis is therefore an error, fixed by marking that axis `\"records\": true`. Valid only on a `data` rule (`records_per_sample_invalid`)."
         },
         "description": {
           "type": "string"
@@ -3303,7 +3303,7 @@ export const schema: AnySchemaObject = {
             2
           ],
           "deprecated": true,
-          "description": "DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED at esm 3.0.0. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `\"records\": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. Every parameter of the source, in a model or a reaction system, that does not write its own value MUST have a record shape giving exactly this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file)."
+          "description": "DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED in a later major version. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `\"records\": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. Every parameter of the source, in a model or a reaction system, that does not write its own value MUST have a record shape giving exactly this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file)."
         }
       }
     },

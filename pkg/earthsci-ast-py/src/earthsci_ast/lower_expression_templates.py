@@ -562,7 +562,7 @@ def _check_surviving_refs(node: Any, templates: dict, scope: str) -> None:
 #: The named evaluable-core registry ops that are ALSO rewrite targets in these
 #: positions: a right-hand-side / spatial ``D`` (core only in its equation-LHS
 #: role) and the load-eliminated form ``enum``. The
-#: open-tier sugar (grad/div/laplacian/curl/integral) is UNregistered, so it is
+#: open-tier ops (integral, curl, user ops) are UNregistered, so they are
 #: NOT named here — it lands in T through the ``not op_registry.is_known(op)``
 #: fallback in :func:`_op_in_T`, exactly like any open-namespace custom op no
 #: evaluator implements. ``apply_expression_template`` is excluded.

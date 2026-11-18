@@ -1456,7 +1456,7 @@ export interface DataSourceTemporal {
   time_variable?: string;
   /**
    * @deprecated
-   * DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED at esm 3.0.0. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `"records": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. Every parameter of the source, in a model or a reaction system, that does not write its own value MUST have a record shape giving exactly this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file).
+   * DEPRECATED (esm-spec §8.3, §8.5.1); REMOVED in a later major version. The source-wide default of each consuming parameter's (also deprecated) `from.records_per_sample`. The number of records a parameter receives is said by its record shape alone: two when its first axis is a record axis (an interval index set with `"records": true`), one otherwise. This field is no longer obeyed (a breaking change made with the esm 2.0.0 break): it is parsed with the load-time warning `deprecated_records_per_sample` and CHECKED. Every parameter of the source, in a model or a reaction system, that does not write its own value MUST have a record shape giving exactly this many records, else `records_per_sample_invalid`. Contrast records_per_file (records IN one file).
    */
   records_per_sample?: 1 | 2;
 }

@@ -10,8 +10,9 @@ import pytest
 
 from earthsci_ast.document.math import Sym, parse_latex, parse_typst, print_latex, print_typst
 from earthsci_ast.document.math import token as K
+from earthsci_ast.document.math.expr import REMOVED_SET
 from earthsci_ast.document.math.latex import lex as lex_latex
-from earthsci_ast.document.math.printer import ANNOT_KEYS
+from earthsci_ast.document.math.printer import ANNOT_KEYS, reserved_opn
 from earthsci_ast.document.math.typst import lex as lex_typst
 from earthsci_ast.document.value import from_plain, sort_obj, to_plain
 from earthsci_ast.esm_types import NODE_ANNOTATION_KEYS
@@ -143,26 +144,34 @@ def test_call_form_still_reads_what_the_printer_writes(pr, pa):
 
 
 def test_bare_template_name_out_of_scope_reads_and_prints_bare():
-    e = j({"op": "apply_expression_template", "args": [], "name": "grad", "bindings": {}})
-    assert print_latex(S, e) == r"\operatorname{grad}"
-    assert parse_latex(S, r"\operatorname{grad}") == e
-    assert parse_latex(S, r"\operatorname{grad} x") is not None
-    assert print_typst(S, e) == 'op("grad")'
-    assert parse_typst(S, 'op("grad")') == e
+    e = j({"op": "apply_expression_template", "args": [], "name": "upwind", "bindings": {}})
+    assert print_latex(S, e) == r"\operatorname{upwind}"
+    assert parse_latex(S, r"\operatorname{upwind}") == e
+    assert parse_latex(S, r"\operatorname{upwind} x") is not None
+    assert print_typst(S, e) == 'op("upwind")'
+    assert parse_typst(S, 'op("upwind")') == e
 
 
 def test_bare_template_name_refused_when_in_scope_with_no_parameters():
-    s0 = Sym(NAMES, (("grad", ()),))
-    e = j({"op": "apply_expression_template", "args": [], "name": "grad", "bindings": {}})
-    assert print_latex(s0, e) == r"\operatorname{grad}()"
-    assert parse_latex(s0, r"\operatorname{grad}()") == e
-    assert parse_latex(s0, r"\operatorname{grad}") is None
-    assert parse_latex(s0, r"\operatorname{grad} x") is None
-    assert parse_typst(s0, 'op("grad")') is None
+    s0 = Sym(NAMES, (("upwind", ()),))
+    e = j({"op": "apply_expression_template", "args": [], "name": "upwind", "bindings": {}})
+    assert print_latex(s0, e) == r"\operatorname{upwind}()"
+    assert parse_latex(s0, r"\operatorname{upwind}()") == e
+    assert parse_latex(s0, r"\operatorname{upwind}") is None
+    assert parse_latex(s0, r"\operatorname{upwind} x") is None
+    assert parse_typst(s0, 'op("upwind")') is None
     # in scope with parameters: still bare
-    s1 = Sym(NAMES, (("grad", ("u",)),))
-    assert print_latex(s1, e) == r"\operatorname{grad}"
-    assert parse_latex(s1, r"\operatorname{grad}") == e
+    s1 = Sym(NAMES, (("upwind", ("u",)),))
+    assert print_latex(s1, e) == r"\operatorname{upwind}"
+    assert parse_latex(s1, r"\operatorname{upwind}") == e
+
+
+@pytest.mark.parametrize("name", ["grad", "div", "laplacian"])
+def test_ops_removed_at_3_0_0_are_reserved(name):
+    """esm 3.0.0 removed `grad`, `div` and `laplacian`: like every removed op,
+    the name is reserved — never read as a template or an open operator."""
+    assert reserved_opn(name)
+    assert name in REMOVED_SET
 
 
 # ## The region product: `\times` then `[`

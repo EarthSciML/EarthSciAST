@@ -105,7 +105,7 @@ def test_simulate_rejects_pde_systems():
     var_u = ModelVariable(type="unknown", default=0.0)
     eq = Equation(
         lhs=ExprNode(op="D", args=["u"], wrt="t"),
-        rhs=ExprNode(op="grad", args=["u"], dim="x"),
+        rhs=ExprNode(op="D", args=["u"], wrt="x"),
     )
     model = Model(name="Adv", variables={"u": var_u}, equations=[eq])
     file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Adv": model})
