@@ -799,15 +799,44 @@ struct TileLayout
     n_aux::Int
 end
 
-# The copy maps of one program call: `u`/`aux` buffer slot → internal slot,
-# and internal `du` slot → `du` buffer slot (the owned rows only).
+# One contiguous copy: `len` slots from `src` on to `dst` on.
+struct _CopyRun
+    src::Int
+    dst::Int
+    len::Int
+end
+
+# The copy maps of one program call, as runs: `u`/`aux` buffer slot → internal
+# slot, and internal `du` slot → `du` buffer slot (the owned rows only). A tile
+# block contiguous along its first dimension is one run per row, a whole-domain
+# block one run.
 struct _CopyMaps
-    u_src::Vector{Int}
-    u_dst::Vector{Int}
-    aux_src::Vector{Int}
-    aux_dst::Vector{Int}
-    du_src::Vector{Int}
-    du_dst::Vector{Int}
+    u::Vector{_CopyRun}
+    aux::Vector{_CopyRun}
+    du::Vector{_CopyRun}
+end
+
+# The per-slot pairs `src[k] → dst[k]` as maximal runs, in the same order: the
+# same assignments, made by `copyto!`.
+function _copy_runs(src::Vector{Int}, dst::Vector{Int})
+    runs = _CopyRun[]
+    k = 1
+    while k <= length(src)
+        j = k
+        while j < length(src) && src[j + 1] == src[j] + 1 && dst[j + 1] == dst[j] + 1
+            j += 1
+        end
+        push!(runs, _CopyRun(src[k], dst[k], j - k + 1))
+        k = j + 1
+    end
+    return runs
+end
+
+@inline function _copy_runs!(dst::AbstractVector, src::AbstractVector, runs::Vector{_CopyRun})
+    @inbounds for r in runs
+        copyto!(dst, r.dst, src, r.src, r.len)
+    end
+    return dst
 end
 
 """
@@ -1107,7 +1136,9 @@ function _copy_maps(
             push!(du_dst, _tile_slot(b, Tuple(c)))
         end
     end
-    return _CopyMaps(u_src, u_dst, a_src, a_dst, du_src, du_dst)
+    return _CopyMaps(
+        _copy_runs(u_src, u_dst), _copy_runs(a_src, a_dst), _copy_runs(du_src, du_dst)
+    )
 end
 
 _whole_program(
@@ -1353,17 +1384,9 @@ function _rhs_eval!(
     )
     _check_parameters(shared, p, "rhs!")
     _prime!(ws, fs)
-    U = ws.u
-    @inbounds for k in eachindex(m.u_src)
-        U[m.u_dst[k]] = u[m.u_src[k]]
-    end
-    @inbounds for k in eachindex(m.aux_src)
-        U[m.aux_dst[k]] = aux[m.aux_src[k]]
-    end
-    D = ws.du
+    _copy_runs!(ws.u, u, m.u)
+    _copy_runs!(ws.u, aux, m.aux)
     _ws_eval!(ws, p, t)
-    @inbounds for k in eachindex(m.du_src)
-        du[m.du_dst[k]] = D[m.du_src[k]]
-    end
+    _copy_runs!(du, ws.du, m.du)
     return du
 end
