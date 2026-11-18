@@ -991,101 +991,116 @@ function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
     return stmts
 end
 
-function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
-    ctx.scanmode === nothing && (K = _cg_fuse_leading(K))
-    sm = ctx.scanmode
-    _cg_note_nest!(ctx, K)
-
-    # Per-cell body: CSE recipes as locals (converted to T exactly where the
-    # interpreter's scratch store converts), then the spine into du[oln],
-    # spliced into the loop nest.
-    function cellbody(kc::_CGKernCtx)
-        stmts = _cg_emit_recipes!(Any[], ctx, kc)
-        val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
-        if sm === nothing
-            push!(stmts, :(du[$(kc.oln)] = $val))
-        else
-            # A fused scan's cell (scan_fused.jl): the term, converted exactly
-            # as its store into `du` would convert it, folded into the lane's
-            # running value in `_scan_lanes!`'s order.
-            tv = _cg_name(ctx, "term")
-            acc = sm.acc
-            push!(stmts, :(local $tv = convert(eltype(du), $val)))
-            cons = sm.cons
-            if cons === nothing
-                if sm.inclusive
-                    push!(stmts, :($acc = $(sm.op)($acc, $tv)))
-                    push!(stmts, :(du[$(kc.oln)] = $acc))
-                else
-                    push!(stmts, :(du[$(kc.oln)] = $acc))
-                    push!(stmts, :($acc = $(sm.op)($acc, $tv)))
-                end
+# One cell's statements: the CSE recipes as locals (converted to T exactly
+# where the interpreter's scratch store converts), then the spine stored into
+# `du[oln]`, or, inside a fused scan's nest (`sm`, the scan mode), folded into
+# the lane's running value.
+function _cg_cell_stmts(ctx::_CGCtx, K::_AccKernel, sm, kc::_CGKernCtx)
+    stmts = _cg_emit_recipes!(Any[], ctx, kc)
+    val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine))
+    if sm === nothing
+        push!(stmts, :(du[$(kc.oln)] = $val))
+    else
+        # A fused scan's cell (scan_fused.jl): the term, converted exactly
+        # as its store into `du` would convert it, folded into the lane's
+        # running value in `_scan_lanes!`'s order.
+        tv = _cg_name(ctx, "term")
+        acc = sm.acc
+        push!(stmts, :(local $tv = convert(eltype(du), $val)))
+        cons = sm.cons
+        if cons === nothing
+            if sm.inclusive
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                push!(stmts, :(du[$(kc.oln)] = $acc))
             else
-                # The cell's value as the store converts it, stored (unless the
-                # store was dropped), then the consumer's cell computed from it.
-                sm.inclusive && push!(stmts, :($acc = $(sm.op)($acc, $tv)))
-                xv = _cg_name(ctx, "x")
-                push!(stmts, :(local $xv = convert(eltype(du), $acc)))
-                cons.store && push!(stmts, :(_cg_oview(du)[$(kc.oln)] = $xv))
-                append!(stmts, _cg_scan_consumer_cell(ctx, cons, kc.oln, xv))
-                sm.inclusive || push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+                push!(stmts, :(du[$(kc.oln)] = $acc))
+                push!(stmts, :($acc = $(sm.op)($acc, $tv)))
             end
+        else
+            # The cell's value as the store converts it, stored (unless the
+            # store was dropped), then the consumer's cell computed from it.
+            sm.inclusive && push!(stmts, :($acc = $(sm.op)($acc, $tv)))
+            xv = _cg_name(ctx, "x")
+            push!(stmts, :(local $xv = convert(eltype(du), $acc)))
+            cons.store && push!(stmts, :(_cg_oview(du)[$(kc.oln)] = $xv))
+            append!(stmts, _cg_scan_consumer_cell(ctx, cons, kc.oln, xv))
+            sm.inclusive || push!(stmts, :($acc = $(sm.op)($acc, $tv)))
         end
-        return stmts
     end
+    return stmts
+end
 
-    cs = K.cells
-    # This kernel's chunk of the cell-ordinal axis (0-based, half-open).
+# Box geometry as the emitted loops read it. Every bound, base and stride is
+# run-time geometry (`_cg_geo!`), except the extent of a boundary slab's thin
+# axis (`_cellset_slab`), and the count of a box that is a slab on every axis:
+# it is one cell at every N, and a literal extent lets the compiler drop that
+# axis's loop, where a run-time one leaves a loop set up (and vectorized) for a
+# single cell per row. The slab's index stays data, so the far edge's is one
+# function too.
+_cg_box_geo!(ctx::_CGCtx, cs::_CellSet, v, f, unit::Bool = false) =
+    _cg_geo!(ctx, v, (cs, f), unit)
+
+# Axis `d` of box `cs`: `(first, last, length)` as emitted.
+function _cg_box_axis!(ctx::_CGCtx, cs::_CellSet, d::Int)
+    lo = _cg_box_geo!(ctx, cs, first(cs.ranges[d]), (d, :first))
+    _cg_slab_literal(cs, d) && return (lo, lo, 1)
+    n = length(cs.ranges[d])
+    return (
+        lo, _cg_box_geo!(ctx, cs, last(cs.ranges[d]), (d, :last)),
+        _cg_box_geo!(ctx, cs, n, (d, :len)),
+    )
+end
+
+# A nest's chunk header: the statements that bind this chunk's half-open,
+# 0-based range `[a, b)` of the cell-ordinal axis (`_chunk_ordinals`), and the
+# names of `a` and `b`. A fused scan's nest runs the one lane its caller bound.
+function _cg_nest_header!(ctx::_CGCtx, cs::_CellSet, sm)
     ncells = _cellset_ncells(cs)
     tv = _cg_name(ctx, "ab")
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
-    # Every bound, base and stride below is run-time geometry (`_cg_geo!`),
-    # except the extent of a boundary slab's thin axis (`_cellset_slab`), and
-    # the count of a box that is a slab on every axis: it is one cell at every
-    # N, and a literal extent lets the compiler drop that axis's loop, where a
-    # run-time one leaves a loop set up (and vectorized) for a single cell per
-    # row. The slab's index stays data, so the far edge's is one function too.
-    geo(v, f, unit::Bool = false) = _cg_geo!(ctx, v, (cs, f), unit)
-    function axis(d)
-        lo = geo(first(cs.ranges[d]), (d, :first))
-        _cg_slab_literal(cs, d) && return (lo, lo, 1)
-        n = length(cs.ranges[d])
-        return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
-    end
+    sm === nothing || return Any[], sm.a, sm.b
     # (A tile that shares its code counts every box at run time: it runs no
     # cell of a box it does not own.)
     corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides)) &&
         !_range_shared_code(_range_spec_now())
-    hdr = if sm === nothing
-        Any[
-            :(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
-            :(local $av = $tv[1]),
-            :(local $bv = $tv[2]),
-        ]
-    else
-        # A fused scan's nest runs the one lane its caller bound.
-        av = sm.a
-        bv = sm.b
-        Any[]
-    end
-    if _is_outs(cs)
-        outs = _cg_tab!(ctx, cs.outs)
-        c = _cg_name(ctx, "c")
-        oln = _cg_name(ctx, "o")
-        kc = _CGKernCtx(K, oln, c, 1, 1, Symbol[], invsyms)
-        ctx.tblread = false
-        body = cellbody(kc)
-        tv1 = _cg_tblread!(ctx)
-        return quote
-            $(hdr...)
-            for $c in ($av + 1):$bv
-                local $oln = $outs[$c]
-                $(body...)
-                $(tv1...)
-            end
+    hdr = Any[
+        :(local $tv = _chunk_ordinals($(corner ? 1 : _cg_box_geo!(ctx, cs, ncells, :n)), _cgci, _cgnc)),
+        :(local $av = $tv[1]),
+        :(local $bv = $tv[2]),
+    ]
+    return hdr, av, bv
+end
+
+# A listed-slots kernel: the chunk's ordinals index the out-slot table.
+function _cg_emit_outs_nest!(ctx::_CGCtx, K::_AccKernel, sm, invsyms, hdr, av, bv)
+    outs = _cg_tab!(ctx, K.cells.outs)
+    c = _cg_name(ctx, "c")
+    oln = _cg_name(ctx, "o")
+    kc = _CGKernCtx(K, oln, c, 1, 1, Symbol[], invsyms)
+    ctx.tblread = false
+    body = _cg_cell_stmts(ctx, K, sm, kc)
+    tv1 = _cg_tblread!(ctx)
+    return quote
+        $(hdr...)
+        for $c in ($av + 1):$bv
+            local $oln = $outs[$c]
+            $(body...)
+            $(tv1...)
         end
     end
+end
+
+# One kernel's loop nest over its chunk of cells. A fused scan's mode
+# (`ctx.scanmode`) keeps the kernel's own axes (leading-axis fusion would
+# change the lane's cell order).
+function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
+    ctx.scanmode === nothing && (K = _cg_fuse_leading(K))
+    sm = ctx.scanmode
+    _cg_note_nest!(ctx, K)
+    cs = K.cells
+    hdr, av, bv = _cg_nest_header!(ctx, cs, sm)
+    _is_outs(cs) && return _cg_emit_outs_nest!(ctx, K, sm, invsyms, hdr, av, bv)
     _is_cellless(cs) && error("_cg_emit_kernel_nest!: a sub-kernel has no loop nest of its own")
     # Strided Cartesian box, rank ≤ 3, in `_run_box_kernel!`'s exact iteration
     # order (k-outer, i-inner). The flat cell ordinal `o`
@@ -1095,22 +1110,22 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     # (the decode is hoisted to the row level so the inner loop stays today's
     # instructions).
     nd = length(cs.strides)
-    nd <= 3 || return _cg_emit_box_rank_n(ctx, K, cs, hdr, av, bv, cellbody, geo, axis)
+    nd <= 3 || return _cg_emit_box_rank_n(ctx, K, cs, sm, hdr, av, bv)
     st = Any[_cg_geo!(ctx, cs.strides[d], (cs, d, :stride), true) for d in 1:nd]
     iv = _cg_name(ctx, "i")
     jv = nd >= 2 ? _cg_name(ctx, "j") : 1
     kv = nd >= 3 ? _cg_name(ctx, "k") : 1
     oln = _cg_name(ctx, "o")
-    olnexpr = :($(geo(cs.base, :base)) + $iv * $(st[1]))
+    olnexpr = :($(_cg_box_geo!(ctx, cs, cs.base, :base)) + $iv * $(st[1]))
     nd >= 2 && (olnexpr = :($olnexpr + $jv * $(st[2])))
     nd >= 3 && (olnexpr = :($olnexpr + $kv * $(st[3])))
     kc = _CGKernCtx(K, oln, iv, jv, kv, Symbol[], invsyms)
     ctx.tblread = false
-    body = cellbody(kc)
+    body = _cg_cell_stmts(ctx, K, sm, kc)
     # The innermost loop's own annotation: kept scalar when it gathers through
     # a slot table (`_cg_tblread!`).
     tv1 = _cg_tblread!(ctx)
-    i0, i1, ni = axis(1)
+    i0, i1, ni = _cg_box_axis!(ctx, cs, 1)
     if nd == 1 && sm === nothing
         inter = _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, i0, av, bv)
         if inter !== nothing
@@ -1150,7 +1165,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     ihi = _cg_name(ctx, "ih")
     jlo = _cg_name(ctx, "jl")
     jhi = _cg_name(ctx, "jh")
-    j0, j1, _ = axis(2)
+    j0, j1, _ = _cg_box_axis!(ctx, cs, 2)
     # A row of a rank-2/3 box whose cell value is one affine reduction runs the
     # reduction interchanged, as the rank-1 case above does (Float64 only).
     rowinter = sm === nothing ?
@@ -1195,7 +1210,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     rhi = _cg_name(ctx, "rh")
     klo = _cg_name(ctx, "kl")
     khi = _cg_name(ctx, "kh")
-    nj = axis(2)[3]; k0 = axis(3)[1]
+    nj = _cg_box_axis!(ctx, cs, 2)[3]; k0 = _cg_box_axis!(ctx, cs, 3)[1]
     return quote
         $(hdr...)
         if $av < $bv
@@ -1377,14 +1392,8 @@ function _cg_emit_rowgroup_nest!(
     )
     cs1 = Ks[1].cells
     nd = length(cs1.strides)
-    # The same geometry rules as `_cg_emit_kernel_nest!`: bounds, base and
-    # strides are run-time data, a slab's thin extent a literal.
-    function axis(cs, d)
-        g(v, f) = _cg_geo!(ctx, v, (cs, f))
-        lo = g(first(cs.ranges[d]), (d, :first))
-        _cg_slab_literal(cs, d) && return (lo, lo, 1)
-        return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
-    end
+    # The same geometry rules as `_cg_emit_kernel_nest!` (`_cg_box_axis!`).
+    axis(cs, d) = _cg_box_axis!(ctx, cs, d)
     st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
     base = _cg_geo!(ctx, cs1.base, (cs1, :base))
     jv = _cg_name(ctx, "j")
@@ -1738,12 +1747,11 @@ _cg_novec() = Expr(:loopinfo, (Symbol("llvm.loop.vectorize.enable"), false))
 # the rank-1 loop over `rowbase + i·s1`, and only the first and last row of a
 # chunk clamp dim 1 to the chunk boundary. c == oln for a box.
 function _cg_emit_box_rank_n(
-        ctx::_CGCtx, K::_AccKernel, cs::_CellSet, hdr, av, bv,
-        cellbody, geo, axis
+        ctx::_CGCtx, K::_AccKernel, cs::_CellSet, sm, hdr, av, bv
     )
     nd = length(cs.strides)
     st = Any[_cg_geo!(ctx, cs.strides[d], (cs, d, :stride), true) for d in 1:nd]
-    ax = [axis(d) for d in 1:nd]
+    ax = [_cg_box_axis!(ctx, cs, d) for d in 1:nd]
     lo = Any[a[1] for a in ax]
     hi = Any[a[2] for a in ax]
     len = Any[a[3] for a in ax]
@@ -1754,7 +1762,7 @@ function _cg_emit_box_rank_n(
     end
     oln = _cg_name(ctx, "o")
     rowb = _cg_name(ctx, "rb")
-    rowexpr = geo(cs.base, :base)
+    rowexpr = _cg_box_geo!(ctx, cs, cs.base, :base)
     for d in 2:nd
         rowexpr = :($rowexpr + $(ovs[d]) * $(st[d]))
     end
@@ -1763,7 +1771,7 @@ function _cg_emit_box_rank_n(
         Any[ovs[d] for d in 4:nd]
     )
     ctx.tblread = false
-    body = cellbody(kc)
+    body = _cg_cell_stmts(ctx, K, sm, kc)
     tv1 = _cg_tblread!(ctx)
     i0 = lo[1]; i1 = hi[1]; ni = len[1]
     ohi = _cg_name(ctx, "e")
