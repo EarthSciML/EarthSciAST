@@ -148,9 +148,7 @@ end
 # `_compile`, never `_cse_compile_scalar`. If one ever appears the prelude that backs
 # it is not evaluated by `materialize!`, so the read would be garbage — that is an
 # internal invariant break, and it is reported rather than silenced.
-# (`node` is a `_Node`; it is left unannotated because `compile.jl` — where `_Node`
-# is defined — is `include`d after this file, so the signature cannot name the type.)
-function _check_discrete_fill_state_free(node, name::String)
+function _check_discrete_fill_state_free(node::_Node, name::String)
     k = node.kind
     if k === _NK_STATE || k === _NK_TIME
         _throw_discrete_state_dependent(name, k === _NK_STATE)
@@ -395,7 +393,7 @@ end
 # `t = 0` passed to `_eval_node` is provably never read; `p` carries the scalar
 # params a fill may use. A rank-0 field is one node; a per-cell one walks a
 # node per cell, which takes a license.
-function _scalar_discrete_fill(cvec::Vector{Float64}, node, uz::Vector{Float64})
+function _scalar_discrete_fill(cvec::Vector{Float64}, node::_Node, uz::Vector{Float64})
     return function (p)
         @inbounds cvec[1] = _eval_node(node, uz, p, 0.0)
         return nothing

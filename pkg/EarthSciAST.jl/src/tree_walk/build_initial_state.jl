@@ -786,7 +786,7 @@ end
 
 # The compile-once form of an initialization equation: its body compiled once
 # against the output-index counters `refs`, walked at every cell of `todo`.
-function _walk_init_once!(::_PerCellLicense, u0, todo, refs, node, pp)
+function _walk_init_once!(::_PerCellLicense, u0, todo, refs, node::_Node, pp)
     for (idx_tuple, slot) in todo
         for d in eachindex(refs)
             refs[d][] = idx_tuple[d]

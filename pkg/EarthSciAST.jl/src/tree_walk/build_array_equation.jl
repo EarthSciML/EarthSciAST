@@ -839,23 +839,20 @@ function _gather_nested_faqs_at_cell(
 end
 
 function _compile_faq_equation!(
-        percell_scalar, acc_kernels, scan_folds,
-        array_contractions, covered::_Covered,
+        percell_scalar::Vector{Tuple{Int, _Node}}, acc_kernels::Vector{_AccKernel},
+        scan_folds::Vector{_ScanFold},
+        array_contractions::Vector{_ArrayContraction}, covered::_Covered,
         eq::Equation, resolved_obs::Dict{String, ASTExpr},
         array_var_info, var_map::AbstractDict{String, Int},
         const_registry::AbstractDict, pgather::AbstractDict,
         param_sym_set;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
-        # `nothing` or an `_XEqStore` (untyped: stencil.jl defines the type and
-        # is included after this file; `_try_affine_stencil` checks it).
-        xeq = nothing,
-        # `nothing`, or the cross-equation cell-entry pool, a
-        # `Vector{Tuple{Int,_Node}}` (untyped in the signature: `_Node` lives
-        # in compile.jl, included after this file — same reason as `xeq`).
+        xeq::Union{Nothing, _XEqStore} = nothing,
+        # `nothing`, or the cross-equation cell-entry pool.
         # See `_compile_derivative_equations`: per-cell entries are APPENDED
         # here instead of being merged per equation, and the caller runs
         # `_acc_from_cell_entries` once after the whole equation loop.
-        pooled_cells = nothing,
+        pooled_cells::Union{Nothing, Vector{Tuple{Int, _Node}}} = nothing,
         # See `_compile_derivative_equations`.
         rhs_list_compiled::Bool = false,
         # The state length of the two-buffer slot space the in-place RHS runs
