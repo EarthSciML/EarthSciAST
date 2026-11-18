@@ -44,7 +44,6 @@ _om_nkernels(fo) = length(getfield(getfield(fo, :rhs), :acc_kernels))
 # is the PRE-merge count this build recorded, so one build answers it — there is
 # no second compiler that keeps the affine tier but drops the merge.
 _om_fired(d) = d.n_acc_kernels < d.n_classmerge_in
-_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # Two SAME-STRUCTURE equations over different states — one merge class of two
 # members. The kernels differ only in their state slots (and out-slots), the
@@ -218,13 +217,13 @@ end
         @test _im_nkernels(fm) < dm.n_classmerge_in      # the pass FIRED (IIP)
         @test dm.n_acc_kernels < dm.n_classmerge_in      # and the diag agrees
         for t in (0.0, 0.37)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # default (fully emitted) build: the B1 tier accepts merged kernels
         fmc, umc, pmc, _, _ = _im_build(_om_twin_model(N), ics)
         for t in (0.0, 0.37)
-            @test _ip(fmc, umc, pmc, t) == _ip(fu, uu, pu, t)
-            @test _ip(fmc, umc, pmc, t) == _ip(fm, um, pm, t)  # ≡ interpreted
+            @test rhs_du(fmc, umc, pmc, t) == rhs_du(fu, uu, pu, t)
+            @test rhs_du(fmc, umc, pmc, t) == rhs_du(fm, um, pm, t)  # ≡ interpreted
         end
     end
 
@@ -237,11 +236,11 @@ end
         )
         @test _im_nkernels(fm) < dm.n_classmerge_in
         for t in (0.0, 1.9)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # codegen tier over the merged stencil kernels, still bit-identical
         fmc, umc, pmc, _, _ = _im_build(_om_twin_stencil_model(N), ics)
-        @test _ip(fmc, umc, pmc, 1.9) == _ip(fu, uu, pu, 1.9)
+        @test rhs_du(fmc, umc, pmc, 1.9) == rhs_du(fu, uu, pu, 1.9)
     end
 
     @testset "live forcing stays live through the merged table (in place)" begin
@@ -258,11 +257,11 @@ end
             compiler = :interpreter, param_arrays = pa
         )
         @test _im_nkernels(fm) < dm.n_classmerge_in
-        du1 = _ip(fm, um, pm, 0.0)
-        @test du1 == _ip(fu, uu, pu, 0.0)
+        du1 = rhs_du(fm, um, pm, 0.0)
+        @test du1 == rhs_du(fu, uu, pu, 0.0)
         buf .= reverse(buf) .+ 3.0            # in-place refresh, no rebuild
-        du2 = _ip(fm, um, pm, 0.0)
-        @test du2 == _ip(fu, uu, pu, 0.0)     # both builds saw the refresh
+        du2 = rhs_du(fm, um, pm, 0.0)
+        @test du2 == rhs_du(fu, uu, pu, 0.0)     # both builds saw the refresh
         @test du2 != du1                      # and it actually changed values
     end
 
@@ -291,11 +290,11 @@ end
         @test dm.n_acc_kernels < dm.n_classmerge_in    # classes merged
         @test dm.n_acc_inv_slots >= 1                  # …but the hoist survived
         for t in (0.0, 0.42)
-            @test _ip(fm, um, pm, t) == _ip(fu, uu, pu, t)
+            @test rhs_du(fm, um, pm, t) == rhs_du(fu, uu, pu, t)
         end
         # …and through the codegen tier
         fmc, umc, pmc, _, _ = _im_build(_om_twin_inv_model(N), ics)
-        @test _ip(fmc, umc, pmc, 0.42) == _ip(fu, uu, pu, 0.42)
+        @test rhs_du(fmc, umc, pmc, 0.42) == rhs_du(fu, uu, pu, 0.42)
         # the out-of-place build merges the same classes
         fom, _, _, _, dom = _om_build(_om_twin_inv_model(N), ics)
         @test _om_fired(dom)

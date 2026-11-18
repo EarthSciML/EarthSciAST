@@ -2,13 +2,13 @@
 # from the axis NAMES its operator's operands are declared on, not from a
 # size lookup.
 #
-# `_pointwise_lift_axes` used to map each makearray dimension to a declared
-# index set purely by matching that dimension's EXTENT. Sizes collide readily —
-# a square domain (NLON == NLAT), a vertical axis the same length as some other
-# model's node axis, or a second grid mounted in the same document (a regridder's
-# target ring is `NLON` long BY CONSTRUCTION, so it aliases `lon` at EVERY grid) —
-# and on a collision the lift gave up and promoted the species to a SYNTHETIC
-# dense axis `_liftdim<d>_<extent>` instead of an index-set reference.
+# Matching a makearray dimension to a declared index set purely by EXTENT is
+# not enough. Sizes collide readily — a square domain (NLON == NLAT), a
+# vertical axis the same length as some other model's node axis, or a second
+# grid mounted in the same document (a regridder's target ring is `NLON` long
+# BY CONSTRUCTION, so it aliases `lon` at EVERY grid) — and on a collision a
+# size-only lift has to promote the species to a SYNTHETIC dense axis
+# `_liftdim<d>_<extent>` instead of an index-set reference.
 #
 # The names are already present: every operand gathered inside the operator's
 # makearray is indexed at the lift's own loop variables and declares an index set
@@ -21,7 +21,7 @@
 # candidate index set's size to equal the dimension's cell extent rejects exactly
 # the staggered operands. It also makes the pass a strict refinement of the size
 # match: where only one index set has the dimension's size, any extent-agreeing
-# name IS that index set, so nothing that used to resolve can change.
+# name IS that index set, so nothing the size match resolves can change.
 
 using Test
 using EarthSciAST

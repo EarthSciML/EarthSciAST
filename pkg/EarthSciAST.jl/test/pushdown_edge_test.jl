@@ -1,4 +1,4 @@
-# Projection-pushdown CONST-tier dependency edge — L1 MILESTONE (Phase 2b).
+# Projection-pushdown CONST-tier dependency edge.
 #
 # Drives a SMALL ISRM-like model end-to-end through the REAL build/esm_problem path
 # and proves the whole edge:
@@ -16,22 +16,14 @@
 # pushed-down selection == members in order with NO wholesale fetch, (3) the
 # members-fed factor + cell_* gathers, and (4) the full oracle match.
 
-# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
-# stay isolated from other test files' identically-named helpers in the shared
-# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
-# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
-# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
-module PushdownEdgeTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----------------------------------------------
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 # elementwise / reducing aggregate helper
 function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
     d = Dict{String, Any}(
@@ -65,7 +57,7 @@ function EA.provider_sample(m::MockSR, ::Real; selection = nothing)
     lay, src, rcv = selection[1], selection[2], selection[3]   # Integer, Vector, Colon
     out = Dict{String, Any}()
     for (k, v) in m.full
-        # Phase-1 contract: a fixed Integer keeps its axis as length-1.
+        # Provider contract: a fixed Integer keeps its axis as length-1.
         out[k] = v[lay:lay, src, rcv]
     end
     return out
@@ -158,28 +150,28 @@ end
 
     # ---- the document (pushdown-style: derived emis_src_cells + gated SR) ---
     # containment predicate reused by producer filter and E_* narrow phase
-    _contain_and(Wf, Sf, Ef, Nf) = _op(
+    _contain_and(Wf, Sf, Ef, Nf) = jop(
         "and",
-        _op("<=", _ix(Wf, "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix(Ef, "c")),
-        _op("<=", _ix(Sf, "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix(Nf, "c"))
+        jop("<=", jidx(Wf, "c"), jidx("X", "r")), jop("<", jidx("X", "r"), jidx(Ef, "c")),
+        jop("<=", jidx(Sf, "c"), jidx("Y", "r")), jop("<", jidx("Y", "r"), jidx(Nf, "c"))
     )
     # producer filter: PRODUCT of comparisons (kept iff > 0), c over pop_cells
-    _prod_filter = _op(
+    _prod_filter = jop(
         "*",
-        _op(
-            "*", _op("<=", _ix("W", "c"), _ix("X", "r")),
-            _op("<", _ix("X", "r"), _ix("E", "c"))
+        jop(
+            "*", jop("<=", jidx("W", "c"), jidx("X", "r")),
+            jop("<", jidx("X", "r"), jidx("E", "c"))
         ),
-        _op(
-            "*", _op("<=", _ix("S", "c"), _ix("Y", "r")),
-            _op("<", _ix("Y", "r"), _ix("N", "c"))
+        jop(
+            "*", jop("<=", jidx("S", "c"), jidx("Y", "r")),
+            jop("<", jidx("Y", "r"), jidx("N", "c"))
         )
     )
 
-    _E_expr(is_p) = _op(
+    _E_expr(is_p) = jop(
         "*",
-        _op("ifelse", _contain_and("cell_W", "cell_S", "cell_E", "cell_N"), 1.0, 0.0),
-        _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+        jop("ifelse", _contain_and("cell_W", "cell_S", "cell_E", "cell_N"), 1.0, 0.0),
+        jop("*", jidx("emis_annual", "r"), jidx(is_p, "r"))
     )
     _E_agg(is_p) = _agg(
         ["c"],
@@ -190,33 +182,33 @@ end
 
     _cell_edge(edge) = _agg(
         ["c"], Dict("c" => Dict("from" => "emis_src_cells")),
-        _ix(edge, _ix("src_cell_of_ppl", "c")); args = [edge, "src_cell_of_ppl"]
+        jidx(edge, jidx("src_cell_of_ppl", "c")); args = [edge, "src_cell_of_ppl"]
     )
 
     _conc_agg(SRname, Ename) = _agg(
         ["rcv"],
         Dict("s" => Dict("from" => "emis_src_cells"), "rcv" => Dict("from" => "rcv_cells")),
-        _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s")); reduce = "+",
+        jop("*", jidx(SRname, "s", "rcv"), jidx(Ename, "s")); reduce = "+",
         args = [SRname, Ename]
     )
 
     _deaths(rr) = _agg(
         ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
-        _op(
-            "*", _op(
-                "*", _op(
+        jop(
+            "*", jop(
+                "*", jop(
                     "*",
-                    _op(
-                        "-", _op(
-                            "exp", _op(
+                    jop(
+                        "-", jop(
+                            "exp", jop(
                                 "*",
-                                _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                                jop("/", jop("log", rr), 10), jidx("TotalPM25", "rcv")
                             )
                         ), 1
                     ),
-                    _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                    jop("*", jidx("TotalPop", "rcv"), "pop_scale")
                 ),
-                _op("/", _ix("MortalityRate", "rcv"), 100000)
+                jop("/", jidx("MortalityRate", "rcv"), 100000)
             ), "mort_scale"
         );
         args = ["TotalPM25", "TotalPop", "MortalityRate"]
@@ -263,11 +255,11 @@ end
             obs_eqs, "TotalPM25", ["rcv_cells"], _agg(
                 ["rcv"],
                 Dict("rcv" => Dict("from" => "rcv_cells")),
-                _op(
-                    "*", "fact", _op(
-                        "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
-                        _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
-                        _ix("conc_PrimaryPM25", "rcv")
+                jop(
+                    "*", "fact", jop(
+                        "+", jidx("conc_SOA", "rcv"), jidx("conc_pNO3", "rcv"),
+                        jidx("conc_pNH4", "rcv"), jidx("conc_pSO4", "rcv"),
+                        jidx("conc_PrimaryPM25", "rcv")
                     )
                 );
                 args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
@@ -280,7 +272,7 @@ end
     )
 
     producer_eq = Dict(
-        "lhs" => _ix("emis_src_cell_member", "m"),
+        "lhs" => jidx("emis_src_cell_member", "m"),
         "rhs" => _agg(
             ["m"],
             Dict("r" => Dict("from" => "emis_records"), "c" => Dict("from" => "pop_cells")),
@@ -471,5 +463,3 @@ end
         @test EA._observed_field(insp2, f, "ISRM", "TotalPM25")[1] ≈ oracle_TotalPM25
     end
 end
-
-end # module PushdownEdgeTests

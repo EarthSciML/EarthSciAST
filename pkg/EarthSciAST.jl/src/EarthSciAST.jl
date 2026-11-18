@@ -14,11 +14,8 @@ those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
 snapshot, and the MTK-free tree-walk runtime (`esm_problem`)
 runs it end to end.
 
-Two features live in namespaced submodules rather than the flat namespace:
-`EarthSciAST.Cadence` (the conformance-only raw-JSON cadence classifier,
-spec §5.7 — the §5.7 pass driver itself lives in the conformance adapter,
-`scripts/cadence_adapter.jl`) and `EarthSciAST.Relational` (build-time
-relational kernels). Their generic names (`classify`, `equijoin`, …) are
+The build-time relational kernels live in the submodule
+`EarthSciAST.Relational`; their generic names (`distinct`, `equijoin`, …) are
 deliberately not re-exported — reach them qualified.
 """
 module EarthSciAST

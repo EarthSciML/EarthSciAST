@@ -61,17 +61,6 @@ import OrdinaryDiffEqRosenbrock
 
 const BINDING = "julia"
 
-# The coded diagnostics a refusal can carry. A message naming one of these is
-# this binding declining to evaluate the document, which the tier gates as a
-# REFUSAL — a named exclusion only where the fixture's ledger admits it, never
-# a wrong answer and never a silent skip. Anything else is an ordinary
-# assertion failure.
-const REFUSAL_CODES = (
-    "compiler_refused_rule", "compiler_unavailable",
-    "unevaluable_operator", "unlowered_operator",
-    "unsupported_construct", "float32_unsupported",
-)
-
 # `--manifest <m> --output <o>` may repeat: each `--output` belongs to the
 # `--manifest` before it, and every pair is run in this ONE process under the
 # one `--compiler`. Most of a launch is compiling the build-and-solve path on
@@ -129,18 +118,6 @@ function fixture_path(manifest_path, fx)
     local_path = normpath(joinpath(dirname(abspath(manifest_path)), rel))
     isfile(local_path) && return local_path
     return normpath(joinpath(tests_root(manifest_path), rel))
-end
-
-# The code a message names, or nothing. Matched against the closed list above
-# plus the `E_TREEWALK_*` family, so an ordinary numeric failure — whose message
-# names no code — can never be mistaken for a refusal.
-function refusal_code(message::AbstractString)
-    for code in REFUSAL_CODES
-        occursin(code, message) && return code
-    end
-    m = match(r"\bE_TREEWALK_[A-Z0-9_]+", message)
-    m === nothing || return m.match
-    return nothing
 end
 
 # The algorithm this fixture integrates with. esm-spec §2.2's `solver` block is
@@ -215,13 +192,15 @@ function run_fixture(manifest, fx, manifest_path, compiler)
         ) for r in results
     ]
 
-    # A run in which EVERY assertion failed carrying ONE coded diagnostic is
-    # this compiler declining the document, not this compiler getting every
-    # number wrong. Reporting it as failures would put a refusal in the same
-    # bucket as a numeric defect, which is the one conflation §5.45.3 forbids.
-    codes = [refusal_code(r.message) for r in results if !r.passed]
+    # A run in which EVERY assertion failed carrying ONE refusal code (the
+    # result's `code`, read off the error) is this compiler declining the
+    # document, not this compiler getting every number wrong. Reporting it as
+    # failures would put a refusal in the same bucket as a numeric defect, which
+    # is the one conflation §5.45.3 forbids.
+    codes = [r.code for r in results if !r.passed]
     if length(codes) == length(results) && !isempty(codes) &&
-            all(c -> c !== nothing, codes) && length(unique(codes)) == 1
+            all(c -> c == "compiler_unavailable" || is_refusal_code(c), codes) &&
+            length(unique(codes)) == 1
         codes[1] == "compiler_unavailable" &&
             throw(CompilerUnavailable(results[1].message))
         return Dict{String, Any}(
@@ -233,13 +212,7 @@ function run_fixture(manifest, fx, manifest_path, compiler)
     return Dict{String, Any}("assertions" => entries)
 end
 
-function write_payload(output_path, payload)
-    mkpath(dirname(abspath(output_path)))
-    return open(output_path, "w") do io
-        JSON3.write(io, payload)
-        write(io, "\n")
-    end
-end
+write_payload(output_path, payload) = write_report(output_path, JSON3.write(payload))
 
 function main(argv)
     pairs, compiler = parse_args(argv)
@@ -275,8 +248,8 @@ function run_manifest(manifest_path, output_path, compiler)
         entry = try
             run_fixture(manifest, fx, manifest_path, compiler)
         catch err
-            if err isa CompilerUnavailable ||
-                    (err isa SimulateError && err.code == ERROR_CODES.COMPILER_UNAVAILABLE)
+            o = outcome(err)
+            if err isa CompilerUnavailable || o.kind === :unavailable
                 # A fact about the BINDING, not about a document: it is the
                 # whole output and the remaining fixtures are not attempted.
                 why = err isa CompilerUnavailable ? err.reason : sprint(showerror, err)
@@ -284,10 +257,9 @@ function run_manifest(manifest_path, output_path, compiler)
                 return 0
             end
             msg = sprint(showerror, err)
-            code = refusal_code(msg)
-            if code !== nothing
+            if o.kind === :refused
                 Dict{String, Any}(
-                    "status" => "refused", "code" => code,
+                    "status" => "refused", "code" => o.code,
                     "reason" => first(msg, 400)
                 )
             else

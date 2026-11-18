@@ -102,6 +102,26 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     end
 
     # ---------------------------------------------------------------------------
+    # Stub data providers (the provider protocol of providers.jl).
+    # ---------------------------------------------------------------------------
+    # The same sample at every time and no refresh times: a CONST source.
+    struct ConstProvider{T}
+        value::T
+    end
+    EarthSciAST.provider_refresh_times(::ConstProvider) = Float64[]
+    EarthSciAST.provider_sample(p::ConstProvider, ::Real; selection = nothing) = p.value
+
+    # A sample per refresh time (`time => sample`), refreshing at each of them.
+    struct SeriesProvider{T}
+        fields::Dict{Float64, T}
+    end
+    SeriesProvider(fields::AbstractDict) =
+        SeriesProvider(Dict(Float64(t) => v for (t, v) in fields))
+    EarthSciAST.provider_refresh_times(p::SeriesProvider) = sort!(collect(keys(p.fields)))
+    EarthSciAST.provider_sample(p::SeriesProvider, t::Real; selection = nothing) =
+        p.fields[Float64(t)]
+
+    # ---------------------------------------------------------------------------
     # Expressions from math text, and expressions compared as canonical JSON.
     # ---------------------------------------------------------------------------
     # A typed expression (or `Equation`) read from Typst math under the names it

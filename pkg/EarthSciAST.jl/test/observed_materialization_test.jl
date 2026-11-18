@@ -22,14 +22,11 @@
 # the build inlines away, and a chain of ordinary record-axis observeds above
 # it. This document is that shape, at four cells and four records.
 
-module ObservedMaterializationTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
-_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
 _param(shape) = Dict{String, Any}(
     "type" => "parameter", "default" => 0.0,
     "shape" => Any[shape...]
@@ -75,31 +72,31 @@ const EXPECT_CONC = [
     4.0 * 0.5 + 8.0 * 0.25 + 2.0 * 0.125,
 ]
 
-_env_overlap() = _op(
+_env_overlap() = jop(
     "and",
-    _op("<=", _ix("src_W", "c"), _ix("seg_xmax", "r")),
-    _op("<=", _ix("seg_xmin", "r"), _ix("src_E", "c")),
-    _op("<=", _ix("src_S", "c"), _ix("seg_ymax", "r")),
-    _op("<=", _ix("seg_ymin", "r"), _ix("src_N", "c"))
+    jop("<=", jidx("src_W", "c"), jidx("seg_xmax", "r")),
+    jop("<=", jidx("seg_xmin", "r"), jidx("src_E", "c")),
+    jop("<=", jidx("src_S", "c"), jidx("seg_ymax", "r")),
+    jop("<=", jidx("seg_ymin", "r"), jidx("src_N", "c"))
 )
 
 # Liang–Barsky, branchless, with a SIGN-PRESERVING floor under each divisor so a
 # segment parallel to an axis does not divide by zero (`ifelse` does not guard
 # its arms inside an aggregate).
 function _length_share()
-    x0, x1 = _ix("px", "r", 1), _ix("px", "r", 2)
-    y0, y1 = _ix("py", "r", 1), _ix("py", "r", 2)
-    dx, dy = _op("-", x1, x0), _op("-", y1, y0)
-    neg = _op("-", 0.0, EPS)
-    dxs = _op("ifelse", _op(">=", dx, 0.0), _op("max", dx, EPS), _op("min", dx, neg))
-    dys = _op("ifelse", _op(">=", dy, 0.0), _op("max", dy, EPS), _op("min", dy, neg))
-    ta = _op("/", _op("-", _ix("src_W", "c"), x0), dxs)
-    tb = _op("/", _op("-", _ix("src_E", "c"), x0), dxs)
-    tc = _op("/", _op("-", _ix("src_S", "c"), y0), dys)
-    td = _op("/", _op("-", _ix("src_N", "c"), y0), dys)
-    enter = _op("max", 0.0, _op("min", ta, tb), _op("min", tc, td))
-    exit_ = _op("min", 1.0, _op("max", ta, tb), _op("max", tc, td))
-    return _op("max", _op("-", exit_, enter), 0.0)
+    x0, x1 = jidx("px", "r", 1), jidx("px", "r", 2)
+    y0, y1 = jidx("py", "r", 1), jidx("py", "r", 2)
+    dx, dy = jop("-", x1, x0), jop("-", y1, y0)
+    neg = jop("-", 0.0, EPS)
+    dxs = jop("ifelse", jop(">=", dx, 0.0), jop("max", dx, EPS), jop("min", dx, neg))
+    dys = jop("ifelse", jop(">=", dy, 0.0), jop("max", dy, EPS), jop("min", dy, neg))
+    ta = jop("/", jop("-", jidx("src_W", "c"), x0), dxs)
+    tb = jop("/", jop("-", jidx("src_E", "c"), x0), dxs)
+    tc = jop("/", jop("-", jidx("src_S", "c"), y0), dys)
+    td = jop("/", jop("-", jidx("src_N", "c"), y0), dys)
+    enter = jop("max", 0.0, jop("min", ta, tb), jop("min", tc, td))
+    exit_ = jop("min", 1.0, jop("max", ta, tb), jop("max", tc, td))
+    return jop("max", jop("-", exit_, enter), 0.0)
 end
 
 function _doc()
@@ -139,7 +136,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "px", "rhs" => _agg(
                 ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_x"],
-                _op("*", _ix("raw_x", "r", "v"), 1.0)
+                jop("*", jidx("raw_x", "r", "v"), 1.0)
             )
         )
     )
@@ -147,7 +144,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "py", "rhs" => _agg(
                 ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_y"],
-                _op("*", _ix("raw_y", "r", "v"), 1.0)
+                jop("*", jidx("raw_y", "r", "v"), 1.0)
             )
         )
     )
@@ -159,7 +156,7 @@ function _doc()
             eqs, Dict{String, Any}(
                 "lhs" => nm, "rhs" => _agg(
                     ["r"], [("r", "emis_records")], [col],
-                    _op(o, _ix(col, "r", 1), _ix(col, "r", 2))
+                    jop(o, jidx(col, "r", 1), jidx(col, "r", 2))
                 )
             )
         )
@@ -168,11 +165,11 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "seg_len", "rhs" => _agg(
                 ["r"], [("r", "emis_records")], ["px", "py"],
-                _op(
-                    "sqrt", _op(
+                jop(
+                    "sqrt", jop(
                         "+",
-                        _op("^", _op("-", _ix("px", "r", 2), _ix("px", "r", 1)), 2.0),
-                        _op("^", _op("-", _ix("py", "r", 2), _ix("py", "r", 1)), 2.0)
+                        jop("^", jop("-", jidx("px", "r", 2), jidx("px", "r", 1)), 2.0),
+                        jop("^", jop("-", jidx("py", "r", 2), jidx("py", "r", 1)), 2.0)
                     )
                 )
             )
@@ -185,12 +182,12 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "road_len", "rhs" => _agg(
                 ["r"], [("r", "emis_records"), ("q", "emis_records")], ["seg_key", "seg_len"],
-                _op(
-                    "*", _op(
-                        "ifelse", _op("==", _ix("seg_key", "q"), _ix("seg_key", "r")),
+                jop(
+                    "*", jop(
+                        "ifelse", jop("==", jidx("seg_key", "q"), jidx("seg_key", "r")),
                         1.0, 0.0
                     ),
-                    _ix("seg_len", "q")
+                    jidx("seg_len", "q")
                 ); reduce = "+"
             )
         )
@@ -199,9 +196,9 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "seg_emis", "rhs" => _agg(
                 ["r"], [("r", "emis_records")], ["seg_emis_in", "seg_len", "road_len"],
-                _op(
-                    "/", _op("*", _ix("seg_emis_in", "r"), _ix("seg_len", "r")),
-                    _ix("road_len", "r")
+                jop(
+                    "/", jop("*", jidx("seg_emis_in", "r"), jidx("seg_len", "r")),
+                    jidx("road_len", "r")
                 )
             )
         )
@@ -214,9 +211,9 @@ function _doc()
                     "src_W", "src_S", "src_E", "src_N",
                     "seg_xmin", "seg_ymin", "seg_xmax", "seg_ymax", "px", "py", "seg_emis",
                 ],
-                _op(
-                    "*", _op("ifelse", _env_overlap(), 1.0, 0.0),
-                    _op("*", _ix("seg_emis", "r"), _length_share())
+                jop(
+                    "*", jop("ifelse", _env_overlap(), 1.0, 0.0),
+                    jop("*", jidx("seg_emis", "r"), _length_share())
                 ); reduce = "+"
             )
         )
@@ -225,7 +222,7 @@ function _doc()
         eqs, Dict{String, Any}(
             "lhs" => "conc_PM25", "rhs" => _agg(
                 ["rcv"], [("rcv", "rcv_cells"), ("s", "src_cells")], ["SR_PM25", "E_PM25"],
-                _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")); reduce = "+"
+                jop("*", jidx("SR_PM25", "s", "rcv"), jidx("E_PM25", "s")); reduce = "+"
             )
         )
     )
@@ -376,5 +373,3 @@ end
     @test "px" in exprs
     @test !("px" in defs)
 end
-
-end # module ObservedMaterializationTests

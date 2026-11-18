@@ -446,15 +446,14 @@ end
 end
 
 @testset "an UNEVALUABLE body names the operand it could not bind" begin
-    # The one diagnostic this fix changes (CONFORMANCE_SPEC §5.27.3). Reaching
-    # the evaluator is the whole point of the fallback, so a body that cannot
-    # be evaluated there now reports WHY instead of the state-lookup message it
-    # used to fall out with. Same ERROR verdict, never a plausible number.
+    # CONFORMANCE_SPEC §5.27.3. Reaching the evaluator is the whole point of
+    # the fallback, so a body that cannot be evaluated there reports WHY rather
+    # than a state-lookup message. ERROR verdict, never a plausible number.
     results = _dob_run(_dob_load(_dob_unbound_doc()))
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    # The construction's reference-integrity gate now names it first, as an
+    # The construction's reference-integrity gate names it first, as an
     # undeclared variable.
     @test occursin("undefined_variable", results[1].message)
     @test occursin("ghost", results[1].message)

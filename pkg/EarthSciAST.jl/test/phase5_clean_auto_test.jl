@@ -1,10 +1,8 @@
-# FULLY-AUTOMATIC clean projection-pushdown path — Phase 5.
+# FULLY-AUTOMATIC clean projection-pushdown path.
 #
-# This is the end of the projection-pushdown road: a CLEAN, full-domain model
-# that needs NO hand-authored pushdown constructs AND NO caller-supplied
-# projected coordinates. It closes the last caveat left by Phase 4
-# (`auto_pushdown_rewrite_test.jl`), where the caller still handed in the
-# already-projected `X`/`Y`.
+# A CLEAN, full-domain model that needs NO hand-authored pushdown constructs
+# AND NO caller-supplied projected coordinates (`auto_pushdown_rewrite_test.jl`
+# covers the rewrite with the caller handing in the already-projected `X`/`Y`).
 #
 # The author writes only:
 #   (i)   a full-domain provider-backed `SR[src_cells, rcv]` (mock gated),
@@ -22,13 +20,13 @@
 # receptor fields) and the gated provider. NO projected `X`/`Y` is supplied.
 #
 # The two automatic mechanisms under test, composed:
-#   * Phase 5 Part A (LCC-at-build-time): `_derive_binning_coords` routes the
+#   * Part A (LCC-at-build-time): `_derive_binning_coords` routes the
 #     projection observed to the GENERAL build-time cell evaluator, so `X`/`Y`
 #     are computed BEFORE value-invention and fed into `const_arrays` — the
 #     caller never pre-projects.
-#   * Phase 4 auto-rewrite (`pushdown_rewrite=true`): recognises the
+#   * auto-rewrite (`pushdown_rewrite=true`): recognises the
 #     `+`-aggregate / sparse-binned-factor pattern and GENERATES the four
-#     Phase-2b constructs.
+#     pushdown constructs.
 #
 # Assertions: (1) the rewrite generated the four constructs; (2) Part A's
 # build-time LCC projection produced `X`/`Y` == a plain-Julia forward-projection
@@ -38,29 +36,17 @@
 # oracle to machine precision — with the only inputs being raw lon/lat + the
 # provider.
 #
-# NOTE ON SCALE: L1-scale machine precision is the Phase-5 acceptance
-# criterion here. Full SCALE (52,411 src cells) through the REWRITTEN clean
-# graph was validated in the Phase-1 clean consolidation (isrm.esm run-jl
-# shim): |ppl| = 1520, deaths totals bit-identical to the pushdown-era
-# runtime record. (An earlier note called full scale "blocked by Wall #2";
-# that wall was closed by build-time array-observed materialization.)
-
-# Wrapped in a module so this file's local AST-builder helpers (`_op`, `_ix`, …)
-# stay isolated from other test files' identically-named helpers in the shared
-# `Main` namespace — otherwise `array_ops_test.jl`'s more-specific
-# `_op(::AbstractString, …)` (which builds `ASTExpr[…]`) shadows the Dict-based
-# `_op` below and dispatch fails with a Dict→ASTExpr convert error.
-module Phase5CleanAutoTests
+# NOTE ON SCALE: L1-scale machine precision is the acceptance criterion here;
+# full scale is not exercised by this test.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 
 const EA = EarthSciAST
 
 # ---- small JSON AST builders (shared spelling with the sibling pushdown tests) --
-_ix(f, args...) = Dict("op" => "index", "args" => Any[f, args...])
-_op(o, args...) = Dict("op" => o, "args" => Any[args...])
 function _agg(output_idx, ranges, expr; reduce = nothing, args = String[], extra...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -232,32 +218,32 @@ end
     # deg→rad then the conic ρ/θ/x/y. `tan` is OUTSIDE the setup-time geometry
     # vocabulary, so `_body_needs_general_eval` fires and Part A routes these to
     # the general build-time cell evaluator.
-    _latr(e) = _op("*", _ix("lat", e), "lcc_d2r")
-    _lonr(e) = _op("*", _ix("lon", e), "lcc_d2r")
-    _rho(e) = _op(
+    _latr(e) = jop("*", jidx("lat", e), "lcc_d2r")
+    _lonr(e) = jop("*", jidx("lon", e), "lcc_d2r")
+    _rho(e) = jop(
         "/", "lcc_rf",
-        _op("^", _op("tan", _op("+", "lcc_qp", _op("/", _latr(e), 2.0))), "lcc_n")
+        jop("^", jop("tan", jop("+", "lcc_qp", jop("/", _latr(e), 2.0))), "lcc_n")
     )
-    _theta(e) = _op("*", "lcc_n", _op("-", _lonr(e), "lcc_lam0"))
-    _Xbody(e) = _op("*", _rho(e), _op("sin", _theta(e)))
-    _Ybody(e) = _op("-", "lcc_rho0", _op("*", _rho(e), _op("cos", _theta(e))))
+    _theta(e) = jop("*", "lcc_n", jop("-", _lonr(e), "lcc_lam0"))
+    _Xbody(e) = jop("*", _rho(e), jop("sin", _theta(e)))
+    _Ybody(e) = jop("-", "lcc_rho0", jop("*", _rho(e), jop("cos", _theta(e))))
     _proj_obs(bodyfn) = _agg(
         ["e"], Dict("e" => Dict("from" => "emis_records")),
         bodyfn("e"); args = ["lon", "lat"]
     )
 
     function clean_doc(; conc_semiring = nothing)
-        _contain = _op(
+        _contain = jop(
             "and",
-            _op("<=", _ix("W", "c"), _ix("X", "r")), _op("<", _ix("X", "r"), _ix("E", "c")),
-            _op("<=", _ix("S", "c"), _ix("Y", "r")), _op("<", _ix("Y", "r"), _ix("N", "c"))
+            jop("<=", jidx("W", "c"), jidx("X", "r")), jop("<", jidx("X", "r"), jidx("E", "c")),
+            jop("<=", jidx("S", "c"), jidx("Y", "r")), jop("<", jidx("Y", "r"), jidx("N", "c"))
         )
         _E_agg(is_p) = _agg(
             ["c"],
             Dict("c" => Dict("from" => "src_cells"), "r" => Dict("from" => "emis_records")),
-            _op(
-                "*", _op("ifelse", _contain, 1.0, 0.0),
-                _op("*", _ix("emis_annual", "r"), _ix(is_p, "r"))
+            jop(
+                "*", jop("ifelse", _contain, 1.0, 0.0),
+                jop("*", jidx("emis_annual", "r"), jidx(is_p, "r"))
             );
             reduce = "+", args = ["W", "S", "E", "N", "X", "Y", "emis_annual", is_p]
         )
@@ -265,28 +251,28 @@ end
         _conc_agg(SRname, Ename) = _agg(
             ["rcv"],
             Dict("s" => Dict("from" => "src_cells"), "rcv" => Dict("from" => "rcv_cells")),
-            _op("*", _ix(SRname, "s", "rcv"), _ix(Ename, "s"));
+            jop("*", jidx(SRname, "s", "rcv"), jidx(Ename, "s"));
             (conc_semiring === nothing ? (reduce = "+",) : (semiring = conc_semiring,))...,
             args = [SRname, Ename]
         )
 
         _deaths(rr) = _agg(
             ["rcv"], Dict("rcv" => Dict("from" => "rcv_cells")),
-            _op(
-                "*", _op(
-                    "*", _op(
+            jop(
+                "*", jop(
+                    "*", jop(
                         "*",
-                        _op(
-                            "-", _op(
-                                "exp", _op(
+                        jop(
+                            "-", jop(
+                                "exp", jop(
                                     "*",
-                                    _op("/", _op("log", rr), 10), _ix("TotalPM25", "rcv")
+                                    jop("/", jop("log", rr), 10), jidx("TotalPM25", "rcv")
                                 )
                             ), 1
                         ),
-                        _op("*", _ix("TotalPop", "rcv"), "pop_scale")
+                        jop("*", jidx("TotalPop", "rcv"), "pop_scale")
                     ),
-                    _op("/", _ix("MortalityRate", "rcv"), 100000)
+                    jop("/", jidx("MortalityRate", "rcv"), 100000)
                 ), "mort_scale"
             );
             args = ["TotalPM25", "TotalPop", "MortalityRate"]
@@ -329,11 +315,11 @@ end
                 obs_eqs, "TotalPM25", ["rcv_cells"], _agg(
                     ["rcv"],
                     Dict("rcv" => Dict("from" => "rcv_cells")),
-                    _op(
-                        "*", "fact", _op(
-                            "+", _ix("conc_SOA", "rcv"), _ix("conc_pNO3", "rcv"),
-                            _ix("conc_pNH4", "rcv"), _ix("conc_pSO4", "rcv"),
-                            _ix("conc_PrimaryPM25", "rcv")
+                    jop(
+                        "*", "fact", jop(
+                            "+", jidx("conc_SOA", "rcv"), jidx("conc_pNO3", "rcv"),
+                            jidx("conc_pNH4", "rcv"), jidx("conc_pSO4", "rcv"),
+                            jidx("conc_PrimaryPM25", "rcv")
                         )
                     );
                     args = ["conc_SOA", "conc_pNO3", "conc_pNH4", "conc_pSO4", "conc_PrimaryPM25"]
@@ -391,7 +377,7 @@ end
     @test all(eq -> eq["lhs"] isa AbstractString, doc["models"]["ISRM"]["equations"])
 
     # ============================================================
-    # ASSERTION 1 — the auto-rewrite GENERATED the four Phase-2b constructs.
+    # ASSERTION 1 — the auto-rewrite GENERATED the four pushdown constructs.
     # ============================================================
     td = EA.desugar_pushdown(doc; model_name = "ISRM")
     @test td !== doc
@@ -400,7 +386,7 @@ end
     @test ds["kind"] == "derived" && ds["from_faq"] == FAQ && ds["member_factor"] == MF
     tvars = td["models"]["ISRM"]["variables"]
     @test tvars[MF]["type"] == "parameter" && tvars[MF]["shape"] == [SET]
-    # esm 1.0.0 (§5.4): "state" is no longer a declarable type — the producer's
+    # esm §5.4: "state" is not a declarable type — the producer's
     # member variable is an `unknown`, made a state/observed by its equation.
     @test tvars[MEMV]["type"] == "unknown"
     teqs = td["models"]["ISRM"]["equations"]
@@ -533,5 +519,3 @@ end
         @test !haskey(get(td_max["metadata"], "x_esd", Dict()), "pushdown")
     end
 end
-
-end # module Phase5CleanAutoTests

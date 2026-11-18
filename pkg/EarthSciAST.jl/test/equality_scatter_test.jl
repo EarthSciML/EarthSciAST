@@ -19,6 +19,7 @@
 #   * that the run-time call allocates nothing and the cost grows linearly.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 using JSON3
@@ -30,7 +31,6 @@ _sx(op, args...; kw...) = Dict{String, Any}(
     (String(k) => v for (k, v) in kw)...
 )
 _sxi(v, is...) = _sx("index", v, is...)
-_sxk(arr) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => arr)
 _sxD(v, is...) = _sx("D", _sxi(v, is...); wrt = "t")
 
 # The left-hand side `D(v[is…])` over the index sets `sets`.
@@ -201,8 +201,8 @@ function _sx_ragged_doc(
     rhs = _sx("faq"; output_idx = Any[outs...], expr = body, reduce = reduce, filter = filt, ranges = Dict{String, Any}(rng))
     eqs = Any[
         Dict("lhs" => _sx_lhs("u", ["a"], ["U1"]), "rhs" => _sx("faq"; output_idx = Any["a"], expr = 0.0, ranges = Dict("a" => Dict("from" => "U1")))),
-        Dict("lhs" => "rowLen", "rhs" => _sxk(Int[length(r) for r in rows])),
-        Dict("lhs" => "rowMem", "rhs" => _sxk(mem)),
+        Dict("lhs" => "rowLen", "rhs" => jconst(Int[length(r) for r in rows])),
+        Dict("lhs" => "rowMem", "rhs" => jconst(mem)),
         Dict("lhs" => _sx_lhs("c", outs, osets), "rhs" => rhs),
     ]
     return Dict{String, Any}(
@@ -241,7 +241,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         # build evaluates through the compiled node, not an affine form).
         map8 = [1, 1, 1, 1, 2, 2, 2, 2]
         for rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [3], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", rt ? _sx_rt(e) : e, "j"), body = _sxi("u", "i")
@@ -256,7 +256,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         map8 = [2, 2, 2, 1, 1, 3, 3, 3]
         vals = [1.0, NaN, 3.0, -2.0, 5.0, 0.5, -0.0, 4.0]
         for red in ("+", "*", "max", "min"), rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [4], cr = Dict("i" => [1, 8]), reduce = red,
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -282,8 +282,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         rhs = _sx_faq(
             outs = ["j1", "j2"], osizes = [2, 2], cr = Dict("i" => [1, 4], "k" => [1, 4]),
             filt = _sx(
-                "and", _sx("==", "j1", _sxi(_sxk([1, 1, 2, 2]), "k")),
-                _sx("==", "j2", _sxi(_sxk([2, 1, 2, 1]), "i"))
+                "and", _sx("==", "j1", _sxi(jconst([1, 1, 2, 2]), "k")),
+                _sx("==", "j2", _sxi(jconst([2, 1, 2, 1]), "i"))
             ),
             body = _sxi("u", "i", "k")
         )
@@ -354,7 +354,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         # conjunction), so it folds ascending too.
         rhs = _sx_faq(
             outs = ["j"], osizes = [3], cr = Dict("i" => [1, 8]),
-            filt = _sx("and", _sx(">=", "i", "j"), _sx("==", "j", _sxi(_sxk([1, 1, 2, 2, 1, 1, 3, 3]), "i"))),
+            filt = _sx("and", _sx(">=", "i", "j"), _sx("==", "j", _sxi(jconst([1, 1, 2, 2, 1, 1, 3, 3]), "i"))),
             body = _sxi("u", "i")
         )
         doc = _sx_doc(rhs; outs = ["j"], osizes = [3], ushape = [8])
@@ -392,7 +392,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
 
     @testset "dual numbers take the same fold" begin
         for rt in (false, true)
-            e = _sxi(_sxk([1, 1, 1, 1, 2, 2, 2, 2]), "i")
+            e = _sxi(jconst([1, 1, 1, 1, 2, 2, 2, 2]), "i")
             rhs = _sx_faq(
                 outs = ["j"], osizes = [2], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -490,7 +490,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         rows = [[1, 2], [3, 4], [5, 6], Int[]]
         cmap = [1, 1, 1, 1, 2, 3]
         uval = [1.0e16, 1.0, -1.0e16, 1.0, 2.5, -0.0]
-        key(m) = _sxi(_sxk(cmap), m)
+        key(m) = _sxi(jconst(cmap), m)
         for rt in (false, true), pname in ("r", "a"), child_first in (true, false)
             # `r` sorts after the child `k`, `a` before it; the child range is
             # declared first or last.
@@ -511,7 +511,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         end
         # Keys outside the axis or not an integer are skipped.
         bad = [1, 0, 7, 2, -1, 3]
-        for rt in (false, true), kf in (m -> _sxi(_sxk(bad), m), m -> _sx("/", _sxi(_sxk(cmap), m), 2))
+        for rt in (false, true), kf in (m -> _sxi(jconst(bad), m), m -> _sx("/", _sxi(jconst(cmap), m), 2))
             d = _sx_ragged_doc(3, rows; keyf = kf, rt = rt)
             _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
         end
@@ -553,7 +553,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         # coordinate folds it.
         map8 = [2, 2, 1, 1, 3, 3, 1, 4]
         for rt in (false, true), red in ("+", "max")
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             rhs = _sx_faq(
                 outs = ["j", "m"], osizes = [4, 3], cr = Dict("i" => [1, 8]), reduce = red,
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e),
@@ -566,8 +566,8 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         # gather, so neither is fixed per shared entry; free index first.
         rhs = _sx_faq(
             outs = ["m", "j"], osizes = [3, 4], cr = Dict("i" => [1, 8]),
-            filt = _sx("and", _sx("==", "j", _sxi(_sxk(map8), "i")), _sx("<=", "m", _sx("+", "i", -3))),
-            body = _sx("*", _sxi("u", "i", "m"), _sxi(_sxk([0.5, -1.0, 2.0]), "m"))
+            filt = _sx("and", _sx("==", "j", _sxi(jconst(map8), "i")), _sx("<=", "m", _sx("+", "i", -3))),
+            body = _sx("*", _sxi("u", "i", "m"), _sxi(jconst([0.5, -1.0, 2.0]), "m"))
         )
         doc = _sx_doc(rhs; outs = ["m", "j"], osizes = [3, 4], ushape = [8, 3])
         ics = _sx_ics([8, 3], (i, m) -> _SX_CANCEL[mod1(i + m, 4)])
@@ -583,7 +583,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
     @testset "a run-time pass called concurrently" begin
         # Overlapping calls of one build (an ensemble's threads, a threaded
         # Jacobian) each fold their own cells: Float64 and dual alike.
-        e = _sx_rt(_sxi(_sxk([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]), "i"))
+        e = _sx_rt(_sxi(jconst([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]), "i"))
         rhs = _sx_faq(
             outs = ["j"], osizes = [3], cr = Dict("i" => [1, 12]),
             filt = _sx("==", "j", e), body = _sx("*", _sxi("u", "i"), _sxi("u", "i"))
@@ -621,7 +621,7 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         # nest does (`_ac_take_consumers`).
         map8 = [2, 2, 1, 1, 3, 3, 4, 4]
         for rt in (false, true)
-            e = _sxi(_sxk(map8), "i")
+            e = _sxi(jconst(map8), "i")
             g = _sx_faq(
                 outs = ["j"], osizes = [4], cr = Dict("i" => [1, 8]),
                 filt = _sx("==", "j", rt ? _sx_rt(e) : e), body = _sxi("u", "i")

@@ -1,9 +1,9 @@
 # Cross-kernel / kernel↔prelude CSE via shared scalar prelude slots
-# (perf-gap-closure plan B4; src/tree_walk/xcse.jl).
+# (src/tree_walk/xcse.jl).
 #
 # A lane-invariant expensive subtree appearing in several array kernels'
 # invariant tiers — a photolysis-like rate `exp(c_k · cos_zenith(t))` feeding K
-# species balances — used to be evaluated once per kernel per RHS call. The pass shares it as ONE scalar prelude slot; each kernel's inv def
+# species balances — would otherwise be evaluated once per kernel per RHS call. The pass shares it as ONE scalar prelude slot; each kernel's inv def
 # becomes a bare cache read.
 #
 # Pinned here:

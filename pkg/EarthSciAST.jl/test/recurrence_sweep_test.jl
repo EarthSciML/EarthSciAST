@@ -59,9 +59,9 @@ function _rs_with_state(doc::AbstractDict, var::String, rank::Int)
     push!(
         m["equations"], Dict{String, Any}(
             "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
-            "rhs" => _rs_o(
-                "+", _rs_o("*", -0.5, "u"),
-                _rs_o("*", 1.0e-3, _rs_idx(var, fill(1, rank)...))
+            "rhs" => jop(
+                "+", jop("*", -0.5, "u"),
+                jop("*", 1.0e-3, jidx(var, fill(1, rank)...))
             )
         )
     )
@@ -75,20 +75,18 @@ _rs_faq(sym, set, body; kw...) =
     "ranges" => Dict{String, Any}(sym => Dict("from" => set)),
     "expr" => body, kw...
 )
-_rs_idx(a, i...) = Dict{String, Any}("op" => "index", "args" => Any[a, i...])
-_rs_o(op, a...) = Dict{String, Any}("op" => op, "args" => Any[a...])
 
 # A dynamic document: state `u` over `cells`, a recurrence `R` over the state
 # (a two-lag body with a clamp, and a banded fold `Q` over `R`), and `D(u)`
 # reading both, so the per-call fill level is the route the solver sees.
 function _rs_dynamic(n::Int)
     R = _rs_faq(
-        "k", "cells", _rs_o(
-            "ifelse", _rs_o("<=", "k", 2), _rs_idx("u", "k"),
-            _rs_o(
-                "+", _rs_o("*", "b", _rs_o("max", _rs_idx("R", _rs_o("-", "k", 1)), 0.0)),
-                _rs_o("sin", _rs_idx("u", "k")),
-                _rs_o("*", -0.25, _rs_idx("R", _rs_o("-", "k", 2)))
+        "k", "cells", jop(
+            "ifelse", jop("<=", "k", 2), jidx("u", "k"),
+            jop(
+                "+", jop("*", "b", jop("max", jidx("R", jop("-", "k", 1)), 0.0)),
+                jop("sin", jidx("u", "k")),
+                jop("*", -0.25, jidx("R", jop("-", "k", 2)))
             )
         )
     )
@@ -96,13 +94,13 @@ function _rs_dynamic(n::Int)
         "op" => "faq", "args" => Any[], "output_idx" => ["k"],
         "reduce" => "+",
         "ranges" => Dict{String, Any}("k" => Dict("from" => "cells"), "a" => [0, 3]),
-        "filter" => _rs_o("<=", "a", _rs_o("-", "k", 1)),
-        "expr" => _rs_o(
-            "ifelse", _rs_o("==", "a", 0), _rs_idx("R", "k"),
-            _rs_o(
-                "*", -0.5, _rs_o(
-                    "*", _rs_idx("Q", _rs_o("-", "k", "a")),
-                    _rs_o("/", 1.0, _rs_o("+", "a", 1.0))
+        "filter" => jop("<=", "a", jop("-", "k", 1)),
+        "expr" => jop(
+            "ifelse", jop("==", "a", 0), jidx("R", "k"),
+            jop(
+                "*", -0.5, jop(
+                    "*", jidx("Q", jop("-", "k", "a")),
+                    jop("/", 1.0, jop("+", "a", 1.0))
                 )
             )
         )
@@ -111,14 +109,14 @@ function _rs_dynamic(n::Int)
         "op" => "faq", "args" => Any[], "output_idx" => ["i"],
         "ranges" => Dict{String, Any}("i" => Dict("from" => "cells")),
         "expr" => Dict{String, Any}(
-            "op" => "D", "args" => Any[_rs_idx("u", "i")],
+            "op" => "D", "args" => Any[jidx("u", "i")],
             "wrt" => "t"
         )
     )
     rhs = _rs_faq(
-        "i", "cells", _rs_o(
-            "-", _rs_o("*", -0.1, _rs_idx("Q", "i")),
-            _rs_idx("u", "i")
+        "i", "cells", jop(
+            "-", jop("*", -0.1, jidx("Q", "i")),
+            jidx("u", "i")
         )
     )
     return Dict{String, Any}(
@@ -319,7 +317,7 @@ end
         unguarded = _rs_static(
             _rs_faq(
                 "k", "steps",
-                _rs_o("+", _rs_o("max", _rs_idx("s", _rs_o("-", "k", 1)), 0.0), 1.0)
+                jop("+", jop("max", jidx("s", jop("-", "k", 1)), 0.0), 1.0)
             )
         )
         # A straddling lag (§4.3.1.1 "Admitted lag") whose `a = 0` term is NOT
@@ -329,9 +327,9 @@ end
                 "op" => "faq", "args" => Any[],
                 "output_idx" => ["k"], "reduce" => "+",
                 "ranges" => Dict{String, Any}("k" => Dict("from" => "steps"), "a" => [0, 1]),
-                "expr" => _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 1.0,
-                    _rs_idx("s", _rs_o("-", "k", "a"))
+                "expr" => jop(
+                    "ifelse", jop("<=", "k", 1), 1.0,
+                    jidx("s", jop("-", "k", "a"))
                 )
             )
         )
@@ -399,9 +397,9 @@ end
     @testset "a binary32 recurrence is refused by name under both compilers" begin
         doc = _rs_static(
             _rs_faq(
-                "k", "steps", _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 0.1,
-                    _rs_o("+", _rs_idx("s", _rs_o("-", "k", 1)), 0.1)
+                "k", "steps", jop(
+                    "ifelse", jop("<=", "k", 1), 0.1,
+                    jop("+", jidx("s", jop("-", "k", 1)), 0.1)
                 )
             );
             extra = Dict{String, Any}("element_type" => "Float32")
@@ -462,9 +460,9 @@ end
             JSON3.write(
                 _rs_static(
                     _rs_faq(
-                        "k", "steps", _rs_o(
-                            "ifelse", _rs_o(">=", "k", 4), 0.1,
-                            _rs_o("+", _rs_idx("s", _rs_o("+", "k", 1)), 0.1)
+                        "k", "steps", jop(
+                            "ifelse", jop(">=", "k", 4), 0.1,
+                            jop("+", jidx("s", jop("+", "k", 1)), 0.1)
                         )
                     )
                 )
@@ -501,11 +499,11 @@ end
         # `k - 1` has a static lag; `k - m` (a parameter) has none.
         doc = _rs_static(
             _rs_faq(
-                "k", "steps", _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), 0.1,
-                    _rs_o(
-                        "+", _rs_idx("s", _rs_o("-", "k", 1)),
-                        _rs_o("*", 0.5, _rs_idx("s", _rs_o("-", "k", "m")))
+                "k", "steps", jop(
+                    "ifelse", jop("<=", "k", 1), 0.1,
+                    jop(
+                        "+", jidx("s", jop("-", "k", 1)),
+                        jop("*", 0.5, jidx("s", jop("-", "k", "m")))
                     )
                 )
             )
@@ -622,18 +620,18 @@ end
         function coldoc(along_x::Bool)
             rr = Dict("i" => Dict("from" => "x"), "k" => Dict("from" => "z"))
             body = along_x ?
-                _rs_o(
-                    "ifelse", _rs_o("<=", "i", 1), _rs_idx("u", 1, "k"),
-                    _rs_o(
-                        "+", _rs_o("*", 0.5, _rs_idx("R", _rs_o("-", "i", 1), "k")),
-                        _rs_idx("u", "i", "k")
+                jop(
+                    "ifelse", jop("<=", "i", 1), jidx("u", 1, "k"),
+                    jop(
+                        "+", jop("*", 0.5, jidx("R", jop("-", "i", 1), "k")),
+                        jidx("u", "i", "k")
                     )
                 ) :
-                _rs_o(
-                    "ifelse", _rs_o("<=", "k", 1), _rs_idx("u", "i", 1),
-                    _rs_o(
-                        "+", _rs_o("*", 0.5, _rs_idx("R", "i", _rs_o("-", "k", 1))),
-                        _rs_idx("u", "i", "k")
+                jop(
+                    "ifelse", jop("<=", "k", 1), jidx("u", "i", 1),
+                    jop(
+                        "+", jop("*", 0.5, jidx("R", "i", jop("-", "k", 1))),
+                        jidx("u", "i", "k")
                     )
                 )
             faq2(e) = Dict{String, Any}(
@@ -660,11 +658,11 @@ end
                             Dict(
                                 "lhs" => faq2(
                                     Dict{String, Any}(
-                                        "op" => "D", "args" => Any[_rs_idx("u", "i", "k")],
+                                        "op" => "D", "args" => Any[jidx("u", "i", "k")],
                                         "wrt" => "t"
                                     )
                                 ),
-                                "rhs" => faq2(_rs_o("-", _rs_idx("R", "i", "k")))
+                                "rhs" => faq2(jop("-", jidx("R", "i", "k")))
                             ),
                         ]
                     )

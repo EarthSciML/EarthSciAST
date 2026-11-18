@@ -18,16 +18,12 @@
 # stopped taking the fast path would compare the reference against itself and
 # pass, so each case asserts which path it took.
 
-module SetupMapCompileOnceTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
-_v(n) = n     # a bare String IS a variable reference (parse.jl)
 function _map(output_idx, ranges, expr)
     return Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -59,15 +55,6 @@ function both_ways(json, env)
     return fast, ref, hits, miss
 end
 
-# Bitwise array agreement — the correctness bar.
-function bitsame(a, b)
-    size(a) == size(b) || return false
-    for i in eachindex(a)
-        isequal(a[i], b[i]) || return false
-    end
-    return true
-end
-
 # A gradient-y source field with a signed zero, a negative, and a huge value, so
 # `exp`/`log`/`neg` below actually produce -0.0, NaN and ±Inf.
 const A = Float64[(-1.0)^(i + j) * (i - 3) * (j - 2) / 4 for i in 1:5, j in 1:4]
@@ -82,22 +69,22 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # `A` has zero, negative and positive cells, so between them these bodies
         # produce a signed zero, ±Inf and a NaN — exactly what `isequal` (rather
         # than `==` or `≈`) is here to police.
-        Axy = _ix(_v("A"), _v("x"), _v("y"))
-        Bxy = _ix(_v("B"), _v("x"), _v("y"))
+        Axy = jidx("A", "x", "y")
+        Bxy = jidx("B", "x", "y")
         bodies = Dict(
             # signed zero out of the false arm of a gated physics branch
-            "gated" => _op(
+            "gated" => jop(
                 "ifelse",
-                _op("and", _op(">", Axy, _v("thr")), _op("<", Bxy, 40.0)),
-                _op("exp", _op("*", Axy, _v("s"))),
-                _op("neg", _op("*", 0, Bxy))
+                jop("and", jop(">", Axy, "thr"), jop("<", Bxy, 40.0)),
+                jop("exp", jop("*", Axy, "s")),
+                jop("neg", jop("*", 0, Bxy))
             ),
             # -Inf where A is zero
-            "log" => _op("log", _op("*", Axy, Axy)),
+            "log" => jop("log", jop("*", Axy, Axy)),
             # ±Inf where A is zero, finite elsewhere
-            "recip" => _op("/", _v("s"), Axy),
+            "recip" => jop("/", "s", Axy),
             # NaN (0/0) where A is zero
-            "nan" => _op("/", Axy, Axy),
+            "nan" => jop("/", Axy, Axy),
         )
         seen = Float64[]
         for (nm, body) in bodies
@@ -126,11 +113,11 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     @testset "shifted / arithmetic gather subscripts" begin
         # A subscript that is not the bare output index: the compiled gather must
         # recompute the offset from the rebound index, not from a folded literal.
-        body = _op(
-            "exp", _op(
+        body = jop(
+            "exp", jop(
                 "-",
-                _ix(_v("B"), _op("+", _v("x"), 1), _v("y")),
-                _ix(_v("B"), _v("x"), _op("min", _op("+", _v("y"), 1), 4))
+                jidx("B", jop("+", "x", 1), "y"),
+                jidx("B", "x", jop("min", jop("+", "y", 1), 4))
             )
         )
         j = _map(["x", "y"], ["x" => "X2", "y" => "Y"], body)
@@ -151,7 +138,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     end
 
     @testset "rank-1 map" begin
-        body = _op("*", _ix(_v("A"), _v("c"), 2), _v("s"))
+        body = jop("*", jidx("A", "c", 2), "s")
         j = _map(["c"], ["c" => "X"], body)
         fast, ref, hits, miss = both_ways(j, ENV0)
         @test hits == 1 && miss == 0
@@ -159,7 +146,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     end
 
     @testset "the interpreter keeps the per-cell reference available" begin
-        body = _op("exp", _ix(_v("A"), _v("x"), _v("y")))
+        body = jop("exp", jidx("A", "x", "y"))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         rhs = EA.expression_from_json(j)
         _, c = EA.Internal.counting() do
@@ -183,8 +170,8 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # The compiled fill resolves subscripts the way the reference does, so it
         # serves an exact quotient `(2x)/2`, and an inexact one `(x+1)/2` is
         # refused on both routes alike.
-        sub = _op("/", _op("*", _v("x"), 2), 2)
-        body = _op("exp", _ix(_v("B"), sub, _v("y")))
+        sub = jop("/", jop("*", "x", 2), 2)
+        body = jop("exp", jidx("B", sub, "y"))
         j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
         fast, ref, hits, miss = both_ways(j, ENV0)
         @test hits == 1 && miss == 0
@@ -192,7 +179,7 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         @test !EA._subscripts_int_exact(EA.expression_from_json(j))
         inexact = _map(
             ["x", "y"], ["x" => "X", "y" => "Y"],
-            _op("exp", _ix(_v("B"), _op("/", _op("+", _v("x"), 1), 2), _v("y")))
+            jop("exp", jidx("B", jop("/", jop("+", "x", 1), 2), "y"))
         )
         rhs = EA.expression_from_json(inexact)
         code(f) = try
@@ -211,17 +198,17 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # just in the top-level `args` spine (it walks via `foreach_subexpr_once`).
         inner = _map(
             ["k"], ["k" => "Y"],
-            _ix(_v("B"), _op("/", _op("*", _v("x"), 2), 2), _v("k"))
+            jidx("B", jop("/", jop("*", "x", 2), 2), "k")
         )
         nested = _map(
             ["x", "y"], ["x" => "X", "y" => "Y"],
-            _ix(inner, _v("y"))
+            jidx(inner, "y")
         )
         @test !EA._subscripts_int_exact(EA.expression_from_json(nested))
         # A `/` OUTSIDE an index subscript is harmless and must NOT decline.
         ok = _map(
             ["x", "y"], ["x" => "X", "y" => "Y"],
-            _op("/", _ix(_v("B"), _v("x"), _v("y")), _v("s"))
+            jop("/", jidx("B", "x", "y"), "s")
         )
         _, _, h2, m2 = both_ways(ok, ENV0)
         @test h2 == 1 && m2 == 0
@@ -233,12 +220,12 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # compiled paths at run time (`_const_gather_sub`), and both hand the
         # out-of-range case to `_resolve_const_index_oob`, so each reads the
         # same element: the compiled fill, and the compile-once sweep it falls
-        # back to, which no longer declines such an array.
+        # back to, which does not decline such an array.
         for pol in (:periodic, :clamp)
             wrapped = EA._wrap_bounded_const(copy(B), (pol, :error), "B")
             env = Dict{String, Any}("A" => A, "B" => wrapped, "s" => 1.5, "thr" => 0.0)
-            for sub in (_op("+", _v("x"), 1), _op("-", _v("x"), 2))
-                body = _op("exp", _ix(_v("B"), sub, _v("y")))
+            for sub in (jop("+", "x", 1), jop("-", "x", 2))
+                body = jop("exp", jidx("B", sub, "y"))
                 j = _map(["x", "y"], ["x" => "X", "y" => "Y"], body)
                 fast, ref, hits, miss = both_ways(j, env)
                 @test (pol, hits, miss) == (pol, 1, 0)
@@ -258,10 +245,10 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
         # `ifelse(pred, term, 0̄)` per term the per-cell expansion builds (a join
         # gate is still refused there, and the caller swallows that refusal);
         # either way the values are the reference's.
-        body = _op("exp", _ix(_v("A"), _v("x"), _v("k")))
+        body = jop("exp", jidx("A", "x", "k"))
         j = _map(["x"], ["x" => "X", "k" => Any[1, 4]], body)
         j["reduce"] = "+"
-        j["filter"] = _op(">", _v("k"), 1)
+        j["filter"] = jop(">", "k", 1)
         rhs = EA.expression_from_json(j)
         fast = EA._materialize_setup_general_map(
             rhs, copy(ENV0), nothing, IDX
@@ -279,8 +266,8 @@ const ENV0 = Dict{String, Any}("A" => A, "B" => B, "s" => 1.5, "thr" => 0.0)
     # (B[x+1, 1] at x = 5 returned B[1, 2]) while the per-cell reference raised.
     @testset "out of range on one axis raises on both paths" begin
         for body in (
-                _ix(_v("B"), _op("+", _v("x"), 1), 1),
-                _ix(_v("B"), _op("-", _v("x"), 1), 2),
+                jidx("B", jop("+", "x", 1), 1),
+                jidx("B", jop("-", "x", 1), 2),
             )
             rhs = EA.expression_from_json(_map(["x"], ["x" => "X"], body))
             for interp in (false, true)
@@ -307,8 +294,8 @@ end
 # `:cellmemo` node: evaluated once per cell, to the same bits as the tree
 # without sharing, and allocating nothing per cell.
 @testset "a shared sub-tree is evaluated once per cell" begin
-    t1 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
-    t2 = EA.expression_from_json(_op("*", "a", _op("+", "b", "__esm_oidx_1")))
+    t1 = EA.expression_from_json(jop("*", "a", jop("+", "b", "__esm_oidx_1")))
+    t2 = EA.expression_from_json(jop("*", "a", jop("+", "b", "__esm_oidx_1")))
     e = EA.OpExpr("+", EA.ASTExpr[t1, EA.OpExpr("-", EA.ASTExpr[t2, EA.VarExpr("c")])])
     params = Dict{String, Any}("a" => 0.3, "b" => -1.25, "c" => 7.0)
     ce_plain = EA._cellwise_compile_once(e, 1, Dict{String, Any}(), params)
@@ -341,5 +328,3 @@ end
         @test (@allocated EA._eval_cells(ce, cells)) == (@allocated EA._eval_cells(ce_plain, cells))
     end
 end
-
-end # module

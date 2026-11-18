@@ -1,270 +1,205 @@
+# The cadence partition (CONFORMANCE_SPEC.md §5.7): the package's classifier
+# (src/cadence.jl) and the conformance adapter's partition summary and
+# CONST-fold kernels re-derive what the cross-binding golden
+# (tests/conformance/cadence/manifest.json) pins: the class of every annotated
+# node, the materialization-point set, the emptiness of the hot tree and the
+# per-event handler, and the CONST-folded buffers byte for byte; plus the three
+# checked guards (§5.7.6) and the negative controls that must refuse
+# non-conforming input. It mirrors scripts/run-cadence-conformance.py --self-test.
 using Test
 using EarthSciAST
+using EarthSciAST: CadenceConst, CadenceDiscrete, CadenceContinuous, cadence_class,
+    cadence_seeds, check_expect_cadence, continuous_relational_nodes,
+    derived_index_set_cycle, observed_definitions, expression_from_json, coerce_esm_file
 import JSON3
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+include("testutils.jl")
 
-# Collision-safe alias for the Cadence submodule (an unprefixed `const C`
-# would pollute the shared Main namespace under runtests.jl).
-const _Cadence = EarthSciAST.Cadence
-
-# The §5.7 pass driver (`partition_model`, `run_guards`) and the CONST-fold
-# kernels live in the conformance adapter script (they are consumed only by the
-# adapter and this test); its `PROGRAM_FILE` guard keeps the CLI entry from
-# firing under this include.
+# The partition summary and the CONST-fold kernels live in the conformance
+# adapter; its `PROGRAM_FILE` guard keeps the command-line entry from running.
 include(joinpath(@__DIR__, "..", "scripts", "cadence_adapter.jl"))
-const _CadPass = CadenceConformanceAdapter
+const Pass = CadenceConformanceAdapter
 
-# The dependency-partition (cadence) pass — CONFORMANCE_SPEC.md §5.7, the
-# normative form of RFC `semiring-faq-unified-ir` §6.1 (bead ess-my4.3.7).
-# These tests assert the Julia pass independently re-derives the same contract
-# the cross-binding golden (tests/conformance/cadence/manifest.json) pins:
-# the class of every annotated node, the materialization-point set, the
-# emptiness of the hot tree / per-event handler, and the byte-identical
-# CONST-folded buffers — plus the three checked guards (§5.7.6) and the
-# negative controls that must REJECT non-conforming input. It mirrors the
-# checks in scripts/run-cadence-conformance.py --self-test.
+cadence_fixture(name) = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", name)
 
-const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "cadence", "manifest.json")
+# A typed document from a native `Dict`, without validation, for the
+# hand-built negative controls.
+typed(doc) = coerce_esm_file(doc)
+seeds_of(file, name = "M") = cadence_seeds(file.models[name]; data_sources = file.data_sources)
+jexpr(d) = expression_from_json(d)
+# A `distinct` relational `faq` over `ranges`, with `key` and `id` when given.
+function jproducer(ranges; key = nothing, id = nothing)
+    d = jfaq(jop("true"), ["x"], ranges; semiring = "bool_and_or")
+    d["distinct"] = true
+    key === nothing || (d["key"] = key)
+    id === nothing || (d["id"] = id)
+    return d
+end
 
-@testset "Cadence-partition pass (CONFORMANCE_SPEC §5.7 / RFC §6.1)" begin
+@testset "Cadence partition (CONFORMANCE_SPEC §5.7)" begin
 
-    manifest = _Cadence.to_native(JSON3.read(read(CADENCE_MANIFEST, String)))
+    manifest = Pass.to_native(
+        JSON3.read(read(joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "cadence", "manifest.json"), String))
+    )
 
     @testset "golden agreement — $(fx["id"])" for fx in manifest["fixtures"]
-        model = _Cadence.load_model_json(joinpath(TESTUTILS_REPO_ROOT, fx["fixture"]), fx["model"])
-        r = _CadPass.partition_model(model)
+        p = Pass.load_partition(joinpath(TESTUTILS_REPO_ROOT, fx["fixture"]), fx["model"])
+        r = Pass.partition_model(p)
 
-        # (a) class summary — annotated nodes by DERIVED class == golden.
+        # (a) class summary: annotated nodes by derived class.
         for (cls, n) in fx["class_summary"]
             @test r.class_summary[cls] == n
         end
         # no expect_cadence disagreement (guard 3) on a valid fixture
         @test isempty(r.problems)
 
-        # (b) materialization-point threshold multiset == golden (all points).
-        got_thr = sort([p["threshold"] for p in r.materialization_points])
+        # (b) the materialization-point threshold multiset (all points).
+        got_thr = sort([x["threshold"] for x in r.materialization_points])
         want_thr = sort([m["threshold"] for m in fx["materialization_points"]])
         @test got_thr == want_thr
 
-        # hot-tree / per-event-handler emptiness == golden.
+        # hot-tree / per-event-handler emptiness.
         @test r.hot_tree_empty == fx["hot_tree_empty"]
         @test r.event_handler_empty == fx["event_handler_empty"]
 
-        # (c) CONST-folded buffers serialize byte-for-byte to the golden.
+        # (c) CONST-folded buffers serialize byte for byte to the golden.
         cf = get(fx, "const_fold", Dict{String, Any}())
         inputs = get(cf, "inputs", Dict{String, Any}())
         for (label, spec) in get(cf, "expected", Dict{String, Any}())
-            bytes = _CadPass.canonical_serialize(_CadPass.compute_fold(label, spec, inputs))
+            bytes = Pass.canonical_serialize(Pass.compute_fold(label, spec, inputs))
             @test bytes == spec["serialized"]
         end
 
-        # (d) guards hold on a valid fixture (no false positives).
-        @test (_CadPass.run_guards(model); true)
+        # (d) the guards hold on a valid fixture (no false positives).
+        @test (Pass.run_guards(p); true)
     end
 
     @testset "gather rule splits the stencil (§5.7.3)" begin
-        model = _Cadence.load_model_json(
-            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "mixed_stencil.esm"),
-            "MixedStencilDiffusion"
-        )
-        # index(u, index(nbr,i,k)): outer value load is CONTINUOUS, while the
-        # inner topology selection index(nbr,i,k) is CONST — classed
-        # independently of the array.
-        inner = Dict{String, Any}("op" => "index", "args" => Any["nbr", "i", "k"])
-        outer = Dict{String, Any}("op" => "index", "args" => Any["u", inner])
-        @test _Cadence.classify(inner, model) == "const"
-        @test _Cadence.classify(outer, model) == "continuous"
-        # Kdiff (discrete variable) gather is DISCRETE; a state load is CONTINUOUS.
-        @test _Cadence.classify(Dict{String, Any}("op" => "index", "args" => Any["Kdiff", "i"]), model) == "discrete"
-        @test _Cadence.classify(Dict{String, Any}("op" => "index", "args" => Any["u", "i"]), model) == "continuous"
-        # the analytic continuous-t forcing stays CONTINUOUS, not DISCRETE.
-        @test _Cadence.classify(
-            Dict{String, Any}("op" => "*", "args" => Any["omega", "t"]),
-            Dict{String, Any}("variables" => Dict{String, Any}("omega" => Dict{String, Any}("type" => "parameter")))
-        ) == "continuous"
+        p = Pass.load_partition(cadence_fixture("mixed_stencil.esm"), "MixedStencilDiffusion")
+        # index(u, index(nbr,i,k)): the outer value load is continuous, the inner
+        # topology selection index(nbr,i,k) const, classed independently of the
+        # array.
+        @test cadence_class(jexpr(jidx("nbr", "i", "k")), p.seeds) === CadenceConst
+        @test cadence_class(jexpr(jidx("u", jidx("nbr", "i", "k"))), p.seeds) === CadenceContinuous
+        # A discrete parameter's gather is discrete; a state load continuous.
+        @test cadence_class(jexpr(jidx("Kdiff", "i")), p.seeds) === CadenceDiscrete
+        @test cadence_class(jexpr(jidx("u", "i")), p.seeds) === CadenceContinuous
+        # An analytic forcing in `t` is continuous, not discrete.
+        omega = typed(jdoc(Dict("omega" => Dict("type" => "parameter")), Any[]))
+        @test cadence_class(jexpr(jop("*", "omega", "t")), seeds_of(omega)) === CadenceContinuous
     end
 
     @testset "source-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin
         # A parameter fed by a `data` update resolves through its source's
-        # `temporal` block (RFC pure-io-data-loaders §4.6): the SAME declaration
-        # seeds DISCRETE under a temporal source and CONST (folds at bind) under
-        # a non-temporal one. Only the spelling changed in esm 1.0.0 — a
-        # `discrete` variable with a `data_ingest` refresh is now a PARAMETER
-        # with a `data` update.
-        variables = Dict{String, Any}(
-            "c" => Dict{String, Any}("type" => "unknown", "shape" => Any["cells"]),
-            "bc" => Dict{String, Any}(
-                "type" => "parameter", "shape" => Any["cells"],
-                "update" => Dict{String, Any}(
-                    "kind" => "data", "source" => "bc_loader",
-                    "from" => Dict{String, Any}("file_variable" => "bc")
+        # `temporal` block: the same declaration seeds discrete under a temporal
+        # source and const (folds at bind) under a non-temporal one.
+        path = cadence_fixture("loader_temporal_seed.esm")
+        bc = jexpr(jidx("bc", "i"))
+
+        with_temporal = load_path(path)
+        @test haskey(with_temporal.data_sources, "bc_loader")
+        @test cadence_class(bc, seeds_of(with_temporal, "LoaderTemporalSeed")) === CadenceDiscrete
+
+        doc = JSON3.read(read(path, String), Dict{String, Any})
+        delete!(doc["data_sources"]["bc_loader"], "temporal")
+        @test cadence_class(bc, seeds_of(typed(doc), "LoaderTemporalSeed")) === CadenceConst
+
+        # No source table to resolve against keeps the discrete seed.
+        @test cadence_class(bc, cadence_seeds(with_temporal.models["LoaderTemporalSeed"])) ===
+            CadenceDiscrete
+    end
+
+    @testset "observed leaf seeds from its defining equation's RHS (§5.7.2)" begin
+        # A state-free observed folds (seeding every unknown continuous would
+        # stop it), one reading the state does not (seeding an observed const
+        # would fold a per-step value), one reading a discrete parameter is
+        # discrete, and the resolution is transitive.
+        s = Pass.load_partition(cadence_fixture("observed_leaf_seeds.esm"), "ObservedLeafSeeds").seeds
+        @test s["geom"] === CadenceConst
+        @test s["geom_chain"] === CadenceConst
+        @test s["k_scaled"] === CadenceDiscrete
+        @test s["u_scaled"] === CadenceContinuous
+        @test s["u"] === CadenceContinuous     # the ODE state itself
+        @test s["dx"] === CadenceConst
+        @test s["Kdiff"] === CadenceDiscrete
+
+        # An arrayed observed is recognised through its LHS's base name at any
+        # rank (esm-spec §6.3.1), so a state-free one folds too: the `faq` shell
+        # `faq{i}(wf[i]) ~ …` and the bare-index `wb[i] ~ …` both define an
+        # observed, while `faq{i}(D(u[i]))` stays a tendency of the state.
+        a = Pass.load_partition(cadence_fixture("arrayed_observed_seeds.esm"), "ArrayedObservedSeeds")
+        @test a.seeds["wf"] === CadenceConst
+        @test a.seeds["wb"] === CadenceConst
+        @test a.seeds["ws"] === CadenceContinuous
+        @test a.seeds["u"] === CadenceContinuous
+        @test sort!(collect(keys(observed_definitions(a.model)))) == ["wb", "wf", "ws"]
+
+        # A definition cycle is refused, not silently seeded.
+        cyc = typed(
+            jdoc(
+                Dict("a" => Dict("type" => "unknown"), "b" => Dict("type" => "unknown")),
+                [
+                    Dict("lhs" => "a", "rhs" => jop("*", "b", 2.0)),
+                    Dict("lhs" => "b", "rhs" => jop("*", "a", 2.0)),
+                ]
+            )
+        )
+        err = caught(() -> seeds_of(cyc))
+        @test err isa EarthSciAST.TreeWalkError
+        @test err.code == "observed_cycle"
+    end
+
+    # --- Negative controls: the guards must refuse non-conforming input. --------
+
+    @testset "neg: wrong expect_cadence is flagged (guard 3)" begin
+        # A const gather annotated continuous must be caught.
+        s = seeds_of(typed(jdoc(Dict("p" => Dict("type" => "parameter")), Any[])))
+        @test !isempty(check_expect_cadence(jexpr(jop("index", "p", "i"; expect_cadence = "continuous")), s))
+        @test isempty(check_expect_cadence(jexpr(jop("index", "p", "i"; expect_cadence = "const")), s))
+    end
+
+    @testset "neg: continuous relational refused (guard 2)" begin
+        # A distinct aggregate whose key reads the state u classifies continuous.
+        file = typed(
+            jdoc(
+                Dict("u" => Dict("type" => "unknown")), [Dict("lhs" => jD("u"), "rhs" => 0.0)];
+                index_sets = Dict("faces" => Dict("kind" => "interval", "size" => 4))
+            )
+        )
+        s = seeds_of(file)
+        rhs = jexpr(jproducer(Dict("f" => Dict("from" => "faces")); key = jidx("u", "f")))
+        @test cadence_class(rhs, s) === CadenceContinuous
+        @test only(continuous_relational_nodes(rhs, s)) === rhs
+    end
+
+    @testset "neg: continuous relational fixture refused (guard 2)" begin
+        # tests/invalid/faq/continuous_relational_node.esm is schema-valid and
+        # refused by the partition guard, in Rust and Python as here.
+        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "continuous_relational_node.esm")
+        p = Pass.load_partition(fixture, "ContinuousRelationalNode")
+        @test_throws ErrorException Pass.run_guards(p)
+    end
+
+    @testset "neg: from_faq cycle refused (guard 1)" begin
+        file = typed(
+            jdoc(
+                Dict("a" => Dict("type" => "unknown"), "b" => Dict("type" => "unknown")),
+                [
+                    Dict("lhs" => jidx("a", "x"), "rhs" => jproducer(Dict("y" => Dict("from" => "setB")); id = "nodeA")),
+                    Dict("lhs" => jidx("b", "x"), "rhs" => jproducer(Dict("y" => Dict("from" => "setA")); id = "nodeB")),
+                ];
+                index_sets = Dict(
+                    "setA" => Dict("kind" => "derived", "from_faq" => "nodeA"),
+                    "setB" => Dict("kind" => "derived", "from_faq" => "nodeB")
                 )
             )
         )
-        bc = Dict{String, Any}("op" => "index", "args" => Any["bc", "i"])
-
-        # Source WITH temporal -> DISCRETE (refreshes on each ingest).
-        with_temporal = Dict{String, Any}(
-            "variables" => variables,
-            "data_sources" => Dict{String, Any}(
-                "bc_loader" =>
-                    Dict{String, Any}("kind" => "grid", "temporal" => Dict{String, Any}("frequency" => "PT6H"))
-            )
-        )
-        @test _Cadence.classify(bc, with_temporal) == "discrete"
-
-        # Source WITHOUT temporal -> CONST (non-time-varying, folds at bind).
-        no_temporal = Dict{String, Any}(
-            "variables" => variables,
-            "data_sources" => Dict{String, Any}("bc_loader" => Dict{String, Any}("kind" => "static"))
-        )
-        @test _Cadence.classify(bc, no_temporal) == "const"
-
-        # No sources attached / unresolvable source -> keeps the DISCRETE seed.
-        @test _Cadence.classify(bc, Dict{String, Any}("variables" => variables)) == "discrete"
-
-        # load_model_json attaches the document's top-level data_sources so the
-        # refinement can resolve the named source.
-        m = _Cadence.load_model_json(
-            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
-            "LoaderTemporalSeed"
-        )
-        @test haskey(m, "data_sources") && haskey(m["data_sources"], "bc_loader")
+        cycle = derived_index_set_cycle(values(file.models), file.index_sets)
+        @test cycle !== nothing
+        @test Set(cycle) ⊇ Set(["setA", "setB"])
     end
 
-    @testset "observed leaf seeds from its DEFINING EQUATION's RHS (§5.7.2)" begin
-        # The one place the cadence pass must follow the 1.0.0 relocation: an
-        # observed unknown's definition moved out of `variables[v].expression`
-        # and into `equations`. Both wrong answers are discriminated here.
-        m = _Cadence.load_model_json(
-            joinpath(
-                TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
-                "observed_leaf_seeds.esm"
-            ), "ObservedLeafSeeds"
-        )
-
-        # A state-free observed folds (seeding every unknown CONTINUOUS would
-        # stop it), one reading the state does not (seeding an observed CONST —
-        # the 0.x shortcut — would fold a per-step value), one reading a
-        # discrete parameter is DISCRETE, and the resolution is TRANSITIVE.
-        @test _Cadence.seed_leaf("geom", m) == "const"
-        @test _Cadence.seed_leaf("geom_chain", m) == "const"
-        @test _Cadence.seed_leaf("k_scaled", m) == "discrete"
-        @test _Cadence.seed_leaf("u_scaled", m) == "continuous"
-        @test _Cadence.seed_leaf("u", m) == "continuous"     # the ODE state itself
-        @test _Cadence.seed_leaf("dx", m) == "const"
-        @test _Cadence.seed_leaf("Kdiff", m) == "discrete"
-
-        # An ARRAYED observed is recognised through its LHS's base name at any
-        # rank (esm-spec §6.3.1), so a state-free one folds too: the `faq`
-        # shell `faq{i}(wf[i]) ~ …` and the bare-index `wb[i] ~ …` both define
-        # an observed, while `faq{i}(D(u[i]))` stays a tendency of the state.
-        a = _Cadence.load_model_json(
-            joinpath(
-                TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
-                "arrayed_observed_seeds.esm"
-            ), "ArrayedObservedSeeds"
-        )
-        @test _Cadence.seed_leaf("wf", a) == "const"
-        @test _Cadence.seed_leaf("wb", a) == "const"
-        @test _Cadence.seed_leaf("ws", a) == "continuous"
-        @test _Cadence.seed_leaf("u", a) == "continuous"
-        @test sort!(collect(keys(_Cadence._observed_definitions(a)))) == ["wb", "wf", "ws"]
-
-        # A definition CYCLE is reported, not silently seeded.
-        cyc = Dict{String, Any}(
-            "variables" => Dict{String, Any}(
-                "a" => Dict{String, Any}("type" => "unknown"),
-                "b" => Dict{String, Any}("type" => "unknown")
-            ),
-            "equations" => Any[
-                Dict{String, Any}(
-                    "lhs" => "a",
-                    "rhs" => Dict{String, Any}("op" => "*", "args" => Any["b", 2.0])
-                ),
-                Dict{String, Any}(
-                    "lhs" => "b",
-                    "rhs" => Dict{String, Any}("op" => "*", "args" => Any["a", 2.0])
-                ),
-            ]
-        )
-        @test_throws _Cadence.CadenceError _Cadence.seed_leaf("a", cyc)
-    end
-
-    # --- Negative controls: the guards must REJECT non-conforming input. ------
-
-    @testset "neg: wrong expect_cadence is flagged (guard 3)" begin
-        # A CONST gather mis-annotated as CONTINUOUS must be caught.
-        model = Dict{String, Any}("variables" => Dict{String, Any}("p" => Dict{String, Any}("type" => "parameter")))
-        bad = Dict{String, Any}(
-            "op" => "index", "args" => Any["p", "i"],
-            "expect_cadence" => "continuous"
-        )
-        problems = String[]
-        _Cadence.check_expect_cadence!(bad, model, problems)
-        @test !isempty(problems)
-    end
-
-    @testset "neg: continuous relational rejected (guard 2)" begin
-        # A distinct aggregate whose key reads state u classifies CONTINUOUS.
-        model = Dict{String, Any}(
-            "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown")),
-            "index_sets" => Dict{String, Any}("faces" => Dict{String, Any}("kind" => "interval", "size" => 4))
-        )
-        rhs = Dict{String, Any}(
-            "op" => "faq", "distinct" => true, "semiring" => "bool_and_or",
-            "output_idx" => Any["e"], "ranges" => Dict{String, Any}("f" => Dict{String, Any}("from" => "faces")),
-            "key" => Dict{String, Any}("op" => "index", "args" => Any["u", "f"]),
-            "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
-        )
-        @test _Cadence.classify(rhs, model) == "continuous"
-        @test_throws _Cadence.CadenceError _Cadence.assert_no_continuous_relational(rhs, model)
-    end
-
-    @testset "neg: continuous relational FIXTURE rejected (guard 2)" begin
-        # The shared invalid fixture tests/invalid/faq/continuous_relational_node.esm
-        # — SCHEMA-VALID (Go/TS accept it, marked resolver_only) but rejected by the
-        # partition guard. The same fixture is rejected by the Rust and Python
-        # siblings, so all three evaluators agree (bead ess-my4.3.11). In Julia the
-        # guard lives in run_guards (not partition_model).
-        fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "faq", "continuous_relational_node.esm")
-        model = _Cadence.load_model_json(fixture, "ContinuousRelationalNode")
-        @test_throws _Cadence.CadenceError _CadPass.run_guards(model)
-    end
-
-    @testset "neg: from_faq cycle rejected (guard 1)" begin
-        cyclic = Dict{String, Any}(
-            "variables" => Dict{String, Any}(),
-            "index_sets" => Dict{String, Any}(
-                "setA" => Dict{String, Any}("kind" => "derived", "from_faq" => "nodeA"),
-                "setB" => Dict{String, Any}("kind" => "derived", "from_faq" => "nodeB")
-            ),
-            "equations" => Any[
-                Dict{String, Any}(
-                    "lhs" => Dict{String, Any}("op" => "index", "args" => Any["a", "x"]),
-                    "rhs" => Dict{String, Any}(
-                        "op" => "faq", "id" => "nodeA", "distinct" => true,
-                        "semiring" => "bool_and_or", "output_idx" => Any["x"],
-                        "ranges" => Dict{String, Any}("y" => Dict{String, Any}("from" => "setB")),
-                        "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
-                    )
-                ),
-                Dict{String, Any}(
-                    "lhs" => Dict{String, Any}("op" => "index", "args" => Any["b", "x"]),
-                    "rhs" => Dict{String, Any}(
-                        "op" => "faq", "id" => "nodeB", "distinct" => true,
-                        "semiring" => "bool_and_or", "output_idx" => Any["x"],
-                        "ranges" => Dict{String, Any}("y" => Dict{String, Any}("from" => "setA")),
-                        "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
-                    )
-                ),
-            ]
-        )
-        @test_throws _Cadence.CadenceError _Cadence.assert_acyclic_index_sets(cyclic)
-    end
-
-    @testset "neg: float topology key rejected (§5.5 rule 1)" begin
-        @test_throws _Cadence.CadenceError _CadPass.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
+    @testset "neg: float topology key refused (§5.5 rule 1)" begin
+        @test_throws EarthSciAST.Relational.FloatKeyError Pass.fold_edge_enumeration(Any[Any[1.5]], Any[Any[2]], "undirected")
     end
 end

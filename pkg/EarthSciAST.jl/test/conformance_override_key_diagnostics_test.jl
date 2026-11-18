@@ -8,11 +8,10 @@
 # longer partial qualification of it) runs; a key carried as a suffix by two or
 # more parameters is AMBIGUOUS; anything else is UNKNOWN.
 #
-# Julia used to leave an unmatched key verbatim, so it bound nothing and the run
-# quietly used every declared default while still reporting a verdict — the same
-# silent-wrong-answer shape the §6.6.2 name resolution was introduced to fix,
-# one level up. Rust already raised `SimulateError::InvalidParameter`; this
-# category is what keeps the three from drifting apart again. It compares
+# An unmatched key left verbatim would bind nothing, and the run would quietly
+# use every declared default while still reporting a verdict — the same
+# silent-wrong-answer shape the §6.6.2 name resolution exists to prevent, one
+# level up. This category keeps the bindings' diagnostics in agreement. It compares
 # DIAGNOSTIC OUTCOMES rather than numbers, so it carries no golden: each binding
 # asserts its own idiomatic error type (the manifest's `error_surface` records
 # which) against the shared per-case classification.

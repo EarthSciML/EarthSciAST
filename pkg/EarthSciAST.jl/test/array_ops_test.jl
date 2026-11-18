@@ -55,7 +55,7 @@ end
 _d_index(arr::AbstractString, idxs...) =
     _op("D", _idx(arr, idxs...); wrt = "t")
 
-@testset "Array-op nodes without a compiled system (gt-vt3)" begin
+@testset "Array-op nodes without a compiled system" begin
 
     # ================================================================
     # Parse/serialize round trip smoke test for each array-op node.

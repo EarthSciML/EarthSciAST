@@ -277,8 +277,7 @@ end
         @test isapprox(A_final + B_final + C_final, 1.0; atol = 1.0e-6)
     end
 
-    # Case 5 (fixture simple_ode.esm vs SciPy reference) removed in gt-l5b:
-    # `simple_ode.esm` now carries an inline `tests` block with the same
-    # analytical references, and `tests_blocks_execution_test.jl` walks
+    # `simple_ode.esm` is not covered here: it carries an inline `tests` block
+    # with its analytical references, and `tests_blocks_execution_test.jl` walks
     # `tests/simulation/*.esm` to execute it — avoiding duplicate coverage.
 end

@@ -332,10 +332,10 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
     # ── The self-edge is not a cycle ───────────────────────────────────────
     #
     # esm-spec §4.3.1.1: "A recurrence definition is NOT a cyclic algebraic
-    # system." The tree-walk build used to disagree — `_resolve_observed`
-    # substitutes observed bodies to a fixed point, a self-reference never
-    # converges, and the iteration cap surfaced as `E_TREEWALK_OBSERVED_CYCLE`.
-    # These two testsets pin the distinction from both sides.
+    # system." Substituting observed bodies to a fixed point never converges on
+    # a self-reference, so `_resolve_observed` must not treat one as an
+    # `E_TREEWALK_OBSERVED_CYCLE`. These two testsets pin the distinction from
+    # both sides.
     @testset "a legal recurrence is not reported as a cycle" begin
         # It builds, under both compilers, and its sweep is what the report
         # shows for it (recurrence_sweep_test.jl pins the values).

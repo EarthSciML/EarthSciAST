@@ -1,12 +1,11 @@
 # The OVERLAP broad phase at SETUP — candidate-DRIVEN enumeration, and the
 # behaviour change it does and does not make.
 #
-# `_resolve_geo_join_gates` used to skip every Phase-2a `overlap` clause, so a
-# setup-materialized aggregate — which has no other resolver — never applied its
-# broad phase. `conservative_overlap_A_ij_gated`, whose contract is "one polygon
-# clip per CANDIDATE pair … O(#candidates) build cost", ran the full
-# `#src × #tgt` product instead. `_materialize_geom_array` now resolves the
-# clause and hands it to the SHARED planner (`_overlap_drive_plan`,
+# A setup-materialized aggregate has no resolver other than
+# `_resolve_geo_join_gates`, so that is where its `overlap` clause must apply
+# its broad phase: `conservative_overlap_A_ij_gated`'s contract is "one polygon
+# clip per CANDIDATE pair … O(#candidates) build cost", not the full
+# `#src × #tgt` product. `_materialize_geom_array` resolves the clause and hands it to the SHARED planner (`_overlap_drive_plan`,
 # src/broad_phase.jl — the same one `_vi_enumerate_join` and
 # `_foreach_aggregate_term` use), which drives enumeration from the candidate
 # set rather than filtering the full product.
@@ -43,15 +42,12 @@
 # stopped driving would compare the dense path against itself and pass, so each
 # case asserts which path it took.
 
-module GeomOverlapDriveTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -77,12 +73,12 @@ _ovj(src, tgt; eps = 1.0e-9) = Any[
 # and NE (vertex 3) corners: the product of the two axes' interval overlaps,
 # each clamped at `+0.0`, so a disjoint pair is exactly `+0.0`. `a` and `b` are
 # `index(ring_stack, cell)` slices.
-_corner(slice, v, c) = _ix(slice["args"]..., v, c)
-_axis_overlap(a, b, c) = _op(
+_corner(slice, v, c) = jidx(slice["args"]..., v, c)
+_axis_overlap(a, b, c) = jop(
     "max", 0.0,
-    _op("-", _op("min", _corner(a, 3, c), _corner(b, 3, c)), _op("max", _corner(a, 1, c), _corner(b, 1, c)))
+    jop("-", jop("min", _corner(a, 3, c), _corner(b, 3, c)), jop("max", _corner(a, 1, c), _corner(b, 1, c)))
 )
-_pia(a, b) = _op("*", _axis_overlap(a, b, 1), _axis_overlap(a, b, 2))
+_pia(a, b) = jop("*", _axis_overlap(a, b, 1), _axis_overlap(a, b, 2))
 
 # One axis-aligned square ring at `(x, y)` with side `w`, CCW from the SW corner.
 function sq!(R, p, x, y, w)
@@ -141,15 +137,6 @@ function both_ways(json, env = ENV0, idx = IDX)
     return got, ref, dd, dg, dn
 end
 
-# Bitwise array agreement — the correctness bar.
-function bitsame(a, b)
-    size(a) == size(b) || return false
-    for i in eachindex(a)
-        isequal(a[i], b[i]) || return false
-    end
-    return true
-end
-
 # Does dropping the `join` clause change this document's values? A pruned
 # tuple that would have contributed something other than the fold identity is
 # exactly what makes them differ, and the `min`/`prod` case below is the one
@@ -167,7 +154,7 @@ end
 
 const A_IJ = _agg(
     ["i", "j"], ["i" => "S", "j" => "T"],
-    _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+    _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
     join = _ovj(["src_poly"], ["tgt_poly"])
 )
 
@@ -198,13 +185,13 @@ const A_IJ = _agg(
                 )
             )
         )
-        body = _op(
-            "/", _op("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")),
-            _ix("A_j", "j")
+        body = jop(
+            "/", jop("*", jidx("A_ij", "i", "j"), jidx("F_src", "i")),
+            jidx("A_j", "j")
         )
         for (nm, extra) in (
                 "filtered" => Dict{String, Any}(
-                    "filter" => _op(">", _ix("A_ij", "i", "j"), "atol")
+                    "filter" => jop(">", jidx("A_ij", "i", "j"), "atol")
                 ),
                 "unfiltered" => Dict{String, Any}(),
             )
@@ -230,7 +217,7 @@ const A_IJ = _agg(
             )
             j = _agg(
                 ["j"], ["i" => "S", "j" => "T"],
-                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
                 join = _ovj(["src_poly"], ["tgt_poly"])
             )
             merge!(j, extra)
@@ -252,7 +239,7 @@ const A_IJ = _agg(
         for (nm, red) in ("min" => "min", "prod" => "prod")
             j = _agg(
                 ["j"], ["i" => "S", "j" => "T"],
-                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
                 join = _ovj(["src_poly"], ["tgt_poly"])
             )
             j["reduce"] = red
@@ -295,9 +282,9 @@ const A_IJ = _agg(
         # ungated sweep.
         j = _agg(
             ["k"], ["i" => "S", "j" => "T", "k" => "K"],
-            _op(
-                "*", _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j")),
-                _ix("kk", "k")
+            jop(
+                "*", _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j")),
+                jidx("kk", "k")
             );
             join = _ovj(["src_poly"], ["tgt_poly"])
         )
@@ -322,7 +309,7 @@ const A_IJ = _agg(
         # Envelope factor not in `env` ⇒ no gate at all, and the historic values.
         j = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["not_a_factor"], ["tgt_poly"])
         )
         got, ref, dd, dg, dn = both_ways(j)
@@ -331,21 +318,21 @@ const A_IJ = _agg(
         # ... and so does a factor whose shape names no loop var of this sweep.
         j2 = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["kk"], ["tgt_poly"])
         )
         got2, ref2, dd2, dg2, dn2 = both_ways(j2)
         @test (dd2, dg2, dn2) == (0, 0, 1)
         @test bitsame(got2, ref2)
         # ... and so does a single env factor of the WRONG RANK. A 1-name env is
-        # a `[pos, verts, coord]` ring stack; handing the Phase-3a primitive a
-        # 1-D array there would throw, so the gate declines instead and a
-        # document that used to build still builds.
+        # a `[pos, verts, coord]` ring stack; handing the broad-phase primitive
+        # a 1-D array there would throw, so the gate declines instead and the
+        # document still builds.
         env3 = merge(copy(ENV0), Dict{String, Any}("flat_src" => Float64[1, 2, 3, 4]))
         sh3 = copy(SHAPES); sh3["flat_src"] = ["S"]
         j3 = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"));
             join = _ovj(["flat_src"], ["tgt_poly"])
         )
         rhs3 = EA.expression_from_json(j3)
@@ -362,7 +349,7 @@ const A_IJ = _agg(
     @testset "a document with no overlap clause is untouched" begin
         j = _agg(
             ["i", "j"], ["i" => "S", "j" => "T"],
-            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"))
+            _pia(jidx("src_poly", "i"), jidx("tgt_poly", "j"))
         )
         got, ref, dd, dg, dn = both_ways(j)
         @test (dd, dg, dn) == (0, 0, 1)   # resolution declines before it starts
@@ -387,7 +374,4 @@ const A_IJ = _agg(
         @test c.pairs == a.pairs
     end
 
-
 end
-
-end # module

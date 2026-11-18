@@ -91,11 +91,6 @@ end
 
 _bc_validate(doc::AbstractDict) = E.validate(E.coerce_esm_file(JSON3.read(JSON3.write(doc))))
 _bc_types(res) = sort!(String[e.error_type for e in res.structural_errors])
-_bc_err(f) = try
-    f(); nothing
-catch e
-    e
-end
 
 # The §4.3.4 fixture family from GitHub #100: a 3×2×2 `[lon,lat,lev]` state fed
 # by lower-rank observeds. `w1[lat] = 10j`, `w2[lon,lat] = i + 10j`,
@@ -294,7 +289,7 @@ _bc_oracle(name, body) = _bc_model(
         @test hit.details["index_set"] == "qux"
         @test hit.path == "/models/X/equations/0/rhs"
 
-        err = _bc_err(() -> E.Internal.build(doc))
+        err = caught(() -> E.Internal.build(doc))
         @test err isa E.TreeWalkError
         @test err.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH"
     end
@@ -352,8 +347,7 @@ _bc_oracle(name, body) = _bc_model(
         end
         # The contract is enforced in NESTED positions too. From esm 1.0.0 an
         # observed unknown's body IS an equation, so the finding is reported at that
-        # equation's RHS rather than at a `variables/y/expression` that no longer
-        # exists. `_bc_doc` appends the lifted definition after the authored
+        # equation's RHS. `_bc_doc` appends the lifted definition after the authored
         # equations, so it is equations/1.
         nested = _bc_doc(
             "F", Dict{String, Any}(
@@ -385,7 +379,7 @@ _bc_oracle(name, body) = _bc_model(
             ]
             # Coerced without the loader's schema check, which would refuse
             # most of these first: the subject is the build's own refusal.
-            err = _bc_err(() -> E.Internal.build(E.coerce_esm_file(mk(node))))
+            err = caught(() -> E.Internal.build(E.coerce_esm_file(mk(node))))
             @test err isa E.TreeWalkError
             @test err.code == code
         end
@@ -409,7 +403,7 @@ _bc_oracle(name, body) = _bc_model(
                 _op("concat", _v("u"), _v("u"); axis = 0),
             ]
             m = ESS.Model(vars, [ESS.Equation(_D("u"), node)])
-            err = _bc_err(() -> E.Internal.build(m; initial_conditions = ics))
+            err = caught(() -> E.Internal.build(m; initial_conditions = ics))
             @test err isa E.TreeWalkError
             @test err.code == "unevaluable_operator"
         end
@@ -425,7 +419,7 @@ _bc_oracle(name, body) = _bc_model(
         # with the wrong number of subscripts is still a hard error (the guards were
         # narrowed to their real job, not widened into acceptance).
         doc = _bc_oracle("G", _bc_idx("w1", "i", "j", "k"))   # 3 subscripts into 1-D w1
-        err = _bc_err(() -> E.Internal.build(doc))
+        err = caught(() -> E.Internal.build(doc))
         @test err isa E.TreeWalkError
         @test err.code == "E_TREEWALK_INDEX_NDIM"
     end

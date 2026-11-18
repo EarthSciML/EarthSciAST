@@ -151,8 +151,8 @@ end
         # of what is not implemented: it is the specialty compiler that needs a
         # heavy external dependency, so the answer is `compiler_unavailable`
         # naming Reactant in a session without it, and a BUILD in a session with
-        # it (test/compiler_xla_test.jl gates that arm, under
-        # `ESM_TEST_REACTANT=1`). The two arms must never trade places — an
+        # it (test/reactant/compiler_xla_test.jl gates that arm, in the
+        # Reactant suite). The two arms must never trade places — an
         # unavailable compiler that quietly became `compiler_unknown` would tell
         # a caller the vocabulary had shrunk.
         @test Base.get_extension(EarthSciAST, :EarthSciASTReactantExt) === nothing
@@ -276,8 +276,8 @@ end
     # ── observed_field, native vs the interpreter oracle ────────────────────
     # Reading an observed is one of the evaluations §2.5.10 puts under the
     # refusal rule, so `native` must compile it rather than walk it per cell —
-    # and a SHAPELESS observed, whose single cell has no output index to bind,
-    # is the shape whose compile-once form used to be declined outright.
+    # including a SHAPELESS observed, whose single cell has no output index to
+    # bind.
     # `:interpreter` is the simple oracle: it walks, deliberately, and it is
     # not written to agree with the compiled path, which is what makes the
     # comparison worth making. `:native` is the universally available default;

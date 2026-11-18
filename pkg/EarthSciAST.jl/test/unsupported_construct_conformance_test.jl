@@ -4,19 +4,14 @@
 #
 # Drives the shared manifest at `tests/conformance/unsupported_construct/`. The
 # tree-walk evaluator serves both `simulate` and `run_inline_tests`, on scalar and
-# array documents alike. It used to drop both kinds of event without a word, so an
-# inline test reported the model's value as if no event existed (and, for an
-# array observed of a discrete event's unknown, "array state ... has no cells in
-# var_map"); it refused an implicit equation, but as the Julia-local
-# `E_TREEWALK_UNSUPPORTED_EQUATION` naming only the LHS's Julia type. Every
-# refusal case must now fail with `unsupported_construct` naming the construct and
-# the evaluator; the control must still run. The ModelingToolkit export runs all
-# three constructs and is not covered.
+# array documents alike. It must not drop an event silently and report the
+# model's value as if no event existed. Every refusal case must fail with
+# `unsupported_construct` naming the construct and the evaluator; the control must
+# still run. The ModelingToolkit export runs all three constructs and is not
+# covered.
 #
-# `flatten` also used to drop a REACTION SYSTEM's events outright, so the refusal
-# never fired for a reaction-system document and both the tree-walk evaluator and
-# the ModelingToolkit export ran it without its event; the two
-# `..._on_a_reaction_system` cases pin that.
+# `flatten` keeps a REACTION SYSTEM's events, so the refusal also fires for a
+# reaction-system document; the two `..._on_a_reaction_system` cases pin that.
 
 using Test
 using EarthSciAST

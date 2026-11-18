@@ -1,4 +1,4 @@
-# Loop-invariant hoisting on the affine access-kernel spine (ess-affine). A subtree
+# Loop-invariant hoisting on the affine access-kernel spine. A subtree
 # with no cell-varying access (only params, time, fixed state slots, fixed forcing,
 # literals) has the SAME value for every cell in a box, so `_build_acc_cse` hoists
 # it to a per-CALL scratch filled ONCE before the box loop — not once per cell. The
@@ -20,7 +20,6 @@ function _inv_build(model, ics; affine::Bool)
     )
     return (f!, u0, p, vm, rep.stats)
 end
-_du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
 
 # D(c[i]) = sin(2t)·c[i]  — sin(2t) invariant + time-varying → hoisted, re-evaluated.
 function _inv_time_model(N)
@@ -72,7 +71,7 @@ function _inv_none_model(N)
     return ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N), _ao1(body, "i", 1, N))])
 end
 
-@testset "affine invariant hoist ≡ per-cell (differential, ess-affine)" begin
+@testset "affine invariant hoist ≡ per-cell (differential)" begin
     @testset "time-varying invariant sin(2t) (N=$N)" for N in (8, 32)
         ics = Dict("M.c[$k]" => 1.0 + 0.1k for k in 1:N)
         fa, u0, pa, _, d = _inv_build(_inv_time_model(N), ics; affine = true)
@@ -80,7 +79,7 @@ end
         @test d.n_acc_inv_slots >= 1        # sin(2t) hoisted
         prev = nothing
         for t in (0.0, 0.37, 1.9, -2.5)
-            da = _du(fa, u0, pa, t); dr = _du(fr, u0, pr, t)
+            da = rhs_du(fa, u0, pa, t); dr = rhs_du(fr, u0, pr, t)
             @test da == dr                  # bit-identical
             @test da == sin(2t) .* u0       # correct, and re-evaluated at this t
             prev !== nothing && @test da != prev   # genuinely changes with t
@@ -93,7 +92,7 @@ end
         fa, u0, pa, _, d = _inv_build(_inv_param_model(N), ics; affine = true)
         fr, _, pr, _, _ = _inv_build(_inv_param_model(N), ics; affine = false)
         @test d.n_acc_inv_slots >= 1
-        @test _du(fa, u0, pa, 0.0) == _du(fr, u0, pr, 0.0)
+        @test rhs_du(fa, u0, pa, 0.0) == rhs_du(fr, u0, pr, 0.0)
     end
 
     @testset "fixed-state invariant s·s (N=$N)" for N in (8, 32)
@@ -104,7 +103,7 @@ end
         fa, u0, pa, vm, d = _inv_build(_inv_state_model(N), ics; affine = true)
         fr, u0r, pr, _, _ = _inv_build(_inv_state_model(N), ics; affine = false)
         @test d.n_acc_inv_slots >= 1
-        @test _du(fa, u0, pa, 0.0) == _du(fr, u0r, pr, 0.0)
+        @test rhs_du(fa, u0, pa, 0.0) == rhs_du(fr, u0r, pr, 0.0)
     end
 
     @testset "invariant slot count is N-independent" begin

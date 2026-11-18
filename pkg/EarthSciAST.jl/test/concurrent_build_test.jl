@@ -20,9 +20,6 @@ using EarthSciAST
 
 include("testutils.jl")
 
-_cb_D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_cb_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_cb_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
 _cb_sum(k, lo, hi, body) = Dict{String, Any}(
     "op" => "faq", "semiring" => "sum_product", "args" => Any[], "output_idx" => Any[],
     "ranges" => Dict{String, Any}(k => Any[lo, hi]), "expr" => body
@@ -46,19 +43,19 @@ function _cb_doc_state(N::Int)
                         "lhs" => Dict{String, Any}(
                             "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
                             "ranges" => Dict{String, Any}("i" => Any[1, N]),
-                            "expr" => _cb_D(_cb_ix("u", "i"))
+                            "expr" => jD(jidx("u", "i"))
                         ),
                         "rhs" => Dict{String, Any}(
                             "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
                             "ranges" => Dict{String, Any}("i" => Any[1, N]),
-                            "expr" => _cb_o("*", _cb_o("-", "r"), _cb_ix("u", "i"))
+                            "expr" => jop("*", jop("-", "r"), jidx("u", "i"))
                         )
                     ),
                     Dict{String, Any}(
-                        "lhs" => _cb_D("s"),
-                        "rhs" => _cb_sum("k", 1, N, _cb_o("*", _cb_ix("u", "k"), "x"))
+                        "lhs" => jD("s"),
+                        "rhs" => _cb_sum("k", 1, N, jop("*", jidx("u", "k"), "x"))
                     ),
-                    Dict{String, Any}("lhs" => _cb_o("ic", "s"), "rhs" => _cb_o("*", "s0", 2.0)),
+                    Dict{String, Any}("lhs" => jop("ic", "s"), "rhs" => jop("*", "s0", 2.0)),
                 ]
             )
         )
@@ -79,11 +76,11 @@ function _cb_doc_const(M::Int)
                 ),
                 "equations" => Any[
                     Dict{String, Any}(
-                        "lhs" => _cb_D("y"),
-                        "rhs" => _cb_o(
+                        "lhs" => jD("y"),
+                        "rhs" => jop(
                             "*", "k", _cb_sum(
-                                "m", 1, M, _cb_o(
-                                    "*", _cb_ix(
+                                "m", 1, M, jop(
+                                    "*", jidx(
                                         Dict{String, Any}(
                                             "op" => "const", "args" => Any[], "value" => W
                                         ), "m"
@@ -92,7 +89,7 @@ function _cb_doc_const(M::Int)
                             )
                         )
                     ),
-                    Dict{String, Any}("lhs" => _cb_o("ic", "y"), "rhs" => _cb_o("+", "y0", 1.0)),
+                    Dict{String, Any}("lhs" => jop("ic", "y"), "rhs" => jop("+", "y0", 1.0)),
                 ]
             )
         )

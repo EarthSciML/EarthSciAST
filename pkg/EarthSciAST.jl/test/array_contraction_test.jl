@@ -1,4 +1,4 @@
-# Whole-array contraction loop nest (ess-array-contraction).
+# Whole-array contraction loop nest.
 #
 # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` above the tier's
 # contracted-length floor compiles to ONE body node plus a flat output-slot
@@ -167,7 +167,7 @@ _ac_tally(t, k) = get(t, k, 0)
 # question of whether it fired at all.
 _ac_fired(t) = _ac_tally(t, :array_contraction_codegen)
 
-@testset "whole-array contraction nest (ess-array-contraction)" begin
+@testset "whole-array contraction nest" begin
 
     # The strict default TAKES this equation, because the nest it accepts is
     # emitted rather than walked, and the build's report says so by name. This is

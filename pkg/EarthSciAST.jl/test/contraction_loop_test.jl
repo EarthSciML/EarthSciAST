@@ -7,7 +7,7 @@
 #   * NUMERIC IDENTITY to the unrolled fold (bit-identical for a single contracted
 #     index — same accumulation order, seeded from 0̄);
 #   * BUILD SIZE is O(1) in the reduction length (the unroll is O(length)) —
-#     asserted via build time being ~flat in M while the unroll grows linearly;
+#     asserted on the size of the built right-hand side's object graph;
 #   * the loop preserves the zero-allocation `f!` hot path and differentiates
 #     (ForwardDiff) — the loop counter is an integer constant of the value type;
 #   * the const-array-gather-in-loop path (a loop var as a runtime subscript);
@@ -213,17 +213,13 @@ end
     end
 
     @testset "build size is O(1) in reduction length (loop) vs O(M) (unroll)" begin
-        # Warm up compilation once so the timing reflects build work, not JIT.
-        _cl_build(_cl_doc(16); loop = true); _cl_build(_cl_doc(16); loop = false)
-        t_loop(M) = @elapsed _cl_build(_cl_doc(M); loop = true)
-        t_unroll(M) = @elapsed _cl_build(_cl_doc(M); loop = false)
-        # Loop build time is ~flat in M; unroll grows ~linearly. Assert the loop
-        # build at large M is much faster than the unroll at the same M (a robust,
-        # machine-independent proxy for O(1)-vs-O(M) build IR size).
+        # The size of everything the built right-hand side holds: the loop
+        # build is the same object graph at every M, the unroll grows with M.
+        size_of(M; loop) = Base.summarysize(_cl_build(_cl_doc(M); loop = loop).f!)
         big = 4000
-        tl = min(t_loop(big), t_loop(big))
-        tu = min(t_unroll(big), t_unroll(big))
-        @test tl < tu / 5     # loop build ≥5× faster than unroll at M=4000
+        @test size_of(big; loop = true) == size_of(16; loop = true)
+        @test size_of(big; loop = false) > 5 * size_of(big; loop = true)
+        @test size_of(big; loop = false) > 5 * size_of(16; loop = false)
     end
 
     @testset "an admission floor above the length forces the unroll reference" begin
@@ -378,17 +374,19 @@ end
         end
     end
 
-    # Flat in M on both routes: the loop tier's, and the affine tier's, which no
-    # longer unrolls the reduction (its kernel folds it at run time) — an unroll
-    # would grow ~20× from M=8 (81 terms per cell) to M=40 (1681).
+    # Flat in M on both routes: the loop tier's, and the affine tier's, which
+    # folds the reduction at run time in its kernel rather than unrolling it (an
+    # unroll would grow ~20x from M=8, 81 terms per cell, to M=40, 1681). The
+    # built right-hand side is the same object graph, and the build reports the
+    # same structure, at both sizes.
     @testset "einsum build size is ~flat in M (loop, and the affine run-time fold)" begin
-        _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = true)     # warm
-        _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = false)
-        tl(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop = true)
-        tu(M) = @elapsed _cl_build2d(_cl_doc2d_arith(M), _cl_ics2d_a(); loop = false)
-        big = 40
-        @test min(tl(big), tl(big)) < 5 * min(tl(8), tl(8))
-        @test min(tu(big), tu(big)) < 5 * min(tu(8), tu(8))
+        for loop in (true, false)
+            small = _cl_build2d(_cl_doc2d_arith(8), _cl_ics2d_a(); loop = loop)
+            large = _cl_build2d(_cl_doc2d_arith(40), _cl_ics2d_a(); loop = loop)
+            @test Base.summarysize(large.f!) == Base.summarysize(small.f!)
+            @test large.report.stats == small.report.stats
+            @test length(large.report.kernels) == length(small.report.kernels)
+        end
     end
 
     # A contraction that indexes STATE at a contracted index (`src[k,l]`) now

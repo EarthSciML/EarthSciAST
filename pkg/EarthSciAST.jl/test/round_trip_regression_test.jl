@@ -5,13 +5,13 @@
 #    `reconstruct(::OpExpr)` kwargs, and `serialize_expression`'s emitted
 #    keys — adding a struct field without updating every site fails here.
 # 2. A parameter's `update` round-trips verbatim, handler descriptor and all
-#    (esm 1.0.0 §5.4/§5.5 relocated the 0.x event `functional_affect` onto the
-#    parameter it writes; the descriptor previously degraded into a bogus
-#    `{lhs: handler_id, rhs: 0.0}` affect equation), and the object-or-array
+#    (esm 1.0.0 §5.4/§5.5 puts the handler on the parameter it writes; the
+#    descriptor must not degrade into a `{lhs: handler_id, rhs: 0.0}` affect
+#    equation), and the object-or-array
 #    wire spelling of `update` is recovered from the rule count so the round
 #    trip is stable.
 # 3. Non-string categorical `index_sets` members round-trip with their
-#    original JSON types (previously re-emitted stringified).
+#    original JSON types, not stringified.
 
 using Test
 using JSON3
@@ -385,8 +385,7 @@ end
     @test emitted[2]["handler"]["handler_id"] == "h"
 
     # An event that writes the PARAMETER instead of the unknown is the
-    # `event_affects_parameter` defect (§5.4/§6.3.1) — the replacement for the
-    # 0.x `discrete_parameters` write channel, which no longer exists.
+    # `event_affects_parameter` defect (§5.4/§6.3.1).
     bad_model = ESM.Model(
         Dict(
             "x" => ModelVariable(UnknownVariable; default = 1.5),
@@ -499,7 +498,7 @@ end
     @test out["index_sets"]["fuel"]["members"] == ["grass", "shrub"]
 
     # Full save → load: the reloaded registry deep-equals the original
-    # (this previously failed: members came back as strings).
+    # (members do not come back as strings).
     buf = IOBuffer()
     write(buf, to_json(file))
     reloaded = load_string(IOBuffer(String(take!(buf))))

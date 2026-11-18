@@ -132,7 +132,6 @@ const ESM_Expr = EarthSciAST.ASTExpr
             int_var = "s", lower = NumExpr(0.0), upper = VarExpr("H")
         )
         c = canonicalize(agg)
-        # Previously ~11 of these were silently dropped by a hand-listed rebuild.
         @test c.semiring == "sum_product"
         @test c.int_var == "s" && c.lower == NumExpr(0.0) && c.upper == VarExpr("H")
         @test c.join == agg.join && c.filter !== nothing

@@ -108,7 +108,7 @@ end
     end
 
     # The corpus's own categorical lookup (esm-spec §9.3): a const table read
-    # at two enum-resolved subscripts, which both compilers used to reject.
+    # at two enum-resolved subscripts, which both compilers must accept.
     @testset "an enum-subscripted inline table (tests/valid)" begin
         r = _npf_agree(
             joinpath(

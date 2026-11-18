@@ -1,8 +1,8 @@
 # Foundation test for the access-kernel IR: hand-build structured (affine,
 # periodic, const-box, slot-table) kernels and check the evaluator is
 # BIT-IDENTICAL to a per-cell reference. Exercises _eval_acc / _run_acc_kernel!
-# and the access descriptor kinds, plus the codegen tier (the compiled runner that replaced the retired
-# Float64 lane tape) on the same hand-built kernels.
+# and the access descriptor kinds, plus the codegen tier (the compiled runner)
+# on the same hand-built kernels.
 using Test
 using EarthSciAST
 const E = EarthSciAST

@@ -57,10 +57,8 @@
 #     exemption. esm-schema.json defines both (`element_type` ∈ {Float32,
 #     Float64}, `array_type` e.g. "CuArray") and they select real behaviour —
 #     precision and array backend for the assembled problem — and §4.7.5 step 4
-#     says `domain` is the file's section UNCHANGED. Both Julia AND the Python
-#     oracle used to drop them at load (each round-tripping the loss back out);
-#     both were fixed on 2026-08-24 and the corpus regenerated, so these are
-#     ordinary compared fields now. A corpus-INDEPENDENT test still pins the
+#     says `domain` is the file's section UNCHANGED, so these are ordinary
+#     compared fields. A corpus-INDEPENDENT test also pins the
 #     pass-through on tests/valid/model_only.esm, which declares Float32 and is
 #     not a corpus fixture.
 #
@@ -785,13 +783,8 @@ end
     end
 
     @testset "domain element_type / array_type survive flatten" begin
-        # HISTORY: the corpus used to record BOTH as null for every case, because
-        # the Python oracle's `Domain` dataclass declared neither and dropped them
-        # at load (its round trip was lossy too). Julia had the SAME bug and it
-        # was fixed here in the same commit. The oracle was fixed on 2026-08-24
-        # and the corpus regenerated, so `element_type` / `array_type` are now
-        # compared per-case like any other field. §4.7.5 step 4: `domain` is the
-        # file's section UNCHANGED.
+        # `element_type` / `array_type` are compared per-case like any other
+        # field. §4.7.5 step 4: `domain` is the file's section UNCHANGED.
         #
         # What remains is the corpus-INDEPENDENT half.
         # tests/valid/model_only.esm declares `element_type: "Float32"`. It is not
@@ -808,11 +801,10 @@ end
     @testset "inert reaction species: no tendency, transported only" begin
         # `AtmosphericChemistry.OH` is declared as a species and touched by no
         # reaction, so its stoichiometric sum is EMPTY and esm-libraries-spec
-        # §4.6.1 emits no `D(OH,t)` for it. Julia used to emit `D(OH,t) = 0`
-        # instead, which made it a differential unknown that never moves; §6.3.1
-        # classifies by COMPLEMENT, so leaving the equation out is what makes it
-        # the ALGEBRAIC unknown it is. Julia was the 4-1 outlier here (Python,
-        # Rust, Go and TypeScript all omit) and §4.6.1 ruled against it.
+        # §4.6.1 emits no `D(OH,t)` for it. Emitting `D(OH,t) = 0` would make it
+        # a differential unknown that never moves; §6.3.1 classifies by
+        # COMPLEMENT, so leaving the equation out is what makes it the ALGEBRAIC
+        # unknown it is.
         #
         # `OH` does still get an equation in THIS document, from somewhere else:
         # it is a state, so §4.7.1 step 3's placeholder expansion gives it a
@@ -829,7 +821,7 @@ end
         eqs = flat.equations
         @test length(eqs) == 4
         # Position: OH FIRST, in `models` order ahead of the reaction system —
-        # agreeing with the corpus, where Julia used to have it last.
+        # agreeing with the corpus.
         @test _flhs(eqs) ==
             [canonical_expr_json(_fD("AtmosphericChemistry.$s")) for s in ("OH", "O3", "NO", "NO2")]
         # Transport alone, with no leading `0 +`.
@@ -845,9 +837,9 @@ end
                 _fe("*", "Transport.K_v", _fe("laplacian", oh; dim = "lev")),
             )
         )
-        # ... and every equation is the one the shared corpus records. The `-1 * rate` vs `-rate` rendering that used to separate O3
-        # and NO is gone: esm-libraries-spec §4.6.2 writes a loss of 1 as
-        # `-1 * rate` in every binding.
+        # ... and every equation is the one the shared corpus records:
+        # esm-libraries-spec §4.6.2 writes a loss of 1 as `-1 * rate` in every
+        # binding.
         corpus_case = first(
             c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
                 if String(c.id) == "full_coupled"
@@ -1029,10 +1021,10 @@ end
         # variable, so a bare endpoint has to be qualified first — a key against
         # `systems[1]`, a value against `systems[2]`.
         #
-        # This is not a hypothetical spelling: before the fix, every one of the
-        # eight `translate` maps in the shared fixture tree was authored bare and
-        # not one ever matched. The map missed, the bare-name fallback searched A
-        # for B's SHORT name and missed too, and the entry silently no-op'd.
+        # This is not a hypothetical spelling: the `translate` maps in the shared
+        # fixture tree are authored bare. Unqualified, the map misses, the
+        # bare-name fallback searches A for B's SHORT name and misses too, and
+        # the entry silently no-ops.
         doc(k, v) = """
         {"esm": "2.0.0",
          "metadata": {"name": "TranslateSpelling",
@@ -1297,10 +1289,6 @@ end
         # silently dropping the connector equation is the one outcome a coupling
         # mis-specification must not have — the document declares a coupling and
         # the flattened system carries no trace of it.
-        #
-        # This used to be pinned by `advanced_coupling`'s refusal. That fixture
-        # has been migrated to the §10.4 `variable_map` spelling, so the ruling
-        # would otherwise have lost its only test.
         doc = """
         {"esm": "2.0.0",
          "metadata": {"name": "MultiplicativeNoTendency",

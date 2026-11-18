@@ -8,8 +8,8 @@ using JSON3
 #   2. Schema-validate against data/esm-schema.json.
 #   3. Round-trip parse -> serialize -> parse and compare key fields.
 #
-# These fixtures are the concrete acceptance test for the gt-q4k schema
-# redesign — if any EarthSciData loader cannot be expressed, this test
+# These fixtures are the concrete acceptance test for the DataSource
+# schema — if any EarthSciData loader cannot be expressed, this test
 # suite fails and the gap should be escalated, not worked around.
 @testset "DataSource EarthSciData coverage fixtures" begin
     fixtures_dir = joinpath(@__DIR__, "fixtures", "data_sources")

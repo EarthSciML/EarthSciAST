@@ -86,16 +86,16 @@ _dm_k(offset) = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
 end
 
 # ════════════════════════════════════════════════════════════════════════════
-# The cadence CLASSIFIER must see a state reference wherever it hides (ess-5d1)
+# The cadence CLASSIFIER must see a state reference wherever it hides
 # ════════════════════════════════════════════════════════════════════════════
 # A discrete-cadence cache is filled with u = 0 / t = 0 and refilled only on a data
 # refresh, so a def that reaches a continuous state or `t` must NEVER be classified
 # discrete — it would freeze at u = 0 with no error. The classifier decides this with
-# a name-reachability closure over `_referenced_var_names`, which used to walk only
-# `args`/`expr_body`/`lower`/`upper`/`values`. A state read from an aggregate `filter`
-# predicate (a RUNTIME `ifelse(pred, term, 0̄)` guard — resolve.jl), a value-invention
-# `key` or an expression-valued dense `ranges`
-# bound was therefore INVISIBLE, and the def was silently frozen. Two layers now:
+# a name-reachability closure over `_referenced_var_names`. A state read from an
+# aggregate `filter` predicate (a RUNTIME `ifelse(pred, term, 0̄)` guard — resolve.jl),
+# a value-invention `key` or an expression-valued dense `ranges` bound is INVISIBLE
+# to a walk over only `args`/`expr_body`/`lower`/`upper`/`values`, and the def would
+# be silently frozen. Two layers:
 #   (a) the walker goes through the shared `child_exprs` enumeration → every field;
 #   (b) `_build_discrete_materializer!` CHECKS the compiled fill node for a state /
 #       `t` leaf, so a future classifier blind spot is a build error, not a wrong
@@ -125,7 +125,7 @@ _dmc_split(rhs) = first(
     )
 )       # scalar params
 
-@testset "cadence classifier sees state refs in every expression field (ess-5d1)" begin
+@testset "cadence classifier sees state refs in every expression field" begin
     @testset "control: a state-free, param-tainted aggregate IS still cut" begin
         # The whole point of the tier — this must not regress. No state anywhere.
         @test _dmc_split(_dmc_agg()) == Set(["Fcache"])
@@ -198,7 +198,7 @@ end
 # refuses to compile a fill node that reads `u` or `t`. Drive it directly with a
 # deliberately mis-classified def — this is exactly the shape the old classifier let
 # through, and it is what turned a wrong trajectory into a loud failure.
-@testset "discrete fill kernels are CHECKED state-free at build (ess-5d1)" begin
+@testset "discrete fill kernels are CHECKED state-free at build" begin
     raw = [1.0, 2.0, 3.0, 4.0]
     mk(pgather) = _DM_ESS._build_discrete_materializer!(
         _DM_ESS.DiscreteMaterializer(),

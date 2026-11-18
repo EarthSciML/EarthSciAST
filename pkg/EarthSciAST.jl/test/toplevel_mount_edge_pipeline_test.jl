@@ -8,11 +8,9 @@
 # resolved document; (3) the renamed `index_sets` merge into the mounting
 # registry, deep-equal-or-`subsystem_index_set_conflict`.
 #
-# Julia used to inline this form with a raw pre-pass that deferred all of §9.7
-# to the root, so step (1) never ran and step (3) skipped every axis whose
-# `size` was still a metaparameter expression. These tests pin the closed gap
-# AND the behaviour that must not change with it: the conflict still fires, and
-# the documents that redeclare everything today keep loading unchanged. Ported
+# These tests pin that step (1) runs at the mount and that step (3) merges an
+# axis whose `size` is still a metaparameter expression, AND that the conflict
+# still fires and documents that redeclare everything load unchanged. Ported
 # from `pkg/earthsci-ast-rs/tests/toplevel_mount_edge_pipeline.rs`.
 
 using Test
@@ -51,13 +49,6 @@ const _ASSEMBLER_SCOPED_LEAF = """
 """
 
 _tmp_write(dir, name, body) = (write(joinpath(dir, name), body); joinpath(dir, name))
-
-_err_or_nothing(f) = try
-    f()
-    nothing
-catch e
-    e
-end
 
 @testset "§4.7 edge pipeline at a top-level models.<k> {ref} mount" begin
 
@@ -122,7 +113,7 @@ end
             "index_sets":{"lev":{"kind":"interval","size":59}},
             "models":{"M":{"ref":"./leaf.esm"}}}"""
         )
-        err = _err_or_nothing(() -> EarthSciAST.load_path(host))
+        err = caught(() -> EarthSciAST.load_path(host))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT
         @test occursin("index_set_rename", err.message)   # the remedy
@@ -179,15 +170,13 @@ end
         # instead of failing at the edge. Only a ROOT document, which has no
         # enclosing scope, is strict.
         #
-        # This testset used to assert the opposite — `metaparameter_unbound` at
-        # the edge — because strictness turned on `_has_import_machinery`, a
-        # WHOLE-DOCUMENT boolean. That made the leaf below resolve or not
-        # resolve according to whether it declared ANY metaparameter (or
-        # imported any template library), even one nothing in the file reads:
-        # `UNRELATED` here is never referenced. §4.7 forbids exactly that — "a
-        # component's shape is not allowed to stop resolving because a shared
-        # expression was factored into a library it imports and never calls" —
-        # so the boolean is gone and the two leaves below must agree.
+        # Strictness must not turn on a WHOLE-DOCUMENT property such as whether
+        # the leaf declares ANY metaparameter (or imports any template library),
+        # even one nothing in the file reads: `UNRELATED` here is never
+        # referenced. §4.7 forbids exactly that — "a component's shape is not
+        # allowed to stop resolving because a shared expression was factored
+        # into a library it imports and never calls" — so the two leaves below
+        # must agree.
         dir = mktempdir()
         _tmp_write(
             dir, "leaf.esm", """
@@ -231,7 +220,7 @@ end
         # enclosing scope to close `n_rows`, so it is `metaparameter_unbound` —
         # a proper diagnostic, not a bare `MethodError: no method matching
         # Int64(::String)`. Widening the mount edge must not widen this.
-        err = _err_or_nothing(() -> EarthSciAST.load_path(joinpath(dir, "leaf.esm")))
+        err = caught(() -> EarthSciAST.load_path(joinpath(dir, "leaf.esm")))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.METAPARAMETER_UNBOUND
         @test occursin("n_rows", err.message)
@@ -324,19 +313,13 @@ end
     end
 
     @testset "a concrete restatement of a symbolic leaf axis is idempotent" begin
-        # FALSIFICATION 7, INVERTED — the restatement asymmetry is gone.
-        #
-        # This used to pin a refusal: a symbolic `size` reached the merge
-        # unfolded, so idempotence was SYNTACTIC. Restating the leaf's axis
-        # verbatim merged clean while restating it with the concrete number the
-        # name folds to was `subsystem_index_set_conflict` — even though the two
-        # say the same thing once the root closes, so the more concrete, more
-        # obviously-correct spelling was the one rejected.
-        #
-        # RFC `mount-edge-index-set-renaming.md` open question 2 settled that:
-        # the §4.7 merge runs POST-CLOSE and folds the contribution against the
-        # mounting document's closed environment before comparing, so both
-        # spellings fold to 7 and both are idempotent. All five bindings agree.
+        # Restating the leaf's symbolic axis with the concrete number the name
+        # folds to says the same thing as restating it verbatim once the root
+        # closes, so both must merge clean. Per RFC
+        # `mount-edge-index-set-renaming.md` open question 2, the §4.7 merge runs
+        # POST-CLOSE and folds the contribution against the mounting document's
+        # closed environment before comparing, so both spellings fold to 7 and
+        # both are idempotent. All five bindings agree.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _ASSEMBLER_SCOPED_LEAF)
         host = _tmp_write(
@@ -351,15 +334,12 @@ end
     end
 
     @testset "the two mount forms agree on two identical declarations" begin
-        # esm-spec §4.7 "Two mount forms, one mechanism", pinned where this
-        # binding used to break it: an assembly and the leaf it mounts declaring
-        # the SAME metaparameter and the SAME axis sized by it. Julia accepted
-        # that at a `subsystems.<k>` mount and refused it with
-        # `subsystem_index_set_conflict` at the top-level `models.<k>` mount,
-        # because the top-level inliner merged BEFORE the root's close while the
-        # subsystem path merged after it. Both now defer to the same post-close
-        # merge point, so the two forms answer the same document identically —
-        # which is also issue #198's report.
+        # esm-spec §4.7 "Two mount forms, one mechanism": an assembly and the
+        # leaf it mounts declaring the SAME metaparameter and the SAME axis sized
+        # by it. The `subsystems.<k>` mount and the top-level `models.<k>` mount
+        # both defer to the same post-close merge point, so the two forms answer
+        # the same document identically (issue #198) — neither may merge BEFORE
+        # the root's close and refuse with `subsystem_index_set_conflict`.
         dir = mktempdir()
         _tmp_write(
             dir, "leaf.esm",
@@ -398,10 +378,10 @@ end
         # Step (1) again: the edge's `expression_template_imports` go into the
         # LEAF's own scope BEFORE it resolves, so the §9.6.3 fixpoint lowers its
         # rewrite-targets at the mount — the same thing the `subsystems.<k>` edge
-        # does with the same fixtures (`scope_injection_test.jl`, "form A"). The
-        # inliner used to append them to the spliced model instead and defer the
-        # resolution to the root, which is observationally close but is not the
-        # edge pipeline: nothing of the leaf closed at the mount.
+        # does with the same fixtures (`scope_injection_test.jl`, "form A").
+        # Appending them to the spliced model and deferring the resolution to
+        # the root would be observationally close but is not the edge pipeline:
+        # nothing of the leaf would close at the mount.
         conf = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "conformance",
             "expression_templates", "inject_subsystem_ref"

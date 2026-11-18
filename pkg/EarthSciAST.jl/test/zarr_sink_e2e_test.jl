@@ -105,8 +105,8 @@ using OrdinaryDiffEqTsit5: Tsit5
 end
 
 # The 0-D case, end to end through the REAL sink and the REAL reader
-# (streaming-output-sinks RFC §16.12). This is the evidence that the synthetic
-# `<base>_d0` singleton axis a scalar used to carry was never load-bearing: the
+# (streaming-output-sinks RFC §16.12). This is the evidence that a scalar needs no
+# synthetic `<base>_d0` singleton axis: the
 # `ZarrSink` -> `write_record!` -> Zarr v3 path already writes rank-1
 # `[time_dim]` arrays (the time coordinate is one), so a scalar variable whose
 # only on-disk axis IS the record axis writes, commits and reads back unchanged.

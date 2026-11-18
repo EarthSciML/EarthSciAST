@@ -311,8 +311,8 @@ using JSON3
         @test !is_valid_identifier("1abc")
         @test !is_valid_identifier("α-β")
         @test !is_valid_identifier("")
-        # Regression: used to throw StringIndexError via byte-indexed
-        # `name[2:end]` when the first character was multi-byte.
+        # A multi-byte first character must not throw StringIndexError (no
+        # byte-indexed `name[2:end]`).
         @test validate_reference_syntax("αmodel.β")
     end
 

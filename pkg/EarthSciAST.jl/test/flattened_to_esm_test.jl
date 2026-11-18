@@ -1,6 +1,6 @@
 # Tests for the lossless-flatten + FlattenedSystem→runnable-document path:
 #   - `reconstruct` keeps every OpExpr field across structural rewrites (so
-#     substitute / namespace_expr / simplify are no longer lossy);
+#     substitute / namespace_expr / simplify are not lossy);
 #   - `flatten` carries the document-scoped index-set registry on the
 #     FlattenedSystem;
 #   - `flattened_to_esm` reconstitutes a single runnable document, and a deep

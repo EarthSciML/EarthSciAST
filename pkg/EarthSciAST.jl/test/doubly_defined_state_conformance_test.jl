@@ -4,11 +4,11 @@
 # `D(x, t) ~ f` beside `x ~ g` is two equations for one unknown (esm-spec
 # §4.9.4), so the document is unbalanced and `validate` reports
 # `equation_count_mismatch`. The ruling this category pins is that the BUILD says
-# the same thing. This binding used to leave both equations standing —
-# `algebraic_states_to_observeds` keeps a doubly-defined name a STATE — and then
+# the same thing. Leaving both equations standing —
+# `algebraic_states_to_observeds` keeps a doubly-defined name a STATE — would
 # fail deep in classification with the Julia-local
-# `E_TREEWALK_UNSUPPORTED_EQUATION: VarExpr`, which named neither the unknown nor
-# either equation. Every refusal case must now fail with `equation_count_mismatch`
+# `E_TREEWALK_UNSUPPORTED_EQUATION: VarExpr`, which names neither the unknown nor
+# either equation. Every refusal case must fail with `equation_count_mismatch`
 # naming the unknown and both equations; the controls must still run.
 #
 # The ModelingToolkit route is a code GENERATOR here (`to_julia_code`), not a

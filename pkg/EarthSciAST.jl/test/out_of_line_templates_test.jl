@@ -253,8 +253,8 @@ end
         @test _names(root["models"]["B"]["equations"]) == ["B.outer_stencil"]
 
         # The executing path: the typed FlattenedSystem's registry agrees, and
-        # every surviving reference resolves against it — `expand_flattened_refs`
-        # is the call that threw before the fix.
+        # every surviving reference resolves against it, so `expand_flattened_refs`
+        # does not throw.
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture.esm")))
         @test Set(keys(flat.template_registry)) == Set(keys(merged))
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem

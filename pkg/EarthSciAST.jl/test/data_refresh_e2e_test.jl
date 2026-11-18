@@ -1,4 +1,4 @@
-# End-to-end + zero-alloc + cadence loader-refresh tests (ess-14f.6, JL-J3).
+# End-to-end + zero-alloc + cadence loader-refresh tests.
 #
 # `build_refresh_callback` is the `PresetTimeCallback` whose `affect!` samples a
 # Provider and writes the live forcing buffer in place (native forcing straight
@@ -10,14 +10,14 @@
 # cadence contract end to end.
 #
 # It is the Julia sibling of the Rust driver-level harness `segmented_refresh_solve`
-# (ess-14f.11) and the Python e2e (ess-2fy). Julia's idiom differs: where the Rust
+# and the Python e2e. Julia's idiom differs: where the Rust
 # driver runs a manual segment-by-segment loop, Julia hands the user a single
 # `PresetTimeCallback` + tstops and runs ONE `solve` — the `affect!` fires the
 # refresh at each cadence anchor. So this file is, like the Rust one, a documented
 # integration test that exercises the consumer surface; it adds NO library API
 # (`[[library-exposes-rhs-not-solver]]` holds — the solver is a test-only dep).
 #
-# Acceptance clauses (bead ess-14f.6) and where each is pinned:
+# Acceptance clauses and where each is pinned:
 #   • e2e refresh over a fixture — a coupled, discretized, non-PDE forced model is
 #     LOADED from `fixtures/refresh/coupled_forced.esm`, wired to a Provider, and
 #     integrated; the coupled closed form is matched to solver tol
@@ -40,7 +40,7 @@ using DiffEqCallbacks            # loads EarthSciASTCallbacksExt
 using SciMLBase                  # ext co-trigger (u_modified!)
 import OrdinaryDiffEqTsit5 as ODE  # Tsit5 + ODEProblem + solve (test-only solver dep)
 
-include("testutils.jl")  # rhs_alloc_bytes (via zero_alloc_harness.jl) — the JL-J0 zero-alloc probe
+include("testutils.jl")  # rhs_alloc_bytes (via zero_alloc_harness.jl) — the zero-alloc probe
 
 const ESM = EarthSciAST
 
@@ -79,7 +79,7 @@ function _coupled_ics()
     return ics
 end
 
-@testset "loader-refresh e2e + zero-alloc + cadence (ess-14f.6, JL-J3)" begin
+@testset "loader-refresh e2e + zero-alloc + cadence" begin
 
     @testset "e2e: coupled forced model over a fixture matches the closed form" begin
         # The fixture (loaded, not hand-built): two coupled states over i ∈ [1,3].

@@ -303,8 +303,8 @@ using EarthSciAST
 
         # A name the model does not declare stays a clean error.
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.NOPE")
-        # The 0.x through-the-loader path no longer resolves at all: there is no
-        # `I3` subsystem to traverse, because a source cannot be one.
+        # A through-the-loader path does not resolve: there is no `I3`
+        # subsystem to traverse, because a source cannot be one.
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_file, "GEOSFP.I3.PS")
 
         # The binding travels with the consuming parameter, and the derived

@@ -1,10 +1,9 @@
-# Live forcing-buffer gather: _NK_PARAM_GATHER / _VK_PGATHER (ess-14f.3, JL-J0).
+# Live forcing-buffer gather: _NK_PARAM_GATHER / _VK_PGATHER.
 #
-# The evaluator change that lets a discrete-cadence forcing buffer be read LIVE by
-# the RHS. Unlike `const_arrays` (build-time FROZEN — `index(arr,…)` const-folds to
+# A discrete-cadence forcing buffer is read LIVE by the RHS. Unlike `const_arrays` (build-time FROZEN — `index(arr,…)` const-folds to
 # a literal), a buffer passed via `param_arrays` is bound BY REFERENCE: its
 # `index(forcing,…)` reads compile to a live gather over an aliased flat view, so a
-# refresh callback's in-place `buffer .= …` (the ess-14f.3 J1 callback) shows
+# refresh callback's in-place `buffer .= …` shows
 # through to the RHS with zero reallocation.
 #
 # These tests pin: (1) the live-refresh semantics scalar + vectorized; (2)
@@ -20,7 +19,7 @@ include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
 const ESM = EarthSciAST
 
-@testset "live forcing gather _NK_PARAM_GATHER / _VK_PGATHER (ess-14f.3)" begin
+@testset "live forcing gather _NK_PARAM_GATHER / _VK_PGATHER" begin
 
     @testset "scalar gather reads live + reflects in-place refresh" begin
         # D(y) = forcing[2]
@@ -158,10 +157,8 @@ const ESM = EarthSciAST
         @test du == Float64[2.0 * buf[i] for i in 1:N]
     end
 
-    @testset "a CSE'd expression over the buffer still reads it LIVE (ess-qic)" begin
-        # A live gather used to make `_cse_key` throw (its `_PGatherRef` payload is not
-        # canonicalizable), so CSE silently declined every expression above a forcing
-        # buffer. It is now keyed by (buffer name, offset) and CAN be hoisted into the
+    @testset "a CSE'd expression over the buffer still reads it LIVE" begin
+        # A live gather is keyed by (buffer name, offset) and CAN be hoisted into the
         # prelude. That is only sound if the hoist caches the value for exactly ONE
         # `f!` call — the prelude is refilled at the top of every call, and the buffer
         # cannot change mid-call — so the live-refresh contract above must survive the

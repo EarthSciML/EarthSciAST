@@ -38,7 +38,6 @@ function _ts_agrees(actual, expected, tol)
     return d <= a_tol || d <= r_tol * max(1.0, abs(expected))
 end
 
-_ts_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
 
 # A model importing `ref` with one state per call, `D(s_i) = <name>(bindings_i)`,
 # and each query a parameter; built once per compiler. The returned closure
@@ -87,15 +86,15 @@ function _ts_interp_call(name, inputs, tag)
     qx, qy = "qx_$tag", "qy_$tag"
     if name == "searchsorted"
         x, xs = inputs
-        return Dict{String, Any}("x" => qx, "xs" => _ts_const(xs), "n" => length(xs)), Dict(qx => x)
+        return Dict{String, Any}("x" => qx, "xs" => jconst(xs), "n" => length(xs)), Dict(qx => x)
     elseif name == "linear"
         table, axis, x = inputs
-        b = Dict{String, Any}("table" => _ts_const(table), "axis" => _ts_const(axis), "x" => qx, "n" => length(axis))
+        b = Dict{String, Any}("table" => jconst(table), "axis" => jconst(axis), "x" => qx, "n" => length(axis))
         return b, Dict(qx => x)
     end
     table, ax, ay, x, y = inputs
     b = Dict{String, Any}(
-        "table" => _ts_const(table), "axis_x" => _ts_const(ax), "axis_y" => _ts_const(ay),
+        "table" => jconst(table), "axis_x" => jconst(ax), "axis_y" => jconst(ay),
         "x" => qx, "y" => qy, "nx" => length(ax), "ny" => length(ay)
     )
     return b, Dict(qx => x, qy => y)
