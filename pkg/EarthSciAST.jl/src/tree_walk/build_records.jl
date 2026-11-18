@@ -73,6 +73,22 @@ struct _VariableClasses
     gated_geom_vars::Set{String}
 end
 
+# The mechanism that owns `name` when it carries no ODE partition slot, by the
+# order in which the build settles ownership; `nothing` for a variable the
+# partition places (a state, a scalar parameter or observed, or an array
+# parameter backed by data). `vi_vars` are the value-invention outputs, which
+# are materialized at setup before the build runs.
+function _partition_owner(cls::_VariableClasses, vi_vars, name::String)
+    name in vi_vars && return :value_invention
+    name in cls.geom_setup_vars && return :setup_array
+    name in cls.geom_inline_vars && return :inlined_geometry
+    name in cls.array_inline_vars && return :inlined_array
+    name in cls.discrete_vars && return :discrete_cache
+    name in cls.folded_array_obs && return :folded_observed
+    name in cls.const_obs_vars && return :const_data
+    return nothing
+end
+
 # Phase 2: the ODE partition, the parameter scope, the setup arrays and the
 # rewritten equation stream.
 struct _EquationPartition

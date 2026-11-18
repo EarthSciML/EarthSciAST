@@ -688,23 +688,14 @@ end
 
 # ---- Stage: variable partition ----
 # Split `model.variables` into the ODE partition: scalar parameter names
-# (sorted), scalar observed names, and state-variable names. Variables owned by
-# a setup/inline/fold mechanism (value invention, geometry setup, live-field or
-# promoted inlining, WS4 folds, const-op arrays) carry no partition slot.
-# Array-shaped parameters must be array-backed (const data or a live
-# `param_arrays` buffer — the scalar `p` NamedTuple stays homogeneous Float64,
-# see the JL-J0 note); an array-shaped observed must be owned by one of those
-# mechanisms. The ownership-exclusion sets are keyword-only:
-# they are all same-typed `Set{String}`s, so positional passing could silently
-# swap two of them. Returns `(param_names, observed_names, state_var_names)`.
+# (sorted), scalar observed names, state-variable names, and the scalar
+# parameters whose value arrives as data. A variable a build mechanism owns
+# (`_partition_owner`) carries no partition slot. An array-shaped parameter must
+# be array-backed (const data or a live `param_arrays` buffer; the scalar `p`
+# tuple stays homogeneous Float64); an array-shaped observed must be owned.
 function _partition_variables(
-        model::Model;
-        vi_vars, geom_setup_vars,
-        geom_inline_vars, array_inline_vars,
-        folded_array_obs, const_obs_vars,
-        const_arrays::AbstractDict,
-        param_arrays::AbstractDict,
-        discrete_vars = Set{String}()
+        model::Model, cls::_VariableClasses;
+        vi_vars, const_arrays::AbstractDict, param_arrays::AbstractDict
     )
     param_names = String[]
     observed_names = String[]
@@ -712,33 +703,13 @@ function _partition_variables(
     # Scalar parameters whose value arrives as data (`_scalar_supplied_data`),
     # with their build-time value; they take no `p` slot.
     supplied_scalars = Dict{String, Float64}()
-    # The unknown split is DERIVED (esm-spec §6.3.1). An ODE state or an
-    # algebraic unknown occupies a partition slot the solver integrates or
-    # solves; an observed unknown is eliminable and gets the observed bucket.
-    # Both were the declared `state` / `observed` types before 1.0.0.
+    # The unknown split is derived (esm-spec §6.3.1): an ODE state or an
+    # algebraic unknown occupies a slot the solver integrates or solves; an
+    # observed unknown is eliminable and gets the observed bucket.
     observed_here = Set{String}(observed_unknowns(model))
     unknown_state_names = Set{String}(solver_unknowns(model))
     for (name, v) in model.variables
-        # Value-invention outputs (distinct sets, key columns) are materialized
-        # once at setup (RFC §6.1) and never enter the ODE — drop them from every
-        # partition.
-        name in vi_vars && continue
-        # Geometry-setup vars are materialized at setup; not an ODE partition member.
-        name in geom_setup_vars && continue
-        # Live-field geometry observeds (F_tgt …) and promoted array observeds are
-        # inlined into their readers (ess-14f.4 / shape-promotion); no partition slot.
-        name in geom_inline_vars && continue
-        name in array_inline_vars && continue
-        # Discrete-cadence materialized array observeds: cut out of the per-step RHS
-        # into a cache buffer (filled per refresh) and gathered via `pgather`; like
-        # an inline var, they carry no ODE partition slot.
-        name in discrete_vars && continue
-        # Elementwise array observeds folded into their readers (WS4): their
-        # defining equation is gone and their value lives inline in the state RHS.
-        name in folded_array_obs && continue
-        # const-op array observeds (in-file ring stacks / source fields) are
-        # materialized into const_arrays; build-time data, not a partition member.
-        name in const_obs_vars && continue
+        _partition_owner(cls, vi_vars, name) === nothing || continue
         if name in unknown_state_names
             push!(state_var_names, name)
         elseif v.type == ParameterVariable

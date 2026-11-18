@@ -180,14 +180,7 @@ function _build_partition_and_materialize(
     )
     # ---- Partition variables ----
     param_names, observed_names, state_var_names, supplied_scalars = _partition_variables(
-        model;
-        vi_vars = vi_vars, geom_setup_vars = cls.geom_setup_vars,
-        geom_inline_vars = cls.geom_inline_vars,
-        array_inline_vars = cls.array_inline_vars,
-        folded_array_obs = cls.folded_array_obs,
-        const_obs_vars = cls.const_obs_vars,
-        const_arrays = const_arrays, param_arrays = param_arrays,
-        discrete_vars = cls.discrete_vars
+        model, cls; vi_vars = vi_vars, const_arrays = const_arrays, param_arrays = param_arrays
     )
 
     # ---- Scalar parameter scope (load-time constants) ----
