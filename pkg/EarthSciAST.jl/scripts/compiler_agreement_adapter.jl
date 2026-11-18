@@ -379,15 +379,16 @@ function fixture_trajectory(fx, base, compiler)
     )
 end
 
-# The refusal's `rule` and `reason`. The rule is the error's own `rule` field;
-# the reason is the message after the `compiler=:<name> refuses '<rule>': `
-# prefix `_refuse_rule` writes (esm-libraries-spec §2.5.10), or the whole
-# message when it carries no such prefix. A refusal that names no rule is
-# reported under an unnamed rule instead of being dropped.
-function refusal_parts(err::TreeWalkError)
-    isempty(err.rule) && return ("(unnamed rule)", err.detail)
-    at = findfirst("refuses '$(err.rule)': ", err.detail)
-    return (err.rule, at === nothing ? err.detail : err.detail[(last(at) + 1):end])
+# The refusal's `rule` and `reason`, read off the error (`outcome`): the rule
+# is its `rule` field, the reason its detail after the
+# `compiler=:<name> refuses '<rule>': ` prefix `_refuse_rule` writes
+# (esm-libraries-spec §2.5.10), or the whole detail when it carries no such
+# prefix. A refusal that names no rule is reported under an unnamed rule
+# instead of being dropped.
+function refusal_parts(o)
+    isempty(o.rule) && return ("(unnamed rule)", o.detail)
+    at = findfirst("refuses '$(o.rule)': ", o.detail)
+    return (o.rule, at === nothing ? o.detail : o.detail[(last(at) + 1):end])
 end
 
 function main()
@@ -403,17 +404,16 @@ function main()
         try
             fixtures[id] = fixture_trajectory(fx, base, compiler)
         catch err
-            if err isa SimulateError &&
-                    err.code == ERROR_CODES.COMPILER_UNAVAILABLE
+            o = outcome(err)
+            if o.kind === :unavailable
                 # A fact about the BINDING, not about a document, so it becomes
                 # the whole output and the remaining fixtures are not attempted:
                 # each would raise the identical error, and a per-fixture answer
                 # would read as a coverage backlog instead of a missing compiler.
-                unavailable = err.msg
+                unavailable = o.detail
                 break
-            elseif err isa TreeWalkError &&
-                    err.code == ERROR_CODES.COMPILER_REFUSED_RULE
-                rule, reason = refusal_parts(err)
+            elseif o.code == ERROR_CODES.COMPILER_REFUSED_RULE
+                rule, reason = refusal_parts(o)
                 fixtures[id] = Dict(
                     "status" => "refused",
                     "rule" => rule, "reason" => reason

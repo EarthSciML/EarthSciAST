@@ -826,12 +826,12 @@ end
 # that injects a discretization runs against an EPHEMERAL instance of
 # component `mname` with the test's imports appended to its scope and its
 # rewrite-targets lowered; the persisted `file` is never mutated. A test with
-# no injection runs against the file as loaded. Returns the failure message
-# `String` when the ephemeral build could not be built.
+# no injection runs against the file as loaded. Returns an `_EngineFailure`
+# when the ephemeral build could not be built.
 function _resolve_test_target(
         file::EsmFile, input, mname::AbstractString, t,
         resolved_base::AbstractString
-    )::Union{EsmFile, String}
+    )::Union{EsmFile, _EngineFailure}
     isempty(t.expression_template_imports) && return file
     try
         src = input isa AbstractString ? String(input) : nothing
@@ -841,8 +841,7 @@ function _resolve_test_target(
         )
     catch err
         err isa InterruptException && rethrow()
-        return "per-test discretization injection failed: " *
-            "$(sprint(showerror, err))"
+        return _EngineFailure("per-test discretization injection failed: ", err)
     end
 end
 
@@ -1030,7 +1029,7 @@ end
 
 function _engine_setup(e::SimulateTestEngine, t)
     target = _resolve_test_target(e.file, e.input, e.mname, t, e.resolved_base)
-    target isa String && return target   # injection failed
+    target isa _EngineFailure && return target   # injection failed
     times = sort!(unique(Float64[a.time for a in t.assertions]))
     local prob, sim
     try
@@ -1072,12 +1071,12 @@ function _engine_setup(e::SimulateTestEngine, t)
             )
     catch err
         err isa InterruptException && rethrow()
-        return "simulation failed: $(sprint(showerror, err))"
+        return _EngineFailure("simulation failed: ", err)
     end
     # `retcode` is a SciML `ReturnCode` (§2.5.3); compare it by name so this
     # core file stays solver-free.
     Symbol(sim.retcode) === :Success ||
-        return "solver retcode $(sim.retcode)"
+        return _EngineFailure("solver retcode $(sim.retcode)", nothing)
     return _SimulateHandle(
         sim, prob.var_map, prob.build.products, target,
         Dict{String, String}(prob.merged_renames),
@@ -1203,7 +1202,8 @@ end
 # indistinguishable from one that passed.
 _load_failure_result(path::AbstractString, err) = AssertionResult(
     String(path), :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
-    ERROR, "load failed: $(sprint(showerror, err))", 0.0
+    ERROR, "load failed: $(sprint(showerror, err))", 0.0, nothing, 0.0, 0.0,
+    error_code(err)
 )
 
 # Fold one document's `InlineTestOptions` onto the call-level defaults: a field
