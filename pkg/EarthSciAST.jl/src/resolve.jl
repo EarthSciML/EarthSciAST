@@ -1265,12 +1265,8 @@ function _resolve_mount_edge_core(
     # the assembler carrying the edge, so they absolutize against THIS
     # document's directory, not the leaf's.
     edge_imports = get(entry, "expression_template_imports", nothing)
-    injected = Any[]
-    if edge_imports isa AbstractVector && !isempty(edge_imports)
-        imports_native = _to_ordered(edge_imports)
-        _absolutize_nested_refs!(imports_native, base_path)
-        injected = Any[e for e in imports_native]
-    end
+    injected = edge_imports isa AbstractVector ?
+        _anchor_injected_imports(edge_imports, base_path) : Any[]
     injected_root = apply_scope_injections(comp, injected)
     injected_root === nothing || (comp = injected_root)
 
@@ -1849,6 +1845,30 @@ function _inline_toplevel_form!(
 end
 
 """
+    _anchor_injected_imports(imports, base_path) -> Vector{Any}
+
+Copies of a mount edge's §9.7.10 form-A `expression_template_imports` entries
+with each `ref` anchored at `base_path`, the directory of the document that
+carries the edge (esm-spec §4.7: a relative ref resolves against the
+referencing file). `\${VAR}` tokens and the `esm:std/` form are expanded first;
+a relative ref inside a URL-loaded document joins onto its URL base. Both mount
+routes, the native inliner and the typed `resolve_subsystem_refs!` walk, call
+this, so the leaf's own directory never anchors an injected ref.
+"""
+function _anchor_injected_imports(imports::AbstractVector, base_path::AbstractString)
+    out = Any[]
+    for entry in imports
+        e = _to_ordered(entry)
+        r = e isa AbstractDict ? get(e, "ref", nothing) : nothing
+        if r isa AbstractString
+            e["ref"] = _canonical_ref(_expand_ref_env(r, base_path), String(base_path))
+        end
+        push!(out, e)
+    end
+    return out
+end
+
+"""
     _absolutize_nested_refs!(node, compdir)
 
 Rewrite every relative `{"ref": "..."}` under `node` to an absolute path anchored
@@ -2245,13 +2265,15 @@ function _resolve_subsystem_ref(
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
     # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
+    # The entries are written by THIS document, so their refs are anchored at
+    # its directory before the leaf's load sees them.
     loaded = _load_ref(
         ref.ref, base_path, visited;
         metaparameters = ref.bindings,
         api_meta = api_meta,
         forwarded = forwarded,
         enclosing_env = root_env,
-        injected_imports = ref.expression_template_imports,
+        injected_imports = _anchor_injected_imports(ref.expression_template_imports, base_path),
         index_set_rename = ref.index_set_rename,
         rename_where = "subsystem ref '$(ref.ref)'",
         precision = precision
