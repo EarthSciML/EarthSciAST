@@ -571,3 +571,23 @@ end
     print_math(Dict("op" => "+", "args" => Any["a", 1]), ["a"], :markdown)
     @test !haskey(task_local_storage(), key)
 end
+
+@testset "math keyword lists agree with the surfaces' spellings" begin
+    # Each list below ports one Lean definition (Math.atomStart, Latex.atomEnd,
+    # Math.isBin, Source.delta), so they stay separate; these checks keep them
+    # consistent with the spellings the lexers are derived from.
+    DF = EarthSciAST.DocumentFormats
+    MT = DF.MToken
+    spelled(k) = haskey(DF.MLatex.KW_CHARS, k) || haskey(DF.MTypst.KW_CHARS, k)
+    @test all(spelled, instances(MT.Kw))
+    @test all(spelled, DF.MParse.ATOM_KWS)
+    @test all(spelled, DF.MLatex.ATOM_END_KWS)
+    @test all(spelled, DF.MSurface.BIN_KWS)
+    @test length(DF.SMultiLine.OPENS) == length(DF.SMultiLine.CLOSES)
+    @test isempty(intersect(DF.SMultiLine.OPENS, DF.SMultiLine.CLOSES))
+    @test all(spelled, DF.SMultiLine.OPENS) && all(spelled, DF.SMultiLine.CLOSES)
+    # A keyword that starts an operand never ends one, and no binary operator
+    # is either.
+    @test isempty(intersect(DF.MParse.ATOM_KWS, DF.MLatex.ATOM_END_KWS))
+    @test isempty(intersect(DF.MSurface.BIN_KWS, DF.MParse.ATOM_KWS))
+end

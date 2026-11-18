@@ -83,6 +83,7 @@ const GROUPS = [
         "arrayed_vars_test.jl",
         "canonicalize_test.jl",
         "document_format_test.jl",
+        "document_lean_refs_test.jl",
         "deprecated_ops_test.jl",
         "relational_test.jl",
     ],
