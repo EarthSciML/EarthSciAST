@@ -36,9 +36,9 @@
 # FILE LAYOUT. The evaluator is split along its numbered section seams into
 # the files below (under src/tree_walk/), included here in the original
 # definition order. Definitions used at include time (structs, consts) must
-# stay before their include-time uses — in particular `_Node`/`_BuildMemo`/
-# `_MaybeMemo` (compile.jl) precede the `_resolve_indices` signatures
-# (resolve.jl). The build pipeline
+# stay before their include-time uses — in particular `_Node` (node.jl) and
+# `_BuildMemo`/`_MaybeMemo` (compile.jl) precede the `_resolve_indices`
+# signatures (resolve.jl). The build pipeline
 # (tree_walk/build_*.jl) is included after the compile layer, so its
 # signatures may name compile-layer types; only its records
 # (build_records.jl) and the run-time types a kernel dispatches on
@@ -49,13 +49,19 @@ include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* co
 include("tree_walk/op_ladder.jl")        #      the operator ladder generator (op registry shapes)
 include("tree_walk/cadence_stamp.jl")    #      parameter stamps + the per-build forcing epoch
 include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
+include("tree_walk/node.jl")             # §3   the `_Node` IR and its payload types
+include("tree_walk/dag.jl")              #      unique-node walks over a shared DAG
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
 include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
 include("tree_walk/build_records.jl")    #      the records a build hands back
 include("tree_walk/hoist.jl")            #      nested reductions lifted to internal observeds
-include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
+include("tree_walk/compile.jl")          # §3   expression → `_Node`
+include("tree_walk/prelude_cache.jl")    #      the scalar prelude cache and its stamps
+include("tree_walk/rhs_seams.jl")        #      value type, parameter read, Float32 guard
+include("tree_walk/scalar_cse.jl")       # §3b  scalar common-subexpression elimination
+include("tree_walk/scalar_walk.jl")      # §4   the compiled scalar walker
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
 include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
