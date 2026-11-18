@@ -131,7 +131,7 @@ function algebraic_states_to_observeds(flat::FlattenedSystem)::FlattenedSystem
     new_obs = OrderedDict{String, ModelVariable}(flat.observed_variables)
     for (k, v) in flat.state_variables
         if (k in alg_defined) && !(k in diff_states)
-            # Both sides are `unknown` from esm 1.0.0; the move between the
+            # Both sides are `unknown`; the move between the
             # FlattenedSystem's state and observed buckets IS the reclassification
             # (an algebraically-defined name is observed, esm-spec §6.3.1), so the
             # declared type is already right and the variable copies across as-is.
@@ -531,7 +531,7 @@ function _throw_declared_scalar_conflict(name, inferred, source::AbstractString)
     )
 end
 
-# Return a copy of a ModelVariable with a new (array) shape. From esm 1.0.0 the
+# Return a copy of a ModelVariable with a new (array) shape. The
 # rewritten `faq` EQUATION is the ONLY source of truth for a promoted
 # variable's definition — there is no scalar `expression` on the declaration
 # left to clear, so this is a shape change and nothing else.

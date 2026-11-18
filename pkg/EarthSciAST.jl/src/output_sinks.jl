@@ -257,7 +257,7 @@ end
         -> (cb, tstops::Vector{Float64})
 
 Build the streaming-output callback and its tstops, WITHOUT embedding a solver
-(`[[library-exposes-rhs-not-solver]]`) — the output-side mirror of
+— the output-side mirror of
 [`build_refresh_callback`](@ref). The callback is a pure function of the `sinks`
 and the `snapshot`/`pre_write` seams; it never reads the model. The caller attaches
 it to their own problem:

@@ -117,7 +117,7 @@ end
 
 Validate the equation/unknown balance of a model (esm-spec §4.9.4).
 
-From esm 1.0.0 the balance is stated over UNKNOWNS and EQUATIONS, not over a
+The balance is stated over UNKNOWNS and EQUATIONS, not over a
 declared `state` type: an unknown's behaviour is given by the equations and
 nowhere else, so a model is well-determined exactly when it writes one equation
 per unknown. An equation counts whichever LHS form it takes — a derivative

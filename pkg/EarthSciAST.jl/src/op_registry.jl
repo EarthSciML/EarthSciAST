@@ -122,7 +122,7 @@ The operator registry. **To add (or re-classify) an operator, edit this table**
 hand:
 
 - `_WS4_FOLDABLE_ELEMENTWISE_OPS` (src/tree_walk/build_helpers.jl) — elementwise
-  ops the WS4 array-observed fold may inline; every member MUST have a scalar
+  ops the array-observed fold may inline; every member MUST have a scalar
   arm in `_eval_node_op` (see the invariant comment at its definition site).
 - `_CSE_OPAQUE_OPS` (src/tree_walk/scalar_cse.jl) — ops `_compile` handles
   specially; CSE never hoists through them.
@@ -394,7 +394,7 @@ const _OP_TABLE = _OpSpec[
     #    names. They carry NO bespoke registry flag AT ALL — not even `cse=true`.
     #    Their membership in the open rewrite-target tier T (`_op_in_T`, via
     #    `_REWRITE_TARGET_OPS`, templates/rewrite.jl) is the SINGLE
-    #    source of both behaviours that used to need `cse=true`: (1)
+    #    source of two behaviours: (1)
     #    `_cse_hoistable` treats every T op as a non-hoistable CSE barrier,
     #    routing it to `_compile`/`_compile_op` instead of the guardless
     #    `_cse_rebuild` generic-node path; and (2) that path's GENERIC

@@ -270,7 +270,7 @@ end
 # the leaf.
 #
 # A bare name, or a dotted one that walks to no component, is returned
-# unchanged against `mname`, and the caller reports it exactly as before.
+# unchanged against `mname`, and the caller reports it.
 # Identical to the Python `_resolve_asserted_name` and the Rust
 # `resolve_asserted_name`.
 function _resolve_asserted_name(
@@ -1291,8 +1291,8 @@ nothing). It exists so that a corpus gate's basename-keyed tables — a
 stiff-solver map, an initial-condition seed — can stay in the gate instead of
 forcing it to re-implement §6.6 to get at them.
 
-A document that fails to LOAD throws when `inputs` names a single document,
-exactly as before. In a BATCH — an iterable or a directory — it instead
+A document that fails to LOAD throws when `inputs` names a single document.
+In a BATCH — an iterable or a directory — it instead
 contributes one ERROR row naming the path, so one unreadable file cannot cost
 the run every other file's verdicts. Every OTHER row names its document too:
 `r.file` is the path the document was loaded from (and `""` only for a document

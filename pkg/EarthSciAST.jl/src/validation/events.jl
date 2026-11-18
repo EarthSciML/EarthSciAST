@@ -112,7 +112,7 @@ end
 """
     _check_event_affects_unknowns!(errors, model, event, affects, at, event_kind)
 
-esm-spec §5.4 / §6.3.1: **an event may affect UNKNOWNS only.** From 1.0.0 a
+esm-spec §5.4 / §6.3.1: **an event may affect UNKNOWNS only.** A
 parameter that changes during a run declares its own `update` block, so the
 0.x `discrete_parameters` list and `functional_affect` handler are gone and an
 `affects` LHS naming a parameter is the `event_affects_parameter` defect —

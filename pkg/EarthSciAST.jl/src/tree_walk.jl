@@ -1,9 +1,10 @@
-# Tree-walk evaluator for discretized `.esm` models.
+# The tree-walk build for discretized `.esm` models (`compiler = :native` and
+# `:interpreter`).
 #
 # Compiles the canonical-form equations of a `Model` into a plain
-# `f!(du, u, p, t)` by walking the expression AST at every RHS call.
-# Bypasses ModelingToolkit entirely, so compile time is independent of
-# the system size — the path is intended for discretized PDEs whose
+# `f!(du, u, p, t)`: each equation is lowered once, at build time, to the `_Node`
+# IR, which the run-time evaluators and the code-generation tiers execute.
+# Bypasses ModelingToolkit entirely; it is meant for discretized PDEs whose
 # scalar count exceeds MTK's tearing/codegen ceiling.
 #
 # Internal entry (callers use `esm_problem`, and the package's tests and

@@ -1,15 +1,16 @@
 # Discrete-cadence loader refresh: the consumer surface for provider-fed
 # forcing buffers.
 #
-# A dense `Array{Float64}` bound through `_build_evaluator(...; param_arrays=...)`
+# A dense `Array{Float64}` bound through `esm_problem(...; param_arrays=...)`
 # is captured BY REFERENCE, so an in-place `buf .= …` shows through to `f!` with
 # zero reallocation. This file builds what does that in-place write at the
 # right times: a `PresetTimeCallback` whose `affect!` pulls fresh native arrays
 # from a data Provider and writes them into the SAME buffer objects, once per
 # cadence boundary, never on the per-step path.
 #
-# EarthSciAST returns the pieces (`build_refresh_callback -> (cb, tstops)`); the
-# USER attaches them to their own `ODEProblem`/`solve`. The callback constructor
+# `build_refresh_callback -> (cb, tstops)` returns the pieces; `esm_problem`
+# composes them for a document's own providers, and a caller may attach them to
+# its own `ODEProblem`/`solve`. The callback constructor
 # lives in a package extension gated on `DiffEqCallbacks` + `SciMLBase` (see
 # ext/EarthSciASTCallbacksExt.jl), so the base library pulls no solver stack
 # into `[deps]`.
@@ -23,7 +24,7 @@
 #      mock in tests. EarthSciAST never imports EarthSciIO; it calls these
 #      generics, which the data binding fills in.
 #   2. `RefreshBuffers` — the registry of live forcing buffers, the SAME dense
-#      `Array{Float64}` objects passed to `_build_evaluator`'s `param_arrays`.
+#      `Array{Float64}` objects passed as `esm_problem`'s `param_arrays`.
 #      `affect!` writes the freshly sampled native forcing straight into them
 #      (`_write_forcing!`); any native→sim regrid is an in-model coupling
 #      expression the RHS evaluates, not a refresh-time transform.
@@ -115,8 +116,7 @@ gating derived set's members — then pushes that set down as a per-axis
 
 The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, mirroring the `.esm`
 `data_sources.<name>.metadata.x_esd.gated_select` field (which the runner reads
-to construct the gated provider — `format`/gating live at provider creation, not
-in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
+to construct the gated provider). Each entry of `axes` is one per NATIVE array axis:
 
   * `"all"`                       → the whole axis;
   * `Dict("fixed"=>[i])`          → native 0-based index `i`, DROPPED (length-1);
@@ -194,9 +194,8 @@ record axis is not one the select names): it reports
 record is sliced.
 
 Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
-`"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
-a source declares no variables of its own, so there is no loader-side name left
-to key on; a model reads a field by declaring a parameter whose `update` names
+`"<Loader>.<var>"`. The binding lives on the consumer: a source declares no
+variables of its own, so there is no loader-side name to key on; a model reads a field by declaring a parameter whose `update` names
 the source and binds a `file_variable` (esm-spec §8.5). These are exactly the
 `providers` keys [`esm_problem`](@ref) consumes (and, with `pushdown_rewrite=true`,
 gates from the rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or
@@ -529,7 +528,7 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
         -> (cb, tstops::Vector{Float64})
 
 Build the discrete-cadence loader-refresh callback and its tstops, WITHOUT
-embedding a solver (`[[library-exposes-rhs-not-solver]]`). The callback is a
+embedding a solver. The callback is a
 pure function of the `providers` and `buffers` registries — it never reads the
 model (the forcing names and cadences live entirely in those two arguments).
 `esm_problem(…; providers)` composes it for a document's own discrete providers;

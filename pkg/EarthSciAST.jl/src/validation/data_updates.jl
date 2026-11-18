@@ -4,7 +4,7 @@
     _check_update_unit_conversions!(errors, file, model, path, scope)
 
 Walk the `unit_conversion` Expression of every `update.from` binding in `model`
-(and, recursively, its subsystems). From esm 1.0.0 the binding lives on the
+(and, recursively, its subsystems). The binding lives on the
 CONSUMING PARAMETER (esm-spec §8.5), so this is where the 0.x loader-variable
 walk moved to. A plain numeric factor has nothing to resolve.
 """
@@ -47,7 +47,7 @@ end
 
 esm-spec §8.5: a `data` update's `source` MUST name a declared `data_sources`
 entry, or `data_source_undefined`. This is the only way left to name a data
-source wrongly — from 1.0.0 a source is not a coupling endpoint, a subsystem,
+source wrongly — a source is not a coupling endpoint, a subsystem,
 or a scoped-reference path root — and, unlike the 0.x coupling reference it
 replaces, it is schema-valid by construction (any string), so the defect
 genuinely reaches structural validation instead of being masked by a schema

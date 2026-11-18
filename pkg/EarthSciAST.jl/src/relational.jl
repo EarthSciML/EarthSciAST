@@ -43,16 +43,9 @@ Concretely, per `CONFORMANCE_SPEC.md` §5.5.1:
 # Implementation notes
 
 Built with Julia stdlib `sort`/`Dict` (+ the `OrderedCollections` dep) per RFC
-Appendix A.4. DataFrames.jl (multi-second TTFX, "undefined" join/group order) and
-DuckDB.jl (native binary) are deliberately rejected (A.3) — DuckDB stays only a
-throwaway *oracle* during conformance-test authoring (`SELECT DISTINCT … ORDER
-BY …`, `dense_rank() OVER (ORDER BY …)`).
-
-This formalises and pins the order of the distinct/join/group-by patterns
-`src/graph.jl` already hand-rolls informally (`Set{String}` dedup, composite-key
-string joins, `Dict` node-maps) — patterns that worked but carried no ordering
-guarantee. The Rust (`ess-my4.3.4`) and Python (`ess-my4.3.5`) bindings implement
-the same §5.5 contract, so all three produce byte-identical index sets.
+Appendix A.4; DataFrames.jl and DuckDB.jl are deliberately not dependencies
+(A.3). The Rust and Python bindings implement the same §5.5 contract, so all
+three produce byte-identical index sets.
 """
 module Relational
 

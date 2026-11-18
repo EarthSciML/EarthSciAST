@@ -2,11 +2,9 @@
 # PLANAR spatial-index broad phase — conservative candidate generation.
 # =========================================================================== #
 #
-# Phase 3a of projection-pushdown. A reusable, deterministic broad-phase seam
-# that returns a CONSERVATIVE SUPERSET of the (query × cell) index pairs whose
-# 2D bounding boxes (envelopes) intersect. Phase 3b will consume this to replace
-# a uniform-grid bin-equality join gate (tree-walk `_join_admits`,
-# src/tree_walk/join_gates.jl); here we deliver ONLY the primitive + its oracle.
+# A deterministic broad phase that returns a CONSERVATIVE SUPERSET of the
+# (query × cell) index pairs whose 2D bounding boxes (envelopes) intersect. The
+# `faq` overlap join's candidate set (tree_walk/geometry_setup.jl) is built on it.
 #
 # `broad_phase_candidates(query_envs, cell_envs; eps)` tests envelope
 # intersection pair by pair (with a uniform-grid binning above a size cutoff,
