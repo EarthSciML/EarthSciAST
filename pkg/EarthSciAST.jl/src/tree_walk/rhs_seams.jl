@@ -97,3 +97,9 @@
     )
     return nothing
 end
+
+# Strip an AD dual number down to its underlying real primal; identity on
+# everything else. Specialized for `ForwardDiff.Dual` in
+# `ext/EarthSciASTForwardDiffExt.jl`; a `Dual` cannot exist in a session that has
+# not loaded ForwardDiff, so the identity method is complete without it.
+@inline _value(x) = x

@@ -1041,3 +1041,252 @@ function _plan_observed_slots(
     end
     return (; defs, inline, n_inlined = n_total - length(defs))
 end
+
+# Resolve observed-into-observed substitutions to a fixed point. After
+# this runs, no RHS in the returned dict contains another observed
+# variable as a free variable — so inlining observed names into a
+# model equation is a single `_sub_preserving` call. Iteration cap =
+# depth of the longest valid chain; exceeding it means there's a cycle.
+#
+# CONSUMERS after ess-obs-slots: the ARRAY paths (faq kernels, stencil /
+# affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
+# path still splice these fully-resolved bodies. The scalar path's primary
+# mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
+# which compiles each safe scalar observed's RAW body once and leaves its
+# references by-name — this resolved map then covers only the non-slot names.
+function _resolve_observed(obs::Dict{String, ASTExpr})
+    resolved = Dict{String, ASTExpr}()
+    for (k, v) in obs
+        resolved[k] = v
+    end
+    names = Set(keys(obs))
+    # Max chain depth before we call it a cycle. One pass per observer
+    # is always enough to collapse any acyclic chain.
+    for _ in 1:(length(obs) + 1)
+        any_change = false
+        for (k, v) in resolved
+            # `_referenced_var_names` (not `free_variables`) so a chain that runs
+            # THROUGH a faq body is detected — a live-field geometry
+            # observed reads its upstream regrid output inside a faq, which
+            # `free_variables` treats as bound-away and would leave un-inlined
+            # (ess-14f.4). For a scalar value the two agree, so scalar observeds are
+            # byte-identical; only array-valued observeds gain transitive collapse.
+            # The `n in names` guard means only observed-named references trigger a
+            # rewrite, so the extra bound loop indices it surfaces are inert.
+            fv = _referenced_var_names(v)
+            if any(n -> n in names, fv)
+                resolved[k] = _sub_preserving(v, resolved)
+                any_change = true
+            end
+        end
+        any_change || return resolved
+    end
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_OBSERVED_CYCLE",
+            join(sort(collect(keys(obs))), ",")
+        )
+    )
+end
+
+# ============================================================
+# 5a. Scalar-observed slot planning walkers (named prelude defs)
+# ============================================================
+#
+# A SCALAR observed compiles as a NAMED PRELUDE DEF (one `_NK_CACHED` slot,
+# evaluated once per RHS call in dependency order) instead of being spliced
+# into every reader — see `_plan_observed_slots` (build.jl) for the plan and
+# `_cse_compile_scalar` (compile.jl) for the compile. These two walkers are the
+# plan's safety analyses over the RAW (pre-`_resolve_indices`) trees.
+
+# (node, MODE)-memoized visited set for the two-mode structural scan below.
+# Node identity ALONE is NOT a sound memo key here: the SAME shared node can
+# sit in a STRUCTURAL position under one parent (mark-ALL mode — every
+# candidate reference anywhere below it is flagged) and in an EXPRESSION
+# position under another (SPINE mode — only its structural sub-positions
+# flag), and the two modes collect different subsets. So each node carries a
+# bit per mode. Mark-all hits are a SUPERSET of spine hits for the same node
+# (every structural-position reference is a reference), so a node already
+# scanned in mark-all mode is skippable in either mode, while a node scanned
+# only as spine must still be re-entered for a later mark-all visit.
+# Both modes are monotone set-collectors into the shared `hits`, so skipping
+# a repeat visit of the same (node, mode) never loses a name — this is what
+# makes the walk O(nodes + edges) on the DAGs template lowering produces
+# (raw observed bodies keep subtree sharing by reference) instead of
+# once-per-path exponential (ESS-0hh).
+const _OBS_SEEN_SPINE = 0x01
+const _OBS_SEEN_MARKALL = 0x02
+const _ObsSeen = IdDict{OpExpr, UInt8}
+
+# Collect (into `hits`) every candidate observed name referenced anywhere in
+# `e` — the transitive-name primitive of the structural scan below. Same
+# name/`wrt` collection as `_referenced_var_names`, but threaded through the
+# shared (node, mode) visited set so repeated structural positions over one
+# shared sub-DAG are scanned once.
+function _obs_mark_refs!(
+        e::ASTExpr, names::Set{String}, hits::Set{String},
+        seen::_ObsSeen
+    )
+    if e isa VarExpr
+        e.name in names && push!(hits, e.name)
+        return nothing
+    end
+    e isa OpExpr || return nothing
+    bits = get(seen, e, 0x00)
+    (bits & _OBS_SEEN_MARKALL) == 0x00 || return nothing
+    seen[e] = bits | _OBS_SEEN_MARKALL
+    wrt = e.wrt
+    wrt === nothing || (wrt in names && push!(hits, wrt))
+    foreach_child(c -> _obs_mark_refs!(c, names, hits, seen), e)
+    return nothing
+end
+
+# STRUCTURAL-POSITION scan: collect every candidate name referenced where the
+# build needs a concrete value at BUILD time — a slot read (a runtime value)
+# cannot stand in there, so such an observed must stay inlined:
+#   * `index` gather args — the target is resolved and the subscripts are folded
+#     by `_eval_const_int`, which knows only loop indices and const arrays;
+#   * aggregate range BOUNDS (`_expand_int_range_dyn` folds expression bounds);
+#   * `lower`/`upper` integral bounds and value-invention `key`s.
+# `expr_body` / `filter` / `values` / plain args are EXPRESSION positions — an
+# observed reference there survives to the compiled tree and reads its slot —
+# so the scan recurses rather than flags. Visits are (node, mode)-memoized via
+# `seen` (see the `_ObsSeen` note above): a spine re-entry of an already
+# spine- or mark-all-visited node adds nothing to `hits` and is skipped.
+function _obs_structural_refs!(
+        e::ASTExpr, names::Set{String}, hits::Set{String},
+        seen::_ObsSeen = _ObsSeen()
+    )
+    e isa OpExpr || return nothing
+    bits = get(seen, e, 0x00)
+    bits == 0x00 || return nothing   # spine-visited, or mark-all (its superset)
+    seen[e] = _OBS_SEEN_SPINE
+    if e.op == "index"
+        # Everything under a gather is build-time-resolved (the target itself,
+        # and each subscript through `_eval_const_int`) — flag it all.
+        for a in e.args
+            _obs_mark_refs!(a, names, hits, seen)
+        end
+        return nothing
+    end
+    if e.ranges !== nothing
+        for (_, v) in e.ranges
+            v isa AbstractVector || continue
+            for b in v
+                b isa ASTExpr && _obs_mark_refs!(b, names, hits, seen)
+            end
+        end
+    end
+    e.lower === nothing || _obs_mark_refs!(e.lower::ASTExpr, names, hits, seen)
+    e.upper === nothing || _obs_mark_refs!(e.upper::ASTExpr, names, hits, seen)
+    e.key === nothing || _obs_mark_refs!(e.key::ASTExpr, names, hits, seen)
+    for a in e.args
+        _obs_structural_refs!(a, names, hits, seen)
+    end
+    e.expr_body === nothing || _obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)
+    e.filter === nothing || _obs_structural_refs!(e.filter::ASTExpr, names, hits, seen)
+    if e.values !== nothing
+        for v in e.values
+            _obs_structural_refs!(v, names, hits, seen)
+        end
+    end
+    return nothing
+end
+
+# GUARD-CONDITIONALITY count: tally per candidate name how many references are
+# TOTAL vs UNCONDITIONAL, mirroring the CSE per-key rule (`_cse_count!` /
+# `_cse_arg_conditional`): a reference under a lazy `ifelse` branch or a
+# short-circuited `and`/`or` argument is CONDITIONAL. A slot is evaluated
+# unconditionally in the prelude, so an observed with NO unconditional
+# reference must stay inlined behind its guards (`_plan_observed_slots`).
+#
+# Aggregate/makearray/index subtrees count all their references CONDITIONAL:
+# their build-time expansion can drop terms (an empty or join-rejected range,
+# an unselected makearray region), so a reference below them is not provably
+# evaluated — the conservative answer is today's inlining.
+#
+# Occurrences are counted as PATHS through the expression, exactly as the
+# original per-path recursion did — the per-path multiplicity is SEMANTIC
+# here (the demotion rule reasons about total/unconditional occurrence
+# counts), so this walk must NOT be collapsed to distinct-node visits. It is
+# instead computed by multiplicity propagation over the UNIQUE-node DAG,
+# mirroring `_cse_count!` (compile.jl): one reverse-postorder pass pushes each
+# node's (total, unconditional) path multiplicity down its `args` edges — a
+# conditional argument edge forwards no unconditional multiplicity — and each
+# unique node then contributes its multiplicities to its referenced names
+# ONCE. On a pure tree this produces the same numbers as the recursion,
+# occurrence for occurrence; on the shared DAGs template lowering produces it
+# is O(nodes + edges) instead of exponential (ESS-0hh). Additions saturate at
+# `typemax(Int)` (`_sat_add`) — the demotion rule only ever asks `unc == 0`.
+#
+# The DFS mirrors the recursion's edge set exactly: only `args` of
+# non-barrier ops are descended; a barrier node (aggregate/makearray/index)
+# is a leaf whose whole subtree is tallied by `_referenced_var_names` (one
+# distinct-name tally per PATH to the barrier, i.e. × its total multiplicity).
+_count_obs_barrier(op::String) =
+    _is_faq_op(op) || op == "makearray" || op == "index"
+
+function _count_obs_refs!(
+        e::ASTExpr, names::Set{String},
+        tot::Dict{String, Int}, unc::Dict{String, Int}, cond::Bool
+    )
+    if e isa VarExpr
+        if e.name in names
+            tot[e.name] = _sat_add(get(tot, e.name, 0), 1)
+            cond || (unc[e.name] = _sat_add(get(unc, e.name, 0), 1))
+        end
+        return nothing
+    end
+    e isa OpExpr || return nothing
+    # ---- unique nodes in postorder (children before parents, args edges) ----
+    order = OpExpr[]
+    seen = IdDict{OpExpr, Nothing}()
+    function dfs(n::OpExpr)
+        haskey(seen, n) && return
+        seen[n] = nothing
+        if !_count_obs_barrier(n.op)
+            for a in n.args
+                a isa OpExpr && dfs(a)
+            end
+        end
+        return push!(order, n)
+    end
+    dfs(e)
+    # ---- multiplicity propagation: reverse postorder = parents first ----
+    total = IdDict{OpExpr, Int}()
+    uncond = IdDict{OpExpr, Int}()
+    total[e] = 1
+    uncond[e] = cond ? 0 : 1
+    for i in length(order):-1:1
+        n = order[i]
+        _count_obs_barrier(n.op) && continue
+        t = get(total, n, 0)
+        u = get(uncond, n, 0)
+        for (j, a) in enumerate(n.args)
+            a isa OpExpr || continue
+            total[a] = _sat_add(get(total, a, 0), t)
+            if u > 0 && !_cse_arg_conditional(n.op, j)
+                uncond[a] = _sat_add(get(uncond, a, 0), u)
+            end
+        end
+    end
+    # ---- per-unique-node contributions, weighted by multiplicity ----
+    for n in order
+        t = get(total, n, 0)
+        if _count_obs_barrier(n.op)
+            for r in _referenced_var_names(n)
+                r in names && (tot[r] = _sat_add(get(tot, r, 0), t))
+            end
+        else
+            u = get(uncond, n, 0)
+            for (j, a) in enumerate(n.args)
+                (a isa VarExpr && a.name in names) || continue
+                tot[a.name] = _sat_add(get(tot, a.name, 0), t)
+                if u > 0 && !_cse_arg_conditional(n.op, j)
+                    unc[a.name] = _sat_add(get(unc, a.name, 0), u)
+                end
+            end
+        end
+    end
+    return nothing
+end

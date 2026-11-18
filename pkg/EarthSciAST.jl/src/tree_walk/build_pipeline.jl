@@ -1688,3 +1688,8 @@ function _build_evaluator_impl_inner(
         template_sites = _template_sites
     )
 end
+
+# The build's time span: the caller's, else `(0.0, 1.0)`. An inline test's
+# `time_span` belongs to that test (esm-spec §6.6) and is not a default for the
+# system; the flattened system the build reads carries no tests.
+_pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float64(tspan[2]))

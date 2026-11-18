@@ -83,11 +83,16 @@ include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)
 include("tree_walk/observed_program.jl") #      the compiled output-time observed route
-include("tree_walk/helpers.jl")          # §5   misc + array-variable helpers
+include("tree_walk/field_ic.jl")         # §5   a field `ic` per cell
+include("tree_walk/cellwise.jl")         #      cell-wise evaluation, compile-once cell evaluators
+include("tree_walk/ranges.jl")           #      integer range expansion
+include("tree_walk/memory.jl")           #      zero-filled buffers
+include("tree_walk/const_int.jl")        #      the integer subscript evaluator
 include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build
+include("tree_walk/build_refusals.jl")        #      refusals at the build entry
 include("tree_walk/build_classify.jl")        # §2b  pre-lowering + variable classification
 include("tree_walk/build_caller_data.jl")     #      caller data, keys, parameter scope
 include("tree_walk/build_initial_state.jl")   #      `ic` equations and u0
