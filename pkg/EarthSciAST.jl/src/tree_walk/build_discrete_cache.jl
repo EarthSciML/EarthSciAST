@@ -56,32 +56,15 @@ end
 # set is param-tainted by construction, never const). A model with no coordinate regrid
 # gets an empty const set (byte-identical). Returns `(discrete_vars, const_vars)`.
 function _discrete_materialize_split(
-        equations::Vector{Equation},
+        g::_DefGraph,
         inline_candidates, array_inline_candidates,
         state_var_names, param_names, scalar_param_names
     )
     empty = Set{String}()
     isempty(inline_candidates) && isempty(array_inline_candidates) &&
         return (empty, copy(empty))
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
-    end
-    _closure(seed_set) = begin
-        reached = Set{String}()
-        changed = true
-        while changed
-            changed = false
-            for (n, rhs) in defs
-                n in reached && continue
-                refs = _referenced_var_names(rhs)
-                if any(r -> (r in seed_set) || (r in reached), refs)
-                    push!(reached, n); changed = true
-                end
-            end
-        end
-        reached
-    end
+    defs = g.defs
+    _closure(seed_set) = _readers_of(g, seed_set)
     # PARAM-TAINTED: transitively reads a live forcing buffer name.
     param_tainted = isempty(param_names) ? Set{String}() : _closure(Set{String}(param_names))
     # STATE-REACHING: transitively reads a continuous state (seeded with the states
@@ -106,7 +89,7 @@ function _discrete_materialize_split(
     while changed
         changed = false
         for n in collect(const_vars)
-            for r in _referenced_var_names(defs[n])
+            for r in g.reads[n]
                 (r in array_inline_candidates) && !(r in const_vars) && is_const(r) || continue
                 push!(const_vars, r); changed = true
             end
@@ -117,7 +100,7 @@ end
 
 # Dependency order over the discrete-materialize vars (a cache that gathers another
 # cache must fill AFTER it). Mirrors `_geom_setup_order`.
-function _discrete_fill_order(discrete_vars, discrete_defs)
+function _discrete_fill_order(discrete_vars::Set{String}, discrete_defs)
     return _dependency_order(
         collect(discrete_vars),
         n -> intersect(_referenced_var_names(discrete_defs[n]), discrete_vars);
@@ -219,9 +202,8 @@ end
 # the time tiers. Returns `nothing` when there is nothing to fill.
 function _build_discrete_materializer!(
         mut::DiscreteMaterializer,
-        discrete_vars, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
-        array_var_info, var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, p, n_states::Int
+        discrete_vars::Set{String}, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
+        cs::_CompileScope, p::Union{Nothing, NamedTuple}, n_states::Int
     )
     isempty(discrete_vars) && return nothing
     order = _discrete_fill_order(discrete_vars, discrete_defs)
@@ -254,13 +236,13 @@ function _build_discrete_materializer!(
         dims = isempty(rngs) ? Int[1] : Int[length(r) for r in rngs]
         cache = zeros(Float64, dims...)
         caches[name] = cache
-        pgather[name] = _PGatherArray(vec(cache), collect(size(cache)), true)
+        cs.pgather[name] = _PGatherArray(vec(cache), collect(size(cache)), true)
         cells_of[name] = (idx_names, rngs)
     end
     uz = zeros(Float64, n_states)
     pp = isnothing(p) ? NamedTuple() : p
     compiled = _array_cascade_on()
-    state_names = compiled ? _state_base_names(var_map, array_var_info) : Set{String}()
+    state_names = compiled ? _state_base_names(cs.var_map, cs.array_var_info) : Set{String}()
     # 2. The fills, in dependency order. Scalar observeds are inlined into each
     #    aggregate via `resolved_obs` (the inline reader gets them the same way); an
     #    `index(other_discrete, i)` stays a pgather over that cache (other discrete
@@ -287,8 +269,7 @@ function _build_discrete_materializer!(
             _check_discrete_def_state_free(rop_res, name, state_names)
             push!(
                 fills, _compile_discrete_fill(
-                    name, rop, Int[length(r) for r in rngs],
-                    cvec, resolved_obs, const_arrays, pgather, param_sym_set
+                    name, rop, Int[length(r) for r in rngs], cvec, resolved_obs, cs
                 )
             )
             continue
@@ -296,10 +277,7 @@ function _build_discrete_materializer!(
         # A rank-0 field, under either plan: one cell, compiled once and walked
         # at each refill as the right-hand side's scalar equations are.
         if isempty(idx_names)
-            node = _discrete_cell_node(
-                name, rop_res, (), array_var_info, var_map,
-                const_arrays, pgather, param_sym_set
-            )
+            node = _discrete_cell_node(name, rop_res, (), cs)
             push!(fills, _scalar_discrete_fill(cvec, node, uz))
             _record_rule!(name, :observed, :scalar)
             continue
@@ -311,10 +289,7 @@ function _build_discrete_materializer!(
         # document's own error rather than a refusal.
         dims = Int[length(r) for r in rngs]
         ncells = prod(dims)
-        cell_node(idx_tuple) = _discrete_cell_node(
-            name, rop_res, idx_tuple,
-            array_var_info, var_map, const_arrays, pgather, param_sym_set
-        )
+        cell_node(idx_tuple) = _discrete_cell_node(name, rop_res, idx_tuple, cs)
         lic = _percell_license(
             name,
             "the discrete-cadence materializer resolves and compiles this " *
@@ -372,19 +347,14 @@ end
 # uses — so a reduction over CONTRACTED indices (the conservative regrid
 # Σ_i A_ij·F_src/A_j, whose sum-over-source `i` lives in the aggregate's ranges,
 # not the body) is expanded, not silently dropped — and checked state-free.
-function _discrete_cell_node(
-        name::String, rop_res::OpExpr, idx_tuple,
-        array_var_info, var_map, const_arrays, pgather,
-        param_sym_set
-    )
+function _discrete_cell_node(name::String, rop_res::OpExpr, idx_tuple, cs::_CompileScope)
     gather = OpExpr(
         "index", ASTExpr[
             rop_res,
             (IntExpr(Int64(idx_tuple[d])) for d in 1:length(idx_tuple))...,
         ]
     )
-    g_r = _resolve_indices(gather, array_var_info, var_map, const_arrays, pgather)
-    node = _compile(g_r, var_map, param_sym_set)
+    node = _compile_in(cs, _resolve_in(cs, gather))
     _check_discrete_fill_state_free(node, name)
     return node
 end
@@ -476,20 +446,21 @@ end
 # variable's own name, and the row is filed as an observed.
 function _compile_discrete_fill(
         name::String, def::OpExpr, dims::Vector{Int},
-        cvec::Vector{Float64}, resolved_obs, const_arrays,
-        pgather, param_sym_set
+        cvec::Vector{Float64}, resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope
     )
     nd = length(dims)
     blk = name => (ones(Int, nd), copy(dims))
-    L = StateLayout(String[], [blk])
-    avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}(blk)
+    own = _CompileScope(
+        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(blk), StateLayout(String[], [blk]),
+        cs.const_registry, cs.pgather, cs.param_index
+    )
     feqs = _materialized_fill_equations(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
     lv = _with_own_slot_tables() do
         _compile_fill_level(
-            (name,), :dynamic, _ -> feqs, _ -> nothing, resolved_obs, avi, L,
-            const_arrays, pgather, param_sym_set, length(cvec); label_by_name = true
+            (name,), :dynamic, _ -> feqs, _ -> nothing, resolved_obs, own,
+            length(cvec); label_by_name = true
         )
     end
     if rec !== nothing

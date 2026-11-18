@@ -89,7 +89,7 @@ function broad_phase_candidates(
 end
 
 # =========================================================================== #
-# OVERLAP JOIN-GATE broad phase (projection-pushdown Phase 2a).
+# OVERLAP JOIN-GATE broad phase.
 #
 # The shared helper that turns two envelope FACTOR-ARRAYS into the candidate
 # `Set{(src_pos, tgt_pos)}` an OVERLAP join gate admits on. Built ONCE per gate
@@ -263,7 +263,7 @@ side and `tgt_env` the indexed cell side. The vector method takes the two
 envelope vectors directly; the name+registry method resolves envelope factor
 arrays out of `arrays` first (see [`_envelope_vectors`](@ref)).
 
-Uses the exported Phase-3a primitive [`broad_phase_candidates`](@ref), so the
+Uses the exported primitive [`broad_phase_candidates`](@ref), so the
 gate is deterministic.
 """
 function _overlap_candidate_set(
@@ -285,7 +285,7 @@ function _overlap_candidate_set(
 end
 
 # =========================================================================== #
-# CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
+# CANDIDATE-DRIVEN ENUMERATION — the SHARED
 # driver policy behind BOTH overlap-gated enumeration paths.
 #
 # A gate that resolves its ENTIRE admissible pair set once — a `join.overlap`

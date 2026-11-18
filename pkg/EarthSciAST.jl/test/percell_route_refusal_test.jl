@@ -1090,8 +1090,11 @@ end
             ranges = Dict{String, Any}("i" => Any[1, 1]), expr_body = lhs
         )
         scope = _PR._FaqScope(
-            Dict{String, _PR.ASTExpr}(), Dict("u" => ([1], [1])), Dict("u[1]" => 1),
-            Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}(),
+            Dict{String, _PR.ASTExpr}(),
+            _PR._CompileScope(
+                Dict("u" => ([1], [1])), Dict("u[1]" => 1),
+                Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}()
+            ),
             nothing, nothing, nothing, false, 0,
             Tuple{Int, _PR._Node}[], _PR._AccKernel[], _PR._ScanFold[],
             _PR._ArrayContraction[], _PR._Covered(1)

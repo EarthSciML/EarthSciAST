@@ -524,7 +524,7 @@ function _range_restrict_parts(
     _need_drain!(ctx)
     spec.mode === :halo && throw(_HaloDone(ctx))
     isempty(ctx.seams) || (eqs = _seam_equations(ctx, spec, eqs))
-    return merge(parts, (equations = eqs,))
+    return _with_equations(parts, eqs)
 end
 
 # ---- Reads past a periodic seam ----

@@ -88,6 +88,12 @@ _af_op(op, a...; kw...) = OpExpr(op, ESM.ASTExpr[a...]; kw...)
         @test ESM._parse_cell_key("[3]") === nothing
         @test ESM._parse_cell_key("u[1,]") === nothing
         @test ESM._parse_cell_key("u[1]x") === nothing
+        # The spelling `_cell_key` writes, and only that: a negative index reads
+        # back, a leading zero does not.
+        @test ESM._parse_cell_key("u[-1,2]") == ("u", [-1, 2])
+        @test ESM._parse_cell_key(ESM._cell_key("u", [-3])) == ("u", [-3])
+        @test ESM._parse_cell_key("u[01]") === nothing
+        @test ESM._parse_cell_key("u[-0]") === nothing
     end
 
     # ----------------------------------------------------------------

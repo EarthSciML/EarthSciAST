@@ -4,16 +4,12 @@
 # `_Node` fields, so they need the IR type at include time). Section 2c:
 # the COMPILED setup-time geometry path.
 #
-# WHY A COMPILER. Geometry setup once had its own raw-AST interpreter — string
-# -compared ops, per-node Dict lookups, a hand-mirrored scalar ladder — re-run
-# once per output cell × contraction tuple, which made it the dominant build cost
-# of a conservative regrid. `_geo_compile` instead lowers a geometry body ONCE per
-# materialization sweep into the SAME `_Node` IR the runtime walkers evaluate, and
-# the per-cell work is a single `_eval_node` walk over a small `Vector{Float64}`
-# loop-index frame. The scalar vocabulary therefore evaluates through
-# `_eval_node_op`'s registry-generated arms; there is no mirrored geometry ladder.
+# `_geo_compile` lowers a setup-time geometry body ONCE per materialization
+# sweep into the `_Node` IR the runtime walkers evaluate; the per-cell work is
+# one `_eval_node` walk over a small `Vector{Float64}` loop-index frame, and the
+# scalar vocabulary evaluates through `_eval_node_op`'s registry-generated arms.
 #
-# HOW THE PIECES MAP (interpreter arm → compiled form):
+# How the language maps onto the IR:
 #   * loop indices          → `_NK_STATE` slots in the per-sweep frame `u`
 #                             (nested aggregates allocate FRESH slots, so
 #                             lexical shadowing is by construction);
@@ -27,29 +23,19 @@
 #   * nested scalar aggregates → `:geo_agg` nodes, evaluated by
 #                             `_eval_geo_op` — the cold tail arm of
 #                             `_eval_node_op`;
-#   * scalar ops            → plain `_NK_OP` nodes (the registry-generated
-#                             `_eval_node_op` arms), gated at COMPILE time by
-#                             `_GEO_SCALAR_OPS` so an op outside the geometry
-#                             vocabulary still fails with the historical
-#                             E_TREEWALK_GEOMETRY_SETUP code.
+#   * scalar ops            → plain `_NK_OP` nodes, gated at COMPILE time by
+#                             `_GEO_SCALAR_OPS`: an op outside the geometry
+#                             vocabulary raises E_TREEWALK_GEOMETRY_SETUP.
 #
-# Evaluation ORDER is replicated exactly — the same `Iterators.product`
-# nesting, the same join-gate-then-filter gating, the same sequential `+=` /
-# fold accumulation — so materialized arrays are bit-identical to the
-# interpreted originals. Two knowing deviations, both strictly-lazier/safer:
-# `ifelse` is lazy here (the interpreter's 3-ary apply evaluated all three
-# arms before selecting — values identical, but a guarded domain error now
-# cannot fire), and a ≥4-ary `-` folds left (`((a-b)-c)-d`) instead of the
-# interpreter's `a - sum(rest)` (identical for the ≤3-ary forms actually
-# emitted; differs only in FP rounding beyond that).
+# Evaluation order: `Iterators.product` nesting in range-key order, the join
+# gate then the filter, and a sequential fold, so a materialized array is
+# bit-identical to the per-tuple reference. `ifelse` evaluates only the arm it
+# selects.
 # ========================================================================
 
-# The scalar-op vocabulary of the setup-time geometry language: exactly the
-# arms the retired `_geo_apply_scalar/1/2/3` ladder carried — `_GEO_EVAL_OPS`
-# (op_registry.jl, flag `:geo_eval`) minus the structurally-compiled ops.
-# Compile-time membership gating preserves the interpreter's failure mode: an
-# op outside this set throws E_TREEWALK_GEOMETRY_SETUP (not the runtime
-# ladder's unevaluable_operator).
+# The scalar-op vocabulary of the setup-time geometry language: `_GEO_EVAL_OPS`
+# (op_registry.jl, flag `:geo_eval`) minus the structurally-compiled ops. An op
+# outside it raises E_TREEWALK_GEOMETRY_SETUP at compile time.
 const _GEO_STRUCTURAL_OPS = Set{String}(
     [
         "index", "true", "false", "faq",
@@ -62,7 +48,7 @@ const _GEO_SCALAR_OPS = setdiff(_GEO_EVAL_OPS, _GEO_STRUCTURAL_OPS)
 # A build-time ring reference: a source array partially indexed by per-cell
 # leading subscripts; the tail dims stay whole. Resolved per cell to a `view`
 # (no data copy — the const source outlives every walk and is never mutated;
-# read-only consumers only), exactly the interpreter's partial-index behavior.
+# read-only consumers only).
 # `src` is an `AbstractArray` or another `_GeoRingRef`.
 struct _GeoRingRef
     src::Any
@@ -121,9 +107,8 @@ _geo_newslot!(g::_GeoCompileCtx) = (g.nslots[] += 1)
 # ---- The compiler -----------------------------------------------------------
 
 # Lower a setup-time geometry expression to a `_Node` against the lexical
-# `g.scope`/`g.setof`. Covers exactly the language the interpreter spoke;
-# anything else throws the same E_TREEWALK_GEOMETRY_SETUP diagnostics it
-# threw — just at compile (before the sweep) instead of at the first cell.
+# `g.scope`/`g.setof`. Anything outside the geometry language raises
+# E_TREEWALK_GEOMETRY_SETUP here, before the sweep.
 function _geo_compile(expr, g::_GeoCompileCtx)::_Node
     expr isa OpExpr || return _geo_compile_uncached(expr, g)
     key = (expr, g.scope)
@@ -247,8 +232,8 @@ _geo_source_rank(a::AbstractArray) = ndims(a)
 _geo_source_rank(r::_GeoRingRef) = _geo_source_rank(r.src) - length(r.idx)
 
 # Nested scalar aggregate → `:geo_agg`. Loop vars come from `ranges` in key
-# order (the interpreter's `collect(keys(...))` order — it fixes the product
-# nesting and therefore the accumulation order, so keep it); each gets a fresh
+# order (`collect(keys(...))`, which fixes the product nesting and therefore the
+# accumulation order); each gets a fresh
 # frame slot in an EXTENDED lexical scope, under which the gate/filter/body
 # compile.
 function _geo_compile_agg(expr::OpExpr, g::_GeoCompileCtx)::_Node
@@ -404,9 +389,8 @@ end
     Int(round(_eval_node(nd, u, p, t, T)::Float64))
 
 # Resolve a compiled ring/array source at the current frame. A partial index
-# resolves to a `view` for the ranks the geometry FAQ uses (matching the
-# interpreter's fast paths); the general fallback materializes a dense slice,
-# as before.
+# resolves to a `view` for the ranks the geometry FAQ uses; the general fallback
+# materializes a dense slice.
 _geo_ring_value(a::AbstractArray, u, p, t, ::Type{T}) where {T} = a
 function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # `r.src` is typed `Any` (an array or another `_GeoRingRef`), so resolving and slicing it IN THIS FRAME would leave `base`
@@ -453,8 +437,7 @@ function _geo_ring_slice(base, ix::Vector{_Node}, u, p, t, ::Type{T}) where {T}
 end
 
 # Full-rank scalar gather (`:geo_gather`): resolve the source, round each
-# subscript, read. Ranks 1–3 are unrolled (no splat) exactly as the
-# interpreter's fast paths were; bounds stay CHECKED, as before.
+# subscript, read. Ranks 1–3 are unrolled (no splat); bounds stay CHECKED.
 function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # `_Node.payload` is `Any` (one struct serves every node kind), so reading the
     # source array THROUGH IT costs two dynamic dispatches per gather — one to
@@ -506,8 +489,8 @@ function _geo_gather_from(src, c::Vector{_Node}, u, p, t, ::Type{T})::Float64 wh
     return Float64(arr[idxs...])
 end
 
-# Nested scalar aggregate (`:geo_agg`): the interpreter's product loop,
-# verbatim — write the loop slots, join-gate then filter, sum the body.
+# Nested scalar aggregate (`:geo_agg`): the product loop — write the loop
+# slots, join-gate then filter, fold the body.
 function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
     acc = spec.zero
     op = spec.op
@@ -998,7 +981,7 @@ function _geo_shape_key(body::_Node)
 end
 
 # The native kernel of a setup body, or `nothing` (keep the walker). Only under
-# the share_subtrees plan flag, so the interpreter oracle walks.
+# the share_subtrees plan flag, so `compiler = :interpreter`, the oracle, walks.
 function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothing)
     _compiler_plan_now().share_subtrees || return nothing
     g = _GeoCG(
