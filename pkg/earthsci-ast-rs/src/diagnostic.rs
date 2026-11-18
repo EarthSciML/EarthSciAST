@@ -313,9 +313,9 @@ diagnostic_code_registry! {
     /// removed: `arrayop` at esm 0.8.0, and `aggregate`, `fn`, `table_lookup` with
     /// `function_tables`, `skolem`, `rank`, `intersect_polygon`,
     /// `polygon_intersection_area`, `argmin` and `argmax` at esm 2.0.0, and
-    /// `grad`, `div` and `laplacian` at esm 3.0.0. Raised by name at load,
+    /// `grad`, `div` and `laplacian` at esm 2.4.0. Raised by name at load,
     /// before schema validation, whatever `esm` the document declares; a
-    /// 2.0.0 removal names the codemod, a 3.0.0 removal points at spatial `D`.
+    /// 2.0.0 removal names the codemod, a 2.4.0 removal points at spatial `D`.
     REMOVED_OP = "removed_op";
     /// A WARNING, not an error: a document spells a DEPRECATED op (esm-spec
     /// §4.2 "Deprecated ops") — `neg`, the word spelling of unary `-`, or

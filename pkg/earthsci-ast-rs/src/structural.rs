@@ -1537,7 +1537,7 @@ pub(crate) fn deprecated_records_per_sample_warning(file: &EsmFile) -> Option<St
     (!sites.is_empty()).then(|| {
         format!(
             "deprecated_records_per_sample: `records_per_sample` is deprecated and is removed \
-             in a later major version; the number of records a data-fed parameter receives is said by its \
+             at esm 3.0.0; the number of records a data-fed parameter receives is said by its \
              record shape, two when its first axis is an interval index set with \
              \"records\": true (esm-spec §8.5.1). Written at: {}.",
             sites.join(", ")

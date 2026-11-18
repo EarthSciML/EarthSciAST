@@ -234,7 +234,7 @@ fn system_kind_order_is_first_match_wins() {
     assert_eq!(kind("StochasticSpatial"), SystemKind::Sde);
     // A spatial `D` (wrt present and not "t") is the signal, alone or nested
     // (the `SugarOps` model keeps its name from when it spelled the ops esm
-    // 3.0.0 removed).
+    // 2.4.0 removed).
     assert_eq!(kind("Transient"), SystemKind::Pde);
     assert_eq!(kind("SugarOps"), SystemKind::Pde);
 }

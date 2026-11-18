@@ -102,7 +102,7 @@ fn faq_below_v11_is_rejected() {
 // --- every fixture under tests/invalid/removed_ops/ ------------------------
 
 /// Every `tests/invalid/removed_ops/*.esm` fixture is refused at load with
-/// `removed_op`, naming its op. The three ops esm 3.0.0 removed (`grad`, `div`,
+/// `removed_op`, naming its op. The three ops esm 2.4.0 removed (`grad`, `div`,
 /// `laplacian`) are refused even though their fixtures declare esm 2.3.0, and
 /// their message points at spatial `D` and MIGRATION.md, never at the 2.0.0
 /// codemod.
@@ -135,7 +135,7 @@ fn every_removed_ops_fixture_is_refused_with_removed_op() {
         if ["grad", "div", "laplacian"].contains(&op.as_str()) {
             let doc: serde_json::Value = serde_json::from_str(&src).expect("fixture is JSON");
             assert_eq!(doc["esm"], "2.3.0", "{stem} declares 2.3.0");
-            assert!(e.contains("esm 3.0.0"), "{stem}: {e}");
+            assert!(e.contains("esm 2.4.0"), "{stem}: {e}");
             assert!(e.contains("MIGRATION.md"), "{stem}: {e}");
             assert!(!e.contains("earthsci_ast.migrate"), "{stem}: {e}");
             seen_v3.push(op);
