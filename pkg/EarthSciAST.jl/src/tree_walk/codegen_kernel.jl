@@ -92,6 +92,29 @@ _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 # the per-kernel transaction in `_build_codegen_rhs` catches it and the kernel
 # keeps its per-cell runner.
 
+# A fused scan's consumer as the nest emits it (`_cg_consumer`, scan_fused.jl):
+# kernel `K`, whose descriptor `ix` reads the scan's value at its cell plus
+# `delta`, with `invsyms` its invariant locals; `store` writes `K`'s own output.
+struct _CGConsumer
+    K::_AccKernel
+    ix::Int
+    delta::Int
+    store::Bool
+    invsyms::Vector{Symbol}
+end
+
+# A fused prefix scan's nest (scan_fused.jl): the accumulator local `acc`, the
+# ordinal range `[a, b)` of one lane, the fold `op`, whether the fold is
+# inclusive, and the consumer taken in, if any.
+struct _CGScanMode
+    acc::Symbol
+    a::Symbol
+    b::Symbol
+    op::Symbol
+    inclusive::Bool
+    cons::Union{Nothing, _CGConsumer}
+end
+
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
     # Runtime objects the generated code needs (const arrays, slot tables,
@@ -148,11 +171,8 @@ mutable struct _CGCtx
     # `tblcbs` collects the run-mode locals the version guard tests.
     tblaffine::Bool
     tblcbs::Vector{Symbol}
-    # A fused prefix scan's nest (scan_fused.jl): `nothing`, or the names and
-    # rule its loop body folds each cell's term with — `(acc, a, b, op,
-    # inclusive, cons)`, the nest running ordinals `[a, b)` (one lane), `cons`
-    # the consumer taken in (`_cg_consumer`) or `nothing`.
-    scanmode::Any
+    # A fused prefix scan's nest, or `nothing` (see `_CGScanMode`).
+    scanmode::Union{Nothing, _CGScanMode}
     # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
     # each state read is emitted against the buffer its slots live in
