@@ -670,6 +670,13 @@ preserved automatically.
 Callers that transform sub-expressions should pass the already-transformed
 result for the relevant field, e.g. `reconstruct(e; args=new_args)` or
 `reconstruct(e; expr_body=new_body, filter=new_filter)`.
+
+    reconstruct(x; <any field of x>=…)
+
+The same for every document record type in [`RECORD_FIELD_TABLES`](@ref) and
+for `ReactionSystem` and `EsmFile` (generated below the tables): every field is
+copied from `x` unless passed, and the result is built through the type's
+constructor, so its normalizations and checks run.
 """ reconstruct
 
 # ========================================
@@ -1443,39 +1450,6 @@ _update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
     _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
 
 """
-    reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
-
-Rebuild a `ModelVariable`, copying every field from `v` by default and
-overriding only the keywords explicitly passed. The `ModelVariable` analogue of
-[`reconstruct(::OpExpr)`](@ref): route all copy-with-changes sites through this
-helper so a newly added field is preserved by default instead of silently
-dropped by a hand-listed subset.
-"""
-function reconstruct(
-        v::ModelVariable;
-        type::ModelVariableType = v.type,
-        default = v.default,
-        description = v.description,
-        units = v.units,
-        default_units = v.default_units,
-        shape = v.shape,
-        location = v.location,
-        distribution = v.distribution,
-        update = v.update,
-        element_type = v.element_type,
-        lb = v.lb,
-        ub = v.ub
-    )
-    return ModelVariable(
-        type;
-        default = default, description = description,
-        units = units, default_units = default_units, shape = shape,
-        location = location, distribution = distribution, update = update,
-        element_type = element_type, lb = lb, ub = ub
-    )
-end
-
-"""
     TimeSpan(start::Float64, stop::Float64)
 
 Simulation time interval for inline model tests and analyses (§gt-cc1).
@@ -1846,24 +1820,6 @@ struct Model <: SubsystemNode
     # field missing from both is missing from both wire directions in silence.
     reference::Union{Reference, Nothing}
 
-    # Primary constructor with separate event arrays
-    Model(
-        variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation},
-        discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
-        subsystems::AbstractDict{String};
-        tolerance = nothing, tests = InlineTest[], analyses = Any[],
-        initialization_equations = Equation[],
-        guesses = Dict{String, Union{Float64, ASTExpr}}(),
-        system_kind = nothing, reference = nothing
-    ) =
-        new(
-        OrderedDict{String, ModelVariable}(variables), equations,
-        discrete_events, continuous_events, OrderedDict{String, SubsystemNode}(subsystems),
-        tolerance, tests, _dynamic(Vector{Any}, analyses)::Vector{Any},
-        initialization_equations, guesses, system_kind, reference
-    )
-
-    # Convenience constructor with optional event arrays and subsystems.
     Model(
         variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation};
         discrete_events = DiscreteEvent[],
@@ -1884,6 +1840,16 @@ struct Model <: SubsystemNode
         initialization_equations, guesses, system_kind, reference
     )
 end
+
+# The positional form: events and subsystems in field order.
+Model(
+    variables::AbstractDict{String, ModelVariable}, equations::Vector{Equation},
+    discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
+    subsystems::AbstractDict{String}; kwargs...
+) = Model(
+    variables, equations; discrete_events = discrete_events,
+    continuous_events = continuous_events, subsystems = subsystems, kwargs...
+)
 
 """
     Species
@@ -2591,25 +2557,6 @@ struct EsmFile
             OrderedDict{String, Any}(component_templates),
         coordinates, coupling_roles, solver, document_base, coupling_import_base
     )
-end
-
-"""
-    reconstruct(file::EsmFile; <any EsmFile field>=…) -> EsmFile
-
-Rebuild an `EsmFile`, copying every field from `file` and overriding only the
-keywords passed. The `EsmFile` analogue of [`reconstruct(::ModelVariable)`](@ref):
-every copy-with-changes of a document goes through it, so a field added to the
-struct is carried across instead of reset to its default.
-"""
-function reconstruct(file::EsmFile; kwargs...)
-    fields = Dict{Symbol, Any}(f => getfield(file, f) for f in fieldnames(EsmFile))
-    for (k, v) in kwargs
-        haskey(fields, k) || throw(ArgumentError("EsmFile has no field `$k`"))
-        fields[k] = v
-    end
-    esm = pop!(fields, :esm)
-    metadata = pop!(fields, :metadata)
-    return EsmFile(esm, metadata; fields...)
 end
 
 # ========================================
@@ -3534,3 +3481,24 @@ for spec in RECORD_FIELD_TABLES
     get(spec, :injected, false) && push!(covered, :name)
     @assert covered == Set(fieldnames(T)) "RECORD_FIELD_TABLES.$(spec.T) rows must cover fieldnames($(spec.T)) exactly"
 end
+
+# `reconstruct(x::T; <field> = …)` for a type whose constructor takes the fields
+# `pos` positionally and every other field as a keyword: each field defaults to
+# `x`'s, and the constructor's normalizations and checks run on the result.
+function _def_reconstruct(T::DataType, pos)
+    rec = gensym(:rec)
+    fs = fieldnames(T)
+    sig = (Expr(:kw, f, :($rec.$f)) for f in fs)
+    kws = Any[Expr(:kw, f, f) for f in fs if !(f in pos)]
+    call = isempty(kws) ? Expr(:call, T, pos...) :
+        Expr(:call, T, Expr(:parameters, kws...), pos...)
+    return @eval reconstruct($rec::$T; $(sig...)) = $call
+end
+
+for spec in RECORD_FIELD_TABLES
+    pos = Symbol[row.f for row in spec.rows if get(row, :pos, false)]
+    get(spec, :injected, false) && pushfirst!(pos, :name)
+    _def_reconstruct(getfield(@__MODULE__, spec.T), pos)
+end
+_def_reconstruct(ReactionSystem, (:species, :reactions))
+_def_reconstruct(EsmFile, (:esm, :metadata))

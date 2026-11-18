@@ -489,11 +489,8 @@ function _intern_model(model::Model, ctx::_InternCtx)::Model
             ieqs === model.initialization_equations && ng === guesses &&
             nsubs === subs
     ) && return model
-    return Model(
-        model.variables, eqs, model.discrete_events, model.continuous_events,
-        nsubs; tolerance = model.tolerance, tests = model.tests,
-        analyses = model.analyses,
-        initialization_equations = ieqs, guesses = ng,
-        system_kind = model.system_kind, reference = model.reference
+    return reconstruct(
+        model; equations = eqs, initialization_equations = ieqs, guesses = ng,
+        subsystems = nsubs
     )
 end

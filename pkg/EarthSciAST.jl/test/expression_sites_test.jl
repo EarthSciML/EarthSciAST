@@ -211,7 +211,38 @@ _tag(e) = e isa OpExpr && e.op == "+" && e.args[2] isa VarExpr ? e.args[2].name 
         r2 = EarthSciAST.reconstruct(r; expression = NumExpr(2.0))
         @test r2.kind == "crossing" && r2.direction == "up" && r2.when === r.when
         @test r2.expression == NumExpr(2.0)
-        @test_throws ArgumentError EarthSciAST.reconstruct(r; nonsense = 1)
+        @test_throws MethodError EarthSciAST.reconstruct(r; nonsense = 1)
+    end
+
+    @testset "reconstruct exists for every document record type and copies every field" begin
+        M = EarthSciAST
+        for spec in M.RECORD_FIELD_TABLES
+            T = getfield(M, spec.T)
+            @test hasmethod(M.reconstruct, Tuple{T})
+            # Every field is a keyword of the generated method.
+            @test issubset(fieldnames(T), Base.kwarg_decl(only(methods(M.reconstruct, Tuple{T}))))
+        end
+        # Every EsmFile field, set to a value other than its default, survives a
+        # copy that changes one other field.
+        f = M.EsmFile(
+            "2.3.0", M.Metadata("m"); models = Dict("M" => M.Model(Dict{String, M.ModelVariable}(), M.Equation[])),
+            reaction_systems = Dict("R" => M.ReactionSystem(M.Species[], M.Reaction[])),
+            data_sources = Dict{String, M.DataSource}(), domain = M.Domain(),
+            enums = Dict("e" => Dict("a" => 1)),
+            index_sets = Dict("i" => M.IndexSet("interval"; size = 2)),
+            expression_templates = Dict{String, Any}("t" => 1),
+            metaparameters = Dict{String, Any}("n" => 1),
+            component_templates = Dict{String, Any}("models.M" => 1),
+            coordinates = Dict{String, Any}("c" => 1),
+            coupling_roles = Dict{String, Any}("r" => 1), solver = M.Solver(stiffness = "stiff"),
+            document_base = "/d", coupling_import_base = "/b"
+        )
+        g = M.reconstruct(f; esm = "2.2.0")
+        @test g.esm == "2.2.0"
+        for k in fieldnames(M.EsmFile)
+            k === :esm && continue
+            @test getfield(g, k) == getfield(f, k)
+        end
     end
 
     # Every field of a document struct whose declared type holds an `ASTExpr`
