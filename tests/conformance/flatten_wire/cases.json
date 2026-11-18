@@ -5,6 +5,6 @@
     {"name": "lift_inferred_operand", "fixture": "fixtures/lift_inferred_operand.esm", "golden": "golden/lift_inferred_operand.json", "builds": true},
     {"name": "field_ic_application", "fixture": "fixtures/field_ic_application.esm", "golden": "golden/field_ic_application.json", "builds": true},
     {"name": "declared_scalar_application", "fixture": "fixtures/declared_scalar_application.esm", "golden": "golden/declared_scalar_application.json", "builds": false},
-    {"name": "refused_lift", "fixture": "fixtures/refused_lift.esm", "golden": "golden/refused_lift.json", "builds": false}
+    {"name": "union_lift", "fixture": "fixtures/union_lift.esm", "golden": "golden/union_lift.json", "builds": true}
   ]
 }

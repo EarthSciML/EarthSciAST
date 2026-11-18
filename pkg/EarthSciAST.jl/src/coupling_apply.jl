@@ -1031,12 +1031,10 @@ function _rename_variable(
         expr::ASTExpr, from::AbstractString,
         to::AbstractString
     )::ASTExpr
-    if expr isa VarExpr
-        return expr.name == from ? VarExpr(String(to)) : expr
-    elseif expr isa OpExpr
-        return map_children(x -> _rename_variable(x, from, to), expr)
-    end
-    return expr
+    return _rewrite_expr(
+        (x, _) -> (x isa VarExpr && x.name == from) ? VarExpr(String(to)) : x,
+        (n, _) -> n, expr
+    )
 end
 
 """
@@ -1057,23 +1055,14 @@ function _rename_variables(
         renames::AbstractDict{String, String}
     )::ASTExpr
     isempty(renames) && return expr
-    if expr isa VarExpr
-        to = get(renames, expr.name, nothing)
-        return to === nothing ? expr : VarExpr(to)
-    elseif expr isa OpExpr
-        # A relational `join` names its key COLUMNS and its overlap envelope
-        # factors as bare STRINGS rather than as `VarExpr` children, so
-        # `map_children` preserves them verbatim (that is what it is for) and
-        # this walk alone would leave a join pointing at a spelling the merge
-        # deleted. §4.7.5 step 2 namespaces those strings like any other
-        # reference, so §4.7.1 step 4 has to rename them like any other
-        # reference too (CONFORMANCE_SPEC §5.5.6, §5.35).
-        return _rename_join_clauses(
-            map_children(x -> _rename_variables(x, renames), expr),
-            renames
-        )
-    end
-    return expr
+    # A relational `join` names its key columns and overlap envelope factors as
+    # bare strings, not `VarExpr` children, so each rebuilt node renames them
+    # too (§4.7.5 step 2 namespaces them like any reference; CONFORMANCE_SPEC
+    # §5.5.6, §5.35).
+    return _rewrite_expr(
+        (x, _) -> x isa VarExpr ? (t = get(renames, x.name, nothing); t === nothing ? x : VarExpr(t)) : x,
+        (n, _) -> _rename_join_clauses(n, renames), expr
+    )
 end
 
 """
@@ -1104,23 +1093,13 @@ function _substitute_placeholder(
         target::String
     )::ASTExpr
     placeholder === nothing && return expr
-    if expr isa NumExpr || expr isa IntExpr
-        return expr
-    elseif expr isa VarExpr
-        if is_placeholder(expr.name) || expr.name == placeholder
-            return VarExpr(target)
-        end
-        return expr
-    elseif expr isa OpExpr
-        # Recurse into EVERY expression-bearing field via the shared field-preserving
-        # rewrite and rebuild via `reconstruct`, which preserves all other fields
-        # (int_var, join, id, manifold, key, …) that a hand-listed
-        # keyword subset used to drop. `placeholder`/`target` are namespaced
-        # dependent-variable names, never node-local binders, so recursing into
-        # every field cannot capture a bound index or `int_var`.
-        return map_children(x -> _substitute_placeholder(x, placeholder, target), expr)
-    end
-    return expr
+    # `placeholder` and `target` are namespaced dependent-variable names, never
+    # node-local binders, so every child field is rewritten.
+    return _rewrite_expr(
+        (x, _) -> (x isa VarExpr && (is_placeholder(x.name) || x.name == placeholder)) ?
+            VarExpr(target) : x,
+        (n, _) -> n, expr
+    )
 end
 
 """
@@ -1675,7 +1654,7 @@ function _data_fed_without_shape(file::EsmFile)
 end
 
 # True iff `v` carries a `kind: "data"` update WITH a `from` binding (esm-spec
-# §5.4/§8.5) — the predicate `_collect_loader_fields!` and `_collect_data_feeds!`
+# §5.4/§8.5) — the predicate `_loader_fields` and `_collect_data_feeds!`
 # apply, so all three agree on which parameters are data-fed.
 _is_data_fed(v::ModelVariable) =
     v.update !== nothing && any(rule -> rule.kind == "data" && rule.from !== nothing, v.update)

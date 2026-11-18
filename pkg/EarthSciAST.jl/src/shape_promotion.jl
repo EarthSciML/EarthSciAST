@@ -20,97 +20,20 @@
 #  - PROPAGATE: an operand's shape flows to the result through elementwise ops;
 #    a `faq` with a contracting `output_idx` is a PROMOTION
 #    BOUNDARY (a genuine reduction stays scalar), and an `index` gather is scalar.
-#  - CONFLICT: all array sources must resolve to one grid shape; a genuine
-#    mismatch is an error (the caller picks the target grid).
+#  - UNION: operands over different index sets give the union of their index
+#    sets (the outer product), in order of first appearance.
 
-# Output shape (vector of index-set / dim names; empty = scalar) of an expression
-# under the current per-variable shape map.
-function _infer_expr_shape(
-        expr::ASTExpr,
-        shapes::Dict{String, Vector{String}},
-        ctx = nothing
-    )::Vector{String}
-    if expr isa NumExpr || expr isa IntExpr
-        return String[]
-    elseif expr isa VarExpr
-        return get(shapes, expr.name, String[])
-    elseif expr isa OpExpr
-        op = expr.op
-        # A template application (a reference, or an expansion made at load)
-        # is elementwise in the arrays its expansion reads in value positions
-        # (esm-spec §9.6.11); the tables and axes it reads whole do not shape
-        # the result. Without `ctx`, an application is scalar, as before.
-        site_operands = ctx !== nothing &&
-            (op == "apply_expression_template" || expr.template_origin !== nothing) ?
-            _application_operands(expr, shapes, ctx) : nothing
-        site = site_operands !== nothing && !isempty(site_operands)
-        if !site && op == "index"
-            # A gather selects one element (or a fixed slice) — scalar output for
-            # promotion purposes (the level-set already indexes its own field).
-            return String[]
-        elseif !site && op in _ARRAY_PRODUCER_OPS
-            # Output is exactly the uncontracted axes named in output_idx, each
-            # named by the index set its range draws `{from}`. An output symbol
-            # is a node-local loop name, not an index set; one ranging over an
-            # inline interval (or a literal singleton axis) names no index set,
-            # so the producer is ANONYMOUS here: its variable takes its extent
-            # from those ranges in the build (esm-spec §6.3) rather than being
-            # promoted onto a named shape.
-            expr.output_idx === nothing && return String[]
-            names = String[]
-            for x in expr.output_idx
-                x isa AbstractString || return String[]
-                r = expr.ranges === nothing ? nothing : get(expr.ranges, String(x), nothing)
-                r isa IndexSetRef || return String[]
-                push!(names, r.from)
-            end
-            return names
-        else
-            # Elementwise: broadcast over the operands' index-set NAMES
-            # (esm-spec §4.3.4). Operand shapes are compared as name SETS, not
-            # positionally: an operand whose index sets are a SUBSET of another's
-            # broadcasts along the missing axes, so the result takes the SUPERSET
-            # shape; two shapes naming the same sets in a different ORDER are the
-            # same shape (the leaf-indexing rewrite below aligns them by name, so
-            # this is a transpose, not a conflict). Only genuinely incomparable
-            # name sets — neither a subset of the other — are a conflict.
-            # `lower`/`upper` (integral bounds) and `filter` don't shape the
-            # elementwise result.
-            operands = site ? site_operands :
-                op == "apply_expression_template" ? ASTExpr[] : expr.args
-            sh = String[]
-            for a in operands
-                s = _infer_expr_shape(a, shapes, ctx)
-                isempty(s) && continue
-                if isempty(sh)
-                    sh = s
-                elseif sh != s
-                    ssh = Set(sh); ss = Set(s)
-                    if issubset(ss, ssh)
-                        # `s` broadcasts into `sh` (including the equal-set,
-                        # permuted-order case: the FIRST operand's axis order
-                        # wins, deterministically).
-                    elseif issubset(ssh, ss)
-                        sh = s                      # widen to the superset
-                    else
-                        # Typed error from the flatten taxonomy (§4.7.6): a shape
-                        # conflict is a failed dimension promotion, not a generic
-                        # argument error.
-                        throw(
-                            DimensionPromotionError(
-                                "shape-promotion: conflicting operand shapes $(sh) vs $(s) " *
-                                    "in op '$(op)' — neither operand's index sets are a subset " *
-                                    "of the other's, so no broadcast result shape exists"
-                            )
-                        )
-                    end
-                end
-            end
-            return sh
-        end
-    end
-    return String[]
-end
+# The index sets `expr`'s value spans under the current per-variable shape map
+# (empty for a scalar, and for an expression the inference leaves undecided):
+# the one inference, `_expr_axes` (expr_axes.jl). Elementwise operands over
+# different index sets give the union, in order of first appearance
+# (esm-spec §4.3.4). With `ctx`, a template application is elementwise over the
+# arrays its expansion reads in value positions (esm-spec §9.6.11).
+_infer_expr_shape(
+    expr::ASTExpr, shapes::Dict{String, Vector{String}}, ctx = nothing
+)::Vector{String} = something(
+    _expr_axes(_ShapeEnv(shapes; unknown = String[], ctx = ctx), expr), String[]
+)
 
 # Op-class memberships for the array rewrites below and in pointwise_lift.jl,
 # derived from the registry flags (src/op_registry.jl); memberships are
@@ -224,11 +147,11 @@ function _wrap_bare_array_refs(
             expr
         else
             # Name-based alignment applies in ELEMENT-WISE position only: a
-            # scalar operator lifted over the grid. Any other op — an unlowered
-            # rewrite target (`div`/`grad`/a user op) — consumes WHOLE
-            # arrays under its own contract, not name-aligned cells, so its
-            # operands keep the historical positional gather.
-            inner = _is_scalar_op(expr.op) ? align : nothing
+            # scalar operator, or a `broadcast` of one, lifted over the grid.
+            # Any other op — an unlowered rewrite target (`div`/`grad`/a user
+            # op) — consumes WHOLE arrays under its own contract, not
+            # name-aligned cells, so its operands keep the positional gather.
+            inner = _is_elementwise_node(expr) ? align : nothing
             new_args = ASTExpr[
                 _wrap_bare_array_refs(
                     a, arrayvars, loops,

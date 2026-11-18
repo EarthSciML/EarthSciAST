@@ -218,7 +218,7 @@ end
 
 # Every data-fed parameter of `model`, in declaration order. A parameter is data-fed when some `update` rule is
 # `kind == "data"` and carries a `from` binding (esm-spec §5.4/§8.5) — the same
-# predicate `_collect_loader_fields!` applies, MINUS its requirement that the
+# predicate `_loader_fields` applies, MINUS its requirement that the
 # named source resolve: a source the document does not declare is not a source
 # that is bound either, and dropping the parameter here is exactly how it used
 # to reach the build looking ordinary and run at its `default`.
@@ -748,14 +748,10 @@ function _count_obs_refs!(
     return nothing
 end
 
-function _pick_tspan(tspan, model::Model)
-    tspan === nothing || return (Float64(tspan[1]), Float64(tspan[2]))
-    if !isempty(model.tests)
-        ts = model.tests[1].time_span
-        return (Float64(ts.start), Float64(ts.stop))
-    end
-    return (0.0, 1.0)
-end
+# The build's time span: the caller's, else `(0.0, 1.0)`. An inline test's
+# `time_span` belongs to that test (esm-spec §6.6) and is not a default for the
+# system; the flattened system the build reads carries no tests.
+_pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float64(tspan[2]))
 
 # ============================================================
 # 5b. Array-variable helpers (faq evaluation support)

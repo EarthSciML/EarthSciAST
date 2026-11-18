@@ -258,17 +258,6 @@ both bindings now and every field is compared. The RULING itself no longer has a
 corpus case, so it is pinned locally below on a document built here — losing the
 refusal must not lose the diagnostic.)
 
-- `loader_fields` on a REACTION SYSTEM's data-bound parameter: classified, never
-  fetched. `_collect_loader_fields!` (src/flatten.jl) walks models and their
-  subsystems only, so a reaction system's parameter declaring
-  `update: {kind: "data", ...}` is reported in `discrete_parameters` — correctly,
-  per esm-spec §6.3.1 — while nothing emits a `LoaderField` to actually load it.
-  Rust does not share this gap: `collect_loader_fields` walks the flattened
-  parameter map, so it fetches these bindings and is the binding that is right.
-  Julia, Python and Go all need the same treatment before the corpus can record
-  it; until then Julia matches the corpus on `loader_fields` and the pin below
-  keeps the half-implemented path from drifting unnoticed.
-
 """
 const _FC_DIVERGENCES = Dict{String, Vector{String}}(
     "complete_coupling_types" => ["equations"],
@@ -796,15 +785,13 @@ end
                 startswith(n, first(split(param, '.')) * ".") || continue
                 @test (fixture, n, _fc_update_kinds(other)) == (fixture, n, String[])
             end
-            # The other half of §8.5 is NOT implemented for reaction systems:
-            # `_collect_loader_fields!` walks models only, so this parameter is
-            # classified discrete but nothing fetches it. Pinned so the gap is
-            # visible here rather than only as a runtime surprise.
+            # ... and it is fetched: it has a `loader_fields` entry like a
+            # model's data-fed parameter (esm-libraries-spec §4.7.5 step 4).
             @test (
                 fixture, "loader_fields",
                 param in String[lf.name for lf in flat.loader_fields],
             ) ==
-                (fixture, "loader_fields", false)
+                (fixture, "loader_fields", true)
         end
     end
 

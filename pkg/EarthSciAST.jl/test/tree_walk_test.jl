@@ -260,7 +260,7 @@ end
     # ========================================================
     # Default tspan from inline tests block
     # ========================================================
-    @testset "tspan picked from tests block" begin
+    @testset "an inline test's time span is not the build's default" begin
         vars = Dict{String, ModelVariable}(
             "x" => ModelVariable(UnknownVariable; default = 1.0),
             "k" => ModelVariable(ParameterVariable; default = 0.1),
@@ -275,9 +275,8 @@ end
         ]
         model = ESM.Model(vars, [eq]; tests = tests)
         _, _, _, tspan_default, _ = EarthSciAST.Internal.build(model)
-        # The build reads the flattened run document, which does not carry the
-        # model's inline tests, so the build falls back to (0.0, 1.0).
-        @test_broken tspan_default == (0.0, 25.0)
+        # A build's default span is (0.0, 1.0); an inline test passes its own.
+        @test tspan_default == (0.0, 1.0)
     end
 
     # ========================================================
