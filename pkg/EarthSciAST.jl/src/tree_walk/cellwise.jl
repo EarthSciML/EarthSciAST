@@ -1,67 +1,28 @@
 # tree_walk/cellwise.jl — cell-wise evaluation: an expression indexed at a cell, the
 # per-cell evaluator, and the compile-once cell evaluators with their memo.
 
-"""
-    _index_at_cell(expr, idxs) -> ASTExpr
-
-Broadcast-index an elementwise expression at the concrete 1-based cell `idxs`:
-every array-PRODUCING node (`makearray`, or `faq` with non-empty
-`output_idx`) is wrapped in `index(node, idxs…)`, elementwise ops are descended,
-and scalar leaves (literals, scalar names, `index` gathers, scalar reductions)
-pass through. The concrete-index dual of `_index_array_leaves` (loop-name form).
-"""
-function _index_at_cell(expr::EarthSciAST.ASTExpr, idxs::Vector{Int})::EarthSciAST.ASTExpr
-    if expr isa OpExpr
-        if _is_array_producer(expr)
-            idx_args = ASTExpr[expr]
-            for k in idxs
-                push!(idx_args, IntExpr(Int64(k)))
-            end
-            return OpExpr("index", idx_args)
-        end
-        (
-            expr.op == "faq" || expr.op == "makearray" ||
-                expr.op == "index"
-        ) && return expr
-        return reconstruct(expr; args = ASTExpr[_index_at_cell(a, idxs) for a in expr.args])
-    end
-    return expr
+# `expr` read at one cell given by `subscripts`: every array-PRODUCING node
+# (`makearray`, or `faq` with non-empty `output_idx`) is wrapped in
+# `index(node, subscripts…)`, elementwise operators are descended, and scalar
+# leaves (literals, scalar names, `index` gathers, scalar reductions) pass
+# through. The concrete-cell dual of `_index_array_leaves` (loop-name form).
+function _index_at(expr::ASTExpr, subscripts::Vector{ASTExpr})::ASTExpr
+    expr isa OpExpr || return expr
+    _is_array_producer(expr) && return OpExpr("index", ASTExpr[expr, subscripts...])
+    (expr.op == "faq" || expr.op == "makearray" || expr.op == "index") && return expr
+    return reconstruct(expr; args = ASTExpr[_index_at(a, subscripts) for a in expr.args])
 end
 
-"""
-    _index_at_cell_sym(expr, syms) -> ASTExpr
+# `_index_at` at a concrete 1-based cell.
+_index_at_cell(expr::ASTExpr, idxs::Vector{Int}) =
+    _index_at(expr, ASTExpr[IntExpr(Int64(k)) for k in idxs])
 
-The SYMBOLIC-output-index twin of [`_index_at_cell`](@ref) (wall2 Phase C): every
-array-PRODUCING node is wrapped in `index(node, VarExpr(syms[1]), …)` instead of
-`index(node, IntExpr(cell[1]), …)`, so the output indices stay symbolic through
-`_resolve_indices`/unrolling and the whole observed body compiles ONCE with the
-output indices bound as parameters (`syms` are reserved names the compile-once
-`evaluate_cellwise` fast path binds per cell). Structurally identical to
-`_index_at_cell` in every other respect — same descent through elementwise ops,
-same scalar-leaf passthrough — so the resulting reduction term order (and thus the
-floating-point sum) is byte-identical to the per-cell path with the output index
-folded to a literal.
-"""
-function _index_at_cell_sym(
-        expr::EarthSciAST.ASTExpr,
-        syms::Vector{String}
-    )::EarthSciAST.ASTExpr
-    if expr isa OpExpr
-        if _is_array_producer(expr)
-            idx_args = ASTExpr[expr]
-            for s in syms
-                push!(idx_args, VarExpr(s))
-            end
-            return OpExpr("index", idx_args)
-        end
-        (
-            expr.op == "faq" || expr.op == "makearray" ||
-                expr.op == "index"
-        ) && return expr
-        return reconstruct(expr; args = ASTExpr[_index_at_cell_sym(a, syms) for a in expr.args])
-    end
-    return expr
-end
+# `_index_at` at a cell named by the symbols `syms`, which stay symbolic through
+# `_resolve_indices` and the unroll and are bound per cell as parameters. The
+# reduction terms come out in the order the concrete cell gives them, so the
+# floating-point result is the concrete cell's.
+_index_at_cell_sym(expr::ASTExpr, syms::Vector{String}) =
+    _index_at(expr, ASTExpr[VarExpr(s) for s in syms])
 
 # Evaluate an elementwise-over-arrays expression at one concrete cell through
 # the standard build-time pipeline (_index_at_cell → _resolve_indices → _compile
@@ -81,69 +42,55 @@ end
 # which reads `t` at the start of the run (esm-spec §11.4.2), reaches it with
 # `t` renamed to a scalar bound to that start (`_ic_bind_start_time`), and an
 # assertion, which carries a `time` of its own (esm-spec §6.6.3), passes its
-# time here. Before this
-# argument existed the slot was the literal `0.0` at every call site, so a
-# `t`-dependent observed asserted at any other time read ZERO and reported a
-# plausible-looking wrong number (issue #406).
+# time here.
 #
 # One resolve and compile per call, so per cell: it takes a license (or a
-# refusal's one-cell probe), compiler.jl.
+# refusal's one-cell probe), compiler.jl. Errors propagate.
 function _eval_cellwise(
         ::_PerCellAccess, expr::EarthSciAST.ASTExpr, cell::Vector{Int};
         const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
         params::AbstractDict = _EMPTY_PARAMS,
         t::Float64 = 0.0
     )::Float64
-    cellwise = _index_at_cell(expr, cell)
-    # One build memo for the resolve and the compile, and the shared nodes of
-    # the compiled tree evaluated once (`_cell_memoize!`): an inlined observed
-    # chain reaches the same sub-tree from many parents (a template parameter
-    # written at each of its uses, an observed read by several others), and
-    # walking it once per parent grows with the product of those fan-outs.
-    # Both memos return the value the unshared walk computes.
-    bmemo = _BuildMemo()
-    vmap = Dict{String, Int}()
-    resolved = _resolve_indices(
-        cellwise,
-        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-        vmap, const_arrays, _EMPTY_PGATHER, bmemo
-    )
     psyms = Symbol[Symbol(k) for k in keys(params)]
-    pvals = Float64[Float64(params[k]) for k in keys(params)]
-    p_nt = NamedTuple{Tuple(psyms)}(Tuple(pvals))
-    node = _cell_memoize!(
-        _compile(resolved, vmap, Set{Symbol}(psyms), bmemo), typeof(p_nt)
-    )
+    node = _compile_cell_body(_index_at_cell(expr, cell), String[], const_arrays, psyms)
+    p_nt = NamedTuple{Tuple(psyms)}(Tuple(Float64[Float64(params[k]) for k in keys(params)]))
     return _eval_node(node, Float64[], p_nt, t)
 end
 
-# ============================================================
-# 5b'. Compile-once cellwise evaluator (wall2 Phase C — THE Wall #2 fix)
-# ============================================================
-#
-# `evaluate_cellwise` materialises an array-valued observed / analytic reference at
-# every output cell. The straightforward path (`_eval_cellwise`, one cell at a time)
-# re-runs the ENTIRE `_index_at_cell → _resolve_indices → _compile` pipeline PER
-# cell, so for a CONTRACTING aggregate over const arrays — `conc[rcv] = Σ_c
-# A[c,rcv]·E[c]` — it rebuilds AND recompiles the whole N_src-wide reduction tree
-# once per output cell (the output index is baked to a literal, forcing every
-# `A[c,rcv]` const read to constant-fold per cell). That is O(N_cells × N_src)
-# alloc-heavy recompilation on a type-unstable ASTExpr path — Wall #2.
-#
-# The compile-once path resolves+compiles the observed body a SINGLE time with the
-# OUTPUT INDICES BOUND AS PARAMETERS (kept symbolic through the unroll — a const
-# read carrying an output index lowers to a runtime `_NK_CONST_GATHER`, everything
-# else folds exactly as before), then evaluates each cell by rebinding ONLY the
-# output-index params and re-walking the type-stable compiled tree. The contracted
-# indices still unroll to the SAME concrete values in the SAME order via the SAME
-# `_foreach_aggregate_term`/`_combine_with_reducer`, so the reduction term order —
-# and thus the floating-point sum — is BYTE-IDENTICAL to the per-cell path.
-#
-# It is a PURE OPTIMISATION: whenever anything is unsupported (a ragged /
-# output-dependent contracted bound, a join/filter aggregate, a makearray keyed on
-# the output index, or any resolve/compile error) `_cellwise_compile_once` returns
-# `nothing` and `evaluate_cellwise` falls back to the exact per-cell loop — output
-# byte-identical to today.
+# Resolve and compile a cell body once, the names `bound` declared bound (so a
+# const read carrying one lowers to a run-time `_NK_CONST_GATHER`) and `psyms`
+# the parameter names, in order. One build memo serves the resolve and the
+# compile, and the compiled tree's shared nodes are evaluated once per cell
+# (`_cell_memoize!`): an inlined observed chain reaches the same sub-tree from
+# many parents, and walking it once per parent grows with the product of
+# those fan-outs. Both memos return the value the unshared walk computes.
+function _compile_cell_body(
+        expr::ASTExpr, bound::Vector{String}, const_arrays::AbstractDict,
+        psyms::Vector{Symbol}
+    )::_Node
+    bmemo = _BuildMemo()
+    vmap = Dict{String, Int}()
+    resolved = _resolve_indices(
+        expr, Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+        vmap, const_arrays, _EMPTY_PGATHER, bmemo, Set{String}(bound)
+    )
+    return _cell_memoize!(
+        _compile(resolved, vmap, Set{Symbol}(psyms), bmemo),
+        NamedTuple{Tuple(psyms), NTuple{length(psyms), Float64}}
+    )
+end
+
+# ---- Compile-once cell evaluation ----
+# `_eval_cellwise` resolves and compiles the whole body at every cell, so a
+# contracting aggregate over const arrays (`conc[rcv] = Σ_c A[c,rcv]·E[c]`)
+# rebuilds its whole reduction per output cell. The compile-once evaluator
+# (`_cell_evaluator`) resolves and compiles the body once with the output
+# indices bound as parameters (a const read carrying one lowers to a run-time
+# `_NK_CONST_GATHER`, everything else folds as before) and evaluates each cell
+# by rebinding them. The contracted indices unroll to the same values in the
+# same order, so every sum is the per-cell path's, bit for bit. Whatever it
+# cannot compile, it declines (`nothing`), and the caller evaluates per cell.
 
 # A per-cell evaluator specialised on the parameter key tuple `syms` (a TYPE
 # parameter, so `NamedTuple{syms}` construction is type-stable and isbits →
@@ -167,16 +114,26 @@ end
     ntuple(d -> @inbounds(Float64(cell[d])), Val(NI))
 
 @inline function (ce::_CellEval{syms, NP, NI})(cell::AbstractVector{<:Integer}) where {syms, NP, NI}
+    length(cell) == NI || _cell_rank_mismatch(length(cell), NI)
     vals = (ce.base..., _idx_tuple(cell, Val(NI))...)   # isbits tuple → stack
     p_nt = NamedTuple{syms}(vals)                        # type-stable (syms is a type param)
     return _eval_node(ce.node, _NO_STATE_U, p_nt, ce.t)
 end
 
-# Engagement counts (`_count!`, compiler.jl): how often the compile-once fast
-# path engages (`_cellwise_compile_once_impl` returns a `_CellEval`,
-# `:cellwise_fastpath_hit`) versus falls back to the per-cell loop (`nothing`,
-# `:cellwise_fastpath_miss`). Every caller goes through this wrapper, which
-# returns the impl's result unchanged.
+@noinline _cell_rank_mismatch(n::Int, ni::Int) = throw(
+    TreeWalkError(
+        "E_TREEWALK_UNSUPPORTED_EQUATION",
+        "cell evaluator: cell rank $n ≠ output rank $ni"
+    )
+)
+
+# The compile-once evaluator of a field `expr` over an `nidx`-D output grid
+# (`nidx == 0` is a shapeless target: one cell, nothing to bind), or `nothing`
+# when it cannot be compiled and the caller evaluates per cell. The output
+# indices are bound under reserved names, or `bind_syms` when given (a
+# precomputed contraction binds its own output symbols). Counts each answer
+# (`:cellwise_fastpath_hit` / `:cellwise_fastpath_miss`, `_count!` in
+# compiler.jl).
 function _cellwise_compile_once(
         expr::EarthSciAST.ASTExpr, nidx::Int,
         const_arrays::AbstractDict,
@@ -184,15 +141,11 @@ function _cellwise_compile_once(
         bind_syms::Union{Nothing, Vector{String}} = nothing,
         t::Float64 = 0.0
     )
-    ce = _cellwise_compile_once_impl(
-        expr, nidx, const_arrays, params;
-        bind_syms = bind_syms, t = t
-    )
-    if ce === nothing
-        _count!(:cellwise_fastpath_miss)
-    else
-        _count!(:cellwise_fastpath_hit)
-    end
+    syms = bind_syms === nothing ? _cell_oidx_syms(nidx) : bind_syms
+    ce = nidx >= 0 && length(syms) == nidx ?
+        _cell_evaluator(expr, syms, const_arrays, params; index_outputs = true, t = t) :
+        nothing
+    _count!(ce === nothing ? :cellwise_fastpath_miss : :cellwise_fastpath_hit)
     return ce
 end
 
@@ -276,112 +229,32 @@ end
     return Float64(_eval_node(n.children[1], u, p, t, T))
 end
 
-# Build the compile-once evaluator for `expr` over an `nidx`-D output grid, or
-# `nothing` if the fast path cannot apply (the caller falls back to per-cell). The
-# resolve+compile is attempted ONCE with the output indices bound as reserved
-# parameters; ANY failure (unsupported construct, unbound name, …) yields `nothing`.
-function _cellwise_compile_once_impl(
-        expr::EarthSciAST.ASTExpr, nidx::Int,
-        const_arrays::AbstractDict,
-        params::AbstractDict;
-        bind_syms::Union{Nothing, Vector{String}} = nothing,
-        t::Float64 = 0.0
-    )
-    # `nidx == 0` is a SHAPELESS (rank-0) target — one cell, no output index to
-    # bind. It compiles exactly like any other: no reserved index parameters, an
-    # empty symbol list for `_index_at_cell_sym` (which then makes the same
-    # `index(producer)` wrap the concrete `_index_at_cell` makes for an empty
-    # cell), and one evaluation. It used to be declined here, which sent every
-    # scalar observed to the per-cell walk — and, once the compiler gained a
-    # strict tier, to a refusal for the one shape that cannot possibly walk
-    # "per cell" more than once.
-    nidx >= 0 || return nothing
-    # Reserved output-index parameter names (never authored by a user), one per
-    # output dimension. Guard against the (impossible-in-practice) name collision.
-    # `bind_syms` overrides them with caller-chosen names (wall2 Phase D reuses
-    # this to compile a BLAS-precomputed wrapper, binding the aggregate's own
-    # output symbols); the default is byte-identical to the Phase C behaviour.
-    syms_str = bind_syms === nothing ? String["__esm_oidx_$d" for d in 1:nidx] : bind_syms
-    length(syms_str) == nidx || return nothing
-    for s in syms_str
-        (s == "t" || haskey(params, s)) && return nothing
-    end
-    pkeys = collect(keys(params))
-    psyms = Symbol[Symbol(k) for k in pkeys]
-    for s in syms_str
-        push!(psyms, Symbol(s))
-    end
-    bound = Set{String}(syms_str)
-    node = try
-        cellwise = _index_at_cell_sym(expr, syms_str)
-        # One build memo for the resolve and the compile: a sub-tree shared by
-        # reference (an inner reduction that does not read the enclosing
-        # unrolled loop's symbol, such as the `argmin` template's minimum) resolves and
-        # compiles to one node, which `_cell_memoize!` then evaluates once per
-        # cell.
-        bmemo = _BuildMemo()
-        vmap = Dict{String, Int}()
-        resolved = _resolve_indices(
-            cellwise,
-            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-            vmap, const_arrays,
-            _EMPTY_PGATHER, bmemo, bound
-        )
-        _cell_memoize!(
-            _compile(resolved, vmap, Set{Symbol}(psyms), bmemo),
-            NamedTuple{Tuple(psyms), NTuple{length(psyms), Float64}}
-        )
-    catch err
-        _is_resource_error(err) && rethrow()
-        return nothing   # anything unsupported → per-cell fallback
-    end
-    base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
-    return _CellEval{Tuple(psyms), length(pkeys), nidx}(node, base, t)
-end
+# The reserved names (no document can author them) an `n`-D output cell's
+# indices are bound under.
+_cell_oidx_syms(n::Int) = String["__esm_oidx_$d" for d in 1:n]
 
-# Compile a SCALAR term once with `syms` — every loop symbol it reads, output and
-# contracted alike — bound as parameters, or `nothing` if it cannot be compiled.
-#
-# The difference from `_cellwise_compile_once` is only the `_index_at_cell_sym`
-# wrap that one applies first: that one is handed a FIELD expression and has to
-# index each array-producing node at the output cell, while this one is handed a
-# term that is already scalar at a fixed (output, contracted) tuple. Everything
-# after that is the same pipeline — `_resolve_indices` with the symbols declared
-# BOUND, so a const read carrying one lowers to a runtime `_NK_CONST_GATHER`,
-# then `_compile` with the symbols in the parameter set — and the result is the
-# same `_CellEval`, called with a key vector holding the symbols' values in
-# `syms` order.
-#
-# It exists for the join-gated aggregate (Phase E in inline_tests.jl), whose
-# admitted (output, contracted) tuples are chosen by a build-time index and so
-# cannot be enumerated symbolically. Compiling the TERM once and walking the
-# gate's own key sequence keeps the whole field on one compile, which is what
-# `compiler=:native` promises; `:interpreter` remains the oracle it is checked
-# against.
-function _scalarwise_compile_once(
-        expr::EarthSciAST.ASTExpr, syms::Vector{String},
-        const_arrays::AbstractDict,
-        params::AbstractDict; t::Float64 = 0.0
+# Compile `expr` once with the names `syms` bound as parameters after those of
+# `params`, and return the `_CellEval` that evaluates it at a cell (the values
+# of `syms`, in order), or `nothing` when it cannot be compiled or a name of
+# `syms` is repeated, is `t` or is a parameter. With `index_outputs`, `expr` is
+# a field and each array-producing node is first read at the cell
+# (`_index_at_cell_sym`); without it, `expr` is already scalar at the bound
+# tuple, as a join-gated aggregate's term is, whose admitted tuples come from a
+# build-time index and are walked in that order.
+function _cell_evaluator(
+        expr::ASTExpr, syms::Vector{String}, const_arrays::AbstractDict,
+        params::AbstractDict; index_outputs::Bool, t::Float64 = 0.0
     )
-    isempty(syms) && return nothing
-    length(unique(syms)) == length(syms) || return nothing
+    allunique(syms) || return nothing
     for s in syms
         (s == "t" || haskey(params, s)) && return nothing
     end
     pkeys = collect(keys(params))
     psyms = Symbol[Symbol(k) for k in pkeys]
-    for s in syms
-        push!(psyms, Symbol(s))
-    end
-    bound = Set{String}(syms)
+    append!(psyms, Symbol.(syms))
     node = try
-        resolved = _resolve_indices(
-            expr,
-            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-            Dict{String, Int}(), const_arrays,
-            _EMPTY_PGATHER, nothing, bound
-        )
-        _compile(resolved, Dict{String, Int}(), Set{Symbol}(psyms))
+        body = index_outputs ? _index_at_cell_sym(expr, syms) : expr
+        _compile_cell_body(body, syms, const_arrays, psyms)
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
@@ -389,6 +262,14 @@ function _scalarwise_compile_once(
     base = ntuple(i -> Float64(params[pkeys[i]]), length(pkeys))
     return _CellEval{Tuple(psyms), length(pkeys), length(syms)}(node, base, t)
 end
+
+# A scalar term compiled once with every loop symbol it reads bound
+# (`_cell_evaluator` without the output read), or `nothing`.
+_scalarwise_compile_once(
+    expr::ASTExpr, syms::Vector{String}, const_arrays::AbstractDict,
+    params::AbstractDict; t::Float64 = 0.0
+) = isempty(syms) ? nothing :
+    _cell_evaluator(expr, syms, const_arrays, params; index_outputs = false, t = t)
 
 # Function barrier: evaluate `ce` at every cell. `ce` arrives concretely typed
 # (`CE` is inferred from it), so the per-cell call is a STATIC dispatch and the loop

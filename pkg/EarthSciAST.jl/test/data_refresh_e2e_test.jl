@@ -92,7 +92,7 @@ end
 
         scale = [1.0, 2.0, 3.0]          # CONST factor — materialized once at build
         srcbuf = [1.0, 1.0, 1.0]          # DISCRETE live buffer — the [0,1) segment value
-        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),    # CONST: inlined once (no tstops)
@@ -106,6 +106,7 @@ end
             )
         )
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )   # SAME buffer object as param_arrays
@@ -131,7 +132,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, _vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),
@@ -154,6 +155,7 @@ end
         @test provider_is_const(const_scale)
 
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => disc, "scale" => const_scale),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )
@@ -181,7 +183,7 @@ end
         model = file.models["M"]
         scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, _vm) = b = EarthSciAST.Internal.build(
             file;
             initial_conditions = _coupled_ics(),
             const_arrays = Dict("scale" => scale),
@@ -195,6 +197,7 @@ end
         # a real in-place refresh through the machinery, not a hand-poked buffer.
         prov = _RefreshLogProvider([1.0], Dict(1.0 => Dict("src" => [9.0, 9.0, 9.0])))
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = RefreshBuffers(Dict("src" => srcbuf))
         )

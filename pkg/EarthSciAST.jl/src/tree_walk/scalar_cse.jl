@@ -2,7 +2,7 @@
 # `_compile_cse` / `_cse_compile_scalar`.
 
 # ============================================================
-# 3b. Common-subexpression elimination (ess-r7h) — eval-time memo, approach (a)
+# Common-subexpression elimination — an evaluation-time memo
 # ============================================================
 #
 # APPROACH: eval-time memoization. The serialized IR and the canonical goldens are
@@ -121,22 +121,15 @@ _cse_hoistable(e::OpExpr) =
 _has_tree_walk_rule(op::AbstractString) = Symbol(op) in _SHAPED_OP_SYMS
 _cse_hoistable(::ASTExpr) = false
 
-# ---- Keying an expression built over a live forcing buffer (ess-qic) ----------
+# ---- Keying an expression built over a live forcing buffer ----------------------
 #
 # A resolved `param_arrays` gather is an argless `index` node carrying a
 # `_PGatherRef` in `value` (see `_PGatherRef`). `_PGatherRef` is a runtime payload,
-# not a JSON type, so `canonical_json` throws on it — and since it is canonicalized
-# as a CHILD of every hoistable ancestor, that throw used to decline sharing for the
-# whole met→physics stack sitting above a forcing buffer. The fix is to key the
-# gather as a LEAF with a canonicalizable, DISTINGUISHABLE identity:
-#
-# STILL NEEDED AFTER ess-obs-slots — verified, not assumed. Named observed
-# slots remove one class of key-bearing tree (an observed body spliced into
-# readers), but payload-bearing gathers still flow through `_cse_key` on two
-# live paths: a scalar EQUATION reading `index(forcing, …)` directly, and
-# every observed slot DEF body (resolved through the same `_resolve_indices`
-# and counted/keyed by `_cse_count!`/`_compile_cse`). Deleting this stand-in
-# would silently switch CSE off for both — exactly the ess-qic hole.
+# not a JSON type, so `canonical_json` throws on it, and since it is canonicalized
+# as a CHILD of every hoistable ancestor, that throw would decline sharing for the
+# whole met→physics stack sitting above a forcing buffer: a scalar equation
+# reading `index(forcing, …)` and every observed slot's definition. So the gather
+# is keyed as a LEAF with a canonicalizable, DISTINGUISHABLE identity:
 #
 #     OpExpr("index", []; name="__pgather", value=[<buffer name>, <linear offset>])
 #
@@ -237,10 +230,10 @@ end
 #
 # `pgctx` is the live-forcing stand-in context (above) when the build binds any
 # `param_arrays` buffer or discrete cache, and `nothing` otherwise — in which case
-# no `_PGatherRef` can exist and this is byte-for-byte the pre-ess-qic key.
+# no `_PGatherRef` can exist and the key is the expression's own.
 #
 # ---------------------------------------------------------------------------
-# WHY A BARE-LITERAL CANONICAL FORM IS REFUSED (bug audit 2026-07-14, J4)
+# WHY A BARE-LITERAL CANONICAL FORM IS REFUSED
 #
 # The CSE key is `canonical_json`, and `canonicalize` contains folds that are NOT
 # value-preserving on the IEEE reals: `_canon_mul` maps `x*0 → 0` and `_canon_div`
@@ -269,16 +262,17 @@ function _cse_key(e::ASTExpr, pgctx::Union{Nothing, _PGatherKeyCtx})
     return _cse_key(e, pgctx, _CSEKeyMemos())
 end
 
-# Per-build memo pair for CSE keying over a structurally-SHARED expression DAG
+# Per-build memos for CSE keying over a structurally-SHARED expression DAG
 # (template expansion splices identical subtrees by reference, so the same
 # node object hangs under exponentially many paths):
 #
 #   * `canon` — node object → its canonical form (or the `CanonicalizeError`
 #     it raised, replayed on every later consumer so a shared failing subtree
 #     declines every ancestor exactly as the plain recursion did).
-#   * `key`   — node object → its `_cse_key` result (`String` or `nothing`).
+#   * `key`   — node object → its `_cse_key` result (a number or `nothing`).
+#   * `num`, `ids` — the canonical-node numbering (`_cse_node_number!`).
 #
-# Both are keyed on OBJECT IDENTITY: keying is a pure function of the node
+# `canon` and `key` are keyed on OBJECT IDENTITY: keying is a pure function of the node
 # (and the build-constant `pgctx`), so one computation per unique node is
 # byte-identical to one per path. The count pass and the compile pass share
 # ONE memo pair (via `_CSEContext`) for the same reason they share `pgctx`.
@@ -294,12 +288,14 @@ _CSEKeyMemos() = _CSEKeyMemos(
 
 # The number of a canonical node: two nodes get one number exactly when their
 # canonical JSON (`_emit_node_json`) is equal. The JSON is a function of the
-# node's own fields and its operands' JSON, injectively (strings are quoted,
-# numbers and nested values are canonical), so the tuple of those fields, with
-# each operand node's NUMBER in place of its JSON, is equal exactly when the
-# JSON is, by induction on the operands. A bare operand keeps the JSON text
-# (or its name, for a variable, whose JSON is the quoted name); the fields the
-# JSON cannot carry raise as the emission does. Keying a template call site
+# node's emitted fields (`_EMISSIBLE_FIELDS`, canonicalize.jl) and its operands'
+# JSON, injectively (strings are quoted, numbers and nested values are
+# canonical), so the tuple of those fields, with each operand node's NUMBER in
+# place of its JSON, is equal exactly when the JSON is, by induction on the
+# operands. The tuple is built from that same field list, so a field the
+# emitter carries is never left out of the key. A bare operand keeps the JSON
+# text (or its name, for a variable, whose JSON is the quoted name); the fields
+# the JSON cannot carry raise as the emission does. Keying a template call site
 # this way costs one node's fields, where its JSON is its whole body.
 function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
     v = get(M.num, e, 0)
@@ -310,13 +306,16 @@ function _cse_node_number!(e::OpExpr, M::_CSEKeyMemos)
         ops[i] = a isa OpExpr ? _cse_node_number!(a, M) :
             a isa VarExpr ? (:var, a.name) : _emit_json(a)
     end
-    key = (
-        e.op, ops, e.wrt, e.dim, e.fn, e.name, _cse_value_key(e.value), e.units,
-    )
+    key = map(f -> _cse_field_key(e, f, ops), _EMISSIBLE_FIELDS)
     n = get!(M.ids, key, length(M.ids) + 1)
     M.num[e] = n
     return n
 end
+
+# One emitted field of `e` in its CSE key: the operand numbers for `args`, the
+# canonical value for `value`, the field itself otherwise.
+_cse_field_key(e::OpExpr, f::Symbol, ops::Vector{Any}) =
+    f === :args ? ops : f === :value ? _cse_value_key(e.value) : getfield(e, f)
 
 # A node's `value` in its key: the canonical JSON of a document value, or, for
 # the run-time const gather (`_ConstGatherRef`, which no JSON carries), the
@@ -543,12 +542,12 @@ end
 # (criterion #2: distinct evaluations == distinct canonical subexpressions).
 # `has_pgather` is whether the build bound ANY live forcing buffer or discrete
 # cache (`!isempty(pgather)`). It is a required keyword, not a defaulted one: a
-# forgotten `false` would silently restore the ess-qic coverage hole rather than
-# fail, and a hole that fails closed is exactly the bug this argument exists to fix.
+# forgotten `false` would silently stop every expression over a forcing buffer
+# from being shared.
 function _cse_compile_scalar(
         entries::Vector{Tuple{Int, ASTExpr}},
         var_map, param_syms; has_pgather::Bool,
-        # Named scalar-observed defs (ess-obs-slots), in
+        # Named scalar-observed defs, in
         # dependency order, already `_resolve_indices`d.
         # Each compiles ONCE as a prelude def; readers
         # (`VarExpr` of the name, in entries or in later

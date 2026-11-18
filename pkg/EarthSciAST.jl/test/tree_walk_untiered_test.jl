@@ -215,8 +215,10 @@ _ut_doc_build(file; kw...) = _ut_with_stats(ESM.Internal.build(file; kw...))
         buf = [6.0]
         mk() = _ut_fastjx_model(K, M)
         pa() = Dict("F" => buf)
-        fi, u0, p, _ts, _vm, di = _ut_tiered(mk; param_arrays = pa())
-        fu, _u2, _p2, _ts2, _vm2, _du = _ut_untiered(mk; param_arrays = pa())
+        bi = ESM.Internal.build(mk(); param_arrays = pa())
+        bu = ESM.Internal.build(mk(); param_arrays = pa(), compiler = :interpreter)
+        fi, u0, p, _ts, _vm, di = _ut_with_stats(bi)
+        fu, _u2, _p2, _ts2, _vm2, _du = _ut_with_stats(bu)
         @test di.n_time_slots > 0
 
         p2 = _ut_set(p; w = 0.9, scale = 2.25)
@@ -234,7 +236,8 @@ _ut_doc_build(file; kw...) = _ut_with_stats(ESM.Internal.build(file; kw...))
         for step in seq
             if step[1] === :refresh
                 buf[1] = step[2]
-                ESM.notify_forcing_refresh!()
+                ESM.notify_forcing_refresh!(bi)
+                ESM.notify_forcing_refresh!(bu)
                 continue
             end
             u, pp, t = step

@@ -16,7 +16,7 @@ const ESM_AOM = EarthSciAST
 # `(f!, u0, p, tspan, var_map, stats)`. Names are flattened (`M.u[1]`).
 function _aom_build(model; kwargs...)
     b = ESM_AOM.Internal.build(model; kwargs...)
-    return (b.f!, b.u0, b.p, b.tspan, b.var_map, b.report.stats)
+    return (b.f!, b.u0, b.p, b.tspan, b.var_map, b.report.stats, b)
 end
 
 # Build the same model twice — factored (`:native`) and inlined
@@ -223,12 +223,16 @@ end
             )
             @test check(uu, pp, tt)
         end
-        # A refresh in place at the same t, through the supported write path.
+        # A refresh in place at the same t, through the refresh callback's
+        # write, announced to both builds.
         ESM_AOM._write_forcing!(F, "F", Dict("F" => F .* 2.0))
+        ESM_AOM.notify_forcing_refresh!(f4[7])
+        ESM_AOM.notify_forcing_refresh!(i4[7])
         @test check(u0, p, 1.5)
-        # ... and through a direct write plus the buffer-specific notify.
+        # ... and through a direct write plus the announcement.
         F[3] = -7.0
-        ESM_AOM.notify_forcing_refresh!(F)
+        ESM_AOM.notify_forcing_refresh!(f4[7])
+        ESM_AOM.notify_forcing_refresh!(i4[7])
         @test check(u0, p, 1.5)
         ff!(du, u0, p, 1.5)
         if VERSION >= v"1.12"

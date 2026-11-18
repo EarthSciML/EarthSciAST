@@ -7,9 +7,9 @@
 # Each refresh that can move those inputs must be seen on the very next call,
 # bit for bit as `compiler=:interpreter` (which memoizes nothing) sees it:
 #   * a new `t`, a new `p` (what `remake(prob; p = …)` hands the RHS);
-#   * a live buffer written through `_write_forcing!` (the refresh callback);
-#   * a direct in-place write followed by `notify_forcing_refresh!()` or
-#     `notify_forcing_refresh!(buffer)`;
+#   * a live buffer written through `_write_forcing!` (the refresh callback)
+#     and announced to the build;
+#   * a direct in-place write followed by `notify_forcing_refresh!(build)`;
 #   * a direct in-place write followed by a call at a `t` not yet evaluated.
 # Both value types are checked: Float64 calls and the ForwardDiff Jacobian's
 # dual-number calls, which run on their own buffers and stamps. The child
@@ -109,14 +109,13 @@ function _cr_refresh_sequence(N)
     @test agree(p, 0.0)
     @test agree(p, 0.0)                                    # a memo hit
     @test agree(p, 1.5)                                    # new t
+    announce() = (ESM.notify_forcing_refresh!(nat); ESM.notify_forcing_refresh!(ref))
     ESM._write_forcing!(F, "F", Dict("F" => F .* 2.0))
+    announce()
     @test agree(p, 1.5)                                    # the refresh callback's write
-    F .+= 1.0
-    ESM.notify_forcing_refresh!()
-    @test agree(p, 1.5)                                    # direct write + global notice
     F .*= 0.5
-    ESM.notify_forcing_refresh!(F)
-    @test agree(p, 1.5)                                    # direct write + buffer notice
+    announce()
+    @test agree(p, 1.5)                                    # direct write + announcement
     @test agree(p2, 1.5)                                   # new p (remake)
     @test agree(p, 1.5)                                    # and back
     F .-= 0.25
@@ -130,7 +129,7 @@ function _cr_refresh_sequence(N)
     F .+= 7.0
     fn!(du, u0, p, 1.5)
     @test jac(fn!, p, 1.5) == jbefore
-    ESM.notify_forcing_refresh!(F)
+    announce()
     @test agree(p, 1.5)
     @test jac(fn!, p, 1.5) != jbefore
     return nothing
@@ -151,9 +150,9 @@ else
             end
         end
 
-        @testset "a second build of the same buffer is not disturbed" begin
-            # A buffer notice reaches every build that reads the buffer, and
-            # only those: a build over another buffer keeps its memo.
+        @testset "an announcement reaches its own build only" begin
+            # A notice goes to one build: another build over the same buffer,
+            # or over another buffer, keeps its memo until told.
             model, isets, ics = _cr_model(8)
             F = [1.0 + 0.5j for j in 1:8]
             G = copy(F)
@@ -181,10 +180,12 @@ else
             @test call(bF2) == d0 && call(bG) == d0
             F .*= 2.0
             G .*= 2.0
-            ESM.notify_forcing_refresh!(F)
+            ESM.notify_forcing_refresh!(bF)
             @test call(bF) != d0
-            @test call(bF2) == call(bF)
+            @test call(bF2) == d0                    # same buffer, not announced
             @test call(bG) == d0                     # G was not announced
+            ESM.notify_forcing_refresh!(bF2)
+            @test call(bF2) == call(bF)
         end
 
         @testset "a stiff solve across refreshes ≡ the interpreter" begin
@@ -201,21 +202,22 @@ else
             )
             function solve_with(compiler, how)
                 F = [0.2j for j in 1:8]
-                f!, u0, p = ESM.Internal.build(
+                b = ESM.Internal.build(
                     model; index_sets = isets,
                     initial_conditions = ics, param_arrays = Dict("F" => F),
                     compiler = compiler
                 )
+                f!, u0, p = b
                 cb, tstops = if how === :provider
                     ESM.build_refresh_callback(;
                         providers = Dict("F" => _CRProvider(fields)),
-                        buffers = ESM.RefreshBuffers(Dict("F" => F))
+                        buffers = ESM.RefreshBuffers(Dict("F" => F)), owner = b
                     )
                 else
                     DiffEqCallbacks.PresetTimeCallback(
                             [1.0, 2.0], integ -> begin
                                 F .= fields[integ.t]["F"]
-                                ESM.notify_forcing_refresh!(F)
+                                ESM.notify_forcing_refresh!(b)
                             end
                         ), [1.0, 2.0]
                 end

@@ -2,10 +2,11 @@
 # tree_walk/scalar_codegen.jl — the Julia CODEGEN tier for the scalar
 # equation list and the cached prelude.
 #
-# The in-place `f!` (`_make_rhs`, acc_merge.jl) evaluates the scalar equations
-# (`rhs_list`) and the three cadence tiers of the shared-subexpression prelude
-# (const_tier.jl) by walking each `_Node` tree with `_eval_node`, once per
-# equation or slot, on every call. This tier emits them as Julia code instead,
+# Without this tier the in-place `f!` (`_rhs_closure`, below) evaluates the
+# scalar equations (`rhs_list`) and the three cadence tiers of the
+# shared-subexpression prelude (const_tier.jl) by walking each `_Node` tree with
+# `_eval_node`, once per equation or slot, on every call. This tier emits them
+# as Julia code instead,
 # compiled once through RuntimeGeneratedFunctions, as the access-kernel tier
 # (codegen_kernel.jl) does for array kernels.
 #
@@ -120,149 +121,190 @@ const _SC_CUT_UNIT_NODES = 2048
 # A dynamic slot at least this large is a cut point in such a unit.
 const _SC_CUT_SLOT_NODES = 64
 
-# Union-find over the dynamic slots and the equations: an equation or a slot
-# joins every dynamic slot it reads. Returns the units, plus the positions
-# (slots and equations) that cannot be emitted because a tree reads a foreign
-# scratch — those components stay on the walker whole.
-#
-# A component of at least `_SC_CUT_UNIT_NODES` nodes with no such position is
-# then cut: a read of one of its slots of at least `_SC_CUT_SLOT_NODES` nodes
-# does not join the reader to the slot. The reader's unit runs after the
-# slot's (`level`, one more than the deepest unit it reads that way) and the
-# slot is stored to the cache (`cut`). Units that would read each other's cut
-# slots both ways are joined again. Returns `(good, resid, level, cut)`, `good`
-# ordered by level.
-function _sc_dynamic_units(
+# The read graph over the dynamic slots and the equations. Positions
+# `1:nslots` are the dynamic slots (in `dyn_slots` order), the rest the
+# equations. `rd[x]` lists the dynamic-slot positions position `x` reads;
+# `bad[x]` is set when its tree reads another section's scratch, which keeps its
+# whole component on the walker; `sizes[x]` is its tree's node count.
+struct _ScReadGraph
+    rd::Vector{Vector{Int}}
+    bad::BitVector
+    sizes::Vector{Int}
+    nslots::Int
+end
+
+function _sc_read_graph(
         rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
-        cache::_CSECache, dyn_slots::AbstractVector{Int}; cuts::Bool = true
+        cache::_CSECache, dyn_slots::AbstractVector{Int}
     )
     nd_ = length(dyn_slots)
     N = nd_ + n_rhs
-    pos = Dict{Int, Int}()                     # dynamic slot -> union-find node
-    for (i, s) in enumerate(dyn_slots)
-        pos[s] = i
-    end
+    pos = Dict{Int, Int}(s => i for (i, s) in enumerate(dyn_slots))
     bad = falses(N)
-    # Each position's reads of dynamic slots, as union-find nodes.
     rd = Vector{Vector{Int}}(undef, N)
+    sizes = Vector{Int}(undef, N)
     reads = Int[]
     for x in 1:N
         empty!(reads)
         tree = x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2]
         _sc_cache_reads!(reads, tree, cache) || (bad[x] = true)
-        r = Int[]
-        for s in reads
-            j = get(pos, s, 0)
-            j == 0 || push!(r, j)
+        rd[x] = Int[j for j in (get(pos, s, 0) for s in reads) if j != 0]
+        sizes[x] = _cg_node_tree_size(tree)
+    end
+    return _ScReadGraph(rd, bad, sizes, nd_)
+end
+
+# Union-find with path halving; a union keeps the smaller root.
+struct _UnionFind
+    parent::Vector{Int}
+end
+_UnionFind(n::Int) = _UnionFind(collect(1:n))
+function _uf_find(uf::_UnionFind, x::Int)
+    parent = uf.parent
+    while parent[x] != x
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    end
+    return x
+end
+function _uf_unite!(uf::_UnionFind, a::Int, b::Int)
+    ra = _uf_find(uf, a)
+    rb = _uf_find(uf, b)
+    ra == rb || (uf.parent[max(ra, rb)] = min(ra, rb))
+    return nothing
+end
+
+# The units: every position joined to each dynamic slot it reads, except
+# across a read of a cut slot (`cutpt`). Units whose cut reads form a cycle
+# are joined until none does, so the unit graph over cut reads is acyclic.
+function _sc_partition(g::_ScReadGraph, cutpt::BitVector)
+    N = length(g.rd)
+    uf = _UnionFind(N)
+    for x in 1:N, j in g.rd[x]
+        cutpt[j] || _uf_unite!(uf, x, j)
+    end
+    any(cutpt) || return uf
+    while true
+        roots = unique!(Int[_uf_find(uf, x) for x in 1:N])
+        idx = Dict{Int, Int}(r => i for (i, r) in enumerate(roots))
+        succ = [Set{Int}() for _ in roots]
+        for x in 1:N, j in g.rd[x]
+            cutpt[j] || continue
+            a, b = idx[_uf_find(uf, x)], idx[_uf_find(uf, j)]
+            a == b || push!(succ[a], b)
         end
-        rd[x] = r
+        merged = false
+        for grp in values(_sc_scc(succ))
+            length(grp) > 1 || continue
+            for k in grp
+                _uf_unite!(uf, roots[grp[1]], roots[k])
+            end
+            merged = true
+        end
+        merged || return uf
     end
-    parent = collect(1:N)
-    find(x) = (
-        while parent[x] != x
-            parent[x] = parent[parent[x]]; x = parent[x]
-        end; x
-    )
-    unite(a, b) = (ra = find(a); rb = find(b); ra == rb || (parent[max(ra, rb)] = min(ra, rb)); nothing)
-    for x in 1:N, j in rd[x]
-        unite(x, j)
-    end
-    # ---- Cut the large components at their large slots ----
-    cutpt = falses(N)
-    size_of(x) = _cg_node_tree_size(x <= nd_ ? prelude[dyn_slots[x]] : rhs_list[x - nd_][2])
-    sizes = Int[size_of(x) for x in 1:N]
+    return
+end
+
+# The cut points of the uncut partition `uf`: a dynamic slot of at least
+# `_SC_CUT_SLOT_NODES` nodes in a component of at least `_SC_CUT_UNIT_NODES`
+# nodes with no walker-bound position.
+function _sc_cut_points(g::_ScReadGraph, uf::_UnionFind)
+    N = length(g.rd)
     comp_nodes = Dict{Int, Int}()
     comp_bad = Set{Int}()
     for x in 1:N
-        r = find(x)
-        comp_nodes[r] = get(comp_nodes, r, 0) + sizes[x]
-        bad[x] && push!(comp_bad, r)
+        r = _uf_find(uf, x)
+        comp_nodes[r] = get(comp_nodes, r, 0) + g.sizes[x]
+        g.bad[x] && push!(comp_bad, r)
     end
-    for x in 1:nd_
-        cuts || break
-        r = find(x)
-        (sizes[x] >= _SC_CUT_SLOT_NODES && comp_nodes[r] >= _SC_CUT_UNIT_NODES && !(r in comp_bad)) &&
-            (cutpt[x] = true)
+    cutpt = falses(N)
+    for x in 1:g.nslots
+        r = _uf_find(uf, x)
+        (
+            g.sizes[x] >= _SC_CUT_SLOT_NODES && comp_nodes[r] >= _SC_CUT_UNIT_NODES &&
+                !(r in comp_bad)
+        ) && (cutpt[x] = true)
     end
-    if any(cutpt)
-        parent .= 1:N
-        for x in 1:N, j in rd[x]
-            cutpt[j] || unite(x, j)
+    return cutpt
+end
+
+# Each unit's level (a unit reading a cut slot of another runs one level after
+# it; longest path over the acyclic unit graph) and the cut slots some other
+# unit reads, which must be stored to the cache. `unit_of[r]` is the unit of
+# union-find root `r`.
+function _sc_levels(
+        g::_ScReadGraph, uf::_UnionFind, unit_of::Dict{Int, Int}, nunits::Int,
+        cutpt::BitVector, dyn_slots::AbstractVector{Int}
+    )
+    lvl = ones(Int, nunits)
+    cut = Set{Int}()
+    any(cutpt) || return lvl, cut
+    succ = [Set{Int}() for _ in 1:nunits]   # producer -> readers
+    indeg = zeros(Int, nunits)
+    for x in 1:length(g.rd), j in g.rd[x]
+        cutpt[j] || continue
+        a, b = unit_of[_uf_find(uf, j)], unit_of[_uf_find(uf, x)]
+        a == b && continue
+        if !(b in succ[a])
+            push!(succ[a], b)
+            indeg[b] += 1
         end
-        # Join the units on a cycle of cut reads (Tarjan over the unit graph).
-        while true
-            roots = unique!(Int[find(x) for x in 1:N])
-            idx = Dict{Int, Int}(r => i for (i, r) in enumerate(roots))
-            nU = length(roots)
-            succ = [Set{Int}() for _ in 1:nU]
-            for x in 1:N, j in rd[x]
-                cutpt[j] || continue
-                a, b = idx[find(x)], idx[find(j)]
-                a == b || push!(succ[a], b)
-            end
-            comp = _sc_scc(succ)
-            merged = false
-            for grp in values(comp)
-                length(grp) > 1 || continue
-                for g in grp
-                    unite(roots[grp[1]], roots[g])
-                end
-                merged = true
-            end
-            merged || break
+        push!(cut, dyn_slots[j])
+    end
+    q = Int[u for u in 1:nunits if indeg[u] == 0]
+    while !isempty(q)
+        a = pop!(q)
+        for b in succ[a]
+            lvl[b] = max(lvl[b], lvl[a] + 1)
+            indeg[b] -= 1
+            indeg[b] == 0 && push!(q, b)
         end
     end
-    roots = Dict{Int, Int}()
+    return lvl, cut
+end
+
+# The units of the dynamic slots and the equations, from the read graph `g`.
+# With `cuts`, a large component is cut at its large slots (`_sc_cut_points`):
+# a read of a cut slot does not join the reader to it, the reader's unit runs
+# at a later level and the slot is stored to the cache (`cut`). Returns
+# `(good, resid, level, cut)`: the emittable units ordered by level, the units
+# that stay on the walker (a position reads a foreign scratch), each good
+# unit's level, and the cut slots.
+function _sc_dynamic_units(g::_ScReadGraph, dyn_slots::AbstractVector{Int}; cuts::Bool = true)
+    N = length(g.rd)
+    cutpt = falses(N)
+    uf = _sc_partition(g, cutpt)
+    if cuts
+        cutpt = _sc_cut_points(g, uf)
+        any(cutpt) && (uf = _sc_partition(g, cutpt))
+    end
+    unit_of = Dict{Int, Int}()
     units = _ScUnit[]
     badroot = Set{Int}()
     for x in 1:N
-        bad[x] && push!(badroot, find(x))
-    end
-    for x in 1:N
-        r = find(x)
-        u = get(roots, r, 0)
+        r = _uf_find(uf, x)
+        g.bad[x] && push!(badroot, r)
+        u = get(unit_of, r, 0)
         if u == 0
             push!(units, _ScUnit(Int[], Int[]))
-            u = roots[r] = length(units)
+            u = unit_of[r] = length(units)
         end
-        x <= nd_ ? push!(units[u].slots, dyn_slots[x]) : push!(units[u].outs, x - nd_)
+        x <= g.nslots ? push!(units[u].slots, dyn_slots[x]) : push!(units[u].outs, x - g.nslots)
     end
-    # Levels: a unit reading a cut slot of another runs after it. The unit graph
-    # is acyclic here, so a longest-path walk in topological order settles it.
-    lvl = ones(Int, length(units))
-    cut = Set{Int}()
-    if any(cutpt)
-        succ = [Set{Int}() for _ in 1:length(units)]   # producer -> readers
-        indeg = zeros(Int, length(units))
-        for x in 1:N, j in rd[x]
-            cutpt[j] || continue
-            a, b = roots[find(j)], roots[find(x)]
-            a == b && continue
-            if !(b in succ[a])
-                push!(succ[a], b); indeg[b] += 1
-            end
-            push!(cut, dyn_slots[j])
-        end
-        q = Int[u for u in eachindex(units) if indeg[u] == 0]
-        while !isempty(q)
-            a = pop!(q)
-            for b in succ[a]
-                lvl[b] = max(lvl[b], lvl[a] + 1)
-                indeg[b] -= 1
-                indeg[b] == 0 && push!(q, b)
-            end
-        end
-    end
+    lvl, cut = _sc_levels(g, uf, unit_of, length(units), cutpt, dyn_slots)
     good = _ScUnit[]
     goodlvl = Int[]
     resid = _ScUnit[]
-    for (r, u) in roots
+    for (r, u) in unit_of
         U = units[u]
-        sort!(U.slots); sort!(U.outs)
+        sort!(U.slots)
+        sort!(U.outs)
         if r in badroot
             push!(resid, U)
         else
-            push!(good, U); push!(goodlvl, lvl[u])
+            push!(good, U)
+            push!(goodlvl, lvl[u])
         end
     end
     # Deterministic order: by level, then the unit's first equation, then its
@@ -1307,12 +1349,13 @@ function _build_scalar_section(
     for K in acc_kernels
         _sc_kernel_reads!(ext, K, cache, seen)
     end
-    good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots)
+    graph = _sc_read_graph(rhs_list, n_rhs, prelude, cache, dyn_slots)
+    good, bad, level, cut = _sc_dynamic_units(graph, dyn_slots)
     dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, union(ext, cut))
     if !isempty(cut) && !isempty(resid)
         # A unit left on the walker runs after every emitted one, so no emitted
         # unit may read it: emit the uncut units instead.
-        good, bad, level, cut = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots; cuts = false)
+        good, bad, level, cut = _sc_dynamic_units(graph, dyn_slots; cuts = false)
         dynp, emitted, resid = _sc_dyn_program(good, level, rhs_list, prelude, cache, ext)
     end
     resid_units = vcat(bad, good[resid])
@@ -1366,15 +1409,57 @@ function _retier_scalar_rules!(var_map, rhs_list, sec::_ScalarSection)
     return nothing
 end
 
-# ---- The right-hand side with a scalar section ---------------------------
-# `_make_rhs`'s `f!` (acc_merge.jl) with the scalar walk replaced by the
-# section's programs. Same order of sections, same cadence stamps: the const
-# tier refills only when `p` moved, the time tier when `(p, t, forcing epoch)`
-# moved, the dynamic units every call; then whatever the section left on the
-# walker; then the kernels, the scan folds and the contractions. The walked
-# prelude is captured only when something is still walked, so a fully emitted
-# build carries no tree.
-function _make_rhs_scalar_cg(
+# The scalar section that leaves every prelude slot and scalar equation on the
+# walker: what `_make_rhs` runs when the build made no scalar section.
+function _walked_scalar_section(
+        rhs_list::AbstractVector{Tuple{Int, _Node}}, prelude::AbstractVector{_Node},
+        const_slots::AbstractVector{Int}, time_slots::AbstractVector{Int},
+        dyn_slots::AbstractVector{Int}
+    )
+    n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
+    walk = _scalar_walk_license(
+        n_slots + length(rhs_list) > 0,
+        isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
+        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots",
+        () -> vcat(_Node[nd for (_, nd) in rhs_list], prelude)
+    )
+    return _ScalarSection(
+        nothing, nothing, _ScalarLevels(()), collect(Int, dyn_slots),
+        collect(Tuple{Int, _Node}, rhs_list), Int[], walk
+    )
+end
+
+# ---- The right-hand side -------------------------------------------------
+# The in-place `f!` of a build. It computes in `T = _rhs_value_type(u, p, t)`,
+# a compile-time constant per specialization, so at `T === Float64` the scratch
+# lookups are field loads; handed dual-number state or parameters, the same
+# closure evaluates in that type on buffers created on its first such call. It
+# allocates nothing in steady state and is not reentrant (it writes the build's
+# scratch): one instance per integrator.
+#
+# The sections run in this order:
+#   1. const tier: the prelude slots that are a pure function of `p`
+#      (const_tier.jl), refilled only when `p` moved (`_cse_const_stale`). Not
+#      folded at build time: `p` changes under `remake`, and its values are
+#      dual numbers under a parameter sensitivity.
+#   2. time tier: the slots that are a pure function of `p`, `t` and the
+#      contents of the live forcing buffers they gather, refilled when `p`, `t`
+#      or the build's forcing epoch moved (`_cse_t_stale`). A Jacobian's columns
+#      at one `t` evaluate it once; revisiting a `t` after a rejected step
+#      recomputes the same values, since the slots carry no history.
+#   3. dynamic slots and scalar equations, every call: the generated units,
+#      then whatever the section left on the walker. Every slot is evaluated
+#      before any equation, which is safe because `_cse_compile_scalar` never
+#      makes a slot whose every occurrence is under a lazy `ifelse`/`and`/`or`
+#      arm (scalar_cse.jl).
+#   4. the access kernels (codegen_kernel.jl), which may read the prelude cache
+#      filled above at the same `T`;
+#   5. the prefix scans, which read back the terms the kernels wrote into `du`;
+#   6. the whole-array contractions, each over its own `du` slots.
+# A tier the section emitted runs as generated code, otherwise it is walked
+# (`_walk_prelude_slots!`). The walked prelude is captured only when something
+# is still walked, so a fully emitted build carries no tree.
+function _rhs_closure(
         sec::_ScalarSection, full_prelude::AbstractVector{_Node},
         cse_cache::_CSECache,
         acc_kernels::AbstractVector{_AccKernel},
@@ -1391,8 +1476,6 @@ function _make_rhs_scalar_cg(
     resid_rhs = sec.resid_rhs
     walks_prelude = (constp === nothing && !isempty(const_slots)) ||
         (timep === nothing && !isempty(time_slots)) || !isempty(resid_dyn)
-    # Named as `_make_rhs`'s capture is, so the walked prelude is introspectable
-    # the same way whichever builder made `f!`.
     cse_prelude = walks_prelude ? collect(_Node, full_prelude) : _Node[]
     const_walk = constp === nothing ? collect(Int, const_slots) : Int[]
     time_walk = timep === nothing ? collect(Int, time_slots) : Int[]

@@ -72,6 +72,11 @@ end
 Base.iterate(b::Build, i::Int = 1) = i > 6 ? nothing : (getfield(b, i), i + 1)
 Base.length(::Build) = 6
 
+# A forcing write announced to the build that reads it (see
+# `EarthSciAST.notify_forcing_refresh!`).
+EarthSciAST.notify_forcing_refresh!(b::Build) =
+    EarthSciAST._bump_epoch!(b.report.products.forcing_epoch)
+
 """
     Internal.build(input; model_name = "M", compiler = :native, index_sets = nothing,
                    metaparameters = Dict(), base_path = pwd(), kwargs...) -> Internal.Build

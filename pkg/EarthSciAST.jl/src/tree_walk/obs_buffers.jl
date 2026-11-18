@@ -6,10 +6,10 @@
 # forcing they were filled from, and the refill when they do not. The `p`
 # compare is the const tier's (`_pstamp_same`, cadence_stamp.jl): a same-`p`
 # call is a compare and never allocates. The forcing compare is the time
-# tier's: the build's forcing epoch (cadence_stamp.jl) moves on every refresh
-# of a buffer the build reads — the refresh callback's `_write_forcing!`, or a
-# direct in-place write announced with `notify_forcing_refresh!` — and the
-# caches are stale when it has moved since their last fill. (The refresh
+# tier's: the build's forcing epoch (cadence_stamp.jl) moves on every write to
+# a buffer the build reads that is announced to the build's owner
+# (`notify_forcing_refresh!`, which the refresh callback calls), and the caches
+# are stale when it has moved since their last fill. (The refresh
 # callback refills them itself, through its `post_refresh` hook, so the call
 # after it finds them current.) A `p` of another type than the build's — dual
 # numbers, for a derivative with respect to parameters — leaves the caches at

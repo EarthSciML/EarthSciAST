@@ -1509,9 +1509,7 @@ const _MA_REGION_MAX_PIECES = 256
 
 # A region bound as an `Int`, or `nothing` for one that is not an integer an
 # `Int` holds.
-_ma_region_bound(x::Integer) = typemin(Int) <= x <= typemax(Int) ? Int(x) : nothing
-_ma_region_bound(x::AbstractFloat) =
-    (isinteger(x) && -0x1p63 <= x < 0x1p63) ? Int(x) : nothing
+_ma_region_bound(x::Real) = _as_int64(x)
 _ma_region_bound(x) = nothing
 
 function _makearray_region_equations(

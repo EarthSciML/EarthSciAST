@@ -75,7 +75,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # interpreter's per-cell fill is the oracle it must equal bit for bit.
         srcbuf = copy(src_at(0.0))
         dm = _ESS_DM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_DM.Internal.build(
+        (f!, u0, p, _ts, vm) = b = _ESS_DM.Internal.build(
             fixture;
             initial_conditions = ics, param_arrays = Dict("M.src" => srcbuf),
             materialize_out = dm
@@ -102,7 +102,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_DM.Internal.build(
+        (f2!, u02, p2, _ts2, vm2) = b = _ESS_DM.Internal.build(
             fixture;
             initial_conditions = ics, param_arrays = Dict("M.src" => srcbuf2),
             materialize_out = dm2
@@ -110,6 +110,7 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         interior = [t for t in anchors if t > 0.0]
         prov = _DMConfProvider(interior, Dict(t => Dict("src" => src_at(t)) for t in interior))
         cb, tstops = _ESS_DM.build_refresh_callback(;
+            owner = b,
             providers = Dict("src" => prov),
             buffers = _ESS_DM.RefreshBuffers(Dict("src" => srcbuf2)),  # SAME buffer object
             post_refresh = dm2.materialize!
