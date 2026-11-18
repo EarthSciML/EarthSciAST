@@ -59,6 +59,16 @@ include("load_errors.jl")
 include("compiler.jl")
 # Core data model + validation
 include("types.jl")
+# The field tables of `OpExpr` and the document records, and what is generated
+# from them at load (`reconstruct`); parse.jl and serialize.jl generate the wire
+# directions from the same tables.
+include("record_tables.jl")
+# The record shape of a data-fed parameter (esm-spec §8.5.1).
+include("record_shapes.jl")
+# Resolving a qualified `System.sub.var` reference against a typed document.
+include("qualified_reference.jl")
+# Stoichiometry views of a `Reaction` and the dict-form `Reaction` constructor.
+include("stoichiometry.jl")
 # The expression sites of a typed document: `map_expressions!` / `foreach_expression`.
 include("expression_sites.jl")
 # The one cycle search over a string-keyed directed graph (`_find_cycle`).
