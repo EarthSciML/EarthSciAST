@@ -25,16 +25,10 @@ use earthsci_ast::{OutputPlan, derive_output_plan};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-/// Repo root = the crate dir's grandparent (`pkg/earthsci-ast-rs/../..`).
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root resolves")
-}
+use crate::common;
 
 fn corpus(rel: &str) -> PathBuf {
-    repo_root()
+    common::repo_root()
         .join("tests/conformance/output_derivation")
         .join(rel)
 }

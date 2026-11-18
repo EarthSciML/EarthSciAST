@@ -7,11 +7,8 @@
 use earthsci_ast::extension::lower_expression_templates::expand;
 use earthsci_ast::{flatten, load_path, load_string, to_json};
 use serde_json::Value;
-use std::path::PathBuf;
 
-fn stdlib_refs_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/stdlib_refs")
-}
+use crate::common;
 
 /// Every string value of a `ref` key replaced by one placeholder: the authored
 /// ref round-trips verbatim, so its spelling is the one expected difference.
@@ -61,7 +58,7 @@ fn with_env<T>(env: &[(String, String)], f: impl FnOnce() -> T) -> T {
 
 #[test]
 fn stdlib_refs_manifest_cases() {
-    let root = stdlib_refs_dir();
+    let root = common::category_dir("stdlib_refs");
     let manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(root.join("manifest.json")).unwrap())
             .unwrap();
@@ -106,7 +103,9 @@ fn stdlib_refs_manifest_cases() {
 /// A document with no location of its own still reaches the bundle.
 #[test]
 fn a_document_loaded_from_a_string_imports_the_bundle() {
-    let text = std::fs::read_to_string(stdlib_refs_dir().join("import_interp.esm")).unwrap();
+    let text =
+        std::fs::read_to_string(common::category_dir("stdlib_refs").join("import_interp.esm"))
+            .unwrap();
     let file = load_string(&text).expect("loads with no base path");
     // The loaded form keeps template references (esm-spec §9.6.4 Option B);
     // expanding them shows the imported template resolved.
@@ -121,12 +120,13 @@ fn a_document_loaded_from_a_string_imports_the_bundle() {
 
 #[test]
 fn bundle_names_the_repo_lib_files() {
-    let mut names: Vec<String> = std::fs::read_dir(stdlib_refs_dir().join("../../../lib"))
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".esm"))
-        .collect();
+    let mut names: Vec<String> =
+        std::fs::read_dir(common::category_dir("stdlib_refs").join("../../../lib"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".esm"))
+            .collect();
     names.sort();
     assert_eq!(earthsci_ast::extension::stdlib::bundled_names(), names);
 }

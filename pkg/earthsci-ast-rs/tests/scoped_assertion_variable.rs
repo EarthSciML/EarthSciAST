@@ -13,14 +13,21 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{AssertionResult, SolveOptions, load_path, run_inline_tests_with_base_dir};
+use earthsci_ast::{AssertionResult, load_path};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 
 use crate::common;
 
 fn run(name: &str) -> Vec<AssertionResult> {
     let path = common::repo_fixture("conformance/scoped_assertion_variable/fixtures").join(name);
     let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent())
+    run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+    )
 }
 
 /// Every assertion passes, and its actual value is `expected` to `rel`.

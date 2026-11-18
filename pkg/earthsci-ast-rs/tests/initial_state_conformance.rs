@@ -15,18 +15,9 @@ use earthsci_ast::{
 };
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/initial_state")
-}
-
-fn read_json(path: &Path) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
 
 fn numbers(v: &serde_json::Value) -> HashMap<String, f64> {
     v.as_object()
@@ -55,7 +46,7 @@ fn problem(case: &serde_json::Value, tspan: (f64, f64)) -> earthsci_ast::EsmProb
 
 #[test]
 fn initial_state_matches_the_manifest() {
-    let manifest = read_json(&category_dir().join("manifest.json"));
+    let manifest = common::read_json(common::category_dir("initial_state").join("manifest.json"));
     assert_eq!(manifest["category"].as_str(), Some("initial_state"));
     let required: Vec<&str> = manifest["bindings_required"]
         .as_array()
@@ -121,7 +112,7 @@ fn initial_state_matches_the_manifest() {
 /// for that solve is counted in-crate (`field_ic_memo_tests`).
 #[test]
 fn accessor_then_solve_agree() {
-    let manifest = read_json(&category_dir().join("manifest.json"));
+    let manifest = common::read_json(common::category_dir("initial_state").join("manifest.json"));
     let case = manifest["cases"]
         .as_array()
         .unwrap()

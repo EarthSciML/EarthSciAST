@@ -1,0 +1,26 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "save_floor_faq_leaf",
+    "description": "A leaf that declares esm 1.1.0 and uses a `faq` node. Mounted by older_mounts_faq.esm and older_mounts_all_floors.esm, which declare esm 1.0.0 (esm-spec §4.7, \"Save-time version floors\").",
+    "authors": ["EarthSciAST"],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": ["version", "mount", "faq", "save-floor"]
+  },
+  "index_sets": {
+    "cells": {"kind": "interval", "size": 3}
+  },
+  "models": {
+    "FaqLeaf": {
+      "variables": {
+        "total": {"type": "unknown", "description": "Sum of the cell numbers 1..3."}
+      },
+      "equations": [
+        {
+          "lhs": "total",
+          "rhs": {"op": "faq", "args": [], "output_idx": [], "ranges": {"j": {"from": "cells"}}, "expr": "j"}
+        }
+      ]
+    }
+  }
+}

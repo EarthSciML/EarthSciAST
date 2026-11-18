@@ -3,7 +3,7 @@
 //! The defect this file pins is not a wrong number — it is a *plausible* one.
 //! A document that declares `data_sources` and binds a parameter to a column of
 //! one gets its numbers from disk. The build-time provider contract
-//! (`earthsci_ast::PrepareProvider`) is supplied by the CALLER, and the `esm`
+//! (`earthsci_ast::DataProvider`) is supplied by the CALLER, and the `esm`
 //! binary supplied none: every subcommand that prepared a document therefore
 //! evaluated each data-fed parameter at its `default` and printed the result as
 //! the document's answer. No error, no warning, no diagnostic — a run that

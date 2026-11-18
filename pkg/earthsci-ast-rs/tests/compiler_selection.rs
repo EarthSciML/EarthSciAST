@@ -38,15 +38,10 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 
-fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is pkg/earthsci-ast-rs.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-}
+use crate::common;
 
 fn fixture(rel: &str) -> PathBuf {
-    let p = repo_root().join(rel);
+    let p = common::repo_root().join(rel);
     assert!(p.exists(), "fixture {} is missing", p.display());
     p
 }
@@ -453,8 +448,7 @@ fn assert_native_agrees(rel: &str, u0: &[(&str, f64)]) {
 
 #[test]
 fn the_report_names_every_rule_not_only_the_declines() {
-    // The half `SolutionMetadata::tape_fallbacks` cannot answer: a document
-    // with no declines reports an empty fallback list and says nothing about
+    // A document with no declines solves, and the solve says nothing about
     // the rules that DID lower, nor at which cadence they run.
     let path = fixture("tests/conformance/output_derivation/fixtures/gridded.esm");
     let prob = build_rhs(&path, Compiler::Native, Rhs::Always).expect("builds");
@@ -785,8 +779,9 @@ fn the_count_rewrite_is_a_problem_option() {
         .expect("builds under native")
     };
     let counts = |p: &EsmProblem| {
-        let c = p.debug_array_compiled().expect("a right-hand side");
-        c.debug_tape_listing()
+        p.debug_solve_rhs()
+            .expect("a taped right-hand side")
+            .tape_listing()
             .lines()
             .filter(|l| l.contains(" Count {"))
             .count()

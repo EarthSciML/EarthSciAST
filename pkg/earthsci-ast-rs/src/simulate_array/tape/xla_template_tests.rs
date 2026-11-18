@@ -17,7 +17,7 @@
 //!     within the compiled tier's tolerance classes.
 
 use super::super::ArrayCompiled;
-use super::array_tests::{compile, d_eq, doc, idx, lit, plus};
+use super::test_support::{compile, d_eq, doc, idx, lit, plus};
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use crate::xla_runtime::{CompileRhsError, CompiledRhs};
@@ -51,7 +51,7 @@ fn both(
     let params: HashMap<String, f64> = HashMap::new();
     let pv = compiled.debug_resolve_params(&params);
     let got = prog.eval(state, &pv, t).expect("compiled eval");
-    let (want, _) = compiled.debug_eval_rhs(state, t, &params, true);
+    let (want, _) = compiled.debug_eval_rhs(state, t, &params);
     (got, want)
 }
 
@@ -323,7 +323,7 @@ fn a_faulting_computed_gather_is_refused_by_name() {
 fn assert_close(compiled: &ArrayCompiled, prog: &CompiledRhs, rtol: f64, atol: f64, what: &str) {
     let n = compiled.state_variable_names().len();
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, 0.25, 2.5);
+        let state = super::test_support::seeded_state(n, seed, 0.25, 2.5);
         let (got, want) = both(compiled, prog, &state, 0.7);
         let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -342,7 +342,7 @@ fn every_template_family_lowers_and_matches_the_oracle() {
     if !runtime_available() {
         return;
     }
-    use super::closed_template_tests as ct;
+    use super::template_fixtures as ct;
     let cases: Vec<(&str, Value, f64)> = vec![
         ("calendar", ct::calendar_doc(1.6e9), 1e-13),
         ("planar overlap", ct::overlap_doc(false), 1e-11),
@@ -355,7 +355,7 @@ fn every_template_family_lowers_and_matches_the_oracle() {
         let prog = program(&compiled);
         assert_close(&compiled, &prog, tol, 1e-14, what);
     }
-    for d in super::interp_template_tests::all_template_models() {
+    for d in super::template_fixtures::all_template_models() {
         let compiled = compile(d);
         let prog = program(&compiled);
         assert_close(&compiled, &prog, 1e-13, 1e-300, "interp template");
@@ -383,7 +383,7 @@ fn a_gather_over_compile_time_data_is_evaluated_ahead_of_the_program() {
     let prog = program(&compiled);
     let n = compiled.state_variable_names().len();
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, -1.0, 1.0);
+        let state = super::test_support::seeded_state(n, seed, -1.0, 1.0);
         assert_bits(
             &compiled,
             &prog,
@@ -393,7 +393,7 @@ fn a_gather_over_compile_time_data_is_evaluated_ahead_of_the_program() {
     }
     // The planar overlap template over literal rings: its areas are a
     // constant of the program.
-    let compiled = compile(super::closed_template_tests::overlap_doc(false));
+    let compiled = compile(super::template_fixtures::overlap_doc(false));
     let prog = program(&compiled);
     assert_close(&compiled, &prog, 1e-11, 1e-14, "planar overlap, hoisted");
 }

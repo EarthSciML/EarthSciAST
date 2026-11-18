@@ -17,20 +17,14 @@
 //! what `subsystem_scope` discriminates.
 
 use earthsci_ast::Classification;
+use earthsci_ast::HasSubsystems;
 use earthsci_ast::{EsmFile, Model, SystemKind, flatten};
 use serde_json::Value;
-use std::path::PathBuf;
 
-/// Repo root = the crate dir's grandparent (`pkg/earthsci-ast-rs/../..`).
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root resolves")
-}
+use crate::common;
 
 fn load_json(rel: &str) -> Value {
-    let path = repo_root().join(rel);
+    let path = common::repo_root().join(rel);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
@@ -38,22 +32,16 @@ fn load_json(rel: &str) -> Value {
 /// Every model node of a document, keyed by its DOT-PATH from the root, so a
 /// subsystem is `Parent.Child` — the golden's own key convention.
 ///
-/// A subsystem is stored as raw JSON on [`Model`], so each is deserialized in
-/// turn and recursed into. Classification never crosses one of these
-/// boundaries: that is the point of keying by node.
+/// Classification never crosses a subsystem boundary: that is the point of
+/// keying by node.
 fn model_nodes(doc: &Value) -> Vec<(String, Model)> {
-    fn walk(prefix: &str, raw: &Value, out: &mut Vec<(String, Model)>) {
-        let Ok(model) = serde_json::from_value::<Model>(raw.clone()) else {
-            return;
-        };
-        if let Some(subs) = &model.subsystems {
-            let mut names: Vec<&String> = subs.keys().collect();
-            names.sort();
-            for name in names {
-                walk(&format!("{prefix}.{name}"), &subs[name], out);
-            }
+    fn walk(prefix: &str, model: &Model, out: &mut Vec<(String, Model)>) {
+        let mut subs: Vec<(&String, &Model)> = model.inline_subsystems().collect();
+        subs.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, sub) in subs {
+            walk(&format!("{prefix}.{name}"), sub, out);
         }
-        out.push((prefix.to_string(), model));
+        out.push((prefix.to_string(), model.clone()));
     }
 
     let mut out = Vec::new();
@@ -63,7 +51,10 @@ fn model_nodes(doc: &Value) -> Vec<(String, Model)> {
     let mut names: Vec<&String> = models.keys().collect();
     names.sort();
     for name in names {
-        walk(name, &models[name], &mut out);
+        let Ok(model) = serde_json::from_value::<Model>(models[name].clone()) else {
+            continue;
+        };
+        walk(name, &model, &mut out);
     }
     out
 }

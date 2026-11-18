@@ -13,10 +13,10 @@ use std::path::{Path, PathBuf};
 
 use earthsci_ast::{Compiler, InlineTestOptions, load_path, run_inline_tests_with_options};
 
+use crate::common;
+
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pointwise_lift/values")
-        .join(name)
+    common::repo_fixture("conformance/pointwise_lift/values").join(name)
 }
 
 fn assert_passes(name: &str, expected_assertions: usize) {
@@ -30,7 +30,6 @@ fn assert_passes(name: &str, expected_assertions: usize) {
                 compiler: Some(compiler),
                 ..Default::default()
             },
-            None,
         );
         assert_eq!(
             results.len(),

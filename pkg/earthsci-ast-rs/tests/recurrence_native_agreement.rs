@@ -18,9 +18,10 @@
 
 #![cfg(all(feature = "solve", not(target_arch = "wasm32")))]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use earthsci_ast::simulate_array::RhsStats;
+use crate::common;
+
 use earthsci_ast::{
     Alg, Compiler, EsmProblem, InlineTestOptions, ProblemOptions, Rhs, SolveOptions, esm_problem,
     load_path, load_string, run_inline_tests_with_options, solve,
@@ -99,7 +100,7 @@ const DOCS: &[(&str, &str, &str, usize)] = &[
 ];
 
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+    common::repo_tests_dir()
 }
 
 fn read_doc(rel: &str) -> Value {
@@ -195,7 +196,7 @@ fn every_recurrence_fixture_passes_its_own_assertions_under_native() {
             base_dir: Some(tests_dir().join(rel).parent().unwrap().to_path_buf()),
             ..Default::default()
         };
-        let results = run_inline_tests_with_options(&file, &options, None);
+        let results = run_inline_tests_with_options(&file, &options);
         assert!(!results.is_empty(), "{rel}: asserts nothing");
         for r in results {
             assert!(
@@ -238,28 +239,16 @@ fn with_a_state(doc: &Value, var: &str, rank: usize) -> Value {
     doc
 }
 
-/// The two right-hand sides at one state, bit for bit, with native's on the
-/// tape alone.
+/// The two right-hand sides at one state, bit for bit, through each Problem's
+/// public program (native's is the strict tape).
 fn assert_rhs_agrees(label: &str, native: &EsmProblem, interp: &EsmProblem) {
-    let nc = native
-        .debug_array_compiled()
-        .expect("native has a right-hand side");
-    let ic = interp
-        .debug_array_compiled()
-        .expect("the interpreter has a right-hand side");
-    let _precision = nc.debug_precision_env().enter();
-    let state: Vec<f64> = (0..nc.state_variable_names().len())
+    let names = native.state_variable_names();
+    assert_eq!(names, interp.state_variable_names(), "{label}: state order");
+    let state: Vec<f64> = (0..names.len())
         .map(|p| 1.0 + 0.1 * (0.37 * p as f64).sin())
         .collect();
-    let params = nc.debug_resolve_params(native.p());
-    let mut dy = vec![0.0f64; state.len()];
-    let mut scratch = nc
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut stats = RhsStats::default();
-    nc.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-    assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, interp.p(), true);
+    let dy = common::rhs::ProblemRhs::new(native).eval(&state, 0.0);
+    let idy = common::rhs::ProblemRhs::new(interp).eval(&state, 0.0);
     assert_eq!(
         bits(dy.clone()),
         bits(idy.clone()),
@@ -399,9 +388,9 @@ fn the_program_is_the_same_length_at_every_frame_size() {
             )
             .expect("native builds it");
             let r = prob
-                .debug_array_compiled()
-                .expect("a right-hand side")
-                .debug_build_tape_report();
+                .debug_solve_rhs()
+                .expect("a taped right-hand side")
+                .tape_report();
             let instrs = r.n_instr_const + r.n_instr_segment + r.n_instr_continuous;
             (instrs, r.n_slots)
         })
@@ -439,7 +428,7 @@ fn an_unguarded_self_read_faults_under_native_as_under_the_interpreter() {
             compiler: Some(compiler),
             ..Default::default()
         };
-        let results = run_inline_tests_with_options(&file, &options, None);
+        let results = run_inline_tests_with_options(&file, &options);
         assert_eq!(results.len(), 1, "{results:?}");
         let r = &results[0];
         assert!(
@@ -480,7 +469,7 @@ fn the_fault_fixtures_fault_under_both_compilers() {
                 base_dir: Some(tests_dir().join(rel).parent().unwrap().to_path_buf()),
                 ..Default::default()
             };
-            let results = run_inline_tests_with_options(&file, &options, None);
+            let results = run_inline_tests_with_options(&file, &options);
             assert!(!results.is_empty(), "{rel}: asserts nothing");
             for r in results {
                 assert!(

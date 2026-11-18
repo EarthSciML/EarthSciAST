@@ -517,8 +517,7 @@ reference-preserving byte form instead.
 """
 function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
-    _raise_faq_esm_floor!(serialized)
-    _raise_variable_bounds_esm_floor!(serialized)
+    _raise_esm_floors!(serialized)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
         # references / materialized registries emits in the canonical
@@ -780,43 +779,40 @@ for spec in RECORD_FIELD_TABLES
     ) $sname
 end
 
-"""
-    _contains_faq(node) -> Bool
+# The load gates whose `since` is a save-time floor (`_raise_esm_floors!`).
+const _SAVE_FLOOR_GATES = (:faq, :const_units, :variable_bounds)
 
-Does `node` contain an `"op" => "faq"` anywhere?
 """
-function _contains_faq(node)::Bool
-    if node isa AbstractDict
-        _raw_get(node, "op") == "faq" && return true
-        for v in values(node)
-            _contains_faq(v) && return true
-        end
-    elseif node isa AbstractVector
-        for v in node
-            _contains_faq(v) && return true
+    _raise_esm_floors!(doc)
+
+Raise an emitted document's declared `esm` to the lowest version that admits
+every floored construct it contains (esm-spec §4.7, "Save-time version
+floors"): a `faq` node 1.1.0, `units` on an expression node 1.2.0, `lb` / `ub`
+on a model variable 2.1.0. The highest that applies wins and the declared
+version is never lowered.
+
+A document can come to contain one of these without ever spelling it: a 1.0.0
+document that mounts a 1.2.0 leaf carrying a unit-bearing `const` has the leaf
+inlined at load, and emitting that as 1.0.0 writes a document the
+`const_units_version_too_old` gate refuses to read back. The load gates cannot
+catch it, since the mounting file's authored bytes are legal. Like the §9.6.4
+rule-8 template stamp ([`_esm_stamp_floor`](@ref)) it only ever raises.
+Each floor is the `since` of a load gate in [`_VERSION_GATES`](@ref), detected
+by that gate's own offence finder, so a save floor and the gate that would
+refuse the saved bytes cannot disagree.
+"""
+function _raise_esm_floors!(doc)
+    doc isa AbstractDict || return doc
+    declared = _esm_version(doc)
+    declared === nothing && return doc
+    raised = nothing
+    for gate in _SAVE_FLOOR_GATES
+        floor = getfield(_VERSION_GATES, gate).since
+        if floor > declared && (raised === nothing || floor > raised) &&
+                !isempty(getfield(_VERSION_GATES, gate).offences(doc))
+            raised = floor
         end
     end
-    return false
-end
-
-"""
-    _raise_faq_esm_floor!(doc)
-
-Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
-node but declares less.
-
-Like the §9.6.4 rule-8 template stamp ([`_esm_stamp_floor`](@ref)) this is a
-FLOOR — it only ever raises. A document can come to CONTAIN `faq` without ever
-spelling it: a 1.0.0 parent that mounts a subsystem whose child uses `faq` has
-the child inlined at load, and emitting that as 1.0.0 writes a document the
-`faq_version_too_old` gate then refuses to read back. The load-time gate cannot
-catch it — the parent's AUTHORED bytes are legal — so the stamp closes it here.
-See `docs/content/rfcs/faq-node-rename.md` §5.5.
-"""
-function _raise_faq_esm_floor!(doc)
-    doc isa AbstractDict || return doc
-    version = _esm_version(doc)
-    (version === nothing || version >= (1, 1, 0)) && return doc
-    _contains_faq(doc) && (doc["esm"] = "1.1.0")
+    raised === nothing || (doc["esm"] = join(raised, "."))
     return doc
 end

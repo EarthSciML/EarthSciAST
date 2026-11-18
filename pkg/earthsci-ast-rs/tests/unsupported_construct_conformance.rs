@@ -12,20 +12,10 @@
 //! refusal case must now fail with `unsupported_construct` naming the construct
 //! and the evaluator; the control must still run.
 
-use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
-use serde_json::Value;
-use std::path::{Path, PathBuf};
+use earthsci_ast::load_path;
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 
-fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/unsupported_construct")
-}
-
-/// A missing manifest is a hard failure, not a skip.
-fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the unsupported_construct manifest is readable");
-    serde_json::from_str(&raw).expect("the unsupported_construct manifest parses")
-}
+use crate::common;
 
 /// Which of this binding's evaluators a refusal NAMES.
 ///
@@ -45,7 +35,7 @@ fn evaluator_for(path: &str) -> &'static str {
 
 #[test]
 fn every_case_is_refused_or_runs_as_the_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("unsupported_construct");
     let code = m["code"].as_str().expect("`code` is a string");
     assert_eq!(code, "unsupported_construct");
     assert!(
@@ -64,13 +54,15 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
 
     for case in cases {
         let id = case["id"].as_str().expect("`id` is a string");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("unsupported_construct")
+            .join(case["path"].as_str().expect("`path` is a string"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
-        let results = run_inline_tests_with_base_dir(
+        let results = run_inline_tests_with_options(
             &file,
-            None,
-            &SolveOptions::default(),
-            Some(category_dir().as_path()),
+            &InlineTestOptions {
+                base_dir: Some(common::category_dir("unsupported_construct")),
+                ..Default::default()
+            },
         );
         assert!(!results.is_empty(), "{id}: ran no assertions");
         match case["expect"].as_str() {

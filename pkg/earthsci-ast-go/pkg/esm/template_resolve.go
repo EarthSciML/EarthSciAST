@@ -296,10 +296,17 @@ func resolveImportEntry(entry any, baseDir string, stack []string, origin string
 		return nil, newETErr(CodeTemplateImportUnresolved,
 			fmt.Sprintf("%s: template-library ref '%s' is not valid JSON: %v", origin, ref, err))
 	}
+	// Version gates on the target, judged against the library's own `esm`
+	// (esm-spec §9.6.5, §4.7 "Each file is held to its own declared `esm`
+	// version"): the template-machinery constructs, and declared `units` on an
+	// expression node in a template body (§4.8.5 item 6).
 	if err := RejectExpressionTemplatesPreV04(view); err != nil {
 		return nil, err
 	}
 	if err := RejectTemplateImportsPreV08(view); err != nil {
+		return nil, err
+	}
+	if err := rejectConstUnitsPreV12(view); err != nil {
 		return nil, err
 	}
 

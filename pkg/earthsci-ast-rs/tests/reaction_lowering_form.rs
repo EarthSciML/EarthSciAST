@@ -16,7 +16,9 @@
 use earthsci_ast::{Expr, TermOrigin, derive_odes, flatten, load_document};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::common;
 
 #[derive(Debug, Deserialize)]
 struct DerivedEquation {
@@ -46,8 +48,7 @@ struct Corpus {
 }
 
 fn corpus() -> Corpus {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/reactions/lowering_form.json")
+    let path = common::repo_fixture("conformance/reactions/lowering_form.json")
         .canonicalize()
         .unwrap_or_else(|e| panic!("locating the lowering-form corpus: {e}"));
     let json = std::fs::read_to_string(&path)

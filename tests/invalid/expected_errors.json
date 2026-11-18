@@ -3966,6 +3966,14 @@
     "resolver_error_code": "enum_duplicate_value",
     "notes": "Resolver-level invalid (esm-spec \u00a79.3, CONFORMANCE_SPEC \u00a75.26.5). SCHEMA-VALID \u2014 JSON Schema cannot say that the values of an object are distinct \u2014 so uniqueness is a loader check, refused with `enum_duplicate_value`. `is_valid` is false for EVERY binding: all five parse the `enums` block at load and reject a duplicate there. Two symbols map to 0 and no `enum` op names either: 0 is a value like any other, and the check is on the block, not on resolved members."
   },
+  "version_gate_library_older_const_units.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "const_units_version_too_old",
+    "notes": "The 1.2.0 document imports tests/fixtures/version_gate/library_v110_const_units.esm, a 1.1.0 template library whose template body carries a unit-bearing `const`. A template library is a file held to its own declared version (esm-spec \u00a74.7, \u00a74.8.5 item 6), so the import is rejected although the importing document is new enough."
+  },
   "version_gate_newer_mounts_older_const_units.esm": {
     "resolver_only": true,
     "schema_errors": [],

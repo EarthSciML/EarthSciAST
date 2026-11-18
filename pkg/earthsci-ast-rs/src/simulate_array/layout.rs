@@ -304,7 +304,7 @@ impl crate::simulate::KnownNames for SlotNames<'_> {
 
 /// Which state slots a derivative equation defines, one flag per slot: the
 /// build's check that every slot has exactly the definition it needs (stage 7
-/// and 8 of [`ArrayCompiled::from_model`]). A flag per slot, so marking a
+/// and 8 of [`ArrayCompiled::from_model_with_arrays`]). A flag per slot, so marking a
 /// whole array or an axis-aligned box of it is a fill.
 pub(super) struct SlotCoverage {
     covered: Vec<bool>,

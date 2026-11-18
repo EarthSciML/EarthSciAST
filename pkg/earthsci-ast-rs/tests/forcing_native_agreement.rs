@@ -10,7 +10,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{Compiler, ProblemOptions, SolveOptions, esm_problem, solve};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
@@ -21,14 +21,13 @@ use crate::common;
 /// A provider feeding one variable a deterministic field: once, for a CONST
 /// provider (no anchors), or at each anchor, for a DISCRETE one.
 struct Scripted {
-    key: String,
     shape: Vec<usize>,
     anchors: Vec<f64>,
     base: f64,
 }
 
 impl Scripted {
-    fn field(&self, t: f64) -> HashMap<String, NativeField> {
+    fn field(&self, t: f64) -> ArrayD<f64> {
         let n: usize = self.shape.iter().product();
         let values: Vec<f64> = (0..n.max(1))
             .map(|i| self.base * (1.0 + 0.25 * i as f64) * (1.0 + t))
@@ -38,16 +37,15 @@ impl Scripted {
         } else {
             values[..n].to_vec()
         };
-        let array = ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("scripted field");
-        HashMap::from([(self.key.clone(), NativeField::new(array))])
+        ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("scripted field")
     }
 }
 
-impl CadenceProvider for Scripted {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for Scripted {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         Ok(self.field(0.0))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         Ok(self.anchors.contains(&t).then(|| self.field(t)))
     }
     fn refresh_times(&self) -> Vec<f64> {
@@ -66,17 +64,16 @@ fn solve_under(
     tspan: (f64, f64),
     saveat: &[f64],
 ) -> earthsci_ast::Solution {
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = feeds
+    let providers: HashMap<String, Box<dyn DataProvider>> = feeds
         .iter()
         .map(|&(key, shape, anchors, base)| {
             (
                 key.to_string(),
                 Box::new(Scripted {
-                    key: key.to_string(),
                     shape: shape.to_vec(),
                     anchors: anchors.to_vec(),
                     base,
-                }) as Box<dyn CadenceProvider>,
+                }) as Box<dyn DataProvider>,
             )
         })
         .collect();

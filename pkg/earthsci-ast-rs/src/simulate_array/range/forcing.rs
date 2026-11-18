@@ -2,9 +2,8 @@
 //! sets, the parameter and state layouts, and [`RhsError`].
 
 use super::RhsProgram;
-use crate::provider::{NativeField, ProviderError, single_provider_field};
+use crate::provider::{ProviderError, check_provider_shape};
 use ndarray::ArrayD;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -72,30 +71,12 @@ impl std::fmt::Display for RhsError {
 
 impl std::error::Error for RhsError {}
 
-/// The fail-closed codes a fault message may lead with.
-const FAULT_CODES: [&str; 8] = [
-    "E_TREEWALK_CONSTARRAY_OOB",
-    "E_TREEWALK_INDEX_ON_SCALAR",
-    "E_TREEWALK_MISSING_DATA",
-    "E_TREEWALK_MISSING_INITIAL_VALUE",
-    "E_TREEWALK_RECUR_UNAVAILABLE",
-    "E_TREEWALK_UNBOUND_NAME",
-    "E_TREEWALK_UNDECLARED_INDEX_SET",
-    "E_TREEWALK_UNRESOLVED_ORDER",
-];
-
-/// The fault a latched message reports, coded by the code it leads with.
-pub(super) fn fault(message: String) -> RhsError {
-    let code = FAULT_CODES
-        .iter()
-        .copied()
-        .find(|c| {
-            message
-                .strip_prefix(c)
-                .is_some_and(|rest| rest.starts_with(':'))
-        })
-        .unwrap_or("rhs_fault");
-    RhsError::Fault { code, message }
+/// The fault a call latched, as the error it reports.
+pub(super) fn fault(f: crate::simulate_array::eval::Fault) -> RhsError {
+    RhsError::Fault {
+        code: f.code,
+        message: f.message,
+    }
 }
 
 pub(super) fn shape(what: &'static str, expected: usize, got: usize) -> RhsError {
@@ -275,41 +256,38 @@ impl ForcingSet {
 /// [`RhsProgram::default_forcing`] holds for the same sample (API_SPEC §5.8,
 /// "Forcing sets").
 ///
-/// `sample` is what a [`crate::provider::CadenceProvider`] returned
-/// (`materialize()` for a const provider, `refresh(t)` for a discrete one). It
-/// must hold exactly one field, whatever that field is called: a provider in
-/// `ProblemOptions::providers` feeds the one parameter its key names, so the
-/// field's own name is not read. This differs from the Julia binding, whose
+/// `sample` is what a [`crate::provider::DataProvider`] delivered (`sample()`
+/// for a const provider, `refresh(t)` for a discrete one): the array of the
+/// one parameter its key names. This differs from the Julia binding, whose
 /// provider samples are keyed by parameter name, because each binding's
-/// provider contract differs. The field's array dimensions, in the order the
+/// provider contract differs. The array's dimensions, in the order the
 /// provider delivered them (a source's file order, the record dimension first
 /// when two records are delivered), must be `slot.shape`, axis by axis; a 0-d
 /// slot takes an array of exactly one element. `esm_problem` refuses a sample
-/// whose field does not have the parameter's declared shape, at `materialize()`
-/// and at every `refresh(t)`, so the two accept the same samples. The buffer
-/// is the array's values column-major over those dimensions (first index
-/// fastest), the order a forcing set reads a slot's buffer in.
+/// that does not have the parameter's declared shape, at `sample()` and at
+/// every `refresh(t)`, so the two accept the same samples. The buffer is the
+/// array's values column-major over those dimensions (first index fastest),
+/// the order a forcing set reads a slot's buffer in.
 ///
 /// A declared `unit_conversion` (esm-spec §8.5) is NOT applied here: a
 /// provider from `esio_provider::providers_from_document` (feature `esio`) applies
 /// it when it delivers the sample, so the sample is already in the
 /// parameter's declared units, and applying it again would apply it twice.
 ///
-/// A provider passed to `esm_problem` in `ProblemOptions::build_providers` is
-/// consumed by the build instead, which also checks the declared shape but
-/// rounds the sample to the document's working precision (`domain.element_type`)
-/// for a Float32 document; this function does not round.
+/// A provider the build pipeline consumes is checked against the declared
+/// shape too, and its sample is rounded to the document's working precision
+/// (`domain.element_type`) for a Float32 document; this function does not
+/// round.
 ///
 /// # Errors
 ///
-/// A sample that does not hold exactly one field, or whose field's array does
-/// not have the slot's shape.
+/// A sample whose array does not have the slot's shape.
 pub fn forcing_from_sample(
-    sample: &HashMap<String, NativeField>,
+    sample: &ArrayD<f64>,
     slot: &ForcingSlot,
 ) -> Result<Arc<[f64]>, ProviderError> {
-    let field = single_provider_field(&slot.name, sample, Some(&slot.shape))?;
-    Ok(column_major(&field.array))
+    check_provider_shape(&slot.name, sample, Some(&slot.shape))?;
+    Ok(column_major(sample))
 }
 
 /// A row-major array's elements in column-major order (first index fastest):

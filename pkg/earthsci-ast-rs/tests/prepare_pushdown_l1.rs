@@ -17,14 +17,16 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
 use std::rc::Rc;
 
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{AxisSel, DataProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
+
+use crate::common;
+use crate::common::{Fetch, FetchLog, MockConst, MockGated};
 
 // ---- Lambert conformal conic (unit sphere), plain-Rust ORACLE --------------
 
@@ -70,52 +72,6 @@ fn lcc_inv(x: f64, y: f64, c: &Lcc) -> (f64, f64) {
 }
 
 // ---- provider mocks — NO hand-authored gate anywhere -----------------------
-
-struct MockConst(Vec<f64>);
-
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum Call {
-    Wholesale,
-    Selection(Vec<AxisSel>),
-}
-
-struct MockGated {
-    full: ArrayD<f64>, // native [layer, src, rcv]
-    calls: Rc<RefCell<Vec<Call>>>,
-}
-
-impl PrepareProvider for MockGated {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-        self.calls.borrow_mut().push(Call::Wholesale);
-        Ok(self.full.clone())
-    }
-
-    fn supports_selection(&self) -> bool {
-        true
-    }
-
-    fn sample_with_selection(
-        &mut self,
-        selection: &[AxisSel],
-    ) -> Result<ArrayD<f64>, PrepareError> {
-        self.calls
-            .borrow_mut()
-            .push(Call::Selection(selection.to_vec()));
-        let mut arr = self.full.clone();
-        for (i, ax) in selection.iter().enumerate() {
-            if let AxisSel::Indices(idx) = ax {
-                arr = arr.select(ndarray::Axis(i), idx);
-            }
-        }
-        Ok(arr)
-    }
-}
 
 fn arr1(v: &[f64]) -> ArrayD<f64> {
     ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
@@ -294,8 +250,7 @@ fn l1_against_the_oracle(with_bystander: bool) {
     };
 
     // ---- the committed fixture IS the authored document ---------------------
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let fixture = common::repo_fixture("conformance/pushdown/fixtures/pushdown_l1.esm");
     let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
@@ -307,7 +262,7 @@ fn l1_against_the_oracle(with_bystander: bool) {
     }
 
     // ---- providers: mocks only, keyed by the document's loader variables ----
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
@@ -328,16 +283,13 @@ fn l1_against_the_oracle(with_bystander: bool) {
         ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
         ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
-    let mut call_logs: HashMap<String, Rc<RefCell<Vec<Call>>>> = HashMap::new();
+    let mut call_logs: HashMap<String, FetchLog> = HashMap::new();
     for v in LVARS {
         let calls = Rc::new(RefCell::new(Vec::new()));
         call_logs.insert(v.to_string(), calls.clone());
         providers.push((
             format!("ISRM.SR_{v}"),
-            Box::new(MockGated {
-                full: full_sr[v].clone(),
-                calls,
-            }),
+            Box::new(MockGated::new(full_sr[v].clone(), calls)),
         ));
     }
 
@@ -367,7 +319,8 @@ fn l1_against_the_oracle(with_bystander: bool) {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..opts
         },
     )
@@ -396,8 +349,8 @@ fn l1_against_the_oracle(with_bystander: bool) {
             "{v}: expected exactly one gated fetch, got {calls:?}"
         );
         match &calls[0] {
-            Call::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
-            Call::Wholesale => panic!("{v}: fetched WHOLESALE"),
+            Fetch::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
+            Fetch::Wholesale => panic!("{v}: fetched WHOLESALE"),
         }
     }
 
@@ -548,13 +501,12 @@ fn prepare_pushdown_l1_single_member_support_set() {
             .collect()
     };
 
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let fixture = common::repo_fixture("conformance/pushdown/fixtures/pushdown_l1.esm");
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
 
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(total_pop.to_vec())),
@@ -575,16 +527,13 @@ fn prepare_pushdown_l1_single_member_support_set() {
         ("ISRM.is_SOx".into(), Box::new(MockConst(is_sox.to_vec()))),
         ("ISRM.is_PM25".into(), Box::new(MockConst(is_pm25.to_vec()))),
     ];
-    let mut call_logs: HashMap<String, Rc<RefCell<Vec<Call>>>> = HashMap::new();
+    let mut call_logs: HashMap<String, FetchLog> = HashMap::new();
     for v in LVARS {
         let calls = Rc::new(RefCell::new(Vec::new()));
         call_logs.insert(v.to_string(), calls.clone());
         providers.push((
             format!("ISRM.SR_{v}"),
-            Box::new(MockGated {
-                full: full_sr[v].clone(),
-                calls,
-            }),
+            Box::new(MockGated::new(full_sr[v].clone(), calls)),
         ));
     }
     let ca: HashMap<String, ArrayD<f64>> = [
@@ -612,7 +561,8 @@ fn prepare_pushdown_l1_single_member_support_set() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..opts
         },
     )
@@ -634,8 +584,8 @@ fn prepare_pushdown_l1_single_member_support_set() {
             "{v}: expected one gated fetch, got {calls:?}"
         );
         match &calls[0] {
-            Call::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
-            Call::Wholesale => panic!("{v}: fetched WHOLESALE"),
+            Fetch::Selection(sel) => assert_eq!(sel, &expect_sel, "{v}: wrong selection"),
+            Fetch::Wholesale => panic!("{v}: fetched WHOLESALE"),
         }
     }
 
@@ -676,7 +626,7 @@ fn l1_build(
     compiler: earthsci_ast::Compiler,
 ) -> (
     Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError>,
-    Vec<Rc<RefCell<Vec<Call>>>>,
+    Vec<FetchLog>,
 ) {
     const GRID: usize = 9;
     const N_RCV: usize = 4;
@@ -702,7 +652,7 @@ fn l1_build(
             .iter()
             .map(|&(x, y)| lcc_inv(x, y, &c))
             .unzip();
-    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+    let mut providers: Vec<(String, Box<dyn DataProvider>)> = vec![
         (
             "ISRM.TotalPop".into(),
             Box::new(MockConst(vec![100.0, 200.0, 300.0, 400.0])),
@@ -748,7 +698,10 @@ fn l1_build(
         });
         let calls = Rc::new(RefCell::new(Vec::new()));
         logs.push(calls.clone());
-        providers.push((format!("ISRM.SR_{v}"), Box::new(MockGated { full, calls })));
+        providers.push((
+            format!("ISRM.SR_{v}"),
+            Box::new(MockGated::new(full, calls)),
+        ));
     }
     let ca: HashMap<String, ArrayD<f64>> = [
         ("src_W", &w),
@@ -767,7 +720,8 @@ fn l1_build(
             model_name: Some("ISRM".to_string()),
             pushdown_rewrite: true,
             const_arrays: ca,
-            build_providers: providers,
+            providers: providers.into_iter().collect(),
+            build_pipeline: true,
             ..Default::default()
         },
     );
@@ -775,8 +729,7 @@ fn l1_build(
 }
 
 fn l1_doc() -> Value {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let fixture = common::repo_fixture("conformance/pushdown/fixtures/pushdown_l1.esm");
     serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
         .expect("parse pushdown_l1.esm")
 }
@@ -893,8 +846,7 @@ fn a_native_refusal_unrelated_to_the_gated_data_comes_before_the_gated_fetch() {
 /// fetching whole.
 #[test]
 fn a_whole_document_build_whose_pushdown_matches_two_models_is_refused() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    let fixture = common::repo_fixture("conformance/pushdown/fixtures/pushdown_l1.esm");
     let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");

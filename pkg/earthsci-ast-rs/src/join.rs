@@ -51,11 +51,11 @@
 //!   ranges — the MOVES/NONROAD shape, and the normal case). Resolution is
 //!   TWO-SIDED:
 //!   * a member-value-equality predicate is ANDed into the node's `filter`, so
-//!     every evaluation path — the vectorized overlay, the tape, the per-cell
-//!     oracle — stays correct with no new value-equality path of its own. For a
-//!     loop-symbol pair the two sides are dense-coded by rank in the sorted union
-//!     of their distinct values (same equality classes, independent of declared
-//!     member order); for a data column the predicate reads the column directly
+//!     every evaluation path — the reference evaluator's whole-array and
+//!     per-cell walks, the tape — stays correct with no new value-equality
+//!     path of its own. For a loop-symbol pair the two sides are dense-coded
+//!     by rank in the sorted union of their distinct values (same equality
+//!     classes, independent of declared member order); for a data column the predicate reads the column directly
 //!     (`index(col, sym)`).
 //!   * an [`OnGate`] — the resolved key columns and the two loop symbols — is
 //!     ATTACHED to the surviving `join` clause so the evaluator can build the
@@ -78,8 +78,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 
 use crate::compile_error::CompileError;
+use crate::dependency::Reads;
 use crate::faq::is_faq_op;
 use crate::types::{Expr, ExpressionNode, IndexSet, JoinClause, Model, RangeSpec, RegionBound};
+
+/// The code an overlap join's envelope refusal carries (Julia's
+/// `E_TREEWALK_JOIN_OVERLAP`; CONFORMANCE_SPEC §5.5.6).
+pub(crate) const JOIN_OVERLAP: &str = "E_TREEWALK_JOIN_OVERLAP";
 
 /// One component of a join / group-by key. Exact-equality types only (§5.3):
 /// an integer ID or a categorical member. **Floats are forbidden in keys**
@@ -229,6 +234,29 @@ impl OnGate {
     }
 }
 
+impl JoinClause {
+    /// This clause with `f` applied to every VARIABLE REFERENCE it carries as a
+    /// plain string (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
+    /// `overlap` envelope factor, and the data-column names of a resolved
+    /// `on_gate`. The clause's loop symbols (`syms`, `overlap.sym_src` /
+    /// `sym_tgt`, the gate's two gated symbols) are binders of the node, not
+    /// references, and are kept as they are.
+    pub(crate) fn map_reference_names(&self, f: impl Fn(&String) -> String) -> JoinClause {
+        JoinClause {
+            on: self.on.iter().map(|[l, r]| [f(l), f(r)]).collect(),
+            syms: self.syms.clone(),
+            overlap: self.overlap.as_ref().map(|ov| crate::types::OverlapClause {
+                src_env: ov.src_env.iter().map(&f).collect(),
+                tgt_env: ov.tgt_env.iter().map(&f).collect(),
+                eps: ov.eps,
+                sym_src: ov.sym_src.clone(),
+                sym_tgt: ov.sym_tgt.clone(),
+            }),
+            on_gate: self.on_gate.as_ref().map(|g| g.map_column_names(&f)),
+        }
+    }
+}
+
 /// Source of [`OnGate::id`]. A gate is resolved once per node per build, and the
 /// id only ever has to distinguish gates *within* one process's evaluator cache.
 static NEXT_GATE_ID: AtomicU64 = AtomicU64::new(1);
@@ -251,28 +279,30 @@ fn next_gate_id() -> u64 {
 pub fn resolve_aggregate_joins(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
+    declared_shapes: impl FnOnce(&Model) -> HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
     // Resolve each OVERLAP clause's two range symbols FIRST — that resolution
-    // needs the declared shapes of the model's variables. The same shapes are
-    // what let an `on` key column name a genuine DATA COLUMN (a 1-D variable
-    // over the index set its loop symbol draws from), so they are computed once
-    // here and threaded into the per-node lowering too.
+    // needs the declared shapes of the model's variables, which
+    // `declared_shapes` gives as [`declared_var_shapes`] reads them. The same
+    // shapes are what let an `on` key column name a genuine DATA COLUMN (a
+    // 1-D variable over the index set its loop symbol draws from), so they
+    // are read once here and threaded into the per-node lowering too.
     // Both passes below touch only expressions that carry a `join`; one look
     // decides that for the whole model.
     if !model_contains_join(model) {
         return Ok(());
     }
-    let var_shapes = declared_var_shapes(model);
-    resolve_overlap_join_syms(model);
-    check_model_overlap_factor_ranks(model, &var_shapes)?;
+    let var_shapes = &declared_shapes(model);
+    resolve_overlap_join_syms(model, var_shapes);
+    check_model_overlap_factor_ranks(model, var_shapes)?;
     for eq in &mut model.equations {
-        lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
-        lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
+        lower_expr_joins(&mut eq.lhs, index_sets, var_shapes)?;
+        lower_expr_joins(&mut eq.rhs, index_sets, var_shapes)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
-            lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
+            lower_expr_joins(&mut eq.lhs, index_sets, var_shapes)?;
+            lower_expr_joins(&mut eq.rhs, index_sets, var_shapes)?;
         }
     }
     // Parameter-update expressions are the only Expressions still carried on a
@@ -280,7 +310,7 @@ pub fn resolve_aggregate_joins(
     // above.
     for var in model.variables.values_mut() {
         var.try_for_each_expression_mut(&mut |expr| {
-            lower_expr_joins(expr, index_sets, &var_shapes)
+            lower_expr_joins(expr, index_sets, var_shapes)
         })?;
     }
     Ok(())
@@ -439,9 +469,9 @@ fn lower_node_joins(
     // additionally carrying the [`OnGate`] resolved below. Unlike the overlap
     // broad phase it is EXACT rather than conservative, so the coded `filter`
     // predicate is emitted as well: every path that does not consult the gate
-    // (the whole-array overlay, the tape, the compiled RHS loop) then still
-    // computes the same answer, and the driven path's answer is verifiably
-    // identical to the undriven one.
+    // (the reference evaluator's whole-array walk, the tape, the compiled
+    // RHS loop) then still computes the same answer, and the driven path's
+    // answer is verifiably identical to the undriven one.
     let mut kept: Vec<JoinClause> = Vec::new();
     for clause in &joins {
         if clause.overlap.is_some() {
@@ -463,9 +493,11 @@ fn lower_node_joins(
             Some([sl, sr]) => {
                 for s in [sl, sr] {
                     if !declared.contains(s.as_str()) {
+                        let mut symbols: Vec<&str> = declared.iter().copied().collect();
+                        symbols.sort_unstable();
                         return Err(CompileError::build_err(format!(
                             "`join.syms` names '{s}', which is not a range symbol of this \
-                             aggregate ({declared:?}); both entries must name one of its \
+                             aggregate ({symbols:?}); both entries must name one of its \
                              `ranges` (CONFORMANCE_SPEC §5.5.8)"
                         )));
                     }
@@ -896,20 +928,19 @@ fn raw_key_expr(s: &ResolvedSide) -> Result<Expr, CompileError> {
 /// drive that gate. The §5.5.6 errors Julia raises from the same resolver —
 /// a list of the wrong length, a factor of the wrong rank — are raised by
 /// [`check_overlap_factor_ranks`], which every caller runs beside this.
-pub fn resolve_overlap_join_syms(model: &mut Model) {
-    let var_shapes = declared_var_shapes(model);
+pub fn resolve_overlap_join_syms(model: &mut Model, var_shapes: &HashMap<String, Vec<String>>) {
     for eq in &mut model.equations {
-        resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
-        resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+        resolve_overlap_syms_expr(&mut eq.lhs, var_shapes);
+        resolve_overlap_syms_expr(&mut eq.rhs, var_shapes);
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
-            resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+            resolve_overlap_syms_expr(&mut eq.lhs, var_shapes);
+            resolve_overlap_syms_expr(&mut eq.rhs, var_shapes);
         }
     }
     for var in model.variables.values_mut() {
-        var.for_each_expression_mut(&mut |expr| resolve_overlap_syms_expr(expr, &var_shapes));
+        var.for_each_expression_mut(&mut |expr| resolve_overlap_syms_expr(expr, var_shapes));
     }
 }
 
@@ -917,7 +948,7 @@ pub fn resolve_overlap_join_syms(model: &mut Model) {
 /// §5.5.6: a list whose length is not 1, 2 or 4, or a factor whose declared
 /// rank does not match its list's ([`crate::broad_phase::overlap_env_rank`]).
 /// Every factor of both sides is checked, not only the first. Raised under
-/// Julia's code, `E_TREEWALK_JOIN_OVERLAP` (its `_overlap_env_sym`).
+/// Julia's code, [`JOIN_OVERLAP`] (its `_overlap_env_sym`).
 ///
 /// A factor with no declared shape is not checked here: its rank is not known
 /// until it is evaluated, and the resolver leaves its gate undriven.
@@ -939,12 +970,15 @@ pub fn check_overlap_factor_ranks(
     {
         for (side, env) in [("src_env", &ov.src_env), ("tgt_env", &ov.tgt_env)] {
             let Some(rank) = crate::broad_phase::overlap_env_rank(env.len()) else {
-                return Err(CompileError::build_err(format!(
-                    "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` must name 1 (a [pos, verts, \
+                return Err(CompileError::coded_build_err(
+                    JOIN_OVERLAP,
+                    format!(
+                        "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` must name 1 (a [pos, verts, \
                      coord] ring stack), 2 (point [x, y]) or 4 (rect [xmin, ymin, xmax, ymax]) \
                      factors; got {}: {env:?} (CONFORMANCE_SPEC §5.5.6)",
-                    env.len()
-                )));
+                        env.len()
+                    ),
+                ));
             };
             for name in env {
                 if let Some(shape) = var_shapes.get(name)
@@ -955,12 +989,15 @@ pub fn check_overlap_factor_ranks(
                     } else {
                         "a [pos, verts, coord] 3-D ring stack"
                     };
-                    return Err(CompileError::build_err(format!(
-                        "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` factor `{name}` must be \
+                    return Err(CompileError::coded_build_err(
+                        JOIN_OVERLAP,
+                        format!(
+                            "E_TREEWALK_JOIN_OVERLAP: overlap join `{side}` factor `{name}` must be \
                          {want} for a {}-name list, whose first shape index set names the join \
                          range; its declared shape is {shape:?} (CONFORMANCE_SPEC §5.5.6)",
-                        env.len()
-                    )));
+                            env.len()
+                        ),
+                    ));
                 }
             }
         }
@@ -974,8 +1011,10 @@ pub fn check_overlap_factor_ranks(
     out
 }
 
-/// Every declared variable's shape (index-set names), for
-/// [`resolve_overlap_join_syms`]. Mirrors the Julia `_declared_var_shapes`.
+/// Every declared variable's shape (index-set names), `shape: []` included,
+/// for [`resolve_overlap_join_syms`]. Mirrors the Julia `_declared_var_shapes`.
+/// A build reads the same map from its shape table
+/// ([`crate::simulate_array::ShapeTable::declared_map`]).
 pub fn declared_var_shapes(model: &Model) -> HashMap<String, Vec<String>> {
     model
         .variables
@@ -1276,37 +1315,6 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
     })
 }
 
-/// The names a node's own join clauses read: its `on` key columns and its
-/// `overlap` envelope factors.
-fn clause_names(n: &ExpressionNode, out: &mut Vec<String>) {
-    for clause in n.join.iter().flatten() {
-        out.extend(clause.on.iter().flatten().cloned());
-        if let Some(ov) = &clause.overlap {
-            out.extend(ov.src_env.iter().chain(&ov.tgt_env).cloned());
-        }
-    }
-}
-
-/// The join-clause names of every node in `e` (the cone's seeds).
-fn join_clause_names(e: &Expr, out: &mut Vec<String>) {
-    if let Expr::Operator(n) = e {
-        clause_names(n, out);
-        n.for_each_child(&mut |c| join_clause_names(c, out));
-    }
-}
-
-/// Every name `e` reads: its variables and the names its join clauses read.
-fn expr_reads(e: &Expr, out: &mut Vec<String>) {
-    match e {
-        Expr::Variable(v) => out.push(v.clone()),
-        Expr::Operator(n) => {
-            clause_names(n, out);
-            n.for_each_child(&mut |c| expr_reads(c, out));
-        }
-        _ => {}
-    }
-}
-
 /// Every name read, directly or through the observeds they are defined by, by
 /// the KEY COLUMNS of the `on` joins in `roots` (CONFORMANCE_SPEC §5.5.8) and
 /// by the ENVELOPE FACTORS of their `overlap` joins (§5.5.6), which carry the
@@ -1322,17 +1330,17 @@ pub(crate) fn join_key_cone<'e>(
     roots: impl IntoIterator<Item = &'e Expr>,
     definition: impl Fn(&str) -> Option<&'e Expr>,
 ) -> HashSet<String> {
-    let mut frontier: Vec<String> = Vec::new();
-    for r in roots {
-        join_clause_names(r, &mut frontier);
-    }
+    let mut frontier: Vec<String> = roots
+        .into_iter()
+        .flat_map(|r| Reads::of(r).join_names)
+        .collect();
     let mut seen: HashSet<String> = HashSet::new();
     while let Some(name) = frontier.pop() {
         if !seen.insert(name.clone()) {
             continue;
         }
         if let Some(def) = definition(&name) {
-            expr_reads(def, &mut frontier);
+            frontier.extend(Reads::of(def).all().cloned());
         }
     }
     seen
@@ -1376,11 +1384,10 @@ pub(crate) fn join_key_parameters(
     };
     let mut frontier: Vec<(String, String)> = Vec::new();
     for (m, model) in models {
-        let mut names = Vec::new();
         for eq in &model.equations {
-            join_clause_names(&eq.rhs, &mut names);
+            let names = Reads::of(&eq.rhs).join_names;
+            frontier.extend(names.iter().filter_map(|n| resolve(m, n)));
         }
-        frontier.extend(names.iter().filter_map(|n| resolve(m, n)));
     }
     let mut seen: HashSet<(String, String)> = HashSet::new();
     while let Some(key) = frontier.pop() {
@@ -1388,9 +1395,8 @@ pub(crate) fn join_key_parameters(
             continue;
         }
         if let Some(def) = defs[key.0.as_str()].get(&key.1) {
-            let mut reads = Vec::new();
-            expr_reads(def, &mut reads);
-            frontier.extend(reads.iter().filter_map(|n| resolve(&key.0, n)));
+            let reads = Reads::of(def);
+            frontier.extend(reads.all().filter_map(|n| resolve(&key.0, n)));
         }
         seen.insert(key);
     }
@@ -2059,9 +2065,10 @@ mod tests {
         ]);
         let rank_error = |src: &[&str], tgt: &[&str]| -> String {
             let e = overlap_gated_expr(src, tgt);
-            check_overlap_factor_ranks(&e, &shapes)
-                .expect_err("a wrong-rank factor must be refused")
-                .to_string()
+            let err = check_overlap_factor_ranks(&e, &shapes)
+                .expect_err("a wrong-rank factor must be refused");
+            assert_eq!(err.code(), Some(JOIN_OVERLAP));
+            err.to_string()
         };
 
         let mut e = overlap_gated_expr(&["col"], &["ring", "ring2"]);

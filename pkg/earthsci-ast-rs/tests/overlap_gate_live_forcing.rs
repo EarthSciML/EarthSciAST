@@ -11,7 +11,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{Compiler, ProblemOptions, RhsProgram, esm_problem, rhs_program};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
@@ -143,18 +143,17 @@ fn expected(f: &[f64]) -> Vec<f64> {
 struct Discrete(Vec<f64>);
 
 impl Discrete {
-    fn sample(&self) -> HashMap<String, NativeField> {
-        let a = ArrayD::from_shape_vec(IxDyn(&[3]), self.0.clone()).expect("field");
-        HashMap::from([("F".to_string(), NativeField::new(a))])
+    fn record(&self) -> ArrayD<f64> {
+        ArrayD::from_shape_vec(IxDyn(&[3]), self.0.clone()).expect("field")
     }
 }
 
-impl CadenceProvider for Discrete {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        Ok(self.sample())
+impl DataProvider for Discrete {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        Ok(self.record())
     }
-    fn refresh(&mut self, _t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(Some(self.sample()))
+    fn refresh(&mut self, _t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        Ok(Some(self.record()))
     }
     fn refresh_times(&self) -> Vec<f64> {
         vec![0.0]
@@ -169,7 +168,7 @@ fn program(compiler: Compiler, fed: bool, f: &[f64]) -> RhsProgram {
     if fed {
         opts.providers = HashMap::from([(
             "F".to_string(),
-            Box::new(Discrete(f.to_vec())) as Box<dyn CadenceProvider>,
+            Box::new(Discrete(f.to_vec())) as Box<dyn DataProvider>,
         )]);
     } else {
         opts.runtime_array_parameters = true;

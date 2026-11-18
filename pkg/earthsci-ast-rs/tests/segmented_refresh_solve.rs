@@ -69,9 +69,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::flatten;
-use earthsci_ast::provider::{
-    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
-};
+use earthsci_ast::provider::{DataProvider, ForcingBuffer, ProviderError, RefreshExecutor};
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
@@ -268,15 +266,14 @@ const SRC_AT: [(f64, [f64; 3]); 3] = [
 // An in-memory provider — the test stand-in for the EarthSciIO Rust Provider
 // ===========================================================================
 
-/// A hand-built [`CadenceProvider`] feeding ONE forcing variable, standing in
+/// A hand-built [`DataProvider`] feeding ONE forcing variable, standing in
 /// for the EarthSciIO Rust Provider (esio-9nb.7) the real driver wraps via a
-/// thin adapter. `out_key` is the post-flatten forcing-buffer key the RHS looks
-/// up (e.g. `"Box.src"`). It records its `materialize`/`refresh` calls so the
+/// thin adapter. Its key in the provider map is the post-flatten forcing-buffer
+/// key the RHS looks up (e.g. `"Box.src"`). It records its `sample`/`refresh` calls so the
 /// harness can assert the cadence contract (CONST once, DISCRETE once per
 /// boundary). No I/O — the "testable with a hand-built buffer" contract the plan
 /// specifies.
 struct ScheduledProvider {
-    out_key: String,
     /// CONST baseline returned by `materialize`; `None` for a pure-DISCRETE
     /// loader.
     const_value: Option<Vec<f64>>,
@@ -288,18 +285,16 @@ struct ScheduledProvider {
 }
 
 impl ScheduledProvider {
-    fn const_loader(out_key: &str, value: [f64; 3]) -> Self {
+    fn const_loader(value: [f64; 3]) -> Self {
         Self {
-            out_key: out_key.to_string(),
             const_value: Some(value.to_vec()),
             schedule: Vec::new(),
             materialize_calls: Rc::new(RefCell::new(0)),
             refresh_log: Rc::new(RefCell::new(Vec::new())),
         }
     }
-    fn discrete_loader(out_key: &str, schedule: &[(f64, [f64; 3])]) -> Self {
+    fn discrete_loader(schedule: &[(f64, [f64; 3])]) -> Self {
         Self {
-            out_key: out_key.to_string(),
             const_value: None,
             schedule: schedule.iter().map(|(t, v)| (*t, v.to_vec())).collect(),
             materialize_calls: Rc::new(RefCell::new(0)),
@@ -308,20 +303,20 @@ impl ScheduledProvider {
     }
 }
 
-impl CadenceProvider for ScheduledProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for ScheduledProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         *self.materialize_calls.borrow_mut() += 1;
         let v = self
             .const_value
             .clone()
             .expect("materialize on a provider with no CONST baseline");
-        Ok(HashMap::from([(self.out_key.clone(), field(&v))]))
+        Ok(field(&v))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         self.refresh_log.borrow_mut().push(t);
         for (anchor, value) in &self.schedule {
             if *anchor == t {
-                return Ok(Some(HashMap::from([(self.out_key.clone(), field(value))])));
+                return Ok(Some(field(value)));
             }
         }
         Ok(None)
@@ -332,8 +327,8 @@ impl CadenceProvider for ScheduledProvider {
 }
 
 /// A 1-D native field from a value vector (written straight into the buffer).
-fn field(v: &[f64]) -> NativeField {
-    NativeField::new(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+fn field(v: &[f64]) -> ArrayD<f64> {
+    ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
 }
 
 // ===========================================================================
@@ -454,19 +449,19 @@ struct Wiring {
 fn build_executor(compiled: &ArrayCompiled) -> Wiring {
     let doc = classification_doc();
 
-    let emis = ScheduledProvider::discrete_loader("Box.src", &SRC_AT);
-    let factors = ScheduledProvider::const_loader("Box.scale", SCALE);
+    let emis = ScheduledProvider::discrete_loader(&SRC_AT);
+    let factors = ScheduledProvider::const_loader(SCALE);
     let discrete_refresh_log = Rc::clone(&emis.refresh_log);
     let const_materialize_calls = Rc::clone(&factors.materialize_calls);
 
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
+    let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
         (
-            "emis".to_string(),
-            Box::new(emis) as Box<dyn CadenceProvider>,
+            "Box.src".to_string(),
+            Box::new(emis) as Box<dyn DataProvider>,
         ),
         (
-            "factors".to_string(),
-            Box::new(factors) as Box<dyn CadenceProvider>,
+            "Box.scale".to_string(),
+            Box::new(factors) as Box<dyn DataProvider>,
         ),
     ]);
 
@@ -612,7 +607,7 @@ fn const_materialized_once_discrete_refreshed_once_per_boundary() {
 /// product the executor wrote — proving both forcings reach the RHS live.
 #[test]
 fn forcing_is_constant_within_a_segment_so_rhs_is_pure() {
-    let compiled = build_compiled();
+    let compiled = std::rc::Rc::new(build_compiled());
     let Wiring {
         mut exec, forcing, ..
     } = build_executor(&compiled);
@@ -625,9 +620,12 @@ fn forcing_is_constant_within_a_segment_so_rhs_is_pure() {
     // not touched again until the next boundary.
     let names = compiled.state_variable_names().to_vec();
     let state = vec![0.0f64; names.len()];
-    let params = HashMap::new();
-    let (dy_at_0, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-    let (dy_at_half, _) = compiled.debug_eval_rhs(&state, 0.5, &params, false);
+    let mut rhs = earthsci_ast::simulate_array::SolveRhs::oracle(
+        std::rc::Rc::clone(&compiled),
+        &HashMap::new(),
+    );
+    let dy_at_0 = rhs.eval(&state, 0.0);
+    let dy_at_half = rhs.eval(&state, 0.5);
     assert_eq!(
         dy_at_0, dy_at_half,
         "forcing is frozen within the segment → the RHS is time-invariant here (pure)"

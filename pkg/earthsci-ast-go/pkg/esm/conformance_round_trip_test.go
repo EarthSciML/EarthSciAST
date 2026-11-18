@@ -45,6 +45,7 @@ type conformanceManifest struct {
 		ID             string            `json:"id"`
 		Path           string            `json:"path"`
 		LoadTransforms []json.RawMessage `json:"load_transforms"`
+		SavedEsm       string            `json:"saved_esm"`
 	} `json:"fixtures"`
 }
 
@@ -228,6 +229,13 @@ func TestConformanceRoundTripManifest(t *testing.T) {
 			if len(lost) > 0 {
 				sort.Strings(lost)
 				t.Errorf("dropped preserved field(s) at %v", lost)
+			}
+
+			// 2b. SAVED VERSION (esm-spec 4.7, "Save-time version floors").
+			if fixture.SavedEsm != "" {
+				if got, _ := emitted.(map[string]any)["esm"].(string); got != fixture.SavedEsm {
+					t.Errorf("saved esm %q, want %q", got, fixture.SavedEsm)
+				}
 			}
 
 			// 3. IDEMPOTENCE (esm-spec 9.6.4 rule 5) — still required, no longer

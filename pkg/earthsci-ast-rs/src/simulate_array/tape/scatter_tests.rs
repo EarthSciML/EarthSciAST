@@ -1,13 +1,8 @@
 //! The one-pass equality scatter (`lower/scatter.rs`): which lowering each
 //! shape takes, bit-identical to the interpreter in both executors.
 
-use super::ir::*;
-use super::tests::ab_check;
+use super::test_support::{ab_check, opcount};
 use serde_json::{Value, json};
-
-fn count(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
 
 fn fixture(rel: &str) -> Value {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -45,8 +40,8 @@ fn a_unit_shift_scatter_lowers_without_a_tuple_list_or_a_box() {
         -2.0,
         2.0,
     );
-    assert_eq!(count(&prog, "SegReduce"), 0);
-    assert_eq!(count(&prog, "Reduce"), 0);
+    assert_eq!(opcount(&prog, "SegReduce"), 0);
+    assert_eq!(opcount(&prog, "Reduce"), 0);
 }
 
 /// A pin that is not a unit shift takes the build-time scatter map: one
@@ -68,8 +63,8 @@ fn a_non_shift_pin_lowers_to_one_segmented_reduction() {
             {"op": "<", "args": ["i", 9]}]}),
     ] {
         let prog = ab_check(scatter_doc(12, filter.clone(), body.clone()), -2.0, 2.0);
-        assert_eq!(count(&prog, "SegReduce"), 1, "{filter}");
-        assert_eq!(count(&prog, "Reduce"), 0, "{filter}");
+        assert_eq!(opcount(&prog, "SegReduce"), 1, "{filter}");
+        assert_eq!(opcount(&prog, "Reduce"), 0, "{filter}");
     }
 }
 
@@ -85,7 +80,7 @@ fn a_run_time_pin_keeps_the_dense_lowering() {
         -2.0,
         2.0,
     );
-    assert_eq!(count(&prog, "SegReduce"), 0);
+    assert_eq!(opcount(&prog, "SegReduce"), 0);
 }
 
 /// A scatter keeps its list over the program's tuple-list budget: the list
@@ -101,7 +96,7 @@ fn a_scatter_over_the_tuple_list_budget_keeps_its_list() {
         let prev = set_tuple_list_budget(budget);
         let prog = ab_check(scatter_doc(12, filter.clone(), body.clone()), -2.0, 2.0);
         set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), 1, "budget {budget}");
+        assert_eq!(opcount(&prog, "SegReduce"), 1, "budget {budget}");
     }
     // Two scatters in one program, room in the budget for one: both lists.
     let one = json!({"op": "faq", "args": [], "output_idx": ["j"], "reduce": "+",
@@ -116,7 +111,7 @@ fn a_scatter_over_the_tuple_list_budget_keeps_its_list() {
     let prev = set_tuple_list_budget(20);
     let prog = ab_check(doc, -2.0, 2.0);
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 2);
+    assert_eq!(opcount(&prog, "SegReduce"), 2);
 }
 
 /// Over the budget at a size whose dense box is past the promotion limit,
@@ -130,12 +125,12 @@ fn a_scatter_over_the_budget_without_a_promotable_box_keeps_its_list() {
         json!({"op": "==", "args": ["j", {"op": "/", "args": ["i", 2]}]}),
         json!({"op": "index", "args": ["u", "i"]}),
     );
-    let compiled = super::tests::compile(doc);
+    let compiled = super::test_support::compile(doc);
     let prev = set_tuple_list_budget(16);
     let (prog, _) = super::taped(compiled.build_tape_opts(&std::collections::HashSet::new(), None));
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 1);
-    assert_eq!(count(&prog, "Reduce"), 0);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
+    assert_eq!(opcount(&prog, "Reduce"), 0);
 }
 
 /// A ragged range under a free output index: each free cell walks its own
@@ -179,8 +174,8 @@ fn a_ragged_range_under_a_free_index_scatters_per_free_cell() {
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(count(&prog, "SegReduce"), 1);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
     // The admitted points only, Σ_a min(|row a|, 3) = 3 + 1 + 3 + 2, not the
     // 3 · (3 + 1 + 4 + 2) pairs the dense tuple list masks at run time.
-    assert_eq!(prog.seg_tables[0].rows.last(), Some(&9));
+    assert_eq!(prog.tables.seg_tables[0].rows.last(), Some(&9));
 }

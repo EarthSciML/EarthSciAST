@@ -24,15 +24,14 @@
 //!
 //! # The provider contract, and why it is a trait
 //!
-//! The bytes are fetched by the EarthSciIO Rust `Provider` (bead `esio-9nb.7`,
-//! data-providers plan §4.6): `materialize` (CONST, load once), `refresh(t)`
-//! (DISCRETE, re-read at a cadence anchor; `None` if the record has not advanced),
-//! `refresh_times` (the cadence anchors). EarthSciIO lives in a **separate
-//! repo/crate that ESS does not link**; ESS instead depends on the
-//! [`CadenceProvider`] **trait** here (dependency inversion), and a thin adapter
-//! at the integration boundary wraps the real `Provider` to implement it. The
-//! cross-rig mayor-gate on `esio-9nb.7` froze that signature so this trait
-//! matches it.
+//! One [`DataProvider`] feeds ONE parameter: the build reads it (`sample`, or
+//! `sample_with_selection` for a gated fetch), and so does the run
+//! (`refresh(t)` at its `refresh_times`). The bytes are fetched by the
+//! EarthSciIO Rust `Provider` (bead `esio-9nb.7`, data-providers plan §4.6).
+//! EarthSciIO lives in a **separate repo/crate that ESS does not link**; ESS
+//! instead depends on the trait here (dependency inversion), and
+//! `crate::esio_provider` (feature `esio`) implements it over the real
+//! `Provider`.
 //!
 //! Time is the **f64 solver clock** — the cadence anchors `refresh_times` yields,
 //! the same axis the diffsol driver integrates on. The upstream `Provider` takes
@@ -58,6 +57,7 @@
 //! model (an in-model coupling contraction the RHS evaluates), not a seam here.
 
 use crate::cadence::{self, Cadence};
+use crate::pushdown_rewrite::ProviderGate;
 use indexmap::IndexMap;
 use ndarray::ArrayD;
 use serde_json::Value;
@@ -65,13 +65,32 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// A refresh-executor / classification failure: a malformed loader-fed variable,
-/// a missing provider, a cadence-classification disagreement, or a buffer write error.
-/// Mirrors the lightweight string-wrapped style of [`crate::cadence::CadenceError`].
+/// A provider or refresh-executor failure: a provider that cannot deliver, a
+/// malformed loader-fed variable, a missing provider, a cadence-classification
+/// disagreement, or a sample of the wrong shape.
 ///
-/// Alias of the shared [`crate::error::MessageError`] newtype; the public name and
-/// its bare-`{0}` `Display` output are unchanged.
+/// Alias of the shared [`crate::error::MessageError`] newtype; its `Display` is
+/// the bare message.
 pub type ProviderError = crate::error::MessageError;
+
+/// Builds a document's data providers, once per build, keyed as
+/// [`crate::problem::ProblemOptions::providers`] keys them.
+///
+/// A factory rather than a set because `ProblemOptions` takes its `providers`
+/// BY VALUE: one shared map would be moved out by the first build and missing
+/// from the second. `Err` carries a message naming what could not be
+/// constructed. [`crate::bind_data_sources`] returns one for a document's
+/// `data_sources`, and `InlineTestOptions::providers` takes one.
+#[cfg(not(target_arch = "wasm32"))]
+pub type BuildProviderFactory<'a> =
+    dyn Fn() -> Result<Vec<(String, Box<dyn DataProvider>)>, String> + 'a;
+
+/// The wasm32 build has no build pipeline (`crate::prepare` is native-only), so
+/// there is no provider contract to satisfy: a factory passed to the inline-test
+/// runner is refused, and every assertion of a test that needs one is recorded
+/// as an ERROR.
+#[cfg(target_arch = "wasm32")]
+pub type BuildProviderFactory<'a> = dyn Fn() -> Result<(), String> + 'a;
 
 fn err(msg: impl Into<String>) -> ProviderError {
     // Construct via the underlying newtype: a `pub type` alias to a tuple struct
@@ -89,27 +108,19 @@ fn err(msg: impl Into<String>) -> ProviderError {
 /// [`ArrayCompiled::forcing_handle`]: crate::simulate_array::ArrayCompiled::forcing_handle
 pub type ForcingBuffer = Rc<RefCell<HashMap<String, ArrayD<f64>>>>;
 
-/// A raw native-grid field handed back by a provider: the array plus its native
-/// coordinate axes (axis name → coordinate values, in native-grid order).
-///
-/// Regridding/reprojection onto the model's simulation grid is the owning model's
-/// job (an in-model coupling expression the RHS evaluates), **not** the
-/// provider's — so `materialize`/`refresh` return a `NativeField`, and the
-/// executor writes its array straight into the forcing buffer. `NativeField =
-/// {array, coords}` matches the Python/Julia/Rust contract in data-providers plan §4.6.
+/// A raw native-grid field: the array plus its native coordinate axes (axis
+/// name → coordinate values, in native-grid order). What the EarthSciIO bridge
+/// decodes; a [`DataProvider`] delivers the array alone.
 #[derive(Debug, Clone)]
 pub struct NativeField {
     /// The field values on the provider's native grid.
     pub array: ArrayD<f64>,
-    /// The native-grid coordinate axes (axis name → coordinate values). Carried
-    /// for a model whose in-model regrid coupling needs them; the executor writes
-    /// only `array`.
+    /// The native-grid coordinate axes (axis name → coordinate values).
     pub coords: IndexMap<String, Vec<f64>>,
 }
 
 impl NativeField {
-    /// A field with no coordinate metadata — convenience for an already-on-grid
-    /// loader or a test whose forcing is consumed directly.
+    /// A field with no coordinate metadata.
     pub fn new(array: ArrayD<f64>) -> Self {
         Self {
             array,
@@ -118,51 +129,127 @@ impl NativeField {
     }
 }
 
-/// The cadence-driven data-provider contract the refresh executor consumes.
-///
-/// This is the ESS-side **consumer interface** mirroring the EarthSciIO Rust
-/// `Provider` (bead `esio-9nb.7`, data-providers plan §4.6). ESS does not link the
-/// EarthSciIO crate; a thin adapter at the integration boundary implements this
-/// trait by delegating to the real `Provider` (and converting an f64 anchor to the
-/// `DateTime<Utc>` the upstream `refresh` wants). Tests implement it with an
-/// in-memory fake — no I/O — exactly the "testable with a hand-built buffer"
-/// contract the plan specifies.
-///
-/// One `CadenceProvider` corresponds to one data loader and may feed several
-/// model variables; `materialize`/`refresh` are keyed by the fed variable name.
-pub trait CadenceProvider {
-    /// CONST load: read the whole field(s) once at setup. Keyed by the variable
-    /// name(s) the loader feeds. Called once by [`RefreshExecutor::materialize_const`]
-    /// for a CONST loader; a DISCRETE loader's CONST baseline (if any) is out of
-    /// scope here — DISCRETE loaders refresh at anchors.
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError>;
-
-    /// DISCRETE refresh at cadence anchor `t` (solver seconds): re-read the slice.
-    /// `Some(fields)` when the record advanced (a buffer write follows);
-    /// `None` when it has not — the executor then **skips the buffer write**
-    /// (None-skip), leaving the previously-loaded field in place. A provider also
-    /// returns `None` for a `t` that is not one of its own anchors, so the executor
-    /// may call every DISCRETE provider at every union anchor and let each decide.
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError>;
-
-    /// The cadence anchors (solver seconds) at which `refresh` should fire. Empty
-    /// for a CONST loader (no `temporal` block) — it contributes no driver tstop.
-    /// The union of these across DISCRETE providers is the driver's tstop list.
-    fn refresh_times(&self) -> Vec<f64>;
+/// One axis of the per-axis selection handed to a gated provider — the Rust
+/// spelling of the Python engine's `"all" | [0-based indices]` form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AxisSel {
+    /// The full native axis.
+    All,
+    /// The listed 0-based native indices, in order.
+    Indices(Vec<usize>),
+    /// The half-open strided range `[start, stop)` by `step` (`step >= 1`) —
+    /// the contiguous form, kept whole rather than expanded to indices so a
+    /// store-backed reader can push a slice down instead of a 52,411-long
+    /// index list.
+    Range {
+        /// Inclusive first index (0-based).
+        start: usize,
+        /// Exclusive last index.
+        stop: usize,
+        /// Stride (>= 1).
+        step: usize,
+    },
 }
 
-// There is NO native→sim-grid regrid seam: the freshly sampled native forcing is
-// written straight into the buffer, and any native→sim regrid is an ordinary
-// in-model coupling expression the RHS evaluates downstream (the obsolete
-// `Regrid`/`IdentityRegrid` seam was removed in v0.8.0 — regridding is declarative
-// in the model, not re-implemented imperatively in Rust).
+impl AxisSel {
+    /// The 0-based indices this selector picks over an axis of length
+    /// `dim_len` (the engine-side fallback for a provider that cannot push a
+    /// selection down).
+    pub fn indices(&self, dim_len: usize) -> Vec<usize> {
+        match self {
+            AxisSel::All => (0..dim_len).collect(),
+            AxisSel::Indices(v) => v.clone(),
+            AxisSel::Range { start, stop, step } => {
+                (*start..(*stop).min(dim_len)).step_by(*step).collect()
+            }
+        }
+    }
+}
+
+/// A source of ONE parameter's data, keyed in
+/// [`crate::problem::ProblemOptions::providers`] by that parameter (esm-spec
+/// §6.6.2 spellings: `Fed.s`, `s`, or a partial qualification).
+///
+/// A provider with no [`Self::refresh_times`] is CONST: its one
+/// [`Self::sample`] is the parameter's value for the whole run. A provider
+/// with refresh times is DISCRETE: [`Self::refresh`] delivers the record in
+/// effect from each of them. When the build pipeline is asked for
+/// ([`crate::problem::ProblemOptions::build_pipeline`]), it consumes every
+/// CONST provider — whole, or pre-sliced through
+/// [`Self::sample_with_selection`] when a gate ([`Self::gate_spec`], or the
+/// pushdown rewrite's own) defers it past value invention — and may close a
+/// metaparameter with a provider's own record count
+/// ([`Self::extent_metaparameter`]). The run-time refresh executor consumes
+/// the rest.
+///
+/// The array a provider delivers must have the parameter's declared shape,
+/// its dimensions in the order the source stores them; it is refused
+/// otherwise.
+pub trait DataProvider {
+    /// The whole field, time-less: a CONST provider's value, or the record a
+    /// DISCRETE provider holds before any refresh.
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError>;
+
+    /// The record in effect from `t` (solver seconds): `Some` when it differs
+    /// from what this provider last delivered, `None` when it does not — the
+    /// executor then keeps the field it holds. A provider also answers `None`
+    /// for a `t` that is not one of its refresh times, so the executor may ask
+    /// every DISCRETE provider at every boundary. A CONST provider never
+    /// refreshes.
+    fn refresh(&mut self, _t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        Ok(None)
+    }
+
+    /// The refresh times (solver seconds) at which [`Self::refresh`] should
+    /// fire; empty for a CONST provider. Their union across providers is the
+    /// boundary list a solve segments on.
+    fn refresh_times(&self) -> Vec<f64> {
+        Vec::new()
+    }
+
+    /// Whether [`Self::sample_with_selection`] pushes the selection down to
+    /// the reader (fetching only what intersects it). One that cannot is
+    /// sampled whole and sliced by the build, with the same result.
+    fn supports_selection(&self) -> bool {
+        false
+    }
+
+    /// The whole field with a per-axis selection pushed down. EVERY requested
+    /// axis is present in the result (a fixed axis comes back length-1 and is
+    /// dropped by the build).
+    fn sample_with_selection(
+        &mut self,
+        _selection: &[AxisSel],
+    ) -> Result<ArrayD<f64>, ProviderError> {
+        Err(err("provider does not support selection pushdown"))
+    }
+
+    /// A provider-declared gate (the fallback protocol mirroring Julia's
+    /// `provider_gate_spec`); the pushdown rewrite's own gate takes
+    /// precedence.
+    fn gate_spec(&self) -> Option<ProviderGate> {
+        None
+    }
+
+    /// The metaparameter this provider's own extent BINDS (esm-spec §8.9): a
+    /// loader that discovers its record count at read time declares
+    /// `extent: {"metaparameter": "N_REC"}`, and the build closes that
+    /// metaparameter with the length of this provider's leading axis before
+    /// the typed load. Every provider naming the same metaparameter must
+    /// agree, which is also the alignment check across a table's columns.
+    fn extent_metaparameter(&self) -> Option<String> {
+        None
+    }
+}
 
 /// One loader's binding: its declared cadence and the model variables it feeds.
 /// A loader's `temporal` block decides a single cadence for *all* its outputs, so
 /// every variable in `variables` shares `cadence`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoaderBinding {
-    /// The data-source name (the `update.source` of the parameters it feeds).
+    /// The data-source name (the `update.source` of the parameters it feeds),
+    /// or, for a binding [`RefreshExecutor`] made from a provider, the
+    /// provider's key.
     pub loader: String,
     /// `Const` (no `temporal` — materialize once) or `Discrete` (refresh at the
     /// cadence). A loader never feeds a `Continuous` forcing.
@@ -254,49 +341,80 @@ pub fn classify_loader_bindings(
     Ok(by_loader.into_values().collect())
 }
 
-/// One classified loader paired with its provider.
-struct LoaderProvider {
-    binding: LoaderBinding,
-    provider: Box<dyn CadenceProvider>,
+/// One provider and the parameter it feeds.
+struct Feed {
+    /// The forcing-buffer name its array is written under.
+    target: String,
+    /// What a refused sample's message calls the provider: the caller's key,
+    /// which may spell `target` differently (esm-spec §6.6.2).
+    label: String,
+    /// The parameter's declared shape, resolved against the index-set
+    /// registry; `None` when it is not known, and then no shape is checked.
+    declared: Option<Vec<usize>>,
+    cadence: Cadence,
+    provider: Box<dyn DataProvider>,
     /// The provider's `refresh_times()`, sorted and deduplicated, read once
-    /// when the loader is bound.
+    /// when the feed is bound.
     anchors: Vec<f64>,
     /// The provider's last delivery when it went to a detached sample
     /// ([`RefreshExecutor::sample_detached`]) rather than to the forcing
     /// buffer. A provider answers `None` for a record that has not changed
     /// since it last delivered, so until it delivers again that record is
     /// this one, not the buffer's.
-    detached: Option<HashMap<String, NativeField>>,
+    detached: Option<ArrayD<f64>>,
 }
 
-impl LoaderProvider {
-    fn new(binding: LoaderBinding, provider: Box<dyn CadenceProvider>) -> Self {
+impl Feed {
+    fn new(
+        target: String,
+        label: String,
+        declared: Option<Vec<usize>>,
+        cadence: Cadence,
+        provider: Box<dyn DataProvider>,
+    ) -> Self {
         let mut anchors = provider.refresh_times();
         anchors.sort_by(f64::total_cmp);
         anchors.dedup();
-        LoaderProvider {
-            binding,
+        Feed {
+            target,
+            label,
+            declared,
+            cadence,
             provider,
             anchors,
             detached: None,
         }
     }
 
+    /// `a`, refused when it does not have the declared shape.
+    fn checked(&self, a: ArrayD<f64>) -> Result<ArrayD<f64>, ProviderError> {
+        check_provider_shape(&self.label, &a, self.declared.as_deref())?;
+        Ok(a)
+    }
+
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        let a = self.provider.sample()?;
+        self.checked(a)
+    }
+
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
+        match self.provider.refresh(t)? {
+            Some(a) => self.checked(a).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// Ask the provider for the record in effect at `t`: `Ok(None)` when it
     /// has none there (no answer at `t` and no refresh time at or before it),
     /// `Ok(Some(None))` when its record did not change since it last
-    /// delivered, `Ok(Some(Some(fields)))` for a new delivery.
-    #[allow(clippy::type_complexity)]
-    fn ask_in_effect(
-        &mut self,
-        t: f64,
-    ) -> Result<Option<Option<HashMap<String, NativeField>>>, ProviderError> {
-        let fields = self.provider.refresh(t)?;
-        if fields.is_some() || self.is_anchor(t) {
-            return Ok(Some(fields));
+    /// delivered, `Ok(Some(Some(a)))` for a new delivery.
+    fn ask_in_effect(&mut self, t: f64) -> Result<Option<Option<ArrayD<f64>>>, ProviderError> {
+        let a = self.refresh(t)?;
+        if a.is_some() || self.is_anchor(t) {
+            return Ok(Some(a));
         }
         match self.anchor_before(t) {
-            Some(a) => self.provider.refresh(a).map(Some),
+            Some(b) => self.refresh(b).map(Some),
             None => Ok(None),
         }
     }
@@ -307,14 +425,14 @@ impl LoaderProvider {
     /// delivery.
     fn write_delivery(
         &mut self,
-        fields: Option<HashMap<String, NativeField>>,
+        a: Option<ArrayD<f64>>,
         forcing: &ForcingBuffer,
         written: &mut Vec<String>,
-    ) -> Result<(), ProviderError> {
+    ) {
         let stashed = self.detached.take();
-        match fields.or(stashed) {
-            Some(fields) => write_fields(&fields, forcing, written),
-            None => Ok(()),
+        if let Some(a) = a.or(stashed) {
+            forcing.borrow_mut().insert(self.target.clone(), a);
+            written.push(self.target.clone());
         }
     }
 
@@ -327,6 +445,14 @@ impl LoaderProvider {
     fn anchor_before(&self, t: f64) -> Option<f64> {
         let n = self.anchors.partition_point(|&a| a < t);
         n.checked_sub(1).map(|i| self.anchors[i])
+    }
+
+    /// A failure of this feed, naming the provider by its key.
+    fn named(&self, error: ProviderError) -> LoaderError {
+        LoaderError {
+            loader: self.target.clone(),
+            error,
+        }
     }
 }
 
@@ -357,98 +483,32 @@ pub(crate) fn declared_shape_mismatch(
     })
 }
 
-/// The one field of a `providers=` sample bound to `target`: the sample must
-/// hold exactly one field, whatever it is called, and when `declared` is known
-/// that field's array must have that shape ([`declared_shape_mismatch`]).
-///
-/// The check [`RemapProvider`] applies to every `materialize()` and
-/// `refresh(t)` sample, and the one [`crate::forcing_from_sample`] applies, so
-/// the two accept and refuse the same samples.
-pub(crate) fn single_provider_field<'a>(
+/// Refuse a provider sample for `target` whose array does not have the
+/// `declared` shape ([`declared_shape_mismatch`]); `None` checks nothing. The
+/// check the run-time executor applies to every sample and every refresh, and
+/// the one [`crate::forcing_from_sample`] applies, so the two accept and
+/// refuse the same samples.
+pub(crate) fn check_provider_shape(
     target: &str,
-    sample: &'a HashMap<String, NativeField>,
+    a: &ArrayD<f64>,
     declared: Option<&[usize]>,
-) -> Result<&'a NativeField, ProviderError> {
-    let mut fields = sample.values();
-    let (Some(field), None) = (fields.next(), fields.next()) else {
-        return Err(err(format!(
-            "provider for {target:?} fed {} fields; a `providers=` forcing binds exactly one",
-            sample.len()
-        )));
-    };
-    if let Some(declared) = declared
-        && let Some(msg) = declared_shape_mismatch(
-            &format!("provider for {target:?}"),
-            field.array.shape(),
-            declared,
-        )
+) -> Result<(), ProviderError> {
+    match declared
+        .and_then(|d| declared_shape_mismatch(&format!("provider for {target:?}"), a.shape(), d))
     {
-        return Err(err(msg));
-    }
-    Ok(field)
-}
-
-/// A [`RefreshExecutor::from_providers`] adapter that re-keys a runtime provider's
-/// single fed field to the coupling TARGET variable name — the `providers=` dict
-/// key the model's RHS gathers. Providers on that seam feed under their own loader
-/// field name (e.g. an EIO band `"elevation"`), NOT the target
-/// (`"USGS3DEP.raw.elevation"`), so [`write_fields`] — which keys by the fed name —
-/// would otherwise bind the forcing where nothing reads it. The model-declared
-/// [`RefreshExecutor::new`] seam needs no remap: there the provider feeds under the
-/// model variable name already.
-///
-/// Every sample goes through [`single_provider_field`], against the target's
-/// declared shape when one is known.
-struct RemapProvider {
-    target: String,
-    /// What a refused sample's message calls the provider: the caller's key,
-    /// which may spell `target` differently (esm-spec §6.6.2).
-    label: String,
-    /// The target parameter's declared shape, resolved against the index-set
-    /// registry; `None` when it is not known, and then no shape is checked.
-    declared: Option<Vec<usize>>,
-    inner: Box<dyn CadenceProvider>,
-}
-
-impl RemapProvider {
-    fn remap(
-        &self,
-        fields: HashMap<String, NativeField>,
-    ) -> Result<HashMap<String, NativeField>, ProviderError> {
-        single_provider_field(&self.label, &fields, self.declared.as_deref())?;
-        let (_fed_name, field) = fields.into_iter().next().expect("checked: one field");
-        let mut out = HashMap::with_capacity(1);
-        out.insert(self.target.clone(), field);
-        Ok(out)
+        Some(msg) => Err(err(msg)),
+        None => Ok(()),
     }
 }
 
-impl CadenceProvider for RemapProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        let fields = self.inner.materialize()?;
-        self.remap(fields)
-    }
-
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        match self.inner.refresh(t)? {
-            Some(fields) => Ok(Some(self.remap(fields)?)),
-            None => Ok(None),
-        }
-    }
-
-    fn refresh_times(&self) -> Vec<f64> {
-        self.inner.refresh_times()
-    }
-}
-
-/// The refresh executor: the ESS "**refresh callable + refresh_times**" surface a
+/// The refresh executor: the "**refresh callable + refresh_times**" surface a
 /// discrete-cadence driver consumes (NOT a solver).
 ///
-/// Pairs each loader's [`CadenceProvider`] with its declared cadence (from
-/// [`classify_loader_bindings`]), materializes CONST forcings once, and refreshes
-/// DISCRETE forcings at their cadence anchors — each time writing the native field
-/// straight into the PR-1 [`ForcingBuffer`] (any native→sim regrid is an in-model
-/// coupling expression the RHS evaluates, not a seam here).
+/// Pairs each [`DataProvider`] with the parameter it feeds and that
+/// parameter's cadence, materializes CONST forcings once, and refreshes
+/// DISCRETE forcings at their refresh times — each time writing the array
+/// straight into the PR-1 [`ForcingBuffer`] (any native→sim regrid is an
+/// in-model coupling expression the RHS evaluates, not a seam here).
 ///
 /// Lifecycle a driver follows (R-3):
 /// 1. [`RefreshExecutor::new`] — classify + pair providers.
@@ -458,100 +518,109 @@ impl CadenceProvider for RemapProvider {
 /// 4. At each boundary `t`: [`RefreshExecutor::refresh_at`]`(t, &buffer)`, then
 ///    continue the segmented solve.
 pub struct RefreshExecutor {
-    loaders: Vec<LoaderProvider>,
+    feeds: Vec<Feed>,
 }
 
 impl RefreshExecutor {
-    /// Build the executor: classify each loader-fed variable in `model` (with
-    /// `doc`'s `data_sources`) CONST/DISCRETE, and pair each classified loader with
-    /// its provider from `providers` (keyed by loader name). Every classified
-    /// loader must have a provider; an unclassified extra provider is ignored.
+    /// Build the executor from the model's own declarations: classify each
+    /// loader-fed variable of `model` (with `doc`'s `data_sources`) CONST or
+    /// DISCRETE ([`classify_loader_bindings`]), and pair it with the provider
+    /// in `providers` keyed by that variable — its name as `model` declares
+    /// it, or that name under any prefix (`Box.src` for `src`). Each array is
+    /// written under the provider's key. Every classified variable must have
+    /// a provider; a provider no classified variable takes is ignored.
     pub fn new(
         model: &Value,
         doc: &Value,
-        mut providers: HashMap<String, Box<dyn CadenceProvider>>,
+        mut providers: HashMap<String, Box<dyn DataProvider>>,
     ) -> Result<Self, ProviderError> {
         let bindings = classify_loader_bindings(model, doc)?;
-        let mut loaders = Vec::with_capacity(bindings.len());
+        let mut feeds = Vec::new();
         for binding in bindings {
-            let provider = providers.remove(&binding.loader).ok_or_else(|| {
-                err(format!(
-                    "no provider supplied for loader {:?} (feeds {:?})",
-                    binding.loader, binding.variables
-                ))
-            })?;
-            loaders.push(LoaderProvider::new(binding, provider));
+            for var in &binding.variables {
+                let suffix = format!(".{var}");
+                let mut keys: Vec<&String> = providers
+                    .keys()
+                    .filter(|k| *k == var || k.ends_with(&suffix))
+                    .collect();
+                keys.sort();
+                let key = match keys.as_slice() {
+                    [k] => (*k).clone(),
+                    [] => {
+                        return Err(err(format!(
+                            "no provider supplied for {var:?} (fed by the loader {:?})",
+                            binding.loader
+                        )));
+                    }
+                    several => {
+                        return Err(err(format!(
+                            "several providers feed {var:?}: {several:?}; pass one"
+                        )));
+                    }
+                };
+                let provider = providers.remove(&key).expect("a key of the map");
+                feeds.push(Feed::new(key.clone(), key, None, binding.cadence, provider));
+            }
         }
-        Ok(Self { loaders })
+        Ok(Self { feeds })
     }
 
-    /// Build the executor directly from a runtime provider map (the `providers=`
-    /// injection seam the runners use) — the cross-language runtime-provider
-    /// paradigm the Julia/Python bindings also follow. Classify each provider by
-    /// its `refresh_times()` (non-empty ⇒ DISCRETE, empty ⇒ CONST) rather than
-    /// from a model `temporal` block, so a model whose loaders are supplied by the
-    /// caller (keyed by the one variable each feeds) — with no `data_ingest`
-    /// declarations for [`classify_loader_bindings`] to read — still gets ONE
-    /// provider-management path. Both this and the model-declared [`new`] produce
-    /// the same [`RefreshExecutor`], so both seams share `materialize_const` /
-    /// `refresh_times` / `refresh_at`.
-    ///
-    /// [`new`]: RefreshExecutor::new
-    pub fn from_providers(providers: HashMap<String, Box<dyn CadenceProvider>>) -> Self {
+    /// Build the executor directly from a provider map keyed by the forcing
+    /// variable each feeds (the `providers=` injection seam the runners use):
+    /// a provider with refresh times is DISCRETE, one without is CONST, so a
+    /// model whose loaders are supplied by the caller — with no `data`
+    /// updates for [`classify_loader_bindings`] to read — still gets ONE
+    /// provider-management path.
+    pub fn from_providers(providers: HashMap<String, Box<dyn DataProvider>>) -> Self {
         Self::from_providers_with_shapes(providers, &HashMap::new(), &HashMap::new())
     }
 
     /// [`Self::from_providers`], refusing every sample a provider delivers
-    /// (`materialize()` and each `refresh(t)`) whose field does not have the
-    /// shape `declared` holds under that provider's key. A key `declared` does
-    /// not hold is not shape-checked. A refused sample is reported under the
-    /// name `labels` holds for its key (the caller's spelling of it), else
-    /// under the key itself.
+    /// (`sample()` and each `refresh(t)`) whose array does not have the shape
+    /// `declared` holds under that provider's key. A key `declared` does not
+    /// hold is not shape-checked. A refused sample is reported under the name
+    /// `labels` holds for its key (the caller's spelling of it), else under
+    /// the key itself.
     pub(crate) fn from_providers_with_shapes(
-        providers: HashMap<String, Box<dyn CadenceProvider>>,
+        providers: HashMap<String, Box<dyn DataProvider>>,
         declared: &HashMap<String, Vec<usize>>,
         labels: &HashMap<String, String>,
     ) -> Self {
-        let mut loaders = Vec::with_capacity(providers.len());
-        for (var, provider) in providers {
-            let cadence = if provider.refresh_times().is_empty() {
-                Cadence::Const
-            } else {
-                Cadence::Discrete
-            };
-            // Re-key the provider's single fed field to the coupling target `var`
-            // (the name the RHS gathers); a `providers=` provider feeds under its
-            // own loader field name, which `write_fields` would otherwise use.
-            let remapped: Box<dyn CadenceProvider> = Box::new(RemapProvider {
-                target: var.clone(),
-                label: labels.get(&var).cloned().unwrap_or_else(|| var.clone()),
-                declared: declared.get(&var).cloned(),
-                inner: provider,
-            });
-            loaders.push(LoaderProvider::new(
-                LoaderBinding {
-                    loader: var.clone(),
+        let mut feeds: Vec<Feed> = providers
+            .into_iter()
+            .map(|(var, provider)| {
+                let cadence = if provider.refresh_times().is_empty() {
+                    Cadence::Const
+                } else {
+                    Cadence::Discrete
+                };
+                Feed::new(
+                    var.clone(),
+                    labels.get(&var).cloned().unwrap_or_else(|| var.clone()),
+                    declared.get(&var).cloned(),
                     cadence,
-                    variables: vec![var],
-                },
-                remapped,
-            ));
-        }
-        Self { loaders }
+                    provider,
+                )
+            })
+            .collect();
+        feeds.sort_by(|a, b| a.target.cmp(&b.target));
+        Self { feeds }
     }
 
-    /// The classified loader bindings, for a driver that wants to inspect what is
-    /// wired (which variables are CONST vs DISCRETE, which loaders are present).
-    pub fn bindings(&self) -> impl Iterator<Item = &LoaderBinding> {
-        self.loaders.iter().map(|lp| &lp.binding)
+    /// What is wired: one binding per provider, naming the variable it feeds
+    /// and its cadence.
+    pub fn bindings(&self) -> impl Iterator<Item = LoaderBinding> + '_ {
+        self.feeds.iter().map(|f| LoaderBinding {
+            loader: f.label.clone(),
+            cadence: f.cadence,
+            variables: vec![f.target.clone()],
+        })
     }
 
-    /// CONST forcings: `materialize()` each CONST loader **once** and write the
-    /// native field into `forcing`. Call at setup, before the segmented integration
-    /// loop; DISCRETE loaders are untouched here. Returns the variable names written
-    /// (sorted), for assertion/logging. Idempotent in effect — calling twice just
-    /// re-reads and overwrites with identical values — but a CONST field is meant
-    /// to be loaded once.
+    /// CONST forcings: `sample()` each CONST provider **once** and write its
+    /// array into `forcing`. Call at setup, before the segmented integration
+    /// loop; DISCRETE providers are untouched here. Returns the variable names
+    /// written (sorted).
     pub fn materialize_const(
         &mut self,
         forcing: &ForcingBuffer,
@@ -559,24 +628,20 @@ impl RefreshExecutor {
         self.materialize_const_named(forcing).map_err(|e| e.error)
     }
 
-    /// [`Self::materialize_const`], with a failure naming the loader that
+    /// [`Self::materialize_const`], with a failure naming the provider that
     /// raised it.
     pub(crate) fn materialize_const_named(
         &mut self,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, LoaderError> {
-        let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
-        for lp in loaders.iter_mut() {
-            if lp.binding.cadence != Cadence::Const {
-                continue;
-            }
-            let named = |error| LoaderError {
-                loader: lp.binding.loader.clone(),
-                error,
-            };
-            let fields = lp.provider.materialize().map_err(named)?;
-            write_fields(&fields, forcing, &mut written).map_err(named)?;
+        for f in self
+            .feeds
+            .iter_mut()
+            .filter(|f| f.cadence == Cadence::Const)
+        {
+            let a = f.sample().map_err(|e| f.named(e))?;
+            f.write_delivery(Some(a), forcing, &mut written);
         }
         written.sort();
         written.dedup();
@@ -584,26 +649,25 @@ impl RefreshExecutor {
     }
 
     /// The sorted, de-duplicated union of every DISCRETE provider's
-    /// `refresh_times` — the driver's tstop list. CONST loaders contribute none.
-    /// The caller intersects with the integration window `(t0, t_end)`.
+    /// `refresh_times` — the driver's tstop list. CONST providers contribute
+    /// none. The caller intersects with the integration window `(t0, t_end)`.
     pub fn refresh_times(&self) -> Vec<f64> {
         let mut times: Vec<f64> = self
-            .loaders
+            .feeds
             .iter()
-            .filter(|lp| lp.binding.cadence == Cadence::Discrete)
-            .flat_map(|lp| lp.anchors.iter().copied())
+            .filter(|f| f.cadence == Cadence::Discrete)
+            .flat_map(|f| f.anchors.iter().copied())
             .collect();
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        times.sort_by(f64::total_cmp);
         times.dedup();
         times
     }
 
-    /// Refresh at cadence anchor `t`: for each DISCRETE provider, call
-    /// `refresh(t)`; on `Some(fields)`, write each native field into `forcing`;
-    /// on `None` (record unchanged, or `t` not this provider's anchor),
-    /// **skip the write** — the previously-loaded field stays in the buffer
-    /// (None-skip). CONST loaders never refresh. Returns the variable names
-    /// (re)written at this anchor (sorted).
+    /// Refresh at boundary `t`: for each DISCRETE provider, call `refresh(t)`;
+    /// on `Some(a)`, write it into `forcing`; on `None` (record unchanged, or
+    /// `t` not this provider's refresh time), **skip the write** — the
+    /// previously-loaded field stays in the buffer. Returns the variable names
+    /// (re)written at this boundary (sorted).
     ///
     /// Mutate the buffer only *between* segments (the driver calls this at a
     /// boundary, never inside a solver step), keeping the RHS pure within a
@@ -616,17 +680,17 @@ impl RefreshExecutor {
         self.refresh_named(t, forcing).map_err(|e| e.error)
     }
 
-    /// Sample every DISCRETE provider at `t`, an arbitrary time rather than
-    /// a cadence anchor: the record in effect there. Returns the variable
-    /// names written (sorted).
+    /// Sample every DISCRETE provider at `t`, an arbitrary time rather than a
+    /// refresh time: the record in effect there. Returns the variable names
+    /// written (sorted).
     ///
     /// For each provider: when `t` is one of its own refresh times it is asked
     /// for `refresh(t)`, and `None` means its record did not change, so
     /// nothing is written. Otherwise it is asked for `refresh(t)` first (a
     /// provider may answer at any time, as Julia's `provider_sample` does),
-    /// and on `None` for `refresh(a)` at `a`, its latest refresh time before
-    /// `t`, whose record holds over `t`. A provider with no refresh time at
-    /// or before `t` that does not answer at `t` has no record in effect and
+    /// and on `None` for `refresh(b)` at `b`, its latest refresh time before
+    /// `t`, whose record holds over `t`. A provider with no refresh time at or
+    /// before `t` that does not answer at `t` has no record in effect and
     /// writes nothing.
     ///
     /// This is the sample a Problem takes at construction (`sample_time`,
@@ -645,35 +709,27 @@ impl RefreshExecutor {
         Ok(written)
     }
 
-    /// [`Self::refresh_at`], with a failure naming the loader that raised it.
+    /// [`Self::refresh_at`], with a failure naming the provider that raised it.
     pub(crate) fn refresh_named(
         &mut self,
         t: f64,
         forcing: &ForcingBuffer,
     ) -> Result<Vec<String>, LoaderError> {
-        let RefreshExecutor { loaders } = self;
         let mut written = Vec::new();
-        for lp in loaders.iter_mut() {
-            if lp.binding.cadence != Cadence::Discrete {
-                continue;
-            }
-            let loader = lp.binding.loader.clone();
-            let named = |error| LoaderError {
-                loader: loader.clone(),
-                error,
-            };
-            // `None` (record unchanged, or `t` not this provider's anchor) → skip
-            // the buffer write (None-skip); the previously-loaded field stays put.
-            let fields = lp.provider.refresh(t).map_err(named)?;
-            lp.write_delivery(fields, forcing, &mut written)
-                .map_err(named)?;
+        for f in self
+            .feeds
+            .iter_mut()
+            .filter(|f| f.cadence == Cadence::Discrete)
+        {
+            let a = f.refresh(t).map_err(|e| f.named(e))?;
+            f.write_delivery(a, forcing, &mut written);
         }
         written.sort();
         written.dedup();
         Ok(written)
     }
 
-    /// [`Self::sample_at`], with a failure naming the loader that raised it.
+    /// [`Self::sample_at`], with a failure naming the provider that raised it.
     /// Appends the variables written to `written`, and returns the variables
     /// of every DISCRETE provider with no record in effect at `t` (sorted).
     pub(crate) fn sample_in_effect(
@@ -682,20 +738,15 @@ impl RefreshExecutor {
         forcing: &ForcingBuffer,
         written: &mut Vec<String>,
     ) -> Result<Vec<String>, LoaderError> {
-        let RefreshExecutor { loaders } = self;
         let mut vacant = Vec::new();
-        for lp in loaders.iter_mut() {
-            if lp.binding.cadence != Cadence::Discrete {
-                continue;
-            }
-            let loader = lp.binding.loader.clone();
-            let named = |error| LoaderError {
-                loader: loader.clone(),
-                error,
-            };
-            match lp.ask_in_effect(t).map_err(named)? {
-                Some(fields) => lp.write_delivery(fields, forcing, written).map_err(named)?,
-                None => vacant.extend(lp.binding.variables.iter().cloned()),
+        for f in self
+            .feeds
+            .iter_mut()
+            .filter(|f| f.cadence == Cadence::Discrete)
+        {
+            match f.ask_in_effect(t).map_err(|e| f.named(e))? {
+                Some(a) => f.write_delivery(a, forcing, written),
+                None => vacant.push(f.target.clone()),
             }
         }
         vacant.sort();
@@ -712,8 +763,8 @@ impl RefreshExecutor {
     /// A provider whose record did not change since it last delivered gives
     /// that delivery: the buffer's field, or the one an earlier detached
     /// sample took. A new delivery is kept for the buffer's next write from
-    /// that provider ([`LoaderProvider::write_delivery`]), so a solve after
-    /// this one still starts from the record in effect at its start.
+    /// that provider ([`Feed::write_delivery`]), so a solve after this one
+    /// still starts from the record in effect at its start.
     #[allow(clippy::type_complexity)]
     pub(crate) fn sample_detached(
         &mut self,
@@ -721,76 +772,45 @@ impl RefreshExecutor {
         only: &std::collections::HashSet<String>,
         forcing: &ForcingBuffer,
     ) -> Result<(HashMap<String, ArrayD<f64>>, Vec<String>), LoaderError> {
-        let RefreshExecutor { loaders } = self;
         let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
-        let mut vacant = Vec::new();
-        for lp in loaders.iter_mut() {
-            if lp.binding.cadence != Cadence::Discrete
-                || !lp.binding.variables.iter().any(|v| only.contains(v))
-            {
-                continue;
-            }
-            let loader = lp.binding.loader.clone();
-            let named = |error| LoaderError {
-                loader: loader.clone(),
-                error,
-            };
-            match lp.ask_in_effect(t).map_err(named)? {
-                Some(Some(fields)) => {
-                    out.extend(fields.iter().map(|(k, f)| (k.clone(), f.array.clone())));
-                    lp.detached = Some(fields);
+        for f in self
+            .feeds
+            .iter_mut()
+            .filter(|f| f.cadence == Cadence::Discrete && only.contains(&f.target))
+        {
+            match f.ask_in_effect(t).map_err(|e| f.named(e))? {
+                Some(Some(a)) => {
+                    out.insert(f.target.clone(), a.clone());
+                    f.detached = Some(a);
                 }
-                Some(None) => match &lp.detached {
-                    Some(fields) => {
-                        out.extend(fields.iter().map(|(k, f)| (k.clone(), f.array.clone())));
+                Some(None) => {
+                    let held = f
+                        .detached
+                        .clone()
+                        .or_else(|| forcing.borrow().get(&f.target).cloned());
+                    if let Some(a) = held {
+                        out.insert(f.target.clone(), a);
                     }
-                    None => {
-                        let buffer = forcing.borrow();
-                        for v in &lp.binding.variables {
-                            if let Some(a) = buffer.get(v) {
-                                out.insert(v.clone(), a.clone());
-                            }
-                        }
-                    }
-                },
-                None => vacant.extend(lp.binding.variables.iter().cloned()),
+                }
+                None => {}
             }
         }
-        out.retain(|k, _| only.contains(k));
         // A name no delivery holds has no record in effect at `t`.
-        vacant.extend(only.iter().filter(|n| !out.contains_key(*n)).cloned());
-        vacant.retain(|n| only.contains(n));
+        let mut vacant: Vec<String> = only
+            .iter()
+            .filter(|n| !out.contains_key(*n))
+            .cloned()
+            .collect();
         vacant.sort();
-        vacant.dedup();
         Ok((out, vacant))
     }
 }
 
-/// A provider failure, with the loader (for a run-time provider, the
-/// forcing variable it feeds) that raised it.
+/// A provider failure, with the variable its provider feeds.
 #[derive(Debug)]
 pub(crate) struct LoaderError {
     pub(crate) loader: String,
     pub(crate) error: ProviderError,
-}
-
-/// Write each freshly sampled native field straight into the forcing buffer,
-/// recording the variable names written. There is no regrid here — any native→sim
-/// regrid is an in-model coupling expression the RHS evaluates. The buffer's
-/// `borrow_mut` is taken per-insert (not held across the loop), so it cannot
-/// deadlock the `RefCell`.
-fn write_fields(
-    fields: &HashMap<String, NativeField>,
-    forcing: &ForcingBuffer,
-    written: &mut Vec<String>,
-) -> Result<(), ProviderError> {
-    for (var, native) in fields {
-        forcing
-            .borrow_mut()
-            .insert(var.clone(), native.array.clone());
-        written.push(var.clone());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -807,8 +827,8 @@ mod tests {
         Rc::new(RefCell::new(HashMap::new()))
     }
 
-    fn field(values: &[f64]) -> NativeField {
-        NativeField::new(ArrayD::from_shape_vec(IxDyn(&[values.len()]), values.to_vec()).unwrap())
+    fn field(values: &[f64]) -> ArrayD<f64> {
+        ArrayD::from_shape_vec(IxDyn(&[values.len()]), values.to_vec()).unwrap()
     }
 
     fn buf_get(forcing: &ForcingBuffer, var: &str) -> Option<Vec<f64>> {
@@ -822,7 +842,6 @@ mod tests {
     /// fed field is a value-vector (a 1-D array); scalar constructors wrap a single
     /// value, the `_field` constructor takes the whole vector for a shaped forcing.
     struct FakeProvider {
-        var: String,
         /// CONST baseline returned by `materialize` (and what makes `materialize`
         /// counted). `None` for a pure-DISCRETE loader that is never materialized.
         materialize_value: Option<Vec<f64>>,
@@ -834,9 +853,8 @@ mod tests {
     }
 
     impl FakeProvider {
-        fn const_loader(var: &str, value: f64) -> Self {
+        fn const_loader(_var: &str, value: f64) -> Self {
             Self {
-                var: var.to_string(),
                 materialize_value: Some(vec![value]),
                 schedule: Vec::new(),
                 materialize_calls: Rc::new(RefCell::new(0)),
@@ -850,9 +868,8 @@ mod tests {
                 .collect();
             Self::discrete_loader_field(var, schedule)
         }
-        fn discrete_loader_field(var: &str, schedule: Vec<(f64, Option<Vec<f64>>)>) -> Self {
+        fn discrete_loader_field(_var: &str, schedule: Vec<(f64, Option<Vec<f64>>)>) -> Self {
             Self {
-                var: var.to_string(),
                 materialize_value: None,
                 schedule,
                 materialize_calls: Rc::new(RefCell::new(0)),
@@ -861,25 +878,20 @@ mod tests {
         }
     }
 
-    impl CadenceProvider for FakeProvider {
-        fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+    impl DataProvider for FakeProvider {
+        fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
             *self.materialize_calls.borrow_mut() += 1;
             let v = self
                 .materialize_value
                 .clone()
-                .expect("materialize called on a provider with no CONST baseline");
-            Ok(HashMap::from([(self.var.clone(), field(&v))]))
+                .expect("sample called on a provider with no CONST baseline");
+            Ok(field(&v))
         }
-        fn refresh(
-            &mut self,
-            t: f64,
-        ) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+        fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
             self.refresh_log.borrow_mut().push(t);
             for (anchor, value) in &self.schedule {
                 if *anchor == t {
-                    return Ok(value
-                        .as_ref()
-                        .map(|v| HashMap::from([(self.var.clone(), field(v))])));
+                    return Ok(value.as_ref().map(|v| field(v)));
                 }
             }
             Ok(None) // `t` is not one of this provider's anchors.
@@ -967,12 +979,9 @@ mod tests {
         let topo_calls = Rc::clone(&topo.materialize_calls);
         let met_calls = Rc::clone(&met.materialize_calls);
 
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
-            (
-                "topo".to_string(),
-                Box::new(topo) as Box<dyn CadenceProvider>,
-            ),
-            ("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>),
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
+            ("elev".to_string(), Box::new(topo) as Box<dyn DataProvider>),
+            ("wind".to_string(), Box::new(met) as Box<dyn DataProvider>),
         ]);
         let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
 
@@ -1008,16 +1017,16 @@ mod tests {
                 "topo": {"kind": "static"}
             }
         });
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
             (
-                "met".to_string(),
+                "wind".to_string(),
                 Box::new(FakeProvider::discrete_loader(
                     "wind",
                     vec![(0.0, Some(1.0)), (6.0, Some(2.0)), (12.0, Some(3.0))],
-                )) as Box<dyn CadenceProvider>,
+                )) as Box<dyn DataProvider>,
             ),
             (
-                "bcs".to_string(),
+                "bc".to_string(),
                 Box::new(FakeProvider::discrete_loader(
                     "bc",
                     vec![
@@ -1027,11 +1036,11 @@ mod tests {
                         (9.0, Some(4.0)),
                         (12.0, Some(5.0)),
                     ],
-                )) as Box<dyn CadenceProvider>,
+                )) as Box<dyn DataProvider>,
             ),
             (
-                "topo".to_string(),
-                Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn CadenceProvider>,
+                "elev".to_string(),
+                Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn DataProvider>,
             ),
         ]);
         let exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
@@ -1049,11 +1058,11 @@ mod tests {
             vec![(0.0, Some(10.0)), (6.0, None), (12.0, Some(30.0))],
         );
         let refresh_log = Rc::clone(&met.refresh_log);
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
-            ("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>),
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
+            ("wind".to_string(), Box::new(met) as Box<dyn DataProvider>),
             (
-                "topo".to_string(),
-                Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn CadenceProvider>,
+                "elev".to_string(),
+                Box::new(FakeProvider::const_loader("elev", 7.0)) as Box<dyn DataProvider>,
             ),
         ]);
         let mut exec = RefreshExecutor::new(&doc["models"]["M"], &doc, providers).unwrap();
@@ -1096,11 +1105,11 @@ mod tests {
     fn refresh_writes_native_field_into_buffer() {
         let doc = mixed_doc();
         let met = FakeProvider::discrete_loader("wind", vec![(0.0, Some(5.0))]);
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
-            ("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>),
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
+            ("wind".to_string(), Box::new(met) as Box<dyn DataProvider>),
             (
-                "topo".to_string(),
-                Box::new(FakeProvider::const_loader("elev", 4.0)) as Box<dyn CadenceProvider>,
+                "elev".to_string(),
+                Box::new(FakeProvider::const_loader("elev", 4.0)) as Box<dyn DataProvider>,
             ),
         ]);
         // No regrid seam: the native field lands in the buffer unchanged (any
@@ -1127,12 +1136,12 @@ mod tests {
     fn new_errors_when_a_classified_loader_has_no_provider() {
         let doc = mixed_doc();
         // Supply `met` but not `topo` → the CONST loader is unprovided.
-        let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([(
-            "met".to_string(),
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([(
+            "wind".to_string(),
             Box::new(FakeProvider::discrete_loader(
                 "wind",
                 vec![(0.0, Some(1.0))],
-            )) as Box<dyn CadenceProvider>,
+            )) as Box<dyn DataProvider>,
         )]);
         let e = RefreshExecutor::new(&doc["models"]["M"], &doc, providers)
             .map(|_| ())
@@ -1256,8 +1265,10 @@ mod tests {
                 (6.0, Some(vec![9.0, 8.0, 7.0])),
             ],
         );
-        let providers: HashMap<String, Box<dyn CadenceProvider>> =
-            HashMap::from([("met".to_string(), Box::new(met) as Box<dyn CadenceProvider>)]);
+        let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([(
+            "Forced.wind".to_string(),
+            Box::new(met) as Box<dyn DataProvider>,
+        )]);
         let mut exec =
             RefreshExecutor::new(&class_doc["models"]["Forced"], &class_doc, providers).unwrap();
 
@@ -1270,7 +1281,7 @@ mod tests {
 
         // Segment boundary t=0: refresh → RHS reads the t=0 forcing field.
         exec.refresh_at(0.0, &forcing).unwrap();
-        let (dy0, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (dy0, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         assert_eq!(
             dy0,
             vec![2.0, 3.0, 4.0],
@@ -1279,7 +1290,7 @@ mod tests {
 
         // Segment boundary t=6: refresh advances the buffer → RHS reflects it.
         exec.refresh_at(6.0, &forcing).unwrap();
-        let (dy6, _) = compiled.debug_eval_rhs(&state, 6.0, &params, false);
+        let (dy6, _) = compiled.debug_eval_rhs(&state, 6.0, &params);
         assert_eq!(
             dy6,
             vec![9.0, 8.0, 7.0],

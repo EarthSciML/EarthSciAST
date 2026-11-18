@@ -21,7 +21,7 @@
     "forcing_slots": "forcing_slots(prog) equals forcing_slots: name, shape and kind, in this order",
     "default_forcing": "each buffer of default_forcing_set(prog) / prog.default_forcing() equals default_forcing[slot], column-major, bitwise",
     "du_default": "the program's right-hand side at default_state(prog), the default parameter vector, t = tspan[0] and the default forcing set equals du_default bitwise",
-    "problem_du": "the Problem's own right-hand side (Julia: prob.f!; Rust: debug_eval_rhs_into on the Problem's compiled model) at its initial state, its parameters and t = tspan[0] equals du_default bitwise"
+    "problem_du": "the Problem's own right-hand side (Julia: prob.f!; Rust: the SolveRhs handle from EsmProblem::debug_solve_rhs) at its initial state, its parameters and t = tspan[0] equals du_default bitwise"
   },
   "document": "fixtures/provider_forcing.esm",
   "tspan": [

@@ -30,38 +30,13 @@
 
 use std::process::ExitCode;
 
-use earthsci_ast::adapter_support::write_report;
-use earthsci_ast::compiler_agreement_adapter::{parse_args, run_manifest};
+use earthsci_ast::adapter_support::adapter_main;
+use earthsci_ast::compiler_agreement_adapter::configure;
 
 fn main() -> ExitCode {
-    let args = match parse_args(std::env::args().skip(1)) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("compiler-agreement-adapter-rust: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let report = match run_manifest(&args.manifest, args.compiler) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("compiler-agreement-adapter-rust: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Write the report FIRST so the runner still gets the per-fixture detail
-    // for whatever failed, then fail the process: the contract allows a
-    // non-zero exit WITH a valid report and reads it either way.
-    if let Err(e) = write_report(&args.output, &report.payload) {
-        eprintln!("compiler-agreement-adapter-rust: failed to write output: {e}");
-        return ExitCode::FAILURE;
-    }
-    if !report.failed.is_empty() {
-        eprintln!(
-            "compiler-agreement-adapter-rust: {} fixture(s) errored: {}",
-            report.failed.len(),
-            report.failed.join(", ")
-        );
-        return ExitCode::FAILURE;
-    }
-    ExitCode::SUCCESS
+    adapter_main(
+        "compiler-agreement-adapter-rust",
+        Some("--compiler"),
+        configure,
+    )
 }

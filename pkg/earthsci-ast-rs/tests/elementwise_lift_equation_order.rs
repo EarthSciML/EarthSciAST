@@ -12,9 +12,8 @@
 //! (`faq_bare_array_operand`).
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{
-    Compiler, ProblemOptions, SolveOptions, esm_problem, load_path, run_inline_tests_with_base_dir,
-};
+use earthsci_ast::{Compiler, ProblemOptions, esm_problem, load_path};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::path::{Path, PathBuf};
 
 /// `rates.esm`: the rate model the mechanism reads.
@@ -177,8 +176,13 @@ fn a_lifted_rate_defined_after_its_reader_is_gathered() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = write_documents(dir.path());
     let file = load_path(&path).expect("the document loads");
-    let results =
-        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            base_dir: path.parent().map(|p| p.to_path_buf()),
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 3, "{results:?}");
     for r in &results {
         assert!(r.passed, "{}: {} ({:?})", r.variable, r.message, r.actual);

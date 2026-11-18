@@ -682,6 +682,15 @@
       "note": "Each version gate judges the file that holds the gated construct against that file's own esm: an older document mounting a newer leaf is accepted, and a newer document does not legalize an older leaf's gated construct."
     },
     {
+      "id": "spec.4.7.save-version-floors",
+      "section": "4.7",
+      "quote": "When an implementation saves a document that contains a construct in this table and declares an `esm` below that construct's floor, it MUST write `esm` as the floor:",
+      "class": "semantic",
+      "phase": 5,
+      "area": "round_trip",
+      "note": "The saved esm is the larger of the declared version and the floor of every construct the saved document contains (faq 1.1.0, a unit-bearing expression node 1.2.0, a variable bound 2.1.0); it is never lowered, and loading need not raise it."
+    },
+    {
       "id": "spec.4.7.mounted-data-sources-identical",
       "section": "4.7",
       "quote": "that contribute the same name MUST contribute **identical** entries, and those merge once",

@@ -201,6 +201,43 @@ fn literal_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     }
 }
 
+/// Exact equality of two `const` payloads: a dense one by its spelling, shape
+/// and every element's bit pattern, a JSON one by [`literal_eq`].
+fn const_eq(a: &crate::ConstValue, b: &crate::ConstValue) -> bool {
+    if crate::ConstValue::ptr_eq(a, b) {
+        return true;
+    }
+    match (a.dense_key(), b.dense_key()) {
+        (Some((ia, sa, va)), Some((ib, sb, vb))) => {
+            ia == ib
+                && sa == sb
+                && va.len() == vb.len()
+                && va.iter().zip(vb).all(|(x, y)| x.to_bits() == y.to_bits())
+        }
+        (None, None) => match (a.as_json(), b.as_json()) {
+            (Some(x), Some(y)) => literal_eq(x, y),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Hash consistent with [`const_eq`].
+fn const_hash<H: Hasher>(v: &crate::ConstValue, h: &mut H) {
+    match (v.dense_key(), v.as_json()) {
+        (Some((spelling, shape, values)), _) => {
+            6u8.hash(h);
+            spelling.hash(h);
+            shape.hash(h);
+            for x in values {
+                x.to_bits().hash(h);
+            }
+        }
+        (None, Some(j)) => literal_hash(j, h),
+        (None, None) => unreachable!("a const payload is dense or JSON"),
+    }
+}
+
 /// Hash consistent with [`literal_eq`].
 fn literal_hash<H: Hasher>(v: &serde_json::Value, h: &mut H) {
     use serde_json::Value as V;
@@ -364,7 +401,7 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
     op == &b.op
         && match (value, &b.value) {
             (None, None) => true,
-            (Some(x), Some(y)) => literal_eq(x, y),
+            (Some(x), Some(y)) => const_eq(x, y),
             _ => false,
         }
         && child_vec_eq(args, &b.args)
@@ -445,7 +482,7 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         None => 0u8.hash(h),
         Some(v) => {
             1u8.hash(h);
-            literal_hash(v, h);
+            const_hash(v, h);
         }
     }
     args.len().hash(h);
@@ -686,7 +723,7 @@ mod tests {
         let _scope = InternScope::new();
         let lit = |v: serde_json::Value| {
             let mut n = op("const", vec![]);
-            n.value = Some(v);
+            n.value = Some(v.into());
             Expr::operator(n)
         };
         let ptr = |e: &Expr| match e {
@@ -714,6 +751,20 @@ mod tests {
             ptr(&lit(serde_json::json!(0.0))),
             ptr(&lit(serde_json::json!(-0.0))),
             "-0.0 and 0.0 stay distinct"
+        );
+        // The same for a payload held dense: integers and floats, and the
+        // two zeros, stay apart.
+        assert_ne!(
+            ptr(&lit(serde_json::json!([1, 2]))),
+            ptr(&lit(serde_json::json!([1.0, 2.0])))
+        );
+        assert_ne!(
+            ptr(&lit(serde_json::json!([0.0, 1.0]))),
+            ptr(&lit(serde_json::json!([-0.0, 1.0])))
+        );
+        assert_eq!(
+            ptr(&lit(serde_json::json!([[1, 2], [3, 4]]))),
+            ptr(&lit(serde_json::json!([[1, 2], [3, 4]])))
         );
     }
 

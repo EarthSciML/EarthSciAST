@@ -4,16 +4,16 @@
 //! per-call heap allocation** (after warm-up), **no hashing on the kernel
 //! path**, and **zero recursion**. Array kernels are strided loops over raw
 //! `(pointer, shape, strides)` triples dispatched through the SAME
-//! `BinCode`/`UnCode` kernel fn-pointer tables the vectorized overlay uses,
+//! `BinCode`/`UnCode` kernel fn-pointer tables the per-cell oracle uses,
 //! so every element is computed by the same kernel the interpreter would have
 //! called — bit identity is structural, not coincidental:
 //!
 //! * elementwise instructions apply a pure per-element kernel, so iteration
 //!   order cannot change any output bit;
 //! * gathers execute the precompiled segment-copy plans (pure data movement
-//!   over a `+0.0` ghost fill, exactly `eval_vec_index`'s copy phase);
-//! * contractions were already unrolled by the lowering into the overlay's
-//!   own fold order;
+//!   over a `+0.0` ghost fill);
+//! * contractions were already unrolled by the lowering into the per-cell
+//!   oracle's fold order;
 //! * `JmpIfZero` short-circuits with the reference executor's pending-skip
 //!   discipline, so an untaken branch never executes.
 //!
@@ -34,8 +34,7 @@
 //! uniform.
 //!
 //! **Sections/invalidation**: the CONST section runs once per scratch and
-//! parameter vector, guarded by a `bind_params`-style parameter-generation
-//! hash mirroring `cse.rs`: a caller that reuses one scratch across a
+//! parameter vector, guarded by a parameter-generation hash: a caller that reuses one scratch across a
 //! parameter change (a sweep through `debug_eval_rhs_into`) re-primes instead
 //! of being served stale CONST values. The SEGMENT section also re-runs when
 //! the forcing epoch moves, which the driver bumps after each forcing refresh
@@ -51,6 +50,8 @@
 
 use super::super::*;
 use super::ir::*;
+use super::prepared::Prepared;
+pub(super) use super::prepared::UNSTORED;
 use ndarray::ArrayD;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
@@ -119,6 +120,7 @@ fn call_ways(exec: &TapeExec) -> usize {
         1
     }
 }
+pub(super) use super::layout::dy_strides;
 use resolve::{cm_strides, rm_strides};
 
 // ---------------------------------------------------------------------------
@@ -204,7 +206,9 @@ pub(crate) struct TapeExec {
     /// Flat `f64` slab backing every storage bucket.
     slab: Vec<f64>,
     /// Per-slot flat offset into the slab (`usize::MAX` for never-defined
-    /// slots, which no reachable instruction references).
+    /// slots, which no reachable instruction references): the program's own
+    /// layout ([`Prepared::slot_off`]), or the current call plan's once one
+    /// is built.
     slot_off: Vec<usize>,
     /// The published observeds: an export enters it the first time its
     /// `Export` runs, and later publishes overwrite it in place. Nothing in
@@ -217,54 +221,11 @@ pub(crate) struct TapeExec {
     /// Pending `(resume_pc, skip)` records for taken `JmpIfZero` branches
     /// (the reference executor's discipline). Capacity preallocated.
     pending: Vec<(u32, u32)>,
-    /// Per instruction, its scalar form when it has one (see
-    /// [`interp::ScalarOp`]), decoded by the first call against `slot_off`
-    /// and cleared whenever `slot_off` changes.
-    scode: Vec<interp::ScalarOp>,
-    /// The decoded one-lane programs `scode` refers to.
-    slanes: Vec<interp::ScalarLane>,
-    /// Straight runs of `scode` run as one program each, and per instruction
-    /// the block starting there (`u32::MAX`: none). Decoded with `scode`.
-    sblocks: Vec<interp::ScalarBlock>,
-    sblock_at: Vec<u32>,
-    /// The blocks' register file.
-    sregs: Vec<f64>,
-    /// Row-major mirror of the flat state vector for a program stored
-    /// row-major ([`TapeProgram::col_major`] false), refilled once per call
-    /// for the variables `mirror` marks (each column-major block transposed
-    /// in place at the SAME flat offset), so reads of state run over
-    /// contiguous memory. Pure data movement, so bit-identical to reading the
-    /// strided view directly. Empty when no variable needs it.
-    state_rm: Vec<f64>,
-    /// Per state variable: whether reads go through `state_rm`. False for a
-    /// column-major program (its boxes ARE the state's layout) and for a
-    /// variable whose two layouts are the same walk; those read the caller's
-    /// state in place.
-    mirror: Vec<bool>,
-    /// The variables `mirror` marks, so a call's refill does not walk every
-    /// state variable (a 0-d state model has one per state).
-    mirror_vars: Vec<u32>,
-    /// The `[start, end)` ranges of `dy` no `DyWrite` is certain to write,
-    /// which each call zeroes, for a `dy` of `dy_zero_len` elements
-    /// (`usize::MAX` until the first call computes them).
-    dy_zero: Vec<(usize, usize)>,
-    dy_zero_len: usize,
-    /// Per slot: the `dy` offset the slot is written to directly instead of
-    /// the slab, or `usize::MAX` (see [`dy_homes`]); computed with
-    /// `dy_zero`.
-    dy_home: Vec<usize>,
-    /// `dy_home` for a call that publishes no observeds: a fused output
-    /// that only the output-only tail reads is [`UNSTORED`] (see
-    /// [`quiet_homes`]).
-    dy_home_quiet: Vec<usize>,
-    /// Per gather plan: `true` when its per-axis segments tile the whole
-    /// output box, so the ghost zero-fill can be skipped (every element is
-    /// overwritten by a segment copy).
-    plan_full: Vec<bool>,
-    /// Per `makearray` assembly: `true` when its regions cover the whole
-    /// output box, so its zero fill can be skipped (every element is
-    /// overwritten by a part).
-    asm_covered: Vec<bool>,
+    /// The decoded form of the scalar instructions (see
+    /// [`interp::ScalarCode`]), for the slot layout of generation `layout`.
+    scalar: interp::ScalarCode,
+    /// Bumped whenever `slot_off` changes, so `scalar` is decoded again.
+    layout: u64,
     /// Step 4 epochs: the parameter / forcing epochs the CONST resp. SEGMENT
     /// sections last primed under (0 = never primed; live epochs start at 1).
     /// Checked per call as two integer compares — see `run_tape_call`.
@@ -297,10 +258,6 @@ pub(crate) struct TapeExec {
     /// a call splits (see `par::call_ways`).
     #[cfg(not(target_arch = "wasm32"))]
     call_work: usize,
-    /// The continuous section's segmented reductions that split together
-    /// with the work around them (see `chain`), in program order.
-    #[cfg(not(target_arch = "wasm32"))]
-    seg_chains: Vec<chain::SegChain>,
     #[cfg(not(target_arch = "wasm32"))]
     chain_scratch: chain::ChainScratch,
     /// The phases a threaded call runs in (see `plan`), built by the first
@@ -311,10 +268,6 @@ pub(crate) struct TapeExec {
     /// grown the first time a call forks wider.
     #[cfg(not(target_arch = "wasm32"))]
     peers: Vec<Scratch>,
-    /// The program's own slot offsets, from which a plan lays out the slots
-    /// it moves (`slot_off` is the current plan's layout once one is built).
-    #[cfg(not(target_arch = "wasm32"))]
-    base_slot_off: Vec<usize>,
 }
 
 /// One thread's mutable scratch for straight-line instructions (see
@@ -335,23 +288,12 @@ pub(super) struct Scratch {
 impl TapeExec {
     pub(crate) fn new(prog: &TapeProgram) -> Self {
         let slab = vec![0.0f64; prog.slab.total_elems];
-        let slot_off: Vec<usize> = prog
-            .slots
-            .iter()
-            .map(|s| {
-                if s.storage == u32::MAX {
-                    usize::MAX
-                } else {
-                    prog.slab.storages[s.storage as usize].offset
-                }
-            })
-            .collect();
         let obs: ArrMap = ArrMap::with_capacity_and_hasher(prog.exports.len(), Default::default());
         let parked = prog
             .exports
             .iter()
             .map(|(name, slot)| {
-                let desc = &prog.slots[*slot as usize];
+                let desc = &prog.tables.slots[*slot as usize];
                 // The published array is logical: a column-major program's
                 // box is stored reversed.
                 let shape: Vec<usize> = if desc.scalar {
@@ -364,70 +306,20 @@ impl TapeExec {
                 Some((name.clone(), ArrayD::<f64>::zeros(IxDyn(&shape))))
             })
             .collect();
-        let mirror: Vec<bool> = prog
-            .state_vars
-            .iter()
-            .map(|sv| !prog.col_major && !super::layout::order_free(&sv.shape))
-            .collect();
-        let n_state: usize = prog
-            .state_vars
-            .iter()
-            .zip(&mirror)
-            .filter(|(_, m)| **m)
-            .map(|(sv, _)| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
-            .max()
-            .unwrap_or(0);
-        let plan_full = prog
-            .plans
-            .iter()
-            .map(|plan| {
-                plan.shape.iter().enumerate().all(|(d, &extent)| {
-                    let mut segs: Vec<(usize, usize)> =
-                        plan.segs[d].iter().map(|&(o, l, _)| (o, l)).collect();
-                    segs.sort_unstable();
-                    let mut next = 0usize;
-                    for (o, l) in segs {
-                        if o != next {
-                            return false;
-                        }
-                        next = o + l;
-                    }
-                    next == extent
-                })
-            })
-            .collect();
         let max_fregs = prog
             .fused
             .iter()
-            .map(|f| f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize)
+            .map(|f| f.n_regs as usize + f.n_load_regs as usize)
             .max()
             .unwrap_or(0);
-        #[cfg(not(target_arch = "wasm32"))]
-        let seg_chains = chain::seg_chains(prog, &slot_off);
-        #[cfg(not(target_arch = "wasm32"))]
-        let slot_off_base = slot_off.clone();
         TapeExec {
             slab,
-            slot_off,
+            slot_off: prog.prepared().slot_off.clone(),
             obs,
             parked,
             pending: Vec::with_capacity(16),
-            scode: Vec::new(),
-            slanes: Vec::new(),
-            sblocks: Vec::new(),
-            sblock_at: Vec::new(),
-            sregs: Vec::new(),
-            state_rm: vec![0.0f64; n_state],
-            mirror_vars: (0..mirror.len() as u32)
-                .filter(|&i| mirror[i as usize])
-                .collect(),
-            mirror,
-            dy_zero: Vec::new(),
-            dy_zero_len: usize::MAX,
-            dy_home: Vec::new(),
-            dy_home_quiet: Vec::new(),
-            plan_full,
-            asm_covered: assemblies_covered(prog),
+            scalar: interp::ScalarCode::default(),
+            layout: 0,
             primed_param_epoch: 0,
             primed_forcing_epoch: 0,
             scratch: Scratch {
@@ -445,58 +337,67 @@ impl TapeExec {
             #[cfg(not(target_arch = "wasm32"))]
             call_work: par::program_work(prog),
             #[cfg(not(target_arch = "wasm32"))]
-            seg_chains,
-            #[cfg(not(target_arch = "wasm32"))]
             chain_scratch: chain::ChainScratch::default(),
             #[cfg(not(target_arch = "wasm32"))]
             plan: None,
             #[cfg(not(target_arch = "wasm32"))]
             peers: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            base_slot_off: slot_off_base,
         }
     }
-}
-
-/// Per assembly of `prog`, whether its regions cover every element of the box
-/// it assembles (for every `Assemble` that uses it).
-fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
-    let mut covered = vec![true; prog.assemblies.len()];
-    for ins in &prog.instrs {
-        let Instr::Assemble { table, out } = ins else {
-            continue;
-        };
-        let shape = &prog.slots[*out as usize].shape;
-        let rm = rm_strides(shape);
-        let mut hit = vec![false; shape.iter().product::<usize>().max(1)];
-        for (_, region) in &prog.assemblies[*table as usize].parts {
-            let spec = &prog.regions[*region as usize];
-            let n: usize = spec.shape.iter().product();
-            let mut idx: DimU = SmallVec::from_elem(0, spec.shape.len());
-            for _ in 0..n {
-                let flat: i64 = (0..idx.len())
-                    .map(|d| rm[d] * (spec.dest_lo[d] + idx[d]) as i64)
-                    .sum();
-                hit[flat as usize] = true;
-                for d in (0..idx.len()).rev() {
-                    idx[d] += 1;
-                    if idx[d] < spec.shape[d] {
-                        break;
-                    }
-                    idx[d] = 0;
-                }
-            }
-        }
-        covered[*table as usize] &= hit.iter().all(|&h| h);
-    }
-    covered
 }
 
 /// The compiled-tape context a [`super::super::RhsScratch`] carries. `None`
 /// on a scratch means "legacy interpreter path".
+/// Row-major mirror of the flat state vector for a program stored row-major
+/// ([`TapeProgram::col_major`] false), refilled once per call for the
+/// variables `mirror` marks (each column-major block transposed in place at
+/// the SAME flat offset), so reads of state run over contiguous memory. Pure
+/// data movement, so bit-identical to reading the strided view directly.
+///
+/// Kept beside the [`TapeExec`] rather than inside it: a call borrows it
+/// shared (through [`Env`]) while the executor is borrowed mutably.
+pub(in crate::simulate_array) struct StateMirror {
+    /// The mirrored values. Empty when no variable needs it.
+    state_rm: Vec<f64>,
+    /// Per state variable: whether reads go through `state_rm`. False for a
+    /// column-major program (its boxes ARE the state's layout) and for a
+    /// variable whose two layouts are the same walk; those read the caller's
+    /// state in place.
+    mirror: Vec<bool>,
+    /// The variables `mirror` marks, so a call's refill does not walk every
+    /// state variable (a 0-d state model has one per state).
+    mirror_vars: Vec<u32>,
+}
+
+impl StateMirror {
+    fn new(prog: &TapeProgram) -> Self {
+        let mirror: Vec<bool> = prog
+            .state_vars
+            .iter()
+            .map(|sv| !prog.col_major && !super::layout::order_free(&sv.shape))
+            .collect();
+        let n_state: usize = prog
+            .state_vars
+            .iter()
+            .zip(&mirror)
+            .filter(|(_, m)| **m)
+            .map(|(sv, _)| sv.flat_offset + sv.shape.iter().product::<usize>().max(1))
+            .max()
+            .unwrap_or(0);
+        StateMirror {
+            state_rm: vec![0.0f64; n_state],
+            mirror_vars: (0..mirror.len() as u32)
+                .filter(|&i| mirror[i as usize])
+                .collect(),
+            mirror,
+        }
+    }
+}
+
 pub(in crate::simulate_array) struct TapeCtx {
     pub(crate) prog: Arc<TapeProgram>,
     pub(crate) exec: TapeExec,
+    mirror: StateMirror,
     /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
     /// bumped whenever the caller's params slice differs, bit for bit, from
     /// the one the last call saw (the slice is the only channel callers have,
@@ -512,9 +413,11 @@ pub(in crate::simulate_array) struct TapeCtx {
 impl TapeCtx {
     pub(in crate::simulate_array) fn new(prog: Arc<TapeProgram>) -> Self {
         let exec = TapeExec::new(&prog);
+        let mirror = StateMirror::new(&prog);
         TapeCtx {
             prog,
             exec,
+            mirror,
             param_epoch: 0,
             forcing_epoch: 1,
             last_params: None,
@@ -568,11 +471,13 @@ impl TapeCtx {
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
 struct Env<'a> {
     prog: &'a TapeProgram,
+    /// The program's executor-side analyses ([`TapeProgram::prepared`]).
+    prep: &'a Prepared,
     forcing: ForcingView<'a>,
     state: &'a [f64],
-    /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
+    /// Row-major per-variable mirror of `state` (see [`StateMirror`]).
     state_rm: &'a [f64],
-    /// Per state variable: read through `state_rm` (see `TapeExec::mirror`).
+    /// Per state variable: read through `state_rm` (see [`StateMirror`]).
     mirror: &'a [bool],
     params: &'a [f64],
     t: f64,
@@ -684,14 +589,7 @@ fn run_continuous(env: &Env, range: std::ops::Range<usize>, exec: &mut TapeExec,
         let ways = call_ways(exec);
         if ways > 1 && !exec.exports_active {
             if !exec.plan.as_ref().is_some_and(|p| p.fits(&range, ways)) {
-                exec.plan = plan::CallPlan::build(
-                    env.prog,
-                    range.clone(),
-                    ways,
-                    &exec.seg_chains,
-                    &exec.dy_home_quiet,
-                    &exec.base_slot_off,
-                );
+                exec.plan = plan::CallPlan::build(env.prog, env.prep, range.clone(), ways);
                 // Every later call, planned or not, runs in the plan's
                 // layout: the slots it moved hold no value across calls.
                 if let Some(p) = &exec.plan {
@@ -699,8 +597,8 @@ fn run_continuous(env: &Env, range: std::ops::Range<usize>, exec: &mut TapeExec,
                         exec.slab.resize(p.slab_len, 0.0);
                     }
                     exec.slot_off.clone_from(&p.slot_off);
-                    // The scalar forms hold slab offsets of the old layout.
-                    exec.scode.clear();
+                    // The scalar code holds slab offsets of the old layout.
+                    exec.layout += 1;
                 }
             }
             if let Some(p) = exec.plan.take() {
@@ -736,188 +634,24 @@ fn same_params(last: &[f64], params: &[f64]) -> bool {
             .all(|(a, b)| a.to_bits() == b.to_bits())
 }
 
-/// The `[start, end)` ranges of a `dy` of `n` elements that no `DyWrite` of
-/// `prog` is certain to write on every call: the complement of the writes
-/// that every call runs: those in the CONTINUOUS section's leading
-/// [`TapeProgram::n_rhs`] instructions (the output-only tail after them is
-/// skipped while exports are off) outside any conditional region (a
-/// `JmpIfZero` branch or a sweep body may not run).
-fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
-    let cont = prog.section_range(Cadence::Continuous);
-    let every_call = cont.start..cont.end.min(cont.start + prog.n_rhs as usize);
-    let conditional = prog.guarded_positions();
-    let mut written = vec![false; n];
-    for pc in every_call {
-        if conditional[pc] {
-            continue;
-        }
-        let write = match &prog.instrs[pc] {
-            Instr::DyWrite { write } => write,
-            // A lane program writes each of its lanes' positions.
-            Instr::Lanes { spec } => {
-                let ls = &prog.lanes[*spec as usize];
-                for w in &ls.writes {
-                    if let LaneDst::Dy(pos) = &w.dst {
-                        for l in 0..ls.lanes as usize {
-                            written[pos.at(l) as usize] = true;
-                        }
-                    }
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        let w = &prog.dy_writes[*write as usize];
-        if let Some(pos) = &w.scatter {
-            for &p in pos {
-                written[p] = true;
-            }
-        } else if let Some(flat) = w.scalar_flat {
-            written[flat] = true;
-        } else {
-            let sv = &prog.state_vars[w.var as usize];
-            let shape = &prog.slots[w.slot as usize].shape;
-            let st = dy_strides(prog, &sv.shape);
-            let total: usize = shape.iter().product();
-            let nd = shape.len();
-            let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd);
-            for _ in 0..total {
-                let mut off = sv.flat_offset;
-                for d in 0..nd {
-                    off += (w.dest_lo[d] + idx[d]) * st[d] as usize;
-                }
-                written[off] = true;
-                let mut d = nd;
-                while d > 0 {
-                    d -= 1;
-                    idx[d] += 1;
-                    if idx[d] < shape[d] {
-                        break;
-                    }
-                    idx[d] = 0;
-                }
-            }
-        }
-    }
-    let mut ranges = Vec::new();
-    let mut k = 0;
-    while k < n {
-        if written[k] {
-            k += 1;
-            continue;
-        }
-        let start = k;
-        while k < n && !written[k] {
-            k += 1;
-        }
-        ranges.push((start, k));
-    }
-    ranges
-}
-
-/// Per slot, the `dy` offset a fused group writes it to directly, or
-/// `usize::MAX` for the slab: a fused output whose only reader is one
-/// whole-box `DyWrite` onto a CONTIGUOUS run of a `dy` of `n` elements, both
-/// in the CONTINUOUS section and outside any conditional region. The group
-/// then stores the derivative where the `DyWrite` would have copied it (the
-/// same values, one pass fewer), and that `DyWrite` does nothing.
-fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
-    let mut home = vec![usize::MAX; prog.slots.len()];
-    let tables = prog.tables();
-    let mut readers = vec![0u32; prog.slots.len()];
-    let mut defs = vec![0u32; prog.slots.len()];
-    let mut def_pc = vec![usize::MAX; prog.slots.len()];
-    for (pc, i) in prog.instrs.iter().enumerate() {
-        i.for_each_read(&tables, |s| readers[s as usize] += 1);
-        i.for_each_def(&tables, |s| {
-            defs[s as usize] += 1;
-            def_pc[s as usize] = pc;
-        });
-    }
-    let cont = prog.section_range(Cadence::Continuous);
-    let conditional = prog.guarded_positions();
-    for pc in cont.clone() {
-        let Instr::DyWrite { write } = &prog.instrs[pc] else {
-            continue;
-        };
-        let w = &prog.dy_writes[*write as usize];
-        let s = w.slot as usize;
-        if conditional[pc] || w.scatter.is_some() || w.scalar_flat.is_some() {
-            continue;
-        }
-        if readers[s] != 1 || defs[s] != 1 || !cont.contains(&def_pc[s]) || conditional[def_pc[s]] {
-            continue;
-        }
-        let Instr::Fused { spec } = &prog.instrs[def_pc[s]] else {
-            continue;
-        };
-        let fs = &prog.fused[*spec as usize];
-        // A stored output over the group's box, or an absorbed reduction's
-        // accumulator (folded in place, so straight into `dy`).
-        let desc = &prog.slots[s];
-        let fits = match &fs.reduce {
-            Some(r) if r.out as usize == s => desc.elems() == r.n_inner,
-            _ => fs.outputs.iter().any(|&(_, o)| o as usize == s) && desc.shape[..] == fs.shape[..],
-        };
-        if desc.scalar || !fits {
-            continue;
-        }
-        let sv = &prog.state_vars[w.var as usize];
-        let st = dy_strides(prog, &sv.shape);
-        let rm = rm_strides(&desc.shape);
-        let contiguous = (0..desc.shape.len()).all(|d| desc.shape[d] <= 1 || st[d] == rm[d]);
-        let mut off = sv.flat_offset;
-        for d in 0..desc.shape.len() {
-            off += w.dest_lo[d] * st[d] as usize;
-        }
-        if contiguous && off + desc.elems() <= n {
-            home[s] = off;
-        }
-    }
-    home
-}
-
-/// A [`dy_homes`] entry: the fused output is not stored at all.
-pub(super) const UNSTORED: usize = usize::MAX - 1;
-
-/// `home` with [`UNSTORED`] for every output of a CONTINUOUS fused group
-/// whose readers all sit in the section's output-only tail (past
-/// [`TapeProgram::n_rhs`]), which a call that publishes no observeds does
-/// not run: the group still computes the value (a later micro-op may need
-/// it) but writes it nowhere.
-fn quiet_homes(prog: &TapeProgram, home: &[usize]) -> Vec<usize> {
-    let mut quiet = home.to_vec();
-    let rhs_end = (prog.n_const + prog.n_segment + prog.n_rhs) as usize;
-    let cont = prog.section_range(Cadence::Continuous);
-    let tables = prog.tables();
-    // Per slot: whether any instruction a quiet call runs reads it.
-    let mut read_early = vec![false; prog.slots.len()];
-    for i in prog.instrs.iter().take(rhs_end) {
-        i.for_each_read(&tables, |s| read_early[s as usize] = true);
-    }
-    for pc in cont.start..rhs_end.min(cont.end) {
-        let Instr::Fused { spec } = &prog.instrs[pc] else {
-            continue;
-        };
-        for &(_, slot) in &prog.fused[*spec as usize].outputs {
-            let s = slot as usize;
-            if !read_early[s] && home[s] == usize::MAX {
-                quiet[s] = UNSTORED;
-            }
-        }
-    }
-    quiet
-}
-
-/// The strides of a state variable's `dy` (and state) block over `shape`,
-/// the box the program stores it as: row-major over a column-major
-/// program's reversed box, column-major over a row-major program's.
-pub(super) fn dy_strides(prog: &TapeProgram, shape: &[usize]) -> DimI {
-    if prog.col_major {
-        rm_strides(shape)
-    } else {
-        cm_strides(shape)
-    }
+/// Rebuild what the CONST and SEGMENT sections feed and later calls read
+/// from tables of their own (the folded gathers' positions, the compacted
+/// chains' tuples), after those sections ran.
+fn refill_primed(prog: &TapeProgram, exec: &mut TapeExec) {
+    let slab = resolve::Slab::new(&mut exec.slab, &exec.slot_off, &prog.tables.slots);
+    // SAFETY: the sections ran on this thread, and nothing else touches the
+    // slab between calls.
+    unsafe { fused::refill_index_tables(&mut exec.idx_tables, slab) };
+    #[cfg(not(target_arch = "wasm32"))]
+    // SAFETY: as above.
+    unsafe {
+        chain::refill_compact(
+            &prog.prepared().seg_chains,
+            &mut exec.chain_scratch,
+            prog,
+            slab,
+        )
+    };
 }
 
 /// Execute one RHS call through the tape: prime the CONST + SEGMENT sections
@@ -1005,8 +739,10 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         }
     }
     let (param_epoch, forcing_epoch) = (ctx.param_epoch, ctx.forcing_epoch);
-    let prog = &*ctx.prog;
-    let exec = &mut ctx.exec;
+    let TapeCtx {
+        prog, exec, mirror, ..
+    } = ctx;
+    let prog = &**prog;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (ways, threads) = if exec.serial {
@@ -1017,33 +753,32 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         exec.scratch.fscratch.workers.call_ways = ways;
         exec.scratch.fscratch.workers.threads = threads;
     }
+    let prep = prog.prepared();
+    // Every position the program writes lies in `dy`; the writes below are
+    // unchecked, so this is checked once per call, in every build.
+    assert!(
+        dy.len() >= prep.dy.min_len,
+        "dy has {} elements, but the program writes {}",
+        dy.len(),
+        prep.dy.min_len
+    );
     // Zero what no rule writes; every other element is overwritten below.
-    if exec.dy_zero_len != dy.len() {
-        exec.dy_zero = dy_zero_ranges(prog, dy.len());
-        exec.dy_home = dy_homes(prog, dy.len());
-        exec.dy_home_quiet = quiet_homes(prog, &exec.dy_home);
-        exec.dy_zero_len = dy.len();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            exec.plan = None;
-        }
-    }
     if zero_dy {
-        for &(a, b) in &exec.dy_zero {
+        for (a, b) in prep.dy.zero_ranges(dy.len()) {
             dy[a..b].fill(0.0);
         }
     }
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
     let ways = call_ways(exec);
-    for &i in &exec.mirror_vars {
+    for &i in &mirror.mirror_vars {
         let sv = &prog.state_vars[i as usize];
         let rm = rm_strides(&sv.shape);
         let cm = cm_strides(&sv.shape);
         unsafe {
             copy_strided_maybe_split(
                 ways,
-                exec.state_rm.as_mut_ptr().add(sv.flat_offset),
+                mirror.state_rm.as_mut_ptr().add(sv.flat_offset),
                 &rm,
                 state.as_ptr().add(sv.flat_offset),
                 &cm,
@@ -1051,14 +786,13 @@ pub(in crate::simulate_array) fn run_tape_inputs(
             );
         }
     }
-    let state_rm = std::mem::take(&mut exec.state_rm);
-    let mirror = std::mem::take(&mut exec.mirror);
     let env = Env {
         prog,
+        prep,
         forcing,
         state,
-        state_rm: &state_rm,
-        mirror: &mirror,
+        state_rm: &mirror.state_rm,
+        mirror: &mirror.mirror,
         params,
         t,
         declared,
@@ -1075,37 +809,13 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0 + 1, c.get().1)));
         run_range(&env, 0..prime_end, exec, dy);
-        unsafe {
-            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        unsafe {
-            chain::refill_compact(
-                &exec.seg_chains,
-                &mut exec.chain_scratch,
-                prog,
-                exec.slab.as_ptr(),
-                &exec.slot_off,
-            )
-        };
+        refill_primed(prog, exec);
     } else if exec.primed_forcing_epoch != forcing_epoch {
         exec.primed_forcing_epoch = forcing_epoch;
         #[cfg(test)]
         SECTION_PRIMES.with(|c| c.set((c.get().0, c.get().1 + 1)));
         run_range(&env, const_end..prime_end, exec, dy);
-        unsafe {
-            fused::refill_index_tables(&mut exec.idx_tables, exec.slab.as_ptr(), &exec.slot_off)
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        unsafe {
-            chain::refill_compact(
-                &exec.seg_chains,
-                &mut exec.chain_scratch,
-                prog,
-                exec.slab.as_ptr(),
-                &exec.slot_off,
-            )
-        };
+        refill_primed(prog, exec);
     }
     // With nothing reading the published observeds, the output-only tail of
     // the section is not run.
@@ -1115,6 +825,4 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         prime_end + prog.n_rhs as usize
     };
     run_continuous(&env, prime_end..end, exec, dy);
-    exec.state_rm = state_rm;
-    exec.mirror = mirror;
 }

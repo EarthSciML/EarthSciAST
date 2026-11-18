@@ -8,13 +8,12 @@
 //! The logic lives in the LIBRARY rather than in `src/bin/` so that the
 //! integration test (`tests/compiled_rhs_adapter.rs`) can drive exactly the
 //! code path the binary runs, without spawning a process. The binary
-//! `earthsci-compiled-rhs-adapter-rust` is a thin `main` over [`parse_args`]
-//! and [`run_manifest`].
+//! `earthsci-compiled-rhs-adapter-rust` is
+//! [`crate::adapter_support::adapter_main`] over this tier.
 //!
 //! Engines:
-//!   * `interpreter` — [`ArrayCompiled::debug_eval_rhs`] on the vectorized
-//!     evaluator, the same no-scalarization kernel the simulator uses. This is
-//!     the engine that runs today.
+//!   * `interpreter` — [`ArrayCompiled::debug_eval_rhs`], the per-cell
+//!     oracle every compiler is checked against. This is the default engine.
 //!   * `compiled` — the XlaBuilder emitter over the tape
 //!     (`simulate_array::tape::xla_emit`) run through PJRT
 //!     (`xla_runtime`). Behind the non-default `xla` feature: a
@@ -27,10 +26,12 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+pub use crate::adapter_support::Report;
+use crate::adapter_support::{self, Answer, Manifest, Tier, bare, number};
 use crate::load_string;
 use crate::simulate_array::ArrayCompiled;
 
@@ -65,11 +66,12 @@ impl Engine {
         }
     }
 
-    fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "interpreter" => Ok(Engine::Interpreter),
-            "compiled" => Ok(Engine::Compiled),
-            other => Err(format!(
+    /// The engine `--engine` names; `interpreter` when the flag is omitted.
+    pub fn configure(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("interpreter") => Ok(Engine::Interpreter),
+            Some("compiled") => Ok(Engine::Compiled),
+            Some(other) => Err(format!(
                 "unknown --engine {other:?} (want interpreter|compiled)"
             )),
         }
@@ -78,120 +80,11 @@ impl Engine {
 
 /// The adapter's parsed command line: `--manifest <m> --output <o>
 /// [--engine interpreter|compiled]`.
-pub struct Args {
-    /// Path to the tier manifest.
-    pub manifest: PathBuf,
-    /// Path the report is written to.
-    pub output: PathBuf,
-    /// Requested engine; `interpreter` when `--engine` is omitted.
-    pub engine: Engine,
-}
+pub type Args = adapter_support::Args<Engine>;
 
 /// Parse the adapter contract's argument list, rejecting anything else.
-///
-/// Separate from [`crate::adapter_support::parse_manifest_output_args`]
-/// because this tier adds `--engine`; the other adapters take no such flag and
-/// must keep rejecting it.
 pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
-    let mut manifest: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut engine = Engine::Interpreter;
-    let mut it = args.into_iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--manifest" => manifest = it.next().map(PathBuf::from),
-            "--output" => output = it.next().map(PathBuf::from),
-            "--engine" => {
-                let v = it.next().ok_or("--engine needs a value")?;
-                engine = Engine::parse(&v)?;
-            }
-            other => return Err(format!("unexpected argument {other:?}")),
-        }
-    }
-    match (manifest, output) {
-        (Some(manifest), Some(output)) => Ok(Args {
-            manifest,
-            output,
-            engine,
-        }),
-        _ => Err("--manifest and --output are required".to_string()),
-    }
-}
-
-/// What a manifest run produced: the report payload to write, plus the ids of
-/// any fixtures that could not be evaluated.
-///
-/// The two are separate because they go to different places. `payload` is the
-/// adapter's JSON output and carries each failure as that fixture's `error`
-/// entry, so the runner can name it. `failed` is what decides the process exit
-/// code: a run in which no fixture produced numbers must not exit 0, or a
-/// broken adapter reads as a clean pass upstream.
-pub struct Report {
-    /// The `{"binding": …, "engine": …, …}` document to write to `--output`.
-    pub payload: Value,
-    /// Ids of fixtures whose entry is an `error` rather than an `rhs` map.
-    pub failed: Vec<String>,
-}
-
-/// Strip a leading `Model.` namespace so element names match across bindings.
-/// The same spelling the PDE-simulation adapter emits: bare column-major
-/// element names (`u[1]`, `u[i,j]`, scalar `s`).
-fn bare(name: &str) -> &str {
-    name.split_once('.').map(|x| x.1).unwrap_or(name)
-}
-
-/// One probe value as JSON. `json!(f64)` writes NaN and ±inf as `null`, which
-/// the runner cannot turn back into a number, so a non-finite value goes out as
-/// the string Python's `float()` parses (`"NaN"`, `"Infinity"`, `"-Infinity"`)
-/// and a regression that produces one is reported against its element instead
-/// of aborting the whole tier run.
-fn num(v: f64) -> Value {
-    if v.is_finite() {
-        json!(v)
-    } else if v.is_nan() {
-        json!("NaN")
-    } else if v > 0.0 {
-        json!("Infinity")
-    } else {
-        json!("-Infinity")
-    }
-}
-
-/// Resolve a manifest `fixtures[].path` to a file on disk.
-///
-/// The contract spells the path relative to the repository's `tests/`
-/// directory, while the sibling PDE tier spells its own fixture paths relative
-/// to the manifest's directory. Both are accepted: candidates are tried in a
-/// fixed order and the first that exists wins, so the same adapter drives the
-/// shipped manifest and a crate-local test manifest that sits elsewhere.
-///
-/// `manifest_dir` MUST be absolute — [`run_manifest`] absolutizes it first.
-/// The ancestor walk below is what finds the repository's `tests/`, and a
-/// relative directory runs out of ancestors long before reaching it, which
-/// turns every fixture into a not-found error.
-pub fn resolve_fixture_path(manifest_dir: &Path, rel: &str) -> Result<PathBuf, String> {
-    let mut tried: Vec<PathBuf> = Vec::new();
-    // 1. Relative to the manifest itself (the PDE tier's spelling).
-    tried.push(manifest_dir.join(rel));
-    // 2/3. Relative to a `tests/` directory at or above the manifest, innermost
-    //      first. This resolves `conformance/<tier>/fixtures/x.esm` against the
-    //      repository's own `tests/` however deep the manifest is nested.
-    for ancestor in manifest_dir.ancestors() {
-        if ancestor.file_name().map(|n| n == "tests").unwrap_or(false) {
-            tried.push(ancestor.join(rel));
-        }
-        tried.push(ancestor.join("tests").join(rel));
-    }
-    tried.iter().find(|p| p.is_file()).cloned().ok_or_else(|| {
-        format!(
-            "fixture path {rel:?} not found; tried {}",
-            tried
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })
+    adapter_support::parse_args(args, Some("--engine"), Engine::configure)
 }
 
 /// Canonicalize the manifest's `parameters` override keys onto the compiled
@@ -309,7 +202,7 @@ fn eval_compiled(
             .map_err(|e| format!("probe {pid}: {e}"))?;
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), num(du[i]));
+            m.insert(bare(n).to_string(), number(du[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
@@ -329,9 +222,8 @@ fn eval_compiled(
 }
 
 /// Evaluate one fixture's probes with the requested engine.
-fn run_fixture(fx: &Value, manifest_dir: &Path, engine: Engine) -> Result<Value, String> {
-    let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
-    let path = resolve_fixture_path(manifest_dir, rel)?;
+fn run_fixture(fx: &Value, manifest: &Manifest, engine: Engine) -> Result<Value, String> {
+    let path = manifest.fixture_path(fx)?;
     let json_str = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
 
@@ -367,75 +259,41 @@ fn run_fixture(fx: &Value, manifest_dir: &Path, engine: Engine) -> Result<Value,
         let state_obj = probe["state"].as_object().ok_or("probe.state missing")?;
         let t = probe["t"].as_f64().unwrap_or(0.0);
         let sv = state_vec(&names, state_obj).map_err(|e| format!("probe {pid}: {e}"))?;
-        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params, false);
+        let (dy, _stats) = compiled.debug_eval_rhs(&sv, t, &params);
         let mut m = Map::new();
         for (i, n) in names.iter().enumerate() {
-            m.insert(bare(n).to_string(), num(dy[i]));
+            m.insert(bare(n).to_string(), number(dy[i]));
         }
         rhs.insert(pid.to_string(), Value::Object(m));
     }
     Ok(json!({ "rhs": Value::Object(rhs) }))
 }
 
-/// Run a whole manifest and build the report payload.
-///
-/// For `Engine::Compiled` the whole output is the contract's `unavailable`
-/// form when the engine cannot run here at all (no `xla` feature, or no usable
-/// PJRT client) — no fixture is loaded and nothing is evaluated. Otherwise, and
-/// always for `Engine::Interpreter`, every fixture is evaluated; a fixture that fails is
-/// reported as `{"error": "<text>"}` in its own entry and the run continues,
-/// so one bad fixture cannot hide the rest. The caller learns that a failure
-/// happened from [`Report::failed`], which the binary turns into a non-zero
-/// exit: the tier's ruling is that nothing may be a silent skip, and a run
-/// where every fixture errored must not look like a clean run.
-///
-/// Unknown manifest fields are ignored throughout.
-pub fn run_manifest(manifest_path: &Path, engine: Engine) -> Result<Report, String> {
-    if engine == Engine::Compiled
-        && let Some(reason) = compiled_unavailable_reason()
-    {
-        return Ok(Report {
-            payload: json!({
-                "binding": "rust",
-                "engine": engine.as_str(),
-                "status": "unavailable",
-                "reason": reason,
-            }),
-            failed: Vec::new(),
-        });
+impl Tier for Engine {
+    fn header(&self) -> Option<(&'static str, &'static str)> {
+        Some(("engine", self.as_str()))
     }
-    let text = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("failed to read manifest {}: {e}", manifest_path.display()))?;
-    let manifest: Value =
-        serde_json::from_str(&text).map_err(|e| format!("failed to parse manifest: {e}"))?;
-    // Absolutize BEFORE taking the parent: `resolve_fixture_path` finds the
-    // repository's `tests/` by walking ancestors, and a relative `--manifest`
-    // (exactly what a runner invoking `cargo run` from the crate directory
-    // passes) has no ancestors above its own first segment.
-    let abs = std::path::absolute(manifest_path).unwrap_or_else(|_| manifest_path.to_path_buf());
-    let manifest_dir = abs.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-    let empty: Vec<Value> = Vec::new();
-    let mut fixtures = Map::new();
-    let mut failed = Vec::new();
-    for fx in manifest["fixtures"].as_array().unwrap_or(&empty) {
-        let id = fx["id"].as_str().unwrap_or("<unknown>").to_string();
-        let entry = match run_fixture(fx, &manifest_dir, engine) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("fixture {id}: {e}");
-                failed.push(id.clone());
-                json!({ "error": e })
-            }
-        };
-        fixtures.insert(id, entry);
+    /// For `Engine::Compiled`, the whole output is the contract's
+    /// `unavailable` form when the engine cannot run here at all (no `xla`
+    /// feature, or no usable PJRT client): no fixture is loaded and nothing is
+    /// evaluated.
+    fn unavailable(&self) -> Option<String> {
+        match self {
+            Engine::Compiled => compiled_unavailable_reason(),
+            Engine::Interpreter => None,
+        }
     }
-    Ok(Report {
-        payload: json!({
-            "binding": "rust",
-            "engine": engine.as_str(),
-            "fixtures": Value::Object(fixtures),
-        }),
-        failed,
-    })
+
+    fn run_fixture(&self, fx: &Value, manifest: &Manifest) -> Result<Answer, String> {
+        run_fixture(fx, manifest, *self).map(Answer::Entry)
+    }
+}
+
+/// Run a whole manifest under `engine` and build the report
+/// ([`adapter_support::run_manifest`]). Nothing may be a silent skip: a
+/// fixture that fails is its own `error` entry and is named in
+/// [`Report::failed`], which the binary turns into a non-zero exit.
+pub fn run_manifest(manifest_path: &Path, engine: Engine) -> Result<Report, String> {
+    adapter_support::run_manifest(&engine, manifest_path)
 }

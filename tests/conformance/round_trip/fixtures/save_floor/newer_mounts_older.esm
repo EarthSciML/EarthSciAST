@@ -1,0 +1,23 @@
+{
+  "esm": "2.3.0",
+  "metadata": {
+    "name": "save_floor_newer_mounts_older",
+    "description": "An esm 2.3.0 document that mounts tests/valid/version_gate_newer_leaf.esm (esm 1.2.0, a unit-bearing `const`). The document already declares a version above the 1.2.0 floor, and a save never lowers the version, so it saves as esm 2.3.0 (esm-spec §4.7, \"Save-time version floors\").",
+    "authors": ["EarthSciAST"],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": ["version", "mount", "const-units", "save-floor"]
+  },
+  "models": {
+    "Station": {
+      "variables": {
+        "p_reading": {"type": "unknown", "units": "Pa", "description": "The mounted leaf's absolute pressure."}
+      },
+      "equations": [
+        {"lhs": "p_reading", "rhs": "Pressure.p_abs"}
+      ],
+      "subsystems": {
+        "Pressure": {"ref": "../../../../valid/version_gate_newer_leaf.esm"}
+      }
+    }
+  }
+}

@@ -36,71 +36,8 @@ use std::path::Path;
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
-    raise_faq_esm_floor(&mut value);
-    raise_variable_bounds_esm_floor(&mut value);
+    crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string_pretty(&value).map_err(EsmError::JsonParse)
-}
-
-/// Raise an emitted document's declared `esm` to 1.1.0 when it CONTAINS a `faq`
-/// node but declares less.
-///
-/// Like the §9.6.4 rule-8 template stamp, this is a FLOOR — "a consumer needs at
-/// least this" — so it only ever raises. It exists because a document can come
-/// to contain `faq` without ever spelling it: a 1.0.0 parent that mounts a
-/// subsystem whose child uses `faq` has the child inlined into it at load, and
-/// emitting that as 1.0.0 writes a document the `faq_version_too_old` gate then
-/// refuses to read back. The load-time gate cannot catch it — the parent's
-/// AUTHORED bytes are legal — so the stamp closes it here.
-/// See docs/content/rfcs/faq-node-rename.md §5.5.
-fn raise_faq_esm_floor(value: &mut serde_json::Value) {
-    fn has_faq(v: &serde_json::Value) -> bool {
-        match v {
-            serde_json::Value::Object(map) => {
-                map.get("op").and_then(|o| o.as_str()) == Some("faq") || map.values().any(has_faq)
-            }
-            serde_json::Value::Array(items) => items.iter().any(has_faq),
-            _ => false,
-        }
-    }
-    let below = value
-        .get("esm")
-        .and_then(|v| v.as_str())
-        .and_then(crate::diagnostic::parse_semver)
-        .is_some_and(|(major, minor, _)| (major, minor) < (1, 1));
-    if below
-        && has_faq(value)
-        && let Some(obj) = value.as_object_mut()
-    {
-        obj.insert(
-            "esm".to_string(),
-            serde_json::Value::String("1.1.0".to_string()),
-        );
-    }
-}
-
-/// Raise an emitted document's declared `esm` to 2.1.0 when a model variable
-/// carries `lb` or `ub` (esm-spec §6.3.2) but the document declares less.
-///
-/// A floor, for the reason [`raise_faq_esm_floor`] is one: a 2.0.0 document
-/// may mount a 2.1.0 file whose variables carry bounds (each file is held to
-/// its own declared version, §4.7), and the mount is inlined at load. Emitting
-/// the resolved document at 2.0.0 would write bytes the
-/// `variable_bounds_version_too_old` gate refuses to read back.
-fn raise_variable_bounds_esm_floor(value: &mut serde_json::Value) {
-    let below = value
-        .get("esm")
-        .and_then(|v| v.as_str())
-        .and_then(crate::diagnostic::parse_semver)
-        .is_some_and(|(major, minor, _)| (major, minor) < (2, 1));
-    if below
-        && crate::variable_bounds::first_bound_pointer(value).is_some()
-        && let Some(obj) = value.as_object_mut()
-    {
-        obj.insert(
-            "esm".to_string(),
-            serde_json::Value::String("2.1.0".to_string()),
-        );
-    }
 }
 
 /// Serialize an ESM file to compact JSON string (no pretty printing)
@@ -121,8 +58,7 @@ fn raise_variable_bounds_esm_floor(value: &mut serde_json::Value) {
 /// * `Err(EsmError)` - Serialization error
 pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
     let mut value = serde_json::to_value(esm_file).map_err(EsmError::JsonParse)?;
-    raise_faq_esm_floor(&mut value);
-    raise_variable_bounds_esm_floor(&mut value);
+    crate::version_gates::raise_emit_floors(&mut value);
     serde_json::to_string(&value).map_err(EsmError::JsonParse)
 }
 
@@ -211,6 +147,20 @@ mod tests {
         assert!(json.contains("\"test\""));
         assert!(json.contains("\"variables\""));
         assert!(json.contains("\"equations\""));
+    }
+
+    /// A 1.0.0 document that mounts a 1.2.0 leaf carrying a unit-bearing
+    /// `const` is written back at 1.2.0, so the emitted bytes reload: the
+    /// const-units gate refuses them at 1.0.0 (esm-spec §4.8.5 item 6).
+    #[test]
+    fn emit_floors_const_units_from_a_mounted_leaf() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/valid/version_gate_older_mounts_newer.esm");
+        let loaded = crate::load_path(&fixture).expect("fixture loads");
+        assert_eq!(loaded.esm, "1.0.0");
+        let json = to_json(&loaded).unwrap();
+        assert!(json.contains("\"esm\": \"1.2.0\""), "{json}");
+        crate::load_string(&json).expect("the emitted document reloads");
     }
 
     #[test]

@@ -4,21 +4,17 @@
 //! unflattening, a scalar subscript computed at run time.
 //!
 //! Every case builds with NO fallback rule and is compared bit for bit, with
-//! the fault it latches, against the per-cell oracle and the whole-array
-//! overlay, on both executors, fused and unfused ([`ab`]).
+//! the fault it latches, against the per-cell oracle, on both executors,
+//! fused and unfused ([`ab`]).
 
-use super::array_tests::{
-    ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, no_params, opcount, plus,
-};
 use super::taped;
+use super::test_support::{
+    ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, minus, no_params, opcount, plus,
+};
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-
-fn minus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
-    json!({"op": "-", "args": [a, b]})
-}
 
 fn floor(a: serde_json::Value) -> serde_json::Value {
     json!({"op": "floor", "args": [a]})
@@ -170,7 +166,7 @@ fn run_time_subscript_under_a_boundary_policy() {
             std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
         let prog = ab(&compiled, &no_params());
         assert!(
-            prog.data_gathers.iter().all(|g| g.order.is_none()),
+            prog.tables.data_gathers.iter().all(|g| g.order.is_none()),
             "{kind:?}: a resolving policy cannot fault"
         );
     }
@@ -562,15 +558,12 @@ fn a_failed_sub_box_lowering_falls_back_to_the_full_box() {
     let pv = compiled.debug_resolve_params(&HashMap::new());
     let fused = taped(compiled.build_tape_opts(
         &HashSet::new(),
-        Some(super::fuse::SuperopCfg {
-            bin3: false,
-            ext_pairs: true,
-        }),
+        Some(super::fuse::SuperopCfg { ext_pairs: true }),
     ))
     .0;
     let unfused = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
     for seed in 0..3u64 {
-        let state = super::tests::seeded_state(n, seed, -2.0, 2.0);
+        let state = super::test_support::seeded_state(n, seed, -2.0, 2.0);
         let mut dy_f = vec![0.0f64; n];
         let mut dy_u = vec![0.0f64; n];
         super::refexec::run_reference(&fused, &compiled, &state, &pv, 0.0, &mut dy_f);
@@ -639,7 +632,7 @@ fn a_filtered_out_const_gather_never_faults() {
         // at build time for the fault it cannot place; it never faults.
         let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
         assert!(
-            refused.iter().all(|(rule, why)| rule == "D(u)"
+            refused.iter().all(|(rule, why)| rule == "D(M.u)"
                 && why.contains("E_TREEWALK_CONSTARRAY_OOB")
                 && why.contains("fault scan")),
             "{refused:?}"

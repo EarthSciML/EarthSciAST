@@ -16,7 +16,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{
     Compiler, EsmProblem, InlineTestOptions, Key, LoadOptions, ProblemOptions, Rhs, esm_problem,
     load_string_with_options, materialize_value_invention, observed_field,
@@ -27,16 +26,12 @@ use serde_json::{Value, json};
 
 use crate::common;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn rewrites_dir() -> PathBuf {
-    repo_root().join("tests/conformance/relational_templates/rewrites")
+    common::repo_root().join("tests/conformance/relational_templates/rewrites")
 }
 
 fn library() -> String {
-    repo_root()
+    common::repo_root()
         .join("lib/relational.esm")
         .canonicalize()
         .expect("lib/relational.esm")
@@ -93,7 +88,7 @@ fn elem_key(name: &str, model: &str) -> String {
 
 fn rewrite_path(entry: &Value) -> PathBuf {
     match entry.get("out").and_then(Value::as_str) {
-        Some(out) => repo_root().join(out),
+        Some(out) => common::repo_root().join(out),
         None => rewrites_dir().join(format!("{}.esm", entry["id"].as_str().unwrap())),
     }
 }
@@ -216,8 +211,6 @@ fn rhs_at_golden(
     g: &Value,
 ) -> HashMap<String, f64> {
     let names: Vec<String> = prob
-        .debug_array_compiled()
-        .expect("a right-hand side")
         .state_variable_names()
         .iter()
         .map(|n| elem_key(n, model))
@@ -229,36 +222,16 @@ fn rhs_at_golden(
     want.sort();
     assert_eq!(sorted, want, "{label}: state elements");
     let state: Vec<f64> = names.iter().map(|n| gs[n].as_f64().unwrap()).collect();
-    let (_, dy) = rhs_at(prob, compiler, label, &state);
+    let dy = rhs_at(prob, compiler, label, &state);
     names.into_iter().zip(dy).collect()
 }
 
-/// `dy` at `state`: the interpreter, or the strict native tape with no rule
-/// off it.
-fn rhs_at(
-    prob: &EsmProblem,
-    compiler: Compiler,
-    label: &str,
-    state: &[f64],
-) -> (Vec<String>, Vec<f64>) {
-    let comp = prob.debug_array_compiled().expect("a right-hand side");
-    let names = comp.state_variable_names().to_vec();
-    let state = state.to_vec();
-    let dy = if compiler == Compiler::Native {
-        let _precision = comp.debug_precision_env().enter();
-        let params = comp.debug_resolve_params(prob.p());
-        let mut dy = vec![0.0f64; state.len()];
-        let mut scratch = comp
-            .debug_new_scratch_taped()
-            .unwrap_or_else(|e| panic!("{label}: strict native: {e}"));
-        let mut stats = RhsStats::default();
-        comp.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
-        assert!(scratch.has_tape(), "{label}: the tape declined a rule");
-        dy
-    } else {
-        comp.debug_eval_rhs(&state, 0.0, prob.p(), true).0
-    };
-    (names, dy)
+/// `dy` at `state` through the Problem's public program: the interpreter, or
+/// the strict native tape with no rule off it.
+fn rhs_at(prob: &EsmProblem, compiler: Compiler, label: &str, state: &[f64]) -> Vec<f64> {
+    let mut rhs = common::rhs::ProblemRhs::new(prob);
+    assert_eq!(rhs.program().compiler(), compiler, "{label}: compiler");
+    rhs.eval(state, 0.0)
 }
 
 fn bits(v: &[f64]) -> Vec<u64> {
@@ -425,7 +398,7 @@ fn check_vi_only(
     let arrays = case_arrays(case);
     let params = case_params(case);
     let options = LoadOptions {
-        base_path: Some(repo_root()),
+        base_path: Some(common::repo_root()),
         ..Default::default()
     };
     let file = load_string_with_options(&tp_doc.to_string(), &options)
@@ -500,7 +473,7 @@ fn inline(path: &Path, compiler: Compiler) -> Vec<(bool, Option<f64>, String)> {
         compiler: Some(compiler),
         ..Default::default()
     };
-    run_inline_tests_with_options(&file, &opts, None)
+    run_inline_tests_with_options(&file, &opts)
         .into_iter()
         .map(|r| (r.passed, r.actual, r.message))
         .collect()
@@ -586,6 +559,26 @@ fn an_out_of_range_key_component_is_refused_naming_the_column() {
         assert!(
             !e.contains("derived_index_set_unmaterialized"),
             "[{}]: rewrapped: {e}",
+            compiler.as_str()
+        );
+        // The build pipeline hands the refusal on typed, its code intact.
+        let mut doc = doc.clone();
+        common::supply_state_defaults(&mut doc);
+        let opts = ProblemOptions {
+            compiler: Some(compiler),
+            rhs: Rhs::Auto,
+            const_arrays: case_arrays(case),
+            p: case_params(case),
+            build_pipeline: true,
+            ..Default::default()
+        };
+        let Err(e) = esm_problem(&doc, (0.0, 1.0), opts) else {
+            panic!("[{}]: an out-of-range key built", compiler.as_str());
+        };
+        assert_eq!(
+            e.code(),
+            Some("value_invention_key_out_of_range"),
+            "[{}]: {e}",
             compiler.as_str()
         );
     }

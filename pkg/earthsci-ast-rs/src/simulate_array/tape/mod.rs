@@ -43,15 +43,14 @@
 //! * [`Instr::ConstArray`] materializes an inline array literal into a
 //!   CONST-section slot — one instruction and one store per solve, whatever
 //!   the literal's size, with the payload on
-//!   [`TapeProgram::const_data`]. Without it an array-valued `const` had no
+//!   [`ProgramTables::const_data`]. Without it an array-valued `const` had no
 //!   representation at all (`Operand::Lit` is one `f64`; `Fill` broadcasts
 //!   one scalar), so every reader of such a constant bailed.
 //! * [`Instr::Reduce`] folds a source box over a set of axes with a binary
 //!   kernel, visiting the source in ROW-MAJOR order — which is the per-cell
 //!   oracle's contraction odometer, so a rank-0 `faq` (every index
 //!   contracted, scalar result) folds the same terms in the same
-//!   association the interpreter would. It is the one construct the tape
-//!   lowers that the whole-array overlay declines outright.
+//!   association the interpreter would.
 //!
 //! A rule that reads an observed whose own rule declined declines too, at
 //! the read: there is no operand for a value that is not on the tape, so the
@@ -77,6 +76,7 @@ mod lower;
 mod lowering_limit_tests;
 #[cfg(test)]
 mod makearray_index_tests;
+mod prepared;
 mod prune;
 #[cfg(test)]
 mod refexec;
@@ -85,6 +85,11 @@ mod scan_shift;
 #[cfg(test)]
 mod scatter_tests;
 mod sink;
+mod slab;
+#[cfg(test)]
+mod template_fixtures;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -271,11 +276,11 @@ pub(crate) fn make_report(prog: &TapeProgram, vn_hits: (usize, usize)) -> TapeBu
         n_instr_segment: prog.n_segment as usize,
         n_instr_continuous: n_cont,
         opcode_counts,
-        n_slots: prog.slots.len(),
+        n_slots: prog.tables.slots.len(),
         n_storages: prog.slab.storages.len(),
-        n_gather_plans: prog.plans.len(),
+        n_gather_plans: prog.tables.plans.len(),
         n_exports: prog.exports.len(),
-        n_dy_writes: prog.dy_writes.len(),
+        n_dy_writes: prog.tables.dy_writes.len(),
         slab_bytes: prog.slab.total_elems * 8,
         slab_bytes_const: prog.slab.const_elems * 8,
         slab_bytes_segment: prog.slab.segment_elems * 8,
@@ -306,11 +311,45 @@ pub(crate) fn make_declined_report(
 impl DeclinedTape {
     /// `(rule name, reason)` for every rule that did not lower, in rule order.
     pub(crate) fn declined_rules(&self) -> Vec<(String, String)> {
+        self.declines()
+            .map(|(r, why)| (r.name.clone(), why.message()))
+            .collect()
+    }
+
+    /// Every rule that did not lower, with its decline, in rule order.
+    pub(crate) fn declines(&self) -> impl Iterator<Item = (&RuleInfo, &Bail)> {
         self.rules
             .iter()
             .zip(&self.reasons)
-            .filter_map(|(r, why)| why.as_ref().map(|why| (r.name.clone(), why.clone())))
-            .collect()
+            .filter_map(|(r, why)| why.as_ref().map(|why| (r, why)))
+    }
+
+    /// The strict compilers' refusal of this build (`compiler_refused_rule`
+    /// under `compiler`), naming the first declined rule and its decline,
+    /// put in `context` when its message does not already mention it.
+    pub(crate) fn refusal(
+        &self,
+        compiler: &'static str,
+        context: Option<&str>,
+    ) -> crate::simulate::SimulateError {
+        let (rule, why) = self
+            .declines()
+            .next()
+            .expect("a declined tape names at least one rule");
+        let message = why.message();
+        let reason = match context {
+            Some(what) if !message.contains(what) => format!("{what}: {message}"),
+            _ => message,
+        };
+        crate::simulate::SimulateError::Compile(
+            crate::compile_error::CompileError::CompilerRefusedRule {
+                compiler,
+                kind: rule.kind_name(),
+                rule: rule.name.clone(),
+                tier: rule.cadence_name(),
+                reason,
+            },
+        )
     }
 }
 
@@ -452,26 +491,12 @@ impl ArrayCompiled {
         &self,
         discrete_forcing: &HashSet<String>,
     ) -> Result<std::sync::Arc<TapeProgram>, crate::simulate::SimulateError> {
-        let declined = match self.tape(discrete_forcing).0 {
-            Ok(prog) => return Ok(prog),
-            Err(declined) => declined,
-        };
-        let (k, reason) = declined
-            .reasons
-            .iter()
-            .enumerate()
-            .find_map(|(k, why)| why.clone().map(|why| (k, why)))
-            .expect("a declined tape names at least one rule");
-        let rule = &declined.rules[k];
-        Err(crate::simulate::SimulateError::Compile(
-            crate::compile_error::CompileError::CompilerRefusedRule {
-                compiler: if self.is_xla() { "xla" } else { "native" },
-                kind: rule.kind_name(),
-                rule: rule.name.clone(),
-                tier: rule.cadence_name(),
-                reason,
-            },
-        ))
+        match self.tape(discrete_forcing).0 {
+            Ok(prog) => Ok(prog),
+            Err(declined) => {
+                Err(declined.refusal(if self.is_xla() { "xla" } else { "native" }, None))
+            }
+        }
     }
 
     /// Every entry the forcing buffer holds, as `(name, shape)` sorted by name:
@@ -554,8 +579,9 @@ impl ArrayCompiled {
         fuse: Option<fuse::SuperopCfg>,
         align_layout: bool,
     ) -> (Result<TapeProgram, DeclinedTape>, TapeBuildReport) {
-        let const_names = self.classify_static_observeds(discrete_forcing);
-        let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
+        let deps = self.observed_dependencies(discrete_forcing);
+        let const_names = deps.at_most(crate::cadence::Cadence::Const);
+        let seg_names = deps.at_most(crate::cadence::Cadence::Discrete);
         let forcing = self.forcing_inputs(discrete_forcing);
         let (prog, vn_hits) = build_tape_program(
             self,
@@ -583,8 +609,9 @@ impl ArrayCompiled {
     /// reads one, is in the SEGMENT section, re-run when the set changes.
     pub(crate) fn build_tile_tape(&self, tile: &TileLowering) -> Result<TapeProgram, DeclinedTape> {
         let discrete: HashSet<String> = self.forcing_decls.keys().cloned().collect();
-        let const_names = self.classify_static_observeds(&discrete);
-        let seg_names = self.classify_segment_invariant_observeds(&discrete, true);
+        let deps = self.observed_dependencies(&discrete);
+        let const_names = deps.at_most(crate::cadence::Cadence::Const);
+        let seg_names = deps.at_most(crate::cadence::Cadence::Discrete);
         let forcing = self.forcing_inputs(&discrete);
         build_tape_program(
             self,
@@ -601,15 +628,14 @@ impl ArrayCompiled {
     /// Build the tape and return the diagnostic report (see
     /// [`TapeBuildReport`]). Evaluation is unchanged: this is a build-and-
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
-    pub fn debug_build_tape_report(&self) -> TapeBuildReport {
+    pub(crate) fn debug_build_tape_report(&self) -> TapeBuildReport {
         (*self.tape(&HashSet::new()).1).clone()
     }
 
     /// The program as text, one instruction per line with its section and
     /// the box it defines, then the fused groups (`TAPE_LISTING=1` in
     /// `examples/tape_report.rs`). Diagnostics only.
-    #[doc(hidden)]
-    pub fn debug_tape_listing(&self) -> String {
+    pub(crate) fn debug_tape_listing(&self) -> String {
         use std::fmt::Write;
         let (prog, report) = self.tape(&HashSet::new());
         let Ok(prog) = prog else {
@@ -620,7 +646,7 @@ impl ArrayCompiled {
             let boxed = ins
                 .out()
                 .map(|o| {
-                    let d = &prog.slots[o as usize];
+                    let d = &prog.tables.slots[o as usize];
                     format!(" -> s{o}{:?}", &d.shape[..])
                 })
                 .unwrap_or_default();
@@ -687,7 +713,7 @@ impl ArrayCompiled {
     ) -> (Vec<TapeRuleRecord>, TapeBuildReport) {
         let (prog, report) = self.tape(discrete_forcing);
         let report = (*report).clone();
-        let (rules, reasons): (&[RuleInfo], &[Option<String>]) = match &prog {
+        let (rules, reasons): (&[RuleInfo], &[Option<Bail>]) = match &prog {
             Ok(prog) => (&prog.rules, &[]),
             Err(declined) => (&declined.rules, &declined.reasons),
         };
@@ -698,19 +724,22 @@ impl ArrayCompiled {
                 name: r.name.clone(),
                 kind: r.kind_name(),
                 cadence: r.cadence_name(),
-                fallback_reason: reasons.get(k).cloned().flatten(),
+                fallback_reason: reasons.get(k).and_then(|b| b.as_ref().map(Bail::message)),
             })
             .collect();
         (records, report)
     }
 
-    /// Step 4 diagnostic: dump per-group shape statistics of the fused
-    /// program to stderr (`examples/fuse_stats.rs`).
-    pub fn debug_dump_fuse_stats(&self) {
+    /// Per-group shape statistics of the fused program, then the micro-op,
+    /// adjacency and chain-length histograms of the fusion pass, as text
+    /// (`examples/fuse_stats.rs`). Diagnostics only.
+    pub(crate) fn debug_fuse_stats(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
         let (prog, report) = self.tape(&HashSet::new());
-        eprintln!("{report}");
+        let _ = writeln!(out, "{report}");
         let Ok(prog) = prog else {
-            return;
+            return out;
         };
         let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
         by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));
@@ -725,11 +754,13 @@ impl ArrayCompiled {
             .iter()
             .map(|f| f.outputs.len() * f.n_elems())
             .sum();
-        eprintln!(
+        let _ = writeln!(
+            out,
             "element-ops per call: {} micro x elems | output elems stored {}",
             tot_elem_ops, tot_out_elems
         );
-        eprintln!(
+        let _ = writeln!(
+            out,
             "fused groups: {} | micro ops {} | inputs {} | outputs {} | runs {} | max n_regs {}",
             prog.fused.len(),
             tot_micro,
@@ -738,20 +769,21 @@ impl ArrayCompiled {
             tot_runs,
             max_regs
         );
-        eprintln!("micro-op histogram (element-weighted, post-superop):");
+        let _ = writeln!(out, "micro-op histogram (element-weighted, post-superop):");
         for (k, n) in prog.fuse_stats.micro_hist.iter().take(24) {
-            eprintln!("  {n:>10}  {k}");
+            let _ = writeln!(out, "  {n:>10}  {k}");
         }
-        eprintln!("single-use adjacency (element-weighted, pre-superop):");
+        let _ = writeln!(out, "single-use adjacency (element-weighted, pre-superop):");
         for (k, n) in prog.fuse_stats.adj_hist.iter().take(24) {
-            eprintln!("  {n:>10}  {k}");
+            let _ = writeln!(out, "  {n:>10}  {k}");
         }
-        eprintln!("arith chain lengths (element-weighted, pre-superop):");
+        let _ = writeln!(out, "arith chain lengths (element-weighted, pre-superop):");
         for (len, n) in prog.fuse_stats.chain_hist.iter() {
-            eprintln!("  {n:>10}  len={len}");
+            let _ = writeln!(out, "  {n:>10}  len={len}");
         }
         for f in by_regs.iter().take(12) {
-            eprintln!(
+            let _ = writeln!(
+                out,
                 "  group: shape={:?} micro={} regs={} inputs={} (shifted {}) scalars={} \
                  outputs={} runs={} folded_gathers={}",
                 &f.shape[..],
@@ -765,5 +797,6 @@ impl ArrayCompiled {
                 f.n_folded_gathers
             );
         }
+        out
     }
 }

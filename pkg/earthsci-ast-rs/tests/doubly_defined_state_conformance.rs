@@ -9,22 +9,10 @@
 //! `validate` uses, naming the unknown and both equations. The controls are the
 //! same documents with the algebraic equation removed and must still run.
 
-use earthsci_ast::{
-    ProblemOptions, SolveOptions, esm_problem, load_path, run_inline_tests_with_base_dir, validate,
-};
-use serde_json::Value;
-use std::path::{Path, PathBuf};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
+use earthsci_ast::{ProblemOptions, esm_problem, load_path, validate};
 
-fn category_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/doubly_defined_state")
-}
-
-/// A missing manifest is a hard failure, not a skip.
-fn manifest() -> Value {
-    let raw = std::fs::read_to_string(category_dir().join("manifest.json"))
-        .expect("the doubly_defined_state manifest is readable");
-    serde_json::from_str(&raw).expect("the doubly_defined_state manifest parses")
-}
+use crate::common;
 
 /// Read only to check the manifest itself is well formed, which is what keeps a
 /// typo in it from passing silently. `native` and `interpreter` are both the
@@ -40,7 +28,7 @@ fn check_evaluator_path(path: &str) {
 
 #[test]
 fn every_case_is_refused_or_runs_as_the_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("doubly_defined_state");
     let code = m["code"].as_str().expect("`code` is a string");
     assert_eq!(code, "equation_count_mismatch");
     assert!(
@@ -59,7 +47,8 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
 
     for case in cases {
         let id = case["id"].as_str().expect("`id` is a string");
-        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let path = common::category_dir("doubly_defined_state")
+            .join(case["path"].as_str().expect("`path` is a string"));
         check_evaluator_path(case["evaluator_path"].as_str().expect("`evaluator_path`"));
         let file = load_path(&path).unwrap_or_else(|e| panic!("{id}: does not load: {e}"));
 
@@ -95,11 +84,12 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                     report.structural_errors
                 );
                 // An inline test reports the refusal rather than a number.
-                let results = run_inline_tests_with_base_dir(
+                let results = run_inline_tests_with_options(
                     &file,
-                    None,
-                    &SolveOptions::default(),
-                    Some(category_dir().as_path()),
+                    &InlineTestOptions {
+                        base_dir: Some(common::category_dir("doubly_defined_state")),
+                        ..Default::default()
+                    },
                 );
                 assert!(!results.is_empty(), "{id}: ran no assertions");
                 for r in &results {
@@ -118,11 +108,12 @@ fn every_case_is_refused_or_runs_as_the_manifest_says() {
                 }
             }
             Some("run") => {
-                let results = run_inline_tests_with_base_dir(
+                let results = run_inline_tests_with_options(
                     &file,
-                    None,
-                    &SolveOptions::default(),
-                    Some(category_dir().as_path()),
+                    &InlineTestOptions {
+                        base_dir: Some(common::category_dir("doubly_defined_state")),
+                        ..Default::default()
+                    },
                 );
                 assert!(!results.is_empty(), "{id}: ran no assertions");
                 for r in &results {

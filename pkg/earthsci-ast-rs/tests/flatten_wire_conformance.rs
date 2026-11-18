@@ -14,11 +14,8 @@ use earthsci_ast::{
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-fn case_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/flatten_wire")
-}
+use crate::common;
 
 /// `v` as canonical JSON: keys sorted by code point, no whitespace, integers
 /// as written, floats through `format_canonical_float`.
@@ -194,7 +191,7 @@ fn built(file: &EsmFile, compiler: Compiler) -> Result<Vec<(String, u64, u64)>, 
 
 #[test]
 fn the_flattened_system_on_the_wire_matches_the_shared_golden() {
-    let dir = case_dir();
+    let dir = common::category_dir("flatten_wire");
     let cases: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("cases.json")).unwrap()).unwrap();
     let cases = cases["cases"].as_array().unwrap();

@@ -39,6 +39,8 @@ mod assertion_tolerance_conformance;
 mod basic_functionality;
 #[path = "build_once_spatial_field_conformance.rs"]
 mod build_once_spatial_field_conformance;
+#[path = "build_pipeline_bindings.rs"]
+mod build_pipeline_bindings;
 #[path = "build_time_computed_gathers.rs"]
 mod build_time_computed_gathers;
 #[path = "build_time_tape_route.rs"]
@@ -67,8 +69,6 @@ mod coupled_array_seam;
 mod coupled_const_array_fold;
 #[path = "coupling_imports.rs"]
 mod coupling_imports;
-#[path = "cse_equivalence.rs"]
-mod cse_equivalence;
 #[path = "cumulative_prefix_scan.rs"]
 mod cumulative_prefix_scan;
 #[path = "dae_contract.rs"]
@@ -209,8 +209,6 @@ mod native_lazy_shapes;
 mod native_model_shapes_conformance;
 #[path = "nonadvancing_run_skips_the_solver.rs"]
 mod nonadvancing_run_skips_the_solver;
-#[path = "observed_cadence_tier.rs"]
-mod observed_cadence_tier;
 #[path = "observed_cone.rs"]
 mod observed_cone;
 #[path = "observed_cycle.rs"]
@@ -237,8 +235,6 @@ mod overlap_gate_live_forcing;
 mod overlap_gate_ring_stack;
 #[path = "override_key_diagnostics_conformance.rs"]
 mod override_key_diagnostics_conformance;
-#[path = "pde_const_hoist.rs"]
-mod pde_const_hoist;
 #[path = "pde_inline_array_overrides_conformance.rs"]
 mod pde_inline_array_overrides_conformance;
 #[path = "pde_inline_dead_observed_conformance.rs"]
@@ -253,8 +249,6 @@ mod pde_inline_observed_state_dependent_conformance;
 mod pde_inline_reference_dimension_names_conformance;
 #[path = "pde_vectorized_eval.rs"]
 mod pde_vectorized_eval;
-#[path = "performance.rs"]
-mod performance;
 #[path = "pipeline_flatten_rewrites.rs"]
 mod pipeline_flatten_rewrites;
 #[path = "pointwise_lift_values.rs"]
@@ -419,8 +413,6 @@ mod value_invention_materialize_conformance;
 mod variable_bounds;
 #[path = "variable_map_expression_transform.rs"]
 mod variable_map_expression_transform;
-#[path = "vec_coverage_frontier.rs"]
-mod vec_coverage_frontier;
 #[path = "wildfire_simulation.rs"]
 mod wildfire_simulation;
 #[path = "wrt_default_omitted.rs"]

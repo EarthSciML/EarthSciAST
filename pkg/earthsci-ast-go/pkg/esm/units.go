@@ -2272,6 +2272,29 @@ func rejectConstUnitsPreV12(view map[string]any) error {
 	})
 }
 
+// raiseConstUnitsEsmFloor raises a document's declared `esm` to 1.2.0 when an
+// expression node at any depth carries `units` but the document declares
+// less. A document comes to carry one without spelling it when a 1.2.0 leaf is
+// mounted into an older root: the root's authored bytes pass the gate, but the
+// assembled document, emitted at the root's version, would be refused by
+// rejectConstUnitsPreV12 when read back. Like the `faq` floor it only ever
+// raises.
+func raiseConstUnitsEsmFloor(jsonStr string) string {
+	declared, below := declaredEsmBelow(jsonStr, 1, 2)
+	if !below {
+		return jsonStr
+	}
+	view, err := decodeJSONView([]byte(jsonStr))
+	if err != nil {
+		return jsonStr
+	}
+	// The gate refuses exactly the documents that need the floor.
+	if rejectConstUnitsPreV12(view) == nil {
+		return jsonStr
+	}
+	return raiseEsmFloorTo(jsonStr, declared, "1.2.0")
+}
+
 // BuildUnitEnv converts a map of name→unit-string into a map of name→Unit.
 // Entries whose unit string fails to parse are omitted from the returned
 // environment and reported in the second return value (a name→parse-error map)

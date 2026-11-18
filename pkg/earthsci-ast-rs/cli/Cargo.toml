@@ -23,11 +23,11 @@ path = "src/main.rs"
 default = ["diffsol"]
 # The time integrators behind `esm simulate`. They are additive: a build with
 # both picks one per run with `--backend`, and a build with one uses it. A build
-# with neither still validates, converts, analyzes and evaluates static
+# with neither still validates, converts, inspects and evaluates static
 # documents, and refuses to integrate one, naming the features to build with.
 #
 # diffsol: the solver `earthsci-ast` itself links (its `solve` feature).
-# `esm test` and `esm benchmark --bench-type simulate` run on it only.
+# `esm test` runs on it only.
 diffsol = ["earthsci-ast/solve"]
 # EarthSciIntegrator: plans a run configuration against the document
 # (operators, schedule, macro step), then runs the plan. It turns on

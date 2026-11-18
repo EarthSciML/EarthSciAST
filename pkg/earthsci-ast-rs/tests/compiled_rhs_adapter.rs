@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use earthsci_ast::compiled_rhs_adapter::{Engine, parse_args, run_manifest};
 use serde_json::Value;
 
+use crate::common;
+
 /// rtol for the anchor comparison. The tier's own `algebraic` class is 1e-13
 /// and `transcendental` 1e-12; 1e-12 covers both.
 const RTOL: f64 = 1e-12;
@@ -202,11 +204,11 @@ fn cli_argument_contract() {
     let a = parse_args(argv("--manifest m.json --output o.json")).expect("defaults");
     assert_eq!(a.manifest, PathBuf::from("m.json"));
     assert_eq!(a.output, PathBuf::from("o.json"));
-    assert_eq!(a.engine, Engine::Interpreter);
+    assert_eq!(a.config, Engine::Interpreter);
 
     let a = parse_args(argv("--manifest m.json --output o.json --engine compiled")).expect("ok");
-    assert_eq!(a.engine, Engine::Compiled);
-    assert_eq!(a.engine.as_str(), "compiled");
+    assert_eq!(a.config, Engine::Compiled);
+    assert_eq!(a.config.as_str(), "compiled");
 
     assert!(parse_args(argv("--manifest m.json")).is_err());
     assert!(parse_args(argv("--output o.json")).is_err());
@@ -234,7 +236,7 @@ fn unknown_manifest_fields_are_ignored() {
     // directory, and the temp dir has no such ancestor to walk up to — so
     // rewrite them absolute, which the resolver also accepts.
     let mut manifest = manifest;
-    let repo_tests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+    let repo_tests = common::repo_tests_dir();
     for fx in manifest["fixtures"].as_array_mut().expect("fixtures") {
         let rel = fx["path"].as_str().expect("path").to_string();
         fx["path"] = serde_json::json!(repo_tests.join(&rel).to_string_lossy());

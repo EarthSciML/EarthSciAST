@@ -21,14 +21,7 @@ use earthsci_ast::{
 use serde_json::Value;
 use std::path::PathBuf;
 
-fn tier_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/records_per_sample")
-}
-
-fn manifest() -> Value {
-    serde_json::from_str(&std::fs::read_to_string(tier_dir().join("manifest.json")).unwrap())
-        .unwrap()
-}
+use crate::common;
 
 fn cases<'a>(m: &'a Value, expect: &str) -> Vec<&'a Value> {
     m["cases"]
@@ -40,7 +33,7 @@ fn cases<'a>(m: &'a Value, expect: &str) -> Vec<&'a Value> {
 }
 
 fn case_path(case: &Value) -> PathBuf {
-    tier_dir().join(case["path"].as_str().unwrap())
+    common::category_dir("records_per_sample").join(case["path"].as_str().unwrap())
 }
 
 fn load(case: &Value) -> EsmFile {
@@ -127,7 +120,7 @@ fn expected_sites(case: &Value) -> Vec<String> {
 
 #[test]
 fn valid_cases_report_the_records_their_record_shape_gives() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let valid = cases(&m, "valid");
     assert!(!valid.is_empty());
     for case in valid {
@@ -191,7 +184,7 @@ fn valid_cases_report_the_records_their_record_shape_gives() {
 
 #[test]
 fn the_record_axis_flag_is_loaded_and_emitted() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let case = cases(&m, "valid")
         .into_iter()
         .find(|c| c["id"] == "record_axis")
@@ -207,7 +200,7 @@ fn the_record_axis_flag_is_loaded_and_emitted() {
 
 #[test]
 fn invalid_cases_are_refused_at_the_pinned_pointer() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let invalid = cases(&m, "invalid");
     assert!(!invalid.is_empty());
     for case in invalid {
@@ -222,7 +215,7 @@ fn invalid_cases_are_refused_at_the_pinned_pointer() {
 
 #[test]
 fn flatten_invalid_cases_pass_validation_and_are_refused_by_flatten() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let flatten_invalid = cases(&m, "flatten_invalid");
     assert!(!flatten_invalid.is_empty());
     for case in flatten_invalid {
@@ -239,7 +232,7 @@ fn flatten_invalid_cases_pass_validation_and_are_refused_by_flatten() {
 
 #[test]
 fn refused_cases_are_refused_by_validation_or_flatten() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let refused = cases(&m, "refused");
     assert!(!refused.is_empty());
     for case in refused {
@@ -259,7 +252,7 @@ fn a_target_validation_cannot_reach_is_not_an_empty_record_shape() {
     // Retarget the param_to_var edge onto a model the document does not
     // declare: the record shape is not decidable, so validation is silent
     // although the parameter writes the deprecated 2.
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let case = cases(&m, "valid")
         .into_iter()
         .find(|c| c["id"] == "records_per_sample_deprecated_param_to_var")
@@ -296,7 +289,7 @@ fn case_by_id<'a>(m: &'a Value, id: &str) -> &'a Value {
 fn flatten_never_reports_records_per_sample_on_a_non_data_rule() {
     // The deprecated field on a non-`data` rule is validation's finding alone
     // (esm-spec §8.5.1): flatten does not refuse the document for it.
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let case = case_by_id(&m, "records_on_non_data_rule");
     let file = load(case);
     if let Err(e) = flatten_case(case, &file) {
@@ -309,7 +302,7 @@ fn flatten_never_reports_records_per_sample_on_a_non_data_rule() {
 
 #[test]
 fn a_reaction_system_parameter_counts_its_records_from_its_record_shape() {
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let valid = case_by_id(&m, "records_per_sample_deprecated_reaction_system");
     let flat = flatten_case(valid, &load(valid)).unwrap();
     let lf = flat
@@ -328,15 +321,18 @@ fn an_index_set_an_unmounted_ref_could_declare_is_not_judged() {
     // F writes records_per_sample 2 over `rec`. Drop the document's own `rec`
     // and leave a subsystem `{ref}` unmounted: the ref's file may declare
     // `rec` as a record axis, so the count is not decidable at validation.
-    let m = manifest();
+    let m = common::tier_manifest("records_per_sample");
     let case = case_by_id(&m, "records_per_sample_2_on_plain_pair_axis");
     let mut file = load(case);
     file.index_sets.as_mut().unwrap().shift_remove("rec");
     let box_model = file.models.as_mut().unwrap().get_mut("Box").unwrap();
     box_model.subsystems = Some(
-        [("Grid".to_string(), serde_json::json!({"ref": "./grid.esm"}))]
-            .into_iter()
-            .collect(),
+        [(
+            "Grid".to_string(),
+            serde_json::from_value(serde_json::json!({"ref": "./grid.esm"})).unwrap(),
+        )]
+        .into_iter()
+        .collect(),
     );
     assert_eq!(record_findings(&m, &file), vec![]);
     // With nothing left to mount, the undeclared `rec` is an ordinary axis.

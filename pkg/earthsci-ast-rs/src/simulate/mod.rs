@@ -4,9 +4,10 @@
 //! `native` / `xla` and its per-cell oracle under `interpreter` (API_SPEC
 //! §5.8). This module holds what every solve of it shares: the public option
 //! and result vocabulary ([`Alg`], [`SolveOptions`], [`Solution`]), the
-//! [`SimulateError`] surface, the diffsol step loop, esm-spec §6.6.2
-//! caller-key canonicalization, and the routing that builds the runtime from a
-//! document.
+//! [`SimulateError`] surface, esm-spec §6.6.2 caller-key canonicalization,
+//! and the routing that builds the runtime from a document. The segment loop
+//! and the diffsol step loop live beside the runtime, in
+//! `simulate_array::session`.
 //!
 //! ## Scope
 //!
@@ -35,22 +36,16 @@
 //! ## Module layout
 //!
 //! `errors` (the [`SimulateError`] surface), `api` (the public option and
-//! result vocabulary), `driver` (the solver step loop and the routing into
+//! result vocabulary), `driver` (the routing from a document into
 //! [`crate::simulate_array`]), `override_keys` (esm-spec §6.6.2 caller-key
 //! canonicalization), and `lhs` (the observed-unknown report hosts build a run
 //! UI from). Every item is re-exported here, so `crate::simulate::*` paths
 //! resolve unchanged.
 
-use crate::flatten::{FlattenedSystem, flatten};
+use crate::flatten::FlattenedSystem;
 use crate::types::EsmFile;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
-
-// The solver is OPTIONAL (esm-libraries-spec §2.5.9): building a `EsmProblem`
-// never needs it, so `diffsol` sits behind the `solve` Cargo feature and every
-// item that touches it is gated the same way.
-#[cfg(feature = "solve")]
-use diffsol::{OdeSolverMethod, Op, VectorHost};
 
 mod api;
 mod driver;

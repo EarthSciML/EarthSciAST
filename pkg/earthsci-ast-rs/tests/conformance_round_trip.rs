@@ -22,16 +22,10 @@
 use earthsci_ast::*;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+
+use crate::common;
 
 const BINDING: &str = "rust";
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repo root")
-}
 
 /// Applied to BOTH sides, so no relaxation can hide a drop. Implements the five
 /// normalizations in `tests/conformance/README.md` (admissions 1 and 2 of
@@ -151,7 +145,7 @@ fn strings(v: &Value) -> Vec<String> {
 
 #[test]
 fn conformance_round_trip_manifest() {
-    let root = repo_root();
+    let root = common::repo_root();
     let tests_dir = root.join("tests");
     let manifest_path = tests_dir.join("conformance/round_trip/manifest.json");
     let manifest: Value = serde_json::from_str(
@@ -257,6 +251,14 @@ fn conformance_round_trip_manifest() {
             .collect();
         if !lost.is_empty() {
             failures.push(format!("{id}: dropped preserved field(s) at {lost:?}"));
+        }
+
+        // 2b. SAVED VERSION (esm-spec §4.7, "Save-time version floors").
+        if let Some(want) = fixture.get("saved_esm").and_then(|v| v.as_str()) {
+            let got = emitted.get("esm").and_then(|v| v.as_str());
+            if got != Some(want) {
+                failures.push(format!("{id}: saved esm {got:?}, want {want:?}"));
+            }
         }
 
         // 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer

@@ -3,14 +3,14 @@
 //! run, in the CONST section, or in the SEGMENT section when a provider
 //! refreshes it between segments, and every reader takes the slot.
 //!
-//! Each program here is checked bit for bit against the per-cell oracle and
-//! the whole-array overlay, through the fast executor (fused and unfused) and
-//! the reference executor.
+//! Each program here is checked bit for bit against the per-cell oracle,
+//! through the fast executor (fused and unfused) and the reference executor.
 
-use super::super::{ArrayCompiled, RhsScratch, RhsStats};
+use super::super::ArrayCompiled;
 use super::ir::*;
 use super::refexec::run_reference;
 use super::taped;
+use super::test_support::{assert_bits_eq, compile, fast_dy, opcount, scratch_with};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -61,11 +61,6 @@ fn forced_doc(n: i64) -> serde_json::Value {
     })
 }
 
-fn compile(n: i64) -> ArrayCompiled {
-    let file = crate::parse::load_string(&forced_doc(n).to_string()).expect("fixture loads");
-    ArrayCompiled::from_file(&file).expect("fixture compiles")
-}
-
 fn bc_values(n: usize, scale: f64) -> ArrayD<f64> {
     ArrayD::from_shape_vec(
         IxDyn(&[n]),
@@ -75,14 +70,10 @@ fn bc_values(n: usize, scale: f64) -> ArrayD<f64> {
 }
 
 fn feed(compiled: &ArrayCompiled, n: usize, scale: f64, k: f64) {
-    let buf = compiled.forcing_buffer();
+    let buf = compiled.forcing_handle();
     let mut buf = buf.borrow_mut();
-    buf.insert("bc".into(), bc_values(n, scale));
-    buf.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
-}
-
-fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
+    buf.insert("M.bc".into(), bc_values(n, scale));
+    buf.insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), k));
 }
 
 fn state_of(n: usize, seed: u64) -> Vec<f64> {
@@ -91,46 +82,10 @@ fn state_of(n: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
-fn assert_bits(got: &[f64], want: &[f64], label: &str) {
-    assert_eq!(got.len(), want.len(), "{label}: length");
-    for (k, (a, b)) in got.iter().zip(want).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "{label}: dy[{k}] {a:?} vs interpreter {b:?}"
-        );
-    }
-}
-
-fn taped_scratch(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
-    let mut s = compiled.debug_new_scratch();
-    s.install_tape(std::sync::Arc::new(prog));
-    s
-}
-
-fn fast(
-    compiled: &ArrayCompiled,
-    scratch: &mut RhsScratch,
-    state: &[f64],
-    t: f64,
-    param_vec: &[f64],
-) -> Vec<f64> {
-    let mut dy = vec![0.0; state.len()];
-    compiled.debug_eval_rhs_into(
-        state,
-        t,
-        param_vec,
-        &mut dy,
-        scratch,
-        &mut RhsStats::default(),
-    );
-    dy
-}
-
 #[test]
 fn forcing_reads_tape_bit_identically_through_every_executor() {
     let n = 7usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
@@ -142,32 +97,30 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
     assert_eq!(opcount(&prog, "LoadForcing"), 2, "{report}");
     let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
     let cfg = Some(super::fuse::SuperopCfg::from_env());
-    let mut fused = taped_scratch(
+    let mut fused = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
     );
-    let mut unfused = taped_scratch(
+    let mut unfused = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
     );
     for seed in 0..3u64 {
         let state = state_of(n, seed);
         for &t in &[0.0, 0.5, 2.0] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
-            let (overlay, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            assert_bits(&overlay, &oracle, "overlay");
+            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params);
             for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
                 let mut dy = vec![0.0; n];
                 run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                assert_bits(&dy, &oracle, &format!("reference executor, {label}"));
+                assert_bits_eq(&dy, &oracle, &format!("reference executor, {label}"));
             }
-            assert_bits(
-                &fast(&compiled, &mut fused, &state, t, &param_vec),
+            assert_bits_eq(
+                &fast_dy(&compiled, &mut fused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, fused",
             );
-            assert_bits(
-                &fast(&compiled, &mut unfused, &state, t, &param_vec),
+            assert_bits_eq(
+                &fast_dy(&compiled, &mut unfused, &state, t, &param_vec),
                 &oracle,
                 "fast executor, unfused",
             );
@@ -179,7 +132,7 @@ fn forcing_reads_tape_bit_identically_through_every_executor() {
 #[test]
 fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
     let n = 5usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     let sections = |discrete: &HashSet<String>| -> Vec<(String, Cadence)> {
         let (prog, _) = taped(compiled.build_tape_opts(discrete, None));
         prog.instrs
@@ -199,18 +152,18 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
     assert_eq!(
         none,
         [
-            ("bc".to_string(), Cadence::Const),
-            ("k".to_string(), Cadence::Const)
+            ("M.bc".to_string(), Cadence::Const),
+            ("M.k".to_string(), Cadence::Const)
         ]
     );
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let mut some = sections(&discrete);
     some.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
         some,
         [
-            ("bc".to_string(), Cadence::Segment),
-            ("k".to_string(), Cadence::Const)
+            ("M.bc".to_string(), Cadence::Segment),
+            ("M.k".to_string(), Cadence::Const)
         ]
     );
 }
@@ -218,7 +171,7 @@ fn a_forcing_load_runs_in_the_section_its_cadence_allows() {
 #[test]
 fn the_forcing_program_does_not_grow_with_the_grid() {
     let shape = |n: i64| {
-        let compiled = compile(n);
+        let compiled = compile(forced_doc(n));
         let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), None));
         assert!(report.fallbacks.is_empty(), "{report}");
         (prog.instrs.len(), report.opcode_counts)
@@ -229,19 +182,19 @@ fn the_forcing_program_does_not_grow_with_the_grid() {
 #[test]
 fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
     let n = 4usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = state_of(n, 1);
     crate::simulate_array::take_const_array_oob();
-    compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    compiled.debug_eval_rhs(&state, 0.0, &params);
     let want = crate::simulate_array::take_const_array_oob().expect("the oracle faults");
     assert!(want.starts_with("E_TREEWALK_UNBOUND_NAME: '"), "{want}");
-    let mut scratch = taped_scratch(
+    let mut scratch = scratch_with(
         &compiled,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
     );
-    let dy = fast(&compiled, &mut scratch, &state, 0.0, &param_vec);
+    let dy = fast_dy(&compiled, &mut scratch, &state, 0.0, &param_vec);
     let got = crate::simulate_array::take_const_array_oob().expect("the tape faults");
     assert_eq!(got, want);
     assert!(
@@ -253,17 +206,17 @@ fn a_missing_forcing_entry_faults_as_the_interpreter_does() {
 #[test]
 fn a_forcing_entry_of_another_shape_faults() {
     let n = 4usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
     let prog = Arc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
     let scratch_for = |prog: &std::sync::Arc<TapeProgram>| {
-        let mut s = compiled.debug_new_scratch();
+        let mut s = compiled.new_scratch();
         s.install_tape(std::sync::Arc::clone(prog));
         s
     };
     crate::simulate_array::take_const_array_oob();
-    fast(
+    fast_dy(
         &compiled,
         &mut scratch_for(&prog),
         &state_of(n, 0),
@@ -273,10 +226,10 @@ fn a_forcing_entry_of_another_shape_faults() {
     assert!(crate::simulate_array::take_const_array_oob().is_none());
     // The buffer changes shape under a program built against the old one.
     compiled
-        .forcing_buffer()
+        .forcing_handle()
         .borrow_mut()
-        .insert("bc".into(), bc_values(n + 1, 1.0));
-    let dy = fast(
+        .insert("M.bc".into(), bc_values(n + 1, 1.0));
+    let dy = fast_dy(
         &compiled,
         &mut scratch_for(&prog),
         &state_of(n, 0),
@@ -285,7 +238,7 @@ fn a_forcing_entry_of_another_shape_faults() {
     );
     let msg = crate::simulate_array::take_const_array_oob().expect("the mismatch faults");
     assert!(
-        msg.contains("'bc' with shape [5]") && msg.contains("reads it as [4]"),
+        msg.contains("'M.bc' with shape [5]") && msg.contains("reads it as [4]"),
         "{msg}"
     );
     assert!(dy.iter().any(|v| v.is_nan()));
@@ -294,37 +247,37 @@ fn a_forcing_entry_of_another_shape_faults() {
 #[test]
 fn the_forcing_epoch_reruns_the_segment_section_only() {
     let n = 6usize;
-    let compiled = compile(n as i64);
+    let compiled = compile(forced_doc(n as i64));
     feed(&compiled, n, 1.0, 0.7);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let (prog, report) =
         taped(compiled.build_tape_opts(&discrete, Some(super::fuse::SuperopCfg::from_env())));
     assert!(report.fallbacks.is_empty(), "{report}");
-    let mut scratch = taped_scratch(&compiled, prog);
+    let mut scratch = scratch_with(&compiled, prog);
     let state = state_of(n, 2);
     let t = 2.0;
-    let first = fast(&compiled, &mut scratch, &state, t, &param_vec);
-    assert_bits(
+    let first = fast_dy(&compiled, &mut scratch, &state, t, &param_vec);
+    assert_bits_eq(
         &first,
-        &compiled.debug_eval_rhs(&state, t, &params, true).0,
+        &compiled.debug_eval_rhs(&state, t, &params).0,
         "primed",
     );
 
     // A refresh of the DISCRETE forcing: served stale until the epoch moves,
     // and after it exactly as the interpreter reads the refreshed buffer.
     feed(&compiled, n, 3.0, 0.7);
-    assert_bits(
-        &fast(&compiled, &mut scratch, &state, t, &param_vec),
+    assert_bits_eq(
+        &fast_dy(&compiled, &mut scratch, &state, t, &param_vec),
         &first,
         "before the epoch moves",
     );
     scratch.bump_forcing_epoch();
-    let refreshed = fast(&compiled, &mut scratch, &state, t, &param_vec);
-    assert_bits(
+    let refreshed = fast_dy(&compiled, &mut scratch, &state, t, &param_vec);
+    assert_bits_eq(
         &refreshed,
-        &compiled.debug_eval_rhs(&state, t, &params, true).0,
+        &compiled.debug_eval_rhs(&state, t, &params).0,
         "after the epoch moves",
     );
     assert_ne!(refreshed, first, "the refresh is load-bearing");
@@ -333,8 +286,8 @@ fn the_forcing_epoch_reruns_the_segment_section_only() {
     // not re-run it: nothing refreshes a CONST forcing inside a solve.
     feed(&compiled, n, 3.0, -1.5);
     scratch.bump_forcing_epoch();
-    assert_bits(
-        &fast(&compiled, &mut scratch, &state, t, &param_vec),
+    assert_bits_eq(
+        &fast_dy(&compiled, &mut scratch, &state, t, &param_vec),
         &refreshed,
         "a CONST forcing is loaded once per scratch",
     );
@@ -348,28 +301,31 @@ fn segmented_solve(
     boundaries: &[f64],
 ) -> (crate::simulate::Solution, (u64, u64)) {
     let n = 5usize;
-    let mut compiled = compile(n as i64);
+    let mut compiled = compile(forced_doc(n as i64));
     compiled.runtime_mode = mode;
-    let buf = compiled.forcing_buffer();
-    let discrete: HashSet<String> = ["bc".to_string()].into();
+    let buf = compiled.forcing_handle();
+    let discrete: HashSet<String> = ["M.bc".to_string()].into();
     let opts = crate::simulate::SolveOptions {
         saveat: Some(vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0]),
         ..Default::default()
     };
     let before = super::section_primes();
+    let none = HashMap::new();
     let sol = compiled
-        .solve_with_refresh_inspect(
-            (0.0, 3.0),
-            &HashMap::new(),
-            &HashMap::new(),
+        .solve_run(
+            &crate::simulate_array::RunSpec {
+                tspan: (0.0, 3.0),
+                params: &none,
+                initial_conditions: &none,
+                discrete_forcing: &discrete,
+                boundaries,
+            },
             &opts,
             None,
-            &discrete,
-            boundaries,
-            |t| {
+            &mut |t| {
                 let mut b = buf.borrow_mut();
-                b.insert("bc".into(), bc_values(n, 1.0 + t));
-                b.insert("k".into(), ArrayD::from_elem(IxDyn(&[]), 0.7));
+                b.insert("M.bc".into(), bc_values(n, 1.0 + t));
+                b.insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), 0.7));
                 Ok(())
             },
         )
@@ -389,7 +345,7 @@ fn a_segmented_native_solve_refreshes_through_the_forcing_epoch() {
     let (got, (full, seg)) = segmented_solve(RuntimeMode::Native, &[1.0, 2.0]);
     assert_eq!(got.time, want.time);
     for (row, (g, w)) in got.state.iter().zip(&want.state).enumerate() {
-        assert_bits(g, w, &format!("state row {row}"));
+        assert_bits_eq(g, w, &format!("state row {row}"));
     }
     // Every segment after the first re-runs SEGMENT without CONST, and the
     // number of full primes does not grow with the number of segments.
@@ -464,9 +420,9 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         // precision would change `b`.
         let k = 0.1 + 2f64.powi(-40);
         compiled
-            .forcing_buffer()
+            .forcing_handle()
             .borrow_mut()
-            .insert("k".into(), ArrayD::from_elem(IxDyn(&[]), k));
+            .insert("M.k".into(), ArrayD::from_elem(IxDyn(&[]), k));
         let params = HashMap::new();
         let param_vec = compiled.debug_resolve_params(&params);
         let cfg = Some(super::fuse::SuperopCfg::from_env());
@@ -474,21 +430,21 @@ fn a_scalar_forcing_is_shared_by_readers_of_two_precisions() {
         assert!(report.fallbacks.is_empty(), "{report}");
         assert_eq!(opcount(&prog, "LoadForcing"), 1, "{report}");
         let prog_uf = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
-        let mut fused = taped_scratch(
+        let mut fused = scratch_with(
             &compiled,
             taped(compiled.build_tape_opts(&HashSet::new(), cfg)).0,
         );
         let n = compiled.state_variable_names().len();
         let state = state_of(n, 3);
-        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let label = |s: &str| format!("{s}, a first: {a_first}");
         for (l, p) in [("fused", &prog), ("unfused", &prog_uf)] {
             let mut dy = vec![0.0; n];
             run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
-            assert_bits(&dy, &oracle, &label(&format!("reference executor, {l}")));
+            assert_bits_eq(&dy, &oracle, &label(&format!("reference executor, {l}")));
         }
-        assert_bits(
-            &fast(&compiled, &mut fused, &state, 0.0, &param_vec),
+        assert_bits_eq(
+            &fast_dy(&compiled, &mut fused, &state, 0.0, &param_vec),
             &oracle,
             &label("fast executor"),
         );

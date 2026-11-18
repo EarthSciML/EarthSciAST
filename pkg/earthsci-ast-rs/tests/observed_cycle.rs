@@ -23,9 +23,7 @@
 use earthsci_ast::{StructuralErrorCode, load_path, load_string, validate};
 use serde_json::json;
 
-fn repo_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use crate::common;
 
 /// The `(message, cycle)` of the one `observed_cycle` error a document
 /// produces, at the expected path. Panics with the full finding list when the
@@ -64,7 +62,7 @@ fn observed_cycle_finding(doc: &str, path: &str) -> (String, Vec<String>) {
 /// minimal repro and the shape a scalar-only detector would miss.
 #[test]
 fn the_shared_fixture_is_rejected_and_names_the_cycle() {
-    let path = repo_root().join("tests/invalid/observed_cycle_array_elementwise.esm");
+    let path = common::repo_root().join("tests/invalid/observed_cycle_array_elementwise.esm");
     let doc = std::fs::read_to_string(&path).expect("fixture exists");
     let (message, cycle) = observed_cycle_finding(&doc, "/models/YSU");
 
@@ -140,7 +138,7 @@ fn a_scalar_self_reference_is_a_cycle_of_length_one() {
 /// A detector that flagged it would make the recurrence construct unusable.
 #[test]
 fn a_recurrence_candidate_self_edge_is_not_a_cycle() {
-    let path = repo_root().join("tests/valid/recurrence_causal_self_reference.esm");
+    let path = common::repo_root().join("tests/valid/recurrence_causal_self_reference.esm");
     let file = load_path(&path).expect("the recurrence fixture loads");
     let result = validate(&file);
     let cycles: Vec<_> = result
@@ -170,7 +168,7 @@ fn no_valid_fixture_acquires_an_observed_cycle() {
     // `bindings` too — invisible to the exemption, which turns a legal
     // recurrence into a length-one cycle. See `has_index_self_read`.
     for dir in ["tests/valid", "tests/fixtures", "lib"] {
-        let root = repo_root().join(dir);
+        let root = common::repo_root().join(dir);
         let mut stack = vec![root];
         while let Some(d) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&d) else {
@@ -218,7 +216,7 @@ fn no_valid_fixture_acquires_an_observed_cycle() {
 /// what proceeded was a materialization that read a value that did not exist.
 #[test]
 fn the_build_refuses_the_cycle_and_names_it() {
-    let path = repo_root().join("tests/invalid/observed_cycle_array_elementwise.esm");
+    let path = common::repo_root().join("tests/invalid/observed_cycle_array_elementwise.esm");
     let file = load_path(&path).expect("fixture loads");
     let err = earthsci_ast::simulate_array::ArrayCompiled::from_file(&file)
         .err()

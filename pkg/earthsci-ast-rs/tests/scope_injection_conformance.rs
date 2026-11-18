@@ -86,6 +86,7 @@ fn form_a_subsystem_ref_injection() {
         .subsystems
         .as_ref()
         .expect("Assembly subsystems")["Runoff"];
+    let runoff = serde_json::to_value(runoff).expect("subsystem serializes");
     assert_eq!(
         runoff["equations"][0]["rhs"]["args"][1]["op"], "makearray",
         "the injected central-difference rule must lower the leaf's lon-derivative"

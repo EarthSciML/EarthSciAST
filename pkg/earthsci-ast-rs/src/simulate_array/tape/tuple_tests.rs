@@ -5,7 +5,7 @@
 //! than with the product.
 
 use super::ir::*;
-use super::tests::ab_check;
+use super::test_support::{ab_check, opcount};
 use serde_json::{Value, json};
 
 fn corpus(rel: &str) -> Value {
@@ -14,10 +14,6 @@ fn corpus(rel: &str) -> Value {
         .join(rel);
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     serde_json::from_str(&text).expect("corpus document is JSON")
-}
-
-fn count(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
 }
 
 /// The five join documents and the two ragged ones the native compiler used
@@ -38,7 +34,7 @@ fn the_corpus_join_and_ragged_documents_lower_to_segmented_reductions() {
         ),
     ] {
         let prog = ab_check(corpus(rel), -2.0, 2.0);
-        assert_eq!(count(&prog, "SegReduce"), reductions, "{rel}");
+        assert_eq!(opcount(&prog, "SegReduce"), reductions, "{rel}");
     }
 }
 
@@ -97,8 +93,8 @@ fn a_self_join_materializes_its_matches_and_its_tape_is_flat_in_n() {
     let mut sizes = Vec::new();
     for n in [16usize, 300] {
         let prog = ab_check(self_join_doc(n), -2.0, 2.0);
-        assert_eq!(count(&prog, "SegReduce"), 2);
-        for t in &prog.seg_tables {
+        assert_eq!(opcount(&prog, "SegReduce"), 2);
+        for t in &prog.tables.seg_tables {
             assert_eq!(
                 t.rows,
                 vec![0, (n - 1) as u32],
@@ -156,8 +152,8 @@ fn a_many_to_many_data_column_join_folds_in_the_interpreters_order() {
     let matches = (0..nl)
         .map(|a| (0..nr).filter(|&b| kl[a] == kr[b]).count())
         .sum::<usize>();
-    assert_eq!(prog.seg_tables.len(), 1);
-    assert_eq!(prog.seg_tables[0].rows, vec![0, matches as u32]);
+    assert_eq!(prog.tables.seg_tables.len(), 1);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, matches as u32]);
 }
 
 /// A gate with one side an OUTPUT index: each output cell's run lists the
@@ -203,13 +199,13 @@ fn a_gate_on_an_output_index_restricts_each_cells_run() {
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(count(&prog, "SegReduce"), 1);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
     let per_cell = |c: f64| rec_cell.iter().filter(|&&x| x == c).count() as u32;
     let mut rows = vec![0u32];
     for c in 1..=ncell {
         rows.push(rows.last().unwrap() + per_cell(c as f64));
     }
-    assert_eq!(prog.seg_tables[0].rows, rows);
+    assert_eq!(prog.tables.seg_tables[0].rows, rows);
 }
 
 /// A ragged contraction whose body gathers a 2-D STATE through a column of
@@ -258,12 +254,13 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(count(&prog, "SegReduce"), 1);
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 2, 5, 6]);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 2, 5, 6]);
     // The gather of `u` sees one ghost: row 2's member 5 lies past node 4.
     // A column-major program stores `u`'s box axis-reversed (`layout`).
     let u_box: [usize; 2] = if prog.col_major { [2, 4] } else { [4, 2] };
     let ghosts: usize = prog
+        .tables
         .gather_tables
         .iter()
         .filter(|t| t.src_shape[..] == u_box)
@@ -276,7 +273,7 @@ fn a_ragged_gather_of_a_two_dimensional_state_reads_it_in_place() {
 // Build-time data and laziness inside a tuple-list body.
 // ---------------------------------------------------------------------------
 
-use super::array_tests::{agrees_or_refuses, idx};
+use super::test_support::{agrees_or_refuses, idx, konst};
 use std::collections::HashMap;
 
 /// A ragged contraction `v' = Σ_{k ∈ nz(i)} body` over three rows whose
@@ -318,10 +315,6 @@ fn ragged_doc(cnt: Value, body: Value, filter: Option<Value>) -> Value {
     })
 }
 
-fn cnst(v: Value) -> Value {
-    json!({"op": "const", "args": [], "value": v})
-}
-
 fn p_positive() -> Value {
     json!({"op": ">", "args": ["p", 0]})
 }
@@ -346,19 +339,19 @@ fn states() -> Vec<Vec<f64>> {
 /// agree exactly still are.
 #[test]
 fn a_branch_join_is_build_time_data_only_when_its_branches_agree() {
-    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([1, 1, 1]))]});
-    let compiled = super::array_tests::compile(ragged_doc(cnt, wv(), None));
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), konst(json!([2, 3, 1])), konst(json!([1, 1, 1]))]});
+    let compiled = super::test_support::compile(ragged_doc(cnt, wv(), None));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
         refused
             .iter()
-            .any(|(_, r)| r.contains("ragged offsets factor `cnt`")),
+            .any(|(_, r)| r.contains("ragged offsets factor `M.cnt`")),
         "{refused:?}"
     );
 
-    let cnt = json!({"op": "ifelse", "args": [p_positive(), cnst(json!([2, 3, 1])), cnst(json!([2, 3, 1]))]});
-    let compiled = super::array_tests::compile(ragged_doc(cnt, wv(), None));
-    super::array_tests::ab(&compiled, &both_branches());
+    let cnt = json!({"op": "ifelse", "args": [p_positive(), konst(json!([2, 3, 1])), konst(json!([2, 3, 1]))]});
+    let compiled = super::test_support::compile(ragged_doc(cnt, wv(), None));
+    super::test_support::ab(&compiled, &both_branches());
 }
 
 /// The same for a gather subscript inside the body: `v[ifelse(p > 0, i, k)]`
@@ -368,7 +361,7 @@ fn a_branch_join_subscript_is_not_build_time_data() {
     let body = json!({"op": "*", "args": [
         idx(json!("w"), &[json!("i"), json!("k")]),
         idx(json!("v"), &[json!({"op": "ifelse", "args": [p_positive(), "i", "k"]})])]});
-    let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
+    let compiled = super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, None));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
         refused
@@ -385,8 +378,8 @@ fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
     let body = json!({"op": "*", "args": [
         {"op": "ifelse", "args": [p_positive(), "k", {"op": "*", "args": [2, "k"]}]},
         wv()]});
-    let compiled = super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, None));
-    super::array_tests::ab(&compiled, &both_branches());
+    let compiled = super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, None));
+    super::test_support::ab(&compiled, &both_branches());
 }
 
 /// A fault site in a filtered body is reached only at the tuples the filter
@@ -397,12 +390,12 @@ fn a_loop_symbol_first_read_in_a_branch_is_defined_on_both_paths() {
 #[test]
 fn a_fault_in_a_filtered_tuple_body_is_not_certain() {
     let base =
-        json!({"op": "+", "args": [cnst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
+        json!({"op": "+", "args": [konst(json!([1.0, 2.0, 3.0])), idx(json!("p"), &[json!(1)])]});
     let body =
         json!({"op": "*", "args": [idx(base, &[json!("k")]), idx(json!("v"), &[json!("k")])]});
     let filter = json!({"op": ">", "args": [idx(json!("v"), &[json!("k")]), 0]});
     let compiled =
-        super::array_tests::compile(ragged_doc(cnst(json!([2, 3, 1])), body, Some(filter)));
+        super::test_support::compile(ragged_doc(konst(json!([2, 3, 1])), body, Some(filter)));
     let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
     assert!(
         refused
@@ -422,15 +415,15 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
     use crate::value_invention::BoundaryKind;
     for kind in [BoundaryKind::Periodic, BoundaryKind::Clamp] {
         let body = json!({"op": "*", "args": [idx(json!("C"), &[json!("k")]), idx(json!("v"), &[json!("i")])]});
-        let mut doc = ragged_doc(cnst(json!([2, 3, 1])), body, None);
+        let mut doc = ragged_doc(konst(json!([2, 3, 1])), body, None);
         doc["index_sets"]["none"] = json!({"kind": "interval", "size": 0});
         doc["models"]["M"]["variables"]["C"] =
             json!({"type": "unknown", "units": "1", "shape": ["none"]});
         doc["models"]["M"]["equations"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"lhs": "C", "rhs": cnst(json!([]))}));
-        let mut compiled = super::array_tests::compile(doc);
+            .push(json!({"lhs": "C", "rhs": konst(json!([]))}));
+        let mut compiled = super::test_support::compile(doc);
         let scope: ConstArrayScope = (*compiled.const_scope).clone();
         compiled.const_scope = std::sync::Arc::new(scope.with_boundary("C", vec![kind]));
         let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
@@ -485,10 +478,10 @@ fn star_join_doc(
                 "y": {"type": "unknown", "units": "1", "shape": ["outs", "frees"], "default": 1.0}
             },
             "equations": [
-                {"lhs": "key", "rhs": cnst(json!(key))},
-                {"lhs": "val", "rhs": cnst(json!(val))},
-                {"lhs": "okey", "rhs": cnst(json!(okey))},
-                {"lhs": "w", "rhs": cnst(json!(w))},
+                {"lhs": "key", "rhs": konst(json!(key))},
+                {"lhs": "val", "rhs": konst(json!(val))},
+                {"lhs": "okey", "rhs": konst(json!(okey))},
+                {"lhs": "w", "rhs": konst(json!(w))},
                 {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
                     "output_idx": ["o", "f"],
                     "ranges": {"o": {"from": "outs"}, "f": {"from": "frees"}, "a": {"from": "bigs"}},
@@ -509,16 +502,23 @@ fn star_join_doc(
 /// constant payloads, its gather position tables, its segment tables and its
 /// slab.
 fn materialized_elems(prog: &TapeProgram) -> usize {
-    prog.const_data
+    prog.tables
+        .const_data
         .iter()
         .map(|c| c.values.len())
         .sum::<usize>()
         + prog
+            .tables
             .gather_tables
             .iter()
             .map(|g| g.pos.len())
             .sum::<usize>()
-        + prog.seg_tables.iter().map(|s| s.rows.len()).sum::<usize>()
+        + prog
+            .tables
+            .seg_tables
+            .iter()
+            .map(|s| s.rows.len())
+            .sum::<usize>()
         + prog.slab.total_elems
 }
 
@@ -541,11 +541,14 @@ fn a_join_over_the_tuple_list_budget_folds_and_stops_growing_with_its_pairs() {
         let prog = ab_check(star_join_doc(n_big, n_key, n_out, n_free, false), -2.0, 2.0);
         set_tuple_list_budget(prev);
         assert_eq!(
-            count(&prog, "SegReduce"),
+            opcount(&prog, "SegReduce"),
             1,
             "n_key = {n_key}: under budget"
         );
-        assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+        assert_eq!(
+            prog.tables.seg_tables[0].rows.last().copied(),
+            Some(tuples as u32)
+        );
         whole.push(materialized_elems(&prog));
 
         // A budget of two cells' runs (chunks that split the free axis
@@ -556,8 +559,12 @@ fn a_join_over_the_tuple_list_budget_folds_and_stops_growing_with_its_pairs() {
             let prev = set_tuple_list_budget(b);
             let prog = ab_check(star_join_doc(n_big, n_key, n_out, n_free, false), -2.0, 2.0);
             set_tuple_list_budget(prev);
-            assert_eq!(count(&prog, "SegReduce"), 0, "n_key = {n_key}, budget {b}");
-            assert!(prog.gather_tables.is_empty() && prog.seg_tables.is_empty());
+            assert_eq!(
+                opcount(&prog, "SegReduce"),
+                0,
+                "n_key = {n_key}, budget {b}"
+            );
+            assert!(prog.tables.gather_tables.is_empty() && prog.tables.seg_tables.is_empty());
             sizes.push(materialized_elems(&prog));
         }
         assert_eq!(sizes[0], sizes[1]);
@@ -579,7 +586,7 @@ fn a_join_reading_a_state_is_not_folded_over_the_budget() {
     let prev = set_tuple_list_budget(8);
     let prog = ab_check(star_join_doc(240, 3, 6, 2, true), -2.0, 2.0);
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 1);
+    assert_eq!(opcount(&prog, "SegReduce"), 1);
 }
 
 /// The budget is the PROGRAM's, not a list's: two joins that each fit it
@@ -609,7 +616,7 @@ fn the_tuple_list_budget_is_shared_by_every_list_in_a_program() {
         let prev = set_tuple_list_budget(budget);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), lists, "budget {budget}");
+        assert_eq!(opcount(&prog, "SegReduce"), lists, "budget {budget}");
     }
 }
 
@@ -645,15 +652,15 @@ fn a_rank_zero_join_over_the_tuple_list_budget_folds_in_windows() {
     let prev = set_tuple_list_budget(usize::MAX);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 2, "under budget");
+    assert_eq!(opcount(&prog, "SegReduce"), 2, "under budget");
     // Two windows, several, and one tuple a window. Under any budget that
     // holds `grand`'s list, `grand` (lowered first, by name) would keep it.
     for budget in [grand - 1, grand / 7, 1] {
         let prev = set_tuple_list_budget(budget);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}");
-        assert!(prog.seg_tables.is_empty(), "budget {budget}");
+        assert_eq!(opcount(&prog, "SegReduce"), 0, "budget {budget}");
+        assert!(prog.tables.seg_tables.is_empty(), "budget {budget}");
     }
 }
 
@@ -718,11 +725,11 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
                 "y": {"type": "unknown", "units": "1", "shape": ["gs", "vs", "hs"], "default": 1.0}
             },
             "equations": [
-                {"lhs": "day", "rhs": cnst(json!(day))},
-                {"lhs": "vday", "rhs": cnst(json!(vday))},
-                {"lhs": "hour", "rhs": cnst(json!(hour))},
-                {"lhs": "hod", "rhs": cnst(json!(hod))},
-                {"lhs": "big", "rhs": cnst(json!(big))},
+                {"lhs": "day", "rhs": konst(json!(day))},
+                {"lhs": "vday", "rhs": konst(json!(vday))},
+                {"lhs": "hour", "rhs": konst(json!(hour))},
+                {"lhs": "hod", "rhs": konst(json!(hod))},
+                {"lhs": "big", "rhs": konst(json!(big))},
                 {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
                     "output_idx": ["g", "v", "h"],
                     "ranges": {"g": {"from": "gs"}, "v": {"from": "vs"}, "h": {"from": "hs"},
@@ -753,6 +760,7 @@ fn hot_soak_doc(n_g: usize, n_v: usize, n_i: usize, n_s: usize, n_h: usize) -> V
 /// program holds: the largest `ConstArray` payload over its output box.
 fn folded_payload(prog: &TapeProgram, n_cells: usize) -> Vec<u64> {
     let mut found: Vec<&ConstArrayData> = prog
+        .tables
         .const_data
         .iter()
         .filter(|c| c.values.len() == n_cells)
@@ -774,8 +782,15 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
     let prev = set_tuple_list_budget(usize::MAX);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     set_tuple_list_budget(prev);
-    assert_eq!(count(&prog, "SegReduce"), 1, "under budget, the whole list");
-    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    assert_eq!(
+        opcount(&prog, "SegReduce"),
+        1,
+        "under budget, the whole list"
+    );
+    assert_eq!(
+        prog.tables.seg_tables[0].rows.last().copied(),
+        Some(tuples as u32)
+    );
     let run = n_i / n_v * n_s; // one output cell's tuples
     let mut payloads = Vec::new();
     take_chunk_inputs_held();
@@ -785,8 +800,8 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
         let prev = set_tuple_list_budget(budget);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
-        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
-        assert!(prog.gather_tables.is_empty(), "budget {budget}");
+        assert_eq!(opcount(&prog, "SegReduce"), 0, "budget {budget}: folded");
+        assert!(prog.tables.gather_tables.is_empty(), "budget {budget}");
         payloads.push(folded_payload(&prog, n_g * n_v * n_h));
         // No chunk's program holds the large input: each gather of it is
         // resolved at build, and only the gathered values are stored.
@@ -796,7 +811,7 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
             "budget {budget}: chunk programs were built"
         );
         assert!(
-            held.iter().all(|h| !h.iter().any(|n| n == "big")),
+            held.iter().all(|h| !h.iter().any(|n| n == "M.big")),
             "budget {budget}: a chunk program holds `big`: {held:?}"
         );
     }
@@ -814,7 +829,7 @@ fn a_fold_over_many_chunks_sharing_its_inputs_is_bit_identical() {
 fn a_folded_contraction_is_walked_once_in_chunks_within_the_budget() {
     use super::lower::{set_tuple_list_budget, take_tuple_walks};
     let (n_g, n_v, n_i, n_s, n_h) = (3usize, 4usize, 40usize, 5usize, 6usize);
-    let compiled = super::tests::compile(hot_soak_doc(n_g, n_v, n_i, n_s, n_h));
+    let compiled = super::test_support::compile(hot_soak_doc(n_g, n_v, n_i, n_s, n_h));
     let cells = n_g * n_v * n_h;
     let run = n_i / n_v * n_s; // every output cell's run
     let tuples = cells * run;
@@ -847,7 +862,7 @@ fn a_folded_contraction_is_walked_once_in_chunks_within_the_budget() {
         assert_eq!(walks, 1, "budget {budget}: one walk");
         assert_eq!(empty, 0, "budget {budget}: no empty cell folded");
         assert_eq!(
-            count(&prog, "SegReduce"),
+            opcount(&prog, "SegReduce"),
             usize::from(want.is_empty()),
             "budget {budget}"
         );
@@ -872,7 +887,7 @@ fn with_unmatched_outputs(mut doc: Value, n_out: usize, n_key: usize) -> Value {
         .collect();
     let eqs = doc["models"]["M"]["equations"].as_array_mut().unwrap();
     assert_eq!(eqs[2]["lhs"], json!("okey"));
-    eqs[2]["rhs"] = cnst(json!(okey));
+    eqs[2]["rhs"] = konst(json!(okey));
     doc
 }
 
@@ -880,7 +895,7 @@ fn with_unmatched_outputs(mut doc: Value, n_out: usize, n_key: usize) -> Value {
 /// build's tuple walks recorded: `(walks, chunk lengths, empty cells folded)`.
 fn build_recording(doc: &Value, budget: usize) -> (TapeProgram, (usize, Vec<usize>, usize)) {
     use super::lower::{set_tuple_list_budget, take_tuple_walks};
-    let compiled = super::tests::compile(doc.clone());
+    let compiled = super::test_support::compile(doc.clone());
     take_tuple_walks();
     let prev = set_tuple_list_budget(budget);
     let (prog, _) = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
@@ -900,6 +915,7 @@ fn assert_unmatched_rows_keep_the_identity(
     budget: usize,
 ) {
     let found: Vec<&ConstArrayData> = prog
+        .tables
         .const_data
         .iter()
         .filter(|c| c.values.len() == n_out * n_free)
@@ -942,16 +958,19 @@ fn a_fold_with_empty_output_cells_keeps_them_at_the_identity() {
     let run = n_big / n_key;
     let tuples = (n_out - n_out / 3) * n_free * run;
     let (prog, (_, chunks, _)) = build_recording(&doc, usize::MAX);
-    assert_eq!(count(&prog, "SegReduce"), 1, "under budget");
+    assert_eq!(opcount(&prog, "SegReduce"), 1, "under budget");
     assert!(chunks.is_empty());
-    assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+    assert_eq!(
+        prog.tables.seg_tables[0].rows.last().copied(),
+        Some(tuples as u32)
+    );
     for budget in [5 * run + 7, 2 * run, run + 1, run, run - 1, 7, 1] {
         let prev = set_tuple_list_budget(budget);
         ab_check(doc.clone(), -2.0, 2.0);
         set_tuple_list_budget(prev);
         let (prog, (walks, chunks, empty)) = build_recording(&doc, budget);
         assert_eq!(walks, 1, "budget {budget}: one walk");
-        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}: folded");
+        assert_eq!(opcount(&prog, "SegReduce"), 0, "budget {budget}: folded");
         assert_eq!(empty, 0, "budget {budget}: an empty cell was folded");
         assert!(
             chunks.iter().all(|&n| 0 < n && n <= budget),
@@ -1001,7 +1020,7 @@ fn a_list_given_part_of_the_shared_budget_switches_to_folding_mid_walk() {
         let (prog, (walks, chunks, empty)) = build_recording(&doc, budget);
         assert_eq!(walks, 2, "budget {budget}");
         assert_eq!(
-            count(&prog, "SegReduce"),
+            opcount(&prog, "SegReduce"),
             1,
             "budget {budget}: one list kept"
         );
@@ -1047,10 +1066,10 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
-                {"lhs": "cl", "rhs": cnst(json!(ones))},
-                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
+                {"lhs": "cl", "rhs": konst(json!(ones))},
+                {"lhs": "cr", "rhs": konst(json!(ones))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1071,11 +1090,11 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     let before = declines();
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     assert_eq!(declines(), before, "under the floor nothing is declined");
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 20]);
     let prev = crate::broad_phase::set_gate_plan(4, 0);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     // One tape build on its own, so no interpreter evaluation is counted.
-    let compiled = super::tests::compile(doc);
+    let compiled = super::test_support::compile(doc);
     let before = declines();
     let built = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
     let declined = declines() - before;
@@ -1083,7 +1102,7 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     assert!(built.0.is_ok());
     assert_eq!(declined, 1, "the constant-key gate was built");
     assert_eq!(
-        prog.seg_tables[0].rows,
+        prog.tables.seg_tables[0].rows,
         vec![0, 20],
         "the selective gate still drives"
     );
@@ -1116,10 +1135,10 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
-                {"lhs": "cl", "rhs": cnst(json!(ones))},
-                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
+                {"lhs": "cl", "rhs": konst(json!(ones))},
+                {"lhs": "cr", "rhs": konst(json!(ones))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1140,11 +1159,11 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
     let before = declines();
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     assert_eq!(declines(), before, "under the floor nothing is declined");
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    assert_eq!(prog.tables.seg_tables[0].rows, vec![0, 20]);
     let prev = crate::broad_phase::set_gate_plan(4, 0);
     let prog = ab_check(doc.clone(), -2.0, 2.0);
     // One tape build on its own, so no interpreter evaluation is counted.
-    let compiled = super::tests::compile(doc);
+    let compiled = super::test_support::compile(doc);
     let before = declines();
     let built = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
     let declined = declines() - before;
@@ -1152,7 +1171,7 @@ fn two_on_clauses_over_one_symbol_pair_are_one_composite_gate() {
     assert!(built.0.is_ok());
     assert_eq!(declined, 0, "a merged clause is not priced on its own");
     assert_eq!(
-        prog.seg_tables[0].rows,
+        prog.tables.seg_tables[0].rows,
         vec![0, 20],
         "the composite gate drives"
     );
@@ -1189,8 +1208,8 @@ fn a_constant_key_clause_and_a_float_column_clause_stay_separate_gates() {
                 "total": {"type": "unknown", "units": "1", "default": 0.0}
             },
             "equations": [
-                {"lhs": "kl", "rhs": cnst(json!(kl))},
-                {"lhs": "kr", "rhs": cnst(json!(kr))},
+                {"lhs": "kl", "rhs": konst(json!(kl))},
+                {"lhs": "kr", "rhs": konst(json!(kr))},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
                          "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
                          "ranges": {"j": {"from": "rs"}}},
@@ -1218,12 +1237,12 @@ fn an_all_negative_zero_ragged_row_sums_to_positive_zero() {
     let body = json!({"op": "-", "args": [{"op": "*", "args": [0.0, {"op": "exp", "args": [
         idx(json!("v"), &[idx(json!("cols"), &[json!("i"), json!("k")])])]}]}]});
     for cnt in [json!([2, 3, 1]), json!([1, 1, 1])] {
-        let doc = ragged_doc(cnst(cnt), body.clone(), None);
+        let doc = ragged_doc(konst(cnt), body.clone(), None);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
-        assert_eq!(count(&prog, "SegReduce"), 1);
-        let compiled = super::array_tests::compile(doc);
+        assert_eq!(opcount(&prog, "SegReduce"), 1);
+        let compiled = super::test_support::compile(doc);
         for state in states() {
-            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
             assert!(dy.iter().all(|v| v.to_bits() == 0), "{dy:?}");
         }
     }
@@ -1279,10 +1298,10 @@ fn contracted_parent_doc(free_output: bool) -> Value {
                 "v": {"type": "unknown", "units": "1", "shape": v_shape, "default": 1.0}
             },
             "equations": [
-                {"lhs": "cnt", "rhs": cnst(json!(CP_CNT))},
-                {"lhs": "cols", "rhs": cnst(json!(CP_COLS))},
-                {"lhs": "w", "rhs": cnst(json!(CP_W))},
-                {"lhs": "g", "rhs": cnst(json!(CP_G))},
+                {"lhs": "cnt", "rhs": konst(json!(CP_CNT))},
+                {"lhs": "cols", "rhs": konst(json!(CP_COLS))},
+                {"lhs": "w", "rhs": konst(json!(CP_W))},
+                {"lhs": "g", "rhs": konst(json!(CP_G))},
                 {"lhs": lhs, "rhs": rhs}
             ]
         }}
@@ -1323,14 +1342,14 @@ fn a_ragged_range_whose_parent_is_contracted_folds_the_parent_outer() {
     for free_output in [false, true] {
         let doc = contracted_parent_doc(free_output);
         let prog = ab_check(doc.clone(), -2.0, 2.0);
-        assert_eq!(count(&prog, "SegReduce"), 1, "free output: {free_output}");
-        let compiled = super::array_tests::compile(doc);
+        assert_eq!(opcount(&prog, "SegReduce"), 1, "free output: {free_output}");
+        let compiled = super::test_support::compile(doc);
         let state: Vec<f64> = if free_output {
             vec![1.0, -2.0]
         } else {
             vec![1.0]
         };
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         let expect: Vec<f64> = state.iter().map(|&v| want * v).collect();
         assert_eq!(dy, expect, "free output: {free_output}");
     }

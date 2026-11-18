@@ -31,9 +31,9 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use earthsci_ast::simulate_array::SolveRhs;
 use earthsci_ast::simulate_array::tape::CompilerRewrites;
-use earthsci_ast::simulate_array::{RhsScratch, RhsStats};
-use earthsci_ast::{Compiler, EsmProblem, ProblemOptions, Rhs};
+use earthsci_ast::{Compiler, ProblemOptions, Rhs};
 use serde_json::Value;
 
 const T_BASE: f64 = 1.3;
@@ -47,9 +47,8 @@ fn env_num(k: &str, d: f64) -> f64 {
 
 /// One `native` right-hand side, ready to call.
 struct Model {
-    prob: EsmProblem,
-    scratch: RhsScratch,
-    params: Vec<f64>,
+    /// The taped right-hand side the solve integrates, or the per-cell oracle.
+    rhs: SolveRhs,
     state: Vec<f64>,
     names: Vec<String>,
     /// Problem construction and tape installation, then the first call (where
@@ -75,24 +74,18 @@ impl Model {
             },
         )
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let c = prob.debug_array_compiled().expect("a right-hand side");
-        let scratch = if oracle {
-            c.debug_new_scratch()
-        } else {
-            c.debug_new_scratch_taped()
-                .unwrap_or_else(|e| panic!("{}: not taped: {e}", path.display()))
-        };
-        let params = c.debug_resolve_params(prob.p());
-        let names = c.state_variable_names().to_vec();
+        let rhs = prob
+            .debug_solve_rhs()
+            .unwrap_or_else(|e| panic!("{}: not taped: {e}", path.display()));
+        let rhs = if oracle { rhs.to_oracle() } else { rhs };
+        let names = rhs.state_variable_names().to_vec();
         let state = names
             .iter()
             .map(|n| prob.u0().get(n).copied().unwrap_or(0.0))
             .collect();
         let build_s = t0.elapsed().as_secs_f64();
         let mut m = Model {
-            prob,
-            scratch,
-            params,
+            rhs,
             state,
             names,
             build_s,
@@ -110,15 +103,7 @@ impl Model {
     }
 
     fn call(&mut self, t: f64, dy: &mut [f64]) {
-        let c = self.prob.debug_array_compiled().expect("a right-hand side");
-        c.debug_eval_rhs_into(
-            &self.state,
-            t,
-            &self.params,
-            dy,
-            &mut self.scratch,
-            &mut RhsStats::default(),
-        );
+        self.rhs.eval_into(&self.state, t, dy);
     }
 
     fn dy(&mut self, t: f64) -> Vec<f64> {
@@ -830,10 +815,7 @@ fn main() {
     if family == "list" {
         // `list FILE`: the tape listing of FILE under `native` (diagnostics).
         let m = Model::build(Path::new(&args[2]), true, false);
-        print!(
-            "{}",
-            m.prob.debug_array_compiled().unwrap().debug_tape_listing()
-        );
+        print!("{}", m.rhs.tape_listing());
         let mut m = m;
         let (b, f) = (m.build_s, m.first_s);
         println!(
