@@ -71,71 +71,49 @@ _cross_eq_class_emit_enabled() = !_oop_merge_disabled()
 
 # ---- Structural grouping signature ------------------------------------------
 
-# A signature that is equal for two per-cell nodes iff they have an identical
-# tree shape ignoring the values that legitimately vary per cell (STATE slot
-# index, LITERAL value). Same signature ⇒ unambiguous merge into one template.
-# Different signatures (in-bounds STATE vs ghost LITERAL, makearray region A vs
-# B, valence-5 vs valence-6 contraction) ⇒ separate kernels.
+# A structural id, equal for two per-cell nodes iff they have an identical tree
+# shape ignoring the values that legitimately vary per cell (STATE slot index,
+# LITERAL value). Same id ⇒ unambiguous merge into one template. Different ids
+# (in-bounds STATE vs ghost LITERAL, makearray region A vs B, valence-5 vs
+# valence-6 contraction) ⇒ separate kernels.
 #
-# The signature is written token-by-token into a caller-supplied `IOBuffer` and
-# materialised to a `String` exactly ONCE per top-level node (see the reusable
-# buffer in `_acc_from_cell_entries`). The earlier `string(…, join(…), …)` form
-# allocated an intermediate `String` at every interior node and re-copied every
-# descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
-# emitted bytes are unchanged, so the grouping is identical.
-function _struct_sig!(io::IOBuffer, n::_Node)
-    k = n.kind
-    if k === _NK_STATE
-        print(io, 'S')
-    elseif k === _NK_LITERAL
-        print(io, 'L')
-    elseif k === _NK_PARAM
-        print(io, "P:", n.sym)
-    elseif k === _NK_PARAM_GATHER
-        # Cells gathering from the SAME captured buffer (same `payload` object)
-        # merge into one live-forcing table read; the per-lane linear `idx`
-        # becomes the index table. Different buffers ⇒ different `objectid` ⇒
-        # separate kernels.
-        print(io, "PG:", objectid(n.payload))
-    elseif k === _NK_TIME
-        print(io, 'T')
-    elseif k === _NK_CONTRACTION
-        print(io, "C:", n.op, '(')
-        _sig_children!(io, n.children)
-        print(io, ')')
-    elseif k === _NK_CONST_GATHER
-        # A computed-subscript table read: cells merge only when they read the
-        # SAME array (`payload` object), at subscripts of one structure.
-        print(io, "G:", objectid(n.payload), '(')
-        _sig_children!(io, n.children)
-        print(io, ')')
-    elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
-            k === _NK_LIVE_GATHER
-        # A runtime contraction loop or a ragged loop is CONFINED to scalar
-        # contexts: a cell holding one is walked by the scalar walker and never
-        # reaches the array-equation merge. Should one arrive, it is keyed by
-        # object identity so DISTINCT loops never share a group, and
-        # `_acc_merge_nodes` then refuses it by name (`_unknown_kind`).
-        print(io, "CL:", objectid(n))
-    elseif k === _NK_OP
-        print(io, "O:", n.op)
-        print(io, '(')
-        _sig_children!(io, n.children)
-        print(io, ')')
-    else
-        _unknown_kind(n, "the per-cell merge signature")
+# Ids are hash-consed in `intern`, shared by every node of one grouping: a
+# node's id is the interned pair of its own token and its children's ids. A
+# spine is a DAG with shared nodes, so the fold visits each distinct node once.
+const _SigIntern = Dict{Tuple{Any, Vector{Int}}, Int}
+
+function _struct_sig_id(root::_Node, intern::_SigIntern)::Int
+    return _node_fold(root, Int) do n, kids
+        get!(intern, (_struct_sig_token(n), collect(Int, kids)), length(intern) + 1)
     end
-    return io
 end
 
-function _sig_children!(io::IOBuffer, children)
-    first = true
-    for ch in children
-        first || print(io, ',')
-        first = false
-        _struct_sig!(io, ch)
+function _struct_sig_token(n::_Node)
+    k = n.kind
+    if k === _NK_STATE || k === _NK_LITERAL || k === _NK_TIME
+        return k
+    elseif k === _NK_PARAM
+        return (k, n.sym)
+    elseif k === _NK_PARAM_GATHER || k === _NK_CONST_GATHER
+        # Cells reading the SAME captured array (`payload` object) merge into one
+        # table read; different arrays ⇒ separate kernels.
+        return (k, objectid(n.payload))
+    elseif k === _NK_CONTRACTION
+        return (k, n.op)
+    elseif k === _NK_OP
+        # The merge takes an op's payload from the group's first member, so a
+        # payload is part of the structure.
+        return n.payload === nothing ? (k, n.op) : (k, n.op, objectid(n.payload))
+    elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
+            k === _NK_LIVE_GATHER
+        # A run-time contraction loop or a ragged loop is confined to scalar
+        # contexts: a cell holding one is walked by the scalar walker and never
+        # reaches the array-equation merge. Should one arrive, it is keyed by
+        # object identity so distinct loops never share a group, and
+        # `_acc_merge_nodes` then refuses it by name (`_unknown_kind`).
+        return (:loop, objectid(n))
     end
-    return io
+    return _unknown_kind(n, "the per-cell merge signature")
 end
 
 # Merge one structurally-identical group of per-cell nodes into an access
@@ -146,13 +124,35 @@ end
 #             is a LITERAL 0.0 leaf, not a slot)
 #   PARAM/TIME  pass through (spine kinds)
 #   PARAM_GATHER all-equal → ARR_FIXED (live); varying → ARR_TBL_BOX (live)
-#   CONTRACTION children merged element-wise (the signature pins the width)
+#   CONTRACTION children merged element-wise (the structural id pins the width)
 #   OP        children merged
 #   CONST_GATHER / LIVE_GATHER  children merged, as an operator node with no
-#             operator carrying the gather (same array, by the signature)
+#             operator carrying the gather (same array, by the structural id)
 # The ordinal tables use box-local addressing `s1=1, off=1` — the outs runner
 # threads the cell ordinal through `midx[1]`.
-function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})::_Node
+#
+# `memo` maps a tuple of member nodes (by identity) to its merged node, so a
+# sub-tree every member shares at the same position is merged once and the
+# merged spine keeps the sharing.
+const _MergeMemo = Dict{Vector{_NodeKey}, _Node}
+
+_acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc}) =
+    _acc_merge_nodes(nodes, len, acc, _MergeMemo())
+
+function _acc_merge_nodes(
+        nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc}, memo::_MergeMemo
+    )::_Node
+    key = _NodeKey[_NodeKey(n) for n in nodes]
+    hit = get(memo, key, nothing)
+    hit === nothing || return hit
+    merged = _acc_merge_nodes_uncached(nodes, len, acc, memo)
+    memo[key] = merged
+    return merged
+end
+
+function _acc_merge_nodes_uncached(
+        nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc}, memo::_MergeMemo
+    )::_Node
     n1 = nodes[1]
     k = n1.kind
     if k === _NK_LITERAL
@@ -172,10 +172,9 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
         return n1
     elseif k === _NK_PARAM_GATHER
         # All cells share the captured live buffer (`payload`, guaranteed equal
-        # by the signature); the per-lane linear offsets become an index table.
-        # Both lowerings read the ALIASED buffer at run time — never a frozen
-        # copy — so an in-place refresh is always seen (and the J5 trace guard
-        # covers both kinds).
+        # by the structural id); the per-lane linear offsets become an index
+        # table. Both lowerings read the aliased buffer at run time, never a
+        # frozen copy, so an in-place refresh is always seen.
         buf = n1.payload::Vector{Float64}
         i1 = n1.idx
         if all(nd.idx == i1 for nd in nodes)
@@ -185,11 +184,7 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
         end
         return _acc(length(acc))
     elseif k === _NK_CONTRACTION
-        m = length(n1.children)
-        ch = _Node[
-            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
-                for c in 1:m
-        ]
+        ch = _merge_children(nodes, len, acc, memo)
         return _mknode(
             kind = _NK_CONTRACTION, op = n1.op, literal = n1.literal,
             children = ch
@@ -200,27 +195,28 @@ function _acc_merge_nodes(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc})
         # access spine as an operator node with no operator holding the
         # `_ConstGatherArray`, the encoding the direct emitter reads as a table
         # read (`_de_is_cgather`, ext/reactant_direct/closed.jl).
-        pay = n1.payload
-        m = length(n1.children)
-        ch = _Node[
-            _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc)
-                for c in 1:m
-        ]
-        return _mknode(kind = _NK_OP, op = n1.op, payload = pay, children = ch)
+        ch = _merge_children(nodes, len, acc, memo)
+        return _mknode(kind = _NK_OP, op = n1.op, payload = n1.payload, children = ch)
     end
     return _unknown_kind(n1, "the per-cell merge")
 end
+
+_merge_children(nodes::Vector{_Node}, len::Int, acc::Vector{_AccDesc}, memo::_MergeMemo) =
+    _Node[
+    _acc_merge_nodes(_Node[nd.children[c] for nd in nodes], len, acc, memo)
+        for c in eachindex(nodes[1].children)
+]
 
 # Group an array equation's per-cell `(du_slot, node)` entries by structure and
 # build one indirect-outs `_AccKernel` per group, in first-seen group order —
 # deterministic kernel boundaries, lane order, and out-slot order.
 function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_AccKernel}
     isempty(entries) && return _AccKernel[]
-    order = String[]
-    groups = Dict{String, Tuple{Vector{Int}, Vector{_Node}}}()
-    sigbuf = IOBuffer()
+    order = Int[]
+    groups = Dict{Int, Tuple{Vector{Int}, Vector{_Node}}}()
+    intern = _SigIntern()
     for (slot, node) in entries
-        sig = String(take!(_struct_sig!(sigbuf, node)))
+        sig = _struct_sig_id(node, intern)
         if !haskey(groups, sig)
             groups[sig] = (Int[], _Node[])
             push!(order, sig)
@@ -232,9 +228,8 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
     kernels = _AccKernel[]
     for sig in order
         slots, nds = groups[sig]
-        len = length(slots)
         acc = _AccDesc[]
-        spine = _acc_merge_nodes(nds, len, acc)
+        spine = _acc_merge_nodes(nds, length(slots), acc)
         # CSE + invariant hoisting on the merged spine — skipped on a
         # lazy-bearing one (see the header) so the SCALAR reference stays lazy.
         spine, cse = _acc_node_has_lazy(spine) ? (spine, _ACC_NO_CSE) :
