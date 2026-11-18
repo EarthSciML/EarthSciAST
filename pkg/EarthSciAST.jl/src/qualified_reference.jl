@@ -1,6 +1,5 @@
-# ========================================
-# 8. Reference Resolution System
-# ========================================
+# Resolving a qualified `System.sub.var` reference against a typed document
+# (esm-spec §4.6).
 
 """
     QualifiedReferenceError

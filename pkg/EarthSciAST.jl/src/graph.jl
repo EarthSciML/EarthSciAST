@@ -23,7 +23,7 @@ struct Graph{N, E}
 end
 
 """
-Component-level node representing a model, reaction system, data source, or operator.
+Component-level node: a model or a reaction system.
 """
 struct ComponentNode
     id::String
@@ -158,9 +158,9 @@ end
 
 Generate component-level graph showing systems and their couplings.
 
-Creates nodes for each model, reaction system, and data source. Operators are
-NOT given nodes: a `CouplingOperatorApply` entry only registers an operator
-(the operator lives in the file's `operators` section), so it contributes no
+Creates a node for each model and reaction system; a data source is not a node
+(esm-libraries-spec §4.8.1). Operators are NOT given nodes: a
+`CouplingOperatorApply` entry only registers an operator, so it contributes no
 node or edge here. Creates edges based on the remaining coupling entries with
 appropriate types and labels.
 
@@ -219,8 +219,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
             # carries the species, so `parameters` is the only thing left for
             # esm-libraries-spec §4.8.1's "variable count" to mean — and it is
             # the exact analogue of a model's `variables`, which likewise counts
-            # unknowns and parameters together. This used to be 0, which
-            # asserted that a reaction system declares no variables at all.
+            # unknowns and parameters together.
             metadata = Dict{String, Any}(
                 "var_count" => length(rxn_sys.parameters),
                 "eq_count" => length(rxn_sys.reactions),
@@ -246,8 +245,6 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     # an attribute of an existing node rather than a node of its own". A model
     # reaches a source through a parameter whose `update` names it (esm-spec
     # §8.5), and that parameter is already a variable of an existing node.
-    # This module used to draw a leaf `data_source` node; TypeScript, Go and
-    # Python never did.
 
     # Shared edge builder for the two two-system coupling forms
     # (operator_compose / couple). Although the coupling SEMANTICS are
@@ -298,9 +295,7 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
             # bare name identifies no component. The label is the mapped
             # variable — everything after the first dot, so a subsystem-scoped
             # endpoint keeps its path (§4.8.1: "labeled with the mapped
-            # variable"). This used to emit `[<second segment>]`, which for
-            # `EmissionSources.Transportation.traffic_density` printed the
-            # SUBSYSTEM name rather than the variable.
+            # variable").
             if length(from_parts) >= 2 && length(to_parts) >= 2
                 from_system = from_parts[1]
                 to_system = to_parts[1]
@@ -433,7 +428,7 @@ Every variable of `model` mapped to its DERIVED graph kind (esm-spec §6.3.1).
 The kind is derived, never read off `var.type`: the format declares only
 `unknown` and `parameter`, so `var.type` would label every unknown `"unknown"` —
 a value that appears in no §4.8.2 vocabulary and tells a reader nothing about
-how the node behaves. This module used to do exactly that.
+how the node behaves.
 
 Computed once per model rather than per reference, since each classifier walks
 the equation list.
@@ -526,9 +521,7 @@ function _process_model!(b::_ExprGraphBuilder, model::Model, system::AbstractStr
         _add_node!(b, var_name, get(kinds, var_name, "parameter"), var.units, system)
     end
     for (i, equation) in enumerate(model.equations)
-        # 0-BASED, matching every other binding. This module used to emit the
-        # Julia 1-based `enumerate` index, leaking a language convention into a
-        # cross-binding wire field.
+        # 0-BASED, matching every other binding: a cross-binding wire field.
         _process_equation!(b, equation, i - 1, system)
     end
     return nothing
@@ -539,7 +532,7 @@ function _process_reaction_system!(
         b::_ExprGraphBuilder, rxn_sys::ReactionSystem,
         system::AbstractString
     )
-    # Species carry their DECLARED units; this module used to drop them.
+    # Species carry their DECLARED units.
     for species in rxn_sys.species
         _add_node!(b, species.name, "species", species.units, system)
     end
@@ -558,9 +551,7 @@ Process one component and, recursively, its inline `subsystems`.
 An unresolved `SubsystemRef` is skipped: it is a reference stub, not a
 component, and its variables live in the file it names. Scoped names compose
 with a dot, so a `Meteorology` model's `Temperature` subsystem contributes
-`Meteorology.Temperature.surface_temp`. This module used to visit only the
-top-level components, so a document like `tests/valid/scoped_refs_coupling.esm`
-produced 4 nodes where the oracle produces 37.
+`Meteorology.Temperature.surface_temp`.
 """
 function _process_component_tree!(
         b::_ExprGraphBuilder, component::Model,

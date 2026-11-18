@@ -1,6 +1,5 @@
-# ========================================
-# 9. Backward Compatibility Helpers
-# ========================================
+# Stoichiometry views of a `Reaction`: entry vectors to and from a
+# species→coefficient dict, and the dict-form `Reaction` constructor.
 
 """
     dict_to_stoichiometry_entries(dict::AbstractDict{String,<:Real}) -> Vector{StoichiometryEntry}
@@ -107,16 +106,9 @@ end
 The `substrates` / `products` fields as stored: the ORDERED
 `Vector{StoichiometryEntry}` (or `nothing` for a source/sink reaction, ∅ → X /
 X → ∅). Named accessors for the raw fields so ordered author-entry access reads
-the same at every call site (equivalent to `r.substrates` / `r.products` now
-that the `getproperty` shim is gone). For the unordered `Dict{String,Float64}`
+the same at every call site (equivalent to `r.substrates` / `r.products`). For the unordered `Dict{String,Float64}`
 species→coefficient view, use [`get_reactants_dict`](@ref) /
 [`get_products_dict`](@ref).
 """
 raw_substrates(r::Reaction) = getfield(r, :substrates)
 raw_products(r::Reaction) = getfield(r, :products)
-
-# NOTE: `Reaction` has no `getproperty` override — plain `r.substrates` /
-# `r.products` reach the stored ORDERED `Vector{StoichiometryEntry}` fields
-# directly. Use `raw_substrates` / `raw_products` for that ordered view and
-# `get_reactants_dict` / `get_products_dict` for the unordered
-# `Dict{String,Float64}` species→coefficient view.

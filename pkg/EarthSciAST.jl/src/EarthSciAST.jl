@@ -183,154 +183,102 @@ include("inline_tests.jl")
 include("internal.jl")
 
 export
-    # Root of the exception hierarchy (H-1): every exception this package
-    # raises subtypes `EarthSciASTError`, so one `catch e; e isa
-    # EarthSciASTError` covers the whole surface. `ERROR_CODES` is the central
-    # registry of the diagnostic code STRINGS those errors carry — a
-    # cross-binding contract, mirroring TypeScript's `ERROR_CODES` object and
-    # Python's `ErrorCode` enum.
+    # The exported surface by group; API_SPEC.md §5 and §8 record the
+    # cross-binding names and the decisions behind them, and api-surface.json
+    # pins them.
+    # Errors: the root of the hierarchy and the registry of code strings.
     EarthSciASTError, ERROR_CODES, error_code_names,
-    # esm-spec §8.5.1: where the deprecated `records_per_sample` is written.
     deprecated_records_per_sample_sites,
-    # Reference resolution — semiring-FAQ node addressing (RFC §6.1).
-    # The graph-query methods (dependencies/dependents/detect_cycle/
-    # topological_order/edges_of_kind) are intentionally NOT exported: they are
-    # generic names (e.g. `dependencies` collides with `Pkg.dependencies`) and
-    # are reached as `EarthSciAST.dependencies(graph, key)`.
+    # Reference resolution (RFC §6.1). The graph queries (`dependencies`,
+    # `dependents`, `detect_cycle`, `topological_order`, `edges_of_kind`) are
+    # not exported: `dependencies` collides with `Pkg.dependencies`.
     ReferenceGraph, ReferenceVertex, ReferenceEdge, ReferenceResolutionError,
     build_reference_graph, resolve_references,
-    # Expression types
+    # Expressions
     ASTExpr, NumExpr, IntExpr, VarExpr, OpExpr,
     # Data-loader unit conversion (esm-spec §8.5)
     UnitConversionError, parse_unit_conversion,
     apply_unit_conversion, apply_unit_conversion!,
-    # Literal predicates (RFC §5.4.1 int/float distinction)
     is_literal, literal_value,
-    # Equation types
+    # Document types
     Equation, AffectEquation,
-    # Model component types
     ModelVariableType, UnknownVariable, ParameterVariable,
     ModelVariable, Model, SubsystemRef, Species, Parameter, Reaction, ReactionSystem,
-    # Parameter value model (esm-spec §5.4, §5.5, §6.3)
     Distribution, ParameterUpdate, FunctionalUpdate, DataSourceBinding,
     PARAMETER_UPDATE_KINDS, SHAPE_REQUIRING_UPDATE_KINDS,
-    # Derived classification (esm-spec §6.3.1) — the ONLY sanctioned way to ask
-    # which unknowns are ODE states / observed / algebraic and which parameters
-    # are Brownian / discrete / sampled / constant.
-    # `unknowns` / `parameters` are the canonical cross-binding names
-    # (API_SPEC.md §8 item 6); `unknown_names` / `parameter_names` stay
-    # exported alongside them — not for one minor but indefinitely — because
-    # the bare names collide in Julia's flat namespace (`ModelingToolkit`
-    # exports both), so a consumer needs an unambiguous spelling.
+    # Derived classification (esm-spec §6.3.1). `unknown_names` /
+    # `parameter_names` stay beside `unknowns` / `parameters` because the bare
+    # names collide with ModelingToolkit's exports.
     unknowns, parameters, unknown_names, parameter_names,
     ode_states, is_ode_state, observed_unknowns, algebraic_unknowns,
     solver_unknowns,
     observed_definitions, observed_definition,
     brownian_parameters, discrete_parameters, sampled_parameters,
     constant_parameters,
-    # The `system_kind` family (API_SPEC.md §8 item 11) is three distinct
-    # questions: `system_kind` DERIVES the kind from the equations and
-    # parameters, `declared_system_kind` reads the explicit field (`nothing`
-    # when absent), and `effective_system_kind` is `declared ?? derived` — the
-    # question a caller choosing a solver asks. The Julia-only
-    # `declared_system_kind_mismatch` was deleted in favour of the pair.
     system_kind, declared_system_kind, effective_system_kind,
     has_spatial_derivative, has_time_derivative,
     assert_classification_partitions,
-    # Event types
+    # Events, data sources and coupling
     EventType, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger,
     ConditionTrigger, PeriodicTrigger, PresetTimesTrigger,
-    # Data-source registry types (esm-spec §8)
     DataSource, DataSourceLocation, DataSourceTemporal, DataSourceDeterminism,
     CouplingEntry,
-    # Concrete coupling types
     CouplingOperatorCompose, CouplingCouple, CouplingVariableMap,
     CouplingOperatorApply, CouplingCallback, CouplingEvent, CouplingImport,
-    # Coupling-library reuse (esm-spec §10.9–§10.11)
     expand_coupling_imports,
-    # Flattened system (§4.7.5 / §4.7.6)
+    # Flattening (esm-libraries-spec §4.7.5, §4.7.6)
     FlattenMetadata, FlattenedSystem, flatten, lower_reactions_to_equations,
     infer_array_shapes,
-    # Per-term provenance (esm-libraries-spec §4.7.5, issue #539)
     TermOrigin, Contribution, equation_contributions,
-    # Range-restricted right-hand sides (API_SPEC §5.8, issue #540)
+    # Range-restricted and public right-hand sides, strip and expose (API_SPEC §5.8)
     rhs_program, select, halo, restrict, lanes, tile_layout, lane_layout,
     rhs_workspace, rhs!, lane_inputs, gather_lane_inputs!, Decomposition,
-    # Public right-hand side (API_SPEC §5.8, issue #541)
     ForcingSet, ForcingSlot, ParamSlot, StateBlock, forcing_slots, forcing_set,
     default_forcing_set, replace_forcing, forcing_epoch, parameter_vector, n_states,
     state_layout, forcing_from_sample,
-    # Strip and expose (API_SPEC §5.8, issue #543)
     StrippedConstructs, stripped, is_stripped, compile_kernels, Kernel, KernelSet,
     KernelBlock, KernelWorkspace, kernel!, kernel_layout, kernel_workspace, z_layout,
-    # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
+    # Flatten errors, named as in the other bindings
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,
     DomainExtentMismatchError, SliceOutOfDomainError, CyclicPromotionError,
     OperatorComposeNoMergeError, OperatorComposeRequireMatchError,
     OperatorComposeAmbiguousBareNameError,
-    # System types
     Domain, Reference, Metadata, EsmFile,
-    # JSON functionality. `load` took a `String` that meant a FILE PATH here
-    # and in Go but JSON TEXT in TypeScript and Rust — one name, one argument
-    # type, opposite meanings — and `save` WROTE here while returning the
-    # payload and touching nothing in TypeScript and Rust. Both are split into
-    # entry points that say which they are; no function both writes and returns
-    # the payload. `to_json` is listed with the graph exports below, which it
-    # shares by dispatch. `SCHEMA_VERSION` is the old `ESM_FORMAT_VERSION`
-    # under the name the other four bindings already used; `LIBRARY_VERSION` is
-    # this package's own version, which Julia did not expose at all.
+    # Load and emit. `to_json` is listed with the graph exports below.
     load_path, load_string, load_document,
     to_json_compact, write_path,
     ParseError, SchemaValidationError, SchemaError, validate_schema,
     expression_from_json, SCHEMA_VERSION, LIBRARY_VERSION,
-    # Version-marker migration (esm-libraries-spec §8.3). `migrate` is a pure
-    # `esm`-field bump along the ADDITIVE line `1.0.0 … SCHEMA_VERSION`;
-    # nothing crosses the 1.0.0 clean break, so every 0.x source has no
-    # supported target. `supported_migration_targets` drops the `get` prefix
-    # its TypeScript twin carries.
+    # Version-marker migration (esm-libraries-spec §8.3)
     migrate, can_migrate, supported_migration_targets, MigrationError,
-    # Subsystem reference resolution
     resolve_subsystem_refs!, SubsystemRefError,
-    # Coupling serialization functions
     serialize_coupling_entry, coerce_coupling_entry,
-    # Structural validation
-    # `validate` takes a TYPED document in every binding (API_SPEC.md §8
-    # item 13); the path and text conveniences are `validate_path` and
-    # `validate_text`, which additionally render a load-time rejection as the
-    # structural finding the corpus pins.
+    # Validation
     StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
     validate_path, validate_text,
     validate_reaction_rate_units,
-    # Expression operations. Expression containment extends `Base.contains`
-    # (always in scope for consumers), so `contains` is not re-exported.
+    # Expression operations. `contains` extends `Base.contains` and is not
+    # re-exported.
     substitute, free_variables, simplify, UnboundVariableError,
-    # Qualified reference resolution
     resolve_qualified_reference, QualifiedReferenceError, ReferenceResolution,
     validate_reference_syntax, is_valid_identifier,
-    # Reaction system ODE derivation
     derive_odes, stoichiometric_matrix, mass_action_rate,
-    # Graph analysis (Section 4.8)
+    # Graphs (esm-libraries-spec §4.8). `to_json` is the document serializer;
+    # its `Graph` methods are a deprecated alias of `to_json_graph`, kept one
+    # minor version.
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
-    # The canonical graph-rendering trio (API_SPEC.md §8 item 8).
     to_dot, to_mermaid, to_json_graph,
-    # `to_json` is the DOCUMENT serializer (§8 item 2). Its `Graph` methods are
-    # a deprecated alias of `to_json_graph`, kept one minor per §10; they
-    # dispatch on the argument type and render byte-identical output.
     to_json,
-    # Unit validation
+    # Units
     parse_units, parse_units_reason, get_expression_dimensions, validate_equation_dimensions,
     validate_model_dimensions, validate_reaction_system_dimensions, validate_file_dimensions,
     infer_variable_units,
-    # The error-collecting units engine: these distinguish a PROVABLE dimensional
-    # inconsistency from an indeterminate one, which the Bool/`nothing` API above
-    # cannot. `validate()` is built on these.
     expression_unit_findings, equation_unit_findings, model_unit_findings,
     UnitFinding, UNIT_DIMENSION_MISMATCH, UNIT_PARSE_ERROR,
     UNIT_FINDING_DIMENSIONLESS_LITERAL,
-    # Editing operations (Section 4). EsmFile merging extends `Base.merge`
-    # (always in scope for consumers), so `merge` is not re-exported.
+    # Editing. `merge` extends `Base.merge` and is not re-exported.
     EditError,
     add_variable, remove_variable, rename_variable,
     add_equation, remove_equation, substitute_in_equations,
@@ -338,125 +286,58 @@ export
     add_continuous_event, add_discrete_event, remove_event,
     add_coupling, remove_coupling, compose, map_variable,
     extract,
-    # Code generation
     to_julia_code,
-    # Canonical AST form (RFC §5.4)
+    # Canonical form (RFC §5.4) and the Markdown and Typst source formats
     canonicalize, canonical_json, format_canonical_float, CanonicalizeError,
     canonicalize_document,
-    # Markdown and Typst document source formats (CONFORMANCE §5.58)
     print_markdown, print_typst, print_document, print_math,
     parse_markdown, parse_typst, parse_document, parse_math, expression_names,
-    # MTK → ESM export (gt-dod2; Phase 1 migration tooling)
     mtk2esm, mtk2esm_gaps, GapReport,
-    # Planar spatial-index broad phase (projection-pushdown Phase 3a)
     broad_phase_candidates,
-    # Tree-walk evaluator (gt-e8yw; MTK-free RHS path)
+    # Evaluation
     evaluate_expr, TreeWalkError, BuildInspection, RecurrenceInfo,
-    # Public template-expansion seam (esm-spec §9.6.4 Option B): the typed
-    # model exactly as the build sees it post-expansion, for
-    # downstream analyzers (EarthSciASTDiff differentiates this tree). Two
-    # halves of ONE seam, one per differentiable input shape:
-    # `expanded_model(file, name)` for a single `Model` inside an `EsmFile`,
-    # `expand_flattened_refs(flat)` for a coupled document's `FlattenedSystem`
-    # — whose surviving references resolve against the flattener's MERGED
-    # `template_registry` (§9.6.4 rule 7), not a per-model
-    # `component_templates` entry, so `expanded_model` cannot serve there.
-    # `expanded_file(file)` is the whole-document third half, for a consumer
-    # that wants the fused DOCUMENT rather than a build input.
-    # `flatten` ALWAYS hands its consumers reference-preserving expressions, so
-    # any consumer without its own template handling must call this at its
-    # entry ("Expand at your boundary", RFC out-of-line-expression-templates
-    # §7.7) — the MTK `System` constructor and EarthSciASTDiff's
-    # `sysview` both do.
+    # Template expansion at a consumer's boundary (esm-spec §9.6.4): `flatten`
+    # hands out reference-preserving expressions.
     expanded_model, expand_flattened_refs, expanded_file,
-    # Parameter-vector ABI: name → position in a `p` that is an AbstractVector
-    # (the `p`-side mirror of `var_map`). See `param_map`'s docstring for why it
-    # is a function of `p` and not a field of its own.
     param_map,
-    # The parameter PARTITION (differentiability plan §3 Phase 5): which
-    # parameters are `:numeric` (in the runtime `p` — differentiable, and
-    # overridable at solve time), which are `:structural` (read at build time,
-    # so changing one is a rebuild), and which never reach `p` at all
-    # (`:const_folded` / `:forcing`). `remake_parameters` is the `p`-swap that
-    # applies the numeric half — the SciML `remake` shape, deliberately NOT a
-    # rebuild.
     parameter_classes, remake_parameters,
     DiscreteMaterializer,
-    # Discrete-cadence loader refresh (ess-14f.4, JL-J1; callback ctor in the
-    # DiffEqCallbacks/SciMLBase extension). The Provider protocol has concrete
-    # impls in the data binding (EarthSciIO); regrid is an in-model coupling
-    # expression the RHS evaluates (the obsolete RegridApplier seam was removed).
+    # Data refresh and providers (the concrete providers are in EarthSciIO)
     build_refresh_callback, RefreshBuffers, RefreshError,
     provider_refresh_times, provider_is_const, provider_sample,
     provider_supports_selection, provider_gate_spec, provider_is_gated,
     provider_extent_metaparameter,
-    # Document-declared provider construction (Phase 1 clean consolidation;
-    # implemented by the EarthSciIO extension, stub errors without it).
     providers_from_document,
-    # Streaming output sinks (streaming-output-sinks RFC §16, Wave 1; callback
-    # ctor in the DiffEqCallbacks/SciMLBase extension). The OUTPUT mirror of the
-    # Provider/refresh input seam: a `PresetTimeCallback` snapshots state and
-    # pushes it to a Sink at each output boundary, so the trajectory streams to
-    # disk instead of accumulating in RAM. Concrete sinks live in the data binding
-    # (EarthSciIO) or a test mock; `state_snapshot` is the host-gather v1 seam.
+    # Streaming output, output plans and checkpoints
     build_output_callback, StateSnapshot, state_snapshot, AbstractSink, OutputError,
     sink_output_times, sink_open!, sink_write!, sink_flush!, sink_close!,
     sink_supports_partial, sink_observed_names,
-    # Flat→gridded inversion (RFC §7) + the concrete Zarr sink constructor
-    # (implemented in the EarthSciIO extension, mirror of build_output_callback).
     VarGridding, derive_output_gridding, scatter_grid!, build_zarr_sink,
     row_major_flat_indices,
-    # Document-derived output metadata (RFC §7–§8): real dim names + CF
-    # coordinate emission (dimension coordinates from the `coordinates` registry).
     OutputMeta, derive_output_meta, DimCoord, plan_dimension_coordinates,
     group_gridding_by_grid,
-    # The derived output PLAN (RFC §7–§9) — the writer-facing shape, and the
-    # artifact the cross-language derivation conformance corpus compares.
     VarPlan, GridPlan, OutputPlan, derive_output_plan, output_var_dims,
-    # Checkpoint / restart (RFC §10, §16.7): flat-gather (restart-read inverse of
-    # scatter), predicate constructors + OR-combinator, and the predicate-driven
-    # checkpoint callback (DiscreteCallback in the DiffEqCallbacks extension).
     gather_flat!, any_of, slurm_walltime_predicate, spot_preemption_predicate,
     build_checkpoint_callback, zarr_restart_state,
-    # Live forcing buffers of an out-of-place build, plus the refresh-side hook
-    # that mirrors a host refresh into a compiled program's argument arrays.
     forcing_buffers, forcing_buffer_index, sync_forcing!,
-    # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
-    # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
-    # pipeline (load → discretize → build → seed → callbacks); the
-    # verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
-    # extension — which is also where `init` / `step!` / `solve!` / `remake` /
-    # `EnsembleProblem` come from, so EarthSciAST exports none of those names
-    # and cannot collide with the solver package that defines them.
+    # The simulation problem (esm-libraries-spec §2.5). `solve`, `init`,
+    # `remake` and the rest come from SciMLBase through the extension.
     esm_problem, EsmProblem, callbacks, SimulateError, seed_expression_ic!,
     final_state, observed_field,
-    # Which strategy built the right-hand side, and where each rule landed
-    # (API_SPEC §5.8, esm-libraries-spec §2.5.10). `compiler` is also the name
-    # of the `esm_problem` keyword that CHOOSES one, over the closed vocabulary
-    # in `COMPILER_VOCABULARY`.
     compiler, compiler_report, CompilerReport, CompilerRuleRecord,
     tier_histogram, COMPILER_VOCABULARY,
-    # Inline-test runner (esm-ol5qa; spec §6.6)
+    # Inline tests (esm-spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
     discover_esm_files, run_esm_tests, write_junit_xml,
-    # Inline-test runner (spec §6.6, incl. the §6.6.5 PDE assertion forms)
-    # over the tree-walk pathway. The results are the `AssertionResult`
-    # exported above — both runners have always shared the one type.
     run_inline_tests, InlineTestOptions,
     evaluate_cellwise, field_reduce,
-    # `lower_enums` is the PURE form at the canonical name (API_SPEC.md §8
-    # item 15); `lower_enums!` is the in-place twin under Julia's `!`
-    # convention (§2.2). Both raise `EnumLoweringError`, as every other
-    # binding does — this used to raise `ParseError`.
+    # Load-time lowering: enums, expression templates, template imports
     lower_enums, lower_enums!, EnumLoweringError,
-    # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,
     ExpressionTemplateError,
-    # Template-library imports + load-time metaparameters (esm-spec §9.7 /
-    # docs/content/rfcs/template-library-imports.md)
     resolve_template_machinery, reject_template_imports_pre_v08,
-    # Document-scoped solver hints (esm-spec §2.2).
+    # Solver hints (esm-spec §2.2)
     Solver, reject_solver_pre_v11, resolve_tolerances, coerce_solver,
     reject_solver_external_pre_v13, solver_external_location,
     SolverTimeSpan, reject_solver_time_span_pre_v13, resolve_time_span,

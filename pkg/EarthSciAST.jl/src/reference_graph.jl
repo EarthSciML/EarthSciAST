@@ -21,9 +21,8 @@
 #
 # Like the Python and Rust bindings, this pass operates on the **raw parsed
 # document** (a nested `AbstractDict`/`AbstractVector`, e.g. the JSON3 object or
-# a `Dict{String,Any}`) rather than the typed `OpExpr`/`Model` structs: the
-# typed layer deliberately drops `index_sets`, node `id`, `ranges[*].from` and
-# `join`, so the references live only in the raw document. The pass is
+# a `Dict{String,Any}`) rather than the typed `OpExpr`/`Model` structs: its
+# public signature takes a raw document in every binding. The pass is
 # self-contained and additive — a document using none of these features yields
 # an empty-but-valid graph.
 #

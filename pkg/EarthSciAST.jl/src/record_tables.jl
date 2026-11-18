@@ -134,9 +134,9 @@ end
     )
     # Positional (NamedTuple-free) construction on the hot path. `args` defaults to
     # the `Vector{ASTExpr}` field and callers overwrite it with `Vector{ASTExpr}`s, so the
-    # `isa` fast path is the norm; the widening branch preserves the historical
-    # acceptance of any `AbstractVector` of `ASTExpr` (matching the keyword ctor's
-    # `OpExpr(op, args::AbstractVector)` widening overload).
+    # `isa` fast path is the norm; the widening branch accepts any
+    # `AbstractVector` of `ASTExpr`, as the keyword constructor's
+    # `OpExpr(op, args::AbstractVector)` overload does.
     argv = args isa Vector{ASTExpr} ? args : Vector{ASTExpr}(args)
     return _new_typed(
         OpExpr, op, argv,
@@ -174,9 +174,7 @@ constructor, so its normalizations and checks run.
 """ reconstruct
 
 
-# ========================================
-# 15. Record wire-mapping tables
-# ========================================
+# Record wire-mapping tables
 
 """
     RECORD_FIELD_TABLES

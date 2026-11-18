@@ -319,12 +319,6 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String, Any}
 end
 
 
-# NOTE: `serialize_operator` / `serialize_registered_function` were removed
-# along with the `operators` / `registered_functions` emit path (esm-spec
-# v0.3.0 §9 closure): `serialize_esm_file` now refuses to write those blocks,
-# so the per-entry serializers had no remaining callers. The `Operator` /
-# `RegisteredFunction` types themselves remain exported for in-memory use.
-
 """
     serialize_coupling_entry(entry::CouplingEntry) -> Dict{String,Any}
 

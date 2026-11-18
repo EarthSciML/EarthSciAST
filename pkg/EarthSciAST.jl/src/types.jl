@@ -63,11 +63,8 @@ from disk keep whatever version they declare; this constant is only the default
 for documents the library itself creates (flatten wrappers, MTK/Catalyst
 export). Must track the version on the first line of `esm-spec.md` and in the
 bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
-test enforces.
-
-Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
-Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
-NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
+test enforces. NOT the version of this PACKAGE — that is
+[`LIBRARY_VERSION`](@ref).
 """
 const SCHEMA_VERSION = "2.3.0"
 
@@ -895,8 +892,7 @@ ParameterVariable
     MODEL_VARIABLE_TYPE_TABLE
 
 The bidirectional `ModelVariableType` ↔ string vocabulary — one row per enum
-member, the single source of truth for every kind-string mapping (previously
-three hand-maintained parallel ladders). It lives here, next to the enum it
+member, the single source of truth for every kind-string mapping. It lives here, next to the enum it
 maps, following the [`OPEXPR_FIELD_TABLE`](@ref) precedent (op_registry.jl is
 scoped to the `OpExpr.op` operator vocabulary; a variable-kind enum is not an
 op). Columns:
@@ -1184,11 +1180,9 @@ the array form.
 
 A diagnostic pointer must address the document **as written**. Julia's typed
 model normalizes a scalar `update` into a one-element `Vector` at parse time
-(see [`_coerce_update_vector`](@ref)), and the three passes that walk update
-rules used to interpolate that synthetic index unconditionally — so a document
-writing `update: {...}` was told about `/update/0/from/unit_conversion`, a
-pointer resolving to nothing in its own source. The corpus pin and the
-TypeScript, Python and Go bindings all say `/update/from/unit_conversion`.
+(see [`_coerce_update_vector`](@ref)), so the index is written only for the
+array form: a document writing `update: {...}` is addressed as
+`/update/from/unit_conversion`, as the corpus pin and the other bindings say.
 """
 _update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
     _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
@@ -1196,7 +1190,7 @@ _update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
 """
     TimeSpan(start::Float64, stop::Float64)
 
-Simulation time interval for inline model tests and analyses (§gt-cc1).
+Simulation time interval for inline model tests and analyses (esm-spec §6.6).
 """
 struct TimeSpan
     start::Float64
@@ -1280,7 +1274,7 @@ end
 
 A scalar `(variable, time, expected)` check used inside a `InlineTest`.
 
-PDE-aware variants (gt-vzwk):
+PDE-aware variants:
 - `coords`: pin a spatial point as `dim => coordinate` (mutually exclusive with `reduce`).
 - `reduce`: collapse the spatial field to a scalar — one of `integral`, `mean`,
   `max`, `min`, `L2_error`, `Linf_error`. Mutually exclusive with `coords`.
@@ -1328,14 +1322,14 @@ end
 """
     InlineTest(id, time_span, assertions; description, initial_conditions, parameter_overrides, tolerance)
 
-Inline validation test for a Model (schema gt-cc1). Defines the run
+Inline validation test for a Model (esm-spec §6.6). Defines the run
 configuration — initial conditions, parameter overrides, simulation time
 span — and a list of scalar assertions that must hold.
 """
 # NAMING: this struct is spelled `InlineTest` (not `Test`) so it does NOT
 # collide with the `Test` STANDARD-LIBRARY MODULE that every test suite brings
 # in via `using Test`. It is the schema's inline-validation-test construct
-# (`models.*.tests`, gt-cc1; esm-spec §6.6); not exported — reach it qualified
+# (`models.*.tests`, esm-spec §6.6); not exported — reach it qualified
 # as `EarthSciAST.InlineTest`.
 struct InlineTest
     id::String
@@ -1537,9 +1531,8 @@ field is typed by their shared supertype, `OrderedDict{String,SubsystemNode}`.
 `variables` and `subsystems` are `OrderedDict`s, and the parser populates them in
 DOCUMENT ORDER. That is not a convenience: esm-libraries-spec §4.7.5 step 4 makes
 the flattened system's ordering normative (variables in the order their component
-declares them), and a flattener can only inherit an order the IR preserved. A
-plain `Dict` here leaked its hash order all the way out to `flatten`'s
-`parameters`, which a consumer reads POSITIONALLY as the parameter vector.
+declares them), and a flattener can only inherit an order the IR preserved:
+`flatten`'s `parameters` is read POSITIONALLY as the parameter vector.
 """
 struct Model <: SubsystemNode
     variables::OrderedDict{String, ModelVariable}
@@ -1557,11 +1550,7 @@ struct Model <: SubsystemNode
     initialization_equations::Vector{Equation}
     guesses::Dict{String, Union{Float64, ASTExpr}}
     system_kind::Union{String, Nothing}
-    # The component's own citation (schema `Model.reference`). It was the
-    # most-dropped field in the corpus — most `tests/valid` fixtures carry one
-    # and every one of them lost it — and nothing could notice, because the
-    # `RECORD_FIELD_TABLES` fieldnames assert pins table rows to the STRUCT: a
-    # field missing from both is missing from both wire directions in silence.
+    # The component's own citation (schema `Model.reference`).
     reference::Union{Reference, Nothing}
 
     Model(
@@ -1739,8 +1728,8 @@ struct CouplingVariableMap <: CouplingEntry
         )
         # SINGLE enforcement point for the "expression transform takes no
         # factor" invariant. The parser (`coerce_variable_map`, parse.jl) does
-        # not pre-check; it catches this ArgumentError and rebrands it as a
-        # ParseError so `load` keeps its historical error type/message.
+        # not pre-check; it catches this ArgumentError and raises it as a
+        # ParseError with the same message.
         if transform isa ASTExpr && factor !== nothing
             throw(ArgumentError("variable_map: an expression `transform` takes no `factor` (fold the scaling into the expression)"))
         end
@@ -1975,24 +1964,15 @@ system is required to reproduce "the file's `domain` section, unchanged"
 """
 struct Domain
     # The name of the independent (time) variable, `"t"` unless the document
-    # renames it. It was parsed by NOBODY: the field is in esm-schema.json (with
-    # `additionalProperties: false`, so it is the only spelling), yet `Domain`
-    # did not carry it — so `load` silently DROPPED it and a round-trip through
-    # Julia rewrote a `tau`-based document as a `t`-based one. Validation needs
-    # it too: the independent variable is implicitly declared (finding (a)), and
-    # the check for it used to be a literal `name == "t"`, which both accepted a
-    # bare `t` in a document that renamed it and rejected the real name.
+    # renames it. Validation reads it: the independent variable is implicitly
+    # declared under this name and no other.
     independent_variable::String
     temporal::Union{Dict{String, Any}, Nothing}
     # Floating-point precision and array backend (esm-schema.json `Domain`:
     # `element_type` ∈ {"Float32","Float64"}, `array_type` e.g. "Array" /
-    # "CuArray"). Carried for the same reason `independent_variable` is: the
-    # schema defines them, `tests/valid/model_only.esm` declares
-    # `element_type: "Float32"`, and `Domain` used not to hold them — so `load`
-    # silently DROPPED them and a round trip rewrote a Float32 document as one
-    # with no precision declared at all. They also decide real behaviour
-    # downstream (Float32 vs Float64 for the assembled problem, host vs GPU
-    # arrays), and esm-libraries-spec §4.7.5 step 4 says a `FlattenedSystem`
+    # "CuArray"). They decide behaviour downstream (Float32 vs Float64 for the
+    # assembled problem, host vs GPU arrays), and esm-libraries-spec §4.7.5
+    # step 4 says a `FlattenedSystem`
     # carries "the file's `domain` section, UNCHANGED". `nothing` means the
     # document declared none — absence is preserved rather than replaced by the
     # schema default, so emit round-trips byte-for-byte.
@@ -2195,16 +2175,9 @@ struct EsmFile
     # PRESERVED VERBATIM (raw JSON) across parse → emit.
     #
     # Option A expands CALL SITES; it does not delete DECLARATIONS (esm-spec
-    # §9.6.4 rule 5). These two are peers of `index_sets`, not
-    # `apply_expression_template` invocations — but the loader treated the
-    # registry as if it were a call site and dropped it, so a pure template
-    # LIBRARY (a file whose only payload is `expression_templates`) re-emitted as
-    # `{esm, metadata, index_sets}`: no payload key at all, which the top-level
-    # `anyOf` correctly rejects. The file was legal on disk and illegal the
-    # instant it was loaded and written back — and since §9.6.4 rule 4 runs
-    # schema validation on the POST-EXPANSION form, a conforming library file was
-    # literally unrepresentable (tests/valid/template_import_lib.esm,
-    # template_import_rename_lib.esm).
+    # §9.6.4 rule 5): a template library (a file whose only payload is
+    # `expression_templates`, tests/valid/template_import_lib.esm) emits to
+    # itself, and so passes the post-expansion schema validation of rule 4.
     #
     # They are kept raw rather than typed because nothing in the pipeline reads
     # them back after lowering — their only job is to survive the round trip so a
@@ -2238,11 +2211,8 @@ struct EsmFile
     #
     # Presence of this key is the SOLE positive identifier of the
     # coupling-library file kind (`_is_coupling_library_doc`,
-    # coupling_imports.jl, tests it and nothing else). Dropping it therefore did
-    # not lose an annotation — it destroyed a coupling library's identity on
-    # round trip: the file was a library on disk and an ordinary document the
-    # instant it was loaded and written back. That is the same defect already
-    # fixed for the top-level `expression_templates` registry above.
+    # coupling_imports.jl, tests it and nothing else), so it must survive a
+    # round trip for a coupling library to stay one.
     coupling_roles::Union{Dict{String, Any}, Nothing}
 
     # Document-scoped, OPTIONAL and purely ADVISORY solver hints (esm-spec

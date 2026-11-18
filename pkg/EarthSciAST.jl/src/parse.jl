@@ -593,9 +593,7 @@ function coerce_esm_file(
     # Track-A parameterizations migrate to AST expressions;
     # Track-B state-mutating schemes route through the discretization
     # RFC's named schemes (`docs/rfcs/closed-function-registry.md` §6).
-    # File-loaded `operators` are now a hard error. (The typed `EsmFile`
-    # fields survive for in-memory compatibility only and stay `nothing`
-    # on every parse path.)
+    # A document carrying one is refused.
     if _raw_get(data, "operators", nothing) !== nothing
         throw(
             ParseError(
