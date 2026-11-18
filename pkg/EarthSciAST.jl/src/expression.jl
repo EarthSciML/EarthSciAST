@@ -763,22 +763,12 @@ Return the numeric value of a literal node, as `Float64`. Throws on non-literals
 literal_value(expr::NumExpr) = expr.value
 literal_value(expr::IntExpr) = Float64(expr.value)
 
-# Int64-representability of an integral Float64 — TWO deliberately different
-# bounds, each pinned by its caller's behavior:
-#
-#  - `_int64_maybe_representable(f)`: `abs(f) <= Float64(typemax(Int64))`.
-#    `Float64(typemax(Int64))` rounds UP to 2^63, so `f == 2^63` passes and the
-#    caller's subsequent `Int64(f)` throws `InexactError` — which `simplify`'s
-#    fold deliberately catches as "decline to fold" (algebraic fallthrough, NOT
-#    a `NumExpr` fold). Tightening the bound would change that path's result.
-#
-#  - `_int64_exactly_representable(f)`: half-open signed range
-#    `Float64(typemin(Int64)) <= f < 2^63` — every passing integral value
-#    converts via `Int64(f)` without error. Used by the canonical `const`-value
-#    emitter (canonicalize.jl), which must never throw on the boundary.
+# A looser bound than the document rule `_as_int64`: `abs(f) <= 2^63`
+# (`Float64(typemax(Int64))` rounds up to 2^63), so `f == 2^63` passes and the
+# caller's `Int64(f)` throws `InexactError`, which `simplify`'s fold catches as
+# "decline to fold" (algebraic fallthrough, not a `NumExpr` fold). Tightening
+# the bound would change that path's result.
 _int64_maybe_representable(f::Float64)::Bool = abs(f) <= Float64(typemax(Int64))
-_int64_exactly_representable(f::Float64)::Bool =
-    Float64(typemin(Int64)) <= f < Float64(typemax(Int64))
 
 # Exception types `simplify`'s constant-folding step treats as "decline to
 # fold" (fall through to the algebraic rules) rather than a bug:

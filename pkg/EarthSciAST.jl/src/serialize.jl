@@ -12,7 +12,9 @@ using JSON3
 Emit a stoichiometric coefficient as an integer when the value is exact, else as
 its Float64 form. Integer exactness keeps existing integer-only fixtures
 byte-identical across a parse/re-emit cycle, while fractional values (e.g.
-`0.87 CH2O`, `1.86 CH3O2`) survive untouched.
+`0.87 CH2O`, `1.86 CH3O2`) survive untouched. The bound is 2^53, not the
+`Int64` range of [`_as_int64`](@ref): above it a binary64 coefficient need not
+be the integer the author wrote.
 """
 function _emit_stoich(x::Real)
     if isinteger(x) && isfinite(x) && abs(x) < 2.0^53
@@ -73,8 +75,7 @@ end
 # `100`); a `const` built in memory can hold `Float64`s and would otherwise
 # write `100.0`, unlike a reload of the same document and unlike every other
 # binding.
-_canonical_value_numbers(x::AbstractFloat) =
-    (isfinite(x) && isinteger(x) && _int64_exactly_representable(Float64(x))) ? Int64(x) : x
+_canonical_value_numbers(x::AbstractFloat) = something(_as_int64(x), x)
 _canonical_value_numbers(x::AbstractVector) = Any[_canonical_value_numbers(e) for e in x]
 _canonical_value_numbers(x::AbstractDict) =
     Dict{String, Any}(string(k) => _canonical_value_numbers(e) for (k, e) in pairs(x))

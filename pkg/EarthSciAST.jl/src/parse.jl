@@ -61,11 +61,8 @@ function expression_from_json(data::Any)::ASTExpr
         # `expr` body). Without this an integer ratio inside an aggregate would
         # round-trip as `1.0/N.0` and could never be byte-identical across the
         # five bindings. Non-integral floats stay `NumExpr`.
-        if isfinite(data) && isinteger(data) &&
-                typemin(Int64) <= data <= typemax(Int64) && Float64(Int64(data)) == data
-            return IntExpr(Int64(data))
-        end
-        return NumExpr(Float64(data))
+        i = _as_int64(data)
+        return i === nothing ? NumExpr(Float64(data)) : IntExpr(i)
     elseif isa(data, String)
         return VarExpr(data)
     elseif _has_field(data, :op)
@@ -776,9 +773,7 @@ function coerce_solver(data)
     # read (`0`, not `0.0`). An integer past Int64 has no exact home and is
     # carried as its binary64 value.
     _bound(v) = v isa AbstractString ? String(v) :
-        v isa Int64 ? v :
-        v isa Integer && typemin(Int64) <= v <= typemax(Int64) ? Int64(v) :
-        Float64(v)
+        v isa Integer ? something(_as_int64(v), Float64(v)) : Float64(v)
     span = _f("time_span")
     s = Solver(
         stiffness = _str(_f("stiffness")),

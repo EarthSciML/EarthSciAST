@@ -41,6 +41,20 @@ function _allof(f::F, xs) where {F}
 end
 
 """
+    _as_int64(x::Real) -> Union{Int64, Nothing}
+
+The exact `Int64` value of `x` when `x` is integral and in `Int64` range, else
+`nothing`: CONFORMANCE_SPEC §5.5.3.1 rule 1, "an integral JSON number in
+`Int64` range is an integer, however it was spelled". `-0.0` is the integer
+`0`. A `Bool` is an `Integer` here; a caller that refuses booleans screens
+them first.
+"""
+_as_int64(x::Int64) = x
+_as_int64(x::Integer) = typemin(Int64) <= x <= typemax(Int64) ? Int64(x) : nothing
+_as_int64(x::AbstractFloat) = isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : nothing
+_as_int64(x::Real) = _as_int64(Float64(x))
+
+"""
     SCHEMA_VERSION
 
 The `.esm` FORMAT version (semver string) this implementation targets — the
@@ -1283,8 +1297,7 @@ end
 _coerce_variable_bound(::Nothing) = nothing
 _coerce_variable_bound(x::Bool) =
     throw(ArgumentError("a variable bound is a number or a variable name, got $(x)"))
-_coerce_variable_bound(x::Integer) =
-    typemin(Int64) <= x <= typemax(Int64) ? Int64(x) : Float64(x)
+_coerce_variable_bound(x::Integer) = something(_as_int64(x), Float64(x))
 _coerce_variable_bound(x::Real) = Float64(x)
 _coerce_variable_bound(x::AbstractString) = String(x)
 _coerce_variable_bound(x::ASTExpr) = x

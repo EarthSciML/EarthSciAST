@@ -487,11 +487,8 @@ function _emit_canonical_value(v)::String
     elseif v isa Integer
         return string(v)
     elseif v isa AbstractFloat
-        f = Float64(v)
-        if isfinite(f) && isinteger(f) && _int64_exactly_representable(f)
-            return string(Int64(f))
-        end
-        return format_canonical_float(f)
+        i = _as_int64(v)
+        return i === nothing ? format_canonical_float(Float64(v)) : string(i)
     elseif v isa AbstractString
         return _json_string(v)
     elseif v isa AbstractArray
@@ -678,11 +675,7 @@ const _DEPRECATED_DOCUMENT_OPS = Dict(
 # the nearest binary64 of its token.
 function _canonical_document_number(x::Real)
     x isa Bool && return x
-    if x isa AbstractFloat
-        return isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : Float64(x)
-    end
-    x isa Integer && !(typemin(Int64) <= x <= typemax(Int64)) && return Float64(x)
-    return x
+    return something(_as_int64(x), Float64(x))
 end
 
 # Every number of a JSON value in canonical form, at every depth.

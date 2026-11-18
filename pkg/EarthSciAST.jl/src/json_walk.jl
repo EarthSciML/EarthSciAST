@@ -187,11 +187,10 @@ _json3_to_ordered(x) = x
 # except an array's numbers after its first non-integral one, which stay
 # floats as JSON3 keeps them. (An integer literal above 2^53 has already been
 # rounded by then; JSON3 would have re-read its text.)
-_json3_int(v::Float64) = isinteger(v) && -9.223372036854775808e18 <= v < 9.223372036854775808e18
 function _json3_reint(x::JSON3.Object)
     out = OrderedDict{String, Any}()
     for (k, v) in pairs(x)
-        out[string(k)] = v isa Float64 ? (_json3_int(v) ? unsafe_trunc(Int64, v) : v) :
+        out[string(k)] = v isa Float64 ? something(_as_int64(v), v) :
             (v isa JSON3.Object || v isa JSON3.Array) ? _json3_reint(v) : v
     end
     return out
@@ -201,8 +200,9 @@ function _json3_reint(x::JSON3.Array)
     floated = false
     for (i, v) in enumerate(x)
         if v isa Float64
-            if !floated && _json3_int(v)
-                out[i] = unsafe_trunc(Int64, v)
+            i64 = floated ? nothing : _as_int64(v)
+            if i64 !== nothing
+                out[i] = i64
             else
                 out[i] = v
                 floated = true

@@ -253,4 +253,18 @@ using EarthSciAST
         @test err isa ESM.ParseError
         @test occursin("Invalid ModelVariableType: bogus", sprint(showerror, err))
     end
+
+    @testset "Integral numbers in Int64 range are integers (CONFORMANCE §5.5.3.1)" begin
+        as_int = EarthSciAST._as_int64
+        @test as_int(1.0) === 1
+        @test as_int(-0.0) === 0
+        @test as_int(0.5) === nothing
+        @test as_int(0x1p63) === nothing
+        @test as_int(-0x1p63) === typemin(Int64)
+        @test as_int(Inf) === nothing && as_int(NaN) === nothing
+        @test as_int(Int128(2)^63) === nothing
+        @test as_int(typemax(Int64)) === typemax(Int64)
+        @test EarthSciAST.expression_from_json(-0x1p63) isa IntExpr
+        @test EarthSciAST.expression_from_json(0x1p63) isa NumExpr
+    end
 end
