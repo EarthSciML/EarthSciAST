@@ -1,16 +1,9 @@
-"""
-Reaction system to ODE conversion functionality.
+# Reaction systems lowered to equations by mass-action kinetics (esm-spec §7.4,
+# esm-libraries-spec §4.6.2): the lowering flatten uses, and `derive_odes`.
 
-This module implements the conversion of ReactionSystem objects to ODE-based Models
-using standard mass action kinetics as specified in Libraries Spec Section 7.4.
-"""
-
-# Fallback initial concentration / units for a species that declares no scalar
-# `default`. esm-spec §7.4 pins a species' initial value to `species.default`
-# ("Initial conditions. A species' initial value is its scalar
-# `species.default`") but specifies NO fallback value or unit system when it is
-# absent — `1.0` in `"mol/L"` is this library's historical convention, kept for
-# backward compatibility of `derive_odes` output.
+# What `derive_odes` gives a species that declares no `default` or `units`.
+# esm-spec §7.4 makes a species' initial value its `default` and names no
+# fallback; these are this binding's.
 const DEFAULT_SPECIES_CONCENTRATION = 1.0
 const DEFAULT_SPECIES_UNITS = "mol/L"
 
@@ -19,10 +12,8 @@ const DEFAULT_SPECIES_UNITS = "mol/L"
 
 The reaction's stoichiometry as `(species, signed_stoichiometry)` pairs:
 substrates first with NEGATIVE sign, then products with POSITIVE sign, each
-side in its declared order. Uses `raw_substrates`/`raw_products`, which bypass
-the backward-compat `getproperty` Dict shim on `Reaction`. This is the single
-signed-stoichiometry iteration shared by `lower_reactions_to_equations`,
-`stoichiometric_matrix`, and flatten's reaction-species collection
+side in its declared order. The one signed-stoichiometry iteration, shared by
+`stoichiometric_matrix` and flatten's reaction-species collection
 (`_collect_reaction_species!`).
 """
 function each_stoich_term(rxn::Reaction)::Vector{Tuple{String, Float64}}
@@ -74,26 +65,13 @@ end
 """
     derive_odes(rxn_sys::ReactionSystem) -> Model
 
-Generate an ODE model from a reaction system using standard mass action kinetics.
-
-Creates state variables for each species, parameters for rate constants, and equations
-with d[species]/dt = net_stoichiometry * rate_law. Handles source reactions (null
-substrates), sink reactions (null products), and constraint equations.
-
-# Arguments
-- `rxn_sys::ReactionSystem`: Input reaction system with species, reactions, and parameters
-
-# Returns
-- `Model`: ODE model with variables, equations, and optional events/subsystems
-
-# Algorithm (Libraries Spec Section 7.4)
-1. Create state variables for all species in the reaction system, except
-   reservoir species (`constant: true`), which become parameters
-2. Create parameter variables for all parameters (rate constants)
-3. For each reaction, compute the mass action rate expression
-4. For each species, compute the net rate of change from all reactions
-5. Create differential equations d[species]/dt = net_rate, except for
-   reservoir species, which are held fixed and get none
+The reaction system as a model (esm-spec §7.4): its variables
+([`reaction_variables`](@ref)), each species without a `default`, `description`
+or `units` given [`DEFAULT_SPECIES_CONCENTRATION`](@ref), a generated
+description and [`DEFAULT_SPECIES_UNITS`](@ref); its equations
+`D(X) = Σ stoich · rate` ([`lower_reactions_to_equations`](@ref)); and each
+subsystem converted the same way. The reaction system's constraint equations
+and events are not carried over.
 
 # Examples
 ```julia
@@ -111,8 +89,6 @@ model = derive_odes(rxn_sys)
 ```
 """
 function derive_odes(rxn_sys::ReactionSystem)::Model
-    # Each species keeps its declared default, description and units; the
-    # library conventions fill in only what it does not declare.
     variables = reaction_variables(rxn_sys)
     for species in rxn_sys.species
         v = variables[species.name]
@@ -123,10 +99,7 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
         )
     end
 
-    # Equations come from the shared lowering helper used by flatten.
     equations = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
-
-    # Handle subsystems recursively
     subsystems = Dict{String, Model}()
     for (name, subsys) in rxn_sys.subsystems
         subsystems[name] = derive_odes(subsys)
@@ -138,22 +111,10 @@ end
 """
     stoichiometric_matrix(rxn_sys::ReactionSystem) -> Matrix{Float64}
 
-Compute the net stoichiometric matrix (species × reactions).
-
-The stoichiometric matrix S has dimensions (n_species × n_reactions) where:
-- S[i,j] = net stoichiometry of species i in reaction j
-- Net stoichiometry = products - reactants
-- Positive values indicate production, negative values indicate consumption
-
-Values are `Float64` because v0.2.x allows fractional stoichiometries
-(e.g. `ISOP+O3 → 0.87 CH2O`). Integer-only systems produce a matrix whose
-entries happen to be exact integers stored as `Float64`.
-
-# Arguments
-- `rxn_sys::ReactionSystem`: Input reaction system
-
-# Returns
-- `Matrix{Float64}`: Stoichiometric matrix with dimensions (n_species, n_reactions)
+The net stoichiometric matrix, species × reactions: `S[i, j]` is species `i`'s
+product coefficients minus its substrate coefficients in reaction `j`, positive
+for production. `Float64`, since a stoichiometry may be fractional
+(`ISOP + O3 → 0.87 CH2O`).
 
 # Examples
 ```julia
@@ -164,14 +125,8 @@ entries happen to be exact integers stored as `Float64`.
 ```
 """
 function stoichiometric_matrix(rxn_sys::ReactionSystem)::Matrix{Float64}
-    n_species = length(rxn_sys.species)
-    n_reactions = length(rxn_sys.reactions)
-
-    # Create species name to index mapping
     species_idx = Dict(species.name => i for (i, species) in enumerate(rxn_sys.species))
-
-    # Initialize stoichiometric matrix
-    S = zeros(Float64, n_species, n_reactions)
+    S = zeros(Float64, length(rxn_sys.species), length(rxn_sys.reactions))
 
     for (j, reaction) in enumerate(rxn_sys.reactions)
         for (species, signed_stoich) in each_stoich_term(reaction)
@@ -187,23 +142,9 @@ end
 """
     mass_action_rate(reaction::Reaction, species::Vector{Species}) -> ASTExpr
 
-Compute the mass action rate expression for a reaction.
-
-Uses standard mass action kinetics: `rate = k * ∏[reactants]^stoichiometry`.
-
-Per `esm-spec.md` §7.4 the `reaction.rate` field is the rate **coefficient**
-(`k`, possibly a temperature-dependent expression). The full rate law is
-always `k · ∏ Sᵢ^nᵢ` — the runner unconditionally multiplies the coefficient
-by the substrate product. Source reactions (no substrates) return the
-coefficient unchanged.
-
-# Arguments
-- `reaction::Reaction`: The reaction to compute the rate for
-- `species::Vector{Species}`: All species in the system (unused by this
-  helper; retained for API stability and future validation)
-
-# Returns
-- `ASTExpr`: Mass action rate expression
+The mass-action rate law of `reaction` (esm-spec §7.4): its `rate`, the rate
+coefficient `k`, times `∏ Sᵢ^nᵢ` over its substrates; the coefficient alone for
+a source reaction (no substrates). `species` is not read.
 
 # Examples
 ```julia
@@ -216,13 +157,7 @@ coefficient unchanged.
 """
 function mass_action_rate(reaction::Reaction, species::Vector{Species})::ASTExpr
     rate_expr = reaction.rate
-
-    # Source reactions (no substrates): the rate expression IS the full rate.
-    if reaction.substrates === nothing || isempty(reaction.substrates)
-        return rate_expr
-    end
-
-    # Always multiply the rate coefficient by ∏[substrate]^stoich (spec §7.4).
+    (reaction.substrates === nothing || isempty(reaction.substrates)) && return rate_expr
     mass_action_terms = ASTExpr[rate_expr]
     for entry in reaction.substrates
         species_expr = VarExpr(entry.species)
@@ -238,46 +173,29 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::ASTExpr
         end
     end
 
-    # The substrate loop above pushed at least one factor (the early return
-    # covers the no-substrate case), so there are always ≥ 2 terms here.
     return OpExpr("*", mass_action_terms)
 end
-
-# ========================================
-# Reaction Lowering Helper (§4.6 + §4.7.6)
-# ========================================
 
 """
     lower_reactions_to_equations(reactions, species) -> Vector{Equation}
 
-Produce the ODE equations induced by a set of reactions using standard
-mass-action kinetics: `d[X]/dt = Σ (stoich_ij * rate_j)`.
+The equations a set of reactions induces by mass-action kinetics,
+`D(X) = Σ_j stoich_Xj · rate_j`, for `derive_odes` and `flatten` alike. The
+tree is the canonical form esm-libraries-spec §4.6.2 pins byte for byte across
+the bindings (`tests/conformance/reactions/lowering_form.json`): an n-ary `+`
+over the species' terms in reaction order, each term the bare rate law or
+`stoich * rate` with an integer literal for an integral coefficient. The
+left-hand side is `D(X)` with `wrt` `"t"` whatever the domain.
 
-Shared by `derive_odes` (reaction → Model) and `flatten` (EsmFile → FlattenedSystem)
-so there is exactly one place that turns stoichiometry into equations.
+No equation is emitted for a RESERVOIR (`constant: true`, §7.4), which is held
+fixed but still read in every rate law it appears in, nor for a species whose
+net stoichiometry is zero in every reaction (one in no reaction, or a
+catalyst): esm-spec §6.3.1 classifies by complement, so leaving the equation
+out makes it the algebraic unknown it is, where `D(X) = 0` would make it a
+differential unknown that never moves.
 
-The tree is the canonical form esm-libraries-spec §4.6.2 pins byte for byte
-across the bindings (`tests/conformance/reactions/lowering_form.json`): an
-n-ary `+` over the species' terms in reaction order, each term the bare rate
-law or `stoich * rate` with an integer literal for an integral coefficient.
-
-The LHS is always `D(X, t)` symbolically, regardless of the document's
-domain — dimension promotion (§4.7.6) is applied by `flatten`, not here.
-Spatial operators are added downstream when coupling adds them.
-
-A species with `constant: true` is a RESERVOIR (§7.4): it is held fixed, so no
-`D(X, t)` equation is emitted for it, while it still contributes its
-concentration to every rate law it appears in. It is therefore skipped as an
-equation TARGET only — it stays in `species` so `mass_action_rate` keeps
-reading it as a substrate/product factor.
-
-A species whose NET stoichiometry is zero in every reaction likewise gets no
-equation — usually because it appears in no reaction at all, but a catalyst
-(equal substrate and product stoichiometry everywhere it appears) meets the same
-test. Its rate is the empty sum, and emitting `D(X, t) = 0` for it would make it
-a differential unknown that never moves; esm-spec §6.3.1 classifies by
-COMPLEMENT, so leaving the equation out is what makes it the ALGEBRAIC unknown it
-is. See the comment at the skip below.
+A substrate or product the system does not declare is `undefined_species`
+(esm-spec §7.2), a `ParseError`.
 """
 function lower_reactions_to_equations(
         reactions::Vector{Reaction},
@@ -305,10 +223,6 @@ function lower_reactions_to_equations(
             entries === nothing && continue
             for entry in entries
                 sp = entry.species
-                # A substrate or product the system does not declare is refused,
-                # not dropped: dropping it lowers a different reaction (a product
-                # that is never produced) with no diagnostic (esm-spec §7.2,
-                # `undefined_species`). The other bindings refuse it too.
                 i = get(species_idx, sp, 0)
                 i == 0 && throw(
                     ParseError(
@@ -324,9 +238,6 @@ function lower_reactions_to_equations(
         end
 
         for i in touched
-            # Reservoir species (§7.4): held fixed, so it gets no ODE. Its
-            # mass-action contribution to the OTHER species' rates is untouched —
-            # `mass_action_rate` reads it from the reaction either way.
             species[i].constant === true && continue
             stoich = get(produced, i, 0.0) - get(consumed, i, 0.0)
             stoich == 0 && continue
@@ -345,18 +256,6 @@ function lower_reactions_to_equations(
     end
 
     for (i, name) in enumerate(species_names)
-        # A species with NO net contribution from any reaction gets NO equation,
-        # rather than a vacuous `D(X, t) = 0`. The empty sum is zero, so emitting
-        # it is defensible arithmetic — but esm-spec §6.3.1 classifies by
-        # COMPLEMENT, and the two readings give the species different roles: with
-        # the equation it is a differential unknown that never moves, without it
-        # an unknown no equation names, i.e. ALGEBRAIC. §6.3.1 is the operative
-        # rule and the second is its answer.
-        #
-        # This is also what the other four bindings do (Python `reactions.py`,
-        # Rust `reactions.rs`, Go `flatten.go`, TypeScript `reactions.ts`); Julia
-        # emitting the zero was a 4-1 outlier, and the divergence was recorded in
-        # `flatten_conformance_test.jl`'s `_FC_DIVERGENCES` until this changed.
         isempty(terms[i]) && continue
         lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt = "t")
         rhs = length(terms[i]) == 1 ? terms[i][1] : OpExpr("+", terms[i])
