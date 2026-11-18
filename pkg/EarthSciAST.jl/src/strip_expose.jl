@@ -252,7 +252,9 @@ function _event_body(ev)
         d["conditions"] = Any[serialize_expression(c) for c in ev.conditions]
     end
     if ev isa DiscreteEvent || (ev isa CouplingEvent && ev.trigger !== nothing)
-        d["trigger"] = serialize_trigger(ev.trigger)
+        trig = serialize_trigger(ev.trigger)
+        get(trig, "initial_offset", nothing) == 0 && delete!(trig, "initial_offset")
+        d["trigger"] = trig
     end
     d["affects"] = Any[_affect_json(a) for a in ev.affects]
     if !(ev isa DiscreteEvent) && ev.affect_neg !== nothing

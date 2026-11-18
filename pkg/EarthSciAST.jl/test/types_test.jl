@@ -143,6 +143,18 @@ using EarthSciAST
         @test periodic_trigger.period == 10.0
         @test periodic_trigger.phase == 2.0
 
+        # `initial_offset` keeps its presence: an authored 0 is written back,
+        # an absent key stays absent.
+        @test PeriodicTrigger(10.0).phase === nothing
+        for raw in (
+                Dict("type" => "periodic", "interval" => 10.0, "initial_offset" => 0.0),
+                Dict("type" => "periodic", "interval" => 10.0),
+            )
+            back = EarthSciAST.serialize_trigger(EarthSciAST.coerce_trigger(raw))
+            @test haskey(back, "initial_offset") == haskey(raw, "initial_offset")
+            haskey(raw, "initial_offset") && @test back["initial_offset"] === 0.0
+        end
+
         preset_trigger = PresetTimesTrigger([1.0, 5.0, 10.0])
         @test preset_trigger isa DiscreteEventTrigger
         @test preset_trigger.times == [1.0, 5.0, 10.0]

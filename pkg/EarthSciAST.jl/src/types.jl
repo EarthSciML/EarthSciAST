@@ -718,18 +718,20 @@ struct ConditionTrigger <: DiscreteEventTrigger
 end
 
 """
-    PeriodicTrigger(period::Float64, phase::Float64)
+    PeriodicTrigger(period::Float64; phase = nothing)
 
 Trigger that fires periodically.
-- `period`: time interval between triggers
-- `phase`: time offset for first trigger
+- `period`: the wire `interval`, the time between firings
+- `phase`: the wire `initial_offset`, the time offset of the first firing;
+  `nothing` when the document does not write it (the schema default is 0), so
+  an authored `0` is written back and an absent key stays absent
 """
 struct PeriodicTrigger <: DiscreteEventTrigger
     period::Float64
-    phase::Float64
+    phase::Union{Float64, Nothing}
 
-    # Constructor with optional phase
-    PeriodicTrigger(period::Float64; phase = 0.0) = new(period, phase)
+    PeriodicTrigger(period::Float64; phase = nothing) =
+        new(period, phase === nothing ? nothing : Float64(phase))
 end
 
 """

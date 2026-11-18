@@ -562,10 +562,9 @@ function coerce_trigger(data)::DiscreteEventTrigger
         period = Float64(interval_val)
         phase_val = _get_field(data, :initial_offset, nothing)
         if phase_val === nothing
-            phase_val = _get_field(data, :phase, 0.0)
+            phase_val = _get_field(data, :phase, nothing)
         end
-        phase = Float64(phase_val)
-        return PeriodicTrigger(period, phase = phase)
+        return PeriodicTrigger(period, phase = phase_val)
     elseif trigger_type_str == "preset_times" || (trigger_type_str === nothing && _has_field(data, :times))
         times_val = _get_field(data, :times, nothing)
         if times_val === nothing

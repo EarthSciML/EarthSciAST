@@ -177,9 +177,7 @@ function serialize_trigger(trigger::DiscreteEventTrigger)::Dict{String, Any}
         return Dict("type" => "condition", "expression" => serialize_expression(trigger.expression))
     elseif isa(trigger, PeriodicTrigger)
         result = Dict("type" => "periodic", "interval" => trigger.period)
-        if trigger.phase != 0.0
-            result["initial_offset"] = trigger.phase
-        end
+        trigger.phase === nothing || (result["initial_offset"] = trigger.phase)
         return result
     elseif isa(trigger, PresetTimesTrigger)
         return Dict("type" => "preset_times", "times" => trigger.times)
