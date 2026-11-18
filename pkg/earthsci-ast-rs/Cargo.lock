@@ -989,7 +989,7 @@ dependencies = [
  "js-sys",
  "jsonschema",
  "ndarray",
- "num-bigint 0.5.1",
+ "num-bigint 0.4.8",
  "num-rational",
  "num-traits",
  "proptest",

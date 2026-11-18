@@ -351,7 +351,7 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "ndarray",
- "num-bigint 0.5.1",
+ "num-bigint",
  "num-rational",
  "num-traits",
  "rayon",
@@ -559,7 +559,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e246562084dde8ebbcc943b261c406ce4f68e5032ec28029a251a47d6a295500"
 dependencies = [
  "num",
- "num-bigint 0.4.8",
+ "num-bigint",
 ]
 
 [[package]]
@@ -1213,7 +1213,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f0e759e014e630f90af745101b614f761306ddc541681e546649068e25ec1b9"
 dependencies = [
  "byteorder",
- "num-bigint 0.4.8",
+ "num-bigint",
  "py_literal",
 ]
 
@@ -1232,7 +1232,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint 0.4.8",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -1245,16 +1245,6 @@ name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -1302,7 +1292,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.8",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -1518,7 +1508,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "102df7a3d46db9d3891f178dcc826dc270a6746277a9ae6436f8d29fd490a8e1"
 dependencies = [
- "num-bigint 0.4.8",
+ "num-bigint",
  "num-complex",
  "num-traits",
  "pest",

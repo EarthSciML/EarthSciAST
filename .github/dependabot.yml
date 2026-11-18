@@ -55,6 +55,11 @@ updates:
       # not build under the Typst plugin's custom random source.
       - dependency-name: "getrandom"
         versions: [">=0.4"]
+      # num-rational 0.4 is built on num-bigint 0.4, and units.rs passes
+      # num-bigint values into num-rational, so the two must move together.
+      # No num-rational release takes num-bigint 0.5 yet.
+      - dependency-name: "num-bigint"
+        versions: [">=0.5"]
     groups:
       cargo:
         patterns: ["*"]
