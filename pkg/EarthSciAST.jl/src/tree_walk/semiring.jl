@@ -222,7 +222,7 @@ end
 )
 
 # ============================================================
-# 5c-join. M2 — value-equality joins (RFC semiring-faq-unified-ir §5.3)
+# 5c-join. Value-equality joins (RFC semiring-faq-unified-ir §5.3)
 # ============================================================
 #
 # A `join` clause gates which (output × contracted) index combinations of an
@@ -287,7 +287,7 @@ end
 # the default can fill:
 #   * `:binder` — the key names an INDEX SET (§5.5.8 precedence step 1). An
 #     author who meant a particular side can already name the RANGE SYMBOL
-#     instead, which is what the historic diagnostic advises, so an ambiguous set
+#     instead, which is what the diagnostic advises, so an ambiguous set
 #     stays an error and only an explicit `syms` resolves it.
 #   * `:column_axis` — the symbol came from a DATA COLUMN's declared 1-D axis
 #     (step 2). Here there is nothing else the author can write: the pair holds
@@ -339,7 +339,7 @@ function _join_sym_for_key(
         )
     elseif via === :binder
         # A key that NAMES the index set can already say which side it means by
-        # naming the range symbol instead, so the historic rejection stands.
+        # naming the range symbol instead, so the rejection stands.
         throw(
             TreeWalkError(
                 "E_TREEWALK_JOIN_AMBIGUOUS_KEY",
@@ -1015,7 +1015,7 @@ _computed_keys(vals) = _ComputedKeys(
 )
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
-# runs over (Phase 2a). The list's length fixes every factor's rank
+# runs over. The list's length fixes every factor's rank
 # (`_overlap_env_rank`, CONFORMANCE_SPEC §5.5.6): 2 or 4 names are 1-D columns,
 # 1 name a `[pos, verts, coord]` RING stack. In both forms a factor's FIRST axis
 # is its position axis, so the first factor's first shape index set names the
@@ -1220,7 +1220,7 @@ function _join_admits(gates, binding::AbstractDict)
             # OVERLAP gate has empty `codes_l` and falls through.)
             g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
         else
-            # OVERLAP gate (Phase 2a): the (pos_l, pos_r) pair must be in the
+            # OVERLAP gate: the (pos_l, pos_r) pair must be in the
             # prebuilt broad-phase candidate set (envelope candidacy).
             (binding[g.sym_l], binding[g.sym_r]) in g.candidates || return false
         end

@@ -219,12 +219,12 @@ end
 # (`_resolve_index_of_faq`), and the scalar reduction
 # (`_resolve_scalar_faq`) — all unroll the same product: iterate the
 # Cartesian product of the contracted-index iterators, drop join-rejected
-# combinations at build time (M2, §5.3), substitute the concrete contracted
+# combinations at build time, substitute the concrete contracted
 # indices into the (already output-index-substituted) `body`, and guard
 # filter-rejected terms with a runtime `ifelse(pred, term, 0̄)` (§7.2). `emit!`
 # receives each surviving term; the caller owns what happens next (resolve to a
 # scalar ASTExpr vs resolve+compile to a `_Node`) and how the terms are ⊕-combined.
-# With neither gates nor filter this is the unchanged M1 expansion.
+# With neither gates nor filter this is the plain expansion.
 #
 # Dict reuse: `_sub_preserving`/`_join_admits` only READ these dicts (never
 # retain them), and the key SET is identical every iteration — only the values
@@ -608,9 +608,8 @@ _expand_contract_range(rspec, idx_env::Dict{String, Int}, const_arrays::Abstract
 
 # Resolve index(faq(...), k1, k2, ...) in expression position by
 # substituting the output_idx values and unrolling contracted indices at
-# build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`,
-# the `_is_faq_D_lhs` branch of the derivative loop) but produces a scalar
-# ASTExpr instead of writing to rhs_list.
+# build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`) but
+# produces a scalar ASTExpr instead of writing to rhs_list.
 function _resolve_index_of_faq(
         faq_expr::OpExpr, idx_args::Vector{ASTExpr},
         array_var_info, var_map, const_arrays,
@@ -641,9 +640,8 @@ function _resolve_index_of_faq(
     # Output-index substitution. Each output-index arg is EITHER a bound symbol —
     # kept SYMBOLIC, substituted as its own resolved-in-place expression so the
     # unrolled body reads `A[c, <sym>]` and lowers to a runtime `_ConstGatherRef`
-    # (wall2 Phase C, compile-once fast path) — OR a build-time constant, folded to
-    # an `IntExpr` exactly as before. With an EMPTY `bound_syms` every arg is
-    # constant, so this is byte-identical to the pre-Phase-C concrete expansion.
+    # — OR a build-time constant, folded to an `IntExpr`. With an EMPTY
+    # `bound_syms` every arg is constant.
     nd = length(output_idx_strs)
     symbolic = falses(nd)
     k_vals = Vector{Int}(undef, nd)
@@ -1296,7 +1294,7 @@ function _broadcast_operand_subs(
     return adj ? out : nothing
 end
 
-# ── Runtime contraction loop gate (ess-runtime-contraction) ─────────────────
+# ── Runtime contraction loop gate ─────────────────────────────────────────────
 # Depth of the array-equation per-cell resolve (`_compile_faq_percell!`). A
 # scalar aggregate nested INSIDE an array-equation cell body must keep unrolling:
 # its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
@@ -1369,7 +1367,7 @@ function _resolve_symbolic(
 end
 
 # Try to compile a uniform contraction to a single runtime loop node instead of
-# unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
+# unrolling it. Returns a `__contract_loop` marker-op
 # ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
 # the resolve's `_Decline` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
 # (a reserved bound-sym `VarExpr`) and resolves the body ONCE: a loop var reaching
@@ -1407,7 +1405,7 @@ function _try_build_contraction_loop(
     return node
 end
 
-# ── Whole-array contraction loop nest (ess-array-contraction) ────────────────
+# ── Whole-array contraction loop nest ────────────────
 # Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
 # symbolic too (see `_resolve_array_contraction_term`). WHICH tier gets an
 # equation is decided by POSITION in the cascade: `_compile_faq_equation!`
@@ -1498,10 +1496,9 @@ function _resolve_scalar_faq(
     contract_iters = _contract_iters_at(
         contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, const_arrays
     )
-    # M2 (§5.3 / §7.2): build-time join gates + runtime filter guard. Every join
+    # Build-time join gates + runtime filter guard (§5.3 / §7.2). Every join
     # key of a scalar aggregate is a contracted symbol, so the binding is the
-    # contraction tuple (no output-index seed). With neither join nor filter,
-    # this is the unchanged M1 scalar expansion.
+    # contraction tuple (no output-index seed).
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
@@ -1510,10 +1507,10 @@ function _resolve_scalar_faq(
             pgather, memo, bound_syms
         )
     end
-    # ── Runtime contraction loop opt-in (ess-runtime-contraction) ──────────────
-    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else keeps
-    # unrolling exactly as before. Gated conservatively (correctness first):
-    #   * enabled (env), and NOT already inside an array-equation cell resolve
+    # ── Runtime contraction loop opt-in ──────────────
+    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else
+    # unrolls. Gated conservatively (correctness first):
+    #   * enabled by the compiler plan, and NOT already inside an array-equation cell resolve
     #     (loop node is confined to scalar-walker contexts — see `_BuildState.array_cell_depth`);
     #   * NOT the symbolic compile-once cellwise path (`bound_syms` empty) — that
     #     path binds its own reserved symbols and runs a separate evaluator;
@@ -1592,18 +1589,17 @@ const _EMPTY_CONST_ARRAYS = Dict{String, AbstractArray{Float64}}()
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PARAMS = Dict{String, Float64}()
 
-# A live forcing buffer bound by reference into the evaluator (ess-14f.3, JL-J0).
+# A live forcing buffer bound by reference into the evaluator.
 # Unlike `const_arrays` (build-time-FROZEN: `index(arr,…)` const-folds to a
 # `NumExpr` literal, tree_walk.jl const-array branch), a `_PGatherArray` reroutes
 # the SAME `index(forcing,…)` gather to a LIVE read of a captured `flat`
 # `Vector{Float64}`. `flat = vec(buffer)` aliases the caller's dense
 # `Array{Float64}` buffer, so a discrete refresh callback's in-place `buffer .= …`
-# (ess-14f.3 J1) shows through to the RHS with zero reallocation. `dims` carries
+# shows through to the RHS with zero reallocation. `dims` carries
 # the source shape for bounds-checking + column-major linearization at build time.
 # Reading the captured `flat` (NOT `getfield(p, runtime_sym)`) is what keeps the
 # read zero-alloc: a runtime-symbol `getfield` on a heterogeneous NamedTuple boxes
-# the union and would also regress the scalar `_NK_PARAM` path — see the JL-J0
-# feasibility-gate note in `_build_evaluator_impl`.
+# the union and would also regress the scalar `_NK_PARAM` path.
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time
@@ -1618,14 +1614,15 @@ _PGatherArray(flat, dims) = _PGatherArray(flat, dims, false)
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
 
-# The set of OUTPUT-INDEX symbol names kept SYMBOLIC through `_resolve_indices`
-# (wall2 Phase C). It is EMPTY on every path except the compile-once
-# `evaluate_cellwise` fast path, so the DEFAULT threaded through the whole
-# resolve recursion is this shared read-only empty set — making every existing
-# caller byte-identical to the pre-Phase-C behaviour (a name in this set is the
-# ONLY thing that turns a const-array read into a runtime `_ConstGatherRef`
-# instead of a folded `NumExpr`). Read-only sentinel — see the `_EMPTY_*`
-# invariant block next to `_EMPTY_DERIVED_EXTENTS`.
+# The set of index symbol names kept SYMBOLIC through `_resolve_indices`: the
+# compile-once cellwise path's output indices, and the loop indices of a
+# contraction loop, a ragged loop, the whole-array nest and the scatter. A
+# const-array read whose subscript names one becomes a runtime
+# `_ConstGatherRef` rather than a folded `NumExpr`; so does one whose subscript
+# reads a parameter, a state or `t` (`_subscript_is_runtime`), whatever the
+# set holds. The default threaded through the resolve recursion is this shared
+# read-only empty set — see the `_EMPTY_*` invariant block next to
+# `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_BOUND_SYMS = Set{String}()
 
 # True iff a subscript's value is known only at run time: it references a name
@@ -1961,7 +1958,7 @@ _refs_loopvar(e::ASTExpr) =
     _args_any(x -> x isa VarExpr && startswith((x::VarExpr).name, _LOOPVAR_PREFIX), e)
 
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
-# (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
+# (`q[donor(i,k)]`) to a runtime `_NK_STATE_GATHER`. The
 # frozen slot table maps every in-bounds state cell to its flat `u` slot (built
 # once per state var per build, shared across output cells via the build state's slot tables);
 # the subscript expressions resolve normally (a loop var → `_NK_LOOPVAR`; an indirect
@@ -2180,8 +2177,8 @@ function _resolve_indices_op(
         first_arg = expr.args[1]
         # Expression-position faq: index(faq(...), k1, k2, ...)
         # Expand the faq at build time by substituting output_idx and
-        # unrolling contracted indices (same strategy as the `_is_faq_D_lhs`
-        # branch of `_build_evaluator_impl`'s derivative loop).
+        # unrolling contracted indices (the strategy `_compile_faq_percell!`
+        # uses for a whole-array derivative equation).
         if first_arg isa OpExpr && _is_faq_op(first_arg.op)
             return _resolve_index_of_faq(
                 first_arg::OpExpr, expr.args[2:end],
@@ -2304,7 +2301,7 @@ function _resolve_indices_op(
                     "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"
                 )
             )
-            # Runtime state gather (ess-runtime-contraction): a subscript depends on
+            # Runtime state gather: a subscript depends on
             # a contraction loop variable, so the slot is not a build-time constant.
             # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
             # the loop-build path (`__esm_lv_*` names); the concrete path below is
@@ -2348,7 +2345,7 @@ function _resolve_indices_op(
                 throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
             return VarExpr(cname)
         end
-        # Live forcing buffer bound via `param_arrays` (ess-14f.3, JL-J0): reroute
+        # Live forcing buffer bound via `param_arrays`: reroute
         # this gather to a LIVE read instead of the frozen const-fold below. The
         # array is a discrete-cadence loader buffer (the driver routes const-cadence
         # data to `const_arrays` and discrete-cadence data here), so its contents
@@ -2360,7 +2357,7 @@ function _resolve_indices_op(
         # gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
         # the gather from being hoisted itself, it does NOT keep the ref out of
         # `canonical_json`, which sees it as a child of every hoistable ancestor
-        # (ess-qic; see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
+        # (see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
         if first_arg isa VarExpr && haskey(pgather, first_arg.name)
             pg = pgather[first_arg.name]::_PGatherArray
             idx_args_expr = expr.args[2:end]
@@ -2430,8 +2427,7 @@ function _resolve_indices_op(
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
         # RUNTIME-VARYING vs. fully-constant subscripts are handled uniformly by
-        # `_resolve_const_array_gather` (see there); with an empty `bound_syms`
-        # this is byte-identical to the pre-Phase-C const-fold.
+        # `_resolve_const_array_gather` (see there).
         if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
             return _resolve_const_array_gather(
                 const_arrays[first_arg.name],
