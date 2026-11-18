@@ -26,6 +26,9 @@ using Test
 using EarthSciAST
 const EA = EarthSciAST
 
+# A gated provider and its gate, as the build receives them.
+_gated(prov, gate) = EA._GatedProvider(prov, EA._GateSpec(gate, "test"))
+
 # A gated provider that slices its own [layer, src, rcv] block per selection.
 mutable struct SiblingMock
     full::Array{Float64, 3}
@@ -57,10 +60,10 @@ end
     model = (variables = Dict{String, Any}("SR_L$(L).SOA" => nothing for L in 0:2),)
 
     mocks = Dict(L => SiblingMock(copy(full), Any[]) for L in 0:2)
-    gated = Dict{String, Any}(
-        "SR_L$(L).SOA" => (
-            prov = mocks[L],
-            gate = Dict{String, Any}(
+    gated = Dict{String, EA._GatedProvider}(
+        "SR_L$(L).SOA" => _gated(
+            mocks[L],
+            Dict{String, Any}(
                 "axes" => Any[
                     Dict("fixed" => Any[L]),
                     Dict("gated_by" => "supp"), "all",
@@ -108,10 +111,10 @@ end
         extents = Dict{String, Int}("faq1" => 2),
     )
     model = (variables = Dict{String, Any}("Flattened.SR" => nothing),)
-    gated = Dict{String, Any}(
-        "L.SR" => (
-            prov = SiblingMock(copy(full), Any[]),
-            gate = Dict{String, Any}(
+    gated = Dict{String, EA._GatedProvider}(
+        "L.SR" => _gated(
+            SiblingMock(copy(full), Any[]),
+            Dict{String, Any}(
                 "axes" => Any[Dict("fixed" => Any[0]), Dict("gated_by" => "supp"), "all"],
                 "applies_to" => Any["SR"]
             ),
@@ -139,10 +142,10 @@ EA.provider_sample(m::WholeOnlyMock, ::Real; selection = nothing) = m.full
         extents = Dict{String, Int}("faq1" => 2),
     )
     model = (variables = Dict{String, Any}("L.SR" => nothing),)
-    gated = Dict{String, Any}(
-        "L.SR" => (
-            prov = WholeOnlyMock(copy(full)),
-            gate = Dict{String, Any}(
+    gated = Dict{String, EA._GatedProvider}(
+        "L.SR" => _gated(
+            WholeOnlyMock(copy(full)),
+            Dict{String, Any}(
                 "axes" => Any[Dict("fixed" => Any[1]), Dict("gated_by" => "supp"), "all"],
                 "applies_to" => Any["SR"]
             ),

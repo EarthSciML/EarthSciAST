@@ -99,8 +99,7 @@ function _prepare_run(
         refuse_flat = _refuse_tree_walk_constructs
     )::PreparedRun
     if input isa AbstractString
-        isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"))
-        input = load_path(input; metaparameters = metaparameters)
+        input = _load_run_path(String(input), metaparameters)
     elseif input isa AbstractDict
         input = load_document(input; base_path = base_path, metaparameters = metaparameters)
     end
@@ -129,6 +128,12 @@ function _prepare_run(
     _refuse_reserved_liftings(prep.flat)
     refuse_flat(prep.flat)
     return prep
+end
+
+# A path loaded for a run, with the run's metaparameters.
+function _load_run_path(path::String, metaparameters)
+    isfile(path) || throw(SimulateError("esm_problem: no such file '$path'"))
+    return load_path(path; metaparameters = metaparameters)
 end
 
 # The name of the one model of a run file.

@@ -55,8 +55,8 @@ Base.showerror(io::IO, e::RefreshError) = print(io, "RefreshError: ", e.msg)
 #
 # (`provider_is_const` then comes free from the default below). The provider's
 # `refresh_times`/`refresh` already speak `Float64` seconds on the SAME axis as
-# the integrator's `t` (esio-9nb.5), so J1 needs no wall-clock↔seconds mapping:
-# the times ARE the tstops.
+# the integrator's `t`, so the refresh needs no wall-clock↔seconds mapping: the
+# times ARE the tstops.
 
 """
     provider_refresh_times(provider) -> AbstractVector{Float64}
@@ -203,8 +203,7 @@ Keywords:
   * `cache_root` — filesystem root for the download cache (per-loader subdir).
   * `loaders` — restrict to these loader names (`nothing` = every loader with
     an `esio_format`). Lets a runner exclude a loader whose format the reader
-    stack cannot construct yet (the FF10-in-zip EGU case until Phase 2) and
-    slot it in later without an API change.
+    stack cannot construct and slot it in later without an API change.
   * `url_overrides` — loader name ⇒ URL template, replacing `source.url_template`
     and its mirrors (e.g. a local mirror of a live store). An entry is honoured
     whatever its value, so an empty one is an error.
@@ -470,7 +469,7 @@ notify_forcing_refresh!(dm::DiscreteMaterializer) = _bump_epoch!(dm.epoch)
 
 Registry mapping a forcing variable name to its live buffer — the dense
 `Array{Float64}` bound BY REFERENCE through
-`esm_problem(input, tspan; param_arrays = …)` (ess-14f.3). The refresh callback's
+`esm_problem(input, tspan; param_arrays = …)`. The refresh callback's
 `affect!` writes the freshly sampled forcing into these exact objects in place, so the RHS
 (which gathers the same aliased storage via `_NK_PARAM_GATHER`) sees the update
 on its next evaluation.
@@ -654,239 +653,4 @@ function sync_forcing!(dest::NamedTuple, src::NamedTuple)
         copyto!(getfield(dest, k), getfield(src, k))
     end
     return dest
-end
-
-# ============================================================================
-# Gated providers: the selective fetch after value invention
-# ============================================================================
-
-# The const-array keys ONE GATED PROVIDER may publish its fetched variable `nm`
-# under, given every gate issued in the same fetch.
-#
-# `_const_factor_aliases` resolves a bare authored name against EVERY model
-# variable whose final dotted segment matches it. That is exactly what a
-# document-scoped `member_factor` wants, and it is WRONG for a gated provider:
-# sibling loaders may expose the SAME variable name — `ISRM_SR_L0.SOA`,
-# `ISRM_SR_L1.SOA` and `ISRM_SR_L2.SOA` are three DIFFERENT slabs of one zarr
-# store, told apart only by which loader they came from — so tail-matching makes
-# each of those three providers claim all three aliases. Whichever provider the
-# `gated` collection happens to visit last then silently wins for all of them,
-# and every model array is contracted against one arbitrary sibling's slab. The
-# collection is a `Dict`, so which sibling wins is hash order: a wrong answer
-# that is stable within a run, differs per variable name, and raises nothing.
-#
-# A provider claims an alias when it is the SOLE claimant, or when the alias IS
-# its own provider key — the post-flatten `"<Loader>.<var>"` spelling of exactly
-# that provider's variable, which no sibling can also be. An alias that several
-# providers claim and none owns is AMBIGUOUS and is left unwritten: a missing
-# const array is a loud failure at gather time, an arbitrarily chosen one is
-# this bug.
-function _gated_alias_claims(gated::AbstractDict, model)
-    claims = Dict{String, Set{String}}()      # alias => the provider keys claiming it
-    for (key, entry) in gated
-        _, gate = _unbundle_gated(entry)
-        gate === nothing && continue
-        applies = get(gate, "applies_to", nothing)
-        applies === nothing && continue
-        for name in applies
-            for a in _const_factor_aliases(model, String(name))
-                push!(get!(claims, a, Set{String}()), String(key))
-            end
-        end
-    end
-    return claims
-end
-
-function _gated_const_keys(
-        claims::AbstractDict, model, key::AbstractString,
-        nm::AbstractString
-    )
-    aliases = _const_factor_aliases(model, nm)
-    ks = String[
-        a for a in aliases
-            if length(get(claims, a, Set{String}([String(key)]))) == 1 ||
-            a == String(key)
-    ]
-    isempty(ks) && throw(
-        RefreshError(
-            "gated provider '$key' variable '$nm': every const-array key it resolves " *
-                "to ($(sort!(collect(aliases)))) is also claimed by another gated " *
-                "provider, so the fetched slab has no unambiguous name to be published " *
-                "under. Key the provider \"<Loader>.<var>\" so its own spelling can win, " *
-                "or give the sibling loaders' variables distinct names"
-        )
-    )
-    return ks
-end
-
-# ---- Phase 2b Hook 2 helper: gated-provider deferral → selective fetch -------
-# Resolve each stashed GATED provider's `selection` from the now-materialised
-# value-invention members, fetch ONLY the compact slab, and return a
-# `model-var-name => compact Float64 array` dict to merge into `const_arrays`.
-#
-# `gated` maps a provider KEY to either the bare provider or a `(prov=…, gate=…)`
-# bundle; `provider_gate_spec(prov)` supplies the gate when the bundle omits it.
-# A gate is `Dict("axes"=>[…], "applies_to"=>[names…])` where each native axis is
-# one of `Dict("fixed"=>[i])` (0-based native index → DROPPED length-1 axis),
-# `Dict("range"=>Dict("start"=>a,"stop"=>b,"step"=>s))` (a half-open strided
-# window, axis KEPT), `Dict("gated_by"=>"<derived set>")` (the set's members,
-# 1-based, as the new axis), or `"all"` (whole axis) — ONE vocabulary, whether
-# the author wrote it as a loader `select` (esm-spec §8.9.2) or the pushdown
-# rewrite generated it (CONFORMANCE_SPEC §5.5). The compact gated axis length is
-# asserted to equal the gating set's materialised extent.
-function _fetch_gated_providers(gated::AbstractDict, index_sets, vi, t0::Float64, model)
-    out = Dict{String, Any}()
-    (vi === nothing) && isempty(gated) && return out
-    # Who may publish under which const-array key — computed over ALL the gates
-    # up front, because "am I the only claimant?" is not a per-provider question.
-    alias_claims = _gated_alias_claims(gated, model)
-    # derived set name → its producer faq id (for `gated_by` resolution).
-    set_to_faq = Dict{String, String}()
-    if index_sets !== nothing
-        for (sname, is) in index_sets
-            is isa IndexSet || continue
-            is.kind == "derived" && is.from_faq !== nothing &&
-                (set_to_faq[String(sname)] = String(is.from_faq))
-        end
-    end
-    vi_members = vi === nothing ? Dict{String, Vector{Any}}() : vi.members
-    vi_extents = vi === nothing ? Dict{String, Int}() : vi.extents
-
-    for (key, entry) in gated
-        prov, gate = _unbundle_gated(entry)
-        gate === nothing && continue
-        axes = get(gate, "axes", nothing)
-        applies = get(gate, "applies_to", nothing)
-        (axes === nothing || applies === nothing) && throw(
-            RefreshError(
-                "gated provider '$key' gate spec needs both `axes` and `applies_to`"
-            )
-        )
-
-        selection = Vector{Any}(undef, length(axes))
-        drop_axes = Int[]                 # positions of `fixed` axes (dropped)
-        gated_pos = 0                     # position of the single gated axis
-        gated_extent = 0
-        for (ax_i, ax) in enumerate(axes)
-            if ax == "all"
-                selection[ax_i] = Colon()
-            elseif ax isa AbstractDict && haskey(ax, "fixed")
-                fx = ax["fixed"]
-                fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
-                selection[ax_i] = fi + 1          # 0-based native → 1-based neutral
-                push!(drop_axes, ax_i)
-            elseif ax isa AbstractDict && haskey(ax, "range")
-                # The half-open strided window of the SAME per-axis vocabulary a
-                # loader's `select` writes (esm-spec §8.9.2) — the axis is kept,
-                # so it neither drops nor gates. Bounds are already integers here
-                # (a metaparameter name resolves where the select is parsed).
-                r = ax["range"]
-                start = Int(get(r, "start", 0))
-                stop = Int(r["stop"])
-                step = Int(get(r, "step", 1))
-                step >= 1 || throw(
-                    RefreshError(
-                        "gated provider '$key' axis $ax_i: range.step must be >= 1, got $step"
-                    )
-                )
-                selection[ax_i] = collect((start + 1):step:stop)   # 0-based → 1-based
-            elseif ax isa AbstractDict && haskey(ax, "gated_by")
-                sname = String(ax["gated_by"])
-                haskey(set_to_faq, sname) || throw(
-                    RefreshError(
-                        "gated provider '$key' gates on '$sname' which is not a " *
-                            "derived index set with a from_faq"
-                    )
-                )
-                faq = set_to_faq[sname]
-                haskey(vi_members, faq) || throw(
-                    RefreshError(
-                        "gated provider '$key' gates on '$sname' (faq '$faq') but its " *
-                            "value-invention members were not materialised"
-                    )
-                )
-                mem = Int[Int(m) for m in vi_members[faq]]   # 1-based ids, set order
-                selection[ax_i] = mem
-                gated_pos = ax_i
-                gated_extent = get(vi_extents, faq, length(mem))
-            else
-                throw(
-                    RefreshError(
-                        "gated provider '$key' axis $ax_i is malformed " *
-                            "(expected \"all\", {\"fixed\":[i]}, {\"range\":{start,stop,step}}, " *
-                            "or {\"gated_by\":set})"
-                    )
-                )
-            end
-        end
-        gated_pos == 0 && throw(
-            RefreshError(
-                "gated provider '$key' declares no {\"gated_by\":…} axis"
-            )
-        )
-
-        # position of the compact gated axis AFTER dropping the fixed axes.
-        gated_pos_out = gated_pos - count(<(gated_pos), drop_axes)
-        drop_tuple = Tuple(drop_axes)
-
-        supports = provider_supports_selection(prov)
-        if supports
-            sample = provider_sample(prov, t0; selection = selection)
-            for name in applies
-                nm = String(name)
-                field = _sample_field(sample, nm)
-                isempty(drop_tuple) || (field = dropdims(field; dims = drop_tuple))
-                # The slab, a bare-array sample, takes the conversion a whole
-                # sample does (`forcing_from_sample`).
-                arr = forcing_from_sample(field, nm)
-                size(arr, gated_pos_out) == gated_extent || throw(
-                    RefreshError(
-                        "gated provider '$key' variable '$nm': fetched compact axis is " *
-                            "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"
-                    )
-                )
-                for k in _gated_const_keys(alias_claims, model, key, nm)
-                    out[k] = arr
-                end
-            end
-        else
-            # FALLBACK: reader cannot push down — fetch whole, then slice by the
-            # same per-axis selection (a fixed `Int` DROPS the axis, a gated or
-            # range axis is an index vector, `all` is `Colon()`), so the sliced
-            # result matches the pushdown result exactly.
-            sample = provider_sample(prov, t0)
-            for name in applies
-                nm = String(name)
-                full = _sample_field(sample, nm)
-                field = full[selection...]
-                arr = forcing_from_sample(field, nm)
-                size(arr, gated_pos_out) == gated_extent || throw(
-                    RefreshError(
-                        "gated provider '$key' variable '$nm' (fallback slice): compact axis " *
-                            "is $(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"
-                    )
-                )
-                for k in _gated_const_keys(alias_claims, model, key, nm)
-                    out[k] = arr
-                end
-            end
-        end
-    end
-    return out
-end
-
-# A stashed gated entry is either the bare provider (gate via `provider_gate_spec`)
-# or a `(prov=…, gate=…)` / `Dict("prov"=>…, "gate"=>…)` bundle.
-function _unbundle_gated(entry)
-    if entry isa NamedTuple && haskey(entry, :prov)
-        return entry.prov, (
-                haskey(entry, :gate) && entry.gate !== nothing ?
-                entry.gate : provider_gate_spec(entry.prov)
-            )
-    elseif entry isa AbstractDict && haskey(entry, "prov")
-        g = get(entry, "gate", nothing)
-        return entry["prov"], (g === nothing ? provider_gate_spec(entry["prov"]) : g)
-    else
-        return entry, provider_gate_spec(entry)
-    end
 end

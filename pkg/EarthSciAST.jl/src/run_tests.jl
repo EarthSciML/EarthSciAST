@@ -1,32 +1,18 @@
-# ===========================================================================
-# run_tests.jl — discovery + inline-test runner for `.esm` files.
+# run_tests.jl — the inline-test runner's shared frame, corpus discovery and
+# reporting.
 #
-# Each `Model` and `ReactionSystem` may carry a `tests` block (ESM spec §6.6)
-# of scalar `(variable, time, expected, [tolerance])` assertions. This module
-# walks a given set of root directories, parses every `.esm` file via `load`,
-# builds each container from its WHOLE DOCUMENT (§6.6: a test declared on a
-# component the document itself declares "is built from the document it lives
-# in, coupling and all" — see `_compile_model_in_document`),
-# simulates each InlineTest on the resulting ModelingToolkit system (the
-# `MtkTestEngine` here; `run_inline_tests` in inline_tests.jl runs the same
-# assertion frame through `esm_problem` with `SimulateTestEngine`), samples each
-# Assertion via the solution interpolant, and compares to the declared expected value with
-# the tolerance resolved per spec §6.6.4 — PER FIELD over four levels
-# (assertion > test > model > the implementation default `rel=1e-6`), each of
-# `rel` and `abs` taken from the innermost level that declares it.
+# Each `Model` and `ReactionSystem` may carry a `tests` block (esm-spec §6.6).
+# `run_inline_tests` (inline_tests.jl) runs a document's tests through
+# `esm_problem` and `solve`; this file holds what that runner and
+# `run_esm_tests` share: the per-test frame (`_run_test_frame!`: the
+# per-assertion loop, the §6.6.4 tolerance resolution per field over assertion >
+# test > component > the binding default, the §6.6.3 pass predicate, the
+# wall-time split), `AssertionResult`, the solver pick, corpus discovery
+# (`discover_esm_files`), the summary table and JUnit XML.
 #
-# The runner requires `ModelingToolkit`, `OrdinaryDiffEqTsit5` /
-# `OrdinaryDiffEqRosenbrock`, and (for `ReactionSystem` tests) `Catalyst` to
-# be loaded at the call site so the EarthSciAST MTK / Catalyst extensions
-# are active.
-#
-# Public surface:
-# - `discover_esm_files(roots; root=esm_root())` — recursive `.esm` walk
-# - `run_esm_tests(roots; root=esm_root(), junit_xml=nothing, verbose=true)` —
-#   returns `(results, exit_code)` where `exit_code == 0` iff every assertion
-#   passed
-# - `write_junit_xml(results, path)` — emit a junit-compatible report
-# ===========================================================================
+# `run_esm_tests(roots)` is discovery plus `run_inline_tests(files; compiler =
+# :mtk)`: a corpus run through the ModelingToolkit compiler, which needs
+# `ModelingToolkit` and an OrdinaryDiffEq solver loaded at the call site.
 
 using Printf: @printf
 
@@ -109,9 +95,8 @@ SKIP
 """
     AssertionResult
 
-Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
-result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine).
+Outcome of one `(file, container, test, assertion_idx)` evaluation, as
+[`run_inline_tests`](@ref) and [`run_esm_tests`](@ref) report it.
 
 `message` carries the diff or error text for non-`PASS` results.
 `duration_s` is this assertion's even share of its test's wall time (solve +
@@ -119,7 +104,7 @@ all samples), so summing `duration_s` over a test's assertions recovers the
 test's duration (the JUnit testcase `time`).
 
 §6.6.5 fields: `reduce` is the assertion's declared field reduction (`nothing`
-for a plain scalar assertion — always `nothing` from the MTK runner);
+for a plain scalar assertion);
 `rtol`/`atol` are the RESOLVED §6.6.4 tolerances the pass predicate used
 (`0.0`/`0.0` on results synthesized before tolerance resolution, e.g. a
 parse/compile failure). The trailing three fields have defaults, so a
@@ -245,16 +230,13 @@ end
 discover_esm_files(; kwargs...) = discover_esm_files(DEFAULT_ROOTS; kwargs...)
 
 # ---------------------------------------------------------------------------
-# SHARED §6.6 assertion helpers — used by BOTH this MTK scalar runner and the
-# tree-walk PDE runner (inline_tests.jl). The two runners' tolerance
-# resolution and pass predicate must stay in lockstep; edit here only.
+# §6.6 assertion helpers: tolerance resolution and the pass predicate.
 # ---------------------------------------------------------------------------
 
 const _DEFAULT_REL_TOL = 1.0e-6
 
-# Tight solver tolerances for integrating inline tests, shared between the
-# MTK engine's per-test solve and `run_inline_tests`' keyword defaults
-# (tree-walk path): assertion expectations are pinned to many digits, so the
+# Tight solver tolerances for integrating inline tests (`run_inline_tests`'
+# defaults): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
 const DEFAULT_TEST_RELTOL = 1.0e-10
 const DEFAULT_TEST_ABSTOL = 1.0e-12
@@ -329,11 +311,8 @@ end
 # The §6.6.3 pass predicate (exact when no tolerance is declared anywhere).
 #
 # The relative bound is SYMMETRIC in `actual` and `expected` — its scale is
-# `max(|a|, |e|)`, not `|e|` alone. §6.6.3 used to state both readings at once
-# (the normative box gave an `|expected|`-only denominator, the finiteness
-# rationale further down that same section reasoned from
-# `max(|Inf|, |expected|)`); #193 settled it as symmetric, which is what
-# `isapprox` had been doing all along. The verdicts differ only inside
+# `max(|a|, |e|)`, not `|e|` alone (esm-spec §6.6.3), which is what
+# `isapprox` does. The verdicts of the two readings differ only inside
 # `rtol*|e| < |a - e| <= rtol*|a|`, which needs an overshoot
 # (`|actual| > |expected|`) of order `rtol` —
 # `assertion_tolerance_symmetry_test.jl` pins that seam.
@@ -365,101 +344,14 @@ end
 _assertion_fail_message(actual, expected, rtol::Float64, atol::Float64) =
     "actual=$(actual) expected=$(expected) (rtol=$(rtol), atol=$(atol))"
 
-# ---------------------------------------------------------------------------
-# Symbol lookup on a compiled MTK system
-# ---------------------------------------------------------------------------
-
-# Variable names in flattened ESM systems are dotted ("Sub.x"); the MTK
-# extension's `_san` rewrites dots to underscores when constructing symbolic
-# names. After mtkcompile, `getproperty(simp, Symbol(name))` returns the
-# symbolic handle for either form, prefixed by the wrapper system's name.
-#
-# Spec §10.7 fully-qualified refs use the form "ModelName.sub.var". MTK
-# exposes compiled-system properties by stripping the system's own name
-# prefix, so the accessible property for "ModelName.sub.var" is "sub_var"
-# (model-relative form), not "ModelName_sub_var".
-const _NO_RENAMES = Dict{String, String}()
-
-function _resolve_handle(
-        simp, sys_name::Symbol, var_spec::AbstractString,
-        renames::AbstractDict = _NO_RENAMES
-    )
-    _require_mtk()   # guard only: fail early with a clear error when MTK is absent
-    sanitized = replace(String(var_spec), "." => "_")
-    qualified = Symbol(String(sys_name) * "_" * sanitized)
-    if hasproperty(simp, qualified)
-        return getproperty(simp, qualified)
-    end
-    bare = Symbol(sanitized)
-    if hasproperty(simp, bare)
-        return getproperty(simp, bare)
-    end
-    # Model-relative fallback for spec §10.7 fully-qualified refs of the form
-    # "ModelName.sub.var": strip the leading "ModelName." prefix and sanitize
-    # the remainder to obtain the model-relative flattened name "sub_var".
-    # MTK exposes compiled-system properties without the system-name prefix,
-    # so this is the correct lookup for subsystem-composed models.
-    sys_prefix = String(sys_name) * "."
-    if startswith(String(var_spec), sys_prefix)
-        relative = String(var_spec)[(length(sys_prefix) + 1):end]
-        relative_san = Symbol(replace(relative, "." => "_"))
-        if hasproperty(simp, relative_san)
-            return getproperty(simp, relative_san)
-        end
-    end
-    # An `operator_compose` RENAMING match (esm-spec §4.7.1 step 4) DELETES the
-    # state spelling this test keys on — `Sink.O3` folded onto `Chem.ozone` —
-    # and the flatten records where it went (`merged_variable_renames`, issue
-    # #230, CONFORMANCE_SPEC §5.35). Only a DOCUMENT build carries such a map,
-    # so this arm is dead on the per-container path and on an uncoupled
-    # document; on a coupled one it is what keeps a test that names its own
-    # local variable resolvable after the merge moved it. The tree-walk engine
-    # resolves through the same map (`_scope_to_component`, inline_tests.jl).
-    if !isempty(renames)
-        scoped = String(sys_name) * "." * String(var_spec)
-        for key in (scoped, String(var_spec))
-            target = get(renames, key, nothing)
-            target === nothing && continue
-            merged = Symbol(replace(String(target), "." => "_"))
-            hasproperty(simp, merged) && return getproperty(simp, merged)
-        end
-    end
-    throw(
-        ArgumentError(
-            "Variable '$(var_spec)' not found on compiled system " *
-                "(tried '$(qualified)', '$(bare)', and model-relative form)."
-        )
-    )
-end
-
-# Package identities of the lazily-required modeling / solver stack, grouped
-# here so each UUID literal lives in exactly one place.
-const _MTK_PKGID = Base.PkgId(
-    Base.UUID("961ee093-0014-501f-94e3-6117800e7a78"), "ModelingToolkit"
-)
+# Package identities of the solvers a runner picks from when the caller names
+# none, each UUID literal in one place.
 const _ROSENBROCK_PKGID = Base.PkgId(
     Base.UUID("43230ef6-c299-4910-a778-202eb28ce4ce"), "OrdinaryDiffEqRosenbrock"
 )
 const _TSIT5_PKGID = Base.PkgId(
     Base.UUID("b1df2697-797e-41e3-8120-5422d3b24e4a"), "OrdinaryDiffEqTsit5"
 )
-const _CATALYST_PKGID = Base.PkgId(
-    Base.UUID("479239e8-5488-4da2-87a7-35f2df7eef83"), "Catalyst"
-)
-
-# Lazy module lookup so this file can `include` without a hard dep on MTK
-# being loaded at module-init time.
-function _require_mtk()
-    mod = _try_require(_MTK_PKGID)
-    mod === nothing && throw(
-        ArgumentError(
-            "run_esm_tests requires ModelingToolkit to be loaded. " *
-                "Call `using ModelingToolkit` first."
-        )
-    )
-    return mod
-end
-
 _try_require(pkg::Base.PkgId) = get(Base.loaded_modules, pkg, nothing)
 
 # FALLBACK per-file stiff-solver override set, for documents that do not
@@ -497,8 +389,6 @@ function _pick_solver(
     tsit = _try_require(_TSIT5_PKGID)
     tsit !== nothing && return (tsit.Tsit5(), :tsit5)
     rb !== nothing && return (rb.Rosenbrock23(), :rosenbrock23)
-    # Named for neither entry point: `run_inline_tests` reaches here too now
-    # that it picks a solver for a caller who named none.
     throw(
         ArgumentError(
             "running a document's tests requires an OrdinaryDiffEq solver to be " *
@@ -509,19 +399,10 @@ function _pick_solver(
 end
 
 # ---------------------------------------------------------------------------
-# Unified per-test frame — ONE runner skeleton shared by both inline-test
-# entry points, with the execution engine pluggable:
-#
-#   engine            entry point       execution pathway
-#   ----------------  ----------------  ------------------------------------
-#   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
-#   SimulateTestEngine run_inline_tests    tree-walk esm_problem/solve + field lookup
-#                     (inline_tests.jl)
-#
-# The frame owns everything the two runners used to duplicate: the per-test /
-# per-assertion loop, §6.6.4 tolerance resolution, the §6.6.3 pass predicate
-# and failure message, outcome buffering + even wall-time split, and
-# `AssertionResult` construction. An ENGINE implements three methods:
+# The per-test frame: the per-test / per-assertion loop, §6.6.4 tolerance
+# resolution, the §6.6.3 pass predicate and failure message, outcome buffering
+# with an even wall-time split, and `AssertionResult` construction, over an
+# execution ENGINE (`SimulateTestEngine`, inline_tests.jl) implementing:
 #
 #   _engine_setup(engine, t) -> handle::Any | String
 #       Execute test `t` (solve/simulate). Returns an opaque per-test handle
@@ -622,300 +503,6 @@ function _run_test_frame!(
 end
 
 # ---------------------------------------------------------------------------
-# MTK engine — compile once per container (see `_run_container_tests!`), then
-# per test build an ODEProblem from the test's ICs/overrides, solve with the
-# selected (possibly stiff-overridden) solver, and sample assertions via the
-# solution interpolant.
-# ---------------------------------------------------------------------------
-
-struct MtkTestEngine
-    simp::Any
-    sys_name::Symbol
-    solver::Any
-    # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
-    # resolved against the document's `solver` block. The runner's own
-    # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
-    # defaults, not a caller's opinion -- so a document that declares
-    # `solver.reltol` displaces them and every binding runs its inline tests at
-    # one integration tolerance instead of at five different runner defaults.
-    # NOT the tolerance an assertion is COMPARED at (§6.6.4): that is
-    # `container.tolerance`, resolved on its own chain in `_run_test_frame!`.
-    reltol::Float64
-    abstol::Float64
-    # `merged_variable_renames` from the document flatten this engine's system
-    # was built from — see `_resolve_handle`. Empty on the per-container path.
-    renames::Dict{String, String}
-
-    MtkTestEngine(
-        simp, sys_name, solver;
-        reltol::Float64 = DEFAULT_TEST_RELTOL,
-        abstol::Float64 = DEFAULT_TEST_ABSTOL,
-        renames::AbstractDict = _NO_RENAMES
-    ) =
-        new(
-        simp, sys_name, solver,
-        reltol, abstol, Dict{String, String}(renames)
-    )
-end
-
-function _engine_setup(e::MtkTestEngine, t)
-    MTK = _require_mtk()
-    try
-        u0_map = Dict{Any, Float64}()
-        for (spec, val) in t.initial_conditions
-            u0_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
-        end
-        p_map = Dict{Any, Float64}()
-        for (spec, val) in t.parameter_overrides
-            p_map[_resolve_handle(e.simp, e.sys_name, spec, e.renames)] = Float64(val)
-        end
-        tspan = (t.time_span.start, t.time_span.stop)
-        merged = isempty(p_map) ? u0_map : Base.merge(u0_map, p_map)
-        prob = MTK.ODEProblem(e.simp, merged, tspan)
-        return MTK.SciMLBase.solve(
-            prob, e.solver;
-            reltol = e.reltol, abstol = e.abstol
-        )
-    catch err
-        return "Solve setup failed: $(err)"
-    end
-end
-
-_engine_actual(e::MtkTestEngine, sol, a) =
-    sol(a.time, idxs = _resolve_handle(e.simp, e.sys_name, a.variable, e.renames))
-
-_engine_error_message(::MtkTestEngine, err) = "Sample/compare failed: $(err)"
-
-function _compile_model(model, name::Symbol)
-    MTK = _require_mtk()
-    sys = MTK.System(model; name = name)
-    return MTK.mtkcompile(sys)
-end
-
-# Build a model container from the WHOLE-DOCUMENT `FlattenedSystem` rather than
-# from the container in isolation.
-#
-# `MTK.System(::Model)` wraps the one model in a SYNTHETIC single-model
-# `EsmFile` (`flatten(::Model)`) and flattens that, which silently drops
-# everything the document supplies beyond the container itself:
-#
-#   * the document's `expression_templates` registry — `Model` has no such
-#     field, the registry is document-scoped — so `expand_flattened_refs` sees
-#     an EMPTY registry, becomes a no-op, and a §9.6.4 Option-B
-#     `apply_expression_template` reference survives into `_esm_to_symbolic`
-#     as `Unsupported operator: apply_expression_template`;
-#   * every SIBLING component's variables, so an equation reading another
-#     component's state (`D(Rs.A, t)`, or a plain `Rs.A`) dies in
-#     `_resolve_lowering_var` as `Variable 'Rs.A' not found in variable
-#     dictionary`.
-#
-# Both are one bug: the container is not the document. The Python gate builds
-# `esm_problem` over `flatten(ef)` and the Rust CLI builds over the whole
-# flattened document too (§6.6 selects WHICH tests run, not what the system
-# contains), so this path was the 1-of-3 outlier among the executing runners.
-function _compile_model_in_document(flat, name::Symbol)
-    MTK = _require_mtk()
-    sys = MTK.System(flat; name = name)
-    return MTK.mtkcompile(sys)
-end
-
-function _compile_reaction_system(rs, name::Symbol)
-    MTK = _require_mtk()
-    cat = _try_require(_CATALYST_PKGID)
-    cat === nothing && throw(
-        ArgumentError(
-            "ReactionSystem inline tests require Catalyst to be loaded."
-        )
-    )
-    catalyst_rs = cat.ReactionSystem(rs; name = name)
-    return MTK.complete(catalyst_rs)
-end
-
-# ---------------------------------------------------------------------------
-# Per-file driver
-# ---------------------------------------------------------------------------
-
-# Compile one container (a `Model` or a `ReactionSystem`) via `compile` and
-# run its inline tests through the unified frame with an `MtkTestEngine`; a
-# compile failure records one ERROR result per test (`label` names the
-# container family in the error message). Containers with no tests are skipped
-# without compiling. Solver selection (`_pick_solver`) runs OUTSIDE any
-# try/catch on purpose: a missing solver stack must abort the run loudly, not
-# degrade to per-test ERROR rows. A reaction system's species and parameter
-# defaults and its mass-action rate law (`combinatoric_ratelaws = false`) come
-# from `Catalyst.ReactionSystem(::ReactionSystem)` itself.
-function _run_container_tests!(
-        results::Vector{AssertionResult},
-        path::AbstractString, container_kind::Symbol,
-        name::AbstractString, container,
-        compile::Function, label::AbstractString;
-        renames::AbstractDict = _NO_RENAMES,
-        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES,
-        stiffness = nothing, solver_hints = nothing
-    )
-    isempty(container.tests) && return
-    sys_name = Symbol(name)
-    local simp
-    try
-        simp = compile(container, sys_name)
-    catch err
-        for t in container.tests
-            push!(
-                results, AssertionResult(
-                    path, container_kind, String(name), t.id, 0, "", NaN, NaN,
-                    nothing, ERROR, "$(label) compile failed: $(err)", 0.0
-                )
-            )
-        end
-        return
-    end
-    solver, _solver_kind = _pick_solver(
-        path; stiff_files = stiff_files,
-        stiffness = stiffness
-    )
-    # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
-    # the runner's own defaults; each falls through independently.
-    reltol, abstol = _test_integration_tolerances(solver_hints)
-    engine = MtkTestEngine(
-        simp, sys_name, solver;
-        reltol = reltol, abstol = abstol,
-        renames = renames
-    )
-    return _run_test_frame!(
-        results, engine, path, container_kind, String(name),
-        container.tolerance, container.tests
-    )
-end
-
-function run_file_tests!(
-        results::Vector{AssertionResult}, path::AbstractString;
-        stiff_files = STIFF_SOLVER_OVERRIDE_FILENAMES
-    )
-    local esm_file
-    try
-        esm_file = load_path(String(path))
-    catch err
-        push!(
-            results, AssertionResult(
-                path, :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
-                ERROR, "Parse failed: $(err)", 0.0
-            )
-        )
-        return
-    end
-
-    # The document's own stiffness declaration (esm-spec §2.2), which
-    # `_pick_solver` prefers over the basename fallback set. Document-scoped,
-    # so it applies to every container in the file.
-    stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
-
-    # The document flatten every in-document container is built from, computed
-    # at most ONCE per file and only when a container that needs it actually
-    # has tests.
-    #
-    # A container in a document this engine cannot build gets that document's
-    # failure, NOT a private per-container build that would paper over it. One
-    # component's unlowered `grad` making the whole flatten spatial — which
-    # `ModelingToolkit.System` refuses, having no PDE constructor — refuses
-    # every container in that document, which is what the Rust CLI already does
-    # for the same file (`tests/valid/units_dimensional_analysis.esm`: 0 pass in
-    # both). A document must not validate under one binding and fail under
-    # another, and that outranks the assertions a per-container fallback would
-    # keep alive here alone.
-    models = esm_file.models
-    rsystems = esm_file.reaction_systems
-    has_model_tests = models !== nothing &&
-        any(m -> !isempty(m.tests), values(models))
-    # A mechanism that shares its document with a model may read that model —
-    # RADM2's 156 reaction rates are scoped references to the component that
-    # evaluates its rate coefficients — and its tests may override that model's
-    # parameters. The isolated Catalyst build cannot see it: the species
-    # resolve, but the sibling's parameters are not on the compiled system, so
-    # the SOLVE fails rather than the build. Such a document is built from the
-    # same whole-document flatten the models use (§7.4 lowers the mechanism to
-    # its mass-action ODEs there).
-    #
-    # A document whose ONLY containers are reaction systems keeps the Catalyst
-    # route: it is the one that carries Catalyst's own default seeding, and it
-    # is the build the corpus's large mechanisms have always taken.
-    mixed = models !== nothing && !isempty(models)
-    has_mixed_rs_tests = mixed && rsystems !== nothing &&
-        any(rs -> !isempty(rs.tests), values(rsystems))
-
-    doc_flat = nothing
-    doc_flat_err = nothing
-    if has_model_tests || has_mixed_rs_tests
-        try
-            # A reserved `mean` / `integral` variable_map lifting is refused at
-            # build (esm-spec §10.5); the refusal is each test's compile failure.
-            _refuse_reserved_liftings(esm_file)
-            doc_flat = flatten(
-                esm_file;
-                base_path = dirname(abspath(String(path)))
-            )
-        catch err
-            doc_flat_err = err
-        end
-    end
-    # Every state spelling an `operator_compose` renaming match DELETED, mapped
-    # onto the survivor it was folded into (§4.7.1 step 4, issue #230). Only a
-    # DOCUMENT build can carry one — a container built alone has no coupling —
-    # so this is empty on every other path.
-    doc_renames = doc_flat === nothing ?
-        Dict{String, String}() : doc_flat.metadata.merged_variable_renames
-
-    if models !== nothing
-        for (mname, model) in models
-            if doc_flat_err !== nothing
-                for t in model.tests
-                    push!(
-                        results, AssertionResult(
-                            path, :model, String(mname), t.id, 0, "", NaN, NaN,
-                            nothing, ERROR,
-                            "Model compile failed: $(doc_flat_err)", 0.0
-                        )
-                    )
-                end
-                continue
-            end
-            compile = doc_flat === nothing ? _compile_model :
-                (_c, sym) -> _compile_model_in_document(doc_flat, sym)
-            _run_container_tests!(
-                results, path, :model, String(mname), model,
-                compile, "Model";
-                renames = doc_renames,
-                stiff_files = stiff_files, stiffness = stiffness,
-                solver_hints = esm_file.solver
-            )
-        end
-    end
-
-    return if rsystems !== nothing
-        for (rname, rs) in rsystems
-            if mixed && doc_flat !== nothing
-                _run_container_tests!(
-                    results, path, :reaction_system,
-                    String(rname), rs,
-                    (_c, sym) -> _compile_model_in_document(doc_flat, sym),
-                    "ReactionSystem";
-                    renames = doc_renames,
-                    stiff_files = stiff_files, stiffness = stiffness,
-                    solver_hints = esm_file.solver
-                )
-            else
-                _run_container_tests!(
-                    results, path, :reaction_system,
-                    String(rname), rs, _compile_reaction_system,
-                    "ReactionSystem";
-                    stiff_files = stiff_files, stiffness = stiffness,
-                    solver_hints = esm_file.solver
-                )
-            end
-        end
-    end
-end
-
-# ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
 
@@ -925,9 +512,11 @@ end
                   stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
                   io::IO=stdout) -> (results, exit_code)
 
-Walk each directory in `roots`, run every inline test in every `.esm` file,
-and return `(results::Vector{AssertionResult}, exit_code::Int)` where
-`exit_code == 0` iff every assertion passed.
+Walk each directory in `roots`, run every inline test in every `.esm` file
+through the ModelingToolkit compiler ([`run_inline_tests`](@ref) with
+`compiler = :mtk`), and return `(results::Vector{AssertionResult},
+exit_code::Int)` where `exit_code == 0` iff every assertion passed. Needs
+`ModelingToolkit` and an OrdinaryDiffEq solver loaded.
 
 `root` is the base directory against which relative `roots` (and exclude
 patterns) resolve — pass it to walk a different repo instead of overwriting
@@ -941,8 +530,8 @@ Prints a per-file summary table to `io` when `verbose=true`. When
 path contains one of the listed substrings.
 
 `stiff_files` is a set/vector of `.esm` basenames to integrate with the stiff
-Rosenbrock23 solver instead of the default non-stiff Tsit5; it defaults to
-`STIFF_SOLVER_OVERRIDE_FILENAMES` (currently just the known-stiff `pollu.esm`).
+Rosenbrock23 solver when the document declares no `solver.stiffness`; it
+defaults to `STIFF_SOLVER_OVERRIDE_FILENAMES`.
 """
 function run_esm_tests(
         roots::AbstractVector{<:AbstractString} = DEFAULT_ROOTS;
@@ -962,9 +551,10 @@ function run_esm_tests(
             join(roots, ", ")
         )
     else
-        for f in files
-            run_file_tests!(results, f; stiff_files = stiff_files)
-        end
+        results = run_inline_tests(
+            files; compiler = :mtk,
+            options_for = path -> _stiff_file_options(path, stiff_files)
+        )
     end
 
     verbose && _print_summary(io, files, results, String(root))
@@ -973,6 +563,15 @@ function run_esm_tests(
     n_fail = count(r -> r.status == FAIL || r.status == ERROR, results)
     exit_code = n_fail == 0 ? 0 : 1
     return results, exit_code
+end
+
+# The stiff solver for a file `stiff_files` lists by basename; `nothing` leaves
+# the pick to `run_inline_tests` (the document's `solver.stiffness`, then the
+# default list).
+function _stiff_file_options(path, stiff_files)
+    (path isa AbstractString && basename(path) in stiff_files) || return nothing
+    alg, _ = _pick_solver(String(path); stiff_files = stiff_files)
+    return InlineTestOptions(alg = alg)
 end
 
 run_esm_tests(roots::AbstractString...; kwargs...) =
@@ -1005,7 +604,8 @@ function _mounted_components(path::AbstractString)
     raw = try
         JSON3.read(read(path, String))
     catch err
-        err isa InterruptException && rethrow()
+        # An unreadable file or malformed JSON: the run reports it as a load row.
+        err isa Union{SystemError, ArgumentError, EOFError} || rethrow()
         return edges
     end
     (raw isa AbstractDict || raw isa JSON3.Object) || return edges

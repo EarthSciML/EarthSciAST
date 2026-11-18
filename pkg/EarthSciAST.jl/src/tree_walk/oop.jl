@@ -36,7 +36,7 @@
 #
 # WHAT IS IN HERE
 #
-#   * the lane-batched grouping of the per-cell scalar surface (ess-oop-batch):
+#   * the lane-batched grouping of the per-cell scalar surface:
 #     congruent entries bucketed at BUILD time so a backend emits one whole-lane
 #     program per group rather than one per cell;
 #   * the vectorization PLAN per access kernel (`_OopAccPlan`): the gather slot
@@ -48,7 +48,7 @@
 # `_build_evaluator(model; form = :oop)` returns the `_OopRHS` in the `f!` slot of
 # the usual `(f, u0, p, tspan, var_map)` tuple.
 
-# ---- Lane-batched scalar entries (ess-oop-batch) -----------------------------
+# ---- Lane-batched scalar entries ----------------------------------------------
 #
 # WHY. The per-CELL scalar surface of a build — `rhs_list` entries a state
 # equation lowers to when it declines the kernel path (a runtime contraction
@@ -378,8 +378,7 @@ struct _OopAccPlan
     subs::Vector{_AccKernel}
     sub_plans::Vector{_OopAccPlan}
     # Variable-valence reduction (`_NK_REDUCE` + `_VarBound`/`_FixedBound`,
-    # `_AK_STATE_INDIRECT[_COL]` / `_AK_CONST_EDGE`), CSR-segmented (gordian
-    # reduce-vectorize): `red_seg` is the row-pointer vector (length N+1, so cell
+    # `_AK_STATE_INDIRECT[_COL]` / `_AK_CONST_EDGE`), CSR-segmented: `red_seg` is the row-pointer vector (length N+1, so cell
     # `c`'s neighbour entries are `red_seg[c]:red_seg[c+1]-1` in the flat E-lane
     # buffers), and `red_plan[1]` is the body's descriptor plan resolved at E-lane
     # (per-entry `(c,n)`) granularity. Empty ⇒ this kernel carries no reduce. The
@@ -458,13 +457,13 @@ end
     ak === _AK_LOOP_IDX
 
 # Can the whole spine (plus CSE recipes) evaluate as lane vectors? A `_NK_CACHED`
-# must resolve to THIS kernel's scratch tiers. (Ghost-bearing STATE_TBL_BOX no
-# longer declines — gordian total-vectorize closed it via gather-then-select; the
-# sub-kernel class no longer declines — gordian subcall-vectorize evaluates each
-# template body as its own whole-array op over the parent lanes; a variable-valence
-# reduction no longer declines — gordian reduce-vectorize evaluates the body over a
-# flat CSR gather and folds each segment in child order.)
-# `in_reduce` permits the n-indexed descriptors that only make sense inside a fold.
+# must resolve to THIS kernel's scratch tiers. A ghost-bearing slot table
+# vectorizes by gather-then-select, a template-body sub-kernel as its own
+# whole-array op over the parent lanes, and a variable-valence reduction as its
+# body over a flat CSR gather with each segment folded in child order.
+# `in_reduce` permits the n-indexed descriptors that only make sense inside a
+# fold. Every descriptor kind is named: a kind this plan does not know is an
+# error (`_oop_unknown_kind`), never a vectorizable kernel with no data.
 _oop_acc_vecable(n::_Node, K::_AccKernel) = _oop_acc_vecable(n, K, false)
 function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
     k = n.kind
@@ -504,13 +503,14 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel, in_reduce::Bool)
         in_reduce && !_oop_reduce_desc_ok(ak) && return false
         # An unstructured slot-table gather vectorizes as a plain precomputed
         # gather (gather-of-gather resolved host-side). A ghost slot (0) in the
-        # table also vectorizes (gordian total-vectorize): gather at a SAFE index
+        # table also vectorizes: gather at a SAFE index
         # and select 0.0 on the ghost lanes against a host-precomputed mask (see
         # `_build_oop_acc_plan`) — no per-cell fallback, still whole-array only.
         # CONST_CELL addresses by `oln`, which equals the ordinal only for a
         # contiguous set — an indirect-outs kernel would freeze wrong lanes.
         # (The builder never emits it there; this guards hand-built kernels.)
         ak === _AK_CONST_CELL && _is_outs(K.cells) && return false
+        _oop_known_kind(ak) || _oop_unknown_kind(ak)
     elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
@@ -564,8 +564,13 @@ function _build_oop_desc_vectors(
             consts[i] = Float64.(mis[a.dim])
         elseif k === _AK_CONST_CELL
             consts[i] = a.arr[out]        # cell ordinal == oln (see _run_box_kernel!)
+        elseif k === _AK_SCALAR || k === _AK_STATE_FIXED || k === _AK_ARR_FIXED
+            # Read directly by the walker.
+        elseif k === _AK_CONST_EDGE || k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL
+            # n-indexed: resolved per entry by the reduce plan, never here.
+        else
+            _oop_unknown_kind(k)
         end
-        # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker.
     end
     return gathers, consts, forc, ghost
 end
@@ -625,12 +630,29 @@ function _build_oop_reduce_desc_vectors(
         elseif k === _AK_LOOP_IDX
             # contiguous reduce: midx == (c, 1, 1); dim 1 → c, higher dims → 1.
             consts[i] = a.dim === 1 ? Float64[Float64(seg_cell[e]) for e in 1:E] : fill(1.0, E)
+        elseif k === _AK_SCALAR || k === _AK_STATE_FIXED || k === _AK_ARR_FIXED
+            # Read directly by the walker (scalars, broadcast over the segment).
+        elseif k === _AK_STATE_TBL_BOX || k === _AK_CONST_BOX || k === _AK_FORCING_BOX ||
+                k === _AK_ARR_TBL_BOX
+            # Box-addressed: `_oop_acc_vecable` keeps such a reduce on the
+            # per-cell route, so no plan reaches here holding one.
+        else
+            _oop_unknown_kind(k)
         end
-        # SCALAR / STATE_FIXED / ARR_FIXED: read directly by the walker (scalars,
-        # broadcast over the segment). Box/forcing/tbl kinds were declined upstream.
     end
     return gathers, consts
 end
+
+# The descriptor kinds the out-of-place plans know (access_kernel.jl).
+_oop_known_kind(k::UInt8) = UInt8(1) <= k <= _AK_ARR_TBL_BOX
+
+_oop_unknown_kind(k::UInt8) = throw(
+    TreeWalkError(
+        "E_TREEWALK_INTERNAL",
+        "the out-of-place plan has no rule for access descriptor kind $(Int(k)); " *
+            "add one to `_oop_acc_vecable` and the two descriptor-vector builders"
+    )
+)
 
 function _build_oop_acc_plan(K::_AccKernel)
     return _build_oop_acc_plan_inner(K)
@@ -804,14 +826,12 @@ function _make_rhs_oop(
         array_contractions::AbstractVector = _ArrayContraction[]
     )
     # Vectorized lane plans for the acc kernels (host index data, built once).
-    # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
-    # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
-    # the xcse gate, so BOTH emitters receive already-merged kernels and this
-    # plan build is over the merged (fewer) list. `acc_kernels` and `acc_plans`
+    # The kernels arrive merged by class (`_merge_acc_kernel_classes`, before
+    # the xcse gate), so this plan build is over the merged list. `acc_kernels` and `acc_plans`
     # reach the build product under the stable field names :acc_kernels /
     # :acc_plans that external tooling reflects on.
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
-    # Lane-batched scalar surfaces (ess-oop-batch), grouped ONCE at build:
+    # Lane-batched scalar surfaces, grouped ONCE at build:
     # the rhs_list per-cell entries and each fill level's per-column scalars.
     # `rhs_list`/`mat_levels` keep their own stable field names (external
     # tooling reflects on them); `rhs_batches`/`mat_batches` are ADDITIVE

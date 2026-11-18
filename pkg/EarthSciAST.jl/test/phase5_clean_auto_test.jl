@@ -459,7 +459,7 @@ end
     f!, u0, p, _tspan, var_map, rep = EA.Internal.build(
         EA.desugar_pushdown(doc; model_name = "ISRM");
         const_arrays = ca_q,
-        _gated_providers = Dict{String, Any}("ISRM_SR" => mock), _sample_time = 0.0
+        gated_providers = Dict{String, Any}("ISRM_SR" => mock), sample_time = 0.0
     )
     insp = rep.products
 
