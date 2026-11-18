@@ -78,11 +78,11 @@
                 "args": [
                   "u_wind",
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "_var"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               }
@@ -218,11 +218,11 @@
                 "args": [
                   "u_wind",
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "_var"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   }
                 ]
               }
