@@ -1613,12 +1613,33 @@ end
 # build and on the whole symbolic path).
 const _StencilBranch = Tuple{_Node, Vector{_LaneRecipe}, Vector{Int}, Vector{_SubCallSite}}
 
-# Derive + corner-verify a state var's affine slot map (cell indices → var_map
-# slot: `slot = base + Σ_d inds_d·strides_d`) so a gather resolves arithmetically.
-# Returns `nothing` if any probe cell is absent or the layout is not affine on the
-# var's `[lo,hi]` box — in which case `_eval_recipe` keeps the exact string lookup.
-# ~2^D + D probes, once per var per branch template (cold); the payoff is per-cell.
+# A state var's affine slot map over its `[lo, hi]` box (cell indices → slot:
+# `slot = base + Σ_d inds_d·strides_d`, stride 0 along a one-cell axis), so a
+# gather resolves arithmetically; `nothing` when the map is not affine there,
+# and `_eval_recipe` keeps the exact string lookup. A layout's block is the map
+# by definition (`_affine_block`); a map with no block for the var (a plain
+# `Dict`, a range view, or a block that does not cover the box) is probed at
+# ~2^D + D cells and corner-verified.
 function _derive_var_affine(
+        var_name::String, lo::Vector{Int}, hi::Vector{Int},
+        var_map::AbstractDict{String, Int}
+    )
+    n = length(lo)
+    (n == 0 || length(hi) != n) && return nothing
+    blk = _affine_block(var_map, var_name)
+    if blk !== nothing && length(blk.lo) == n &&
+            all(d -> blk.lo[d] <= lo[d] && hi[d] <= blk.hi[d], 1:n)
+        strides = Int[hi[d] > lo[d] ? blk.strides[d] : 0 for d in 1:n]
+        base = blk.base
+        @inbounds for d in 1:n
+            base += (lo[d] - blk.lo[d]) * blk.strides[d] - lo[d] * strides[d]
+        end
+        return (base, strides)
+    end
+    return _probe_var_affine(var_name, lo, hi, var_map)
+end
+
+function _probe_var_affine(
         var_name::String, lo::Vector{Int}, hi::Vector{Int},
         var_map::AbstractDict{String, Int}
     )

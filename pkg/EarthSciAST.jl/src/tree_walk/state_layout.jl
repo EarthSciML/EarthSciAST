@@ -637,6 +637,13 @@ end
 @inline _vm_slot(o::_VarMapOverlay, name::AbstractString, idx) = _vm_slot(o.base, name, idx)
 _vm_block(o::_VarMapOverlay, name::AbstractString) = _vm_block(o.base, name)
 
+# The block a stencil lane may take its slot arithmetic from without asking the
+# map for any cell by name (`_derive_var_affine`, stencil.jl): `_vm_block`,
+# except where a lookup by name does more than answer (a range view records the
+# variable of each slot it hands out, range_hooks.jl).
+_affine_block(m::AbstractDict, name::AbstractString) = _vm_block(m, name)
+_affine_block(o::_VarMapOverlay, name::AbstractString) = _affine_block(o.base, name)
+
 # Format an array-cell key like "u[3]" (1D) or "u[2,3]" (2D).
 function _cell_key(var_name::String, indices)
     # The one- and two-index keys (every grid cell of a 1-D or 2-D variable)

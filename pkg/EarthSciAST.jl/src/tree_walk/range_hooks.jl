@@ -175,6 +175,8 @@ Base.length(m::_RangeVMap) = length(m.L)
 Base.iterate(m::_RangeVMap, st...) = iterate(m.L, st...)
 @inline _vm_slot(m::_RangeVMap, name::AbstractString, idx) = _vm_slot(m.L, name, idx)
 _vm_block(m::_RangeVMap, name::AbstractString) = _vm_block(m.L, name)
+# A stencil lane asks for its cells by name, so each slot it reads is recorded.
+_affine_block(::_RangeVMap, ::AbstractString) = nothing
 
 struct _RangeAffineView
     vm::_RangeVMap
