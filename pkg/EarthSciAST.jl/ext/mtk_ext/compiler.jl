@@ -757,8 +757,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
             bump!(tier)
             push!(
                 rules, EarthSciAST.CompilerRuleRecord(
-                    nm, :equation, tier,
-                    Pair{Symbol, Symbol}[]
+                    nm, :equation, tier
                 )
             )
         end
@@ -773,8 +772,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
             bump!(tier)
             push!(
                 rules, EarthSciAST.CompilerRuleRecord(
-                    nm, :observed, tier,
-                    Pair{Symbol, Symbol}[]
+                    nm, :observed, tier
                 )
             )
         end
@@ -784,7 +782,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
         push!(
             rules, EarthSciAST.CompilerRuleRecord(
                 _mtk_event_label("continuous_events", ev, i), :event,
-                :mtk_continuous_event, Pair{Symbol, Symbol}[]
+                :mtk_continuous_event
             )
         )
     end
@@ -793,7 +791,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
         push!(
             rules, EarthSciAST.CompilerRuleRecord(
                 _mtk_event_label("discrete_events", ev, i), :event,
-                :mtk_discrete_event, Pair{Symbol, Symbol}[]
+                :mtk_discrete_event
             )
         )
     end

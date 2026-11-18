@@ -204,7 +204,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         return _cg_recur_gather(ctx, kc, nd)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
-        s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
+        s === nothing && _decline(:loopvar_out_of_scope)
         # A contracted or output index is an integer, read as the `Float64`
         # the per-cell build's literal for it is: under a `Dual` value type a
         # counter converted to the value type would take arithmetic on it
@@ -229,13 +229,13 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # `memo=nothing` and never goes through `_cse_compile_scalar`, so this
         # cannot appear today; declining by name keeps it from being emitted as
         # a silently wrong read if it ever can.
-        throw(_CodegenDecline(:cached_scalar_slot))
+        _decline(:cached_scalar_slot)
     elseif k === _NK_CONTRACTION_LOOP
         return _cg_nest_contraction_loop(ctx, kc, nd)
     elseif k === _NK_OP
         return _cg_emit_op(ctx, kc, nd)
     end
-    throw(_CodegenDecline(:unknown_kind))
+    return _decline(:unknown_kind, string(k))
 end
 
 # `_NK_RAGGED_LOOP`, `_eval_ragged_loop` term for term: the terms folded left
@@ -255,9 +255,9 @@ end
 function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     spec = nd.payload::_RaggedLoop
     ch = nd.children
-    haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:ragged_loop_reentered))
+    haskey(kc.loops, spec.ref) && _decline(:loop_reentered, "a ragged loop")
     fnsym = _cg_oplus_fn(nd.op)
-    _is_numeric_reducer(nd.op) || throw(_CodegenDecline(:unsupported_op))
+    _is_numeric_reducer(nd.op) || _decline(:unsupported_op, "⊕ = $(nd.op)")
     seed = nd.literal
     kv = _cg_name(ctx, "rk")
     acc = _cg_name(ctx, "racc")
@@ -605,16 +605,33 @@ end
 
 # Whether a node reads only literals, build-constant arrays and the given loop
 # counters, so its value at each cell is the build's to know.
-function _ac_cell_only(nd::_Node, refs)
-    k = nd.kind
-    if k === _NK_LOOPVAR
-        return any(r -> r === nd.payload, refs)
+_ac_cell_only(nd::_Node, refs) = _node_reads_only(nd; refs = refs)
+
+"""
+    _node_reads_only(nd; params = false, refs = nothing) -> Bool
+
+Whether compiled node `nd` reads only build-time values and loop counters:
+literals, `const` gathers and plain operators over them, loop counters (only
+those whose `Ref` is in `refs`, when it is given), and with `params` the
+parameters. Each distinct node is visited once.
+"""
+function _node_reads_only(nd::_Node; params::Bool = false, refs = nothing)
+    seen = _NodeIdMap{Nothing}()
+    ok(n::_Node) = begin
+        haskey(seen, n) && return true
+        k = n.kind
+        good = if k === _NK_LOOPVAR
+            refs === nothing || any(r -> r === n.payload, refs)
+        elseif k === _NK_LITERAL || k === _NK_CONST_GATHER || k === _NK_OP ||
+                (params && k === _NK_PARAM)
+            _allof(ok, n.children)
+        else
+            false
+        end
+        good && (seen[n] = nothing)
+        good
     end
-    (
-        k === _NK_LITERAL || k === _NK_CONST_GATHER ||
-            k === _NK_OP
-    ) || return false
-    return _allof(c -> _ac_cell_only(c, refs), nd.children)
+    return ok(nd)
 end
 
 _cg_oplus_fn(op::Symbol) = _reducer_fnsym(op)
@@ -632,7 +649,7 @@ _cg_oplus_fn(op::Symbol) = _reducer_fnsym(op)
 # subscripts drop its range test.
 function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span = nothing)
     spec = nd.payload::_ContractLoop
-    haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
+    haskey(kc.loops, spec.ref) && _decline(:loop_reentered, "a contraction loop")
     if _compiler_plan_now().count_fold
         cnt = _cg_count_loop(ctx, kc, nd, lo, st, hi, span)
         cnt === nothing || return cnt
@@ -1154,9 +1171,9 @@ end
 # filled — so the loop is correct from any starting cell and a chunk needs no
 # carried state. `outs[c]` is the cell's flat `du` slot.
 #
-# Returns an `_ArrayContraction`, or the emitter's decline reason as a `Symbol`
-# — which the caller turns into a refusal, there being no other form of this
-# tier to fall back to.
+# Returns an `_ArrayContraction`, or the emitter's `_Decline` — which the
+# caller files against the rule, there being no other form of this tier to fall
+# back to.
 #
 # THE FOLD AS DATA (`fold`, an `_ACFold`). `body` is then the bare TERM, with
 # no contraction loops in it, and the emitter writes the fold around it: ONE
@@ -1310,7 +1327,7 @@ end
 # Box addressing is a kernel-only concern; a scalar spine declines it rather
 # than letting a `MethodError` escape the emitter's decline protocol.
 _cg_boxaddr(::_CGCtx, ::_CGScalarCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
-    throw(_CodegenDecline(:lane_spec_on_scalar_spine))
+    _decline(:lane_spec_on_scalar_spine)
 
 function _try_codegen_array_contraction(
         refs::Vector{Base.RefValue{Int}},
@@ -1318,14 +1335,9 @@ function _try_codegen_array_contraction(
         outs::Vector{Int}, body::_Node; fold::Union{Nothing, _ACFold} = nothing,
         nst::Int = 0, consumer = nothing
     )
-    _codegen_disabled() && return :codegen_disabled
+    _codegen_disabled() && return _Decline(:tier_off, "code generation")
     ctx = _CGCtx(_codegen_node_budget(); nst = nst)
-    cons = nothing
-    if consumer !== nothing
-        Kc, ix, delta = consumer
-        _cg_note_nest!(ctx, Kc)
-        cons = (K = Kc, ix = ix, delta = delta, store = true, invsyms = _cg_inv!(ctx, Kc))
-    end
+    cons = _cg_consumer(ctx, consumer)
     entries = fold !== nothing && _acfold_is_table(fold) ?
         _ACEntries(
             _cg_name(ctx, "ent"), fold, refs, los, steps, lens,
@@ -1436,8 +1448,8 @@ function _try_codegen_array_contraction(
             cell
         end
     catch err
-        err isa _CodegenDecline || rethrow()
-        return err.reason
+        err isa _Decline || rethrow()
+        return err
     end
     outsv = _cg_tab!(ctx, outs)
     ln = LineNumberNode(0, Symbol("ess-array-contraction"))
@@ -1478,8 +1490,8 @@ function _try_codegen_array_contraction(
         cstmts = try
             _cg_scan_consumer_cell(ctx, cons, olv, xv)
         catch err
-            err isa _CodegenDecline || rethrow()
-            return err.reason
+            err isa _Decline || rethrow()
+            return err
         end
         quote
             $(ctx.geosink...)
@@ -1505,52 +1517,25 @@ function _try_codegen_array_contraction(
             end
         end
     end
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(
-        :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
-        Expr(
-            :block, grpstmts...,
-            :(local _cgT = _rhs_value_type(u, p, t)),
-            ctx.helpers...,
-            Expr(:macrocall, Symbol("@inbounds"), ln, loop),
-            :(return nothing)
-        )
-    )
-    # The split helpers (`ctx.helpers`, inner definitions) take the transport
-    # this Julia supports, as the kernel section's do (`_cg_split_transport`).
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex
-    )
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, Expr(:macrocall, Symbol("@inbounds"), ln, loop))
     mask = nothing
     if maskloop !== nothing
-        mex = Expr(
-            :function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc),
-            Expr(
-                :block, grpstmts...,
-                :(local _cgT = _rhs_value_type(u, p, t)),
-                ctx.helpers...,
-                Expr(
-                    :macrocall, Symbol("@inbounds"), ln,
-                    quote
-                        $(ctx.geosink...)
-                        $maskloop
-                    end
-                ),
-                :(return nothing)
-            )
-        )
         # The mask runs on the same `tabs`, so its helpers take the same
         # transport as the main function's.
-        mex, _ = _cg_split_transport(mex, ngrp; by_value = fns !== nothing)
-        mask = _ACMask(
-            RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                @__MODULE__, @__MODULE__, mex
-            ), _CSE_INVALID, 0
+        mf, _ = _cg_finish(
+            ctx, _CG_SECTION_ARGS,
+            Expr(
+                :macrocall, Symbol("@inbounds"), ln,
+                quote
+                    $(ctx.geosink...)
+                    $maskloop
+                end
+            );
+            by_value = fns !== nothing
         )
+        mask = _ACMask(mf, _CSE_INVALID, 0)
     end
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    tabpack = _cg_tabpack(ctx, fns)
     # Output slots are globally unique — each was claimed in `covered` at build,
     # which throws on a second claim — so the cell axis chunks like the kernel
     # section's, and for the same reason: every ⊕-fold is inside one cell.
@@ -1574,17 +1559,8 @@ function _ac_param_gate(body::_Node, fold::Union{Nothing, _ACFold})
         return nothing
     gate, term, other = body.children
     (other.kind === _NK_LITERAL && other.literal === 0.0) || return nothing
-    _ac_param_only(gate) || return nothing
+    _node_reads_only(gate; params = true) || return nothing
     return (gate, term)
-end
-
-function _ac_param_only(nd::_Node)
-    k = nd.kind
-    (
-        k === _NK_LITERAL || k === _NK_PARAM || k === _NK_LOOPVAR ||
-            k === _NK_CONST_GATHER || k === _NK_OP
-    ) || return false
-    return _allof(_ac_param_only, nd.children)
 end
 
 # The gated TABLE fold: the cell folds its compacted entries `segc[c]:segc[c+1]-1`

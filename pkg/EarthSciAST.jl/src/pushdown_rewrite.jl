@@ -362,11 +362,15 @@ function _pd_matvec_factors(
 end
 
 # (⊕ spelling, 0̄) for an aggregate node, or `nothing` on an unknown semiring.
-_pd_oplus(agg::OpExpr) =
-try
-    _aggregate_oplus_identity(agg.semiring, agg.reduce)
-catch
-    nothing
+# The node's ⊕ and 0̄, or `nothing` for a semiring or reducer the registry
+# refuses (the rewrite then leaves the node alone, and the build reports it).
+function _pd_oplus(agg::OpExpr)
+    return try
+        _aggregate_oplus_identity(agg.semiring, agg.reduce)
+    catch err
+        err isa EarthSciASTError || rethrow()
+        nothing
+    end
 end
 
 _pd_flip(op) = op == "<" ? ">" : op == "<=" ? ">=" : op == ">" ? "<" : "<="

@@ -473,7 +473,7 @@ end
 # is the cache itself, so the cascade's output slots ARE the cache's column-major
 # cells and its kernels write the cache in place. Returns a `() -> nothing` that
 # runs the fill. The cascade labels its report row and its refusals by the
-# variable's own name (`_with_rule_alias`), and the row is filed as an observed.
+# variable's own name, and the row is filed as an observed.
 function _compile_discrete_fill(
         name::String, def::OpExpr, dims::Vector{Int},
         cvec::Vector{Float64}, resolved_obs, const_arrays,
@@ -486,13 +486,11 @@ function _compile_discrete_fill(
     feqs = _materialized_fill_equations(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
-    se, pcs, aks, sfs, acs = _with_own_slot_tables() do
-        _with_rule_alias(name, name) do
-            _compile_derivative_equations(
-                feqs, resolved_obs, avi, L,
-                const_arrays, pgather, param_sym_set, length(cvec)
-            )
-        end
+    lv = _with_own_slot_tables() do
+        _compile_fill_level(
+            (name,), :dynamic, _ -> feqs, _ -> nothing, resolved_obs, avi, L,
+            const_arrays, pgather, param_sym_set, length(cvec); label_by_name = true
+        )
     end
     if rec !== nothing
         for k in (n0 + 1):length(rec.rules)
@@ -500,17 +498,19 @@ function _compile_discrete_fill(
             rec.rules[k] = CompilerRuleRecord(r.rule, :observed, r.tier, r.declines)
         end
     end
-    scal = Tuple{Int, _Node}[]
-    for (slot, ex) in se
-        push!(scal, (slot, _compile(ex, L, param_sym_set)))
-    end
-    append!(scal, pcs)
-    merged, _ = _merge_acc_kernel_classes(aks)
     # The kernel emission refuses what it cannot generate, naming the rule open
     # at the time — this one, not the assembled right-hand side.
-    rec === nothing || (rec.current = name)
-    section = _make_kernel_section(merged)
-    rec === nothing || (rec.current = "")
-    levels = ((scal, section, sfs, _make_contraction_section(acs), ()),)
+    label(f) = begin
+        rec === nothing || (rec.current = name)
+        sec = f()
+        rec === nothing || (rec.current = "")
+        sec
+    end
+    levels = (
+        _inplace_fill_level(
+            lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences;
+            section_label = label
+        ),
+    )
     return p -> (_fill_obs_levels!(levels, cvec, p, 0.0, Float64); nothing)
 end

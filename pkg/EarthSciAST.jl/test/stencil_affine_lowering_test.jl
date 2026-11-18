@@ -83,6 +83,6 @@ const E = EarthSciAST
     end
     # a contraction node is the remaining unmodelled kind → still a fallback.
     let ctr = E._mknode(kind = E._NK_CONTRACTION, op = :+, children = E._Node[st(-1)])
-        @test_throws E._StencilFallback E._lower_to_access(ctr, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
+        @test_throws E._Decline E._lower_to_access(ctr, E._LaneRepl[Acc(SA(0))], E._AccDesc[])
     end
 end

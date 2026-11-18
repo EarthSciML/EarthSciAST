@@ -556,3 +556,24 @@ end
     ).report
     @test any(r -> occursin("hoisted gather", r.rule), rep.compiler_report.rules)
 end
+
+# The decline vocabulary is closed, and API_SPEC §5.8 lists it: the table there
+# and `_DECLINE_REASONS` name the same reasons in the same order, with the same
+# words. A reason outside it is a programming error, not a decline.
+@testset "decline reasons: one closed vocabulary, as API_SPEC §5.8 lists it" begin
+    spec = read(joinpath(_CSEL_ROOT, "API_SPEC.md"), String)
+    at = findfirst("**Why a tier passed, in Julia.**", spec)
+    @test at !== nothing
+    rows = Pair{Symbol, String}[]
+    for line in split(spec[last(at):end], '\n')
+        m = match(r"^\| `([a-z_]+)` \| (.*) \|$", line)
+        m === nothing && (isempty(rows) ? continue : break)
+        push!(rows, Symbol(m[1]) => replace(m[2], r"`" => ""))
+    end
+    @test [first(r) for r in rows] == [first(p) for p in CSEL._DECLINE_REASONS]
+    @test [last(r) for r in rows] ==
+        [replace(last(p), r"`" => "") for p in CSEL._DECLINE_REASONS]
+    @test_throws ArgumentError CSEL._Decline(:not_a_reason)
+    d = CSEL._Decline(:unsupported_op, "op 'foo'")
+    @test sprint(showerror, d) == "unsupported_op (op 'foo')"
+end

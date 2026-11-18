@@ -101,11 +101,11 @@ _is_numeric_reducer(oplus::AbstractString) = _is_numeric_reducer(Symbol(oplus))
 
 The module-scope name of the function a fold with ⊕ `op` applies, for an
 emitter to splice (`:+`, `:*`, `:max`, `:min`, `:_or_combine`). Declines
-(`_CodegenDecline(:unsupported_op)`) for an unknown ⊕.
+(`_Decline(:unsupported_op)`) for an unknown ⊕.
 """
 function _reducer_fnsym(op::Symbol)
     r = get(_REDUCER_INDEX, op, nothing)
-    r === nothing && throw(_CodegenDecline(:unsupported_op))
+    r === nothing && _decline(:unsupported_op, "⊕ = $(op)")
     return nameof(r.fn)
 end
 

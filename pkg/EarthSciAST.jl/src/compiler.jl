@@ -223,6 +223,128 @@ _plan_for(plan::CompilerPlan) = plan
 # The report: which tier each rule landed on
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Declines: why a tier did not take a rule
+# ---------------------------------------------------------------------------
+#
+# A tier that does not take a rule says so in ONE way: it throws (or, from a
+# helper that tries a form and reports back, returns) a `_Decline` carrying a
+# reason from the closed vocabulary below and a free-text detail. The cascade's
+# driver catches it, files it against the rule with the tier's name
+# (`_note_decline!`), and offers the rule to the next tier; a strict refusal
+# then prints every decline the rule collected. Any other exception a tier
+# raises is not a decline and propagates.
+
+"""
+    _DECLINE_REASONS
+
+The closed vocabulary of decline reasons, `reason => meaning`, in the order
+the `CompilerRuleRecord` docstring and API_SPEC §5.8 list them. A `_Decline`
+with a reason outside it is a programming error.
+"""
+const _DECLINE_REASONS = (
+    # Admission: the shape of the equation is not the tier's.
+    :lhs_not_indexed_derivative => "the left-hand side is not `D(index(var, i…))`",
+    :lhs_subscript_count => "the left-hand side's subscripts do not match the output indices",
+    :no_output_index => "the equation has no output index",
+    :no_contracted_index => "the equation has no contracted index",
+    :range_not_unit_run => "an output range is empty or not a unit-step run",
+    :below_floor => "the contraction is shorter than the tier's length floor",
+    :tier_off => "the tier is off under this compiler",
+    # The contraction.
+    :gated_reduction => "a contraction with a join gate, whose terms vary per output cell",
+    :filtered_reduction => "a contraction with a filter the tier cannot guard",
+    :ragged_contraction => "a contracted range that is not a constant dense range",
+    :contracted_axis_cut => "a contracted axis the box cut splits, so one fold cannot walk it in one piece",
+    # The body.
+    :symbolic_body_did_not_lower => "the body does not resolve or compile with its indices kept symbolic",
+    :unsupported_op => "an operator the tier has no form for",
+    :unknown_kind => "a compiled node kind the tier has no form for",
+    :unknown_array => "a gather of a name that is not a known array",
+    :malformed_index => "an `index` node with no operand",
+    :subscript_rank_mismatch => "a gather whose subscript count is not the array's rank",
+    :subscript_not_static => "a subscript that is not an integer function of the loop indices and build-time tables",
+    :gathered_reduction_shape => "a gathered reduction whose output indices do not match its subscripts",
+    :region_value_shape => "a `makearray` region value whose rank does not match the region",
+    :region_multi_index => "a `makearray` region selected by a subscript of several loop indices",
+    :guarded_out_of_range => "a constant subscript out of range under a run-time guard",
+    :output_layout_not_affine => "the output cells' slots are not an affine function of the loop indices",
+    :subtree_table_declined => "a build-time-evaluable subtree that the compile-once evaluator declined",
+    # The one-pass equality scatter.
+    :scatter_too_many_pinned_cells => "the equality filter pins more output cells than the scatter takes",
+    :scatter_ragged_or_empty => "a scatter whose contracted range is ragged or empty",
+    :scatter_ragged_reads_output => "a ragged scatter whose body reads its own output",
+    # The code generator.
+    :budget => "the generated code would exceed its node budget",
+    :unsupported_desc => "an access descriptor the code generator has no form for",
+    :unsupported_bound => "a loop bound the code generator cannot write",
+    :foreign_scratch => "a read of a scratch buffer the generated function does not own",
+    :subcall_order => "a sub-kernel call emitted before its invariants are in scope",
+    :loopvar_out_of_scope => "a loop variable read outside the loop that binds it",
+    :loop_reentered => "a loop entered again inside its own body",
+    :lane_spec_on_scalar_spine => "a lane descriptor on a scalar spine",
+    :cached_scalar_slot => "a cached scalar slot the generated function cannot read",
+)
+
+const _DECLINE_MEANING = Dict{Symbol, String}(_DECLINE_REASONS)
+
+"""
+    _Decline(reason, detail = "")
+
+Why a tier did not take a rule: `reason` from [`_DECLINE_REASONS`](@ref), and
+`detail` naming the construct. Thrown by a tier (`_decline`), or returned by a
+helper whose caller decides; caught only by the cascade's driver and by the
+code generator's per-kernel transaction.
+"""
+struct _Decline <: EarthSciASTError
+    reason::Symbol
+    detail::String
+    function _Decline(reason::Symbol, detail::AbstractString = "")
+        haskey(_DECLINE_MEANING, reason) || throw(
+            ArgumentError("decline reason :$reason is outside the vocabulary (_DECLINE_REASONS)")
+        )
+        return new(reason, String(detail))
+    end
+end
+
+_decline(reason::Symbol, detail::AbstractString = "") = throw(_Decline(reason, detail))
+
+Base.showerror(io::IO, d::_Decline) =
+    print(io, d.reason, isempty(d.detail) ? "" : " ($(d.detail))")
+
+# A decline in words, for a refusal's sentence: its meaning, then its detail.
+_decline_words(d::_Decline) =
+    _DECLINE_MEANING[d.reason] * (isempty(d.detail) ? "" : " ($(d.detail))")
+
+# One row of `CompilerRuleRecord.declines`.
+const _DeclineRow = @NamedTuple{tier::Symbol, reason::Symbol, detail::String}
+
+_decline_row(tier::Symbol, d::_Decline) = _DeclineRow((tier, d.reason, d.detail))
+
+# A decline as a refusal prints it: `tier: reason (detail)`, the detail cut to
+# `width` characters.
+function _decline_text(r::_DeclineRow; width::Int = 200)
+    isempty(r.detail) && return "$(r.tier): $(r.reason)"
+    d = length(r.detail) > width ? first(r.detail, width) * "…" : r.detail
+    return "$(r.tier): $(r.reason) ($d)"
+end
+
+"""
+    _attempt(f, tier) -> f() | nothing
+
+Run one tier's offer. A `_Decline` it raises is filed against the open rule
+under `tier` and answered with `nothing`; anything else propagates.
+"""
+function _attempt(f, tier::Symbol)
+    try
+        return f()
+    catch err
+        err isa _Decline || rethrow()
+        _note_decline!(tier, err)
+        return nothing
+    end
+end
+
 """
     CompilerRuleRecord
 
@@ -263,15 +385,27 @@ landed on, and every decline it collected getting there.
   Under a strict compiler `:interpreter`, `:setup_percell`,
   `:discrete_percell` and `:output_percell` are refusals instead, and so is
   `:percell_build` in the in-place form, so a `native` report never shows them.
-* `declines` — `tier => reason` for every tier that looked at this rule and
-  passed, deepest reason last.
+* `declines` — one `(tier, reason, detail)` named tuple for every tier that
+  looked at this rule and passed, deepest last. `tier` names the tier
+  (`:equality_scatter`, `:affine`, `:array_contraction`, …), `reason` is one
+  of the closed vocabulary below, and `detail` is free text naming the
+  construct (the operator, the variable, the error the body raised); it is
+  `""` when the reason says it all. A strict refusal prints every decline
+  with its detail.
+
+Decline reasons (the closed vocabulary; [`_DECLINE_REASONS`] holds it with
+the same words):
+
+$(join(("  - `:$(k)` — $(v)" for (k, v) in _DECLINE_REASONS), "\n"))
 """
 struct CompilerRuleRecord
     rule::String
     kind::Symbol
     tier::Symbol
-    declines::Vector{Pair{Symbol, Symbol}}
+    declines::Vector{_DeclineRow}
 end
+CompilerRuleRecord(rule::AbstractString, kind::Symbol, tier::Symbol) =
+    CompilerRuleRecord(String(rule), kind, tier, _DeclineRow[])
 
 """
     CompilerReport
@@ -332,7 +466,7 @@ function Base.show(io::IO, ::MIME"text/plain", r::CompilerReport)
         isempty(rec.declines) ||
             print(
             io, "  [declined: ",
-            join(("$(t):$(why)" for (t, why) in rec.declines), ", "), "]"
+            join(("$(d.tier):$(d.reason)" for d in rec.declines), ", "), "]"
         )
         println(io)
     end
@@ -354,12 +488,12 @@ mutable struct _BuildRecord
     # deeper can name it. Empty between rules.
     current::String
     current_kind::Symbol
-    declines::Vector{Pair{Symbol, Symbol}}
+    declines::Vector{_DeclineRow}
 end
 _BuildRecord(plan::CompilerPlan) =
     _BuildRecord(
     plan, CompilerRuleRecord[], Dict{Symbol, Int}(), "", :equation,
-    Pair{Symbol, Symbol}[]
+    _DeclineRow[]
 )
 
 _build_record()::Union{Nothing, _BuildRecord} =
@@ -551,12 +685,19 @@ function _open_rule!(rule::AbstractString, kind::Symbol)
     return nothing
 end
 
-function _note_decline!(tier::Symbol, reason::Symbol)
+# File a decline against the open rule.
+function _note_decline!(tier::Symbol, d::_Decline)
     rec = _build_record()
     rec === nothing && return nothing
-    push!(rec.declines, tier => reason)
+    push!(rec.declines, _decline_row(tier, d))
     return nothing
 end
+_note_decline!(tier::Symbol, reason::Symbol, detail::AbstractString = "") =
+    _note_decline!(tier, _Decline(reason, detail))
+_note_decline!(r::_DeclineRow) = _note_decline!(r.tier, r.reason, r.detail)
+
+# The declines the open rule has collected so far.
+_open_declines() = (rec = _build_record(); rec === nothing ? _DeclineRow[] : copy(rec.declines))
 
 function _land_rule!(tier::Symbol)
     rec = _build_record()
@@ -577,7 +718,7 @@ end
 # observed): one call, no open/close pair.
 function _record_rule!(
         rule::AbstractString, kind::Symbol, tier::Symbol;
-        declines::Vector{Pair{Symbol, Symbol}} = Pair{Symbol, Symbol}[]
+        declines::Vector{_DeclineRow} = _DeclineRow[]
     )
     rec = _build_record()
     rec === nothing && return nothing

@@ -25,7 +25,7 @@
 # THE BODY. The cell's value is the `faq` restricted to that cell (§4.3.1.1 point
 # 2): its term resolved and compiled ONCE with every index symbolic — the output
 # indices and the contracted ones as loop counters, exactly the term the
-# whole-array contraction tier builds (`_resolve_array_contraction_term`) — and
+# whole-array contraction tier builds (`_compile_cell_program`) — and
 # its reduction the same `_ACFold` that tier folds with: one accumulator seeded
 # from the Float64 0̄, the contracted tuples in `Iterators.product` order (the
 # first contracted index fastest), a filter as the term's `ifelse(filter, term,
@@ -333,62 +333,36 @@ function _compile_recurrence_sweep(
         blk.base, copy(blk.strides), Ref(0)
     )
 
-    # The cell body: the `faq`'s term, its filter as the term's guard, the
-    # observeds this build inlines substituted, every self-read marked.
+    # The cell program: the `faq`'s term, its filter as the term's guard, the
+    # observeds this build inlines substituted, every self-read marked, and its
+    # fold; the table form indexes each cell by its position in
+    # `Iterators.product` order over the block's output ranges — dimension 1
+    # fastest, which for the dense block is the buffer offset.
     ranges = _ranges_dict(dop)
     oplus, zerobar = _aggregate_oplus_identity(dop.semiring, dop.reduce)
     contract_names = _contracted_index_names(ranges, idx_names)
-    term = dop.expr_body::ASTExpr
-    dop.filter === nothing ||
-        (term = OpExpr("ifelse", ASTExpr[dop.filter, term, NumExpr(zerobar)]))
-    isempty(resolved_obs) || (term = _sub_preserving(term, resolved_obs))
-    term = _mark_self_reads(term, name, _RecurGatherRef(rg))
-    got = _resolve_array_contraction_term(
-        term, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather
+    contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
+    contract_const = Union{Vector{Int}, Nothing}[
+        _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
+            for r in contract_ranges
+    ]
+    prog = _compile_cell_program(
+        dop.expr_body::ASTExpr, idx_names, [collect(lo[d]:blk.hi[d]) for d in 1:rank],
+        contract_names, contract_ranges, contract_const, dop.join_gates, dop.filter,
+        oplus, zerobar,
+        (; resolved_obs, array_var_info, var_map, const_registry, pgather, param_sym_set);
+        prepare = t -> _mark_self_reads(t, name, _RecurGatherRef(rg))
     )
-    got === nothing && throw(
+    prog isa _Decline && throw(
         TreeWalkError(
             "E_TREEWALK_UNSUPPORTED_RECURRENCE",
             "the body of recurrence '$name' does not resolve with its indices kept " *
                 "symbolic (a read this build can only resolve at a concrete cell, such as a " *
-                "live forcing buffer gathered at a loop index), so it has no sweep"
+                "live forcing buffer gathered at a loop index), so it has no sweep: " *
+                prog.detail
         )
     )
-    out_refs, contract_refs, resolved = got
-    body = _compile(resolved, var_map, param_sym_set)
-    fold = nothing
-    if !isempty(contract_names)
-        contract_ranges = Vector{Any}[_as_type(Vector{Any}, collect(ranges[n])) for n in contract_names]
-        contract_const = Union{Vector{Int}, Nothing}[
-            _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
-                for r in contract_ranges
-        ]
-        rev = _reverse_window(dop.filter, contract_names, idx_names)
-        fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
-            # Per-cell admitted tuples, indexed by the cell's position in
-            # `Iterators.product` order over the block's output ranges —
-            # dimension 1 fastest, which for the dense block is the buffer
-            # offset.
-            _array_contraction_table(
-                contract_refs, idx_names,
-                [collect(lo[d]:blk.hi[d]) for d in 1:rank], contract_names,
-                contract_ranges, contract_const, dop.join_gates, oplus, zerobar,
-                const_registry; reverse = rev
-            )
-        else
-            _ACFold(
-                contract_refs, Symbol(oplus), zerobar,
-                StepRange{Int, Int}[
-                    (
-                        r = _expand_int_range(c);
-                        first(r):step(r):last(r)
-                    )
-                        for c in contract_ranges
-                ]
-            )
-        end
-    end
+    body, fold, out_refs = prog.body, prog.fold, prog.out_refs
     ncells = prod(ext)
     draft = _RecurrenceSweep(
         name, nothing, (), body, fold, out_refs, rg.cur,
@@ -404,12 +378,12 @@ function _compile_recurrence_sweep(
         )
     end
     gen = _try_codegen_recurrence(draft)
-    if gen isa Symbol
+    if gen isa _Decline
         return _walked_recurrence(
             draft, _percell_license(
                 name,
                 "the emitter for its ordered recurrence sweep (esm-spec §4.3.1.1) " *
-                    "declined ($(gen)), and the walked form evaluates the body as a tree per " *
+                    "declined ($(sprint(showerror, gen))), and the walked form evaluates the body as a tree per " *
                     "cell. Build with compiler=:interpreter to run it"
             )
         )
@@ -526,7 +500,7 @@ end
 # The walked form's loop written as code. `c` is the sweep position; the output
 # indices decode from it exactly as `_walk_recurrence!` decodes them, and a
 # self-read compares its own position against `c` (`_cg_recur_gather`). Returns a
-# `_RecurrenceSweep` carrying the function, or the emitter's decline reason.
+# `_RecurrenceSweep` carrying the function, or the emitter's `_Decline`.
 function _try_codegen_recurrence(sw::_RecurrenceSweep)
     ctx = _CGCtx(_codegen_node_budget())
     kc = _CGScalarCtx()
@@ -567,8 +541,8 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
         term = _cg_emit(ctx, kc, sw.body)
         sw.fold === nothing ? term : _cg_fold(ctx, sw.fold, pcv, kvs, term)
     catch err
-        err isa _CodegenDecline || rethrow()
-        return err.reason
+        err isa _Decline || rethrow()
+        return err
     end
     base = _cg_geo!(ctx, sw.base, (sw, :base))
     ncells = _cg_geo!(ctx, sw.ncells, (sw, :ncells))
@@ -581,22 +555,8 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
             u[$base + $offv] = $cell
         end
     end
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(
-        :function, Expr(:tuple, :u, :p, :t, :tabs),
-        Expr(
-            :block, grpstmts...,
-            :(local _cgT = _rhs_value_type(u, p, t)),
-            ctx.helpers...,
-            Expr(:macrocall, Symbol("@inbounds"), ln, loop),
-            :(return nothing)
-        )
-    )
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex
-    )
-    tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
+    f, fns = _cg_finish(ctx, (:u, :p, :t, :tabs), Expr(:macrocall, Symbol("@inbounds"), ln, loop))
+    tabpack = _cg_tabpack(ctx, fns)
     return _RecurrenceSweep(
         sw.name, f, tabpack, sw.body, sw.fold, sw.out_refs, sw.cur,
         sw.order, sw.lo, sw.dims, sw.base, sw.strides, sw.ncells
@@ -610,7 +570,7 @@ end
 function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     rg = nd.payload::_RecurGather
     cv = get(kc.loops, rg.cur, nothing)
-    cv === nothing && throw(_CodegenDecline(:recur_cursor_out_of_scope))
+    cv === nothing && _decline(:loopvar_out_of_scope, "the recurrence cursor")
     rgv = _cg_name(ctx, "rga")
     base = _cg_geo!(ctx, rg.base, (rg, :base))
     inner = _cg_recur_gather_dim(ctx, kc, nd, rg, rgv, cv, 1, Any[0], Any[base], Symbol[])

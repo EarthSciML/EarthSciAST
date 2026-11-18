@@ -1578,7 +1578,7 @@ Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 
   What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
   cell at a time whose cell entries are then compiled — that costs build time
-  and nothing per step), a `_StencilFallback` on its own (its landing is a
+  and nothing per step), a `_Decline` on its own (its landing is a
   per-cell build), and a compile-once setup sweep that evaluates an already
   compiled node per cell.
 
@@ -2481,7 +2481,7 @@ function _observed_field_memo(
             )
             tier = nprog > 0 ? :output_compiled :
                 percell > 0 ? :output_percell : :output_compiled_once
-            push!(rules, CompilerRuleRecord(name, :observed, tier, Pair{Symbol, Symbol}[]))
+            push!(rules, CompilerRuleRecord(name, :observed, tier))
         end
         memoizable && (build.observed_memo[name] = _ObservedMemo(epoch, copy(v)))
     end

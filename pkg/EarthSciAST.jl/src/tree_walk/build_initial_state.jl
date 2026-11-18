@@ -808,12 +808,13 @@ function _compile_init_once(
     got = _resolve_array_contraction_term(
         body, idx_names, String[], array_var_info, var_map, const_arrays, pgather
     )
-    got === nothing && return nothing
+    got isa _Decline && return nothing
     refs, _, resolved = got
     node = try
         _compile(resolved, var_map, param_sym_set)
     catch err
-        _is_resource_error(err) && rethrow()
+        # Only a document-level refusal is a decline (see resolve.jl).
+        err isa EarthSciASTError || rethrow()
         return nothing
     end
     return (refs, node)

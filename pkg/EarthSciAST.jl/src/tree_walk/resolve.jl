@@ -1397,7 +1397,8 @@ _contraction_loop_min() = (
 # Resolve `body` with each of `names` replaced by a fresh reserved loop-var
 # name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
 # `extra_syms`: `(refs, resolved)`, one `Ref` per name in `names` order, or
-# `nothing` when the body does not resolve that way. Only a document-level
+# a `_Decline` (`:symbolic_body_did_not_lower`, the error's text as its
+# detail) when the body does not resolve that way. Only a document-level
 # refusal (an `EarthSciASTError`) is such a decline: a resource error never is
 # (errors.jl) — the per-cell path a caller falls back to resolves the SAME body
 # once per output cell, so reading an exhausted heap as "this body will not
@@ -1421,7 +1422,7 @@ function _resolve_symbolic(
         _resolve_indices(subbed, array_var_info, var_map, const_arrays, pgather, memo, bsyms)
     catch err
         err isa EarthSciASTError || rethrow()
-        return nothing
+        return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
     end
     for d in eachindex(fresh)
         _register_loopvar!(fresh[d], refs[d])
@@ -1432,7 +1433,7 @@ end
 # Try to compile a uniform contraction to a single runtime loop node instead of
 # unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
 # ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
-# `nothing` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
+# the resolve's `_Decline` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
 # (a reserved bound-sym `VarExpr`) and resolves the body ONCE: a loop var reaching
 # a const-array subscript lowers to a runtime `_NK_CONST_GATHER` (existing Phase-C
 # machinery); a loop var reaching a STATE index or a ragged bound throws
@@ -1448,7 +1449,7 @@ function _try_build_contraction_loop(
     got = _resolve_symbolic(
         body, contract_names, outer_syms, array_var_info, var_map, const_arrays, pgather
     )
-    got === nothing && return nothing
+    got isa _Decline && return got
     refs, resolved = got
     oplus_sym = Symbol(oplus)
     node::ASTExpr = resolved
@@ -1494,7 +1495,7 @@ _array_contraction_min() = (
 
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
-# `(out_refs, contract_refs, resolved)`, or `nothing` when the body does not
+# `(out_refs, contract_refs, resolved)`, or a `_Decline` when the body does not
 # resolve that way. Keeping the output indices symbolic as well as the
 # contracted ones makes the build O(1) in both extents: the body's reads lower
 # through the run-time gather machinery (a const read at an output subscript is
@@ -1522,7 +1523,7 @@ function _resolve_array_contraction_term(
         body, vcat(out_names, contract_names), extra,
         array_var_info, var_map, const_arrays, pgather, memo
     )
-    got === nothing && return nothing
+    got isa _Decline && return got
     refs, resolved = got
     return (refs[1:nout], refs[(nout + 1):end], resolved)
 end
@@ -1583,7 +1584,7 @@ function _resolve_scalar_faq(
     #     unrolling — they already resolve to a per-cell concrete bound);
     #   * total reduction length ≥ the coverage floor;
     #   * the body resolves with the index symbolic (`_try_build_contraction_loop`
-    #     returns `nothing` otherwise → unroll).
+    #     returns a `_Decline` otherwise → unroll).
     if _contraction_loop_enabled() && _build_state().array_cell_depth == 0 &&
             isempty(bound_syms) && gates === nothing && filt0 === nothing &&
             _is_numeric_reducer(oplus) &&
@@ -1595,7 +1596,7 @@ function _resolve_scalar_faq(
                 body, contract_names, ranges,
                 oplus, zerobar, array_var_info, var_map, const_arrays, pgather
             )
-            looped === nothing || return looped
+            looped isa _Decline || return looped
         end
     end
     # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
@@ -1616,7 +1617,7 @@ function _resolve_scalar_faq(
                 zerobar, array_var_info, var_map, const_arrays,
                 pgather; outer_syms = bound_syms
             )
-            looped === nothing || return looped
+            looped isa _Decline || return looped
         end
     end
     terms = ASTExpr[]
