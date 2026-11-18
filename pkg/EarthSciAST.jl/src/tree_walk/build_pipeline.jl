@@ -591,7 +591,8 @@ function _build_compile_evaluator(
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, products, materialize_out,
         form::Symbol,
-        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing
+        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
+        caller_u0 = nothing
     )
     u0 = layout.u0
     p = layout.p
@@ -734,9 +735,9 @@ function _build_compile_evaluator(
     end
 
     # ---- Evaluate faq-valued initialization_equations into u0 ----
-    # A caller's u0 override (esm_problem's `u0`, through `_with_caller_u0`) is
-    # part of the state the equations read, and a cell it names keeps it.
-    caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations)
+    # A caller's u0 override (esm_problem's `u0`) is part of the state the
+    # equations read, and a cell it names keeps it.
+    caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations, caller_u0)
     _seed_faq_init_u0!(
         u0, parts.init_equations, initial_conditions, layout.var_map,
         layout.array_var_info, const_registry, pgather,
@@ -1344,7 +1345,7 @@ function _build_evaluator_impl_inner(
         # registered as a live `param_arrays` buffer (added to the
         # caller's dictionary) instead of const data.
         _runtime_array_parameters::Bool = false,
-        # Internal: a program build (src/range_restricted.jl). Every
+        # Internal: a program build (src/rhs_program.jl). Every
         # externally fed shaped parameter is registered the same way,
         # whatever data the Problem bound to it.
         _live_fed_parameters::Bool = false,
@@ -1371,7 +1372,9 @@ function _build_evaluator_impl_inner(
         _template_reg = nothing,
         # Internal: the front door's expansion cache for `_template_reg`
         # (`_ExpandCache`), or `nothing`.
-        _expand_cache = nothing
+        _expand_cache = nothing,
+        # Internal: the caller's initial state (`BuildOptions.caller_u0`).
+        _caller_u0 = nothing
     )
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
@@ -1568,7 +1571,7 @@ function _build_evaluator_impl_inner(
         ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan)[1] : Float64(_ic_t0),
         ic_data = _ic_data
     )
-    # A range-restricted program (src/range_restricted.jl) clips the equation
+    # A range-restricted program (src/range/tile.jl) clips the equation
     # stream to the cells its owned box needs, before any cell is laid out.
     parts = _range_restrict_parts(
         _range_spec_now(), model, cls, parts, index_sets,
@@ -1641,7 +1644,7 @@ function _build_evaluator_impl_inner(
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
         initial_conditions = initial_conditions, tspan = tspan, products = products,
         materialize_out = materialize_out, form = form,
-        template_sites = _template_sites
+        template_sites = _template_sites, caller_u0 = _caller_u0
     )
 end
 

@@ -102,5 +102,6 @@ include("tree_walk/build_discrete_cache.jl")  #      discrete-cadence caches
 include("tree_walk/build_observed_fills.jl")  #      materialized array-observed fills
 include("tree_walk/build_array_equation.jl")  #      derivative compile + array-equation cascade
 include("tree_walk/build_pipeline.jl")        # §2c  the build phases, `_build_evaluator_impl`
+include("tree_walk/build_options.jl")         #      `BuildOptions`: what one document build is asked for
 include("tree_walk/build_front_doors.jl")     #      `_build_evaluator` entry points, `evaluate_expr`
 include("tree_walk/ir_contract.jl")      #      what a back end may rely on in `_CompiledIR`

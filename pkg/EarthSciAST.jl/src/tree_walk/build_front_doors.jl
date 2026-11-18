@@ -198,24 +198,22 @@ solve(remake(prob; p = Dict(θ[1] => 2.0)), Tsit5())
 parameter_classes(insp::BuildInspection) = insp.param_classes
 
 """
-    _build_selected(file::EsmFile; model_name = nothing, kwargs...)
+    _build_selected(file::EsmFile, model_name, opts::BuildOptions)
 
 The build of `file`'s selected model from the products of the front door
 (`_front_door`): the build itself, with no pre-pass. A re-lowering of a
-range-restricted program re-enters here with the keywords the front door
-produced.
+range-restricted program re-enters here with the options the front door
+produced (`_relower_options`).
 """
 function _build_selected(
-        file::EsmFile;
-        model_name::Union{Nothing, AbstractString} = nothing,
-        kwargs...
+        file::EsmFile, model_name::Union{Nothing, AbstractString}, opts::BuildOptions
     )
     model = _select_model(file, model_name)
     # Thread the document-scoped index-set registry into the typed evaluator.
     return _build_evaluator_impl(
         model; index_sets = file.index_sets,
         _template_reg = _component_template_reg(file, model_name),
-        kwargs...
+        _build_kwargs(opts)...
     )
 end
 
@@ -305,18 +303,18 @@ end
     _FrontDoor
 
 What the build's pre-passes produced for one document: the document and the
-model they selected, the value-invention result, and the build's keywords with
+model they selected, the value-invention result, and the build's options with
 the pre-passes' products added (the canonical override and const-array keys,
-the derived const arrays, the value-invention extents, variables and maps, the
-build-time parameter-read set). `_build_front` builds from it; a
-range-restricted program keeps it to re-lower without re-reading the document.
+the derived const arrays, the build-time parameter-read set, the template
+expansion cache). `_build_front` builds from it; a range-restricted program
+keeps it to re-lower without re-reading the document.
 """
 struct _FrontDoor
     file::EsmFile
     model_name::Union{Nothing, String}
     model::Union{Nothing, Model}
     vi::Any
-    kwd::Dict{Symbol, Any}
+    opts::BuildOptions
 end
 
 # Add `extra` to the const arrays the build of `front` reads (the gated
@@ -324,23 +322,23 @@ end
 function _merge_front_const_arrays!(front::_FrontDoor, extra::AbstractDict)
     isempty(extra) && return front
     ca = Dict{String, Any}(
-        String(k) => v for (k, v) in get(front.kwd, :const_arrays, Dict{String, Any}())
+        String(k) => v for (k, v) in something(front.opts.const_arrays, Dict{String, Any}())
     )
     merge!(ca, extra)
-    front.kwd[:const_arrays] = ca
+    front.opts.const_arrays = ca
     return front
 end
 
 # The build from a front door's product. A range-restricted program's build
 # records the product first, so a restriction of it re-lowers from there.
 function _build_front(front::_FrontDoor)
-    kwd = front.kwd
-    kwd[:_vi_extents] = front.vi === nothing ? Dict{String, Int}() : front.vi.extents
-    kwd[:_vi_vars] = front.vi === nothing ? Set{String}() : front.vi.vi_var_names
-    kwd[:_vi_maps] = front.vi === nothing ? _EMPTY_VI_MAPS :
+    opts = front.opts
+    opts.vi_extents = front.vi === nothing ? Dict{String, Int}() : front.vi.extents
+    opts.vi_vars = front.vi === nothing ? Set{String}() : front.vi.vi_var_names
+    opts.vi_maps = front.vi === nothing ? _EMPTY_VI_MAPS :
         (maps = front.vi.maps, map_sets = front.vi.map_sets)
-    _range_front_door_done(_range_spec_now(), front.file, front.model_name, kwd)
-    return _build_selected(front.file; model_name = front.model_name, kwd...)
+    _range_front_door_done(_range_spec_now(), front.file, front.model_name, opts)
+    return _build_selected(front.file, front.model_name, opts)
 end
 
 # The build's pre-passes over `file`'s selected model: the binary32 refusal,
@@ -352,7 +350,7 @@ function _front_door(
         file::EsmFile, model_name::Union{Nothing, AbstractString};
         kwargs...
     )::_FrontDoor
-    kwd = Dict{Symbol, Any}(kwargs)
+    opts = BuildOptions(; kwargs...)
     _refuse_float32(file, model_name)
 
     # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
@@ -385,7 +383,7 @@ function _front_door(
             # takes this expansion's cache (`_ExpandCache`).
             cache = _ExpandCache()
             _expand_model_refs!(model, _tmpl_reg; memo = cache)
-            kwd[:_expand_cache] = cache
+            opts.expand_cache = cache
         end
     end
 
@@ -394,7 +392,7 @@ function _front_door(
     # observed bodies before `_build_evaluator_impl` is reached, so the
     # rewrite-target walk runs here too, ahead of them.
     if model !== nothing
-        cache = get(kwd, :_expand_cache, nothing)
+        cache = opts.expand_cache
         if cache isa _ExpandCache
             _reject_unlowered_operators(model, cache.gate_lhs, cache.gate_rhs)
         else
@@ -409,19 +407,19 @@ function _front_door(
     # value-invention materialisation, and the typed impl below all read the
     # SAME resolved values. Without this a spec-spelled `{"pert_amp": 0}`
     # missed every one of them and the run silently used the default.
-    if model !== nothing && haskey(kwd, :parameter_overrides)
-        kwd[:parameter_overrides] = _normalize_param_override_keys(
-            model, kwd[:parameter_overrides]
+    if model !== nothing && opts.parameter_overrides !== nothing
+        opts.parameter_overrides = _normalize_param_override_keys(
+            model, opts.parameter_overrides
         )
     end
     # The same for the caller's `const_arrays` keys, so the front-door pre-passes
     # below read a shaped parameter's array under the name the model spells.
-    if model !== nothing && haskey(kwd, :const_arrays)
-        kwd[:const_arrays] = _normalize_const_array_keys(model, kwd[:const_arrays])
+    if model !== nothing && opts.const_arrays !== nothing
+        opts.const_arrays = _normalize_const_array_keys(model, opts.const_arrays)
     end
-    if model !== nothing && haskey(kwd, :const_array_boundaries)
-        kwd[:const_array_boundaries] = _normalize_const_array_keys(
-            model, kwd[:const_array_boundaries]
+    if model !== nothing && opts.const_array_boundaries !== nothing
+        opts.const_array_boundaries = _normalize_const_array_keys(
+            model, opts.const_array_boundaries
         )
     end
 
@@ -432,16 +430,15 @@ function _front_door(
     # into `const_arrays`, so a key over `floor(index(src_lon,i)/dx)` resolves at setup
     # without the host supplying the coordinate. No-op (byte-identical) when no such
     # observed exists.
-    _params = get(kwd, :parameter_overrides, Dict{String, Float64}())
-    _ca = Dict{String, Any}(String(k) => v for (k, v) in get(kwd, :const_arrays, Dict{String, Any}()))
+    _params = something(opts.parameter_overrides, Dict{String, Float64}())
+    _ca = Dict{String, Any}(String(k) => v for (k, v) in something(opts.const_arrays, Dict{String, Any}()))
     # The build-time parameter-read sink (see `_record_param_read`) is created HERE,
     # not in the impl: two of the build-time consumers — the binning-coordinate
     # derivation and value invention (whose `_vi_param` reads decide an index-set
     # EXTENT, i.e. `length(u)`) — run at this front door, before the impl entry.
     # The same set is threaded down so the classification sees all of them.
-    _preads = get(kwd, :_param_reads, nothing)
-    _preads === nothing && (_preads = Set{String}())
-    kwd[:_param_reads] = _preads
+    _preads = something(opts.param_reads, Set{String}())
+    opts.param_reads = _preads
     if model !== nothing
         # The coordinate buffers a value-invention key GATHERS from (`src_lon`,
         # `tgt_lon`): a build-time-constant one is derived here so a
@@ -459,14 +456,14 @@ function _front_door(
         end
         if !isempty(_derived)
             merge!(_ca, _derived)
-            kwd[:const_arrays] = _ca
+            opts.const_arrays = _ca
         end
     end
 
     # A value-invention key column may be an unknown defined by a `const`
     # equation (esm-spec §4.2): that is build-time data exactly as a supplied
     # const array is, so the relational engine reads it. The extra entries are
-    # scoped to value invention; `kwd[:const_arrays]` is not widened.
+    # scoped to value invention; `opts.const_arrays` is not widened.
     _vi_ca = _ca
     if model !== nothing
         for (n, defn) in observed_definitions(model)
@@ -497,7 +494,7 @@ function _front_door(
         _fed = _feed_back_vi_members(file.index_sets, _vi.members, model)
         if !isempty(_fed)
             merge!(_ca, _fed)
-            kwd[:const_arrays] = _ca
+            opts.const_arrays = _ca
         end
     end
 
@@ -519,12 +516,12 @@ function _front_door(
         end
         if !isempty(_envf)
             merge!(_ca, _envf)
-            kwd[:const_arrays] = _ca
+            opts.const_arrays = _ca
         end
     end
 
     return _FrontDoor(
-        file, model_name === nothing ? nothing : String(model_name), model, _vi, kwd
+        file, model_name === nothing ? nothing : String(model_name), model, _vi, opts
     )
 end
 
