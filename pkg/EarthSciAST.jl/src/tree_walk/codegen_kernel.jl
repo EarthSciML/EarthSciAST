@@ -1,6 +1,5 @@
 # ========================================================================
-# tree_walk/codegen_kernel.jl — the Julia CODEGEN tier for access kernels
-# (perf-gap-closure plan, item B1).
+# tree_walk/codegen_kernel.jl — the Julia CODEGEN tier for access kernels.
 #
 # The scalar access-kernel runner (`_run_acc_kernel!`, access_kernel.jl) walks
 # the spine `_Node` tree once per cell: one dynamic kind/op dispatch per node
@@ -32,8 +31,8 @@
 #
 # FALLBACK CONTRACT: anything the emitter cannot model — an unknown node kind
 # or descriptor, a foreign CSE scratch (except the build's own shared
-# scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
-# `_cse_read`; see the tier note below), an oversized spine —
+# scalar-prelude cache, which is emitted as the interpreter's `_cse_read`; see
+# the tier note below), an oversized spine —
 # declines THAT kernel silently (`_Decline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
 # counted per reason in the build's cascade tally (`:codegen_kernel` /
@@ -66,12 +65,11 @@ _codegen_node_budget() =
 # once per parent, as the emitter writes it once per use.
 _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 
-# ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
-# The cross-kernel CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
-# defs into bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a
-# `_CSECache` payload that is no kernel's scratch. The emitter used to decline
-# every such kernel (`:foreign_scratch`), dropping it to the interpreter.
-# This tier emits the read instead, as the very call the interpreter makes
+# ---- Shared-prelude (xcse) cache reads ---------------------------------------
+# The cross-kernel CSE pass (xcse.jl) rewrites kernel invariant-tier defs into
+# bare `_NK_CACHED` reads of the build's SCALAR prelude cache — a `_CSECache`
+# payload that is no kernel's scratch. The emitter emits the read as the very
+# call the interpreter makes
 # (`_cse_read(cache, idx, T)` — eltype-generic, so the Float64 AND the Dual
 # specialization of the generated code read the same buffer the interpreter
 # would: `f64` at Float64, the lazily-allocated `alt::Vector{T}` otherwise).
@@ -99,14 +97,11 @@ _cg_node_tree_size(n::_Node) = _node_tree_size(n)
 mutable struct _CGCtx
     # Runtime objects the generated code needs (const arrays, slot tables,
     # outs vectors), GROUPED BY CONCRETE TYPE into
-    # homogeneous containers (ess-iip-tabgroup). The generated code indexes a
+    # homogeneous containers. The generated code indexes a
     # concrete-element container — `_cggrpG[pos]` — so its element type infers in
     # O(1); the runtime `tabs` argument is a small tuple of those containers, one
-    # per distinct type. This replaces a per-object heterogeneous N-tuple whose
-    # TYPE alone made inference super-linear: the duo LMARS momentum RHS registers
-    # ~2.5e5 tabs, EVERY one a `Vector{Int}`; as `Tuple{Vector{Int},…×2.5e5}` it
-    # drove the split helpers' compile to ~850 s, as one `Vector{Vector{Int}}` it
-    # is cheap. `tab_types[g]` is group g's element type, `tab_objs[g]` its objects
+    # per distinct type. A per-object heterogeneous N-tuple instead would have a
+    # TYPE that alone makes inference super-linear in the number of tabs. `tab_types[g]` is group g's element type, `tab_objs[g]` its objects
     # (deduped by identity via `tabid` → (group, position)).
     tab_types::Vector{DataType}
     tab_objs::Vector{Vector{Any}}
@@ -120,17 +115,17 @@ mutable struct _CGCtx
     nodes::Int                   # emitted-node tally (budget enforcement)
     budget::Int
     nname::Int                   # unique-name counter
-    # Shared-prelude cache reads (ess-cgfsc): the ONE `_CSECache` whose
-    # `_NK_CACHED` reads may be emitted (`nothing` ⇒ decline as before), and a
+    # Shared-prelude cache reads: the ONE `_CSECache` whose
+    # `_NK_CACHED` reads may be emitted (`nothing` ⇒ decline), and a
     # per-build count of reads emitted (tally bookkeeping in the build loop).
     shared_cache::Union{Nothing, _CSECache}
     fscratch::Int
-    # Intra-kernel split (ess-iip-split): top-level `@noinline` helper defs a
+    # Intra-kernel split: top-level `@noinline` helper defs a
     # large kernel's body was partitioned into. Spliced ahead of the chunk
     # sub-functions so both call them by name; each captures nothing (params
     # only), so the RHS stays allocation-free.
     helpers::Vector{Any}
-    # Helper dedup (ess-iip-helper-dedup): identical spilled bodies (same code —
+    # Helper dedup: identical spilled bodies (same code —
     # the momentum spine bears LAZY nodes, so scalar CSE was skipped and its
     # redundant sub-expressions reach codegen un-shared) collapse to ONE compiled
     # `@noinline`, still called per occurrence. Body string → the helper name it
@@ -204,7 +199,7 @@ _cg_grp_sym(g::Int) = Symbol("_cggrp", g)
 end
 
 # Register a runtime object; returns the indexing expression `_cggrpG[pos]` into
-# its by-type container (ess-iip-tabgroup). Deduped by identity; a new object is
+# its by-type container. Deduped by identity; a new object is
 # appended to the container for its concrete type (a new group if that type is
 # unseen). The returned `_cggrpG[pos]` reads a CONCRETE-element container, so its
 # element type infers in O(1) — the whole point of grouping.
@@ -692,7 +687,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         elseif pl === cse.inv_scratch && nd.idx <= length(kc.invsyms)
             return kc.invsyms[nd.idx]
         elseif pl === ctx.shared_cache && pl isa _CSECache
-            # Shared scalar-prelude slot (xcse.jl rewrite; ess-cgfsc). Emit the
+            # Shared scalar-prelude slot (xcse.jl rewrite). Emit the
             # interpreter's exact read — `_cse_read` selects `f64` at Float64
             # and the `alt::Vector{T}` buffer under any other `T`, both filled
             # by `_make_rhs`'s prelude tiers (at this same `T`) before the
@@ -1929,8 +1924,8 @@ _node_work(root::_Node) =
 
 # Per-generated-FUNCTION emitted-node cap. The node budget above bounds total
 # AST size; this bounds the size of any ONE compiled function, because LLVM's
-# first-call compile memory is super-linear in single-function size (one ~400k-
-# node function OOMs a 40 GB host). Loop nests are packed into `@noinline`
+# first-call compile memory is super-linear in single-function size. Loop nests
+# are packed into `@noinline`
 # sub-functions up to this cap so LLVM compiles bounded pieces. Override with
 # ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
 # Every supported Julia can split (`_cg_split_transport` picks the transport),
@@ -2310,13 +2305,12 @@ function _cg_local_lhs(stmt)
     return a isa Expr && a.head === :(=) ? a.args[1] : nothing
 end
 
-# ---- Intra-kernel body split (ess-iip-split) --------------------------------
-# `_cg_emit` lowers one output cell to a SINGLE Julia expression. For a
-# spine-dominated kernel that tree can be ~1e5 nodes; emitted as one function it
-# blows the Julia compiler (compile is superlinear in single-function size — the
-# duo LMARS momentum kernels OOM a 40 GB `:inplace` build). The kernel-CLASS
-# merge already made the cell body grid-INDEPENDENT (one body over a lane axis),
-# so the fix is purely to cap the SINGLE-FUNCTION size: partition the emitted
+# ---- Intra-kernel body split -------------------------------------------------
+# `_cg_emit` lowers one output cell to a SINGLE Julia expression, which for a
+# spine-dominated kernel can be large enough that compiling it as one function
+# exhausts memory (compile is superlinear in single-function size). The
+# kernel-CLASS merge already made the cell body grid-INDEPENDENT (one body over
+# a lane axis), so what remains is to cap the SINGLE-FUNCTION size: partition the emitted
 # expression so no generated function exceeds `_codegen_fn_node_cap`, while the
 # WHOLE RHS stays compiled and NEVER touches the interpreter.
 #
@@ -2385,7 +2379,7 @@ _cg_is_passable(s::Symbol) =
 
 # Spill `sub` (already ≤ cap) into a fresh `@noinline` helper returning its
 # value; return the call expression that replaces it. Tab reads in `sub` are
-# already the by-type container indices `_cggrpG[pos]` (ess-iip-tabgroup), so the
+# already the by-type container indices `_cggrpG[pos]`, so the
 # helper's tab dependency is ONE argument per GROUP (a few concrete-typed
 # containers) no matter how many distinct tabs it touches — this is what keeps
 # the split's parameter/inference cost from exploding with the tab count.
@@ -2551,7 +2545,7 @@ function _build_codegen_rhs(
             push!(kloops, (lx, ctx.nodes - nodes0))
             covered[j] = true
             _tally_cascade!(:codegen_kernel)
-            # Shared-prelude read observability (ess-cgfsc): this kernel
+            # Shared-prelude read observability: this kernel
             # compiled carrying at least one such read.
             ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
         catch err
@@ -2577,7 +2571,7 @@ function _build_codegen_rhs(
     # passed — it is the value TYPE (a runtime `DataType`), and passing it across
     # the call boundary loses the constant-propagation that keeps `convert(_cgT,
     # …)` type-stable, boxing every scalar. Each chunk recomputes `_cgT` locally
-    # from (u, p, t) instead, so inference constant-propagates it as before.
+    # from (u, p, t) instead, so inference constant-propagates it.
     ngrp = length(ctx.tab_types)
     outer_passed = Set{Symbol}()
     # The by-type tab containers (`_cggrpG`, one per distinct tab type — a handful,
@@ -2668,7 +2662,7 @@ function _build_codegen_rhs(
             callstmts...
         )
     )
-    # The intra-kernel split helpers (ess-iip-split) come FIRST so the
+    # The intra-kernel split helpers come FIRST so the
     # invariant prologue and every chunk sub-function can call them by name;
     # each is `@noinline`, params-only (captures nothing). By value, every
     # sub-function becomes its own generated function, arriving in a tuple

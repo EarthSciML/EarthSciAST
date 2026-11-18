@@ -36,7 +36,7 @@
 #
 # WHAT IS IN HERE
 #
-#   * the lane-batched grouping of the per-cell scalar surface (ess-oop-batch):
+#   * the lane-batched grouping of the per-cell scalar surface:
 #     congruent entries bucketed at BUILD time so a backend emits one whole-lane
 #     program per group rather than one per cell;
 #   * the vectorization PLAN per access kernel (`_OopAccPlan`): the gather slot
@@ -48,7 +48,7 @@
 # `_build_evaluator(model; form = :oop)` returns the `_OopRHS` in the `f!` slot of
 # the usual `(f, u0, p, tspan, var_map)` tuple.
 
-# ---- Lane-batched scalar entries (ess-oop-batch) -----------------------------
+# ---- Lane-batched scalar entries -----------------------------
 #
 # WHY. The per-CELL scalar surface of a build — `rhs_list` entries a state
 # equation lowers to when it declines the kernel path (a runtime contraction
@@ -655,14 +655,14 @@ function _make_rhs_oop(
         array_contractions::AbstractVector = _ArrayContraction[]
     )
     # Vectorized lane plans for the acc kernels (host index data, built once).
-    # The kernel-CLASS merge (oop_merge.jl) no longer runs here: it is hoisted
+    # The kernel-CLASS merge (oop_merge.jl) does not run here: it is hoisted
     # into `_build_evaluator_impl` phase 4 (`_merge_acc_kernel_classes`), before
     # the xcse gate, so BOTH emitters receive already-merged kernels and this
     # plan build is over the merged (fewer) list. `acc_kernels` and `acc_plans`
     # reach the build product under the stable field names :acc_kernels /
     # :acc_plans that external tooling reflects on.
     acc_plans = _OopAccPlan[_build_oop_acc_plan(K) for K in acc_kernels]
-    # Lane-batched scalar surfaces (ess-oop-batch), grouped ONCE at build:
+    # Lane-batched scalar surfaces, grouped ONCE at build:
     # the rhs_list per-cell entries and each fill level's per-column scalars.
     # `rhs_list`/`mat_levels` keep their own stable field names (external
     # tooling reflects on them); `rhs_batches`/`mat_batches` are ADDITIVE

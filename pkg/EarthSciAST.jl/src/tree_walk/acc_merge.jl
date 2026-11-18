@@ -258,7 +258,7 @@ end
 # kernels (codegen-compiled loop nests, the eltype-generic scalar walk for
 # declined kernels). Accepts any AbstractVector so both the pre-allocated and the
 # dynamically-grown forms produced by _build_evaluator work. The whole RHS is
-# allocation-free in steady state (ess-9cc), so it can be reused across every
+# allocation-free in steady state, so it can be reused across every
 # RK stage without GC pressure — pinned by the `@allocated f!(du,u,p,t) == 0`
 # test.
 #
@@ -296,11 +296,11 @@ function _make_rhs(
         const_slots, time_slots, scan_section,
         array_contractions; nst = nst
     )
-    # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
+    # The codegen tier (codegen_kernel.jl): every kernel the emitter can model is
     # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
     # (bit-identical, eltype-generic); the rest keep the per-cell scalar
     # runner. With the tier off this is exactly the interpreter kernel loop.
-    # `shared_cache = cse_cache` (ess-cgfsc): THIS call site may compile
+    # `shared_cache = cse_cache`: THIS call site may compile
     # shared-prelude (`_CSECache`) reads into the generated kernels, because
     # `f!` below fills every prelude tier into that exact cache — at the same
     # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
@@ -320,7 +320,7 @@ function _make_rhs(
     function f!(du, u, p, t)
         _reject_float32_state(u)   # loud, statically-folded (see rhs_seams.jl)
         T = _rhs_value_type(u, p, t)
-        # CSE prelude (ess-r7h), in its THREE CADENCE TIERS (4qf + B3, const_tier.jl):
+        # CSE prelude, in its THREE CADENCE TIERS (const_tier.jl):
         # evaluate each distinct shared subexpression once into the scratch cache,
         # in slot order. `defs[s]` references only slots < s (topological), so each
         # read is already filled. The cache makes `f!` non-reentrant (one instance
@@ -387,7 +387,7 @@ function _make_rhs(
         # overflow routing is armed, the compiled overflow function).
         kernel_section(du, u, p, t, T)
 
-        # ---- Cumulative (prefix) reductions (ess-scan, scan.jl) ----
+        # ---- Cumulative (prefix) reductions (scan.jl) ----
         # Each fold reads back the per-cell TERMS its own kernels just wrote
         # into `du` and accumulates them along the scanned axis in place. Runs
         # here, after the whole kernel section, so it is ordered behind every
@@ -397,7 +397,7 @@ function _make_rhs(
         # case.
         isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
 
-        # ---- Whole-array contractions (ess-array-contraction) ----
+        # ---- Whole-array contractions (array_contraction.jl) ----
         # Each runs its own output loop nest over disjoint `du` slots, so it is
         # ordered behind the kernel section for the same reason the folds are:
         # every other section has finished writing. Empty on every model whose

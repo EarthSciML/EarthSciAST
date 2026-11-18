@@ -50,10 +50,9 @@
 # blocked kernel (reduce segment / unmergeable descriptor kind / nested
 # sub-subs), a failed group merge, or a merged kernel whose fresh plan is
 # not vectorizable — each falls back to the original kernels for that scope.
-# Off, the build is the unmerged one byte for byte.
 # ========================================================================
 
-# The name is historical (the pass landed :oop-only); it runs for BOTH emitters.
+# The class merge runs for both build forms.
 _oop_merge_disabled() = !_compiler_plan_now().oop_merge
 
 # Signature equal for two kernels iff they can be evaluated in LOCKSTEP: same
@@ -188,7 +187,7 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
     # the merged kernel keeps a real inv tier — evaluated once per call — and
     # only the cell tier goes per-lane; otherwise (and always for subs, whose
     # runners lane-vectorize the whole prelude) the inv tier folds into the
-    # cell tier exactly as before. Both placements compute the same bits.
+    # cell tier. Both placements compute the same bits.
     function merge_trees(Kof, Pof, keep_inv::Bool)
         accvec = _AccDesc[]
         n_inv = length(Kof(1).cse.inv_recipes); n_cell = length(Kof(1).cse.recipes)
@@ -958,8 +957,8 @@ end
 # through affine, fixed or box-addressed descriptors and spans more than one cell along at least one axis, up to `_AFFINE_KEEP_MAX`
 # kernels (by the number of such axes, then build order, both independent of
 # the grid size); the merge runs on the rest. Corner boxes (one cell along
-# every axis) are merged as before: they are a handful of cells whatever the
-# grid size. One-axis boxes are merged as before too: there the box processor
+# every axis) are merged: they are a handful of cells whatever the grid size.
+# One-axis boxes are merged too: there the box processor
 # also cuts an irregular gather into affine runs, whose number moves with the
 # grid size, and only the merge keeps that program the same at every size. The out-of-place product
 # (the compiled backends' input) and the interpreter runner keep the full

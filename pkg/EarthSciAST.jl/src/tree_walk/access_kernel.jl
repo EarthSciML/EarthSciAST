@@ -611,7 +611,7 @@ function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) w
     return du
 end
 
-# ---- Per-cell CSE builder (ess-affine) ----
+# ---- Per-cell CSE builder ----
 # Value-number the access spine structurally; any OP subtree that occurs ≥2 times
 # is sliced into an ordered recipe list and every occurrence replaced by an
 # `_NK_CACHED` read of a per-cell scratch slot. Bit-identity is automatic: the SAME
@@ -676,7 +676,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
     # change slot decisions on shared spines), but the spine is a DAG whose
-    # per-path recursion was exponential (ESS-0hh). Mirror `_cse_count!`
+    # per-path recursion was exponential. Mirror `_cse_count!`
     # (scalar_cse.jl): number each UNIQUE node once in identity-deduped postorder
     # (a child's vn stays < its parent's, preserving the dependency-order
     # invariant the recipe tiers rely on), then propagate saturating path
@@ -737,7 +737,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # Identity-memoized rewrite: `rw`'s output depends only on the node (its vn
     # and rewritten children), so a shared input node maps to ONE shared output
     # node — without the memo the per-path rebuild re-inflated a shared spine
-    # into an exponentially large tree (ESS-0hh). Values are unchanged: the
+    # into an exponentially large tree. Values are unchanged: the
     # runner evaluates the same ops on the same inputs either way.
     rw_cache = Vector{Union{Nothing, _Node}}(nothing, P)
     function rw(n::_Node)
