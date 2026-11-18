@@ -1,28 +1,33 @@
 # Reference integrity: model, expression, coupling and system references.
 
 """
-    validate_reference_integrity(file::EsmFile) -> Vector{StructuralError}
+    validate_reference_integrity(file::EsmFile; views = nothing, names = nothing) -> Vector{StructuralError}
 
 Validate that all variable references can be resolved through the hierarchy.
+`views` are the template-expanded top-level models and `names` the
+document-wide name sets (`_document_names`), both from a validation pass's
+context when the caller has one.
 """
-function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{StructuralError}
+function validate_reference_integrity(
+        file::EsmFile; views = nothing, names = nothing
+    )::Vector{StructuralError}
     errors = StructuralError[]
+    names === nothing && (names = _document_names(file))
 
     # Validate model variable references. A COUPLED model — operator-composed or
     # a coupling target — is checked against the DOCUMENT-WIDE declared names plus
     # the §6.4 `_var` placeholder (see `validate_model_references`): composition
     # merges the participating systems' scopes, so a cross-system bare reference
     # is legitimate, while a name declared NOWHERE in the document is still an
-    # `undefined_variable`. This replaces the former blanket skip, which saw none
-    # of a coupled model's references (F-1).
+    # `undefined_variable`.
     if file.models !== nothing
-        coupled = _coupled_system_names(file)
         for (model_name, model) in file.models
             append!(
                 errors, validate_model_references(
                     file, model, "/models/$model_name";
                     model_name = model_name,
-                    is_coupled = (model_name ∈ coupled), views = views
+                    is_coupled = (model_name ∈ names.coupled), views = views,
+                    names = names
                 )
             )
         end
@@ -35,19 +40,18 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
     # widened to the document scope when the system is coupled, exactly as
     # `validate_model_references` scopes a model.
     if file.reaction_systems !== nothing
-        coupled = _coupled_system_names(file)
         for (rs_name, rs) in file.reaction_systems
             isempty(rs.tests) && isempty(rs.constraint_equations) &&
                 isempty(rs.discrete_events) && isempty(rs.continuous_events) &&
                 all(p -> p.update === nothing, rs.parameters) && continue
-            is_coupled = rs_name ∈ coupled
-            scope = is_coupled ? _document_declared_names(file) :
+            is_coupled = rs_name ∈ names.coupled
+            scope = is_coupled ? copy(names.declared) :
                 Set{String}(vcat([sp.name for sp in rs.species], [p.name for p in rs.parameters]))
             is_coupled && push!(scope, _OPERATOR_PLACEHOLDER_VAR)
             union!(scope, keys(file.index_sets))
             push!(scope, _indep_var(file))
-            union!(scope, _coordinate_names(file))
-            union!(scope, _callback_injected_names(file))
+            union!(scope, names.coordinates)
+            union!(scope, names.injected)
             foreach_expression(rs, "/reaction_systems/$rs_name"; subsystems = false) do e, at, kind
                 kind in _REFERENCE_CHECKED_SITES || return nothing
                 append!(errors, validate_expression_references(file, e, at; scope = scope))
@@ -68,6 +72,13 @@ function validate_reference_integrity(file::EsmFile; views = nothing)::Vector{St
     return errors
 end
 
+# The document-wide name sets reference integrity scopes with, computed once
+# per pass (a validation pass's context carries the same fields).
+_document_names(file::EsmFile) = (
+    coupled = _coupled_system_names(file), declared = _document_declared_names(file),
+    coordinates = _coordinate_names(file), injected = _callback_injected_names(file),
+)
+
 # The component a `bind` points a role at for `ref`, and the role(s) that point
 # there. A bind value may be a dotted subsystem path (`Parent.Child`, §10.10.1),
 # so the LONGEST bound component that prefixes the reference wins; a reference
@@ -87,10 +98,9 @@ end
 Validate the edges each `coupling_import` expands to (esm-spec §10.10.3).
 
 `validate_coupling_references` walks the SOURCE `coupling` vector, where an
-import is still `{type, ref, bind}` and its edges do not exist, so a mis-bind — a
+import is still `{type, ref, bind}` and its edges do not exist; a mis-bind (a
 structurally complete `bind` that points a role at a component lacking a variable
-the library references — used to pass `validate` and surface only at flatten.
-Each import is expanded here on its own, against the base the loader recorded for
+the library references) is caught here. Each import is expanded here on its own, against the base the loader recorded for
 the document, and its edges go through the same qualified-reference check a
 hand-authored edge does. A finding is re-pointed at the import entry and names the
 library, the role and the bound component. An import that cannot be expanded at
@@ -130,21 +140,19 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
                 end
                 cause === nothing && continue
                 component, roles = _bound_component_for(entry.bind, ref)
-                push!(
-                    errors, StructuralError(
-                        "/coupling/$(i - 1)",
-                        "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
-                            "which does not provide '$ref' referenced by the library: " *
-                            "cannot resolve '$side' reference '$ref': $cause",
-                        ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                        Dict{String, Any}(
-                            "reference" => ref,
-                            "coupling_type" => "variable_map",
-                            "direction" => side,
-                            "coupling_import" => entry.ref,
-                            "role" => roles,
-                            "bound_component" => component,
-                        )
+                _report!(
+                    errors, ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                    "/coupling/$(i - 1)",
+                    "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
+                        "which does not provide '$ref' referenced by the library: " *
+                        "cannot resolve '$side' reference '$ref': $cause",
+                    Dict{String, Any}(
+                        "reference" => ref,
+                        "coupling_type" => "variable_map",
+                        "direction" => side,
+                        "coupling_import" => entry.ref,
+                        "role" => roles,
+                        "bound_component" => component,
                     )
                 )
             end
@@ -175,8 +183,7 @@ end
 
 The document's independent (time) variable — `domain.independent_variable`, or
 `"t"` when the document does not say. Never hard-code `"t"`: a document may
-rename it (`tau`, `depth`), and the old literal check both accepted a bare `t`
-there and rejected the document's real name (finding (a)).
+rename it (`tau`, `depth`).
 """
 _indep_var(file::EsmFile)::String =
     file.domain === nothing ? "t" : file.domain.independent_variable
@@ -338,9 +345,10 @@ its model subsystems (an event's affect targets are names, not sites).
 function validate_model_references(
         file::EsmFile, model::Model, path::String;
         model_name::AbstractString = "",
-        is_coupled::Bool = false, views = nothing
+        is_coupled::Bool = false, views = nothing, names = nothing
     )::Vector{StructuralError}
     errors = StructuralError[]
+    names === nothing && (names = _document_names(file))
 
     # Names in scope for this model's equations: its declared variables (state,
     # parameter, observed), the document-scoped `index_sets` registry (a
@@ -353,12 +361,12 @@ function validate_model_references(
     # A COUPLED model instead resolves against the DOCUMENT-WIDE declared names
     # plus the §6.4 `_var` placeholder: `operator_compose`/`couple` merge the
     # participating systems' scopes, so a cross-system bare reference is
-    # legitimate, while a name declared nowhere is still an `undefined_variable`
-    # (F-1). Mirrors Python's `global_symbols` and TS `documentDeclaredNames`.
+    # legitimate, while a name declared nowhere is still an `undefined_variable`.
+    # Mirrors Python's `global_symbols` and TS `documentDeclaredNames`.
     # The model's own variables are in scope either way: a subsystem's are not
     # among the document-wide (top-level) names.
     scope = Set{String}(keys(model.variables))
-    is_coupled && union!(scope, _document_declared_names(file), (_OPERATOR_PLACEHOLDER_VAR,))
+    is_coupled && union!(scope, names.declared, (_OPERATOR_PLACEHOLDER_VAR,))
     union!(scope, keys(file.index_sets))
     for eq in model.equations
         target = _equation_lhs_target(eq)
@@ -372,7 +380,7 @@ function validate_model_references(
     # the document, so a document that renames the independent variable to `tau`
     # gets `tau` and not `t`.
     push!(scope, _indep_var(file))
-    union!(scope, _coordinate_names(file))
+    union!(scope, names.coordinates)
 
     # A model's variable table is NOT the complete set of declaration sites, and
     # widening reference integrity to every expression-bearing field (finding
@@ -384,7 +392,7 @@ function validate_model_references(
     # caught: a callback INJECTS those names into the system it targets
     # (tests/coupling/callback_examples.esm declares
     # `external_temperature_forcing` exactly this way and nowhere else).
-    union!(scope, _callback_injected_names(file))
+    union!(scope, names.injected)
 
     # Check every expression site (`_REFERENCE_CHECKED_SITES`) against `scope`,
     # on the EXPANSION of any surviving `apply_expression_template` reference
@@ -408,7 +416,8 @@ function validate_model_references(
         # it is checked with the parent's scope rule.
         append!(
             errors, validate_model_references(
-                file, subsys, "$path/subsystems/$subsys_name"; is_coupled = is_coupled
+                file, subsys, "$path/subsystems/$subsys_name"; is_coupled = is_coupled,
+                names = names
             )
         )
     end
@@ -600,12 +609,10 @@ function _check_expression_references!(
         # bare undefined variable.
         skip_operator_arg = false
         if expr.op == "operator_apply" && !isempty(expr.args) && isa(expr.args[1], VarExpr)
-            push!(
-                errors, StructuralError(
-                    anchor,
-                    "Operator '$(expr.args[1].name)' referenced but not defined",
-                    ERROR_CODES.UNDEFINED_OPERATOR
-                )
+            _report!(
+                errors, ERROR_CODES.UNDEFINED_OPERATOR,
+                anchor,
+                "Operator '$(expr.args[1].name)' referenced but not defined"
             )
             skip_operator_arg = true
         end
@@ -634,12 +641,10 @@ end
 # (qualified) reference (handled by the qualified-reference resolver), for a
 # derivative form, or for a builtin function name.
 #
-# The independent variable is NOT special-cased here any more. It used to be a
-# literal `name == "t"`, which is wrong twice over: a document may RENAME it
-# (`domain.independent_variable: "tau"`), and a document that renames it also
-# leaves a bare `t` looking legal. It is credited into `scope` instead, from the
-# document (see `_indep_var`), together with the coordinate namespace — both
-# belong to the DOMAIN, not to any `variables` block (finding (a)).
+# The independent variable is not special-cased: it is credited into `scope`
+# from the document (`_indep_var`, which a document may rename), together with
+# the coordinate namespace; both belong to the DOMAIN, not to any `variables`
+# block.
 function _check_bare_variable!(
         errors::Vector{StructuralError}, name::String,
         path::String, scope::Union{Set{String}, _RefScope, Nothing}
@@ -648,13 +653,11 @@ function _check_bare_variable!(
     occursin('.', name) && return errors
     (startswith(name, "d(") || name in _BUILTIN_FUNCTION_NAMES) && return errors
     if !(scope isa _RefScope ? _in_ref_scope(name, scope) : name in scope)
-        push!(
-            errors, StructuralError(
-                path,
-                "Variable '$name' referenced in equation is not declared",
-                ERROR_CODES.UNDEFINED_VARIABLE,
-                Dict{String, Any}("variable" => name)
-            )
+        _report!(
+            errors, ERROR_CODES.UNDEFINED_VARIABLE,
+            path,
+            "Variable '$name' referenced in equation is not declared",
+            Dict{String, Any}("variable" => name)
         )
     end
     return errors
@@ -672,12 +675,10 @@ function _check_resolvable!(
         resolve_qualified_reference(file, ref)
     catch e
         if isa(e, QualifiedReferenceError)
-            push!(
-                errors, StructuralError(
-                    path,
-                    "$desc '$ref': $(e.message)",
-                    error_type
-                )
+            _report!(
+                errors, error_type,
+                path,
+                "$desc '$ref': $(e.message)"
             )
         else
             rethrow()
@@ -714,13 +715,11 @@ function _check_connector_expressions(
                 resolve_qualified_reference(file, name)
             catch e
                 e isa QualifiedReferenceError || rethrow()
-                push!(
-                    errors, StructuralError(
-                        epath,
-                        "Variable \"$name\" referenced in connector equation expression does not resolve",
-                        ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                        Dict{String, Any}("variable" => name)
-                    )
+                _report!(
+                    errors, ERROR_CODES.UNRESOLVED_SCOPED_REF,
+                    epath,
+                    "Variable \"$name\" referenced in connector equation expression does not resolve",
+                    Dict{String, Any}("variable" => name)
                 )
             end
         end
@@ -742,14 +741,12 @@ function _check_coupling_role_references(file::EsmFile, coupling_entry::Coupling
     roles = file.coupling_roles === nothing ? Dict{String, Any}() : file.coupling_roles
     segments = _collect_role_segments(serialize_coupling_entry(coupling_entry))
     for role in sort!(collect(Iterators.filter(s -> !haskey(roles, s), segments)))
-        push!(
-            errors, StructuralError(
-                path,
-                "edge references '$role', which is not a declared role " *
-                    "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
-                ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
-                Dict{String, Any}("role" => role, "expected_in" => "coupling_roles")
-            )
+        _report!(
+            errors, ERROR_CODES.COUPLING_EDGE_UNKNOWN_ROLE,
+            path,
+            "edge references '$role', which is not a declared role " *
+                "(esm-spec §10.9: a coupling library's refs name a role in `coupling_roles`)",
+            Dict{String, Any}("role" => role, "expected_in" => "coupling_roles")
         )
     end
     return errors
@@ -779,13 +776,11 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # not the individual `/systems/j` element (TS emits the same).
         for system_name in coupling_entry.systems
             if !system_exists_in_file(file, system_name)
-                push!(
-                    errors, StructuralError(
-                        "$path/systems",
-                        "System '$system_name' referenced in operator_compose coupling not found",
-                        ERROR_CODES.UNDEFINED_SYSTEM,
-                        Dict{String, Any}("system" => system_name)
-                    )
+                _report!(
+                    errors, ERROR_CODES.UNDEFINED_SYSTEM,
+                    "$path/systems",
+                    "System '$system_name' referenced in operator_compose coupling not found",
+                    Dict{String, Any}("system" => system_name)
                 )
             end
         end
@@ -794,13 +789,11 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Validate that all referenced systems exist
         for system_name in coupling_entry.systems
             if !system_exists_in_file(file, system_name)
-                push!(
-                    errors, StructuralError(
-                        "$path/systems",
-                        "System '$system_name' referenced in couple coupling not found",
-                        ERROR_CODES.UNDEFINED_SYSTEM,
-                        Dict{String, Any}("system" => system_name)
-                    )
+                _report!(
+                    errors, ERROR_CODES.UNDEFINED_SYSTEM,
+                    "$path/systems",
+                    "System '$system_name' referenced in couple coupling not found",
+                    Dict{String, Any}("system" => system_name)
                 )
             end
         end
@@ -816,12 +809,10 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
     elseif isa(coupling_entry, CouplingVariableMap)
         # Validate 'from' reference
         if !validate_reference_syntax(coupling_entry.from)
-            push!(
-                errors, StructuralError(
-                    "$path/from",
-                    "Invalid reference syntax: '$(coupling_entry.from)'",
-                    ERROR_CODES.INVALID_REFERENCE_SYNTAX
-                )
+            _report!(
+                errors, ERROR_CODES.INVALID_REFERENCE_SYNTAX,
+                "$path/from",
+                "Invalid reference syntax: '$(coupling_entry.from)'"
             )
         else
             # A `variable_map` endpoint is a SCOPED reference (`System.var`); an
@@ -835,12 +826,10 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
 
         # Validate 'to' reference
         if !validate_reference_syntax(coupling_entry.to)
-            push!(
-                errors, StructuralError(
-                    "$path/to",
-                    "Invalid reference syntax: '$(coupling_entry.to)'",
-                    ERROR_CODES.INVALID_REFERENCE_SYNTAX
-                )
+            _report!(
+                errors, ERROR_CODES.INVALID_REFERENCE_SYNTAX,
+                "$path/to",
+                "Invalid reference syntax: '$(coupling_entry.to)'"
             )
         else
             _check_resolvable!(
@@ -850,7 +839,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         end
 
         # `transform` may be an EXPRESSION rather than one of the named string
-        # transforms, and it was never walked (audit finding (h)). Its names are
+        # transforms. Its names are
         # cross-system references, so they are fully qualified (§4.6) and are
         # resolved by the qualified-reference resolver, not against a model scope.
         if isa(coupling_entry.transform, ASTExpr)
@@ -871,23 +860,19 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
     elseif isa(coupling_entry, CouplingOperatorApply)
         # The top-level `operators` block was removed in esm-spec v0.3.0 (§9
         # closure), so the referenced operator can never resolve — flag it.
-        push!(
-            errors, StructuralError(
-                "$path/operator",
-                "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found",
-                ERROR_CODES.UNDEFINED_OPERATOR
-            )
+        _report!(
+            errors, ERROR_CODES.UNDEFINED_OPERATOR,
+            "$path/operator",
+            "Operator '$(coupling_entry.operator)' referenced in operator_apply coupling not found"
         )
 
     elseif isa(coupling_entry, CouplingCallback)
         # Basic validation - callback_id should be a non-empty string
         if isempty(coupling_entry.callback_id)
-            push!(
-                errors, StructuralError(
-                    "$path/callback_id",
-                    "Callback ID cannot be empty",
-                    ERROR_CODES.EMPTY_CALLBACK_ID
-                )
+            _report!(
+                errors, ERROR_CODES.EMPTY_CALLBACK_ID,
+                "$path/callback_id",
+                "Callback ID cannot be empty"
             )
         end
 
@@ -896,7 +881,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         for (i, affect) in enumerate(coupling_entry.affects)
             _check_resolvable!(
                 errors, file, affect.lhs, "$path/affects/$(i - 1)/lhs",
-                "Cannot resolve affect target", "unresolved_affect_target"
+                "Cannot resolve affect target", ERROR_CODES.UNRESOLVED_AFFECT_TARGET
             )
             append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"))
         end
@@ -906,7 +891,7 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
             for (i, affect) in enumerate(coupling_entry.affect_neg)
                 _check_resolvable!(
                     errors, file, affect.lhs, "$path/affect_neg/$(i - 1)/lhs",
-                    "Cannot resolve negative affect target", "unresolved_affect_target"
+                    "Cannot resolve negative affect target", ERROR_CODES.UNRESOLVED_AFFECT_TARGET
                 )
                 append!(errors, validate_expression_references(file, affect.rhs, "$path/affect_neg/$(i - 1)/rhs"))
             end
@@ -953,22 +938,5 @@ function system_exists_in_file(file::EsmFile, system_name::String)::Bool
     length(segments) > 1 || return false
     root, _ = find_top_level_system(file, String(segments[1]))
     root isa Model || return false
-
-    # `model_subsystems` yields a lazy (name, value) generator, not a Dict.
-    current = root
-    for seg in segments[2:end]
-        next = nothing
-        for (sub_name, sub_value) in model_subsystems(current)
-            if sub_name == String(seg)
-                next = sub_value
-                break
-            end
-        end
-        next === nothing && return false
-        # Only a Model can carry further nesting; any other node (an unresolved
-        # `SubsystemRef`) can only be the final segment.
-        next isa Model || return seg == segments[end]
-        current = next
-    end
-    return true
+    return _subsystem_at(root, segments[2:end]) !== nothing
 end

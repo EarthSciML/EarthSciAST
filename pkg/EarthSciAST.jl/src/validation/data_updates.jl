@@ -91,21 +91,15 @@ function _declared_variable(file::EsmFile, scoped)
     length(parts) < 2 && return nothing
     head = String(parts[1])
     if file.models !== nothing && haskey(file.models, head)
-        node = file.models[head]
-        for seg in parts[2:(end - 1)]
-            node isa Model || return nothing
-            node = get(node.subsystems, String(seg), nothing)
-        end
-        node isa Model || return nothing
+        node = _subsystem_at(file.models[head], parts[2:(end - 1)])
+        node === nothing && return nothing
         return get(node.variables, String(parts[end]), nothing)
     end
     file.reaction_systems === nothing && return nothing
     rs = get(file.reaction_systems, head, nothing)
-    for seg in parts[2:(end - 1)]
-        rs isa ReactionSystem || return nothing
-        rs = get(rs.subsystems, String(seg), nothing)
-    end
     rs isa ReactionSystem || return nothing
+    rs = _subsystem_at(rs, parts[2:(end - 1)])
+    rs === nothing && return nothing
     i = findfirst(p -> p.name == parts[end], rs.parameters)
     return i === nothing ? nothing : rs.parameters[i]
 end

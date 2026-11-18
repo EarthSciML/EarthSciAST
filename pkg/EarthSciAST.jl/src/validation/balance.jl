@@ -16,6 +16,19 @@ skips it once, instead of every recursion site repeating the
 model_subsystems(model::Model) =
     (pair for pair in model.subsystems if pair.second isa Model)
 
+# The component the dotted `path` segments name below `c`, walking
+# `subsystems` one segment at a time through components of `c`'s own kind;
+# `nothing` when a segment is missing or names anything else (an unresolved
+# mount, a component of the other kind). The one walk of a scoped path.
+function _subsystem_at(c::T, path) where {T <: Union{Model, ReactionSystem}}
+    for seg in path
+        next = get(c.subsystems, String(seg), nothing)
+        next isa T || return nothing
+        c = next
+    end
+    return c
+end
+
 """
     _equation_lhs_names(lhs::ASTExpr) -> Set{String}
 
@@ -83,13 +96,8 @@ per unknown. An equation counts whichever LHS form it takes — a derivative
 because all three determine the unknowns they name. An `ic` LHS prescribes an
 initial value rather than dynamics and does not count.
 
-That single rule replaces three 0.x checks: the "state variable with no
-defining equation" direction, the "excess equation" direction, and the separate
-square-ness rule that `system_kind: "nonlinear"` used to need. It also absorbs
-the retired `missing_observed_expr` diagnostic — an observed unknown with
-nothing defining it is no longer a malformed declaration but an unbalanced
-system, and `missing_equations_for` names exactly the unknowns that code used
-to name.
+An observed unknown with nothing defining it is an unbalanced system, and
+`missing_equations_for` names it.
 
 Reported at the MODEL's pointer (`/models/<M>`) under `equation_count_mismatch`
 — a balance is a property of the model, not of any one equation.

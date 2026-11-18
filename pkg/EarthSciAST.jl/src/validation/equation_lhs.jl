@@ -6,21 +6,11 @@
 _variable_type_word(t::ModelVariableType)::String =
     t == ParameterVariable ? "parameter" : "unknown"
 
-# The variable a left-hand side names — through `index` / `faq` wrappers and a
-# time derivative `D` (a parameter may have neither a definition nor dynamics),
-# not an `ic` — or `nothing`.
+# The variable a left-hand side defines or differentiates (a parameter may have
+# neither a definition nor dynamics), not through an `ic`; `nothing` otherwise.
 function _lhs_defined_name(e)
-    while e isa OpExpr
-        o = e::OpExpr
-        if _is_faq_op(o.op) && o.expr_body !== nothing
-            e = o.expr_body
-        elseif (o.op == "index" || _is_time_derivative(o)) && !isempty(o.args)
-            e = o.args[1]
-        else
-            return nothing
-        end
-    end
-    return e isa VarExpr ? (e::VarExpr).name : nothing
+    s = _lhs_shape(e)
+    return s.role === :definition || s.role === :derivative ? s.name : nothing
 end
 
 # The declaration `name` refers to from `model`: a local variable, or a scoped
@@ -29,19 +19,10 @@ function _lhs_variable(model::Model, name::String, root_name::String, root::Mode
     v = get(model.variables, name, nothing)
     v === nothing || return v
     parts = split(name, '.')
-    for (start, cur0) in ((1, model), (2, parts[1] == root_name ? root : nothing))
-        cur = cur0
+    for (start, from) in ((1, model), (2, parts[1] == root_name ? root : nothing))
+        from === nothing && continue
+        cur = _subsystem_at(from, parts[start:(end - 1)])
         cur === nothing && continue
-        ok = true
-        for p in parts[start:(end - 1)]
-            sub = get(cur.subsystems, String(p), nothing)
-            if sub isa Model
-                cur = sub
-            else
-                ok = false; break
-            end
-        end
-        ok || continue
         v = get(cur.variables, String(parts[end]), nothing)
         v === nothing || return v
     end
@@ -49,7 +30,8 @@ function _lhs_variable(model::Model, name::String, root_name::String, root::Mode
 end
 
 # Free string subscripts of `index` nodes in `e`: not bound by an enclosing faq
-# (or by `bound`), and naming no declared variable or metaparameter.
+# (or by `bound`), and not in `names` (the declared variables, the
+# metaparameters and the independent variable).
 function _free_lhs_index_symbols!(
         out::Vector{String}, e, bound::Set{String},
         names::Set{String}
@@ -69,7 +51,7 @@ function _free_lhs_index_symbols!(
         for a in o.args[2:end]
             if a isa VarExpr
                 n = (a::VarExpr).name
-                (n in bound || n in names || n == "t") || push!(out, n)
+                (n in bound || n in names) || push!(out, n)
             else
                 _free_lhs_index_symbols!(out, a, bound, names)
             end
@@ -105,14 +87,12 @@ function _check_equation_lhs_names!(
         if dn !== nothing
             v = _lhs_variable(model, dn, root_name, root)
             if v !== nothing && v.type == ParameterVariable
-                push!(
-                    errors, StructuralError(
-                        lpath,
-                        "Equation $(k - 1) defines '$(dn)', which is a parameter; an " *
-                            "equation defines unknowns only",
-                        ERROR_CODES.EQUATION_DEFINES_PARAMETER,
-                        Dict{String, Any}("variable" => dn)
-                    )
+                _report!(
+                    errors, ERROR_CODES.EQUATION_DEFINES_PARAMETER,
+                    lpath,
+                    "Equation $(k - 1) defines '$(dn)', which is a parameter; an " *
+                        "equation defines unknowns only",
+                    Dict{String, Any}("variable" => dn)
                 )
             end
         end
@@ -123,14 +103,12 @@ function _check_equation_lhs_names!(
         end
         free = unique!(_free_lhs_index_symbols!(String[], lhs, rb, names))
         for sym in free
-            push!(
-                errors, StructuralError(
-                    lpath,
-                    "Equation $(k - 1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
-                        " subscripts its left-hand side with '$(sym)', which no faq binds",
-                    ERROR_CODES.UNBOUND_INDEX_SYMBOL,
-                    Dict{String, Any}("symbol" => sym)
-                )
+            _report!(
+                errors, ERROR_CODES.UNBOUND_INDEX_SYMBOL,
+                lpath,
+                "Equation $(k - 1)" * (dn === nothing ? "" : " (defining '$(dn)')") *
+                    " subscripts its left-hand side with '$(sym)', which no faq binds",
+                Dict{String, Any}("symbol" => sym)
             )
         end
     end
