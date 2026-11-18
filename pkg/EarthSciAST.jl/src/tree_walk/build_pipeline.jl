@@ -575,6 +575,25 @@ end
 _rhs_list_compiled(::_InPlace) = false
 _rhs_list_compiled(::_OutOfPlace) = true
 
+# The state length of a two-buffer slot space (`_ObsSplitVec`, obs_buffers.jl)
+# the in-place sections address, or 0 for one plain vector: the out-of-place
+# product is read as one vector.
+_obs_split_nst(::_InPlace, n_states::Int, n_total::Int) = n_total > n_states ? n_states : 0
+_obs_split_nst(::_OutOfPlace, ::Int, ::Int) = 0
+# An observed fill level always runs on the split slot space in place.
+_level_nst(::_InPlace, n_states::Int) = n_states
+_level_nst(::_OutOfPlace, ::Int) = 0
+
+# A recurrence sweep has no lowering in the out-of-place product.
+_check_recurrence_form(::_InPlace, ::String) = nothing
+_check_recurrence_form(::_OutOfPlace, name::String) = _refuse_rule(
+    name,
+    "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
+        "lowering in the out-of-place product this compiler emits; " *
+        "its cells cannot be computed as one whole-array program " *
+        "(CONFORMANCE_SPEC §5.19.2)"
+)
+
 # Phase 4 (`_build_compile_evaluator`): the observed split, the const-array
 # registry, the live forcing buffers and the two compile scopes, the discrete
 # caches, the initialization-equation seed, the materialized-observed fill
@@ -691,7 +710,7 @@ function _build_compile_evaluator(
         template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
         rhs_list_compiled = _rhs_list_compiled(form),
-        obs_nst = (form isa _InPlace && n_total > n_states) ? n_states : 0
+        obs_nst = _obs_split_nst(form, n_states, n_total)
     )
 
     sealed = _seal_fill_levels(form, levels, oop_levels, state_eqs, split, n_states, n_total)
@@ -858,7 +877,7 @@ function _compile_fill_levels(
             lvl, cadence, fill, recurrence, split.resolved, scope, _n_total(layout);
             template_sites = template_sites,
             rhs_list_compiled = _rhs_list_compiled(form),
-            obs_nst = form isa _InPlace ? n_states : 0
+            obs_nst = _level_nst(form, n_states)
         )
             for (lvl, cadence) in plan
     ]
@@ -1527,13 +1546,7 @@ function _level_recurrence(
         products::Union{Nothing, BuildProducts}
     )
     name in recur_names || return nothing
-    form isa _OutOfPlace && _refuse_rule(
-        name,
-        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
-            "lowering in the out-of-place product this compiler emits; " *
-            "its cells cannot be computed as one whole-array program " *
-            "(CONFORMANCE_SPEC §5.19.2)"
-    )
+    _check_recurrence_form(form, name)
     sw = _compile_recurrence_sweep(
         name, mat_defs[name],
         layout.mat_dims[name], get(model.variables, name, nothing), resolved_obs, cs
