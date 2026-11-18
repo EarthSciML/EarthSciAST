@@ -269,6 +269,10 @@ const ERROR_CODES = (
     METAPARAMETER_TYPE_ERROR = "metaparameter_type_error",
     METAPARAMETER_NAME_CONFLICT = "metaparameter_name_conflict",
 
+    # ── A document that fails the schema at load (`SchemaValidationError`;
+    #    the code TypeScript's `SchemaValidationError` carries). ─────────────
+    SCHEMA_VALIDATION_ERROR = "schema_validation_error",
+
     # ── Coupling-library imports (esm-spec §10.9–§10.11;
     #    coupling_imports.jl). ──────────────────────────────────────────────
     COUPLING_IMPORT_UNRESOLVED = "coupling_import_unresolved",

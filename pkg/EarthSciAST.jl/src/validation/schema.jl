@@ -1,24 +1,15 @@
 # The JSON-Schema validator: one record per violation, with its keyword and RFC 6901 pointer.
 
-# Load schema at module initialization from bundled package data
+# The bundled schema, read at precompile time. It ships inside the package, so
+# a schema that is missing or unreadable is a broken install and fails the
+# precompile rather than leaving every document schema-valid.
 const SCHEMA_PATH = joinpath(pkgdir(@__MODULE__), "data", "esm-schema.json")
 # Track data file so precompile cache invalidates when schema changes.
 @static if ccall(:jl_generating_output, Cint, ()) == 1
     include_dependency(SCHEMA_PATH)
 end
 
-# Global schema validator
-const ESM_SCHEMA = if isfile(SCHEMA_PATH)
-    try
-        Schema(JSON3.read(read(SCHEMA_PATH, String)))
-    catch e
-        @warn "Failed to load ESM schema: $e"
-        nothing
-    end
-else
-    @warn "ESM schema file not found at $SCHEMA_PATH"
-    nothing
-end
+const ESM_SCHEMA = Schema(JSON3.read(read(SCHEMA_PATH, String)))
 
 # ── Schema-error collection (AJV-parity leaf enumeration) ───────────────────
 #
@@ -251,17 +242,18 @@ function _compile_keyword(schema, k::String, v, seen)
     return _SchemaKeyword(_KW_LEAF, k, v)
 end
 
-# The compiled form of the root schema, built on first use and kept for as
-# long as the same root object is asked for (the ESM schema is a constant).
-const _SCHEMA_COMPILED = Ref{Any}(nothing)
+# The compiled form of the ESM schema, built on first use. Another root (a test
+# compiling a sub-schema) is compiled afresh and not kept.
+const _SCHEMA_COMPILED = Ref{Union{Nothing, _SchemaNode}}(nothing)
 const _SCHEMA_COMPILED_LOCK = ReentrantLock()
 
-function _compiled_schema(root)::_SchemaNode
+function _compiled_schema(root = ESM_SCHEMA.data)::_SchemaNode
+    root === ESM_SCHEMA.data || return _compile_schema(root, IdDict{Any, _SchemaNode}())
     return lock(_SCHEMA_COMPILED_LOCK) do
         cached = _SCHEMA_COMPILED[]
-        cached !== nothing && cached[1] === root && return cached[2]::_SchemaNode
+        cached === nothing || return cached
         node = _compile_schema(root, IdDict{Any, _SchemaNode}())
-        _SCHEMA_COMPILED[] = (root, node)
+        _SCHEMA_COMPILED[] = node
         return node
     end
 end
@@ -450,26 +442,17 @@ schema violation (CONFORMANCE_SPEC §7.1.2), each carrying:
 Unlike JSONSchema.jl's single-issue `validate`, this enumerates leaf failures
 INSIDE failed `oneOf`/`anyOf`/`allOf`/`if` branches (see
 `_schema_walk!`), matching TypeScript's AJV `allErrors` output.
+
+An exception raised inside the walk is a defect of the validator, not a
+verdict on the document, and propagates.
 """
 function validate_schema(data::Any)::Vector{SchemaError}
-    if ESM_SCHEMA === nothing
-        @warn "Schema validation skipped - schema not loaded"
-        return SchemaError[]
-    end
     errors = SchemaError[]
-    try
-        # Normalise to NATIVE JSON containers first. Callers hand this function
-        # different carriers — the load pipeline the post-wire ordered tree,
-        # the conformance producer a native `Dict{String,Any}` tree, direct
-        # callers possibly a raw `JSON3.Object` — and JSON3's `JSON3.Array` is
-        # not a `Base.Array`, so JSONSchema.jl's `type: array` check (and every
-        # `oneOf` branch that depends on it) misfires on the JSON3 carrier.
-        # Coercing to native containers makes the walk carrier-independent.
-        native = _to_native_json(data)
-        _schema_walk!(errors, native, _compiled_schema(ESM_SCHEMA.data), "", _jsonschema_root_path())
-    catch e
-        e isa InterruptException && rethrow()
-        return [SchemaError("", "Schema validation error: $(e)", "error")]
-    end
+    # Native JSON containers first: callers hand in the post-wire ordered tree,
+    # a native `Dict{String,Any}` tree or a raw `JSON3.Object`, and JSON3's
+    # `JSON3.Array` is not a `Base.Array`, which JSONSchema.jl's `type: array`
+    # check (and every `oneOf` branch depending on it) needs.
+    native = _to_native_json(data)
+    _schema_walk!(errors, native, _compiled_schema(), "", _jsonschema_root_path())
     return _dedup_schema_errors(errors)
 end

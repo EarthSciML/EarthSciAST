@@ -343,73 +343,38 @@ end
     validate_path(path::AbstractString) -> ValidationResult
 
 Validate the document at `path`, INCLUDING the failures that happen while
-loading it.
-
-[`validate`](@ref) itself takes a TYPED document in every binding (API_SPEC.md
-§8 item 13); this is the file convenience, under a name that says it does I/O.
-
-A load-time refusal that carries a code (an unresolvable or ambiguous
-subsystem ref, which the corpus pins at `/models/<M>/subsystems/<S>`, a version
-gate, a template or import diagnostic) is returned as a structural finding
-([`load_failure_structural_error`](@ref)) instead of raised. `load_path` still
-throws, for callers that want the exception. A schema violation or malformed
-JSON still raises here.
+loading it; [`validate`](@ref) itself takes a TYPED document in every binding
+(API_SPEC.md §8 item 13). A load failure is a verdict, not an exception, as in
+[`validate_text`](@ref), which renders it the same way. `load_path` still
+throws, for callers that want the exception.
 """
-function validate_path(path::AbstractString)::ValidationResult
-    file = try
-        load_path(path)
-    catch e
-        err = load_failure_structural_error(e)
-        err === nothing && rethrow()
-        return ValidationResult(SchemaError[], StructuralError[err])
-    end
-    return validate(file)
-end
+validate_path(path::AbstractString)::ValidationResult =
+    _validate_loaded(() -> load_path(path))
 
 """
     validate_text(text::AbstractString; base_path=pwd()) -> ValidationResult
 
 Validate an ESM document held as JSON **text**, INCLUDING the failures that
-happen while loading it.
-
-The text twin of [`validate_path`](@ref), and the same shape: `validate` itself
-takes a TYPED document in every binding (API_SPEC.md §8 item 13), and the two
-convenience entry points that do the reading carry names that say so.
-
-The same function exists in every binding: Go `ValidateText`, Python
-`validate_text`, Rust `validate_text`, TypeScript `validateText`.
+happen while loading it. The text twin of [`validate_path`](@ref); the same
+function exists in every binding (Go `ValidateText`, Python `validate_text`,
+Rust `validate_text`, TypeScript `validateText`).
 
 A load failure becomes a **verdict** in the returned `ValidationResult` rather
-than an exception. A caller asking "is this document valid?" wants an answer for
-a malformed document too, and this is the entry point that has to give one: text
-is the only input that can carry SCHEMA errors at all, since a typed `EsmFile`
-can exist only by having already passed the schema at load. Measured against the
-other four before writing this — Python's `validate_text` and Go's `ValidateText`
-both return `is_valid=false` with populated `schema_errors` for schema-invalid
-AND for malformed text, and neither raises — so three channels are rendered:
+than an exception, as in Python and Go:
 
 - a `SchemaValidationError` carries its structured `SchemaError`s straight
   through into `schema_errors`;
-- an ordinary `ParseError` (no `code`) is malformed JSON: not a schema
-  violation of any node, so it becomes one `SchemaError` at the document root
-  under the `parse` keyword, which is where Go and Python put it too;
+- an ordinary `ParseError` (no `code`) is malformed JSON: one `SchemaError` at
+  the document root under the `parse` keyword;
 - a load diagnostic carrying a code (an unresolvable `{ref}`, the §11.4.1
-  `ic_in_reaction_system` case, a version gate) becomes a `StructuralError`, through
-  the same [`load_failure_structural_error`](@ref) [`validate_path`](@ref)
-  uses.
+  `ic_in_reaction_system` case, a version gate) becomes a `StructuralError`
+  through [`load_failure_structural_error`](@ref).
 
-Anything else still propagates.
-
-!!! note
-    [`validate_path`](@ref) renders only the third of those three and still
-    RAISES on schema-invalid or malformed input, so the two entry points
-    differ on bad input.
+Anything else propagates.
 
 `base_path` anchors relative §9.7.2 template imports and §4.7 `{ref}`s, since
-text carries no location of its own. Note that `load_string` does not resolve
-subsystem `\$ref` MOUNTS — a document carrying those wants
-`validate_path` — the same split Python and Go document for their text entry
-points.
+text carries no location of its own. `load_string` does not resolve subsystem
+`\$ref` MOUNTS; a document carrying those wants `validate_path`.
 
 # Examples
 ```julia
@@ -417,9 +382,14 @@ result = validate_text(read("model.esm", String); base_path=dirname("model.esm")
 result.is_valid
 ```
 """
-function validate_text(text::AbstractString; base_path::AbstractString = pwd())::ValidationResult
+validate_text(text::AbstractString; base_path::AbstractString = pwd())::ValidationResult =
+    _validate_loaded(() -> load_string(text; base_path = base_path))
+
+# `validate(load())`, with a load failure rendered as the verdict
+# `validate_text` documents.
+function _validate_loaded(load)::ValidationResult
     file = try
-        load_string(text; base_path = base_path)
+        load()
     catch e
         if e isa SchemaValidationError
             return ValidationResult(e.errors, StructuralError[])
@@ -447,13 +417,15 @@ Every load diagnostic (`ParseError`, `ExpressionTemplateError`,
 `subsystems.<k>` form is reported at its mount site,
 `/models/<parent>/subsystems/<sub>`, with `ref`, `subsystem` and `parent_model`
 in its details. A `ParseError` without a code (malformed JSON, a coercion
-failure) gives `nothing`.
+failure) gives `nothing`, and so does a `SchemaValidationError`, whose
+findings are schema errors, not structural ones.
 
 [`validate_path`](@ref), [`validate_text`](@ref) and the conformance producer
 route load failures through here.
 """
 function load_failure_structural_error(e)::Union{StructuralError, Nothing}
     e isa _LoadDiagnostic || return nothing
+    e isa SchemaValidationError && return nothing
     isempty(e.code) && return nothing
     if e isa SubsystemRefError
         return StructuralError(

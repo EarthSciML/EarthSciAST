@@ -62,6 +62,10 @@ include("testutils.jl")
         @test exception.message == "Validation failed"
         @test length(exception.errors) == 1
         @test exception.errors[1].path == "/"
+        # A load diagnostic: the common fields lead, with the schema code.
+        @test exception isa EarthSciAST._LoadDiagnostic
+        @test exception.code == "schema_validation_error"
+        @test fieldnames(typeof(exception))[1:5] == (:code, :message, :path, :file, :details)
     end
 
     @testset "Integration with load function" begin
@@ -169,6 +173,18 @@ include("testutils.jl")
             res = validate_path(bad)
             @test !res.is_valid
             @test !isempty(res.structural_errors)
+        end
+
+        # Schema-invalid and malformed files are verdicts too, as in validate_text.
+        mktempdir() do dir
+            p = joinpath(dir, "schema_bad.esm")
+            write(p, """{"esm":"2.0.0","metadata":{"name":"x"}}""")
+            r = validate_path(p)
+            @test !r.is_valid && !isempty(r.schema_errors)
+            q = joinpath(dir, "malformed.esm")
+            write(q, "{not json")
+            r = validate_path(q)
+            @test !r.is_valid && r.schema_errors[1].keyword == "parse"
         end
     end
 

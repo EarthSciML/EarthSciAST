@@ -129,18 +129,34 @@ ValidationResult(schema_errors::Vector{SchemaError}, structural_errors::Vector{S
     ValidationResult(isempty(schema_errors) && isempty(structural_errors), schema_errors, structural_errors, unit_warnings)
 
 """
-    SchemaValidationError
+    SchemaValidationError <: EarthSciASTError
 
-Exception thrown when schema validation fails.
-Contains detailed error information including paths and messages.
+A document that fails the ESM schema at load. It is a load diagnostic (see
+`_LoadDiagnostic`): the common fields `code` (always
+`schema_validation_error`), `message` (the rendered list of violations),
+`path`, `file` and `details`, then `errors`, one [`SchemaError`](@ref) per
+violation.
+
+    SchemaValidationError(message, errors; path = "", file = "", details = Dict())
 """
-struct SchemaValidationError <: EarthSciASTError
+struct SchemaValidationError <: _LoadDiagnostic
+    code::String
     message::String
+    path::String
+    file::String
+    details::Dict{String, Any}
     errors::Vector{SchemaError}
 end
 
-# `message` is already the fully rendered multi-line diagnostic
-# (`_format_schema_errors`), so the standard "TypeName: message" layout is all
-# that is added here.
+SchemaValidationError(
+    message::AbstractString, errors::AbstractVector{SchemaError};
+    path::AbstractString = "", file::AbstractString = "",
+    details::AbstractDict = Dict{String, Any}()
+) = SchemaValidationError(
+    ERROR_CODES.SCHEMA_VALIDATION_ERROR, String(message), String(path), String(file),
+    Dict{String, Any}(details), Vector{SchemaError}(errors)
+)
+
+# `message` is already the rendered multi-line list (`_format_schema_errors`).
 Base.showerror(io::IO, e::SchemaValidationError) =
     print(io, "SchemaValidationError: ", e.message)
