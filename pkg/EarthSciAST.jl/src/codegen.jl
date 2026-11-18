@@ -428,7 +428,7 @@ function _codegen_needs_parens(
     # re-parses correctly in Julia.
     parent_op == "^" && return !is_right
     # Chained comparisons mean something different in Julia — wrap.
-    parent_op in ("==", "!=", "<", ">", "<=", ">=") && return true
+    _is_comparison_op(parent_op) && return true
     return false
 end
 
@@ -504,7 +504,7 @@ function format_julia_expression_node(node::OpExpr)
         end
     elseif op == "/"
         return fmt_chain(" / ")
-    elseif op in ["<", ">", "<=", ">=", "==", "!="]
+    elseif _is_comparison_op(op)
         return fmt_chain(" $op ")
     elseif op == "and"
         return fmt_chain(" && ")

@@ -372,7 +372,7 @@ than being lowered to something that silently never fires.
 """
 function _condition_to_root_equation(cond::ASTExpr, L::_Lowering)
     if cond isa OpExpr
-        if cond.op in ("and", "or", "not")
+        if EarthSciAST._is_logical_op(cond.op)
             throw(
                 SimulateError(
                     "continuous-event condition uses the boolean operator '$(cond.op)', " *

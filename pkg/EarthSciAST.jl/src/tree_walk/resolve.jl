@@ -1938,10 +1938,7 @@ function _resolve_indices_op(
         memo::_MaybeMemo = nothing,
         bound_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    if (
-            expr.op == "ifelse" && length(expr.args) == 3 ||
-                (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2
-        ) &&
+    if _is_guarded_node_op(expr.op, length(expr.args)) &&
             expr.expr_body === nothing && expr.values === nothing
         return _resolve_guarded_op(
             expr, array_var_info, var_map, const_arrays,
