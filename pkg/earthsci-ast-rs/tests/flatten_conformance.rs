@@ -395,34 +395,8 @@ fn diffs(path: &str, got: &Value, want: &Value, out: &mut Vec<String>) {
 /// source rather than left to a diff. The rest of the case is still compared in
 /// full, so a regression anywhere else still fails.
 ///
-/// `loader_fields` on the three reaction-system cases. Each of those documents
-/// has a reaction system whose parameter `T` declares
-/// `update: {kind: "data", source: …, from: {file_variable: "T"}}`. Now that
-/// reaction-system lowering carries `update` through (it is the only channel
-/// binding a parameter to a data source, esm-spec §5.4), that parameter is
-/// correctly classified DISCRETE in every binding — but only Rust also emits a
-/// `LoaderField` for it, so only Rust actually FETCHES it.
-///
-/// The difference is structural, not accidental. `collect_loader_fields` walks
-/// the FLATTENED parameter map, which contains every parameter regardless of
-/// which component contributed it. The oracle's `_data_source_fields` — and
-/// Go's `dataSourceFields`, and Julia's `_collect_loader_fields!` — are invoked
-/// from the MODEL collector only, so a reaction system's data binding never
-/// reaches them. Those three bindings therefore classify the parameter as
-/// discrete while nothing fetches it: a parameter that refreshes from a source
-/// no loader reads.
-///
-/// Rust's answer is the defensible one and is pinned LOCALLY by
-/// `rust_fetches_reaction_system_data_bindings` below, so the behaviour cannot
-/// regress while the corpus disagrees. The fix belongs in the other three
-/// collectors and then in a regenerated corpus; it is deliberately NOT made
-/// here, because closing the gap spans four bindings and changes what the
-/// shared golden asserts about `loader_fields`.
-const FC_DIVERGENCES: &[(&str, &str)] = &[
-    ("full_coupled", "loader_fields"),
-    ("minimal_chemistry", "loader_fields"),
-    ("metadata_inheritance_coupled", "loader_fields"),
-];
+/// None is recorded: Rust matches the corpus on every case.
+const FC_DIVERGENCES: &[(&str, &str)] = &[];
 
 /// True when `diff` — a `diffs` line, which always begins `{path}:` — reports a
 /// field this case is recorded as diverging on. Matches the field itself and
@@ -634,17 +608,11 @@ fn domain_passthrough_matches_the_corpus() {
 
 /// A reaction system's data-fed parameter is FETCHED, not merely classified.
 ///
-/// The local pin behind the `loader_fields` entries in [`FC_DIVERGENCES`].
 /// `minimal_chemistry`'s `SimpleOzone.T` declares
 /// `update: {kind: "data", source: "GEOSFP", from: {file_variable: "T"}}`, so
-/// something has to read GEOSFP's `T` and bind it. Rust emits that descriptor
-/// because `collect_loader_fields` walks the flattened parameter map; the
-/// oracle, Go and Julia collect loader fields from the MODEL collector only and
-/// so emit nothing for it, which is why the corpus disagrees.
-///
-/// Asserted here rather than through the corpus so the behaviour stays pinned
-/// while that gap is open — and so that closing it upstream turns the corpus
-/// entry green rather than leaving this untested.
+/// something has to read GEOSFP's `T` and bind it: `collect_loader_fields`
+/// walks the flattened parameter map, which holds every component's
+/// parameters, reaction systems' included.
 #[test]
 fn rust_fetches_reaction_system_data_bindings() {
     let file = load_path(tests_dir().join("valid/minimal_chemistry.esm")).expect("loads");

@@ -3314,7 +3314,8 @@ impl BareWalk<'_> {
 /// `_promoted_axes`: a `faq` / `makearray` over named ranges has its output
 /// axes' index sets, one over inline `[1, n]` ranges has anonymous axes, an
 /// `index` gather and a geometry kernel are scalar, and every other op
-/// broadcasts its operands' axes by name, the superset winning. The
+/// spans the union of its operands' index sets, in order of first appearance
+/// (esm-spec §4.3.4), so operands over disjoint sets span their outer product. The
 /// definitions are inferred in dependency order
 /// ([`dependency_first_order`]), each after every definition it reads, so a
 /// definition is never inferred from operands not yet inferred, whatever the
@@ -3517,12 +3518,10 @@ fn infer_expr_axes(
     } else {
         let mut result: Vec<String> = Vec::new();
         for arg in &node.args {
-            let a = infer_expr_axes(arg, shapes, memo);
-            if a.is_empty() || a.iter().all(|x| result.contains(x)) {
-                continue;
-            }
-            if result.is_empty() || result.iter().all(|x| a.contains(x)) {
-                result = a;
+            for axis in infer_expr_axes(arg, shapes, memo) {
+                if !result.contains(&axis) {
+                    result.push(axis);
+                }
             }
         }
         result
