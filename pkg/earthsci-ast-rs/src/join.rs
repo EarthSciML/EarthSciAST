@@ -51,11 +51,11 @@
 //!   ranges — the MOVES/NONROAD shape, and the normal case). Resolution is
 //!   TWO-SIDED:
 //!   * a member-value-equality predicate is ANDed into the node's `filter`, so
-//!     every evaluation path — the vectorized overlay, the tape, the per-cell
-//!     oracle — stays correct with no new value-equality path of its own. For a
-//!     loop-symbol pair the two sides are dense-coded by rank in the sorted union
-//!     of their distinct values (same equality classes, independent of declared
-//!     member order); for a data column the predicate reads the column directly
+//!     every evaluation path — the reference evaluator's whole-array and
+//!     per-cell walks, the tape — stays correct with no new value-equality
+//!     path of its own. For a loop-symbol pair the two sides are dense-coded
+//!     by rank in the sorted union of their distinct values (same equality
+//!     classes, independent of declared member order); for a data column the predicate reads the column directly
 //!     (`index(col, sym)`).
 //!   * an [`OnGate`] — the resolved key columns and the two loop symbols — is
 //!     ATTACHED to the surviving `join` clause so the evaluator can build the
@@ -467,9 +467,9 @@ fn lower_node_joins(
     // additionally carrying the [`OnGate`] resolved below. Unlike the overlap
     // broad phase it is EXACT rather than conservative, so the coded `filter`
     // predicate is emitted as well: every path that does not consult the gate
-    // (the whole-array overlay, the tape, the compiled RHS loop) then still
-    // computes the same answer, and the driven path's answer is verifiably
-    // identical to the undriven one.
+    // (the reference evaluator's whole-array walk, the tape, the compiled
+    // RHS loop) then still computes the same answer, and the driven path's
+    // answer is verifiably identical to the undriven one.
     let mut kept: Vec<JoinClause> = Vec::new();
     for clause in &joins {
         if clause.overlap.is_some() {

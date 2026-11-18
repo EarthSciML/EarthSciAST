@@ -165,7 +165,7 @@ pub enum CompileError {
     /// `minItems: 0`), so this is the gate that keeps a malformed-but-
     /// schema-valid node out of the evaluators, where it would otherwise either
     /// panic on an out-of-bounds index or — worse — be silently assigned two
-    /// different values by the per-cell oracle and the vectorized overlay.
+    /// different values by the per-cell oracle and the tape.
     /// See [`crate::op_registry`].
     #[error(
         "invalid_operator_arity: operator '{op}' takes {expected} argument(s), got {got} \

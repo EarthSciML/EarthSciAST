@@ -50,8 +50,7 @@
 //!   kernel, visiting the source in ROW-MAJOR order — which is the per-cell
 //!   oracle's contraction odometer, so a rank-0 `faq` (every index
 //!   contracted, scalar result) folds the same terms in the same
-//!   association the interpreter would. It is the one construct the tape
-//!   lowers that the whole-array overlay declines outright.
+//!   association the interpreter would.
 //!
 //! A rule that reads an observed whose own rule declined declines too, at
 //! the read: there is no operand for a value that is not on the tape, so the

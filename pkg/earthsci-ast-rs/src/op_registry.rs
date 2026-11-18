@@ -1,15 +1,12 @@
 //! The operator registry: the single source of truth for **which `op` strings
 //! exist** and **how many `args` each one takes** (esm-spec §4.2 / §4.3).
 //!
-//! Before this module the crate had no arity check anywhere — neither
-//! [`crate::validate`] nor [`crate::structural`] — and the schema deliberately
-//! leaves `args` at `minItems: 0`, because a *schema* cannot express "`atan2`
-//! takes exactly two arguments but `+` takes any number". The result was that a
-//! malformed-but-schema-valid node reached the evaluators, where the two of them
-//! disagreed about what it meant: the per-cell oracle
-//! ([`crate::simulate_array::eval`]) folded `-(3,1,1)` to `NaN` while the
-//! vectorized overlay ([`crate::simulate_array::vectorized`]) left-folded it to
-//! `1.0`, and `atan2` with one argument indexed `args[1]` and **panicked**.
+//! The schema deliberately leaves `args` at `minItems: 0`, because a *schema*
+//! cannot express "`atan2` takes exactly two arguments but `+` takes any
+//! number". Without an arity check a malformed-but-schema-valid node would
+//! reach the evaluators, where one evaluator could fold `-(3,1,1)` to `NaN`
+//! while another left-folds it to `1.0`, and `atan2` with one argument would
+//! index `args[1]` and panic.
 //!
 //! The registry closes that class of bug at the source: an op/arity pair that
 //! this table rejects never reaches an evaluator, so the evaluators are only

@@ -1273,7 +1273,7 @@ fn shapes_model(parts: &AssembledParts) -> Model {
 /// why this half converts where the dimensionless-but-scaled half refuses.
 ///
 /// **Why here.** `flatten` is the single funnel every evaluator in this crate
-/// draws from — the array oracle, the vectorized overlay, the tape and the XLA
+/// draws from — the array oracle, the tape and the XLA
 /// emitter all consume a [`FlattenedSystem`] — so
 /// one phase here converts for all of them, and they cannot diverge. It is NOT
 /// on the validation path (`validate` never flattens), so the checker keeps

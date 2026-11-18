@@ -1235,7 +1235,7 @@ impl<'a> Emitter<'a> {
                 let dims = self.out_dims(*out);
                 let av = self.operand(a)?;
                 let av = self.to_shape(&av, &dims)?;
-                // `vec_negate`, i.e. `-x`, NOT `0 - x` (they differ on ±0).
+                // The oracle's `negate`, i.e. `-x`, NOT `0 - x` (they differ on ±0).
                 let v = self.wrap(av.neg(), "neg")?;
                 self.define(*out, v);
             }
