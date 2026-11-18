@@ -884,8 +884,8 @@ function _removed_2_0_0_finding(doc)
     for key in (:function_tables, "function_tables")
         haskey(doc, key) && return ("function_tables", "/function_tables")
     end
-    for section in ("models", "reaction_systems")
-        comps = _raw_get(doc, String(section), nothing)
+    for section in _COMPONENT_KINDS
+        comps = _raw_get(doc, section, nothing)
         _is_object(comps) || continue
         for (cname, comp) in pairs(comps)
             _is_object(comp) || continue
@@ -895,15 +895,11 @@ function _removed_2_0_0_finding(doc)
             end
         end
     end
-    hit = n -> (op = _raw_get(n, "op", nothing); op isa AbstractString && op in _REMOVED_OPS_2_0_0)
-    segs = _find_json_segs(hit, doc)
-    segs === nothing && return nothing
-    path = string((string("/", s) for s in Iterators.reverse(segs))...)
-    node = doc
-    for s in Iterators.reverse(segs)
-        node = s isa Integer ? node[s + 1] : _raw_get(node, String(s), nothing)
-    end
-    return (String(_raw_get(node, "op", "")), path)
+    removed = Ref("")
+    hit(n) = (op = _raw_get(n, "op", nothing);
+        (op isa AbstractString && op in _REMOVED_OPS_2_0_0) && (removed[] = String(op); true))
+    path = _find_json_path(hit, doc)
+    return path === nothing ? nothing : (removed[], path)
 end
 
 """
