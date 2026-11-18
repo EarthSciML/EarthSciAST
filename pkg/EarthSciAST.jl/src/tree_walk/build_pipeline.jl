@@ -29,11 +29,15 @@ function _build_lower_and_classify(
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
     # WS4 elementwise array-observed fold, whole-array derivative lift)
     equations, folded_array_obs = _prepare_model_equations(model; vi_vars = vi_vars)
+    # Every reachability question phase 1 asks about the observed definitions.
+    graph = _DefGraph(equations)
 
     # ---- Geometry variable discovery ----
     # (see `_discover_geometry_vars`: build-once setup vars, live-field inline
     # vars, and the has_* gate)
-    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars; index_sets = index_sets)
+    geo = _discover_geometry_vars(
+        model, equations, graph, param_arrays, vi_vars; index_sets = index_sets
+    )
     geom_inline_vars = geo.inline_vars
 
     # ---- Promoted array observeds (shape-promotion inlining) ----
@@ -80,12 +84,12 @@ function _build_lower_and_classify(
                 if v.type == ParameterVariable && !_is_array_shape(v.shape)
         )
         discrete_vars, const_mat_vars = _discrete_materialize_split(
-            equations, union(geom_inline_vars, array_inline_vars),
+            graph, union(geom_inline_vars, array_inline_vars),
             copy(array_inline_vars), pre_state,
             Set{String}(String(k) for k in keys(param_arrays)), scalar_params
         )
         if !isempty(recur_vars)
-            reach = _recurrence_readers(equations, recur_vars)
+            reach = union!(_readers_of(graph, recur_vars), recur_vars)
             setdiff!(discrete_vars, reach)
             setdiff!(const_mat_vars, reach)
         end
@@ -150,27 +154,6 @@ function _build_lower_and_classify(
         array_inline_vars, discrete_vars, const_obs_vars, const_obs_arrays,
         mat_array_vars, gated_geom_vars
     )
-end
-
-# The names in `recur_vars` and every observed that reads one of them, directly
-# or through other observed definitions.
-function _recurrence_readers(equations::Vector{Equation}, recur_vars::Set{String})
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
-    end
-    reach = copy(recur_vars)
-    _saturate!() do
-        changed = false
-        for (n, rhs) in defs
-            n in reach && continue
-            if any(r -> r in reach, _referenced_var_names(rhs))
-                push!(reach, n); changed = true
-            end
-        end
-        changed
-    end
-    return reach
 end
 
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----

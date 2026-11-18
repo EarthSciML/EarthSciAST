@@ -86,15 +86,15 @@ end
 #    const-fed (they stay setup vars).
 # `has_setup_geometry` gates the setup-vars discovery / materialization.
 function _discover_geometry_vars(
-        model::Model, equations::Vector{Equation},
+        model::Model, equations::Vector{Equation}, g::_DefGraph,
         param_arrays::AbstractDict, vi_vars; index_sets = nothing
     )
     has_geometry_seed = _model_has_setup_join_reduction(equations)
     pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
     has_setup_geometry = has_geometry_seed ||
         _model_has_setup_const_reduction(
-        model, equations, index_sets,
-        union(pre_state_names, (String(k) for k in keys(param_arrays)))
+        model, g, index_sets,
+        union!(copy(pre_state_names), (String(k) for k in keys(param_arrays)))
     )
     setup_vars = Set{String}()
     defs = Dict{String, ASTExpr}()
@@ -103,8 +103,7 @@ function _discover_geometry_vars(
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(
-            model, equations,
-            pre_state_names, live_param_names; index_sets = index_sets
+            model, g, pre_state_names, live_param_names; index_sets = index_sets
         )
         # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
         # every var transitively reading a live `param_arrays` buffer. The
@@ -130,19 +129,7 @@ function _discover_geometry_vars(
         # Derived = reads a geometry setup var, transitively. The
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
         # met→fire coupling edge is unchanged.
-        geom_derived = Set{String}()
-        refmemo = Dict{String, Set{String}}()
-        _saturate!() do
-            changed = false
-            for (name, rhs) in defs
-                name in geom_derived && continue
-                refs = get!(() -> _referenced_var_names(rhs), refmemo, name)
-                if any(r -> r in setup_vars || r in geom_derived, refs)
-                    push!(geom_derived, name); changed = true
-                end
-            end
-            changed
-        end
+        geom_derived = _readers_of(g, setup_vars)
         obs_here = Set{String}(observed_unknowns(model))
         # Constant reduction tables alone (`_is_setup_const_reduction`) are
         # not geometry: they inline no live reader.

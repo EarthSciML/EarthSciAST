@@ -99,3 +99,62 @@ end
 _dag_every(_) = true
 _dag_never(_) = false
 _dag_strict(_, _) = false
+
+"""
+    _DefGraph(equations) / _DefGraph(defs)
+
+The definitions of an equation list by left-hand name (`defs`; a later
+equation for one name wins, as a `Dict` fill does), the names each one reads
+(`reads`, `_referenced_var_names`, walked once per definition), and for each
+name the definitions that read it (`readers`). One build makes one, from its
+pre-lowered equations, and asks it every reachability question
+(`_readers_of`).
+"""
+struct _DefGraph
+    defs::Dict{String, ASTExpr}
+    reads::Dict{String, Set{String}}
+    readers::Dict{String, Vector{String}}
+end
+
+function _DefGraph(defs::AbstractDict{String, <:ASTExpr})
+    d = Dict{String, ASTExpr}(defs)
+    reads = Dict{String, Set{String}}()
+    readers = Dict{String, Vector{String}}()
+    for (n, rhs) in d
+        r = _referenced_var_names(rhs)
+        reads[n] = r
+        for x in r
+            push!(get!(Vector{String}, readers, x), n)
+        end
+    end
+    return _DefGraph(d, reads, readers)
+end
+
+function _DefGraph(equations::AbstractVector{Equation})
+    defs = Dict{String, ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
+    end
+    return _DefGraph(defs)
+end
+
+"""
+    _readers_of(g::_DefGraph, seeds) -> Set{String}
+
+The definitions of `g` that read a name of `seeds`, directly or through other
+definitions. A seed is in the result only when it is itself such a definition.
+Loop symbols a definition binds count as reads (`_referenced_var_names`).
+"""
+function _readers_of(g::_DefGraph, seeds)
+    out = Set{String}()
+    stack = String[String(s) for s in seeds]
+    while !isempty(stack)
+        x = pop!(stack)
+        for n in get(g.readers, x, String[])
+            n in out && continue
+            push!(out, n)
+            push!(stack, n)
+        end
+    end
+    return out
+end

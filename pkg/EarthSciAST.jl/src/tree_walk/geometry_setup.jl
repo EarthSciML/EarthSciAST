@@ -94,34 +94,25 @@ function _setup_range_ok(r, index_sets)
     return s isa IndexSet && (s.kind == "interval" || (s.kind == "derived" && s.from_faq !== nothing))
 end
 
-function _model_has_setup_const_reduction(model, equations, index_sets, state_var_names)
+function _model_has_setup_const_reduction(
+        model::Model, g::_DefGraph, index_sets, state_var_names::Set{String}
+    )
     sp = Set{String}(
         n for (n, v) in model.variables if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
-    defs = Dict{String, ASTExpr}(
-        (eq.lhs::VarExpr).name => eq.rhs for eq in equations if eq.lhs isa VarExpr
-    )
-    dynamic = _dynamic_names(defs, state_var_names)
+    dynamic = _dynamic_names(g, state_var_names)
     return _anyof(
-        n -> !(n in dynamic) && _is_setup_const_reduction(defs[n], index_sets, sp), collect(keys(defs))
+        n -> !(n in dynamic) && _is_setup_const_reduction(g.defs[n], index_sets, sp),
+        collect(keys(g.defs))
     )
 end
 
 # The defined names that read a state or `t`, directly or through other
 # definitions: never a build-once table.
-function _dynamic_names(defs, state_var_names)
-    dynamic = Set{String}()
-    _saturate!() do
-        changed = false
-        for (n, rhs) in defs
-            n in dynamic && continue
-            if _anyof(r -> r == "t" || r in state_var_names || r in dynamic, _referenced_var_names(rhs))
-                push!(dynamic, n); changed = true
-            end
-        end
-        changed
-    end
-    return dynamic
+function _dynamic_names(g::_DefGraph, state_var_names::Set{String})
+    seeds = copy(state_var_names)
+    push!(seeds, "t")
+    return _readers_of(g, seeds)
 end
 
 # True iff `e` is a `const`-op node (build-time literal data — a vertex ring
@@ -1540,22 +1531,15 @@ end
 # them WITHOUT touching a state variable. Returns the set, the name → RHS map and
 # the live-tainted names.
 function _geometry_setup_vars(
-        model, equations, state_var_names,
-        live_params; index_sets = nothing
+        model::Model, g::_DefGraph, state_var_names::Set{String},
+        live_params::Set{String}; index_sets = nothing
     )
     scalar_params = Set{String}(
         n for (n, v) in model.variables
             if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr || continue
-        defs[(eq.lhs::VarExpr).name] = eq.rhs
-    end
-    # The names each definition reads, walked once: the saturation passes below
-    # ask again on every sweep.
-    refmemo = Dict{String, Set{String}}()
-    refs_of(n) = get!(() -> _referenced_var_names(defs[n]), refmemo, n)
+    defs = g.defs
+    refs_of(n) = g.reads[n]
     observed_here = Set{String}(observed_unknowns(model))
     is_arr_obs(n) = haskey(model.variables, n) && n in observed_here &&
         _is_array_shape(model.variables[n].shape)
@@ -1565,20 +1549,9 @@ function _geometry_setup_vars(
     # F_src / A_j` mixes setup-const weights (A_ij/A_j) with a live field (F_src):
     # the weights materialize at setup, but F_tgt itself must stay a runtime
     # observed (inlined into its readers below), never pulled into setup where
-    # F_src is unbound. Seed from the live param names, propagate through `defs`.
-    tainted = Set{String}()
-    _saturate!() do   # LIVE-TAINT pass: propagate live-param reads through `defs`
-        changed = false
-        for (n, rhs) in defs
-            n in tainted && continue
-            refs = refs_of(n)
-            if any(r -> (r in live_params) || (r in tainted), refs)
-                push!(tainted, n); changed = true
-            end
-        end
-        changed
-    end
-    dynamic = _dynamic_names(defs, state_var_names)
+    # F_src is unbound.
+    tainted = _readers_of(g, live_params)
+    dynamic = _dynamic_names(g, state_var_names)
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
@@ -1678,7 +1651,7 @@ function _geometry_setup_vars(
         end
         changed
     end
-    return setup, defs, tainted
+    return setup, copy(defs), tainted
 end
 
 # Dependency order over the setup vars (A_ij before its row sums).

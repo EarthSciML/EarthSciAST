@@ -116,7 +116,7 @@ _dmc_agg(; kw...) = _dmc_op(
 # Run the cadence split on a single def. Returns the discrete set.
 _dmc_split(rhs) = first(
     _DM_ESS._discrete_materialize_split(
-        _DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)],
+        _DM_ESS._DefGraph(_DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)]),
         Set(["Fcache"]),      # inline candidates (array observeds)
         Set{String}(),        # const-tier pool
         ["u"],                # continuous state var names

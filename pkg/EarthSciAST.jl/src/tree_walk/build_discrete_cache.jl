@@ -56,32 +56,15 @@ end
 # set is param-tainted by construction, never const). A model with no coordinate regrid
 # gets an empty const set (byte-identical). Returns `(discrete_vars, const_vars)`.
 function _discrete_materialize_split(
-        equations::Vector{Equation},
+        g::_DefGraph,
         inline_candidates, array_inline_candidates,
         state_var_names, param_names, scalar_param_names
     )
     empty = Set{String}()
     isempty(inline_candidates) && isempty(array_inline_candidates) &&
         return (empty, copy(empty))
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
-    end
-    _closure(seed_set) = begin
-        reached = Set{String}()
-        changed = true
-        while changed
-            changed = false
-            for (n, rhs) in defs
-                n in reached && continue
-                refs = _referenced_var_names(rhs)
-                if any(r -> (r in seed_set) || (r in reached), refs)
-                    push!(reached, n); changed = true
-                end
-            end
-        end
-        reached
-    end
+    defs = g.defs
+    _closure(seed_set) = _readers_of(g, seed_set)
     # PARAM-TAINTED: transitively reads a live forcing buffer name.
     param_tainted = isempty(param_names) ? Set{String}() : _closure(Set{String}(param_names))
     # STATE-REACHING: transitively reads a continuous state (seeded with the states
@@ -106,7 +89,7 @@ function _discrete_materialize_split(
     while changed
         changed = false
         for n in collect(const_vars)
-            for r in _referenced_var_names(defs[n])
+            for r in g.reads[n]
                 (r in array_inline_candidates) && !(r in const_vars) && is_const(r) || continue
                 push!(const_vars, r); changed = true
             end
