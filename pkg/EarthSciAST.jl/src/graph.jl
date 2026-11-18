@@ -137,6 +137,22 @@ function _adjacent_nodes(graph::Graph{N, E}, node::N) where {N, E}
     return result
 end
 
+# The sorted neighbour keys of every node (`key(node)`), from one pass over the
+# edges: `_adjacent_nodes` for all nodes at once.
+function _adjacency_map(key::F, graph::Graph) where {F}
+    sets = Dict{String, Set{String}}(key(n) => Set{String}() for n in graph.nodes)
+    for edge in graph.edges
+        s, t = key(edge.source), key(edge.target)
+        haskey(sets, s) && push!(sets[s], t)
+        haskey(sets, t) && push!(sets[t], s)
+    end
+    adj = Dict{String, Vector{String}}()
+    for n in graph.nodes
+        adj[key(n)] = sort!(collect(sets[key(n)]))
+    end
+    return adj
+end
+
 """
     component_graph(file::EsmFile) -> Graph{ComponentNode, CouplingEdge}
 
@@ -873,10 +889,7 @@ discover by reading the source. Julia's `to_json(::Graph)` methods stay one
 minor as a deprecated alias (§10) and render byte-identical output.
 """
 function to_json_graph(graph::Graph{ComponentNode, CouplingEdge})::String
-    adj_list = Dict{String, Vector{String}}()
-    for node in graph.nodes
-        adj_list[node.id] = sort!(String[n.id for n in _adjacent_nodes(graph, node)])
-    end
+    adj_list = _adjacency_map(n -> n.id, graph)
 
     result = Dict(
         "nodes" => [
@@ -904,10 +917,7 @@ function to_json_graph(graph::Graph{ComponentNode, CouplingEdge})::String
 end
 
 function to_json_graph(graph::Graph{VariableNode, DependencyEdge})::String
-    adj_list = Dict{String, Vector{String}}()
-    for node in graph.nodes
-        adj_list[node.name] = sort!(String[n.name for n in _adjacent_nodes(graph, node)])
-    end
+    adj_list = _adjacency_map(n -> n.name, graph)
 
     result = Dict(
         "nodes" => [

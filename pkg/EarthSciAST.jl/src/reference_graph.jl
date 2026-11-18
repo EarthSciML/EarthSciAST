@@ -172,44 +172,8 @@ closes the cycle), or `nothing` if the graph is acyclic. Three-color DFS over
 the dependency edges, deterministic (sorted vertices, sorted neighbours).
 """
 function detect_cycle(g::ReferenceGraph)
-    # Three-color (WHITE/GRAY/BLACK) DFS, iterative, over a materialized graph.
-    # This is the ONE cycle detector: `Cadence.assert_acyclic_index_sets`
-    # (cadence.jl) materializes its implicit set→node→set relation into a small
-    # `ReferenceGraph` and routes through here rather than carrying a twin.
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = Dict{String, Int}(k => WHITE for k in keys(g.vertices))
-    # Precompute sorted adjacency once: the DFS revisits each vertex's
-    # neighbour list once per outgoing edge, and re-sorting per visit was
-    # needless repeated work.
     sorted_out = Dict{String, Vector{String}}(k => sort(v) for (k, v) in g.out)
-    for start in sort(collect(keys(g.vertices)))
-        get(color, start, WHITE) == WHITE || continue
-        stack = Tuple{String, Int}[(start, 1)]   # (vertex, 1-based neighbour index)
-        path = String[start]
-        color[start] = GRAY
-        while !isempty(stack)
-            node, i = stack[end]
-            neigh = get(sorted_out, node, String[])
-            if i <= length(neigh)
-                stack[end] = (node, i + 1)
-                nxt = neigh[i]
-                c = get(color, nxt, WHITE)
-                if c == GRAY
-                    idx = findfirst(==(nxt), path)
-                    return vcat(path[idx:end], String[nxt])
-                elseif c == WHITE
-                    color[nxt] = GRAY
-                    push!(stack, (nxt, 1))
-                    push!(path, nxt)
-                end
-            else
-                color[node] = BLACK
-                pop!(stack)
-                pop!(path)
-            end
-        end
-    end
-    return nothing
+    return _find_cycle(sorted_out, sort(collect(keys(g.vertices))))
 end
 
 """

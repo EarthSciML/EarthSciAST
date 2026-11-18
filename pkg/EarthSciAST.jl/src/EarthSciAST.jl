@@ -61,6 +61,8 @@ include("compiler.jl")
 include("types.jl")
 # The expression sites of a typed document: `map_expressions!` / `foreach_expression`.
 include("expression_sites.jl")
+# The one cycle search over a string-keyed directed graph (`_find_cycle`).
+include("digraph.jl")
 # Derived variable classification (esm-spec §6.3.1). Must follow types.jl (it
 # is stated over `Model`) and precede every consumer, which is nearly all of
 # them: from esm 1.0.0 there are only two declared variable types, so ODE
