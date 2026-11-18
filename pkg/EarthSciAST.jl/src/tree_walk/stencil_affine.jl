@@ -1449,24 +1449,47 @@ function _materialize_const_box_inner(
     return _AccRepl(_AccConstBox(vals, s, off))
 end
 
-# Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (state Δ constant, ghost uniform, const/forcing index affine). A
-# non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
-# past the Δ-cut cap), a non-affine CONST index, and a non-affine LIVE-forcing
-# (pgather) index all MATERIALIZE per-box tables instead of declining — see
-# `_materialize_state_tbl` / `_materialize_const_box` /
-# `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
-# live buffer, so it stays refresh-live; with that lowering off the whole
-# equation takes the per-cell fallback, the differential oracle). A live
-# forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
-# (never folded to a literal, so it stays refresh-live).
-# `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
-# Every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
+# `(s, off)` with `index(l) == off + Σ_d (l[d]-1)·s[d]` on the whole box, or
+# `nothing`. The strides are finite differences of `index` across one step of
+# each non-thin dim from `rep`, checked at every corner. A corner check is a
+# PROOF only for a structurally affine subscript (`structural`, `_affine_form`:
+# such an index cannot leave its model anywhere inside the box once two
+# corners pin it); for any other subscript (a gather through connectivity
+# data, which can agree at the corners and differ in between) the map is
+# checked at every cell of the box (`_box_holds`, memoized under `key()`).
+function _affine_index_on_box(index_at, rep, corners, thin, D, structural::Bool, box, run, key)
+    i_rep = index_at(rep)
+    s = zeros(Int, max(D, 3))
+    for d in 1:D
+        if !thin[d]
+            l2 = copy(rep); l2[d] += 1
+            s[d] = index_at(l2) - i_rep
+        end
+    end
+    off = i_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
+    model(l) = off + sum((l[d] - 1) * s[d] for d in 1:D)
+    for cn in corners
+        model(cn) == index_at(cn) || return nothing
+    end
+    structural || _box_holds(l -> model(l) == index_at(l), box, run, D, key) || return nothing
+    return s, off
+end
+
+# Derive one lane's lowering for a box and VERIFY it holds on the whole box —
+# one method per lane kind (`_lane_repl`). A lane that does not reduce to a
+# literal or a box-addressed descriptor MATERIALIZES a per-box table instead of
+# declining (`_materialize_state_tbl` / `_materialize_const_box` /
+# `_materialize_pgather_tbl`; the pgather table holds indices into the aliased
+# live buffer, so it stays refresh-live). A live forcing lane otherwise lowers
+# to `_AccForcingBox` over the aliased buffer (never folded to a literal, so it
+# stays refresh-live).
+# `structural` is `_affine_idx_expr` over every one of the lane's subscripts:
+# every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
 # forcing index) is a PROOF only when it holds; otherwise the conclusion is
-# re-checked at every cell of the box. It is a property of the EXPRESSION, not of
-# a cell or a box, so the box processor passes the per-branch classification
-# `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
-# caller.
+# re-checked at every cell of the box (`_affine_index_on_box`). It is a
+# property of the EXPRESSION, not of a cell or a box, so the box processor
+# passes the per-branch classification `_lane_nonaffine_args!` already
+# memoizes; the default derives it for a direct caller.
 #
 # `le` is the lane's compiled evaluator (`_lane_evaluator`) or `nothing`; a STATE
 # lane is evaluated through it wherever it answers, which is the same slot
@@ -1481,235 +1504,184 @@ function _derive_lane_repl(
     )
     env = Dict{String, Int}()
     ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
-    if rec.kind == LANE_STATE
-        slot_rep = ev(rep)
-        if slot_rep == 0                              # ghost → literal 0.0
-            for cn in corners
-                ev(cn) == 0 ||
-                    return _materialize_state_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
-            end
-            _ghost_box(
-                rec, idx_names, corners, structural, box, D, ev,
-                const_arrays, le, run
-            ) ||
-                return _materialize_state_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-            return _LitRepl(0.0)
-        end
-        Δ = slot_rep - oln_rep
-        uniform = true
+    lp = _LaneProbe(rec, idx_names, rep, corners, thin, D, box, run, structural, var_map, const_arrays)
+    k = rec.kind
+    k == LANE_STATE && return _lane_repl_state(lp, ev, le, oln_rep, base, strides)
+    k == LANE_LOOPLIT && return _lane_repl_looplit(lp)
+    k == LANE_EXPRTBL && return _lane_repl_exprtbl(lp)
+    k == LANE_CONST && return _lane_repl_const(lp, ev, flat_cache)
+    return _lane_repl_pgather(lp, ev)
+end
+
+# What every lane lowering reads: the lane, the box (its representative cell,
+# corners, thin dims, rank, the run it is cut from) and the build's maps.
+struct _LaneProbe{RP, CN, TH, BX, RN, VM, CA}
+    rec::_LaneRecipe
+    idx_names::Any
+    rep::RP
+    corners::CN
+    thin::TH
+    D::Int
+    box::BX
+    run::RN
+    structural::Bool
+    var_map::VM
+    const_arrays::CA
+end
+
+_lane_tbl_state(lp::_LaneProbe) =
+    _materialize_state_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_const(lp::_LaneProbe) =
+    _materialize_const_box(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_pgather(lp::_LaneProbe) =
+    _materialize_pgather_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+
+# A STATE lane: a ghost box (literal 0.0), a constant offset from the output
+# slot (`_AccStateAffine`), the lane's own affine map on its array's block
+# (`_AccStateTblBox` over the block's identity table), or a slot table.
+function _lane_repl_state(lp::_LaneProbe, ev, le, oln_rep, base, strides)
+    rec, idx_names, rep, corners, thin, D, box, run = lp.rec, lp.idx_names, lp.rep, lp.corners, lp.thin, lp.D, lp.box, lp.run
+    structural = lp.structural
+    slot_rep = ev(rep)
+    if slot_rep == 0                              # ghost → literal 0.0
         for cn in corners
-            sc = ev(cn)
-            if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
-                uniform = false
-                break
-            end
+            ev(cn) == 0 || return _lane_tbl_state(lp)
         end
-        uniform && (
-            structural || _box_holds(
-                box, run, D,
-                () -> _lane_box_key(:offset, rec, idx_names, box)
-            ) do l
-                sc = ev(l)
-                sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
-            end
-        ) && return _AccRepl(_AccStateAffine(Δ))
-        # Not at a constant offset from the output slot. Before paying for a
-        # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
-        # STATE BOX note above): finite-difference the slot across a unit step in
-        # each non-thin dim, then VERIFY at every corner — the same derivation
-        # the const / live-forcing branches below use. A ghost anywhere in the
-        # probe or the corners declines (the table's per-cell 0 sentinel is what
-        # models a ghost).
-        #
-        # GUARD — every subscript must be STRUCTURALLY affine in the output loop
-        # indices. Corner verification alone does NOT license this lowering: a
-        # 2^D-corner check cannot see the interior, and a state subscript can be
-        # arbitrary data (an unstructured `index(conn, i)` gather, whose slot map
-        # is affine at the corners and at `rep + e_d` whenever the connectivity
-        # happens to agree there). The `_derive_var_affine` slot map is affine in
-        # the SUBSCRIPT VALUES, so the composed map is affine in the loop exactly
-        # when the subscripts are — and `_affine_idx_expr` admits nothing but
-        # `+ - neg *` over loop names and integer literals, which is a proof, not
-        # a sample. Anything else keeps the exact per-box table it had before.
-        # (This is the same reasoning the LANE_CONST branch below spells out: its
-        # index affinity holds "BY CONSTRUCTION within a box", not by corner
-        # agreement.) The motivating shapes — a lower-rank geometry column, a
-        # staggered face field, a 2-D surface field — all pass this guard.
-        if structural
-            blk = _state_slot_block(rec)
-            if blk !== nothing
-                lo0, hi0 = blk
-                ls = zeros(Int, max(D, 3))
-                ok = lo0 <= slot_rep <= hi0
-                if ok
-                    for d in 1:D
-                        thin[d] && continue
-                        l2 = copy(rep); l2[d] += 1
-                        v2 = ev(l2)
-                        if v2 == 0
-                            ok = false
-                            break
-                        end
-                        ls[d] = v2 - slot_rep
-                    end
-                end
-                if ok
-                    o = slot_rep - lo0 + 1
-                    @inbounds for d in 1:D
-                        o -= (rep[d] - 1) * ls[d]
-                    end
-                    for cn in corners
-                        sc = ev(cn)
-                        a = o
-                        @inbounds for d in 1:D
-                            a += (cn[d] - 1) * ls[d]
-                        end
-                        if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
-                            ok = false
-                            break
-                        end
-                    end
-                end
-                ok && return _AccRepl(
-                    _AccStateTblBox(
-                        _state_slot_identity(lo0, hi0), ls, o
-                    )
-                )
-            end
+        _ghost_box(
+            rec, idx_names, corners, structural, box, D, ev,
+            lp.const_arrays, le, run
+        ) || return _lane_tbl_state(lp)
+        return _LitRepl(0.0)
+    end
+    Δ = slot_rep - oln_rep
+    uniform = true
+    for cn in corners
+        sc = ev(cn)
+        if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
+            uniform = false
+            break
         end
-        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_LOOPLIT
-        dim = findfirst(==(rec.loop_name), idx_names)
-        dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
-        return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
-    elseif rec.kind == LANE_EXPRTBL
-        # Rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE
-        # RESCUE): the value is an arbitrary function of the loop indices, so
-        # there is no index-affine map to derive, and the LANE_CONST comment
-        # below forbids folding from sampled VALUES — so ALWAYS materialize
-        # the dense per-box value table. `_materialize_const_box` is generic
-        # over `_eval_recipe` (which routes this kind to its `_CellEval`),
-        # its exhaustive all-equal fold collapses a box-invariant subtree to
-        # a literal, and its cost is O(box cells) per lane — the same class
-        # as `_materialize_state_tbl` / `_materialize_pgather_tbl`. The
-        # resulting `_AccConstBox` keys by table object identity in
-        # `_desc_key`, exactly like every materialized const/state/pgather
-        # table: boxes never falsely SHARE a spine (over-split only), so
-        # spine memoization stays sound with no branch-key change — the lane
-        # is one sentinel leaf to the branch key, and its per-cell values are
-        # exact by exhaustive evaluation, never assumed uniform.
-        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_CONST
-        # Loop-invariance is derived from the INDEX, never sampled from the
-        # VALUES. Comparing `_eval_recipe`'s value at `rep` against its value at
-        # the 2^D box CORNERS and folding the lane to a literal when they agree
-        # would be unsound: a const array is
-        # arbitrary data, so corner agreement says nothing about the interior —
-        # a regrid weight column reading (0, 0.5, 0) across a box coincides at
-        # both ends and folded to a literal 0.0, silently zeroing the interior
-        # cell with no error and no warning.  Nothing licenses interpolating
-        # between sampled data values; a denser sample would only make the wrong
-        # answer rarer, not impossible.
-        #
-        # The corner checks that REMAIN below are a different kind of test and
-        # stay: they verify the resolved LINEAR INDEX (`_recipe_const_lin`) is
-        # affine in the loop index, which it is BY CONSTRUCTION within a box when
-        # the subscripts are affine expressions of the loop names — every
-        # boundary-fold transition already forces a box cut (`_const_fold_key!`),
-        # so two corners pin the affine map exactly. A subscript that is NOT
-        # (a gather through connectivity data) has no such construction, so the
-        # derived map is checked at every cell of the box instead. Invariance
-        # then follows STRUCTURALLY: an all-zero stride vector means the index —
-        # hence the value — does not move over the box, and only then is the
-        # literal fold legal. That test cannot be fooled by adversarial data,
-        # and for an affine subscript it costs the same O(2^D) corner evals as
-        # before: no per-cell work is added on the fast path.
-        val_rep = ev(rep)
-        lenv = Dict{String, Int}()
-        clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
-        lin_rep = clin(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = clin(l2) - lin_rep
-            end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            (off + sum((cn[d] - 1) * s[d] for d in 1:D)) == clin(cn) ||
-                return _materialize_const_box(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
+    end
+    uniform && (
         structural || _box_holds(
             box, run, D,
-            () -> _lane_box_key(:const, rec, idx_names, box)
+            () -> _lane_box_key(:offset, rec, idx_names, box)
         ) do l
-            (off + sum((l[d] - 1) * s[d] for d in 1:D)) == clin(l)
-        end || return _materialize_const_box(
-            rec, idx_names, box, D,
-            var_map, const_arrays, run
-        )
-        # Index verified affine over the box; a zero stride in every dim means it
-        # is the SAME element for every cell (thin dims contribute nothing — the
-        # box is one cell wide there), so the read is genuinely loop-invariant
-        # and folds to a literal. `flat[_recipe_const_lin(...)] ==
-        # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
-        # element and the fold is bit-identical.
-        all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do;
-            _const_flat(rec.arr)
+            sc = ev(l)
+            sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
         end
-        return _AccRepl(_AccConstBox(arr_flat, s, off))
-    else  # LANE_PGATHER — LIVE forcing gather
-        # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
-        # own grid), so this is the LANE_CONST derivation applied to the INDEX, not
-        # the value: finite-difference across unit loop steps for the affine strides,
-        # then VERIFY at every corner. Two differences from LANE_CONST: (1) never
-        # fold to a literal even when the index is constant — the buffer contents are
-        # refreshed in place, so the read must stay live; (2) pass `pg.flat`
-        # (the aliased live buffer) straight through, NEVER a copy.
-        pg = rec.arr::_PGatherArray
-        lin_rep = ev(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = ev(l2) - lin_rep
+    ) && return _AccRepl(_AccStateAffine(Δ))
+    # Not at a constant offset from the output slot. Before paying for a dense
+    # per-box table, try the lane's OWN affine map (see the LANE-AFFINE STATE
+    # BOX note above): finite-difference the slot across a unit step in each
+    # non-thin dim, then VERIFY at every corner. A ghost anywhere in the probe
+    # or the corners declines (the table's per-cell 0 sentinel is what models a
+    # ghost). Only a structurally affine subscript qualifies: the block's slot
+    # map is affine in the SUBSCRIPT VALUES, so the composed map is affine in
+    # the loop exactly when the subscripts are, and the corner check is then a
+    # proof (`_affine_index_on_box`).
+    if structural
+        blk = _state_slot_block(rec)
+        if blk !== nothing
+            lo0, hi0 = blk
+            ls = zeros(Int, max(D, 3))
+            ok = lo0 <= slot_rep <= hi0
+            if ok
+                for d in 1:D
+                    thin[d] && continue
+                    l2 = copy(rep); l2[d] += 1
+                    v2 = ev(l2)
+                    if v2 == 0
+                        ok = false
+                        break
+                    end
+                    ls[d] = v2 - slot_rep
+                end
             end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            if (off + sum((cn[d] - 1) * s[d] for d in 1:D)) != ev(cn)
-                # Clamped/folded forcing subscript (non-affine across the box):
-                # materialize the per-box index table.
-                return _materialize_pgather_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
+            if ok
+                o = slot_rep - lo0 + 1
+                @inbounds for d in 1:D
+                    o -= (rep[d] - 1) * ls[d]
+                end
+                for cn in corners
+                    sc = ev(cn)
+                    a = o
+                    @inbounds for d in 1:D
+                        a += (cn[d] - 1) * ls[d]
+                    end
+                    if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
+                        ok = false
+                        break
+                    end
+                end
             end
+            ok && return _AccRepl(_AccStateTblBox(_state_slot_identity(lo0, hi0), ls, o))
         end
-        if !structural && !_box_holds(
-                box, run, D,
-                () -> _lane_box_key(:forcing, rec, idx_names, box)
-            ) do l
-                (off + sum((l[d] - 1) * s[d] for d in 1:D)) == ev(l)
-            end
-            return _materialize_pgather_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
-        return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
+    return _lane_tbl_state(lp)
+end
+
+# The loop index itself: a literal on a thin dim, else a loop-index read.
+function _lane_repl_looplit(lp::_LaneProbe)
+    rec = lp.rec
+    dim = findfirst(==(rec.loop_name), lp.idx_names)
+    dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
+    return lp.thin[dim] ? _LitRepl(Float64(lp.rep[dim])) : _AccRepl(_AccLoopIdx(dim))
+end
+
+# A rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE RESCUE):
+# its value is an arbitrary function of the loop indices, so there is no
+# index-affine map to derive and no value may be folded from samples — it is
+# always the dense per-box value table, which folds to a literal only when
+# every cell's value is equal, exhaustively.
+_lane_repl_exprtbl(lp::_LaneProbe) = _lane_tbl_const(lp)
+
+# A CONST lane. Loop-invariance is derived from the INDEX, never sampled from
+# the VALUES: a const array is arbitrary data, so agreement at the corners
+# says nothing about the interior (a regrid weight column reading (0, 0.5, 0)
+# across a box coincides at both ends). The resolved LINEAR INDEX
+# (`_recipe_const_lin`) is affine on the box when the subscripts are affine
+# expressions of the loop names — every boundary-fold transition already
+# forces a box cut (`_const_fold_key!`). An all-zero stride vector then means
+# the index — hence the value — does not move over the box, and only then is
+# the literal fold legal. `flat[_recipe_const_lin(...)] == _eval_recipe(...)`
+# (see `_recipe_const_lin`), so `val_rep` is that element and the fold is
+# bit-identical.
+function _lane_repl_const(lp::_LaneProbe, ev, flat_cache)
+    rec, idx_names = lp.rec, lp.idx_names
+    val_rep = ev(lp.rep)
+    lenv = Dict{String, Int}()
+    clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), lp.const_arrays)
+    aff = _affine_index_on_box(
+        clin, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:const, rec, idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_const(lp)
+    s, off = aff
+    all(iszero, s) && return _LitRepl(Float64(val_rep))
+    arr_flat = get!(flat_cache, rec.arr) do;
+        _const_flat(rec.arr)
+    end
+    return _AccRepl(_AccConstBox(arr_flat, s, off))
+end
+
+# A LIVE forcing (pgather) lane. `_eval_recipe` returns the flat LINEAR INDEX
+# into the forcing buffer (its own grid), so this is the CONST derivation
+# applied to the index, with two differences: it never folds to a literal even
+# when the index is constant (the buffer is refreshed in place, so the read
+# must stay live), and it passes `pg.flat` (the aliased live buffer) straight
+# through, never a copy. A clamped or folded subscript (non-affine across the
+# box) materializes the per-box index table.
+function _lane_repl_pgather(lp::_LaneProbe, ev)
+    rec = lp.rec
+    pg = rec.arr::_PGatherArray
+    aff = _affine_index_on_box(
+        ev, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:forcing, rec, lp.idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_pgather(lp)
+    s, off = aff
+    return _AccRepl(_AccForcingBox(pg.flat, s, off))
 end
 
 # One lane's `_eval_recipe` at `loop`, through its compiled evaluator `le` where
