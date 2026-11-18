@@ -188,11 +188,14 @@ end
 
 # Payload of an `_NK_STATE_GATHER` node: a state read at a slot computed at eval
 # time from the subscript `children` (a loop counter, or an indirect
-# `index(conn, i, k)`). `slot_flat[off + 1]` is the `u` slot of the cell at
-# column-major offset `off` from `lo`; a subscript outside `[lo, hi]` is a ghost
-# cell and reads 0, as the unroll's out-of-range read does.
+# `index(conn, i, k)`). The cell at column-major offset `off` from `lo` is slot
+# `run_base + off` when the cells are one ascending run of slots (an array laid
+# out as one block), else `slot_flat[off + 1]`; `slot_flat` is empty for a run.
+# A subscript outside `[lo, hi]` is a ghost cell and reads 0, as the unroll's
+# out-of-range read does.
 struct _StateGather
     slot_flat::Vector{Int}
+    run_base::Int
     strides::Vector{Int}
     lo::Vector{Int}
     hi::Vector{Int}
@@ -210,6 +213,9 @@ end
 # evaluated. Anything else is `E_TREEWALK_RECUR_UNAVAILABLE`: never the zero
 # ghost an out-of-range state gather reads (CONFORMANCE_SPEC §5.19.4). `base` and
 # `strides` address the observed's buffer block in the extended value vector.
+@inline _sg_slot(sg::_StateGather, off::Int) =
+    sg.run_base != 0 ? sg.run_base + off : @inbounds(sg.slot_flat[off + 1])
+
 struct _RecurGather
     name::String
     lo::Vector{Int}

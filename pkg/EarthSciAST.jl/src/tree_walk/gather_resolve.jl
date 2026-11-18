@@ -328,7 +328,7 @@ function _resolve_state_gather(
     nd = length(lo)
     var_map = rc.var_map
     sub_nodes = ASTExpr[_resolve_indices(a, rc) for a in idx_args]
-    slot_flat, strides = get!(_build_state().slot_tables, vname) do
+    slot_flat, run_base, strides = get!(_build_state().slot_tables, vname) do
         dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
         strd = Vector{Int}(undef, nd)
         strd[1] = 1
@@ -336,18 +336,14 @@ function _resolve_state_gather(
             strd[d] = strd[d - 1] * dims[d - 1]
         end
         total = prod(dims)
+        # A variable laid out as one block is one run of slots, kept as its
+        # first slot: no table, and no cell key formatted per cell.
+        blk = _vm_block(var_map, vname)
+        if total > 0 && blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
+            return (Int[], blk.base, strd)
+        end
         sf = Vector{Int}(undef, total)
         cur = Vector{Int}(undef, nd)
-        # A variable laid out as one block is read by arithmetic; formatting a
-        # cell key per cell would make this table cost far more per cell than
-        # the integers it holds.
-        blk = _vm_block(var_map, vname)
-        if blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
-            for lin in 0:(total - 1)
-                sf[lin + 1] = blk.base + lin
-            end
-            return (sf, strd)
-        end
         for lin in 0:(total - 1)
             rem = lin
             for d in 1:nd
@@ -362,13 +358,16 @@ function _resolve_state_gather(
             end
             sf[lin + 1] = slot
         end
-        (sf, strd)
+        # A table that happens to be one run is kept as a run, so a gather's
+        # form depends on its slots alone.
+        isrun = total > 0 && all(k -> sf[k] == sf[1] + k - 1, eachindex(sf))
+        isrun ? (Int[], sf[1], strd) : (sf, 0, strd)
     end
     return OpExpr(
         "__state_gather", sub_nodes;
         value = _Lowered(
             _NK_STATE_GATHER,
-            _StateGather(slot_flat, strides, copy(lo), copy(hi), length(slot_flat))
+            _StateGather(slot_flat, run_base, strides, copy(lo), copy(hi), prod(hi .- lo .+ 1))
         )
     )
 end

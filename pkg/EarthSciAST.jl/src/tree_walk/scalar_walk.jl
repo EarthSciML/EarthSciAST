@@ -120,7 +120,7 @@ function _eval_state_gather(n::_Node, u, p, t, ::Type{T}) where {T}
         (sg.lo[d] <= sub <= sg.hi[d]) || return zero(eltype(u))   # ghost cell
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
-    slot = @inbounds sg.slot_flat[off + 1]
+    slot = _sg_slot(sg, off)
     @inbounds return u[slot]
 end
 

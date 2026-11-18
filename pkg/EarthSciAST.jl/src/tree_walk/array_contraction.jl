@@ -424,7 +424,7 @@ function _cg_share_pay!(K::_CGShareKeys, pl)
     key = if pl isa _ConstGatherArray
         (:cga, _flat_content_id!(K.flats, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
     elseif pl isa _StateGather
-        (:sg, pl.slot_flat, pl.strides, pl.lo, pl.hi, pl.len)
+        (:sg, pl.slot_flat, pl.run_base, pl.strides, pl.lo, pl.hi, pl.len)
     else
         (:obj, _cg_share_obj!(K, pl))
     end
@@ -1083,7 +1083,7 @@ function _ac_state_gather_entries(kc::_CGScalarCtx, sg::_StateGather, children)
             end
             off += (x - sg.lo[d]) * sg.strides[d]
         end
-        slots[e] = off < 0 ? 0 : sg.slot_flat[off + 1]
+        slots[e] = off < 0 ? 0 : _sg_slot(sg, off)
     end
     return slots
 end
@@ -1125,14 +1125,16 @@ function _cg_state_gather_dim(
     )
     children = nd.children
     if d > length(children)
-        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
-        _cg_slot_run(sg.slot_flat) &&
+        if sg.run_base != 0
+            side = _cg_slot_side(ctx.nst, sg.run_base, sg.run_base + sg.len - 1)
             return _cg_uread(
-            side, :(
-                $(_cg_geo!(ctx, sg.slot_flat[1], (sg.slot_flat, :run))) +
-                    $(_cg_foldl(:+, off))
+                side, :(
+                    $(_cg_geo!(ctx, sg.run_base, (sg.slot_flat, :run))) +
+                        $(_cg_foldl(:+, off))
+                )
             )
-        )
+        end
+        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
         return _cg_uread(side, :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
     end
     sd = _cg_name(ctx, "sgs")

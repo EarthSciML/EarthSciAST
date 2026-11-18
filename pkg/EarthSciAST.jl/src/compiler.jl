@@ -555,9 +555,10 @@ end
 _WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
 
 mutable struct _BuildState
-    # A state array's flat slot table, by array name (`_resolve_state_gather`).
-    # It depends on the layout the build resolves against.
-    slot_tables::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    # A state array's slot map (table, run base, strides), by array name
+    # (`_resolve_state_gather`). It depends on the layout the build resolves
+    # against.
+    slot_tables::Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}
     # A reserved runtime loop variable's counter `Ref`, by name: written where
     # the resolve keeps an index symbolic, read by `_compile(::VarExpr)`.
     loopvars::Dict{Symbol, Base.RefValue{Int}}
@@ -581,7 +582,7 @@ _BuildState(
     count::Base.RefValue{Int} = Ref(0);
     scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
 ) = _BuildState(
-    Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
+    Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}(),
     Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
     Dict{String, Float64}()
 )
@@ -726,7 +727,7 @@ end
 function _with_own_slot_tables(f)
     st = _build_state()
     saved = st.slot_tables
-    st.slot_tables = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    st.slot_tables = Dict{String, Tuple{Vector{Int}, Int, Vector{Int}}}()
     try
         return f()
     finally
