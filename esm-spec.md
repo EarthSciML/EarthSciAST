@@ -2,9 +2,9 @@
 
 **EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
 
-> **3.0.0 (proposed; breaking).** This change ships in 3.0.0 together with the removal of
-> `grad`, `div` and `laplacian` (the `retire-spatial-ops` change, which also bumps the schema
-> and the version line above). No step of loading or flattening inlines a template body. A firing
+> **Proposed for 2.4.0 (not additive: the behaviour differences are listed below).** The
+> version line above, and `esm-schema.json`, stay at 2.3.0 until the release that adopts
+> this change bumps both together. No step of loading or flattening inlines a template body. A firing
 > `match` rule writes a reference to itself instead of its body (§9.6.3 constraint 7); rules
 > apply inside template bodies once per template instance, replacing eager expansion
 > (§9.6.4 rule 3); mounted leaves keep their references (§9.6.4 rule 1); and the elementwise
