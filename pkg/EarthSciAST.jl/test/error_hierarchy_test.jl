@@ -43,10 +43,6 @@ include("testutils.jl")
                 end
                 (v isa DataType && v <: Exception) || continue
                 v === EarthSciASTError && continue
-                # The one deliberate stray: the signal a `halo` analysis leaves a
-                # build with stays outside the root so that no recovery from a
-                # document error between the range seam and `halo` can swallow it.
-                v === EarthSciAST._HaloDone && continue
                 found += 1
                 v <: EarthSciASTError || push!(strays, string(nameof(mod), ".", n))
             end
