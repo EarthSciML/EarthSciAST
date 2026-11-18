@@ -50,17 +50,11 @@
 # bound reads an output index, or a term or key that does not resolve with its
 # indices symbolic.
 
-# The kernels a shifted scatter's pieces compiled to, held out of the kernel
-# class merge (`_merge_acc_kernel_classes`). One set per build, in the
-# building task's local storage for the length of the build
-# (`_with_scatter_keep`), so the set dies with the build and two builds on two
-# tasks never see each other's. Outside a build there is no set and nothing is
-# held out.
-const _SCATTER_KEEP_KEY = :earthsci_scatter_keep
-
-_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
-    get(task_local_storage(), _SCATTER_KEEP_KEY, nothing)
-_with_scatter_keep(f) = task_local_storage(f, _SCATTER_KEEP_KEY, IdDict{Any, Nothing}())
+# The kernels a shifted scatter's pieces compiled to are held out of the kernel
+# class merge (`_merge_acc_kernel_classes`) through one set per build, on the
+# build's state (`_scatter_keep_now`, compiler.jl), so the set dies with the
+# build and two builds on two tasks never see each other's. Outside a build
+# there is no set and nothing is held out.
 
 # The equality conjuncts that pin output indices, and the conjuncts left over.
 struct _ScatterSpec

@@ -1254,7 +1254,7 @@ function _build_evaluator_impl(
     # behind is read.
     return _with_build_ctx(_new_build_ctx(plan, record)) do
         try
-            return _build_evaluator_impl_pools(model; kwargs...)
+            return _build_evaluator_impl_inner(model; kwargs...)
         finally
             # The report is filled even when the build THREW: a refusal is
             # exactly the case a caller wants the partial tier record for.
@@ -1262,11 +1262,6 @@ function _build_evaluator_impl(
         end
     end
 end
-
-# The shifted-scatter kernels this build holds out of the class merge
-# (scatter.jl).
-_build_evaluator_impl_pools(model::Model; kwargs...) =
-    _with_scatter_keep(() -> _build_evaluator_impl_inner(model; kwargs...))
 
 function _build_evaluator_impl_inner(
         model::Model;
