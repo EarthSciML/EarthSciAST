@@ -1092,18 +1092,9 @@ class ConstUnitsError(Exception):
         self.message = message
 
 
-def reject_const_units_pre_v12(view: Any) -> None:
-    """Reject declared ``units`` on any expression node in a document declaring
-    ``esm`` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
-    Runs on the raw JSON before schema validation, like the ``solver`` gate."""
-    if not isinstance(view, dict):
-        return
-    esm = view.get("esm")
-    if not isinstance(esm, str):
-        return
-    m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", esm)
-    if not m or (int(m.group(1)), int(m.group(2))) >= (1, 2):
-        return
+def first_op_with_units(view: Any) -> str | None:
+    """The pre-order JSON Pointer of the first object carrying both an ``op``
+    and a ``units`` key — a unit-bearing expression node — or ``None``."""
 
     def find(value: Any, at: str) -> str | None:
         if isinstance(value, dict):
@@ -1120,7 +1111,23 @@ def reject_const_units_pre_v12(view: Any) -> None:
                     return hit
         return None
 
-    path = find(view, "")
+    return find(view, "")
+
+
+def reject_const_units_pre_v12(view: Any) -> None:
+    """Reject declared ``units`` on any expression node in a document declaring
+    ``esm`` < 1.2.0 (esm-spec §4.8.5 item 6), naming the first offending node.
+    Runs on the raw JSON before schema validation, like the ``solver`` gate."""
+    if not isinstance(view, dict):
+        return
+    esm = view.get("esm")
+    if not isinstance(esm, str):
+        return
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", esm)
+    if not m or (int(m.group(1)), int(m.group(2))) >= (1, 2):
+        return
+
+    path = first_op_with_units(view)
     if path is not None:
         from .error_handling import CONST_UNITS_VERSION_TOO_OLD
 
