@@ -226,6 +226,76 @@ end
 # a key may be a scalar name, an explicit element `name[i,j]`, or a bare array
 # name that broadcasts a single value over every element of that array.
 # --------------------------------------------------------------------------- #
+
+# The state elements an `initial_conditions` key can address in `var_map`: the
+# scalar names with their slots, and each array base name. A `StateLayout` is
+# read through its blocks, so no cell's key is spelled; any other map is read
+# by decoding its cell keys (`_parse_cell_key`).
+struct _IcSpace
+    scalars::Dict{String, Int}
+    bases::Vector{String}
+    layout::Union{Nothing, StateLayout}
+    cells::Dict{String, Vector{Tuple{Vector{Int}, Int}}}   # when `layout` is nothing
+end
+function _IcSpace(L::StateLayout)
+    bases = String[b.name for b in _layout_blocks(L)]
+    return _IcSpace(L.scalars, bases, L, Dict{String, Vector{Tuple{Vector{Int}, Int}}}())
+end
+function _IcSpace(var_map::AbstractDict)
+    scalars = Dict{String, Int}()
+    cells = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
+    for (vname, idx) in var_map
+        parsed = _parse_cell_key(String(vname))
+        if parsed === nothing
+            scalars[String(vname)] = idx
+        else
+            push!(get!(cells, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
+        end
+    end
+    return _IcSpace(scalars, collect(keys(cells)), nothing, cells)
+end
+
+# The slot of cell `idx` of array `base`, or 0.
+function _ic_slot(sp::_IcSpace, base::String, idx::Vector{Int})
+    sp.layout === nothing || return _layout_slot(sp.layout, base, idx)
+    for (c, slot) in get(sp.cells, base, ())
+        c == idx && return slot
+    end
+    return 0
+end
+
+# `f(idx, slot)` for every cell of array `base`, in slot order.
+function _ic_foreach_cell(f, sp::_IcSpace, base::String)
+    if sp.layout === nothing
+        for (idx, slot) in sort(sp.cells[base]; by = last)
+            f(idx, slot)
+        end
+    else
+        b = _layout_block(sp.layout, base)
+        for slot in b.base:(b.base + b.len - 1)
+            f(_block_cell!(Vector{Int}(undef, length(b.lo)), b, slot), slot)
+        end
+    end
+    return nothing
+end
+
+# Resolve a cell key `base[i,…]` (`parsed`, from `_parse_cell_key`) through the
+# array base names: the bases the key's base designates, kept only when they
+# hold that cell. The resolution names the cell key.
+function _ic_cell_resolution(sp::_IcSpace, bases::NameTable, parsed)
+    base, idx = parsed
+    r = resolve_key(bases, base)
+    if r.how === :ambiguous
+        held = String[c for c in r.candidates if _ic_slot(sp, c, idx) != 0]
+        isempty(held) && return KeyResolution(nothing, :unknown, String[])
+        length(held) == 1 && return KeyResolution(_cell_key(held[1], idx), :suffix, String[])
+        return KeyResolution(nothing, :ambiguous, String[_cell_key(c, idx) for c in held])
+    end
+    (r.name === nothing || _ic_slot(sp, r.name, idx) == 0) &&
+        return KeyResolution(nothing, :unknown, String[])
+    return KeyResolution(_cell_key(r.name, idx), r.how, String[])
+end
+
 function _apply_initial_conditions!(
         u0::Vector{Float64}, var_map::AbstractDict,
         ics::AbstractDict
@@ -236,39 +306,36 @@ function _apply_initial_conditions!(
     # onto a state by the one resolver every caller key goes through
     # (`resolve_key`, src/name_table.jl), and an ambiguous suffix is refused, never
     # guessed at.
-    element_names = Set{String}(String(k) for k in keys(var_map))
-    # Each array base name's cells as `(multi-index, slot)` pairs: the slot is
-    # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
-    # DATA (esm-spec §6.3 / §6.6.2) is read at, so a whole authored profile
-    # lands cell-for-cell rather than by flat position.
-    cells_of = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
-    for (vname, idx) in var_map
-        parsed = _parse_cell_key(String(vname))
-        parsed === nothing && continue
-        push!(get!(cells_of, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
-    end
-    base_names = Set{String}(keys(cells_of))
-    # Two name spaces, tried in order: the ELEMENT names (`M.u`, `M.f[1]`), then
-    # the array BASE names for the broadcast form (`M.f` sets every `M.f[...]`
-    # cell). Rule 2 validates a key's leading segments against the components
-    # the build's names carry (`M.u` ⇒ `M`), so `Missing.u` is reported rather
-    # than re-pointed at `u`.
-    namespaces = _override_namespaces(union(element_names, base_names))
-    spaces = (
-        (NameTable(element_names; namespaces = namespaces), :element),
-        (NameTable(base_names; namespaces = namespaces), :base),
-    )
-    function state_key(key)
-        for (table, space) in spaces
-            r = resolve_key(table, key)
-            r.how === :ambiguous && throw(
-                SimulateError(
-                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"),
-                    ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
-                )
+    sp = _IcSpace(var_map)
+    scalar_names = Set{String}(keys(sp.scalars))
+    base_names = Set{String}(sp.bases)
+    # Two name spaces, tried in order: the ELEMENT names (`M.u`, and a cell key
+    # `M.f[1]` resolved through its base), then the array BASE names for the
+    # broadcast form (`M.f` sets every `M.f[...]` cell). Rule 2 validates a
+    # key's leading segments against the components the build's names carry
+    # (`M.u` ⇒ `M`), so `Missing.u` is reported rather than re-pointed at `u`.
+    namespaces = _override_namespaces(union(scalar_names, base_names))
+    scalars = NameTable(scalar_names; namespaces = namespaces)
+    bases = NameTable(base_names; namespaces = namespaces)
+    function refuse_ambiguous(key, r)
+        r.how === :ambiguous && throw(
+            SimulateError(
+                _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"),
+                ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
             )
-            r.name === nothing || return r, space
+        )
+        return r
+    end
+    function state_key(key)
+        r = refuse_ambiguous(key, resolve_key(scalars, key))
+        r.name === nothing || return r, :element
+        parsed = _parse_cell_key(key)
+        if parsed !== nothing
+            r = refuse_ambiguous(key, _ic_cell_resolution(sp, bases, parsed))
+            r.name === nothing || return r, :cell
         end
+        r = refuse_ambiguous(key, resolve_key(bases, key))
+        r.name === nothing || return r, :base
         return nothing
     end
     # An exact key wins outright; two NON-EXACT keys designating one state is an
@@ -306,7 +373,7 @@ function _apply_initial_conditions!(
         key = String(rawkey)
         r, space = resolved_keys[key]
         resolved = r.name::String
-        if space === :element
+        if space === :element || space === :cell
             is_inline_array(value) && throw(
                 SimulateError(
                     "esm_problem: initial_conditions['$key'] carries inline array data for a " *
@@ -315,12 +382,13 @@ function _apply_initial_conditions!(
                     ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
-            u0[var_map[resolved]] = Float64(value)
+            slot = space === :element ? sp.scalars[resolved] :
+                _ic_slot(sp, _parse_cell_key(resolved)...)
+            u0[slot] = Float64(value)
             continue
         end
-        cells = cells_of[resolved]
         if is_inline_array(value)
-            for (idxs, idx) in cells
+            _ic_foreach_cell(sp, resolved) do idxs, idx
                 checkbounds(Bool, value, idxs...) || throw(
                     SimulateError(
                         "esm_problem: initial_conditions['$key'] has shape $(size(value)), " *
@@ -334,9 +402,7 @@ function _apply_initial_conditions!(
             end
         else
             v = Float64(value)
-            for (_, idx) in cells
-                u0[idx] = v
-            end
+            _ic_foreach_cell((_, idx) -> (u0[idx] = v), sp, resolved)
         end
     end
     return u0
