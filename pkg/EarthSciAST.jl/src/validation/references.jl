@@ -24,7 +24,7 @@ function validate_reference_integrity(
         for (model_name, model) in file.models
             append!(
                 errors, validate_model_references(
-                    file, model, "/models/$model_name";
+                    file, model, _pointer("", "models", model_name);
                     model_name = model_name,
                     is_coupled = (model_name ∈ names.coupled), views = views,
                     names = names
@@ -52,7 +52,7 @@ function validate_reference_integrity(
             push!(scope, _indep_var(file))
             union!(scope, names.coordinates)
             union!(scope, names.injected)
-            foreach_expression(rs, "/reaction_systems/$rs_name"; subsystems = false) do e, at, kind
+            foreach_expression(rs, _pointer("", "reaction_systems", rs_name); subsystems = false) do e, at, kind
                 kind in _REFERENCE_CHECKED_SITES || return nothing
                 append!(errors, validate_expression_references(file, e, at; scope = scope))
                 return nothing
@@ -62,7 +62,7 @@ function validate_reference_integrity(
 
     # Validate coupling references
     for (i, coupling_entry) in enumerate(file.coupling)
-        append!(errors, validate_coupling_references(file, coupling_entry, "/coupling/$(i - 1)"))
+        append!(errors, validate_coupling_references(file, coupling_entry, _pointer("", "coupling", i)))
     end
 
     # esm-spec §10.10.3: a mis-bound `coupling_import` is a bad edge, and the
@@ -142,7 +142,7 @@ function _validate_imported_coupling_edges(file::EsmFile)::Vector{StructuralErro
                 component, roles = _bound_component_for(entry.bind, ref)
                 _report!(
                     errors, ERROR_CODES.UNRESOLVED_SCOPED_REF,
-                    "/coupling/$(i - 1)",
+                    _pointer("", "coupling", i),
                     "coupling_import '$(entry.ref)' binds role '$roles' to '$component', " *
                         "which does not provide '$ref' referenced by the library: " *
                         "cannot resolve '$side' reference '$ref': $cause",
@@ -351,7 +351,19 @@ function validate_model_references(
     )::Vector{StructuralError}
     errors = StructuralError[]
     names === nothing && (names = _document_names(file))
+    # The view expands every site of the model and of its subsystems. A
+    # subsystem of a coupled model is composed along with its parent, so it is
+    # checked with the parent's scope rule.
+    view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
+    _foreach_component(view, path) do m, p, _
+        _check_component_references!(errors, file, m, p, is_coupled, names)
+    end
+    return errors
+end
 
+# The references at every expression site of one component (not its
+# subsystems), `model` already template-expanded.
+function _check_component_references!(errors, file::EsmFile, model::Model, path, is_coupled::Bool, names)
     # Names in scope for this model's equations: its declared variables (state,
     # parameter, observed), the document-scoped `index_sets` registry (a
     # legitimate non-variable identifier namespace an aggregate may name — RFC
@@ -385,10 +397,9 @@ function validate_model_references(
     union!(scope, names.coordinates)
 
     # A model's variable table is NOT the complete set of declaration sites, and
-    # widening reference integrity to every expression-bearing field (finding
-    # (h)) makes that bite: a name declared somewhere ELSE would now be reported
-    # as `undefined_variable`. A false-negative fix that becomes a false-positive
-    # bug is a net loss, so the check runs against the UNION of declaration sites.
+    # checking every expression-bearing field makes that bite: a name declared
+    # somewhere ELSE would be reported as `undefined_variable`. So the check
+    # runs against the UNION of declaration sites.
     #
     # `coupling[i].config.callback_variables[j].name` is the one the corpus
     # caught: a callback INJECTS those names into the system it targets
@@ -403,27 +414,12 @@ function validate_model_references(
     # it in an expression position is it a reference; one bound to a scalar
     # field (`K_manifold => "planar"` filling a `manifold`) or to a range's
     # `from` is a literal. Expansion keeps every site where it was, so pointers
-    # still name the authored expression. The view expands every site of the
-    # model and of its subsystems, which are walked from it below.
-    view = isempty(model_name) ? model : _units_view(file, model_name, model, views)
-    foreach_expression(view, path; subsystems = false) do e, at, kind
+    # still name the authored expression.
+    foreach_expression(model, path; subsystems = false) do e, at, kind
         kind in _REFERENCE_CHECKED_SITES || return nothing
         append!(errors, validate_expression_references(file, e, at; scope = scope))
         return nothing
     end
-
-    # Recursively check subsystems (already expanded in the view)
-    for (subsys_name, subsys) in model_subsystems(view)
-        # A subsystem of a coupled model is composed along with its parent, so
-        # it is checked with the parent's scope rule.
-        append!(
-            errors, validate_model_references(
-                file, subsys, "$path/subsystems/$subsys_name"; is_coupled = is_coupled,
-                names = names
-            )
-        )
-    end
-
     return errors
 end
 
@@ -710,7 +706,7 @@ function _check_connector_expressions(
             e isa InterruptException && rethrow()
             continue    # a malformed expression is the schema's business
         end
-        epath = "$path/connector/equations/$(i - 1)/expression"
+        epath = _pointer(path, "connector", "equations", i, "expression")
         for name in sort!(collect(_referenced_var_names(expr)))
             occursin('.', name) || continue    # bare names are not cross-system refs
             try
@@ -882,27 +878,27 @@ function validate_coupling_references(file::EsmFile, coupling_entry::CouplingEnt
         # Validate affect equations
         for (i, affect) in enumerate(coupling_entry.affects)
             _check_resolvable!(
-                errors, file, affect.lhs, "$path/affects/$(i - 1)/lhs",
+                errors, file, affect.lhs, _pointer(path, "affects", i, "lhs"),
                 "Cannot resolve affect target", ERROR_CODES.UNRESOLVED_AFFECT_TARGET
             )
-            append!(errors, validate_expression_references(file, affect.rhs, "$path/affects/$(i - 1)/rhs"))
+            append!(errors, validate_expression_references(file, affect.rhs, _pointer(path, "affects", i, "rhs")))
         end
 
         # Validate negative affect equations if present
         if coupling_entry.affect_neg !== nothing
             for (i, affect) in enumerate(coupling_entry.affect_neg)
                 _check_resolvable!(
-                    errors, file, affect.lhs, "$path/affect_neg/$(i - 1)/lhs",
+                    errors, file, affect.lhs, _pointer(path, "affect_neg", i, "lhs"),
                     "Cannot resolve negative affect target", ERROR_CODES.UNRESOLVED_AFFECT_TARGET
                 )
-                append!(errors, validate_expression_references(file, affect.rhs, "$path/affect_neg/$(i - 1)/rhs"))
+                append!(errors, validate_expression_references(file, affect.rhs, _pointer(path, "affect_neg", i, "rhs")))
             end
         end
 
         # Validate condition expressions if present (for continuous events)
         if coupling_entry.conditions !== nothing
             for (i, condition) in enumerate(coupling_entry.conditions)
-                append!(errors, validate_expression_references(file, condition, "$path/conditions/$(i - 1)"))
+                append!(errors, validate_expression_references(file, condition, _pointer(path, "conditions", i)))
             end
         end
 

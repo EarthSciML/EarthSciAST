@@ -28,7 +28,7 @@ function _validate_reaction_consistency_here(
 
     # Validate each reaction
     for (i, reaction) in enumerate(rs.reactions)
-        reaction_path = "$path/reactions/$(i - 1)"
+        reaction_path = _pointer(path, "reactions", i)
 
         # Check substrates (reactants) are declared species (ordered
         # StoichiometryEntry vector, not the backward-compat Dict view). An
@@ -40,7 +40,7 @@ function _validate_reaction_consistency_here(
                 if entry.species ∉ species_names
                     _report!(
                         errors, ERROR_CODES.UNDEFINED_SPECIES,
-                        "$reaction_path/substrates/$(j - 1)/species",
+                        _pointer(reaction_path, "substrates", j, "species"),
                         "Species '$(entry.species)' not declared",
                         Dict{String, Any}("species" => entry.species)
                     )
@@ -50,7 +50,7 @@ function _validate_reaction_consistency_here(
                 if entry.stoichiometry <= 0
                     _report!(
                         errors, ERROR_CODES.INVALID_STOICHIOMETRY,
-                        "$reaction_path/substrates/$(j - 1)/species",
+                        _pointer(reaction_path, "substrates", j, "species"),
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)"
                     )
                 end
@@ -65,7 +65,7 @@ function _validate_reaction_consistency_here(
                 if entry.species ∉ species_names
                     _report!(
                         errors, ERROR_CODES.UNDEFINED_SPECIES,
-                        "$reaction_path/products/$(j - 1)/species",
+                        _pointer(reaction_path, "products", j, "species"),
                         "Species '$(entry.species)' not declared",
                         Dict{String, Any}("species" => entry.species)
                     )
@@ -75,7 +75,7 @@ function _validate_reaction_consistency_here(
                 if entry.stoichiometry <= 0
                     _report!(
                         errors, ERROR_CODES.INVALID_STOICHIOMETRY,
-                        "$reaction_path/products/$(j - 1)/species",
+                        _pointer(reaction_path, "products", j, "species"),
                         "Species '$(entry.species)' has non-positive stoichiometry $(entry.stoichiometry)"
                     )
                 end

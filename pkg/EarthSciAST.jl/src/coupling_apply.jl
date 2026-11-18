@@ -149,8 +149,9 @@ transforms are exempt: `conversion_factor` declares the conversion explicitly;
 equivalence at the mapping site (units are still validated elsewhere).
 """
 function _check_variable_map_units(file::EsmFile)
+    decls = _scoped_index(file)
     for entry in file.coupling
-        conflict = _variable_map_unit_conflict(file, entry)
+        conflict = _variable_map_unit_conflict(decls, entry)
         conflict === nothing || throw(DomainUnitMismatchError(entry.from, conflict...))
     end
     return
@@ -159,10 +160,11 @@ end
 # The `(from_units, to_units)` of an `identity` `variable_map` entry whose two
 # endpoints both declare non-empty units that differ, else `nothing`. The one
 # statement of the esm-spec §4.7.6 rule, read by flatten and by `validate`.
-function _variable_map_unit_conflict(file::EsmFile, entry)
+# `decls` are the document's declarations (`_scoped_index`).
+function _variable_map_unit_conflict(decls::_ScopedIndex, entry)
     (entry isa CouplingVariableMap && entry.transform == "identity") || return nothing
-    src_units = _lookup_variable_units(file, entry.from)
-    tgt_units = _lookup_variable_units(file, entry.to)
+    src_units = _lookup_variable_units(decls, entry.from)
+    tgt_units = _lookup_variable_units(decls, entry.to)
     (src_units === nothing || tgt_units === nothing) && return nothing
     (isempty(src_units) || isempty(tgt_units) || src_units == tgt_units) && return nothing
     return (src_units, tgt_units)
@@ -217,57 +219,13 @@ function _check_variable_map_endpoints(
 end
 
 """
-Look up a dot-qualified variable's declared units across models, subsystems,
-and reaction systems (species + parameters). Returns `nothing` when the
-variable is missing or carries no declared units.
+The declared units of the member a top-level scoped name names in the
+declarations `decls` (a model variable, a reaction-system species or parameter,
+at any depth); `nothing` when the member is missing or declares no units.
 """
-function _lookup_variable_units(file::EsmFile, qualified::String)::Union{String, Nothing}
-    parts = split(qualified, ".")
-    length(parts) >= 2 || return nothing
-    root = String(parts[1])
-    tail = String(join(parts[2:end], "."))
-
-    if file.models !== nothing && haskey(file.models, root)
-        return _lookup_model_units(file.models[root], tail)
-    end
-    if file.reaction_systems !== nothing && haskey(file.reaction_systems, root)
-        return _lookup_rsys_units(file.reaction_systems[root], tail)
-    end
-    return nothing
-end
-
-function _lookup_model_units(model::Model, name::String)::Union{String, Nothing}
-    if haskey(model.variables, name)
-        return model.variables[name].units
-    end
-    # Recurse into subsystems for nested names like "Inner.T".
-    dot = findfirst('.', name)
-    if dot !== nothing
-        head = String(SubString(name, 1, prevind(name, dot)))
-        rest = String(SubString(name, dot + 1))
-        if haskey(model.subsystems, head)
-            return _lookup_model_units(model.subsystems[head], rest)
-        end
-    end
-    return nothing
-end
-
-function _lookup_rsys_units(rsys::ReactionSystem, name::String)::Union{String, Nothing}
-    for sp in rsys.species
-        sp.name == name && return sp.units
-    end
-    for p in rsys.parameters
-        p.name == name && return p.units
-    end
-    dot = findfirst('.', name)
-    if dot !== nothing
-        head = String(SubString(name, 1, prevind(name, dot)))
-        rest = String(SubString(name, dot + 1))
-        if haskey(rsys.subsystems, head)
-            return _lookup_rsys_units(rsys.subsystems[head], rest)
-        end
-    end
-    return nothing
+function _lookup_variable_units(decls::_ScopedIndex, qualified::String)::Union{String, Nothing}
+    d = _resolve_declaration(decls, "", qualified)
+    return d === nothing ? nothing : d.decl.units
 end
 
 # ========================================

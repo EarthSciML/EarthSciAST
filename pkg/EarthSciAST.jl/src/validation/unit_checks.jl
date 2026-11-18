@@ -97,8 +97,7 @@ function validate_model_unit_consistency(
     )::Vector{StructuralError}
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
     errors = StructuralError[]
-    _foreach_unit_component(model, path) do c, p
-        c isa Model || return
+    _foreach_component(model, path; sorted = true) do c, p, _
         for f in model_unit_findings(c; toplevel, indep)
             _report!(
                 errors, f.code,
@@ -108,18 +107,6 @@ function validate_model_unit_consistency(
         end
     end
     return errors
-end
-
-# `f(component, pointer)` on `c` and on every inline subsystem at any depth, by
-# sorted name; a model's unresolved mount is skipped.
-function _foreach_unit_component(f, c::Union{Model, ReactionSystem}, pointer::String)
-    f(c, pointer)
-    for name in sort!(collect(keys(c.subsystems)))
-        sub = c.subsystems[name]
-        sub isa Union{Model, ReactionSystem} || continue
-        _foreach_unit_component(f, sub, "$pointer/subsystems/$(_ptr_escape(name))")
-    end
-    return nothing
 end
 
 """
@@ -138,7 +125,7 @@ function _unit_check!(units::_UnitsInputs)
     warnings = Tuple{String, String}[]
     errs = UnitFinding[]
     warns = UnitFinding[]
-    visit = function (c, p)
+    visit = function (c, p, _)
         empty!(errs)
         empty!(warns)
         env = _component_unit_env(c, units.toplevel; indep = units.indep)
@@ -156,11 +143,12 @@ function _unit_check!(units::_UnitsInputs)
         return
     end
     for name in sort!(collect(keys(units.models)))
-        _foreach_unit_component(visit, units.models[name], "/models/$(_ptr_escape(name))")
+        _foreach_component(visit, units.models[name], _pointer("", "models", name); sorted = true)
     end
     for name in sort!(collect(keys(units.reaction_systems)))
-        _foreach_unit_component(
-            visit, units.reaction_systems[name], "/reaction_systems/$(_ptr_escape(name))"
+        _foreach_component(
+            visit, units.reaction_systems[name], _pointer("", "reaction_systems", name);
+            sorted = true
         )
     end
     result = (; errors, warnings)
@@ -182,7 +170,8 @@ a number-density factor into rate constants.
 A scoped rate or substrate (`Sub.k`, `Other.A`) has the units its target
 declares, with the precedence [`model_unit_findings`](@ref) uses: the system's
 own names, then paths relative to its own subsystems, then the top-level
-components of `file` (or the prebuilt `toplevel` map).
+components of `file` (or the prebuilt `toplevel` map). Covers the system's
+subsystems at any depth.
 """
 function validate_reaction_rate_units(
         rs::ReactionSystem, path::String;
@@ -191,6 +180,14 @@ function validate_reaction_rate_units(
     )::Vector{StructuralError}
     errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
+    _foreach_component(rs, path) do r, p, _
+        _check_reaction_rate_units!(errors, r, p, toplevel)
+    end
+    return errors
+end
+
+# The §7.4 mass-action rate-unit rule over one reaction system's own reactions.
+function _check_reaction_rate_units!(errors, rs::ReactionSystem, path::String, toplevel)
     scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
 
     # Build name → unit-string map using ONLY explicitly declared units.
@@ -274,24 +271,13 @@ function validate_reaction_rate_units(
             order_str = isinteger(total_order) ? string(Int(total_order)) : string(total_order)
             _report!(
                 errors, ERROR_CODES.UNIT_INCONSISTENCY,
-                "$path/reactions/$(i - 1)",
+                _pointer(path, "reactions", i),
                 "Reaction $(reaction.id) rate '$rate_name' units '$rate_units_str' " *
                     "incompatible with order-$order_str reaction for species units " *
                     "'$first_sp_units' (expected rate*substrates to have dimensions of species/time)"
             )
         end
     end
-
-    # Recurse into subsystems
-    for (subsys_name, subsys) in rs.subsystems
-        append!(
-            errors, validate_reaction_rate_units(
-                subsys, "$path/subsystems/$subsys_name";
-                toplevel = toplevel
-            )
-        )
-    end
-
     return errors
 end
 
@@ -338,11 +324,16 @@ declared units are dimensionally incompatible with the canonical form (e.g.,
 `R` declared as `kcal/mol` — missing temperature — instead of `J/(mol*K)`).
 Reports at the first observed-variable usage site in the same model;
 otherwise at the declaration. Mirrors Python's
-`units.UnitValidator._check_physical_constants`. Recurses into subsystems.
+`units.UnitValidator._check_physical_constants`. Covers the model's
+subsystems at any depth.
 """
 function validate_physical_constant_units(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
+    _foreach_component((m, p, _) -> _check_physical_constant_units!(errors, m, p), model, path)
+    return errors
+end
 
+function _check_physical_constant_units!(errors, model::Model, path::String)
     for (constant_name, canonical, description) in _KNOWN_PHYSICAL_CONSTANTS
         haskey(model.variables, constant_name) || continue
         var = model.variables[constant_name]
@@ -368,18 +359,12 @@ function validate_physical_constant_units(model::Model, path::String)::Vector{St
 
         _report!(
             errors, ERROR_CODES.UNIT_INCONSISTENCY,
-            "$path/variables/$target",
+            _pointer(path, "variables", target),
             "Physical constant used with incorrect dimensional analysis " *
                 "(constant '$constant_name' ($description) declared with units '$declared_str', " *
                 "expected dimensions compatible with '$canonical')"
         )
     end
-
-    # Recurse into subsystems
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_physical_constant_units(subsys, "$path/subsystems/$subsys_name"))
-    end
-
     return errors
 end
 
@@ -416,11 +401,15 @@ Flag observed variables whose defining expression is `<numeric> * <var>`
 units are dimensionally compatible but the numeric literal disagrees with the
 correct linear conversion factor. Only linear (non-affine) conversions are
 checked. Mirrors Python's `units.UnitValidator._check_conversion_factor`.
-Recurses into subsystems.
+Covers the model's subsystems at any depth.
 """
 function validate_conversion_factor_consistency(model::Model, path::String)::Vector{StructuralError}
     errors = StructuralError[]
+    _foreach_component((m, p, _) -> _check_conversion_factors!(errors, m, p), model, path)
+    return errors
+end
 
+function _check_conversion_factors!(errors, model::Model, path::String)
     for (vname, expr) in observed_definitions(model)
         var = model.variables[vname]
         lhs_units = var.units
@@ -456,17 +445,11 @@ function validate_conversion_factor_consistency(model::Model, path::String)::Vec
 
         _report!(
             errors, ERROR_CODES.UNIT_INCONSISTENCY,
-            "$path/variables/$vname",
+            _pointer(path, "variables", vname),
             "Unit conversion factor is incorrect for specified unit transformation " *
                 "(variable '$vname', declared_units='$lhs_units', source_units='$src_units', " *
                 "declared_factor=$numeric, expected_factor=$factor)"
         )
     end
-
-    # Recurse into subsystems
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(errors, validate_conversion_factor_consistency(subsys, "$path/subsystems/$subsys_name"))
-    end
-
     return errors
 end

@@ -32,7 +32,7 @@ function _check_update_unit_conversions_here!(
             append!(
                 errors, validate_expression_references(
                     file, uc,
-                    _update_rule_path("$path/variables/$name", rules, ri) *
+                    _update_rule_path(_pointer(path, "variables", name), rules, ri) *
                         "/from/unit_conversion";
                     scope = scope
                 )
@@ -76,7 +76,7 @@ function _check_update_sources_here!(
             (src === nothing || src in available) && continue
             _report!(
                 errors, ERROR_CODES.DATA_SOURCE_UNDEFINED,
-                "$path/variables/$name/update",
+                _pointer(path, "variables", name, "update"),
                 "Parameter update names data source '$src', which the document " *
                     "does not declare",
                 Dict{String, Any}(
@@ -90,29 +90,17 @@ function _check_update_sources_here!(
 end
 
 """
-    _declared_variable(file, scoped) -> Union{ModelVariable, Parameter, Nothing}
+    _declared_variable(ix::_ScopedIndex, scoped) -> Union{ModelVariable, Parameter, Nothing}
 
-The declaration a scoped name names: a model variable `Model[.Sub…].var`, or a
-reaction-system parameter `System[.Sub…].param`; `nothing` when there is none
-(or it sits behind a `ref` not yet mounted).
+The declaration the top-level scoped name `scoped` names in the declarations
+`ix`: a model variable `Model[.Sub…].var`, or a reaction-system parameter
+`System[.Sub…].param`; `nothing` when there is none (or it sits behind a `ref`
+not yet mounted).
 """
-function _declared_variable(file::EsmFile, scoped)
+function _declared_variable(ix::_ScopedIndex, scoped)
     scoped isa AbstractString || return nothing
-    parts = split(scoped, '.')
-    length(parts) < 2 && return nothing
-    head = String(parts[1])
-    if file.models !== nothing && haskey(file.models, head)
-        node = _subsystem_at(file.models[head], parts[2:(end - 1)])
-        node === nothing && return nothing
-        return get(node.variables, String(parts[end]), nothing)
-    end
-    file.reaction_systems === nothing && return nothing
-    rs = get(file.reaction_systems, head, nothing)
-    rs isa ReactionSystem || return nothing
-    rs = _subsystem_at(rs, parts[2:(end - 1)])
-    rs === nothing && return nothing
-    i = findfirst(p -> p.name == parts[end], rs.parameters)
-    return i === nothing ? nothing : rs.parameters[i]
+    d = _resolve_declaration(ix, "", scoped; kinds = (:variable, :parameter))
+    return d === nothing ? nothing : d.decl
 end
 
 """
@@ -128,13 +116,13 @@ function _is_record_axis(file::EsmFile, name)::Bool
 end
 
 """
-    _declared_shape_of(file, scoped) -> Union{Vector{String}, Nothing}
+    _declared_shape_of(ix::_ScopedIndex, scoped) -> Union{Vector{String}, Nothing}
 
 The declared `shape` of the variable a scoped name names (`[]` when it declares
 none), or `nothing` when [`_declared_variable`](@ref) cannot reach it.
 """
-function _declared_shape_of(file::EsmFile, scoped)
-    v = _declared_variable(file, scoped)
+function _declared_shape_of(ix::_ScopedIndex, scoped)
+    v = _declared_variable(ix, scoped)
     v === nothing && return nothing
     return v.shape === nothing ? String[] : collect(String, v.shape)
 end
@@ -155,25 +143,9 @@ function _param_to_var_target_map(coupling)
     return targets
 end
 
-"""
-    _has_unmounted_refs(file) -> Bool
-
-Whether some model subsystem at any depth is still an unresolved
-[`SubsystemRef`](@ref) (a document loaded from a string without a base path).
-Mounting one may declare index sets, so until then a record shape whose first
-entry names an index set the document does not declare is not decidable
-(esm-spec §8.5.1).
-"""
-function _has_unmounted_refs(file::EsmFile)
-    file.models === nothing && return false
-    pending(m::Model) = any(
-        sub isa SubsystemRef || (sub isa Model && pending(sub)) for sub in values(m.subsystems)
-    )
-    return any(pending, values(file.models))
-end
 
 """
-    _typed_record_shapes(file, targets, scoped, var; defer_empty) -> Union{Vector{Vector{String}}, Nothing}
+    _typed_record_shapes(decls, targets, scoped, var; defer_empty) -> Union{Vector{Vector{String}}, Nothing}
 
 The record shapes of the data-fed parameter `var` (a model variable or a
 reaction-system parameter; scoped name `scoped`) that this pass can see, over
@@ -185,11 +157,11 @@ of no target, and `defer_empty` says one may still arrive (the document holds a
 target can reach has the empty record shape.
 """
 function _typed_record_shapes(
-        file::EsmFile, targets::AbstractDict, scoped::AbstractString,
+        decls::_ScopedIndex, targets::AbstractDict, scoped::AbstractString,
         var::Union{ModelVariable, Parameter}; defer_empty::Bool
     )
     shapes, mapped = _record_shapes(
-        var.shape, get(targets, scoped, String[]), t -> _declared_shape_of(file, t)
+        var.shape, get(targets, scoped, String[]), t -> _declared_shape_of(decls, t)
     )
     mapped || return defer_empty ? nothing : Vector{String}[String[]]
     return isempty(shapes) ? nothing : shapes
@@ -199,7 +171,7 @@ end
 _shape_show(shape) = "[" * join(("\"$x\"" for x in shape), ", ") * "]"
 
 """
-    _record_shape_findings(file, targets, scope, name, var, rule, src, at; defer_empty, refs_pending = false)
+    _record_shape_findings(file, decls, targets, scope, name, var, rule, src, at; defer_empty, refs_pending = false)
         -> (findings::Vector{Tuple{String, String, Dict{String, Any}}}, records::Union{Int, Nothing})
 
 esm-spec §8.5.1 rules 2, 3 and the deprecated field's agreement, for one `data`
@@ -207,9 +179,9 @@ rule of the parameter `name` (in component `scope`) drawing from the
 `DataSource` `src`, at the rule pointer `at`: each finding as `(code, message,
 details)`. Checked against the record shapes this pass can see
 ([`_typed_record_shapes`](@ref), over the `param_to_var` edges `targets`); none
-decidable, no finding. While `refs_pending` ([`_has_unmounted_refs`](@ref)), a
-record shape whose first entry names an index set the document does not
-declare is skipped: a mount may declare it. Also returns the number of records
+decidable, no finding. While `refs_pending` (some mount is unresolved: the
+document's declarations `decls` are incomplete), a record shape whose first entry names an index
+set the document does not declare is skipped: a mount may declare it. Also returns the number of records
 the parameter receives (`nothing` when not decided, or misplaced), which
 `flatten` gives its `LoaderField`. Shared by validation (which pushes the
 findings) and `flatten` (which throws the first).
@@ -223,12 +195,12 @@ findings) and `flatten` (which throws the first).
   else the source's) that is not the number the record shape gives.
 """
 function _record_shape_findings(
-        file::EsmFile, targets::AbstractDict, scope::AbstractString, name::AbstractString,
-        var::Union{ModelVariable, Parameter}, rule, src, at::AbstractString;
-        defer_empty::Bool, refs_pending::Bool = false
+        file::EsmFile, decls::_ScopedIndex, targets::AbstractDict, scope::AbstractString,
+        name::AbstractString, var::Union{ModelVariable, Parameter}, rule, src,
+        at::AbstractString; defer_empty::Bool, refs_pending::Bool = false
     )
     out = Tuple{String, String, Dict{String, Any}}[]
-    shapes = _typed_record_shapes(file, targets, "$scope.$name", var; defer_empty = defer_empty)
+    shapes = _typed_record_shapes(decls, targets, "$scope.$name", var; defer_empty = defer_empty)
     shapes === nothing && return out, nothing
     if refs_pending
         filter!(s -> isempty(s) || haskey(file.index_sets, first(s)), shapes)
@@ -320,16 +292,17 @@ skipped, and the reachable ones are judged. `flatten` checks what arrives after
 expansion. The pointer is the rule's: `…/update` for the object form,
 `…/update/<i>` for the array form.
 """
-function _check_record_shapes!(errors::Vector{StructuralError}, file::EsmFile)
+function _check_record_shapes!(
+        errors::Vector{StructuralError}, file::EsmFile, decls::_ScopedIndex = _scoped_index(file)
+    )
     targets = _param_to_var_target_map(file.coupling)
     defer_empty = any(e -> e isa CouplingImport, file.coupling)
-    refs_pending = _has_unmounted_refs(file)
     function check(scope, name, var, declpath)
         rules = var.update
         rules === nothing && return
         for (ri, rule) in enumerate(rules)
             rule.from === nothing && continue
-            at = _update_rule_path("$declpath/$name", rules, ri)
+            at = _update_rule_path(_pointer(declpath, name), rules, ri)
             if rule.kind != "data"
                 rule.from.records_per_sample === nothing && continue
                 _report!(
@@ -346,8 +319,8 @@ function _check_record_shapes!(errors::Vector{StructuralError}, file::EsmFile)
                 get(file.data_sources, rule.source, nothing)
             src === nothing && continue  # data_source_undefined reports it
             findings, _ = _record_shape_findings(
-                file, targets, scope, name, var, rule, src, at;
-                defer_empty = defer_empty, refs_pending = refs_pending
+                file, decls, targets, scope, name, var, rule, src, at;
+                defer_empty = defer_empty, refs_pending = !decls.complete
             )
             for (code, msg, details) in findings
                 _report!(
@@ -375,32 +348,25 @@ each reaction-system parameter at every depth
 component's scoped name.
 """
 function _for_each_data_param(f, file::EsmFile)
-    function walk(model::Model, scope, path)
-        for name in sort!(collect(keys(model.variables)))
-            f(scope, name, model.variables[name], "$path/variables")
-        end
-        for (sub_name, sub) in model_subsystems(model)
-            walk(sub, "$scope.$sub_name", "$path/subsystems/$sub_name")
-        end
-        return
-    end
-    function walk(rs::ReactionSystem, scope, path)
-        for p in sort(rs.parameters; by = p -> p.name)
-            f(scope, p.name, p, "$path/parameters")
-        end
-        for sub_name in sort!(collect(keys(rs.subsystems)))
-            walk(rs.subsystems[sub_name], "$scope.$sub_name", "$path/subsystems/$sub_name")
-        end
-        return
-    end
     if file.models !== nothing
         for name in sort!(collect(keys(file.models)))
-            walk(file.models[name], name, "/models/$name")
+            _foreach_component(file.models[name], _pointer("", "models", name); scope = name) do m, p, _, s
+                for vname in sort!(collect(keys(m.variables)))
+                    f(s, vname, m.variables[vname], _pointer(p, "variables"))
+                end
+            end
         end
     end
     if file.reaction_systems !== nothing
         for name in sort!(collect(keys(file.reaction_systems)))
-            walk(file.reaction_systems[name], name, "/reaction_systems/$name")
+            _foreach_component(
+                file.reaction_systems[name], _pointer("", "reaction_systems", name);
+                scope = name, sorted = true
+            ) do rs, p, _, s
+                for prm in sort(rs.parameters; by = x -> x.name)
+                    f(s, prm.name, prm, _pointer(p, "parameters"))
+                end
+            end
         end
     end
     return nothing

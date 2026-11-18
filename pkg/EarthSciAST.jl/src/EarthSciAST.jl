@@ -47,6 +47,8 @@ include("errors.jl")
 # Central diagnostic-code registry. Pure data, no dependencies; must precede
 # every raise site that names a code.
 include("error_codes.jl")
+# JSON pointers as diagnostics address a document (`_pointer`).
+include("json_pointer.jl")
 # The load pipeline's error type and the codes it is raised with; needs only
 # errors.jl and error_codes.jl.
 include("load_errors.jl")
@@ -86,6 +88,7 @@ include("classification.jl")
 include("op_registry.jl")
 include("validation/records.jl")
 include("validation/schema.jl")
+include("validation/scoped_index.jl")
 include("validation/validate.jl")
 include("validation/balance.jl")
 include("validation/data_updates.jl")

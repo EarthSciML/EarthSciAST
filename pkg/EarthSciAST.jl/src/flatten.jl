@@ -1011,6 +1011,7 @@ function _check_flattened_record_shapes(file::EsmFile)
     records = Dict{String, Int}()
     file.data_sources === nothing && return records
     targets = _param_to_var_target_map(file.coupling)
+    decls = _scoped_index(file)
     _for_each_data_param(file) do scope, name, var, declpath
         rules = var.update
         rules === nothing && return
@@ -1018,9 +1019,9 @@ function _check_flattened_record_shapes(file::EsmFile)
             (_is_data_fed(rule) && rule.source !== nothing) || continue
             src = get(file.data_sources, rule.source, nothing)
             src === nothing && continue
-            at = _update_rule_path("$declpath/$name", rules, ri)
+            at = _update_rule_path(_pointer(declpath, name), rules, ri)
             findings, n = _record_shape_findings(
-                file, targets, scope, name, var, rule, src, at; defer_empty = false
+                file, decls, targets, scope, name, var, rule, src, at; defer_empty = false
             )
             if !isempty(findings)
                 code, msg, _ = first(findings)

@@ -35,19 +35,19 @@ function validate_broadcast_semantics(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
     if file.models !== nothing
         for model_name in sort!(collect(keys(file.models)))
-            _check_model_broadcasts!(errors, file.models[model_name], "/models/$model_name")
+            _check_model_broadcasts!(errors, file.models[model_name], _pointer("", "models", model_name))
         end
     end
     if file.reaction_systems !== nothing
         for rs_name in sort!(collect(keys(file.reaction_systems)))
             _check_reaction_system_broadcasts!(
-                errors, file.reaction_systems[rs_name], "/reaction_systems/$rs_name"
+                errors, file.reaction_systems[rs_name], _pointer("", "reaction_systems", rs_name)
             )
         end
     end
     no_shapes = Dict{String, Vector{String}}()
     for (i, entry) in enumerate(file.coupling)
-        _check_site_broadcasts!(errors, entry, "/coupling/$(i - 1)", no_shapes)
+        _check_site_broadcasts!(errors, entry, _pointer("", "coupling", i), no_shapes)
     end
     return errors
 end

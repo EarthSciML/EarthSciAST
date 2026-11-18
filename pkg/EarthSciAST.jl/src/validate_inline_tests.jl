@@ -39,30 +39,10 @@ end
 # component and subsystem names §6.6.2 rule 2 validates a key's leading segments
 # against, and whether every mount is resolved.
 function _declared_override_names(file::EsmFile)
-    names = Set{String}()
-    namespaces = Set{String}()
-    complete = Ref(true)
-    function walk(prefix::String, component)
-        if !(component isa Model || component isa ReactionSystem)
-            complete[] = false
-            return
-        end
-        push!(namespaces, last(split(prefix, '.')))
-        for name in keys(_test_target_shapes(component))
-            push!(names, "$prefix.$name")
-        end
-        for (sub_name, sub) in component.subsystems
-            walk("$prefix.$sub_name", sub)
-        end
-        return
-    end
-    file.models === nothing || for (name, model) in file.models
-        walk(String(name), model)
-    end
-    file.reaction_systems === nothing || for (name, rs) in file.reaction_systems
-        walk(String(name), rs)
-    end
-    return names, namespaces, complete[]
+    ix = _scoped_index(file)
+    names = Set{String}(keys(ix.members))
+    namespaces = Set{String}(String(last(split(c, '.'))) for c in ix.components)
+    return names, namespaces, ix.complete
 end
 
 # Whether `key` reaches a declared name under §6.6.2 rules 1-3: an exact hit; a
@@ -86,7 +66,7 @@ function _check_inline_tests!(
         shapes::Dict{String, Vector{String}}, names, namespaces, complete
     )
     for (ti, test) in enumerate(tests)
-        base = "$component_path/tests/$(ti - 1)"
+        base = _pointer(component_path, "tests", ti)
         if complete
             for (field, overrides) in (
                     ("initial_conditions", test.initial_conditions),
@@ -97,7 +77,7 @@ function _check_inline_tests!(
                     _override_key_matches(bare_key, names, namespaces) && continue
                     _report!(
                         errors, ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
-                        "$base/$field/$(_ptr_escape(key))",
+                        _pointer(base, field, key),
                         "Override key \"$key\" in $field matches no declared name",
                         Dict{String, Any}("key" => key, "field" => field)
                     )
@@ -107,7 +87,7 @@ function _check_inline_tests!(
         for (ai, assertion) in enumerate(test.assertions)
             bare, is_element = _strip_element_suffix(assertion.variable)
             occursin('.', bare) && continue
-            pointer = "$base/assertions/$(ai - 1)"
+            pointer = _pointer(base, "assertions", ai)
             if !haskey(shapes, bare)
                 _report!(
                     errors, ERROR_CODES.UNDEFINED_VARIABLE,
@@ -149,7 +129,7 @@ function _validate_inline_tests(file::EsmFile)::Vector{StructuralError}
         for name in sort!(collect(keys(file.models)))
             model = file.models[name]
             _check_inline_tests!(
-                errors, model.tests, "/models/$name",
+                errors, model.tests, _pointer("", "models", name),
                 _test_target_shapes(model), names, namespaces, complete
             )
         end
@@ -158,7 +138,7 @@ function _validate_inline_tests(file::EsmFile)::Vector{StructuralError}
         for name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[name]
             _check_inline_tests!(
-                errors, rs.tests, "/reaction_systems/$name",
+                errors, rs.tests, _pointer("", "reaction_systems", name),
                 _test_target_shapes(rs), names, namespaces, complete
             )
         end

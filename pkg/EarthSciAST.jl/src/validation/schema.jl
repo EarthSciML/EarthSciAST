@@ -44,11 +44,6 @@ const ESM_SCHEMA = Schema(JSON3.read(read(SCHEMA_PATH, String)))
 # graph of `_SchemaNode`s, so the walk does no `$ref` resolution, lookup or
 # locking per node.
 
-# RFC-6901 JSON Pointer builder. Each segment is prefixed with "/"; the special
-# characters `~` and `/` are escaped per §4 of the RFC.
-_ptr_escape(seg::AbstractString) = replace(replace(seg, "~" => "~0"), "/" => "~1")
-_ptr_child(path::AbstractString, seg) = string(path, "/", _ptr_escape(string(seg)))
-
 # Schema keywords that carry no assertion of their own (identifiers, metadata,
 # and the `$defs`/`definitions` stores), skipped during the walk.
 const _SCHEMA_ANNOTATION_KEYS = Set{String}(
@@ -265,7 +260,7 @@ const _SchemaSink = Union{Nothing, Vector{SchemaError}}
 
 # A child's pointer, built only when there is somewhere to report it.
 _walk_path(::Nothing, path::String, seg) = path
-_walk_path(::Vector{SchemaError}, path::String, seg) = _ptr_child(path, seg)
+_walk_path(::Vector{SchemaError}, path::String, seg) = _pointer(path, seg)
 
 # Record a failure of `keyword` at `path` (collect mode) and return `false`.
 _walk_fail!(::Nothing, path, keyword) = false
@@ -350,7 +345,7 @@ function _schema_walk_keyword!(sink::_SchemaSink, x, node::_SchemaNode, kw::_Sch
         sub = kw.sub::_SchemaNode
         ok = true
         for (i, xi) in enumerate(x)
-            _schema_walk!(sink, xi, sub, _walk_path(sink, path, i - 1), root) && continue
+            _schema_walk!(sink, xi, sub, _walk_path(sink, path, i), root) && continue
             sink === nothing && return false
             ok = false
         end

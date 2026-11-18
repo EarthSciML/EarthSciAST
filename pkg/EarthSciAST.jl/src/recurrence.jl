@@ -67,7 +67,7 @@ function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{S
             group = (g === nothing || g == 0) ? nothing : groups[g]
             frame = _check_recurrence_equation!(
                 errors, file, eq,
-                "/models/$model_name/equations/$(i - 1)/rhs",
+                _pointer("", "models", model_name, "equations", i, "rhs"),
                 array_shaped; group = group
             )
             (frame !== nothing && group !== nothing) && push!(frames, (i, t[1], frame))
@@ -86,7 +86,7 @@ function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{S
                 mismatch = true
                 _report!(
                     errors, ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
-                    "/models/$model_name/equations/$(i - 1)/rhs",
+                    _pointer("", "models", model_name, "equations", i, "rhs"),
                     "'$var' and '$first_var' read each other as a recurrence group, but " *
                         "'$var' does not sweep the same frame: every member shares one " *
                         "cell frame — the same `output_idx`, the same ranges — and one " *
@@ -103,7 +103,7 @@ function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{S
                 at = members[findfirst(f -> f[2] in cycle, members)]
                 _report!(
                     errors, ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                    "/models/$model_name/equations/$(at[1] - 1)/rhs",
+                    _pointer("", "models", model_name, "equations", at[1], "rhs"),
                     "the members of a recurrence group read one another at the cell being " *
                         "written in a cycle (" * join(cycle, " -> ") * "), so no order " *
                         "within the cell satisfies them. Reads between members at the same " *

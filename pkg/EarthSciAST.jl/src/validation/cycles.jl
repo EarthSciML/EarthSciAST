@@ -10,13 +10,7 @@ component at every depth by full scoped name; `resolve(path, ref)` resolves
 then a path relative to its own subsystems, then a top-level system path. It
 returns the scoped name, or `nothing` when `ref` names no declared member.
 """
-function _scoped_resolver(members)
-    return function resolve(path::String, ref::String)
-        inner = path * "." * ref   # own name, or relative to own subsystems
-        haskey(members, inner) && return inner
-        return occursin('.', ref) && haskey(members, ref) ? ref : nothing
-    end
-end
+_scoped_resolver(members) = (path::String, ref::String) -> _resolve_scoped(members, path, ref)
 
 """
     _scoped_observed_graph(file; toplevel=nothing) -> NamedTuple
@@ -41,7 +35,7 @@ function _scoped_observed_graph(file::EsmFile; toplevel = nothing)
     self_exempt = Set{String}()              # §4.3.1.1 recurrence candidates
     scoped_groups = Vector{Vector{String}}()  # §4.3.1.2 recurrence groups, scoped
     states = Set{String}()                   # `D(·, t)` targets, scoped
-    function walk(path::String, m::Model)
+    visit = function (m::Model, _, _, path::String)
         local_defs = observed_definitions(m)
         candidates = _recurrence_candidate_names(m, local_defs)
         for (name, rhs) in local_defs
@@ -59,14 +53,11 @@ function _scoped_observed_graph(file::EsmFile; toplevel = nothing)
             target = resolve(path, name)
             target === nothing || push!(states, target)
         end
-        for (sub, node) in model_subsystems(m)
-            walk(path * "." * sub, node)
-        end
         return
     end
     if file.models !== nothing
         for (name, model) in file.models
-            walk(String(name), model)
+            _foreach_component(visit, model, _pointer("", "models", name); scope = name)
         end
     end
     for st in states
@@ -202,11 +193,14 @@ function validate_observed_cycles(file::EsmFile; views = nothing)::Vector{Struct
         # The template-expanded view, as `validate_recurrence_semantics` reads
         # it, so the two agree on which self-reads are recurrence candidates.
         model = _units_view(file, model_name, file.models[model_name], views)
-        _check_observed_cycles!(errors, model, "/models/$model_name")
+        _foreach_component(model, _pointer("", "models", model_name)) do m, p, _
+            _check_observed_cycles!(errors, m, p)
+        end
     end
     return errors
 end
 
+# The observed dependency cycle of one component (not its subsystems).
 function _check_observed_cycles!(
         errors::Vector{StructuralError}, model::Model,
         path::String
@@ -246,10 +240,6 @@ function _check_observed_cycles!(
                 )
             )
         end
-    end
-
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_observed_cycles!(errors, subsys, "$path/subsystems/$subsys_name")
     end
     return errors
 end

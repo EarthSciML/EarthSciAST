@@ -99,7 +99,7 @@ function _check_reserved_file_names!(errors::Vector{StructuralError}, file::EsmF
         for model_name in sort!(collect(keys(file.models)))
             _check_reserved_model_names!(
                 errors, file.models[model_name],
-                "/models/$model_name",
+                _pointer("", "models", model_name),
                 "Model '$model_name'"; indep = indep
             )
         end
@@ -110,12 +110,12 @@ function _check_reserved_file_names!(errors::Vector{StructuralError}, file::EsmF
             owner = "Reaction system '$rs_name'"
             _check_reserved_declaration_names!(
                 errors, (s.name for s in rs.species),
-                "/reaction_systems/$rs_name/species",
+                _pointer("", "reaction_systems", rs_name, "species"),
                 owner, "species"; indep = indep
             )
             _check_reserved_declaration_names!(
                 errors, (p.name for p in rs.parameters),
-                "/reaction_systems/$rs_name/parameters",
+                _pointer("", "reaction_systems", rs_name, "parameters"),
                 owner, "parameter"; indep = indep
             )
         end
@@ -182,7 +182,7 @@ function _check_array_defaults_have_shape_here!(
         (var.shape === nothing || isempty(var.shape)) || continue
         _report!(
             errors, ERROR_CODES.ARRAY_DEFAULT_WITHOUT_SHAPE,
-            "$path/variables/$name/default",
+            _pointer(path, "variables", name, "default"),
             "$owner variable '$name' has inline array data as its default but declares " *
                 "no shape; inline array data is a shaped variable's value (esm-spec §6.3)",
             Dict{String, Any}(
@@ -227,15 +227,17 @@ Reported as `domain_unit_mismatch` at the coupling ENTRY pointer `/coupling/i`
 (the corpus pin), not at `/coupling/i/from` — the defect is the pairing, carried
 by the whole entry.
 """
-function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
+function validate_variable_map_units(
+        file::EsmFile; index::_ScopedIndex = _scoped_index(file)
+    )::Vector{StructuralError}
     errors = StructuralError[]
     for (i, entry) in enumerate(file.coupling)
-        conflict = _variable_map_unit_conflict(file, entry)
+        conflict = _variable_map_unit_conflict(index, entry)
         conflict === nothing && continue
         src_units, tgt_units = conflict
         _report!(
             errors, ERROR_CODES.DOMAIN_UNIT_MISMATCH,
-            "/coupling/$(i - 1)",
+            _pointer("", "coupling", i),
             "variable_map identity coupling from '$(entry.from)' ($src_units) to " *
                 "'$(entry.to)' ($tgt_units) connects variables with different declared units",
             Dict{String, Any}(

@@ -17,22 +17,30 @@ model_subsystems(model::Model) =
     (pair for pair in model.subsystems if pair.second isa Model)
 
 """
-    _foreach_component(f, node, path; sorted = false)
+    _foreach_component(f, node, path; sorted = false, scope = nothing)
 
 Call `f(component, path, key)` for `node` and for every subsystem below it of
 its own kind (a `Model` below a model, a `ReactionSystem` below a reaction
 system), parent before children: `path` is the component's JSON pointer, each
-subsystem's extending its parent's by `/subsystems/<key>`, and `key` is its
+subsystem's extending its parent's by `/subsystems/<key>` (escaped), and `key` is its
 `subsystems` key (`nothing` for `node`). Siblings come in document order, or
-by key with `sorted`. The one walk of a component tree the structural checks
-share.
+by key with `sorted`. With `scope`, the dotted scoped name of `node`
+(`"Atmos"`), `f(component, path, key, scope)` is called instead, each
+subsystem's scope extending its parent's by `.<key>`. The one walk of a
+component tree the structural checks share.
 """
-function _foreach_component(f, node::T, path::AbstractString; sorted::Bool = false, key = nothing) where {T <: Union{Model, ReactionSystem}}
-    f(node, String(path), key)
+function _foreach_component(
+        f, node::T, path::AbstractString; sorted::Bool = false, key = nothing,
+        scope::Union{Nothing, AbstractString} = nothing
+    ) where {T <: Union{Model, ReactionSystem}}
+    scope === nothing ? f(node, String(path), key) : f(node, String(path), key, String(scope))
     subs = Pair{String, T}[k => v for (k, v) in node.subsystems if v isa T]
     sorted && sort!(subs; by = first)
     for (k, sub) in subs
-        _foreach_component(f, sub, "$path/subsystems/$k"; sorted = sorted, key = k)
+        _foreach_component(
+            f, sub, _pointer(path, "subsystems", k); sorted = sorted, key = k,
+            scope = scope === nothing ? nothing : string(scope, ".", k)
+        )
     end
     return nothing
 end
