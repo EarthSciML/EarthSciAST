@@ -950,7 +950,7 @@
       "class": "semantic",
       "phase": 5,
       "area": "coupling",
-      "note": "A coupling-library edge transform whose templates would introduce grad/div/spatial D is rejected with coupling_library_illegal_payload."
+      "note": "A coupling-library edge transform whose templates would introduce a rewrite-target operator (spatial D, a user op) is rejected with coupling_library_illegal_payload."
     },
     {
       "id": "spec.10.5.reserved-lifting-refused-at-build",
