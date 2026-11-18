@@ -9,12 +9,11 @@
 //! so neither assembles these stages by hand and they run in one order. Their
 //! product, [`NormalizedModel`], is the only input the later stages accept.
 
-use super::compile::{
-    VariableAxes, apply_shape_rewrites, model_from_flattened, set_declared_shapes,
-};
+use super::compile::{apply_shape_rewrites, model_from_flattened};
 use super::recurrence_group::lower_recurrence_groups;
+use super::shape_table::ShapeTable;
 use super::{HashMap, IndexSet};
-use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
+use crate::flatten::FlattenedSystem;
 use crate::simulate::CompileError;
 use crate::types::Model;
 
@@ -30,11 +29,12 @@ pub(crate) enum BuildInput<'a> {
         model: &'a str,
     },
     /// A flattened system: every name dot-namespaced, the coupling applied.
-    /// `inherited` declares the shapes a system this one was cut from decided
-    /// (`ArrayCompiled::from_flattened_shaped`).
+    /// `inherited` is the shape table of the build of a system this one was
+    /// cut from (`ArrayCompiled::from_flattened_shaped`), whose decided
+    /// shapes this one may no longer decide.
     Flattened {
         flat: &'a FlattenedSystem,
-        inherited: Option<&'a BuiltShapes>,
+        inherited: Option<&'a ShapeTable>,
     },
 }
 
@@ -46,11 +46,9 @@ pub(crate) enum BuildInput<'a> {
 pub(crate) struct NormalizedModel {
     pub(crate) model: Model,
     pub(crate) index_sets: HashMap<String, IndexSet>,
-    /// The shapes the build gave unshaped variables (esm-spec §4.3.4,
-    /// §9.6.11), and the variables only data can shape.
-    pub(crate) shapes: ConditionalShapes,
-    /// Every variable's index-set axes, declared or inferred.
-    pub(crate) axes: VariableAxes,
+    /// Every variable's index-set axes, declared or decided by the build
+    /// (esm-spec §4.3.4, §9.6.11), and the variables only data can shape.
+    pub(crate) shapes: ShapeTable,
 }
 
 /// Normalize `input` against the document's `index_sets` registry. The stages
@@ -58,9 +56,10 @@ pub(crate) struct NormalizedModel {
 ///
 /// 1. the system's variables merged into one registry
 ///    ([`model_from_flattened`]), shown model-locally for a model built alone;
-/// 2. the shape rewrites ([`apply_shape_rewrites`]): the elementwise lift and
-///    the shapes of unshaped mixed-rank `ifelse` variables, then the
-///    bare-array-operand check on the lifted equations;
+/// 2. the shape rewrites ([`apply_shape_rewrites`]): the inherited shapes,
+///    the elementwise lift and the shapes of unshaped mixed-rank `ifelse`
+///    variables, then the bare-array-operand check on the lifted equations,
+///    which leave the build's [`ShapeTable`];
 /// 3. stack each recurrence group, which reads the shapes step 2 decided.
 pub(crate) fn normalize(
     input: BuildInput<'_>,
@@ -79,28 +78,14 @@ pub(crate) fn normalize(
             unqualify(&mut model, local);
             (model, None)
         }
-        BuildInput::Flattened { flat, inherited } => {
-            let mut model = model_from_flattened(flat);
-            if let Some(shapes) = inherited {
-                set_declared_shapes(&mut model, shapes);
-            }
-            (model, inherited)
-        }
+        BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
     };
-    let (mut shapes, axes) = apply_shape_rewrites(&mut model, &index_sets)?;
-    // The inherited shapes were declared before the rewrites ran, so the
-    // promotion did not record them; they are the build's all the same.
-    if let Some(inherited) = inherited {
-        shapes
-            .built
-            .extend(inherited.iter().map(|(k, v)| (k.clone(), v.clone())));
-    }
+    let shapes = apply_shape_rewrites(&mut model, &index_sets, inherited)?;
     lower_recurrence_groups(&mut model, &mut index_sets)?;
     Ok(NormalizedModel {
         model,
         index_sets,
         shapes,
-        axes,
     })
 }
 

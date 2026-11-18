@@ -5,11 +5,12 @@
 //! lowering helpers.
 
 use super::normalize::{BuildInput, NormalizedModel, normalize};
+use super::shape_table::{BuiltVariables, ShapeTable};
 use super::*;
 use crate::binders::Binders;
 use crate::causal_self_read::{self, SelfReadDefect};
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
-use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
+use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
@@ -164,7 +165,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 ///
 /// The model keeps each variable's DECLARED shape, as `flatten` does: the
 /// shape an unshaped mixed-rank `ifelse` is built at (esm-spec §4.3.4) is
-/// written by [`promote_conditional_shapes`], which the build runs on it.
+/// written by [`apply_shape_rewrites`], which the build runs on it.
 ///
 /// Shared by [`ArrayCompiled::from_flattened_with`] and the build pipeline's
 /// whole-document build (`crate::prepare`), so a document of several models
@@ -276,82 +277,74 @@ pub(super) fn apply_ragged_factor_scope(
 }
 
 /// The shape rewrites every build makes, from a flattened system or an
-/// authored model: esm-spec §4.3.4, a variable with no declared `shape` whose
-/// value is an array on one arm of an `ifelse` and a scalar on the other
-/// takes the array arm's shape ([`promote_conditional_shapes`], after the
-/// elementwise lift). `flatten` does not record this shape in its output
-/// (esm-libraries-spec §4.7.5), so every build gets it here. Returns the
-/// shapes it gave, sized by `index_sets`, and the index-set axes of every
-/// variable as built ([`refuse_faq_bare_array_operands`]).
+/// authored model, and the [`ShapeTable`] they leave. In order:
+///
+/// 1. each shape `inherited` (the table of the program a restricted system
+///    was cut from) records where no declaration does is declared, since the
+///    restricted system may no longer decide it — `RhsProgram::select` keeps
+///    a state a kept summand reads but drops its `D` equation, and an
+///    unshaped state with no `D` equation has no rank the inference can read;
+/// 2. an expression template applied elementwise over an array argument
+///    (esm-spec §9.6.11) is lifted to a per-cell `faq`
+///    ([`crate::elementwise_lift`]); a variable declared without a `shape`
+///    that the lift defines takes the lift's index sets;
+/// 3. a variable with no declared `shape` whose value is an array on one arm
+///    of an `ifelse` and a scalar on the other takes the array arm's shape
+///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`]),
+///    written into its declaration. `flatten` does not record this shape in
+///    its output (esm-libraries-spec §4.7.5), so every build gets it here. A
+///    variable whose shape only data can decide (its only arrays are
+///    unshaped data-fed parameters) is left undeclared, and the build records
+///    it on the variable's rule ([`AlgebraicRule::Scalar`]'s `data_shaped`);
+/// 4. the bare-array-operand check on the lifted equations
+///    ([`refuse_faq_bare_array_operands`]), whose declared-or-inferred axes
+///    of every variable the table records.
 pub(crate) fn apply_shape_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<(ConditionalShapes, VariableAxes), CompileError> {
-    // After the elementwise lift (inside `promote_conditional_shapes`,
-    // esm-spec §9.6.11): the check reads the lifted equations.
-    let promoted = promote_conditional_shapes(model, index_sets)?;
-    let axes = refuse_faq_bare_array_operands(model)?;
-    Ok((promoted, axes))
-}
-
-/// Every variable's index-set axes in the model a build compiles, keyed by
-/// the name the build gives it ([`crate::structural::promoted_var_shapes`]):
-/// the declared `shape`, else the shape its defining equation infers. A
-/// variable a pointwise lift evaluates over a grid (esm-spec §10.5) is here
-/// with the grid's index sets although its declaration has no `shape`
-/// (esm-libraries-spec §4.7.5). A scalar is absent or has no axes.
-pub(crate) type VariableAxes = HashMap<String, Vec<String>>;
-
-/// What a build knows of its variables by NAME, for a reader that addresses
-/// one after the build (the inline-test runner's §6.6 assertions): their axes,
-/// and the inputs a coupling substituted away.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct BuiltVariables {
-    /// [`VariableAxes`] of the model the build compiled, plus each of
-    /// [`Self::bound_inputs`] under the axes of the variable bound in its
-    /// place, so a reader that names an input (`Box.T` bound to `Col.T`) finds
-    /// the field it reads.
-    pub(crate) axes: VariableAxes,
-    /// [`crate::flatten::FlattenMetadata::bound_inputs`]: `to → (from,
-    /// factor)`. Empty for a build that applied no coupling.
-    pub(crate) bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
-}
-
-impl BuiltVariables {
-    /// `axes` and `bound_inputs`, each bound input given the axes of the
-    /// variable at the end of its chain of bindings.
-    pub(crate) fn new(
-        mut axes: VariableAxes,
-        bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
-    ) -> Self {
-        for to in bound_inputs.keys() {
-            let mut name = to.as_str();
-            for _ in 0..=bound_inputs.len() {
-                match bound_inputs.get(name) {
-                    Some((from, _)) => name = from,
-                    None => break,
-                }
-            }
-            if let Some(found) = axes.get(name).filter(|a| !a.is_empty()).cloned() {
-                axes.entry(to.clone()).or_insert(found);
-            }
-        }
-        BuiltVariables { axes, bound_inputs }
+    inherited: Option<&ShapeTable>,
+) -> Result<ShapeTable, CompileError> {
+    if let Some(parent) = inherited {
+        set_declared_shapes(model, parent.built());
     }
+    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
+        .map_err(CompileError::build_err)?;
+    let conditional = crate::flatten::conditional_shape_promotions(
+        &|n: &str| model.variables.get(n),
+        model.equations.iter(),
+        index_sets,
+    );
+    set_declared_shapes(
+        model,
+        conditional.built.iter().map(|(n, a)| (n, a.as_slice())),
+    );
+    let axes = refuse_faq_bare_array_operands(model)?;
+    Ok(ShapeTable::assemble(
+        model,
+        axes,
+        conditional,
+        lifted,
+        inherited,
+    ))
 }
 
 /// Refuse a `faq` whose `expr` or `filter` reads a shaped variable by bare name
 /// (`faq_bare_array_operand`, esm-spec §4.3.1), on the model a build compiles:
-/// flattened or mounted, every template expanded, after
-/// [`promote_conditional_shapes`], against declared and inferred shapes
+/// flattened or mounted, every template expanded, after the shape rewrites
+/// ([`apply_shape_rewrites`]), against declared and inferred shapes
 /// ([`crate::structural::promoted_var_shapes`]). `validate` reports the rule on
 /// the authored document, where a template application is opaque; this is the
 /// check on what the application expanded into, on every input a build takes —
 /// a typed document, a flattened system, a subsystem, a cross-model read.
 ///
-/// Returns the shapes it checked against, which are the build's
-/// [`VariableAxes`].
-pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<VariableAxes, CompileError> {
+/// Returns the shapes it checked against: every variable's index-set axes,
+/// the declared `shape`, else the shape its defining equation infers. A
+/// variable a pointwise lift evaluates over a grid (esm-spec §10.5) is there
+/// with the grid's index sets although its declaration has no `shape`
+/// (esm-libraries-spec §4.7.5). A scalar is absent.
+pub(crate) fn refuse_faq_bare_array_operands(
+    model: &Model,
+) -> Result<HashMap<String, Vec<String>>, CompileError> {
     let shapes = crate::structural::promoted_var_shapes(model);
     if shapes.values().all(Vec::is_empty) {
         return Ok(shapes);
@@ -376,45 +369,14 @@ pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<VariableAx
     Ok(shapes)
 }
 
-/// Give each unshaped mixed-rank-`ifelse` variable of `model` the shape it is
-/// built at (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`])
-/// and return what it gave. The one place a build writes that shape: every
-/// route that builds a model runs it, and the compiled model keeps the result
-/// (`ArrayCompiled::conditional_shapes`) for the readers downstream of the
-/// build, which must not infer it again from a system that may have lost what
-/// decided it (a restricted `RhsProgram` drops `D(w)` for a state it only
-/// reads).
-///
-/// First, an expression template applied elementwise over an array argument
-/// (esm-spec §9.6.11) is lifted to a per-cell `faq`
-/// ([`crate::elementwise_lift`]); a variable declared without a `shape` that
-/// the lift defines takes the lift's index sets, and is returned with the rest.
-///
-/// A variable whose shape only data can decide (its only arrays are unshaped
-/// data-fed parameters) is returned in [`ConditionalShapes::data_shaped`] and
-/// left undeclared here; the build records it on the variable's rule
-/// ([`AlgebraicRule::Scalar`]'s `data_shaped`).
-pub(crate) fn promote_conditional_shapes(
-    model: &mut Model,
-    index_sets: &HashMap<String, IndexSet>,
-) -> Result<ConditionalShapes, CompileError> {
-    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
-        .map_err(CompileError::build_err)?;
-    let mut promoted = crate::flatten::conditional_shape_promotions(
-        &|n: &str| model.variables.get(n),
-        model.equations.iter(),
-        index_sets,
-    );
-    set_declared_shapes(model, &promoted.built);
-    promoted.built.extend(lifted);
-    Ok(promoted)
-}
-
 /// Write `shapes` into `model`'s declarations, by name.
-pub(super) fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
+fn set_declared_shapes<'a>(
+    model: &mut Model,
+    shapes: impl Iterator<Item = (&'a String, &'a [String])>,
+) {
     for (name, axes) in shapes {
         if let Some(var) = model.variables.get_mut(name) {
-            var.shape = Some(axes.clone());
+            var.shape = Some(axes.to_vec());
         }
     }
 }
@@ -574,17 +536,14 @@ impl ArrayCompiled {
         Self::from_flattened_shaped(flat, runtime_array_parameters, None, compiler)
     }
 
-    /// [`Self::from_flattened_with`], building each variable `inherited`
-    /// names at that shape: the shapes an unshaped mixed-rank `ifelse` took
-    /// when the system `flat` was cut from was built (esm-spec §4.3.4). A
-    /// restricted system can no longer decide them itself — `RhsProgram::
-    /// select` keeps a state a kept summand reads but drops its `D` equation,
-    /// and an unshaped state with no `D` equation has no rank the inference
-    /// can read — so the program it is cut from hands them down.
+    /// [`Self::from_flattened_with`], building each variable at the shape
+    /// `inherited`, the [`ShapeTable`] of the program the system `flat` was
+    /// cut from, built it at where no declaration records it (esm-spec
+    /// §4.3.4, [`apply_shape_rewrites`]).
     pub(crate) fn from_flattened_shaped(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
-        inherited: Option<&BuiltShapes>,
+        inherited: Option<&ShapeTable>,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         Self::compile_flattened(
@@ -601,7 +560,7 @@ impl ArrayCompiled {
     fn compile_flattened(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
-        inherited: Option<&BuiltShapes>,
+        inherited: Option<&ShapeTable>,
         supplied: BuildTimeData<'_>,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
@@ -693,10 +652,7 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        compiled.built_variables = BuiltVariables::new(
-            std::mem::take(&mut compiled.built_variables.axes),
-            flat.metadata.bound_inputs.clone(),
-        );
+        compiled.built_variables.bound_inputs = flat.metadata.bound_inputs.clone();
         compiled.runtime_mode = RuntimeMode::of(compiler);
         Ok(compiled)
     }
@@ -776,12 +732,7 @@ impl ArrayCompiled {
         let NormalizedModel {
             model,
             index_sets,
-            shapes:
-                ConditionalShapes {
-                    built: conditional_shapes,
-                    data_shaped,
-                },
-            axes: variable_axes,
+            shapes,
         } = normalized;
         let ResolvedModel {
             model: mut model_owned,
@@ -828,7 +779,7 @@ impl ArrayCompiled {
             &observed_names,
             &eliminated,
             index_sets,
-            &data_shaped,
+            &shapes,
         )?;
 
         let model = &model_owned;
@@ -876,9 +827,8 @@ impl ArrayCompiled {
             rhs_rules,
             n_states,
             declared_names,
-            conditional_shapes,
             built_variables: BuiltVariables {
-                axes: variable_axes,
+                shapes: std::sync::Arc::new(shapes),
                 bound_inputs: Default::default(),
             },
             forcing: Rc::new(RefCell::new(HashMap::new())),
@@ -2790,7 +2740,7 @@ fn build_observed_rules(
     observed_names: &[String],
     eliminated: &HashSet<String>,
     index_sets: &HashMap<String, IndexSet>,
-    data_shaped: &HashMap<String, Vec<String>>,
+    shapes: &ShapeTable,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
@@ -2825,11 +2775,7 @@ fn build_observed_rules(
     //   over them, so a readable intermediate decomposition runs as authored.
     // The variables whose shape their data-fed parameters' data decides:
     // see [`AlgebraicRule::Scalar`]'s `data_shaped`.
-    let data_shaped_of = |name: &str| {
-        data_shaped
-            .get(name)
-            .map(|fed| std::sync::Arc::from(fed.as_slice()))
-    };
+    let data_shaped_of = |name: &str| shapes.data_shaped(name).map(std::sync::Arc::from);
     let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsFormRef::Bare(name) =

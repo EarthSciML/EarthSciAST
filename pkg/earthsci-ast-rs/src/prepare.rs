@@ -1461,11 +1461,10 @@ struct BuildState<'o> {
     obs_total: usize,
     /// [`PreparedBuild::observed_cone_applied`].
     cone_applied: bool,
-    /// The unshaped observeds whose shape the data of their unshaped
-    /// data-fed parameters decides (esm-spec §4.3.4,
-    /// [`crate::flatten::ConditionalShapes::data_shaped`]).
-    data_shaped: HashMap<String, Vec<String>>,
-    /// [`PreparedBuild::built_variables`].
+    /// [`PreparedBuild::built_variables`]: the build's shape table, which
+    /// also names the unshaped observeds whose shape the data of their
+    /// unshaped data-fed parameters decides (esm-spec §4.3.4,
+    /// [`crate::simulate_array::ShapeTable::data_shaped`]).
     built_variables: BuiltVariables,
 }
 
@@ -1484,7 +1483,7 @@ impl<'o> BuildState<'o> {
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
             .or_else(|| {
-                let fed = self.data_shaped.get(name)?;
+                let fed = self.built_variables.shapes.data_shaped(name)?;
                 crate::flatten::data_fill_shape(fed, |n| {
                     self.arrays.get(n).map(|a| a.shape().to_vec())
                 })
@@ -1604,10 +1603,11 @@ impl<'o> BuildState<'o> {
             model,
             index_sets,
             shapes,
-            axes,
         } = normalized;
-        let built_variables = BuiltVariables::new(axes, bound_inputs.unwrap_or_default());
-        let data_shaped = shapes.data_shaped;
+        let built_variables = BuiltVariables {
+            shapes: std::sync::Arc::new(shapes),
+            bound_inputs: bound_inputs.unwrap_or_default(),
+        };
 
         let (param_vals, param_names) = scalar_params(&model, &spelling, &opts.problem.p)?;
         let keys = spelling.resolver(
@@ -1641,7 +1641,6 @@ impl<'o> BuildState<'o> {
             obs_done: 0,
             obs_total: 0,
             cone_applied: false,
-            data_shaped,
             built_variables,
         })
     }

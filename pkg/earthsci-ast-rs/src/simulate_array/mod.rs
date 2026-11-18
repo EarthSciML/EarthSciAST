@@ -74,6 +74,7 @@ mod recurrence_group;
 mod rhs;
 #[cfg(feature = "solve")]
 mod session;
+mod shape_table;
 #[cfg(feature = "solve")]
 pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
@@ -91,15 +92,16 @@ pub(crate) use compile::InventedSets;
 pub(crate) use compile::check_free_variables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::inline_parameter_arrays;
+pub(crate) use compile::model_tree_any;
 pub(crate) use compile::resolve_declared_shape;
-pub(crate) use compile::{BuiltVariables, model_tree_any};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{MemberFactorColumn, member_factor_columns, run_value_invention_in_scope};
 pub(crate) use compile::{data_feed_source, is_data_fed_unshaped};
+pub(crate) use shape_table::{BuiltVariables, ShapeTable};
 // The build pipeline normalizes what it builds through the same front half
 // as the compile path.
 #[cfg(test)]
-pub(crate) use compile::{model_from_flattened, promote_conditional_shapes};
+pub(crate) use compile::{apply_shape_rewrites, model_from_flattened};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use eval::StandaloneScope;
 #[cfg(test)]
@@ -408,7 +410,7 @@ enum AlgebraicRule {
     /// `data_shaped` names, for a variable declared with no `shape` whose
     /// body is elementwise down to a scalar-condition `ifelse` whose only
     /// arrays are unshaped data-fed parameters, those parameters (esm-spec
-    /// §4.3.4, [`crate::flatten::ConditionalShapes::data_shaped`]). With no
+    /// §4.3.4, [`ShapeTable::data_shaped`]). With no
     /// `declared_shape` it takes the shape their data has, read where the
     /// data is bound ([`AlgebraicRule::fill_shape`]), so both arms have it.
     Scalar {
@@ -850,16 +852,13 @@ pub struct ArrayCompiled {
     /// document never declared from one it declared but had not produced a
     /// value for yet. See [`EvalCtx::declared`]; issue #181.
     declared_names: HashSet<String>,
-    /// The shape each unshaped mixed-rank-`ifelse` variable was built at
-    /// (esm-spec §4.3.4), which neither the document nor the flattened system
-    /// records (esm-libraries-spec §4.7.5). Kept so a reader downstream of the
-    /// build takes the shape the build used instead of inferring it again; see
-    /// [`compile::promote_conditional_shapes`].
-    pub(crate) conditional_shapes: crate::flatten::BuiltShapes,
-    /// Every variable's index-set axes as this build compiled it, and the
-    /// inputs a coupling substituted away ([`compile::BuiltVariables`]). Read
-    /// by [`Self::built_variables`].
-    built_variables: compile::BuiltVariables,
+    /// Every variable's index-set axes as this build compiled it
+    /// ([`ShapeTable`]), and the inputs a coupling substituted away
+    /// ([`BuiltVariables`]). A reader downstream of the build takes a shape
+    /// the build decided — an unshaped mixed-rank `ifelse`'s (esm-spec
+    /// §4.3.4), which neither the document nor the flattened system records
+    /// (esm-libraries-spec §4.7.5) — from here instead of inferring it again.
+    built_variables: BuiltVariables,
     /// The field initial conditions construction resolved
     /// ([`Self::field_ic_records`]), held for the first solve to take instead
     /// of resolving them again. See [`driver::FieldIcMemo`].

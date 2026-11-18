@@ -867,7 +867,10 @@ fn ifelse_reading_a_gathered_scalar_takes_the_array_arms_box() {
         vars["D"] = json!({"type": "unknown"});
         readers.push(d.clone());
         let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-        assert_eq!(compiled.conditional_shapes["M.X"], ["cell"]);
+        assert_eq!(
+            compiled.built_variables().shapes.built_axes("M.X"),
+            Some(&["cell".to_string()][..])
+        );
         assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])));
         ab(&compiled, &both_arms());
         // Unread, as `NEI2016Emis.CO` is in reseact.
@@ -910,7 +913,11 @@ fn ifelse_reading_a_scalar_const_node_takes_the_array_arms_box() {
             vars["H"] = json!({"type": "unknown"});
             readers.push(h.clone());
             let compiled = compile(undeclared_mixed_doc(x.clone(), vars, readers));
-            assert_eq!(compiled.conditional_shapes["M.X"], ["cell"], "{x}");
+            assert_eq!(
+                compiled.built_variables().shapes.built_axes("M.X"),
+                Some(&["cell".to_string()][..]),
+                "{x}"
+            );
             assert_eq!(declared_box(&compiled, "X"), Some(Some(vec![3])), "{x}");
             ab(&compiled, &both_arms());
             // Unread, as `NEI2016Emis.CO` is in reseact.
@@ -931,7 +938,13 @@ fn ifelse_reading_an_array_const_node_is_not_promoted() {
     let arr = json!({"op": "const", "args": [], "value": [1.0, 2.0, 3.0]});
     let x = mixed_ifelse(json!({"op": "*", "args": ["F", arr]}), json!(0.0));
     let compiled = compile(undeclared_mixed_doc(x, json!({}), vec![]));
-    assert!(!compiled.conditional_shapes.contains_key("M.X"));
+    assert!(
+        compiled
+            .built_variables()
+            .shapes
+            .built_axes("M.X")
+            .is_none()
+    );
 }
 
 /// Where the data arm is consumed whole, or meets an array of another shape,

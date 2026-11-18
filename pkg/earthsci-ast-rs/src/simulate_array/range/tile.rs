@@ -700,8 +700,7 @@ pub(super) fn build(
     }
     let mut owned: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     let mut entries = Vec::new();
-    let set_names =
-        super::state_set_names(prog.inner.flat(), compiled, &prog.inner.conditional_shapes);
+    let set_names = super::state_set_names(prog.inner.flat(), compiled, &prog.inner.shapes);
     for (input, names) in [
         (TileInput::U, &prog.inner.writes),
         (TileInput::Aux, &prog.inner.aux),
