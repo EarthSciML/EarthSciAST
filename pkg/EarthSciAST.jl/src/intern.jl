@@ -1,6 +1,5 @@
 # ========================================================================
 # intern.jl — structural interning (hash-consing) of the expression AST.
-# Perf-plan item A1 (prototypes/perf-gap-closure-plan.md in reseact.esm).
 #
 # `_intern_expr` maps every `OpExpr` to ONE canonical object per structure, so
 # the in-memory AST becomes a DAG: textually identical subtrees — which
@@ -8,9 +7,9 @@
 # copies, re-inflating one species' RHS to ~57,000 index ops — become the SAME
 # object. Every downstream build pass is already identity-memoized
 # (`_sub_preserving`, `foreach_subexpr_once`, `_BuildMemo.resolve/compile`,
-# `_build_acc_cse`, the `_stencilize` smemo, the ESS-0hh lowering memo); today
-# those memos mostly miss because the copies are distinct objects. After
-# interning they hit, and the build cost collapses to the unique-node count.
+# `_build_acc_cse`, the `_stencilize` memo, the lowering memo); without
+# interning those memos miss on the copies, which are distinct objects. With it
+# they hit, and the build cost is the unique-node count.
 #
 # WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build.jl),
 # right after `apply_expression_template` reference expansion — the latest
@@ -434,63 +433,9 @@ end
 _intern_expr(e::ASTExpr, ctx::_InternCtx) = e    # future leaf kinds: pass through
 
 # ------------------------------------------------------------------------
-# Model-level pass: intern every expression the tree-walk build's hot path
-# walks — variable expressions (observeds), equations, initialization
-# equations, expression-valued guesses — recursing into `Model` subsystems.
-# Returns a NEW `Model` (sharing untouched sub-objects) so the CALLER's model
-# is never mutated; event/test expressions are off the build's memoized hot
-# path and are left as-is.
+# Model-level pass: intern every expression site of the model and its
+# subsystems (`map_expressions`). Returns a model whose containers are new, so
+# the caller's model is never mutated; untouched records are shared.
 # ------------------------------------------------------------------------
-function _intern_equations(eqs::Vector{Equation}, ctx::_InternCtx)
-    isempty(eqs) && return eqs
-    changed = false
-    out = Vector{Equation}(undef, length(eqs))
-    for (i, eq) in enumerate(eqs)
-        l = _intern_expr(eq.lhs, ctx)
-        r = _intern_expr(eq.rhs, ctx)
-        if l !== eq.lhs || r !== eq.rhs
-            out[i] = Equation(l, r; _comment = eq._comment)
-            changed = true
-        else
-            out[i] = eq
-        end
-    end
-    return changed ? out : eqs
-end
-
-function _intern_model(model::Model, ctx::_InternCtx)::Model
-    # A variable carries no expression of its own (an observed unknown's
-    # defining right-hand side is an ordinary equation, interned below), so the
-    # variable map is carried across as is.
-    eqs = _intern_equations(model.equations, ctx)
-    ieqs = _intern_equations(model.initialization_equations, ctx)
-    guesses = model.guesses
-    ng = guesses
-    for (k, g) in guesses
-        g isa ASTExpr || continue
-        r = _intern_expr(g, ctx)
-        if r !== g
-            ng === guesses && (ng = copy(guesses))
-            ng[k] = r
-        end
-    end
-    subs = model.subsystems
-    nsubs = subs
-    for (k, s) in subs
-        s isa Model || continue
-        ns = _intern_model(s, ctx)
-        if ns !== s
-            nsubs === subs && (nsubs = copy(subs))
-            nsubs[k] = ns
-        end
-    end
-    (
-        eqs === model.equations &&
-            ieqs === model.initialization_equations && ng === guesses &&
-            nsubs === subs
-    ) && return model
-    return reconstruct(
-        model; equations = eqs, initialization_equations = ieqs, guesses = ng,
-        subsystems = nsubs
-    )
-end
+_intern_model(model::Model, ctx::_InternCtx)::Model =
+    map_expressions(e -> _intern_expr(e, ctx), model)
