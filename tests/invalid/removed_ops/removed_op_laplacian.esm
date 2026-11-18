@@ -2,14 +2,14 @@
   "esm": "2.3.0",
   "metadata": {
     "name": "removed_op_laplacian",
-    "description": "INVALID: the `laplacian` op was removed at esm 3.0.0. A loader rejects it BY NAME at the wire boundary with `removed_op`, whatever `esm` the document declares (this one declares 2.3.0, the last 2.x minor). There is no codemod: write `laplacian(u)` as the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)` (MIGRATION.md, \"esm 3.0.0\").",
+    "description": "INVALID: the `laplacian` op was removed at esm 2.4.0. A loader rejects it BY NAME at the wire boundary with `removed_op`, whatever `esm` the document declares (this one declares 2.3.0, the release before the removal). There is no codemod: write `laplacian(u)` as the sum over axes of `D(D(u, wrt: x_i), wrt: x_i)` (MIGRATION.md, \"esm 2.4.0\").",
     "authors": [
       "EarthSciAST"
     ],
     "tags": [
       "invalid",
       "removed_op",
-      "esm-3.0.0",
+      "esm-2.4.0",
       "laplacian"
     ]
   },

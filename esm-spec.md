@@ -1,19 +1,20 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 3.0.0**
+**EarthSciML Abstract Syntax Tree Format — Version 2.4.0**
 
-> **3.0.0 is a break that only removes.** The open-tier sugar ops `grad`,
-> `div` and `laplacian` are removed. A spatial derivative is written with
+> **2.4.0 removes three sugar ops.** The open-tier sugar ops `grad`,
+> `div` and `laplacian` are removed. They were never part of the format
+> proper: they had no evaluator, no dimensional rule and no shipped rewrite
+> rule, so a document using one could run only under a user-supplied rule. A spatial derivative is written with
 > spatial `D`, one per axis: `grad(f, dim: x)` is `D(f, wrt: x)`, `div(F)` is
 > Σᵢ `D(Fᵢ, wrt: xᵢ)`, and `laplacian(u)` is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`. A
 > scheme that is not written per axis (a finite-volume divergence on an
 > unstructured mesh, for example) is a user op lowered by a rewrite rule
 > (§9.6.8). A loader rejects a document using any of the three with
 > `removed_op`, whatever `esm` it declares (§4.2, "Removed ops"); there is no
-> codemod (`MIGRATION.md`, "esm 3.0.0"). Spatial `D`, `integral` and user ops
-> are unchanged. A 1.x or 2.x document that uses no removed construct still
-> loads, on its own and as a mounted or referenced document of a 3.0.0 root,
-> and the version gates of its own release still apply.
+> codemod (`MIGRATION.md`, "esm 2.4.0"). Spatial `D`, `integral` and user ops
+> are unchanged, and every 2.3.0 document that uses none of the three is a
+> valid 2.4.0 document.
 
 > **2.3.0 is additive.** The JSON form does not change. The word spellings
 > `neg` and `pow` are deprecated: a loader rewrites them to unary `-` and `^`
@@ -123,7 +124,7 @@ source document is a lossless spelling of it.
 
 ```json
 {
-  "esm": "3.0.0",
+  "esm": "2.4.0",
   "metadata": { ... },
   "models": { ... },
   "reaction_systems": { ... },
@@ -731,27 +732,26 @@ the document would fail much later as `unlowered_operator`, or never. The list:
 | `argmin`, `argmax` | 2.0.0 | the `argmin` / `argmax` / `argmin_where` / `argmax_where` templates (`lib/relational.esm`) |
 | `polygon_intersection_area` | 2.0.0 | `overlap_area_planar` / `overlap_area_spherical` (`lib/geometry.esm`, §8.6.1) |
 | `intersect_polygon` | 2.0.0 | none |
-| `grad` | 3.0.0 | spatial `D`: `grad(f, dim: x)` is `D(f, wrt: x)` |
-| `div` | 3.0.0 | spatial `D`, one per axis: `div(F)` is Σᵢ `D(Fᵢ, wrt: xᵢ)`; a scheme not written per axis is a user op lowered by a rewrite rule (§9.6.8) |
-| `laplacian` | 3.0.0 | spatial `D`, one per axis: `laplacian(u)` is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; or a user op lowered by a rewrite rule |
+| `grad` | 2.4.0 | spatial `D`: `grad(f, dim: x)` is `D(f, wrt: x)` |
+| `div` | 2.4.0 | spatial `D`, one per axis: `div(F)` is Σᵢ `D(Fᵢ, wrt: xᵢ)`; a scheme not written per axis is a user op lowered by a rewrite rule (§9.6.8) |
+| `laplacian` | 2.4.0 | spatial `D`, one per axis: `laplacian(u)` is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; or a user op lowered by a rewrite rule |
 
 The `function_tables` block is a field, not an op, and is rejected with the same code.
 The diagnostic names the op or field and the path of the first node carrying it, and
 for a 2.0.0 removal it names the 2.0.0 codemod (`MIGRATION.md`), which rewrites a 1.x
-document into the replacement column. The 3.0.0 removals have no codemod: the diagnostic
-points at `MIGRATION.md` ("esm 3.0.0"), and the author writes the replacement. A loader
+document into the replacement column. The 2.4.0 removals have no codemod: the diagnostic
+points at `MIGRATION.md` ("esm 2.4.0"), and the author writes the replacement. A loader
 carries no rewrite of its own: it never loads a removed op by translating it.
 
-**1.x and 2.x documents (normative).** A binding implementing 3.0.0 MUST load a
-document declaring `esm` 1.0.0 through 1.3.0 or 2.0.0 through 2.3.0 that uses no removed
-op or field, both on its own and as a mounted (§4.7) or imported (§9.7.2, §10.10)
-document of a 3.0.0 root; it MUST NOT refuse a document because its major version is 1
-or 2. A removed op or field anywhere in such a document is `removed_op`, as in a 3.0.0
-one: a 2.3.0 document that writes `grad` is refused like a 3.0.0 one. The version gates
-of the 1.x and 2.x releases stay live — `faq_version_too_old`, `solver_version_too_old`,
+**1.x documents (normative).** A binding implementing 2.0.0 MUST load a document
+declaring `esm` 1.0.0 through 1.3.0 that uses no removed op or field, both on its own
+and as a mounted (§4.7) or imported (§9.7.2, §10.10) document of a 2.0.0 root; it
+MUST NOT refuse a document because its major version is 1. A removed op or field
+anywhere in such a document is `removed_op`, as in a 2.0.0 one. The version gates
+of the 1.x releases stay live — `faq_version_too_old`, `solver_version_too_old`,
 `solver_external_version_too_old`, `solver_time_span_version_too_old`,
-`const_units_version_too_old`, `variable_bounds_version_too_old` and the rest — and
-each file is held to its own declared version (§4.7).
+`const_units_version_too_old` and the rest — and each file is held to its own
+declared version (§4.7).
 
 #### Arithmetic
 
@@ -917,7 +917,7 @@ A `D` in a **`match` pattern** is subject to exactly the same rule: a pattern
 pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 
 **Spatial operators are written with `D`.** The format has no gradient, divergence or
-Laplacian operator: `grad`, `div` and `laplacian` were removed at esm 3.0.0 ("Removed ops"
+Laplacian operator: `grad`, `div` and `laplacian` were removed at esm 2.4.0 ("Removed ops"
 above). A gradient component is `D(f, wrt: x)`; a Cartesian divergence is Σᵢ
 `D(Fᵢ, wrt: xᵢ)`; a Laplacian is Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`, which the bounded fixpoint
 (§9.6.3) lowers inner `D` first. A scheme that is not a sum of per-axis derivatives — a
@@ -4339,12 +4339,12 @@ temporal:
   frequency:   ISO8601 duration   # spacing between samples within a file
   records_per_file: integer | "auto"
   time_variable: string        # name of the time coord inside the file
-  records_per_sample: 1 | 2    # DEPRECATED, removed in a later major version (§8.5.1)
+  records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0 (§8.5.1)
 ```
 
 Both **static declaration** (`records_per_file` + `frequency`) and **runtime discovery** (`time_variable`) are allowed. If both are present, the static declaration wins and `time_variable` acts as a fallback. `records_per_file: "auto"` explicitly defers to runtime discovery.
 
-`records_per_sample` is **deprecated** and is removed in a later major version. How many
+`records_per_sample` is **deprecated** and is removed at esm 3.0.0. How many
 records a parameter drawing from the source receives at each query time is
 said by the parameter's record shape: two when its first axis is a record axis,
 one otherwise (§8.5.1). The field no longer decides anything. It is still
@@ -4380,7 +4380,7 @@ consumer, and the units are declared once — on the parameter — instead of tw
       unit_conversion: number | Expression   # optional
       codes: DataSourceCodes       # optional; text column -> numbers (§8.9.1)
       select: DataSourceSelect     # optional; overrides the source default (§8.9.2)
-      records_per_sample: 1 | 2    # DEPRECATED, removed in a later major version; checked against the shape (§8.5.1)
+      records_per_sample: 1 | 2    # DEPRECATED, removed at esm 3.0.0; checked against the shape (§8.5.1)
       description: string
       reference: Reference
 ```
@@ -4532,7 +4532,7 @@ first exists.
 axis, the count was written separately, as `from.records_per_sample` on the
 rule or `temporal.records_per_sample` on the source (§8.3), each `1` or `2`,
 and it was obeyed: a `2` over any first axis of exactly two members delivered
-the pair. Both fields are now **deprecated** and are **removed in a later major version**,
+the pair. Both fields are now **deprecated** and are **removed at esm 3.0.0**,
 and they are **no longer obeyed**. This is a breaking change, made together
 with the esm 2.0.0 break, and there is no compatibility reading of an older
 document: the record shape alone decides the count. Until removal a document
@@ -4561,7 +4561,7 @@ So a document written before the record axis, with `records_per_sample: 2` and
 a plain size-2 first axis, which used to deliver the pair, is now refused with
 `records_per_sample_invalid`. It migrates by adding `"records": true` to that
 axis and deleting the `records_per_sample` fields (which, kept, are only
-checked, until their removal in a later major version). `temporal.records_per_sample: 2` applies
+checked, until their removal at esm 3.0.0). `temporal.records_per_sample: 2` applies
 to every parameter of the source that writes no value of its own, so it is
 only ever agreeable when every such parameter is shaped over a record axis
 first; that is why the flag sits on the consumer's shape instead.
@@ -5520,7 +5520,7 @@ This is still "no boundary-condition declaration anywhere in the format": the cl
 
 Both selectors filter **before** the §9.6.3 priority/declaration-order selection, and both compose with the `unlowered_operator` gate unchanged: if the only candidate rule for a spatial `D` or a user op is constraint-excluded (or ground-mismatched), the node is simply not rewritten, the fixpoint converges with the rewrite-target intact, and the pre-evaluation gate rejects it exactly as if no rule had been imported at all. An unsatisfied constraint is never itself an error.
 
-**Gradient, divergence and Laplacian are written with `D`.** The `grad`, `div` and `laplacian` sugar ops were removed at esm 3.0.0 (§4.2, "Removed ops"). A gradient component is `D(f, wrt: x)`, a Cartesian divergence Σᵢ `D(Fᵢ, wrt: xᵢ)`, and a Laplacian Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; the ordinary `D`-discretization rules apply to each term, and the bounded fixpoint (§9.6.3) lowers nested `D`s on subsequent passes. A rule author who wants a one-shot multi-axis stencil (a 5-point Laplacian, an unstructured-mesh divergence) declares a user op for it and matches that op — the open namespace (§4.2) permits it, and the user op carries no privilege.
+**Gradient, divergence and Laplacian are written with `D`.** The `grad`, `div` and `laplacian` sugar ops were removed at esm 2.4.0 (§4.2, "Removed ops"). A gradient component is `D(f, wrt: x)`, a Cartesian divergence Σᵢ `D(Fᵢ, wrt: xᵢ)`, and a Laplacian Σᵢ `D(D(u, wrt: xᵢ), wrt: xᵢ)`; the ordinary `D`-discretization rules apply to each term, and the bounded fixpoint (§9.6.3) lowers nested `D`s on subsequent passes. A rule author who wants a one-shot multi-axis stencil (a 5-point Laplacian, an unstructured-mesh divergence) declares a user op for it and matches that op — the open namespace (§4.2) permits it, and the user op carries no privilege.
 
 **Determinism.** Lowering is the outermost-first, priority-ordered, bounded-fixpoint rewrite of §9.6.3. Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs (or the same non-convergence / `unlowered_operator` rejection).
 

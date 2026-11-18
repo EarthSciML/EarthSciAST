@@ -8,468 +8,468 @@
       "kind": "variant",
       "description": "\\partial over \\partial t reads as the time derivative.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\partial N}{\\partial t} = -k N\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\partial N}{\\partial t} = -k N\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
     },
     {
       "id": "dot_latex",
       "kind": "variant",
       "description": "\\dot{N} reads as the time derivative.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\dot{N} = -k N\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\dot{N} = -k N\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
     },
     {
       "id": "dot_typst",
       "kind": "variant",
       "description": "dot(N) reads as the time derivative.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ dot(N) = -k N $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ dot(N) = -k N $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
     },
     {
       "id": "italic_d_latex",
       "kind": "variant",
       "description": "\\frac{dN}{dt} with an italic d, nothing named d declared.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{dN}{dt} = -k N\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{dN}{dt} = -k N\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
     },
     {
       "id": "italic_d_spaced_latex",
       "kind": "variant",
       "description": "\\frac{d N}{d t} with an italic d.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{d N}{d t} = -k N\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{d N}{d t} = -k N\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$N$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} N}{\\mathrm{d} t} = -k N\n$$\n"
     },
     {
       "id": "italic_d_typst",
       "kind": "variant",
       "description": "(d N)/(d t) with an italic d.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (d N)/(d t) = -k N $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (d N)/(d t) = -k N $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["N"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "N"], "op": "*"}], "op": "-"}}], "variables": {"N": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($N$)\n\n#param($k$)\n\n$ (dif N)/(dif t) = -k N $\n"
     },
     {
       "id": "upright_e_latex",
       "kind": "variant",
       "description": "\\mathrm{e}^{x} reads as exp.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\mathrm{e}^{x}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\mathrm{e}^{x}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x)\n$$\n"
     },
     {
       "id": "upright_e_typst",
       "kind": "variant",
       "description": "upright(e)^x reads as exp.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(e)^x $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(e)^x $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
     },
     {
       "id": "upright_e_quoted_typst",
       "kind": "variant",
       "description": "upright(\"e\")^x reads as exp.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(\"e\")^x $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = upright(\"e\")^x $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
     },
     {
       "id": "italic_e_latex",
       "kind": "variant",
       "description": "e^{x} reads as exp when no e is declared.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = e^{x}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = e^{x}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x)\n$$\n"
     },
     {
       "id": "italic_e_typst",
       "kind": "variant",
       "description": "e^x reads as exp when no e is declared.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = e^x $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = e^x $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "exp"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) $\n"
     },
     {
       "id": "log",
       "kind": "variant",
       "description": "\\log reads as \\ln.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\log(x)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "log"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\ln(x)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\log(x)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["x"], "op": "log"}}], "variables": {"x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\ln(x)\n$$\n"
     },
     {
       "id": "paren_plain",
       "kind": "variant",
       "description": "Plain ( ) groups.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a (b + x)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", "x"], "op": "+"}], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\left(b + x\\right)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a (b + x)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", "x"], "op": "+"}], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\left(b + x\\right)\n$$\n"
     },
     {
       "id": "paren_big",
       "kind": "variant",
       "description": "\\bigl( \\bigr) groups.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\bigl(b + x\\bigr)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", "x"], "op": "+"}], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\left(b + x\\right)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\bigl(b + x\\bigr)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", {"args": ["b", "x"], "op": "+"}], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\left(b + x\\right)\n$$\n"
     },
     {
       "id": "bracket_group_latex",
       "kind": "variant",
       "description": "[ ] where no operand precedes it groups.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = [a + b] x\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "+"}, "x"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a + b\\right) x\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = [a + b] x\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "+"}, "x"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a + b\\right) x\n$$\n"
     },
     {
       "id": "bracket_group_typst",
       "kind": "variant",
       "description": "[ ] where no operand precedes it groups.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = [a + b] x $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "+"}, "x"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a + b) x $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = [a + b] x $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "+"}, "x"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = (a + b) x $\n"
     },
     {
       "id": "cdot",
       "kind": "variant",
       "description": "\\cdot between names is *.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot x\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot x\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
     },
     {
       "id": "times",
       "kind": "variant",
       "description": "\\times between names is *.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\times x\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\times x\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
     },
     {
       "id": "times_typst",
       "kind": "variant",
       "description": "times between names is *.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k times x $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k x $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k times x $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = k x $\n"
     },
     {
       "id": "thin_space",
       "kind": "variant",
       "description": "\\, between operands is a space.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k\\,x\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k\\,x\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "x"], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = k x\n$$\n"
     },
     {
       "id": "inline_slash",
       "kind": "variant",
       "description": "a / b inline is /.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a / b\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "/"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{a}{b}\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a / b\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "/"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\frac{a}{b}\n$$\n"
     },
     {
       "id": "leq_geq_neq",
       "kind": "variant",
       "description": "\\leq, \\geq and \\neq are the comparisons.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a \\leq b \\land a \\geq b \\land a \\neq b\\right)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "<="}, {"args": ["a", "b"], "op": ">="}, {"args": ["a", "b"], "op": "!="}], "op": "and"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a \\le b \\land a \\ge b \\land a \\ne b\\right)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a \\leq b \\land a \\geq b \\land a \\neq b\\right)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["a", "b"], "op": "<="}, {"args": ["a", "b"], "op": ">="}, {"args": ["a", "b"], "op": "!="}], "op": "and"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left(a \\le b \\land a \\ge b \\land a \\ne b\\right)\n$$\n"
     },
     {
       "id": "minus_tight",
       "kind": "variant",
       "description": "k-1 is binary minus.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k-1\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k - 1\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k-1\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k - 1\n$$\n"
     },
     {
       "id": "minus_against_number",
       "kind": "variant",
       "description": "k -1 is binary minus: an operand precedes the sign.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k -1\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k - 1\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k -1\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k - 1\n$$\n"
     },
     {
       "id": "minus_tight_typst",
       "kind": "variant",
       "description": "k-1 is binary minus.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k-1 $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k - 1 $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k-1 $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1], "op": "-"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k - 1 $\n"
     },
     {
       "id": "scientific_spacing",
       "kind": "variant",
       "description": "A scientific literal spaced any way is one literal.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 1.5\\times10^ {-12}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1.5e-12], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 1.5 \\times 10^{-12}\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 1.5\\times10^ {-12}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1.5e-12], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 1.5 \\times 10^{-12}\n$$\n"
     },
     {
       "id": "scientific_typst",
       "kind": "variant",
       "description": "A scientific literal spaced any way is one literal.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 1.5times 10^( -12 ) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1.5e-12], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 1.5 times 10^(-12) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 1.5times 10^( -12 ) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 1.5e-12], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 1.5 times 10^(-12) $\n"
     },
     {
       "id": "scientific_integer_mantissa",
       "kind": "variant",
       "description": "An integer mantissa is the literal.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2 \\times 10^{3}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 2000], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2000\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2 \\times 10^{3}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 2000], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2000\n$$\n"
     },
     {
       "id": "index_brackets_latex",
       "kind": "variant",
       "description": "[i, j] directly after an operand is index.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A[i, j]\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", "j"], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A_{i, j}\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A[i, j]\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", "j"], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$A$]{}\n\n:param[$i$]{}\n\n:param[$j$]{}\n\n:var[$y$]{}\n\n$$\ny = A_{i, j}\n$$\n"
     },
     {
       "id": "index_brackets_typst",
       "kind": "variant",
       "description": "[i, j] directly after an operand is index.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A[i, j] $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", "j"], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A_(i, j) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A[i, j] $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["A", "i", "j"], "op": "index"}}], "variables": {"A": {"type": "parameter"}, "i": {"type": "parameter"}, "j": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($A$)\n\n#param($i$)\n\n#param($j$)\n\n#var($y$)\n\n$ y = A_(i, j) $\n"
     },
     {
       "id": "explicit_name_latex",
       "kind": "variant",
       "description": "\\mathit{…} names any declared name.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T_{\\mathrm{air}}$]{}\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\mathit{T\\_air}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "T_air"], "op": "*"}}], "variables": {"T_air": {"type": "parameter"}, "k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T_{\\mathrm{air}}$]{}\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k T_{\\mathrm{air}}\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T_{\\mathrm{air}}$]{}\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\mathit{T\\_air}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "T_air"], "op": "*"}}], "variables": {"T_air": {"type": "parameter"}, "k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T_{\\mathrm{air}}$]{}\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k T_{\\mathrm{air}}\n$$\n"
     },
     {
       "id": "explicit_name_typst",
       "kind": "variant",
       "description": "italic(\"…\") names any declared name.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T_(upright(\"air\"))$)\n\n#param($k$)\n\n#var($y$)\n\n$ y = k italic(\"T_air\") $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "T_air"], "op": "*"}}], "variables": {"T_air": {"type": "parameter"}, "k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T_(upright(\"air\"))$)\n\n#param($k$)\n\n#var($y$)\n\n$ y = k T_(upright(\"air\")) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T_(upright(\"air\"))$)\n\n#param($k$)\n\n#var($y$)\n\n$ y = k italic(\"T_air\") $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", "T_air"], "op": "*"}}], "variables": {"T_air": {"type": "parameter"}, "k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T_(upright(\"air\"))$)\n\n#param($k$)\n\n#var($y$)\n\n$ y = k T_(upright(\"air\")) $\n"
     },
     {
       "id": "named_template_args",
       "kind": "variant",
       "description": "Named template arguments where the parameters are known.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(A_{\\mathrm{pre}} = a, \\mathit{Ea} = T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(A_{\\mathrm{pre}} = a, \\mathit{Ea} = T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
     },
     {
       "id": "named_template_args_any_order",
       "kind": "variant",
       "description": "Named template arguments in any order read sorted.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(\\mathit{Ea} = T, A_{\\mathrm{pre}} = a)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(\\mathit{Ea} = T, A_{\\mathrm{pre}} = a)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$T$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{arrhenius}(a, T)\n$$\n\n$$\n\\operatorname{arrhenius}(A_{\\mathrm{pre}}, \\mathit{Ea}) \\coloneqq A_{\\mathrm{pre}} \\exp(-\\mathit{Ea})\n$$\n"
     },
     {
       "id": "named_template_args_any_order_typst",
       "kind": "variant",
       "description": "Named template arguments in any order read sorted.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(italic(\"Ea\") = T, A_(upright(\"pre\")) = a) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(italic(\"Ea\") = T, A_(upright(\"pre\")) = a) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
       "id": "template_params_explicit_names_typst",
       "kind": "variant",
       "description": "A template header whose multi-letter parameter names are written italic(\"…\"): the header reads each name as a balanced expression up to the next , or ).",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(italic(\"A_pre\"), italic(\"Ea\")) := italic(\"A_pre\") exp(-italic(\"Ea\")) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(italic(\"A_pre\"), italic(\"Ea\")) := italic(\"A_pre\") exp(-italic(\"Ea\")) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "bindings": {"A_pre": "a", "Ea": "T"}, "name": "arrhenius", "op": "apply_expression_template"}}], "expression_templates": {"arrhenius": {"body": {"args": ["A_pre", {"args": [{"args": ["Ea"], "op": "-"}], "op": "exp"}], "op": "*"}, "params": ["A_pre", "Ea"]}}, "variables": {"T": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($T$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = op(\"arrhenius\")(a, T) $\n\n$ op(\"arrhenius\")(A_(upright(\"pre\")), italic(\"Ea\")) := A_(upright(\"pre\")) exp(-italic(\"Ea\")) $\n"
     },
     {
       "id": "native_call_latex",
       "kind": "variant",
       "description": "A native operator written in the call form reads as the native node.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{exp}(x) + \\operatorname{max}(a, x)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x) + \\max(a, x)\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{exp}(x) + \\operatorname{max}(a, x)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\exp(x) + \\max(a, x)\n$$\n"
     },
     {
       "id": "native_call_typst",
       "kind": "variant",
       "description": "A native operator written in the call form reads as the native node.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"exp\")(x) + op(\"max\")(a, x) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) + max(a, x) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"exp\")(x) + op(\"max\")(a, x) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x"], "op": "exp"}, {"args": ["a", "x"], "op": "max"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = exp(x) + max(a, x) $\n"
     },
     {
       "id": "pow_neg_call",
       "kind": "variant",
       "description": "pow(x, n) and neg(x) in the call form read as ^ and unary minus.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{pow}(x, 2) + \\operatorname{neg}(a)\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 2], "op": "^"}, {"args": ["a"], "op": "-"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2} + -a\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{pow}(x, 2) + \\operatorname{neg}(a)\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 2], "op": "^"}, {"args": ["a"], "op": "-"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = x^{2} + -a\n$$\n"
     },
     {
       "id": "pow_neg_call_typst",
       "kind": "variant",
       "description": "pow(x, n) and neg(x) in the call form read as ^ and unary minus.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"pow\")(x, 2) + op(\"neg\")(a) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 2], "op": "^"}, {"args": ["a"], "op": "-"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 + -a $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = op(\"pow\")(x, 2) + op(\"neg\")(a) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 2], "op": "^"}, {"args": ["a"], "op": "-"}], "op": "+"}}], "variables": {"a": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($x$)\n\n#var($y$)\n\n$ y = x^2 + -a $\n"
     },
     {
       "id": "json_string_quoted",
       "kind": "variant",
       "description": "The earlier JSON-string spelling, double-quoted in math mode.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\"})\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \"a\\u007Bb\\u007D\")\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k"], "op": "myop", "s": "a{b}"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = \\operatorname{myop}(k; \\mathrm{s} = \\text{\"a\\{b\\}\"})\n$$\n"
     },
     {
       "id": "aligned_block",
       "kind": "variant",
       "description": "Several equations in one aligned block.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} A}{\\mathrm{d} t} &= -k A \\\\\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} &= k A + a B\\end{aligned}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} A}{\\mathrm{d} t} &= -k A \\\\\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} &= k A + a B\\end{aligned}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
     },
     {
       "id": "aligned_continuation",
       "kind": "variant",
       "description": "An aligned row with an empty left cell continues the equation.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} B}{\\mathrm{d} t} &= k A \\\\\n&\\quad + a B\\end{aligned}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\begin{aligned}\\frac{\\mathrm{d} B}{\\mathrm{d} t} &= k A \\\\\n&\\quad + a B\\end{aligned}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
     },
     {
       "id": "split",
       "kind": "variant",
       "description": "Every row of split is one equation.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\begin{split}\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A \\\\\n+ a B\\end{split}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\begin{split}\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A \\\\\n+ a B\\end{split}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:var[$A$]{}\n\n:var[$B$]{}\n\n:param[$a$]{}\n\n:param[$k$]{}\n\n$$\n\\frac{\\mathrm{d} A}{\\mathrm{d} t} = -k A\n$$\n\n$$\n\\frac{\\mathrm{d} B}{\\mathrm{d} t} = k A + a B\n$$\n"
     },
     {
       "id": "aligned_typst",
       "kind": "variant",
       "description": "Several equations in one Typst display, rows split by \\ and &.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($A$)\n\n#var($B$)\n\n#param($a$)\n\n#param($k$)\n\n$ (dif A)/(dif t) &= -k A \\\n(dif B)/(dif t) &= k A + a B $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($A$)\n\n#var($B$)\n\n#param($a$)\n\n#param($k$)\n\n$ (dif A)/(dif t) = -k A $\n\n$ (dif B)/(dif t) = k A + a B $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($A$)\n\n#var($B$)\n\n#param($a$)\n\n#param($k$)\n\n$ (dif A)/(dif t) &= -k A \\\n(dif B)/(dif t) &= k A + a B $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["A"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}], "op": "-"}}, {"lhs": {"args": ["B"], "op": "D", "wrt": "t"}, "rhs": {"args": [{"args": ["k", "A"], "op": "*"}, {"args": ["a", "B"], "op": "*"}], "op": "+"}}], "variables": {"A": {"type": "unknown"}, "B": {"type": "unknown"}, "a": {"type": "parameter"}, "k": {"type": "parameter"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($A$)\n\n#var($B$)\n\n#param($a$)\n\n#param($k$)\n\n$ (dif A)/(dif t) = -k A $\n\n$ (dif B)/(dif t) = k A + a B $\n"
     },
     {
       "id": "cases_in_aligned",
       "kind": "variant",
       "description": "A row break inside cases never splits an equation.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\n\\begin{aligned}y &= \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\\end{aligned}\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", "b"], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\n\\begin{aligned}y &= \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\\end{aligned}\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [{"args": ["x", 0], "op": ">"}, "a", "b"], "op": "ifelse"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "x": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:param[$x$]{}\n\n:var[$y$]{}\n\n$$\ny = \\begin{cases}a & \\text{if } x > 0 \\\\ b & \\text{otherwise}\\end{cases}\n$$\n"
     },
     {
       "id": "typst_delim_augment_names",
       "kind": "variant",
       "description": "Variables named delim and augment are bare words in Typst like any other declared name.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = delim + 2 augment $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["delim", {"args": [2, "augment"], "op": "*"}], "op": "+"}}], "variables": {"augment": {"type": "parameter"}, "delim": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = italic(\"delim\") + 2 italic(\"augment\") $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = delim + 2 augment $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["delim", {"args": [2, "augment"], "op": "*"}], "op": "+"}}], "variables": {"augment": {"type": "parameter"}, "delim": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($italic(\"augment\")$)\n\n#param($italic(\"delim\")$)\n\n#var($y$)\n\n$ y = italic(\"delim\") + 2 italic(\"augment\") $\n"
     },
     {
       "id": "typst_augment_derivative",
       "kind": "variant",
       "description": "A variable named augment as a bare word inside a derivative.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif augment)/(dif t) = k augment $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["augment"], "op": "D", "wrt": "t"}, "rhs": {"args": ["k", "augment"], "op": "*"}}], "variables": {"augment": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif italic(\"augment\"))/(dif t) = k italic(\"augment\") $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif augment)/(dif t) = k augment $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": {"args": ["augment"], "op": "D", "wrt": "t"}, "rhs": {"args": ["k", "augment"], "op": "*"}}], "variables": {"augment": {"type": "unknown"}, "k": {"type": "parameter"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#var($italic(\"augment\")$)\n\n#param($k$)\n\n$ (dif italic(\"augment\"))/(dif t) = k italic(\"augment\") $\n"
     },
     {
       "id": "makearray_region_tight",
       "kind": "variant",
       "description": "A region's bound pairs joined by \\times with no spaces.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N]\\times[1, N] \\end{array}\\right]\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\end{array}\\right]\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N]\\times[1, N] \\end{array}\\right]\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$N$]{}\n\n:param[$a$]{}\n\n:var[$y$]{}\n\n$$\ny = \\left[\\begin{array}{l|l} a & [1, N] \\times [1, N] \\end{array}\\right]\n$$\n"
     },
     {
       "id": "makearray_region_tight_typst",
       "kind": "variant",
       "description": "A region's bound pairs joined by times with no space before the bracket.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times[1, N]) $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]) $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times[1, N]) $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": [], "op": "makearray", "regions": [[[1, "N"], [1, "N"]]], "values": ["a"]}}], "variables": {"N": {"type": "parameter"}, "a": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($N$)\n\n#param($a$)\n\n#var($y$)\n\n$ y = mat(delim: \"[\", augment: #1, a, [1, N] times [1, N]) $\n"
     },
     {
       "id": "times_bracket_product",
       "kind": "variant",
       "description": "Outside a makearray region, a \\times before a bracket is a product, the bracket a group.",
       "surface": "markdown",
-      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\times [b]\n$$\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a b\n$$\n"
+      "input": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a \\times [b]\n$$\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"2.4.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$a$]{}\n\n:param[$b$]{}\n\n:var[$y$]{}\n\n$$\ny = a b\n$$\n"
     },
     {
       "id": "times_bracket_product_typst",
       "kind": "variant",
       "description": "Outside a makearray region, times before a bracket is a product.",
       "surface": "typst",
-      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a times [b] $\n",
-      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a b $\n"
+      "input": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a times [b] $\n",
+      "esm": {"esm": "2.4.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["a", "b"], "op": "*"}}], "variables": {"a": {"type": "parameter"}, "b": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.4.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($a$)\n\n#param($b$)\n\n#var($y$)\n\n$ y = a b $\n"
     }
   ]
 }

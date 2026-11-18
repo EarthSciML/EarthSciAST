@@ -7,15 +7,14 @@ or error text that behavior should produce.
 
 ## The contract
 
-The library implements **major version 3** and still loads **majors 1 and 2**:
-esm 2.0.0 and esm 3.0.0 only removed constructs (each a `removed_op` load
-error; the 2.0.0 removals name `python -m earthsci_ast.migrate`, the 3.0.0
-removals `grad`, `div` and `laplacian` have no codemod), so a 1.x or 2.x
-document that uses none of them loads as written and its own version gates
-still apply. Section 8 of the ESM Libraries Specification asks for:
+The library implements **major version 2** and still loads **major 1**: esm
+2.0.0 only removed constructs (each a `removed_op` load error naming
+`python -m earthsci_ast.migrate`), so a 1.x document that uses none of them
+loads as written and its own 1.x version gates still apply. Section 8 of the ESM
+Libraries Specification asks for:
 
 - **Reject** a file whose major version the library does not implement, in
-  *either* direction (0.x and 4.x).
+  *either* direction (0.x and 3.x).
 - **Accept** a file with a minor version ≤ the library's, within that major
   (backward compatible).
 - **Warn** on a higher minor version but attempt to load it (forward compatible).
@@ -31,7 +30,7 @@ from this category's 0.x form, where major 1 was the thing being refused.
 
 **Every fixture declares the version it is named for.** These files exist to
 exercise the version *gate*, so a fixture restamped to the library's own version
-tests nothing — `version_4_0_0_major_rejection.esm` declaring `1.0.0` would load
+tests nothing — `version_2_5_1_major_rejection.esm` declaring `1.0.0` would load
 clean and its assertion would pass for the wrong reason.
 
 ## Test Files
@@ -50,10 +49,9 @@ clean and its assertion would pass for the wrong reason.
 | `version_2_0_0_baseline.esm` | 2.0.0 | Load | Earlier minor since the esm 2.1.0 bump — additive, no warning |
 | `version_2_1_0_variable_bounds.esm` | 2.1.0 | Load | Earlier minor since the esm 2.2.0 bump; uses `lb` / `ub` on a model variable (esm-spec §6.3.2) |
 | `version_2_2_0_pointwise_lift.esm` | 2.2.0 | Load | Earlier minor since the esm 2.3.0 bump; a scalar state lifted through a `variable_map` (esm-spec §10.5) |
-| `version_2_3_0_deprecated_neg.esm` | 2.3.0 | Load | The last 2.x minor, loaded by a 3.x library; spells unary minus with the deprecated `neg`, so it also warns `deprecated_op` (esm-spec §4.2) — not a version warning |
-| `version_3_0_0_baseline.esm` | 3.0.0 | Load | Exact version match; 3.0.0 only removed `grad`, `div` and `laplacian` |
+| `version_2_3_0_deprecated_neg.esm` | 2.3.0 | Load | Earlier minor since the esm 2.4.0 bump; spells unary minus with the deprecated `neg`, so it also warns `deprecated_op` (esm-spec §4.2) — not a version warning |
+| `version_2_4_0_baseline.esm` | 2.4.0 | Load | Exact version match; 2.4.0 only removed `grad`, `div` and `laplacian` |
 | `version_1_10_0_double_digit.esm` | 1.10.0 | Load with warning | Double-digit minor; newer than 1.3.0 |
-| `version_2_5_1_major_rejection.esm` | 2.5.1 | Load with warning | A newer minor of the older major 2; newer than 2.3.0, the last 2.x minor (the name is historical: it was the future-major rejection while the library was 1.x) |
 | `version_1_2_0_with_unknown_fields.esm` | 1.2.0 | **Schema error** | Newer minor carrying two unmodelled top-level blocks — see the OPEN note |
 
 ### Rejected — the wrong major
@@ -63,7 +61,7 @@ clean and its assertion would pass for the wrong reason.
 | `version_0_1_0_pre_break.esm` | 0.1.0 | Reject with error | A pre-1.0 document; no migration path |
 | `version_0_0_1_pre_break.esm` | 0.0.1 | Reject with error | The oldest published version — age earns no leniency |
 | `version_0_9_0_last_pre_break.esm` | 0.9.0 | Reject with error | The release immediately before the break; no deprecation window |
-| `version_4_0_0_major_rejection.esm` | 4.0.0 | Reject with error | A *future* major, refused in the other direction |
+| `version_2_5_1_major_rejection.esm` | 2.5.1 | Reject with error | A *future* major, refused in the other direction |
 | `version_12_34_56_large_numbers.esm` | 12.34.56 | Reject with error | Large major version |
 
 ### Rejected — the version string itself

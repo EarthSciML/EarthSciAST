@@ -2,14 +2,14 @@
   "esm": "2.3.0",
   "metadata": {
     "name": "removed_op_div",
-    "description": "INVALID: the `div` op was removed at esm 3.0.0. A loader rejects it BY NAME at the wire boundary with `removed_op`, whatever `esm` the document declares (this one declares 2.3.0, the last 2.x minor). There is no codemod: write `div(F)` as the sum over axes of `D(F_i, wrt: x_i)`, or use a user op lowered by a rewrite rule for a scheme that is not written per axis (MIGRATION.md, \"esm 3.0.0\").",
+    "description": "INVALID: the `div` op was removed at esm 2.4.0. A loader rejects it BY NAME at the wire boundary with `removed_op`, whatever `esm` the document declares (this one declares 2.3.0, the release before the removal). There is no codemod: write `div(F)` as the sum over axes of `D(F_i, wrt: x_i)`, or use a user op lowered by a rewrite rule for a scheme that is not written per axis (MIGRATION.md, \"esm 2.4.0\").",
     "authors": [
       "EarthSciAST"
     ],
     "tags": [
       "invalid",
       "removed_op",
-      "esm-3.0.0",
+      "esm-2.4.0",
       "div"
     ]
   },

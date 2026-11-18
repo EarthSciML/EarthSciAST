@@ -1,8 +1,8 @@
 {
-  "esm": "3.0.0",
+  "esm": "2.4.0",
   "metadata": {
-    "name": "Version_3_0_0_Baseline",
-    "description": "Test file with version 3.0.0 - the library's own version. 3.0.0 only removes the `grad`, `div` and `laplacian` ops, so a document that uses none of them is unchanged",
+    "name": "Version_2_4_0_Baseline",
+    "description": "Test file with version 2.4.0 - the library's own version. 2.4.0 only removes the `grad`, `div` and `laplacian` ops, so a document that uses none of them is unchanged",
     "authors": [
       "ESM Format Team"
     ],

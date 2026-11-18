@@ -1,6 +1,6 @@
 ---
 title: "Removed operators"
-description: "The operators esm 2.0.0 and 3.0.0 removed, the error a document using one gets, and the standard-library template that replaces each."
+description: "The operators esm 2.0.0 and 2.4.0 removed, the error a document using one gets, and the standard-library template that replaces each."
 ---
 
 esm 2.0.0 removed every operator whose evaluation needed code outside the
@@ -28,12 +28,12 @@ template form.
 | `intersect_polygon` | none |
 | `aggregate` (the deprecated spelling of `faq`) | `faq`, the same node |
 
-esm 3.0.0 removed three more: the open-tier sugar ops `grad`, `div` and
+esm 2.4.0 removed three more: the open-tier sugar ops `grad`, `div` and
 `laplacian`. They are refused with the same `removed_op`, whatever `esm` a
 document declares. There is no codemod; write each with a spatial `D`, one per
 axis (see [calculus](../calculus/)):
 
-| Removed at 3.0.0 | Replacement |
+| Removed at 2.4.0 | Replacement |
 |---|---|
 | `grad(f, dim: x)` | `D(f, wrt: x)` |
 | `div(F)` | `Σᵢ D(Fᵢ, wrt: xᵢ)`, or an operator you invent, lowered by a rewrite rule, for a scheme not written per axis |
