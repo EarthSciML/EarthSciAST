@@ -82,6 +82,6 @@ shorter (Rust's `s.get(n..).unwrap_or(&[])`)."""
 sdrop(s::Chars, n::Int) = drop(s, min(n, length(s)))
 
 """`String.ofList`."""
-string_of(cs) = String(collect(Char, cs))
+const string_of = str_of
 
 end # module SText

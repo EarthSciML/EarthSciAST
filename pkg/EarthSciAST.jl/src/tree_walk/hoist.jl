@@ -1,6 +1,6 @@
 # ========================================================================
 # tree_walk/hoist.jl — part of the tree-walk evaluator.
-# Included by src/tree_walk.jl after build.jl.
+# Included by src/tree_walk.jl after build_records.jl.
 #
 # HOISTING NESTED REDUCTIONS. A scalar reduction nested in the body of an
 # array faq is folded again at every output cell of that faq:

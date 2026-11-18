@@ -37,7 +37,7 @@ const Toks = AbstractVector{<:Tok}
 """The token at `i` is the keyword `k`."""
 @inline kat(ts::Toks, i::Int, k::Kw) = iskw(tk(ts, i), k)
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Small pieces
 
@@ -270,7 +270,6 @@ struct CallArg
     k::String
     v::Any
 end
-Base.:(==)(a::CallArg, b::CallArg) = fieldeq(a, b)
 
 """`Math.allPos`."""
 function all_pos(xs)
@@ -510,7 +509,6 @@ struct Row
     k::String
     v::Any
 end
-Base.:(==)(a::Row, b::Row) = fieldeq(a, b)
 rng(k, v) = Row(:rng, k, v)
 filt(v) = Row(:filt, "", v)
 

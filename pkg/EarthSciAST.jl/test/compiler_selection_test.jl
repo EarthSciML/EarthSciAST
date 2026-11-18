@@ -103,15 +103,15 @@ function _csel_contraction_doc(NS::Int = 16, NR::Int = 16)
         )
     )
     ics = merge(
-        Dict{String, Any}("E[$s]" => Float64(s % 5) for s in 1:NS),
-        Dict{String, Any}("conc[$r]" => 0.0 for r in 1:NR)
+        Dict{String, Any}("R.E[$s]" => Float64(s % 5) for s in 1:NS),
+        Dict{String, Any}("R.conc[$r]" => 0.0 for r in 1:NR)
     )
     return doc, ics
 end
 
 _csel_contraction_build(doc, ics; compiler) =
     withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-    EarthSciAST._build_evaluator(doc; initial_conditions = ics, compiler = compiler)
+    EarthSciAST.Internal.build(doc; initial_conditions = ics, compiler = compiler)
 end
 
 # `du` at the seeded state, so two builds can be compared element for element.
@@ -201,16 +201,12 @@ end
         # bit, on the hardest document this file has.
         doc, ics = _csel_contraction_doc()
         runs = map(((), (; compiler = :native))) do kw
-            insp = BuildInspection()
-            f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-                EarthSciAST._build_evaluator(
-                    doc; initial_conditions = ics, inspect = insp,
-                    kw...
-                )
+            f!, u0, p, _t, vm, rep = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+                EarthSciAST.Internal.build(doc; initial_conditions = ics, kw...)
             end
             du = zeros(Float64, length(u0))
             f!(du, u0, p, 0.0)
-            (insp.compiler_report, [du[vm["conc[$r]"]] for r in 1:16])
+            (rep.compiler_report, [du[vm["R.conc[$r]"]] for r in 1:16])
         end
         for (rep, _) in runs
             @test rep.compiler === :native
@@ -231,16 +227,13 @@ end
             sum(Float64((3s + 7r) % 11) * Float64(s % 5) for s in 1:16)
                 for r in 1:16
         ]
-        insp = BuildInspection()
-        f!, u0, p, _t, vm = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            EarthSciAST._build_evaluator(
-                doc; initial_conditions = ics, compiler = :native,
-                inspect = insp
-            )
+        f!, u0, p, _t, vm, rep = withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
+            EarthSciAST.Internal.build(doc; initial_conditions = ics, compiler = :native)
         end
+        insp = rep.products
         du = zeros(Float64, length(u0))
         f!(du, u0, p, 0.0)
-        @test [du[vm["conc[$r]"]] for r in 1:16] == exact
+        @test [du[vm["R.conc[$r]"]] for r in 1:16] == exact
         # The tier is named in the report, in its GENERATED form — the walked
         # one is what §2.5.10 refuses, so its absence is half the claim.
         rows = [
@@ -264,8 +257,8 @@ end
         )
         dui = zeros(Float64, length(ui))
         fi!(dui, ui, pi_, 0.0)
-        @test [dui[vmi["conc[$r]"]] for r in 1:16] == exact
-        @test all(du[vm["conc[$r]"]] === dui[vmi["conc[$r]"]] for r in 1:16)
+        @test [dui[vmi["R.conc[$r]"]] for r in 1:16] == exact
+        @test all(du[vm["R.conc[$r]"]] === dui[vmi["R.conc[$r]"]] for r in 1:16)
     end
 
     @testset "native and interpreter agree bit for bit: $(basename(f))" for f in _CSEL_AGREE
@@ -369,10 +362,7 @@ end
         push!(eqs, eqs[2])
         insp2 = BuildInspection()
         @test_throws TreeWalkError withenv("ESS_ARRAY_CONTRACTION_MIN" => "8") do
-            EarthSciAST._build_evaluator(
-                doc; initial_conditions = ics, inspect = insp2,
-                compiler = :native
-            )
+            esm_problem(doc, (0.0, 1.0); u0 = ics, inspect = insp2, compiler = :native)
         end
         @test insp2.compiler_report.compiler === :native
         @test any(
@@ -388,12 +378,12 @@ end
         # the availability check, so this session without Reactant hears it.
         doc, _ = _csel_contraction_doc()
         for call in (
-                () -> CSEL._build_evaluator(doc; compiler = :xla),
-                () -> CSEL._build_evaluator(
+                () -> CSEL.Internal.build(doc; compiler = :xla),
+                () -> CSEL.Internal.build(
                     load_path(_CSEL_AGREE[1]);
                     compiler = :xla
                 ),
-                () -> CSEL.build_evaluator(
+                () -> CSEL.Internal.build(
                     doc; compiler = :xla,
                     form = :inplace
                 ),
@@ -454,32 +444,14 @@ end
             NamedTuple()
     end
 
-    @testset "build_evaluator is deprecated, and exported until it is removed" begin
-        # API_SPEC §8 item 23: the extension seam under the runners is retired
-        # — `esm_problem` is the way in — and the name that remains is a
-        # deprecated alias kept for one minor version so a downstream package
-        # keeps running while it migrates. It stays EXPORTED for that minor: a
-        # downstream that calls the bare name after `using EarthSciAST`
-        # (EarthSciASTDiff does) must hear the warning, not `UndefVarError`.
-        @test :build_evaluator in names(EarthSciAST)
+    @testset "build_evaluator is removed; what it published hangs on the Problem" begin
+        # API_SPEC §8 item 23: `esm_problem` is the way in, and the deprecated
+        # alias is gone.
+        @test !(:build_evaluator in names(EarthSciAST))
+        @test !isdefined(EarthSciAST, :build_evaluator)
         @test :esm_problem in names(EarthSciAST)
-        # The BARE name, as that downstream spells it: an unexported alias
-        # would make this line an `UndefVarError`.
-        @test_logs (:warn,) match_mode = :any build_evaluator(load_path(_CSEL_AGREE[1]))
-        # The alias still builds, and builds the same thing the private entry
-        # point does: a deprecation that changed the answer would be a second
-        # break hiding inside the first.
-        file = load_path(_CSEL_AGREE[1])
-        dep = @test_logs (:warn,) match_mode = :any CSEL.build_evaluator(file)
-        priv = CSEL._build_evaluator(load_path(_CSEL_AGREE[1]))
-        @test isequal(dep[2], priv[2])          # u0
-        @test dep[5] == priv[5]                 # var_map
-        du_dep = zeros(length(dep[2])); dep[1](du_dep, dep[2], dep[3], 0.0)
-        du_priv = zeros(length(priv[2])); priv[1](du_priv, priv[2], priv[3], 0.0)
-        @test isequal(du_dep, du_priv)
 
-        # What the seam used to publish now hangs on the Problem, for every
-        # compiler rather than only for the out-of-place build form.
+        # The forcing buffers answer for every compiler.
         prob = _csel_problem(_CSEL_AGREE[1], (0.0, 1.0))
         @test forcing_buffers(prob) isa NamedTuple
         @test forcing_buffer_index(prob) isa Dict{String, Int}
@@ -558,30 +530,29 @@ function _csel_filtered_gather_doc(filtered::Bool)
 end
 
 @testset "a gather under a filter is not lifted past it" begin
-    ics = Dict{String, Any}("u[$c,$l]" => 1.0 * c + l for c in 1:3 for l in 1:2)
+    ics = Dict{String, Any}("M.u[$c,$l]" => 1.0 * c + l for c in 1:3 for l in 1:2)
     for (c, n) in ((1, 2.0), (2, 0.0), (3, 1.0))
-        ics["cnt[$c]"] = n
+        ics["M.cnt[$c]"] = n
     end
     doc = _csel_filtered_gather_doc(true)
     builds = map((:native, :interpreter)) do comp
-        f!, u0, p, _t, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _t, vm = EarthSciAST.Internal.build(
             doc; initial_conditions = ics,
             compiler = comp
         )
         du = zeros(Float64, length(u0))
         f!(du, u0, p, 0.0)
-        [du[vm["u[$c,$l]"]] for c in 1:3 for l in 1:2]
+        [du[vm["M.u[$c,$l]"]] for c in 1:3 for l in 1:2]
     end
     @test isequal(builds[1], builds[2])
     @test builds[1][3:4] == [0.0, 0.0]                  # the filtered-out column
 
     # The unfiltered document still lifts the gather (it is in range there
     # once every column has cnt >= 1).
-    ics["cnt[2]"] = 1.0
-    insp = BuildInspection()
-    EarthSciAST._build_evaluator(
+    ics["M.cnt[2]"] = 1.0
+    rep = EarthSciAST.Internal.build(
         _csel_filtered_gather_doc(false); initial_conditions = ics,
-        compiler = :native, inspect = insp
-    )
-    @test any(r -> occursin("hoisted gather", r.rule), insp.compiler_report.rules)
+        compiler = :native
+    ).report
+    @test any(r -> occursin("hoisted gather", r.rule), rep.compiler_report.rules)
 end

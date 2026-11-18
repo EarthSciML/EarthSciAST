@@ -22,15 +22,15 @@ const _UO_FIXTURE = JSON3.read(
     Dict{String, Any}
 )
 
-# `D(u) = rhs` with `u` a state and `p` a parameter, built through the public
-# `build_evaluator`.
+# `D(u) = rhs` with `u` a state and `p` a parameter, built through the
+# internal build entry.
 function _uo_build(rhs::_UO.ASTExpr)
     vars = Dict{String, ModelVariable}(
         "u" => ModelVariable(UnknownVariable; default = 1.0),
         "p" => ModelVariable(ParameterVariable; default = 2.0),
     )
     eq = _UO.Equation(OpExpr("D", _UO.ASTExpr[VarExpr("u")]; wrt = "t"), rhs)
-    return EarthSciAST._build_evaluator(_UO.Model(vars, _UO.Equation[eq]))
+    return EarthSciAST.Internal.build(_UO.Model(vars, _UO.Equation[eq]))
 end
 
 _uo_refusal(f) = try
@@ -57,7 +57,7 @@ _uo_compile(e::_UO.ASTExpr) =
         )
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[vm["u"]] == _UO_FIXTURE["control"]["expected"]
+        @test du[vm["M.u"]] == _UO_FIXTURE["control"]["expected"]
     end
 
     @testset "a core op with no rule is refused when compiled" begin

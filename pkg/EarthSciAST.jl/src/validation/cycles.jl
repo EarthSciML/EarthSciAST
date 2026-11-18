@@ -254,8 +254,8 @@ function _check_observed_cycles!(
     return errors
 end
 
-# Strongly connected components of `adj` (Kosaraju, both passes ITERATIVE for the
-# reason `_first_observed_cycle` gives).
+# Strongly connected components of `adj` (Kosaraju, both passes ITERATIVE: the
+# depth is the length of the longest observed chain, which is unbounded).
 function _strongly_connected(adj::Dict{String, Set{String}})::Vector{Set{String}}
     visited = Set{String}()
     finish = String[]
@@ -343,64 +343,11 @@ function _observed_dependency_names(rhs::ASTExpr)::Set{String}
     return free
 end
 
-# The first cycle a DFS over `adj` closes, as the path in traversal order with
-# the entry node repeated to close it (`["gamfac", "hpbl", "wscale", "gamfac"]`),
-# or `nothing` when the graph has no cycle `accept` takes.
-#
-# `accept(cycle)` filters back edges: one whose cycle it rejects is skipped and
-# the search continues. `validate_coupling_cycles` uses it to pass over a cycle
-# that lies in one scope, which is `observed_cycle`'s (esm-spec §4.9.7);
-# `validate_observed_cycles` takes every cycle.
-#
-# WHITE/GREY/BLACK with an explicit path stack. Roots AND successors are visited
-# in sorted order so the cycle that gets named — and which of its members is the
-# entry — does not depend on `Dict` hashing; §4.9.6 and §4.9.7 require that
-# determinism explicitly, because a binding that names a different member on
-# each run cannot be pinned. ONE cycle is reported per model: a second is usually the same defect seen from
-# another entry point, and the author fixes them one at a time regardless.
-#
-# ITERATIVE, and that is not a style choice. The depth of this walk is the
-# length of the longest observed CHAIN — a property of the document, and
-# unbounded — not the expression nesting the schema caps. A recursive `dfs`
-# raised `StackOverflowError` ("program state may be corrupted") on an ACYCLIC
-# chain of somewhere under 20 000 observeds, turning a document that must
-# validate CLEAN into a crash. `cursor[i]` is how far into `adj[path_stack[i]]`
-# that frame has got, so resuming a parent after a child finishes picks up
-# exactly where it left off.
-function _first_observed_cycle(
-        adj::Dict{String, Vector{String}}; accept = Returns(true)
-    )::Union{Vector{String}, Nothing}
-    WHITE, GREY, BLACK = 0, 1, 2
-    color = Dict{String, Int}(n => WHITE for n in keys(adj))
-    path_stack = String[]
-    cursor = Int[]
-
-    for root in sort!(collect(keys(adj)))
-        color[root] == WHITE || continue
-        color[root] = GREY
-        push!(path_stack, root)
-        push!(cursor, 1)
-        while !isempty(path_stack)
-            u = path_stack[end]
-            succ = adj[u]
-            if cursor[end] > length(succ)
-                color[u] = BLACK
-                pop!(path_stack)
-                pop!(cursor)
-                continue
-            end
-            v = succ[cursor[end]]
-            cursor[end] += 1
-            if color[v] == GREY
-                start = findfirst(==(v), path_stack)
-                cycle = vcat(path_stack[start:end], v)
-                accept(cycle) && return cycle
-            elseif color[v] == WHITE
-                color[v] = GREY
-                push!(path_stack, v)
-                push!(cursor, 1)
-            end
-        end
-    end
-    return nothing
-end
+# The first cycle among the observed definitions `adj`, by `_find_cycle`
+# (digraph.jl) with the roots in sorted order and each successor list as given
+# (callers sort them), so the cycle that gets named, and which member is its
+# entry, does not depend on `Dict` hashing (esm-spec §4.9.6, §4.9.7). `accept`
+# passes over a cycle: `validate_coupling_cycles` skips one that lies in one
+# scope, which is `observed_cycle`'s. ONE cycle is reported per model.
+_first_observed_cycle(adj::Dict{String, Vector{String}}; accept = Returns(true)) =
+    _find_cycle(adj, sort!(collect(keys(adj))); accept)

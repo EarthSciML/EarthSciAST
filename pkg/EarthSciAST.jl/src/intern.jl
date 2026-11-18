@@ -1,6 +1,5 @@
 # ========================================================================
 # intern.jl — structural interning (hash-consing) of the expression AST.
-# Perf-plan item A1 (prototypes/perf-gap-closure-plan.md in reseact.esm).
 #
 # `_intern_expr` maps every `OpExpr` to ONE canonical object per structure, so
 # the in-memory AST becomes a DAG: textually identical subtrees — which
@@ -8,11 +7,11 @@
 # copies, re-inflating one species' RHS to ~57,000 index ops — become the SAME
 # object. Every downstream build pass is already identity-memoized
 # (`_sub_preserving`, `foreach_subexpr_once`, `_BuildMemo.resolve/compile`,
-# `_build_acc_cse`, the `_stencilize` smemo, the ESS-0hh lowering memo); today
-# those memos mostly miss because the copies are distinct objects. After
-# interning they hit, and the build cost collapses to the unique-node count.
+# `_build_acc_cse`, the `_stencilize` memo, the lowering memo); without
+# interning those memos miss on the copies, which are distinct objects. With it
+# they hit, and the build cost is the unique-node count.
 #
-# WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build.jl),
+# WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build_pipeline.jl),
 # right after `apply_expression_template` reference expansion — the latest
 # point that covers the whole build hot path. NOT at parse: parse-time
 # interning would also be sound today (the mutation audit in
@@ -74,34 +73,38 @@ _InternCtx() = _InternCtx(Dict{UInt, Vector{OpExpr}}(), IdDict{OpExpr, OpExpr}()
 # Fail-closed structural equality / hash for NON-child-slot payloads: the
 # `:scalar` / `:join` / `:internal` / `:ranges` field kinds — plain JSON data
 # (strings, ints, floats, bools, nested vectors), `ranges` dicts whose entries
-# may be `IndexSetRef`s or bound vectors mixing Ints with (already interned)
-# `ASTExpr`s, and any build-internal payload. Unrecognized types compare
-# `===`-only with an `objectid` hash — consistent, and fail-safe (no merge).
+# may be `IndexSetRef`s or bound vectors mixing Ints with `ASTExpr`s, and any
+# build-internal payload. Unrecognized types compare `===`-only with an
+# `objectid` hash — consistent, and fail-safe (no merge). An `ASTExpr` inside a
+# payload is compared by `ceq`: `===` for interning (children are already
+# interned, so identity is structure), `_expr_equal` for a deep comparison.
 # ------------------------------------------------------------------------
-_plain_eq(a, b) = a === b                       # unknown type: identity only
-_plain_eq(::Nothing, ::Nothing) = true
-_plain_eq(a::String, b::String) = a == b
-_plain_eq(a::Bool, b::Bool) = a === b
-_plain_eq(a::Int64, b::Int64) = a === b
-_plain_eq(a::Float64, b::Float64) = a === b     # bit-egal: -0.0 ≠ 0.0, NaN payloads distinct
-_plain_eq(a::ASTExpr, b::ASTExpr) = a === b     # children are interned ⇒ === is structural
-_plain_eq(a::IndexSetRef, b::IndexSetRef) = a.from == b.from && a.of == b.of
-function _plain_eq(a::AbstractVector, b::AbstractVector)
+_plain_eq(a, b, ceq::F = (===)) where {F} = a === b   # unknown type: identity only
+_plain_eq(::Nothing, ::Nothing, ceq::F = (===)) where {F} = true
+_plain_eq(a::String, b::String, ceq::F = (===)) where {F} = a == b
+_plain_eq(a::Bool, b::Bool, ceq::F = (===)) where {F} = a === b
+_plain_eq(a::Int64, b::Int64, ceq::F = (===)) where {F} = a === b
+# bit-egal: -0.0 ≠ 0.0, NaN payloads distinct
+_plain_eq(a::Float64, b::Float64, ceq::F = (===)) where {F} = a === b
+_plain_eq(a::ASTExpr, b::ASTExpr, ceq::F = (===)) where {F} = ceq(a, b)::Bool
+_plain_eq(a::IndexSetRef, b::IndexSetRef, ceq::F = (===)) where {F} =
+    a.from == b.from && a.of == b.of
+function _plain_eq(a::AbstractVector, b::AbstractVector, ceq::F = (===)) where {F}
     a === b && return true
     typeof(a) === typeof(b) || return false
     length(a) == length(b) || return false
     for i in eachindex(a)
-        _plain_eq(a[i], b[i]) || return false
+        _plain_eq(a[i], b[i], ceq) || return false
     end
     return true
 end
-function _plain_eq(a::AbstractDict, b::AbstractDict)
+function _plain_eq(a::AbstractDict, b::AbstractDict, ceq::F = (===)) where {F}
     a === b && return true
     typeof(a) === typeof(b) || return false
     length(a) == length(b) || return false
     for (k, v) in a
         haskey(b, k) || return false
-        _plain_eq(v, b[k]) || return false
+        _plain_eq(v, b[k], ceq) || return false
     end
     return true
 end
@@ -140,124 +143,18 @@ end
 _plain_hash(x, h::UInt) = hash(objectid(x), hash(0x75, h))   # unknown: identity
 
 # ------------------------------------------------------------------------
-# Child-slot interning helpers (identity-preserving: the ORIGINAL container is
-# returned untouched when no element changed, so an already-canonical subtree
-# costs no allocation on re-intern).
-# ------------------------------------------------------------------------
-function _intern_expr_vec(v::Vector{ASTExpr}, ctx::_InternCtx)
-    out = v
-    @inbounds for i in eachindex(v)
-        a = v[i]
-        r = a isa OpExpr ? _intern_expr(a, ctx) : a
-        if r !== a
-            out === v && (out = copy(v))
-            out[i] = r
-        end
-    end
-    return out
-end
-_intern_expr_map(::Nothing, ::_InternCtx) = nothing
-function _intern_expr_map(m::Dict{String, ASTExpr}, ctx::_InternCtx)
-    out = m
-    for (k, x) in m
-        r = x isa OpExpr ? _intern_expr(x, ctx) : x
-        if r !== x
-            out === m && (out = copy(m))
-            out[k] = r
-        end
-    end
-    return out
-end
-_intern_ranges(::Nothing, ::_InternCtx) = nothing
-function _intern_ranges(m, ctx::_InternCtx)
-    out = m
-    for (k, v) in m
-        v isa AbstractVector || continue        # IndexSetRef etc.: no sub-exprs
-        nv = v
-        for i in eachindex(v)
-            b = v[i]
-            b isa OpExpr || continue
-            r = _intern_expr(b, ctx)
-            if r !== b
-                nv === v && (nv = copy(v))
-                nv[i] = r
-            end
-        end
-        if nv !== v
-            out === m && (out = copy(m))
-            out[k] = nv
-        end
-    end
-    return out
-end
-
-# ------------------------------------------------------------------------
-# The three GENERATED walkers. One statement per `OPEXPR_FIELD_TABLE` row, in
-# struct-field order, dispatched on the row's `kind` — expression-bearing
-# kinds (`:expr`, `:expr_vec`, `:expr_map`, `:ranges`) get child-slot
-# handling (identity compare / objectid hash over interned children); every
-# other kind (`:scalar`, `:join`, `:internal`) routes through the fail-closed
+# The walkers. `_intern_children` interns every expression-bearing field
+# bottom-up through `map_children` (the node itself when nothing changed). The
+# hash and the equality below are GENERATED from `OPEXPR_FIELD_TABLE`, one
+# statement per row in struct-field order, dispatched on the row's `kind`:
+# expression-bearing kinds (`:expr`, `:expr_vec`, `:expr_map`) compare and hash
+# children by identity (they are interned); every other kind (`:scalar`,
+# `:join`, `:internal`, `:ranges`) goes through the fail-closed
 # `_plain_eq`/`_plain_hash` pair. A row added to the table with a new kind
-# would fail the exhaustiveness assert at the bottom of this file.
+# fails the exhaustiveness assert at the bottom of this file.
 # ------------------------------------------------------------------------
 
-const _INTERN_EXPR_KINDS = (:expr, :expr_vec, :expr_map, :ranges)
-
-# (1) Intern every expression-bearing field of `e` bottom-up; return `e`
-# itself when nothing changed, else a `reconstruct` copy with the interned
-# slots (all other fields copied verbatim by `reconstruct`'s contract).
-@eval function _intern_children(e::OpExpr, ctx::_InternCtx)
-    $(
-        (
-            begin
-                nf = Symbol(:new_, f)
-                if spec.kind === :expr
-                    :(
-                        $nf = (
-                            let x = e.$f
-                                x isa OpExpr ? _intern_expr(x, ctx) : x
-                            end
-                        )
-                    )
-                elseif spec.kind === :expr_vec
-                    :(
-                        $nf = (
-                            let v = e.$f
-                                v === nothing ? nothing : _intern_expr_vec(v, ctx)
-                            end
-                        )
-                    )
-                elseif spec.kind === :expr_map
-                    :($nf = _intern_expr_map(e.$f, ctx))
-                else # :ranges
-                    :($nf = _intern_ranges(e.$f, ctx))
-                end
-            end
-                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                if spec.kind in _INTERN_EXPR_KINDS
-        )...
-    )
-    if $(
-            foldl(
-                (acc, f) -> :($acc && $(Symbol(:new_, f)) === e.$f),
-                [
-                    f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                        if spec.kind in _INTERN_EXPR_KINDS
-                ]; init = true
-            )
-        )
-        return e
-    end
-    return reconstruct(
-        e; $(
-            (
-                Expr(:kw, f, Symbol(:new_, f))
-                    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                    if spec.kind in _INTERN_EXPR_KINDS
-            )...
-        )
-    )
-end
+_intern_children(e::OpExpr, ctx::_InternCtx) = map_children(x -> _intern_expr(x, ctx), e)::OpExpr
 
 # (2) Shallow structural hash of a node whose expression-bearing slots are
 # already interned: child slots contribute `objectid` (canonical pointer ≡
@@ -321,16 +218,25 @@ end
     return h
 end
 
-# (3) Shallow structural equality over ALL fields, for candidates in one hash
-# bucket. Child slots by `===` (interned ⇒ structural); everything else
-# `_plain_eq` (fail-closed).
-@eval function _intern_shallow_equal(a::OpExpr, b::OpExpr)::Bool
+# (3) Structural equality of two nodes field by field, children compared by
+# `ceq`. With `ceq = ===` it is the shallow comparison of candidates in one hash
+# bucket (interned children: identity is structure); with `_expr_equal` it is
+# the deep comparison. `internal` decides whether `:internal` (build-time,
+# never emitted) fields take part: they do for interning, which must never merge
+# two nodes the build tells apart, and they do not for document equality.
+@eval function _opexpr_equal(a::OpExpr, b::OpExpr, ceq::F, internal::Bool)::Bool where {F}
     a.op == b.op || return false
     $(
         (
             begin
                 if spec.kind === :expr
-                    :(a.$f === b.$f || return false)
+                    quote
+                        let xa = a.$f, xb = b.$f
+                            xa === xb || (
+                                xa !== nothing && xb !== nothing && ceq(xa, xb)::Bool
+                            ) || return false
+                        end
+                    end
                 elseif spec.kind === :expr_vec
                     quote
                         let va = a.$f, vb = b.$f
@@ -338,7 +244,7 @@ end
                                 (va === nothing || vb === nothing) && return false
                                 length(va) == length(vb) || return false
                                 for i in eachindex(va)
-                                    va[i] === vb[i] || return false
+                                    ceq(va[i], vb[i])::Bool || return false
                                 end
                             end
                         end
@@ -351,13 +257,16 @@ end
                                 length(ma) == length(mb) || return false
                                 for (k, v) in ma
                                     w = get(mb, k, nothing)
-                                    v === w || return false
+                                    w === nothing && return false
+                                    ceq(v, w)::Bool || return false
                                 end
                             end
                         end
                     end
-                else # :scalar / :join / :internal / :ranges
-                    :(_plain_eq(a.$f, b.$f) || return false)
+                elseif spec.kind === :internal
+                    :(!internal || _plain_eq(a.$f, b.$f, ceq) || return false)
+                else # :scalar / :join / :ranges
+                    :(_plain_eq(a.$f, b.$f, ceq) || return false)
                 end
             end
                 for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
@@ -366,6 +275,20 @@ end
     )
     return true
 end
+
+_intern_shallow_equal(a::OpExpr, b::OpExpr) = _opexpr_equal(a, b, ===, true)
+
+"""
+    _expr_equal(a::ASTExpr, b::ASTExpr) -> Bool
+
+Whether two expressions are the same document expression: the same node kinds
+with every emitted field equal, at every depth. Literals compare by value and
+type (`1` is not `1.0`, `0.0` is not `-0.0`); build-time fields are ignored.
+Identical objects are equal without a walk. Not `Base.==`: `OpExpr` keeps
+identity `==` so `IdDict` memos stay constant-time.
+"""
+_expr_equal(a::ASTExpr, b::ASTExpr) = a === b
+_expr_equal(a::OpExpr, b::OpExpr) = a === b || _opexpr_equal(a, b, _expr_equal, false)
 
 # Exhaustiveness pin: the walkers above dispatch on the field kinds known
 # today; a new kind must be classified here before it can ship.
@@ -404,66 +327,9 @@ end
 _intern_expr(e::ASTExpr, ctx::_InternCtx) = e    # future leaf kinds: pass through
 
 # ------------------------------------------------------------------------
-# Model-level pass: intern every expression the tree-walk build's hot path
-# walks — variable expressions (observeds), equations, initialization
-# equations, expression-valued guesses — recursing into `Model` subsystems.
-# Returns a NEW `Model` (sharing untouched sub-objects) so the CALLER's model
-# is never mutated; event/test expressions are off the build's memoized hot
-# path and are left as-is.
+# Model-level pass: intern every expression site of the model and its
+# subsystems (`map_expressions`). Returns a model whose containers are new, so
+# the caller's model is never mutated; untouched records are shared.
 # ------------------------------------------------------------------------
-function _intern_equations(eqs::Vector{Equation}, ctx::_InternCtx)
-    isempty(eqs) && return eqs
-    changed = false
-    out = Vector{Equation}(undef, length(eqs))
-    for (i, eq) in enumerate(eqs)
-        l = _intern_expr(eq.lhs, ctx)
-        r = _intern_expr(eq.rhs, ctx)
-        if l !== eq.lhs || r !== eq.rhs
-            out[i] = Equation(l, r; _comment = eq._comment)
-            changed = true
-        else
-            out[i] = eq
-        end
-    end
-    return changed ? out : eqs
-end
-
-function _intern_model(model::Model, ctx::_InternCtx)::Model
-    # A variable carries no expression of its own (an observed unknown's
-    # defining right-hand side is an ordinary equation, interned below), so the
-    # variable map is carried across as is.
-    eqs = _intern_equations(model.equations, ctx)
-    ieqs = _intern_equations(model.initialization_equations, ctx)
-    guesses = model.guesses
-    ng = guesses
-    for (k, g) in guesses
-        g isa ASTExpr || continue
-        r = _intern_expr(g, ctx)
-        if r !== g
-            ng === guesses && (ng = copy(guesses))
-            ng[k] = r
-        end
-    end
-    subs = model.subsystems
-    nsubs = subs
-    for (k, s) in subs
-        s isa Model || continue
-        ns = _intern_model(s, ctx)
-        if ns !== s
-            nsubs === subs && (nsubs = copy(subs))
-            nsubs[k] = ns
-        end
-    end
-    (
-        eqs === model.equations &&
-            ieqs === model.initialization_equations && ng === guesses &&
-            nsubs === subs
-    ) && return model
-    return Model(
-        model.variables, eqs, model.discrete_events, model.continuous_events,
-        nsubs; tolerance = model.tolerance, tests = model.tests,
-        analyses = model.analyses,
-        initialization_equations = ieqs, guesses = ng,
-        system_kind = model.system_kind, reference = model.reference
-    )
-end
+_intern_model(model::Model, ctx::_InternCtx)::Model =
+    map_expressions(e -> _intern_expr(e, ctx), model)

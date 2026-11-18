@@ -252,18 +252,18 @@ end
         )
         deqa = ESM.Equation(lhs, rhs)
         model = ESM.Model(vars, ESM.Equation[deqx, deqa])
-        f!, u0, p, tspan, var_map = EarthSciAST._build_evaluator(
+        f!, u0, p, tspan, var_map = EarthSciAST.Internal.build(
             model;
             const_arrays = Dict("w" => [1.0, 2.0, 3.0, 4.0]),
             initial_conditions = Dict(
-                "u[1]" => 1.0, "u[2]" => 2.0,
-                "u[3]" => 3.0, "u[4]" => 4.0
+                "M.u[1]" => 1.0, "M.u[2]" => 2.0,
+                "M.u[3]" => 3.0, "M.u[4]" => 4.0
             )
         )
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        @test du[var_map["x"]] == 2.0
-        @test du[var_map["u[2]"]] == 4.0
+        @test du[var_map["M.x"]] == 2.0
+        @test du[var_map["M.u[2]"]] == 4.0
 
         for s in (
                 ESM._EMPTY_DERIVED_EXTENTS, ESM._EMPTY_IDX_ENV,

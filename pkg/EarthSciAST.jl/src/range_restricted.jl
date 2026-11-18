@@ -400,7 +400,7 @@ end
 # read set a build may extend copied, so one build never sees another's
 # additions, and without the build's sinks. A program a Problem was built as
 # (`esm_problem(…; program_build = true)`) recorded the Problem's own
-# `inspect` and `_param_classes`: a re-lowering, which may run on any thread,
+# `products` and `_param_classes`: a re-lowering, which may run on any thread,
 # writes into neither.
 function _relower_kwargs(front)
     _, _, kwd = front
@@ -410,7 +410,7 @@ function _relower_kwargs(front)
             v !== nothing ? copy(v) : v
     end
     kw[:materialize_out] = nothing
-    kw[:inspect] = nothing
+    kw[:products] = nothing
     kw[:_param_classes] = nothing
     kw[:_expand_cache] = nothing     # the front door's build owns it
     return kw
@@ -425,11 +425,11 @@ end
 # one the Problem holds no buffer for, filled with its value, in the program's
 # own copy of the buffer registry (`pa`, returned).
 #
-# `inspect` and `param_classes` are the build's sinks, which a Problem built as
+# `products` and `param_classes` are the build's sinks, which a Problem built as
 # its program (`esm_problem(…; program_build = true)`) passes on; the build's
 # initial state `u0` is returned for that Problem too.
 function _program_build(
-        seed, doc::Dict{String, Any}; inspect = nothing, param_classes = nothing
+        seed, doc::Dict{String, Any}; products = nothing, param_classes = nothing
     )
     front = Ref{Any}(nothing)
     memo = _ProgramMemo()
@@ -446,7 +446,7 @@ function _program_build(
                 _live_fed_parameters = true,
                 _ic_t0 = seed.ic_t0,
                 _ic_data = seed.ic_data,
-                inspect = inspect, _param_classes = param_classes
+                products = products, _param_classes = param_classes
             )
         end
     end
@@ -646,18 +646,18 @@ _whole_program(
     parent = nothing
 ) = first(_whole_program_built(seed, flat, W, R; parent = parent))
 
-# `_whole_program`, with the build's sinks `inspect` and `param_classes` filled
+# `_whole_program`, with the build's sinks `products` and `param_classes` filled
 # and its initial state and parameters: `(prog, u0, p)`.
 function _whole_program_built(
         seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
-        parent = nothing, inspect = nothing, param_classes = nothing
+        parent = nothing, products = nothing, param_classes = nothing
     )
     init = seed.init
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
     doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
     f!, internal, front, u0, p, pa, cap, memo = _program_build(
-        seed, doc; inspect = inspect, param_classes = param_classes
+        seed, doc; products = products, param_classes = param_classes
     )
     present = Set{String}(
         vcat(
@@ -705,7 +705,7 @@ function rhs_program(prob::EsmProblem)
     # A Problem built as its program (`esm_problem(…; program_build = true)`)
     # holds the very program this call would build, but for its default
     # forcing set, which is the Problem's forcing as it is now.
-    r = prob.inspection.program_seed
+    r = prob.build.program_seed
     r isa _ProgramSeedRecipe && r.program[] !== nothing &&
         return _current_program(r, prob.param_buffers)
     c = compiler(prob)
@@ -722,14 +722,14 @@ function rhs_program(prob::EsmProblem)
     return first(_problem_program(seed))
 end
 
-# The whole-model program of `seed` with the build's sinks `inspect` and
+# The whole-model program of `seed` with the build's sinks `products` and
 # `param_classes` filled, and the build's initial state and parameters:
 # `(prog, u0, p)`. `rhs_program` builds it with no sinks; a Problem built with
 # `program_build = true` is built from it, with its own.
-function _problem_program(seed; inspect = nothing, param_classes = nothing)
+function _problem_program(seed; products = nothing, param_classes = nothing)
     flat, W, R = _select_flat(seed.flat, :all, :all)
     return _whole_program_built(
-        seed, flat, W, R; inspect = inspect, param_classes = param_classes
+        seed, flat, W, R; products = products, param_classes = param_classes
     )
 end
 

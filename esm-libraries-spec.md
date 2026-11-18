@@ -1610,6 +1610,7 @@ TypeScript `camelCase`, others verbatim).
 | `field_ics` | list of (state, expr) | Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1), at most one per state; two for one state are refused with `ConflictingDerivativeError`. |
 | `loader_fields` | list | Provider-served loaded fields the system consumes, one per data-fed parameter ("Loader fields" below). |
 | `lifted_shapes` | ordered map | Post-lift grid extents of each pointwise-lifted state, keyed by the state. The state's `shape` names the index sets of those extents ("Pointwise lift: index sets" below). |
+| `initialization_equations` | list (optional) | Every component's `initialization_equations` (esm-spec §6.2), in document order, named as `equations` are: namespaced in the component's scope (step 2, template rename included), then rewritten by the `operator_compose` merged-away rename and the `variable_map` substitution (step 3). A binding MAY leave the field out; one that carries it MUST apply all of these, so an initialization equation never names a variable the flattened system does not declare. Not in the flatten corpus. |
 
 - **The parameter subsets do not partition the struct; they partition `parameters`.**
   esm-spec §6.3.1 states that `brownian_parameters`, `discrete_parameters`,
@@ -1690,14 +1691,15 @@ rewrites their equations.
   species, including one §4.6.1 derives no equation for.
 - **Shape inference.** The lift reads the value axes of an expression, an ordered list of index
   sets (empty for a scalar) or *undecided*, by these rules (esm-spec §4.3.4):
-  - a number, and `t`, are scalars;
+  - a number, a `const` whose value is a number, `true`, `false`, and `t` are scalars;
   - a name is its declared `shape` (`[]` is a scalar); a state already lifted is its lift index
     sets; a parameter declared without a shape is a scalar; an unknown declared without a shape
     and defined by a bare-LHS equation has the axes of that definition; any other unknown declared
     without a shape is a scalar;
   - a structural `D(e)` (`wrt` `t` or absent) has the axes of `e`;
-  - an elementwise operator (esm-spec §4.3.4) has the union of its operands' axes, in order of
-    first appearance, and is undecided if any operand is;
+  - an elementwise operator (esm-spec §4.3.4: a scalar operator, or a `broadcast` whose `fn` is
+    one) has the union of its operands' axes, in order of first appearance, and is undecided if
+    any operand is (esm-spec §4.3.4, "An undeclared result takes the union");
   - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
   - a `faq` with no output indices is a scalar; one whose every output index ranges
     `{"from": X}` has those index sets in `output_idx` order; any other is undecided;

@@ -85,7 +85,7 @@ end
 # The LOCAL (single-node) canonicalization step, applied to a node whose args
 # are already canonical. Factored out of `canonicalize(::OpExpr)` so the
 # tree-walk CSE's identity-memoized driver (`_canonicalize_memo`,
-# tree_walk/compile.jl) can canonicalize a structurally-SHARED expression DAG
+# tree_walk/scalar_cse.jl) can canonicalize a structurally-SHARED expression DAG
 # node-by-unique-node — `canonicalize` is compositional, so
 # `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
 # the memoized driver is byte-identical to the plain recursion.
@@ -487,11 +487,8 @@ function _emit_canonical_value(v)::String
     elseif v isa Integer
         return string(v)
     elseif v isa AbstractFloat
-        f = Float64(v)
-        if isfinite(f) && isinteger(f) && _int64_exactly_representable(f)
-            return string(Int64(f))
-        end
-        return format_canonical_float(f)
+        i = _as_int64(v)
+        return i === nothing ? format_canonical_float(Float64(v)) : string(i)
     elseif v isa AbstractString
         return _json_string(v)
     elseif v isa AbstractArray
@@ -678,11 +675,7 @@ const _DEPRECATED_DOCUMENT_OPS = Dict(
 # the nearest binary64 of its token.
 function _canonical_document_number(x::Real)
     x isa Bool && return x
-    if x isa AbstractFloat
-        return isinteger(x) && -0x1p63 <= x < 0x1p63 ? Int64(x) : Float64(x)
-    end
-    x isa Integer && !(typemin(Int64) <= x <= typemax(Int64)) && return Float64(x)
-    return x
+    return something(_as_int64(x), Float64(x))
 end
 
 # Every number of a JSON value in canonical form, at every depth.
@@ -714,26 +707,17 @@ function _rewrite_deprecated_document_op!(out::OrderedDict{String, Any})
     return out
 end
 
-# A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
-# (JSON3.Object).
-function _document_field(d::AbstractDict, key::String)
-    for k in keys(d)
-        String(k) == key && return d[k]
-    end
-    return nothing
-end
-
 function _canonicalize_document_value(value, is_map::Bool)
     if value isa AbstractVector
         return Any[_canonicalize_document_value(v, false) for v in value]
     elseif value isa AbstractDict
-        units = _document_field(value, "units")
-        op = _document_field(value, "op")
+        units = _raw_get(value, "units")
+        op = _raw_get(value, "op")
         drop_units = false
         if !is_map && op == "const" && units isa AbstractString && _canonical_units(units) == "1"
             # A dimensionless const drops its units: a scalar becomes the bare
             # literal, an array a unitless const.
-            literal = _document_field(value, "value")
+            literal = _raw_get(value, "value")
             literal isa Real && !(literal isa Bool) && return literal
             drop_units = true
         end

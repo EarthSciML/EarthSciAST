@@ -53,10 +53,10 @@ function _rt_template_values(op::String, values)
     )
     file = load_string(JSON3.write(_rt_doc(model)); base_path = dirname(_RT_LIB))
     return map((:interpreter, :native)) do compiler
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(file; compiler)
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(file; compiler)
         du = similar(u0)
         f!(du, u0, p, 0.0)
-        du[vm["r"]]
+        du[vm["M.r"]]
     end
 end
 

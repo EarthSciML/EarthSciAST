@@ -18,7 +18,7 @@ import ..DStrings
 import ..DTypstDict
 using ..MExpr: dig_run, is_dig, is_greek, is_letter
 using ..MParse: atom_start
-using ..MSurface: drop_p, is_bin, lex_signed, sci_split
+using ..MSurface: drop_p, is_bin, lex_signed, render_toks, sci_split
 
 # ## Spelling
 
@@ -164,19 +164,7 @@ sp(p, t1::Tok, t2::Tok) =
     (pretty(p, t1, t2) && !iskw(t2, KLp) && !(iskw(t2, KLbk) && atom_end(t1)))
 
 """`Typst.render` (`renderAux`), as characters."""
-function render(ts)
-    out = Char[]
-    n = length(ts)
-    for i in 1:n
-        t = ts[i]
-        append!(out, tok_chars(t))
-        if i < n
-            p = i == 1 ? nothing : ts[i - 1]
-            sp(p, t, ts[i + 1]) && push!(out, ' ')
-        end
-    end
-    return out
-end
+render(ts) = render_toks(tok_chars, sp, ts)
 
 # ## Lexing
 

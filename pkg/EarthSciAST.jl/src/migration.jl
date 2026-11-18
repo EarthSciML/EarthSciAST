@@ -172,7 +172,7 @@ can_migrate(file::EsmFile, to_version::AbstractString)::Bool =
     can_migrate(file.esm, to_version) && _removed_construct(file) === nothing
 
 function can_migrate(doc::AbstractDict, to_version::AbstractString)::Bool
-    v = _get_field(doc, :esm, nothing)
+    v = _raw_get(doc, "esm", nothing)
     v isa AbstractString || return false
     return can_migrate(v, to_version) && _removed_2_0_0_finding(doc) === nothing
 end
@@ -274,7 +274,7 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
 end
 
 function migrate(doc::AbstractDict, target_version::AbstractString)::Dict{String, Any}
-    source_version = _get_field(doc, :esm, nothing)
+    source_version = _raw_get(doc, "esm", nothing)
     if !(source_version isa AbstractString) || isempty(source_version)
         throw(MigrationError("Source document has no 'esm' version field"))
     end

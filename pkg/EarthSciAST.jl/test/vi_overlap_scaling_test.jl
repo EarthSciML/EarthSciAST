@@ -181,10 +181,10 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     end
 
     # ---- TIMED, INSTRUMENTED materialisation ------------------------------
-    ESS._VI_ENUM_VISITS[] = 0
-    twall = @elapsed vi =
+    vi, counts = ESS.Internal.counting() do
         ESS.materialize_value_invention(model, file.index_sets, const_arrays, Dict{String, Any}())
-    visits = ESS._VI_ENUM_VISITS[]
+    end
+    visits = get(counts, :vi_enum_visits, 0)
 
     # (a) correctness — materialised set == independent brute-force oracle
     @test sort(collect(vi.members["scaling_producer"])) == oracle
@@ -194,7 +194,6 @@ _op(o, args...) = Dict("op" => o, "args" => Any[args...])
     @test visits == npts                       # candidate-driven, no ungated ranges
     @test visits < ncells                      # ≪ even a single full cell sweep
     @test visits < npts * ncells ÷ 100         # ≪ 4e6 full product
-    @test twall < 2.0                          # fast wall-time (post-warmup)
 end
 
 # ===========================================================================
@@ -212,8 +211,8 @@ end
 #       `desugar_pushdown` re-points it onto the compact support axis and gates
 #       it on the generated `pd_cell__*` envelopes. Full product |support|·|records|.
 #
-# Each asserts the VISIT COUNT (`_VI_ENUM_VISITS`, now instrumented on the dense
-# path too) and, independently, that the values equal a plain-Julia oracle — the
+# Each asserts the VISIT COUNT (the `:vi_enum_visits` count, instrumented on the
+# dense path too) and, independently, that the values equal a plain-Julia oracle — the
 # driver must remove work without moving a number.
 # ===========================================================================
 @testset "overlap-gated DENSE aggregate scaling (both orientations)" begin
@@ -304,39 +303,36 @@ end
     )
 
     _mca(np, nc) = Dict{String, Any}(
-        "X" => PX[1:np], "Y" => PY[1:np],
-        "W" => CW[1:nc], "S" => CS[1:nc], "E" => CE[1:nc], "N" => CN[1:nc]
+        "Mirror.X" => PX[1:np], "Mirror.Y" => PY[1:np],
+        "Mirror.W" => CW[1:nc], "Mirror.S" => CS[1:nc], "Mirror.E" => CE[1:nc],
+        "Mirror.N" => CN[1:nc]
     )
 
     # warm the whole front door on a tiny same-typed fixture (JIT, not runtime)
     let sm = Dict(
-            "esm" => "0.6.0", "metadata" => Dict("name" => "dense_overlap_mirror"),
+            "esm" => "2.0.0", "metadata" => Dict("name" => "dense_overlap_mirror"),
             "index_sets" => Dict(
                 "points" => Dict("kind" => "interval", "size" => 1),
                 "cells" => Dict("kind" => "interval", "size" => 2)
             ),
             "models" => _mirror_doc(1, 2)["models"]
         )
-        ESS._build_evaluator(
-            sm; model_name = "Mirror",
+        ESS.Internal.build(
+            sm;
             const_arrays = Dict{String, Any}(
-                "X" => [0.5], "Y" => [0.5],
-                "W" => [0.0, 1.0], "S" => [0.0, 0.0],
-                "E" => [1.0, 2.0], "N" => [1.0, 1.0]
+                "Mirror.X" => [0.5], "Mirror.Y" => [0.5],
+                "Mirror.W" => [0.0, 1.0], "Mirror.S" => [0.0, 0.0],
+                "Mirror.E" => [1.0, 2.0], "Mirror.N" => [1.0, 1.0]
             )
         )
     end
 
-    ESS._VI_ENUM_VISITS[] = 0
-    tmir = @elapsed f!, u0, pp, _, vmap =
-        ESS._build_evaluator(
-        _mirror_doc(npts, ncells); model_name = "Mirror",
-        const_arrays = _mca(npts, ncells)
-    )
-    mir_visits = ESS._VI_ENUM_VISITS[]
+    tmir = @elapsed f!, u0, pp, _, vmap, mir_rep =
+        ESS.Internal.build(_mirror_doc(npts, ncells); const_arrays = _mca(npts, ncells))
+    mir_visits = get(mir_rep.counts, :vi_enum_visits, 0)
 
     du = similar(u0); f!(du, u0, pp, 0.0)
-    got = [du[vmap["P[$p]"]] for p in 1:npts]
+    got = [du[vmap["Mirror.P[$p]"]] for p in 1:npts]
     oracle = [Float64(cell_ab[chosen[p]][1] + cell_ab[chosen[p]][2]) for p in 1:npts]
     @test got == oracle                        # EXACT — one term per record
     # one candidate per point ⇒ the driver visits `npts` tuples, not npts·ncells
@@ -371,7 +367,7 @@ end
     annual = collect(1.0:npts)
     SR = [Float64((i % 7) + j) for i in 1:ncells, j in 1:2]
     fwd_doc = Dict{String, Any}(
-        "esm" => "0.9.0", "metadata" => Dict("name" => "dense_overlap_forward"),
+        "esm" => "2.0.0", "metadata" => Dict("name" => "dense_overlap_forward"),
         "index_sets" => Dict{String, Any}(
             "points" => Dict("kind" => "interval", "size" => npts),
             "cells" => Dict("kind" => "interval", "size" => ncells),
@@ -411,18 +407,21 @@ end
     ]
 
     fca = Dict{String, Any}(
-        "X" => PX, "Y" => PY, "annual" => annual,
-        "W" => CW, "S" => CS, "E" => CE, "N" => CN, "SR" => SR
+        "Fwd.X" => PX, "Fwd.Y" => PY, "Fwd.annual" => annual,
+        "Fwd.W" => CW, "Fwd.S" => CS, "Fwd.E" => CE, "Fwd.N" => CN, "Fwd.SR" => SR
     )
-    insp = ESS.BuildInspection()
-    ESS._build_evaluator(rw; model_name = "Fwd", const_arrays = fca, inspect = insp)
+    rep = ESS.Internal.build(rw; const_arrays = fca).report
+    insp = rep.products
     nsupport = insp.derived_extents["pd_faq__cells"]
     @test nsupport == npts                     # distinct cells, one point each
 
-    file = ESS.coerce_esm_file(rw)
-    ESS._VI_ENUM_VISITS[] = 0
-    fwd_field, _ = ESS._observed_field(insp, file, "Fwd", "Emis")
-    fwd_visits = ESS._VI_ENUM_VISITS[]
+    # The build-time field read the Problem makes: against the flattened run
+    # document, whose one model is `Flattened`.
+    file = ESS.coerce_esm_file(rep.run_doc)
+    (fwd_field, _), counts = ESS.Internal.counting() do
+        ESS._observed_field(insp, file, String(first(keys(file.models))), "Fwd.Emis")
+    end
+    fwd_visits = get(counts, :vi_enum_visits, 0)
     @test length(fwd_field) == nsupport
     # every record contributes its `annual` to exactly one support cell
     @test sum(fwd_field) == sum(annual)

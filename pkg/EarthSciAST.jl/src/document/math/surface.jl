@@ -91,4 +91,22 @@ function lex_signed(sci_exp, cs::Chars)
     return lex_num(sci_exp, cs)
 end
 
+# A token list's spelling: each token's characters (`tok_chars`), a space
+# between two where the surface's `sp(previous, t1, t2)` asks for one. The
+# loop of `Latex.renderAux` and `Typst.renderAux`, which differ only in those
+# two functions.
+function render_toks(tok_chars::C, sp::S, ts) where {C, S}
+    out = Char[]
+    n = length(ts)
+    for i in 1:n
+        t = ts[i]
+        append!(out, tok_chars(t))
+        if i < n
+            p = i == 1 ? nothing : ts[i - 1]
+            sp(p, t, ts[i + 1]) && push!(out, ' ')
+        end
+    end
+    return out
+end
+
 end # module MSurface

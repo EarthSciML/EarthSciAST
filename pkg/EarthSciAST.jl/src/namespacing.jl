@@ -288,7 +288,8 @@ end
 # Per-system collection
 # ========================================
 
-# Namespace a component's events into the flatten accumulators. Shared by
+# Namespace a component's events onto `st.continuous_events` and
+# `st.discrete_events` (the flatten state, or any holder of the two vectors). Shared by
 # `_collect_model!` and `_collect_reaction_system!` so a model and a reaction
 # system carry their events into the flattened system by the SAME rule.
 #
@@ -300,8 +301,7 @@ end
 # untouched, exactly as `namespace_expr` already leaves it alone inside the
 # CONDITION (it is in no component's `local_names`).
 function _collect_events!(
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
+        st,
         component_continuous::Vector{ContinuousEvent},
         component_discrete::Vector{DiscreteEvent},
         prefix::String, ns
@@ -312,13 +312,15 @@ function _collect_events!(
     ns_target(lhs) = is_placeholder(lhs) ? lhs :
         occursin('.', lhs) ? (ns(VarExpr(lhs))::VarExpr).name : "$(prefix).$(lhs)"
     for ev in component_continuous
-        push!(continuous_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
+        push!(st.continuous_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
     end
     for ev in component_discrete
-        push!(discrete_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
+        push!(st.discrete_events, _rename_affect_targets(ns_target, _map_event_exprs(ns, ev)))
     end
     return nothing
 end
+_collect_events!(cv::Vector{ContinuousEvent}, dv::Vector{DiscreteEvent}, ccv, cdv, prefix, ns) =
+    _collect_events!((continuous_events = cv, discrete_events = dv), ccv, cdv, prefix, ns)
 
 """
 Collect a Model's variables and equations into the flattener accumulators,
@@ -340,14 +342,7 @@ into subsystems, whose templates merged into their owner's registry at load.
 `nothing` (the common case: no collision) skips the rewrite entirely.
 """
 function _collect_model!(
-        states::OrderedDict{String, ModelVariable},
-        params::OrderedDict{String, ModelVariable},
-        observeds::OrderedDict{String, ModelVariable},
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
-        model::Model, prefix::String;
+        st, model::Model, prefix::String;
         tpl_rename::Union{Nothing, AbstractDict{String, String}} = nothing,
         tpl_captures::_TplCaptures = _NO_CAPTURES
     )
@@ -396,12 +391,12 @@ function _collect_model!(
         # the renaming"): they resolve in the declaring component's scope.
         v = _map_variable_sites(_ns, var)
         if v.type == ParameterVariable
-            params[namespaced] = v
+            st.params[namespaced] = v
         elseif name in _observed_here
-            name in _inlineable_here || (states[namespaced] = v)
-            observeds[namespaced] = v
+            name in _inlineable_here || (st.states[namespaced] = v)
+            st.observeds[namespaced] = v
         else
-            states[namespaced] = v
+            st.states[namespaced] = v
         end
     end
 
@@ -411,8 +406,13 @@ function _collect_model!(
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
-        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(contribs, _authored(rhs, _component_origin(prefix)))
+        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
+        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
+    end
+    # Initialization equations (esm-spec §6.2) resolve in the same scope and
+    # take the same renaming as the equations.
+    for eq in model.initialization_equations
+        push!(st.init_equations, Equation(_ns(eq.lhs), _ns(eq.rhs); _comment = eq._comment))
     end
 
     # esm 1.0.0: an observed unknown's defining equation is an ORDINARY entry of
@@ -420,10 +420,7 @@ function _collect_model!(
     # left to synthesize from a variable-level `expression`, which no longer
     # exists (esm-spec §6.3).
 
-    _collect_events!(
-        continuous_events, discrete_events,
-        model.continuous_events, model.discrete_events, prefix, _ns
-    )
+    _collect_events!(st, model.continuous_events, model.discrete_events, prefix, _ns)
 
     for (sub_name, sub_model) in model.subsystems
         # esm 1.0.0: a data source is a document-scoped registry entry, not a
@@ -434,9 +431,7 @@ function _collect_model!(
         # const/refresh array registry keyed by that same name.
         sub_model isa Model || continue
         _collect_model!(
-            states, params, observeds, equations, contribs,
-            continuous_events, discrete_events,
-            sub_model, "$(prefix).$(sub_name)";
+            st, sub_model, "$(prefix).$(sub_name)";
             tpl_rename = tpl_rename, tpl_captures = tpl_captures
         )
     end
@@ -458,13 +453,7 @@ law. Were it left a state with no equation instead, it would sit in `u` with a
 permanently-zero derivative — a zero row in the chemistry Jacobian block.
 """
 function _collect_reaction_system!(
-        states::OrderedDict{String, ModelVariable},
-        params::OrderedDict{String, ModelVariable},
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        continuous_events::Vector{ContinuousEvent},
-        discrete_events::Vector{DiscreteEvent},
-        rsys::ReactionSystem, prefix::String;
+        st, rsys::ReactionSystem, prefix::String;
         templates = nothing
     )
     local_names = Set{String}()
@@ -478,30 +467,12 @@ function _collect_reaction_system!(
         push!(local_names, sub_name)
     end
 
-    for sp in rsys.species
-        namespaced = "$(prefix).$(sp.name)"
-        target = sp.constant === true ? params : states
-        target[namespaced] = ModelVariable(
-            sp.constant === true ? ParameterVariable : UnknownVariable;
-            default = sp.default, description = sp.description, units = sp.units
-        )
-    end
-    for p in rsys.parameters
-        namespaced = "$(prefix).$(p.name)"
-        # The §6.3 value model travels with the parameter. `update` above all:
-        # it is the only channel binding a parameter to a data source
-        # (esm-spec §5.4), so leaving it behind here would flatten a
-        # data-driven parameter into a constant. Its rules' expressions resolve
-        # in this system's scope, so they are namespaced like a rate.
-        params[namespaced] = _map_variable_sites(
-            e -> namespace_expr(e, prefix, local_names),
-            ModelVariable(
-                ParameterVariable;
-                default = p.default, description = p.description, units = p.units,
-                default_units = p.default_units, shape = p.shape,
-                distribution = p.distribution, update = p.update
-            )
-        )
+    # A parameter's update rules resolve in this system's scope, so they are
+    # namespaced like a rate.
+    ns(e) = namespace_expr(e, prefix, local_names)
+    for (name, v) in reaction_variables(rsys)
+        target = v.type == ParameterVariable ? st.params : st.states
+        target["$(prefix).$(name)"] = _map_variable_sites(ns, v)
     end
 
     # v0.8.0: every component shares the document's single `domain`; a system
@@ -527,8 +498,8 @@ function _collect_reaction_system!(
         rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
-        push!(equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(contribs, _authored(rhs, _component_origin(prefix)))
+        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
+        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
     end
 
     # A reaction system's events are collected on the same footing as a model's
@@ -541,16 +512,11 @@ function _collect_reaction_system!(
         templates === nothing ? e :
             _expand_expr_refs(e, templates), prefix, local_names
     )
-    _collect_events!(
-        continuous_events, discrete_events,
-        rsys.continuous_events, rsys.discrete_events, prefix, _ns_event
-    )
+    _collect_events!(st, rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
 
     for (sub_name, sub_rsys) in rsys.subsystems
         _collect_reaction_system!(
-            states, params, equations, contribs,
-            continuous_events, discrete_events,
-            sub_rsys, "$(prefix).$(sub_name)"; templates = templates
+            st, sub_rsys, "$(prefix).$(sub_name)"; templates = templates
         )
     end
     return

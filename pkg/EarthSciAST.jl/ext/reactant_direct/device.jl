@@ -12,7 +12,7 @@
 # `direct_params` and `direct_time` call.
 #
 # THE FLAT STATE IS A CONCATENATION OF PER-VARIABLE CELL BLOCKS. The tree-walk's
-# layout (src/tree_walk/build.jl, "flat state-vector cell names") is: state
+# layout (src/tree_walk/state_layout.jl) is: state
 # variables in sorted-name order, each contributing a CONTIGUOUS BLOCK of its
 # own cells in column-major order; a scalar state is a block of one. One flat
 # slot is exactly one cell, so the flat axis IS a cell axis — it is the cell

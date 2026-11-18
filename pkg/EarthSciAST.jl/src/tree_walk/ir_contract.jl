@@ -49,7 +49,7 @@ _access_kind_name(k::UInt8) = get(_ACCESS_KIND_NAMES, k, "access descriptor kind
 #
 # `_CompiledIR.mat_levels` is a tuple of levels in fill order; a level reads only
 # the levels before it. Each level is the 5-tuple the build assembles
-# (build.jl, `form === :oop`):
+# (build_pipeline.jl, `form === :oop`):
 #
 #   1. scalars       `Vector{Tuple{Int, _Node}}`: (extended slot, spine) entries
 #   2. kernels       `Vector{_AccKernel}`, class-merged

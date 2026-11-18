@@ -92,8 +92,8 @@ consumer_rhs(sys) = only(
         ]
         @test length(gathers) == 1
         @test gathers[1].args[2:end] == E.ASTExpr[E.VarExpr("i")]
-        f!, u0, p, _t, vmap = E._build_evaluator(
-            E.flattened_to_esm(prom);
+        f!, u0, p, _t, vmap = E.Internal.build(
+            prom;
             const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]),
             initial_conditions = Dict("M.s[$i]" => 1.0 for i in 1:3)
         )
@@ -134,8 +134,8 @@ end
     body = consumer_rhs(prom).expr_body
     @test body isa E.OpExpr && body.op == "index" &&
         body.args == E.ASTExpr[E.VarExpr("M.j"), E.VarExpr("k")]
-    f!, u0, p, _t, vmap = E._build_evaluator(
-        E.flattened_to_esm(prom);
+    f!, u0, p, _t, vmap = E.Internal.build(
+        prom;
         const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.z" => 0.0)
     )
     du = similar(u0); f!(du, u0, p, 0.0)
@@ -248,8 +248,8 @@ end
     )
     flat = roundtrip(d)
     prom = E.promote_downstream_shapes(flat)
-    f!, u0, p, _t, vmap = E._build_evaluator(
-        E.flattened_to_esm(prom);
+    f!, u0, p, _t, vmap = E.Internal.build(
+        prom;
         const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
     )
     du = similar(u0); f!(du, u0, p, 0.0)

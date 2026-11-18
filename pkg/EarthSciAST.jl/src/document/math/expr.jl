@@ -204,14 +204,14 @@ jwf(j) = wfb(j)
 
 # ## Operators
 
-"""`Math.removedOps`: spec §4.2 "Removed ops", refused by name."""
-const REMOVED_OPS = (
-    "arrayop", "aggregate", "fn", "table_lookup", "skolem", "rank", "argmin", "argmax",
-    "polygon_intersection_area", "intersect_polygon",
-)
+"""`Math.removedOps`: spec §4.2 "Removed ops", refused by name. The host's
+`_REMOVED_OPS`, the list the loader refuses."""
+const REMOVED_OPS = parentmodule(parentmodule(@__MODULE__))._REMOVED_OPS
 
-"""`Math.deprecatedOps`: read in the call form and rewritten, never printed."""
-const DEPRECATED_OPS = ("neg", "pow")
+"""`Math.deprecatedOps`: read in the call form and rewritten, never printed. The
+spellings of the host's `_DEPRECATED_OPS`."""
+const DEPRECATED_OPS =
+    Tuple(sort!(collect(keys(parentmodule(parentmodule(@__MODULE__))._DEPRECATED_OPS))))
 
 """`Math.opOK`: `[A-Za-z_][A-Za-z0-9_.]*` or `[-+*/^<>=!]+`."""
 function op_ok(s::AbstractString)
@@ -257,6 +257,5 @@ struct Sym
     templates::Vector{Tuple{String, Vector{String}}}
 end
 Sym() = Sym(String[], Tuple{String, Vector{String}}[])
-Base.:(==)(a::Sym, b::Sym) = a.names == b.names && a.templates == b.templates
 
 end # module MExpr

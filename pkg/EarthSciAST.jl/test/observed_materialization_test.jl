@@ -9,14 +9,12 @@
 # evaluating it 52,411 times. `_materialized_obs_scope` exists to evaluate each
 # producer once, in dependency order, and hand the consumer buffers.
 #
-# It walked `insp.observed_defs`, the UN-inlined bodies, and the build does not
-# publish one for every observed: an intermediate it folded into its readers
-# appears only in `observed_exprs`, the fully substituted map. So the first
-# producer whose definition named such an intermediate raised
-# E_TREEWALK_UNBOUND_VARIABLE, was swallowed by the pass's tolerant `catch`, and
-# every producer above it then failed on the one below. Nothing was
-# materialized and the whole chain was re-executed per output cell — silently,
-# because the fallback is slower and never wrong.
+# It walks the build's `observed_defs`, the UN-inlined bodies, and the build
+# does not publish one for every observed: an intermediate it folded into its
+# readers appears only in `observed_exprs`, the fully substituted map. The pass
+# must still materialize every producer above such an intermediate, rather than
+# fail on it and leave the whole chain to be re-executed per output cell, which
+# is slower and never wrong, so nothing else would notice.
 #
 # The shape that exposes it is a LINE-source allocation: no geometry kernel
 # anywhere (so nothing is setup-materialized, unlike the polygon document in
@@ -277,13 +275,13 @@ function _prepared(; compiler = :native)
         ca["Binned." * k] = v
     end
     g = MockGatedSR(SR, Any[])
-    insp = EA.BuildInspection()
     prep = EA.esm_problem(
         _doc(), (0.0, 1.0); const_arrays = ca,
         providers = Dict{String, Any}("Binned.SR_PM25" => g),
-        inspect = insp, pushdown_rewrite = true, compiler = compiler
+        pushdown_rewrite = true, compiler = compiler
     )
-    return prep, insp, g
+    # The Problem's own build products: the cellwise route reads them.
+    return prep, prep.build.products, g
 end
 
 @testset "line allocation: the values, with no geometry kernel in the path" begin
@@ -349,9 +347,9 @@ end
     params = EA._param_scope_with_aliases(insp.params)
     scope = EA._materialized_obs_scope(insp, file, mname, qual("conc_PM25"), params)
 
-    # THE REGRESSION. Before the fix this scope came back as `insp.const_arrays`
-    # itself — nothing materialized — and `conc_PM25` then re-ran the binning
-    # aggregate once per receptor cell.
+    # A scope that is `insp.const_arrays` itself means nothing was
+    # materialized, and `conc_PM25` would re-run the binning aggregate once per
+    # receptor cell.
     @test length(scope) > length(insp.const_arrays)
     tails = Set(String(split(String(k), '.')[end]) for k in keys(scope))
     for n in ("px", "py", "seg_len", "road_len", "seg_emis", "E_PM25")

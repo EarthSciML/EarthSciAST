@@ -120,10 +120,10 @@ function _rr_rank_of(x, members)
             )
         )
     )
-    f!, u0, p, _, vm = EarthSciAST._build_evaluator(load_string(JSON3.write(doc)); compiler = :interpreter)
+    f!, u0, p, _, vm = EarthSciAST.Internal.build(load_string(JSON3.write(doc)); compiler = :interpreter)
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    return du[vm["r"]]
+    return du[vm["M.r"]]
 end
 
 # A state element's golden key: `Model.var[1, 2]` -> `var[1,2]`.

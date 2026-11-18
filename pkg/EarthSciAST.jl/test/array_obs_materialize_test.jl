@@ -3,7 +3,7 @@
 # An array-shaped observed defined by a `faq`/`makearray` used to be
 # INLINED into every reader (`_collect_array_inline_vars`); it is now evaluated
 # ONCE PER RHS CALL into a dense buffer laid out above the ODE state, and readers
-# gather that buffer (build.jl §2b-f). `compiler=:interpreter` is the inlining
+# gather that buffer (obs_buffers.jl). `compiler=:interpreter` is the inlining
 # build — it splices every array observed into its readers — and it is the
 # oracle every case below compares against, bit-for-bit, not approximately.
 using Test
@@ -12,11 +12,18 @@ include("testutils.jl")
 using EarthSciAST
 const ESM_AOM = EarthSciAST
 
+# One build as the positional tuple this file indexes:
+# `(f!, u0, p, tspan, var_map, stats)`. Names are flattened (`M.u[1]`).
+function _aom_build(model; kwargs...)
+    b = ESM_AOM.Internal.build(model; kwargs...)
+    return (b.f!, b.u0, b.p, b.tspan, b.var_map, b.report.stats)
+end
+
 # Build the same model twice — factored (`:native`) and inlined
-# (`:interpreter`, the oracle) — and return both `(f!, u0, p, var_map)` tuples.
+# (`:interpreter`, the oracle) — and return both tuples.
 function _aom_build_both(model; kwargs...)
-    fac = ESM_AOM._build_evaluator_impl(model; kwargs...)
-    inl = ESM_AOM._build_evaluator_impl(model; compiler = :interpreter, kwargs...)
+    fac = _aom_build(model; kwargs...)
+    inl = _aom_build(model; compiler = :interpreter, kwargs...)
     return fac, inl
 end
 
@@ -65,7 +72,7 @@ end
         ),
     ]
     model = ESM_AOM.Model(vars, eqs)
-    ics = Dict("u[$j]" => Float64(j) for j in 1:N)
+    ics = Dict("M.u[$j]" => Float64(j) for j in 1:N)
     fac, inl = _aom_build_both(model; index_sets = isets, initial_conditions = ics)
 
     @testset "differential ≡ the inlining build" begin
@@ -90,7 +97,7 @@ end
         # of the problem changes.
         @test length(fac[2]) == N
         @test all(0 < s <= N for s in values(fac[5]))
-        @test !any(startswith(k, "g[") || startswith(k, "h[") for k in keys(fac[5]))
+        @test !any(startswith(k, "M.g[") || startswith(k, "M.h[") for k in keys(fac[5]))
     end
 
     @testset "the RHS stays allocation-free" begin
@@ -249,7 +256,7 @@ end
         m3 = ESM_AOM.Model(vars3, eqs3)
         for compiler in (:native, :interpreter)
             err = try
-                ESM_AOM._build_evaluator_impl(
+                _aom_build(
                     m3; compiler = compiler, index_sets = isets,
                     initial_conditions = ics
                 )
@@ -413,19 +420,19 @@ end
         ]
         icsD = Dict{String, Float64}()
         for j in 1:M
-            icsD["u[$j]"] = Float64(j)^2
-            icsD["A[$j]"] = 0.0
-            icsD["B[$j]"] = 0.0
+            icsD["M.u[$j]"] = Float64(j)^2
+            icsD["M.A[$j]"] = 0.0
+            icsD["M.B[$j]"] = 0.0
         end
         isetsM = Dict("x" => ESM_AOM.IndexSet("interval"; size = M))
-        f!, u0, p, _, vmD, dD = ESM_AOM._build_evaluator_impl(
+        f!, u0, p, _, vmD, dD = _aom_build(
             varsD |> vs ->
             ESM_AOM.Model(vs, eqsD); index_sets = isetsM, initial_conditions = icsD
         )
         @test dD.n_mat_array_obs == 1
         du = similar(u0); f!(du, u0, p, 0.0)
-        A = [du[vmD["A[$j]"]] for j in 1:M]
-        B = [du[vmD["B[$j]"]] for j in 1:M]
+        A = [du[vmD["M.A[$j]"]] for j in 1:M]
+        B = [du[vmD["M.B[$j]"]] for j in 1:M]
         @test A == B                       # THE invariant — exact, not approximate
         @test !all(iszero, A)              # and non-vacuous (it used to be all zeros)
         # the hand-computed centered difference of u = j², periodic wrap
@@ -455,14 +462,14 @@ end
         )
         icsC = copy(icsD)
         for j in 1:M
-            icsC["C[$j]"] = 0.0
+            icsC["M.C[$j]"] = 0.0
         end
-        fC!, u0C, pC, _, vmC, dC2 = ESM_AOM._build_evaluator_impl(
+        fC!, u0C, pC, _, vmC, dC2 = _aom_build(
             ESM_AOM.Model(varsC, eqsC); index_sets = isetsM, initial_conditions = icsC
         )
         duC = similar(u0C); fC!(duC, u0C, pC, 0.0)
-        Cv = [duC[vmC["C[$j]"]] for j in 1:M]
-        Bv = [duC[vmC["B[$j]"]] for j in 1:M]
+        Cv = [duC[vmC["M.C[$j]"]] for j in 1:M]
+        Bv = [duC[vmC["M.B[$j]"]] for j in 1:M]
         @test Cv == Bv                     # same operator, same field, same numbers
         @test !all(iszero, Cv)
     end
@@ -508,7 +515,7 @@ end
         )
         kw = (;
             index_sets = Dict("tgt" => ESM_AOM.IndexSet("interval"; size = 3)),
-            initial_conditions = Dict("c[$j]" => 0.0 for j in 1:3),
+            initial_conditions = Dict("M.c[$j]" => 0.0 for j in 1:3),
             const_arrays = Dict("W" => Wm, "src" => src),
         )
         fac, inl = _aom_build_both(mR; kw...)
@@ -516,7 +523,7 @@ end
         du_f = _aom_du(fac, fac[2])
         du_i = _aom_du(inl, inl[2])
         @test du_f == du_i
-        @test [du_f[fac[5]["c[$j]"]] for j in 1:3] == vec(sum(Wm .* src; dims = 1))
+        @test [du_f[fac[5]["M.c[$j]"]] for j in 1:3] == vec(sum(Wm .* src; dims = 1))
     end
 
     # ---- A materialized observed that CONTRACTS reaches the affine tier ----
@@ -572,12 +579,12 @@ end
                 ),
             ]
         )
-        icsC = Dict("u[$i,$j]" => Float64(10i + j) for i in 1:Nx, j in 1:Ny)
+        icsC = Dict("M.u[$i,$j]" => Float64(10i + j) for i in 1:Nx, j in 1:Ny)
         kwC = (; index_sets = isetsC, initial_conditions = icsC)
 
-        ESM_AOM._reset_cascade_tally!()
-        facC = ESM_AOM._build_evaluator_impl(mC; kwC...)
-        tally = copy(ESM_AOM._CASCADE_TALLY)
+        bC = ESM_AOM.Internal.build(mC; kwC...)
+        facC = (bC.f!, bC.u0, bC.p, bC.tspan, bC.var_map, bC.report.stats)
+        tally = bC.report.counts
         @test facC[6].n_mat_array_obs == 1              # `s` IS materialized
         # The point of the unwrap: nothing lands on the per-cell tier.
         @test get(tally, :percell_acc, 0) == 0
@@ -586,7 +593,7 @@ end
         # Differential: bit-identical to the interpreter, which both inlines
         # the observed and takes the per-cell path, so it never sees the
         # unwrap at all.
-        inlC = ESM_AOM._build_evaluator_impl(mC; compiler = :interpreter, kwC...)
+        inlC = _aom_build(mC; compiler = :interpreter, kwC...)
         u0 = facC[2]
         for probe in (
                 u0, fill(1.0, length(u0)),
@@ -600,7 +607,7 @@ end
         for i in 1:Nx
             rowsum = sum(Float64(10i + j) for j in 1:Ny)
             for j in 1:Ny
-                @test du[facC[5]["u[$i,$j]"]] == 0.5 * rowsum
+                @test du[facC[5]["M.u[$i,$j]"]] == 0.5 * rowsum
             end
         end
     end
@@ -650,8 +657,8 @@ end
             ]
         )
         icsS = merge(
-            Dict("u[$j]" => Float64(j) for j in 1:Ns),
-            Dict("c[$j]" => 0.0 for j in 1:Ns)
+            Dict("M.u[$j]" => Float64(j) for j in 1:Ns),
+            Dict("M.c[$j]" => 0.0 for j in 1:Ns)
         )
         facS, inlS = _aom_build_both(
             mS; index_sets = isetsS,
@@ -671,13 +678,13 @@ end
         end
         # g[j] = 2u[j], so D(c)[i] is 2·(the i-th triangular number) at u[j] = j.
         du = _aom_du(facS, facS[2])
-        @test [du[facS[5]["c[$i]"]] for i in 1:Ns] == 2.0 .* cumsum(1.0:Ns)
+        @test [du[facS[5]["M.c[$i]"]] for i in 1:Ns] == 2.0 .* cumsum(1.0:Ns)
     end
 end
 
 # Capture-avoiding substitution when an array observed is INLINED.
 #
-# `_sub_preserving` (tree_walk/helpers.jl) used to substitute straight through a
+# `_sub_preserving` (expression.jl) used to substitute straight through a
 # nested aggregate's own binders, so an inlined column sum lost its loop variable
 # while `ranges` still declared it — the unroll then emitted `length(gk)`
 # IDENTICAL terms and the sum degenerated to `length(gk) · body[gk = outer_k]`.
@@ -748,17 +755,17 @@ end
         )
     )
 
-    ics = Dict{String, Any}("q[$i,$k]" => Float64(10i + k) for i in 1:NI, k in 1:NK)
+    ics = Dict{String, Any}("R.q[$i,$k]" => Float64(10i + k) for i in 1:NI, k in 1:NK)
     # du[gi,gk] = (Σ_kk q[gi,kk])/2 − q[gi,gk]
     want(i, k) = sum(Float64(10i + kk) for kk in 1:NK) / 2 - Float64(10i + k)
 
     function du_iip(; inline)
-        f!, u0, p, _, vm = EarthSciAST._build_evaluator(
+        f!, u0, p, _, vm = EarthSciAST.Internal.build(
             doc;
             initial_conditions = ics, compiler = inline ? :interpreter : :native
         )
         du = similar(u0); f!(du, u0, p, 0.0)
-        return [du[vm["q[$i,$k]"]] for i in 1:NI, k in 1:NK]
+        return [du[vm["R.q[$i,$k]"]] for i in 1:NI, k in 1:NK]
     end
     ref = [want(i, k) for i in 1:NI, k in 1:NK]
     @test du_iip(inline = false) == ref          # factored: was already right
@@ -802,13 +809,13 @@ end
             ),
         ]
     )
-    icsO = Dict("u[$j]" => 0.5 * j for j in 1:Ns)
+    icsO = Dict("M.u[$j]" => 0.5 * j for j in 1:Ns)
 
-    iip = ESM_AOM._build_evaluator_impl(
+    iip = _aom_build(
         mO; index_sets = isetsO,
         initial_conditions = icsO
     )
-    oop = ESM_AOM._build_evaluator_impl(
+    oop = _aom_build(
         mO; index_sets = isetsO,
         initial_conditions = icsO, form = :oop
     )
@@ -819,7 +826,7 @@ end
 
     du = similar(iip[2]); iip[1](du, iip[2], iip[3], 0.0)
     want = [sum((0.5j)^2 for j in 1:Ns) - 0.5 * i for i in 1:Ns]
-    @test [du[iip[5]["u[$i]"]] for i in 1:Ns] == want
+    @test [du[iip[5]["M.u[$i]"]] for i in 1:Ns] == want
     # The two builds agree on the fill plan: same materialized cell count, and
     # the out-of-place product's extended state is that much wider than `du`.
     @test oop[6].n_mat_array_cells == iip[6].n_mat_array_cells

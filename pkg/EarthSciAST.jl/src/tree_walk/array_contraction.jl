@@ -527,7 +527,7 @@ const _CG_NO_KIDS = _Node[]
 # structurally equal nodes, in dependency order (a group's nodes hold only
 # groups listed before it), or `nothing` when there are none. The region's
 # unique nodes and their path multiplicities — every occurrence, and those
-# outside lazy operands — come from the shared DAG walks (compile.jl).
+# outside lazy operands — come from the shared DAG walks (dag.jl).
 function _cg_share_groups(kc, root::_Node)
     kids = n -> _cg_share_opaque(kc, n) ? _CG_NO_KIDS : n.children
     order, pos = _dag_postorder(root, kids, _dag_every)

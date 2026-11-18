@@ -541,7 +541,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # was legal on disk and illegal the instant it was loaded and re-emitted.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             f = EarthSciAST.load_path(src)
 
             # The declarations SURVIVE the load...
@@ -595,7 +595,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # TypeScript `§9.6.4 rule 5: a template library round-trips to itself`.
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm")
             src = joinpath(repo_root, "tests", "valid", name)
-            isfile(src) || continue
+            @test isfile(src)
             authored = JSON3.read(read(src, String))
             resolved = resolve_template_machinery(authored, dirname(src))
             @test resolved !== nothing
@@ -778,7 +778,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # The empty region is inert: the evaluator builds, and the two faces
         # tile the axis — d(c)/dt is the one-sided difference everywhere. With
         # a uniform state the differences vanish, so du == 0 exactly.
-        f!, u0, p, tspan, vmap = EarthSciAST._build_evaluator(f)
+        f!, u0, p, tspan, vmap = EarthSciAST.Internal.build(f)
         du = similar(u0); fill!(du, NaN)
         f!(du, u0, p, 0.0)
         @test all(du .== 0.0)

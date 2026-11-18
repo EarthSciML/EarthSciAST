@@ -36,12 +36,11 @@ const ESM = EarthSciAST
 
 function _dfp_build(model, ics; compiler::Symbol = :native, env...)
     return withenv((String(k) => v for (k, v) in pairs(env))...) do
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
             initial_conditions = ics, compiler = compiler
         )
-        (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+        (f!, u0, p, vm, rep.stats, rep.counts)
     end
 end
 
@@ -83,7 +82,7 @@ function _dfp_model(N)
 end
 
 _dfp_ics(N) = Dict(
-    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+    "M.$x[$k]" => 2.0 + sin(0.3k + 0.1j)
         for (j, x) in enumerate(("u", "v")), k in 1:N
 )
 

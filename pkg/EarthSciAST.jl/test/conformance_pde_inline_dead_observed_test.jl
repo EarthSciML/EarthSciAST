@@ -8,12 +8,12 @@
 # (`run_inline_tests`) already answered this document, so the golden is the shared
 # cross-binding anchor.
 #
-# This is the conformance GATE for #176: before the fix, the elementwise
-# array-observed fold inlined `diag` / `chain` into their readers and — having
-# none — dropped them, so `BuildInspection.observed_exprs` carried neither and
-# every assertion here failed with "array state '<name>' has no cells in
-# var_map". See tests/conformance/pde_inline_dead_observed/ and the unit
-# coverage in pde_inline_dead_observed_test.jl.
+# This is the conformance GATE for assertions on an array observed no live
+# equation reads (`diag`, and `chain`, which reads `diag`): the elementwise
+# array-observed fold inlines an observed into its readers, so a dead one must
+# still be answerable from its defining equation. See
+# tests/conformance/pde_inline_dead_observed/ and the unit coverage in
+# pde_inline_dead_observed_test.jl.
 
 using Test
 using JSON3

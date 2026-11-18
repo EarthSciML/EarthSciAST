@@ -82,11 +82,10 @@ end
 #             one reference the vocabulary offers
 function _scan_du(model; tier = :scan)
     return let compiler = tier === :ref ? :interpreter : :native
-        ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler = compiler)
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(model; compiler = compiler)
         u = Float64[_sc_val(k) for k in 1:length(u0)]
         du = (buf = zero(u0); f!(buf, u, p, 0.0); buf)
-        (du = du, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY))
+        (du = du, vm = vm, diag = rep.stats, tally = rep.counts)
     end
 end
 
@@ -143,8 +142,8 @@ end
         # Dual numbers take the same generated fold: the Jacobian column is the
         # reference build's, bit for bit.
         m = _scan_model(16; body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
-        fn, u0n, pn, _ = ESM._build_evaluator_impl(m; compiler = :native)
-        fi, u0i, pi_, _ = ESM._build_evaluator_impl(m; compiler = :interpreter)
+        fn, u0n, pn, _ = ESM.Internal.build(m; compiler = :native)
+        fi, u0i, pi_, _ = ESM.Internal.build(m; compiler = :interpreter)
         u = Float64[_sc_val(k) for k in 1:length(u0n)]
         seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
         jd(f, p) = ForwardDiff.derivative(
@@ -162,11 +161,12 @@ end
                 ("<", [0.0; cumsum(1.0:(n - 1))]),
             )
             m = _scan_model(n; filt = filt)
-            ics = Dict("u[$i]" => Float64(i) for i in 1:n)
-            f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions = ics)
+            ics = Dict("M.u[$i]" => Float64(i) for i in 1:n)
+            f!, u0, p, _t, vm, rep = ESM.Internal.build(m; initial_conditions = ics)
+            diag = rep.stats
             du = zero(u0); f!(du, u0, p, 0.0)
             @test diag.n_scan_folds == 1
-            @test [du[vm["c[$i]"]] for i in 1:n] == collect(expected)
+            @test [du[vm["M.c[$i]"]] for i in 1:n] == collect(expected)
         end
     end
 
@@ -178,7 +178,7 @@ end
         m = _scan_model(4; filt = "<", reduce = "max")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
-        @test a.du[a.vm["c[1]"]] == -Inf
+        @test a.du[a.vm["M.c[1]"]] == -Inf
         @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
@@ -219,14 +219,14 @@ end
             if red == "+"
                 # The descending left fold, by hand.
                 u = Float64[_sc_val(k) for k in 1:(2n)]
-                uv = [u[a.vm["u[$j]"]] for j in 1:n]
+                uv = [u[a.vm["M.u[$j]"]] for j in 1:n]
                 want = [
                     foldl(
                         +, (uv[j] for j in n:-1:1 if (filt == ">=" ? j >= i : j > i));
                         init = 0.0
                     ) for i in 1:n
                 ]
-                @test _bits([ref.du[a.vm["c[$i]"]] for i in 1:n]) == _bits(want)
+                @test _bits([ref.du[a.vm["M.c[$i]"]] for i in 1:n]) == _bits(want)
             end
         end
         # The mirrored spelling `i <= j` is the same reverse scan.
@@ -282,11 +282,12 @@ end
         # fold that stopped one short would show up right here.
         n = 6
         m = _scan_model_staggered(n)
-        ics = Dict("u[$i]" => Float64(i) for i in 1:n)
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions = ics)
+        ics = Dict("M.u[$i]" => Float64(i) for i in 1:n)
+        f!, u0, p, _t, vm, rep = ESM.Internal.build(m; initial_conditions = ics)
+        diag = rep.stats
         du = zero(u0); f!(du, u0, p, 0.0)
         @test diag.n_scan_folds == 1
-        @test [du[vm["c[$i]"]] for i in 1:(n + 1)] == [0.0; cumsum(1.0:n)]
+        @test [du[vm["M.c[$i]"]] for i in 1:(n + 1)] == [0.0; cumsum(1.0:n)]
     end
 
     @testset "staggered empty window keeps the semiring identity" begin
@@ -295,7 +296,7 @@ end
         m = _scan_model_staggered(4; reduce = "max")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
-        @test a.du[a.vm["c[1]"]] == -Inf
+        @test a.du[a.vm["M.c[1]"]] == -Inf
         @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
@@ -425,7 +426,8 @@ end
                 ),
             ]
         )
-        _f, _u0, _p, _t, _vm, diag = ESM._build_evaluator_impl(plain)
+        _f, _u0, _p, _t, _vm, rep = ESM.Internal.build(plain)
+        diag = rep.stats
         @test diag.n_scan_folds == 0
     end
 end
@@ -474,9 +476,9 @@ end
 function _obs_scan_eval(json; compiler = :native)
     path = joinpath(mktempdir(), "obs_scan.esm")
     write(path, json)
-    ESM._reset_cascade_tally!()
-    prob = ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
-    tally = copy(ESM._CASCADE_TALLY)
+    prob, tally = ESM.Internal.counting() do
+        ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
+    end
     u = Float64[_sc_val(k) for k in 1:length(prob.u0)]
     du = zero(u)
     prob.f!(du, u, prob.p, 0.0)

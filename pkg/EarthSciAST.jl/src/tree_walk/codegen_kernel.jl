@@ -5,7 +5,7 @@
 # The scalar access-kernel runner (`_run_acc_kernel!`, access_kernel.jl) walks
 # the spine `_Node` tree once per cell: one dynamic kind/op dispatch per node
 # per cell per RHS call. This tier removes that interpretation entirely where
-# it can: at `build_evaluator` time each `_AccKernel` is EMITTED as Julia
+# it can: at `_build_evaluator` time each `_AccKernel` is EMITTED as Julia
 # source — the kernel's exact per-box loop nest with the spine as a
 # straight-line expression using direct indexing (`u[oln + Δ]`, literal
 # strides/offsets baked in) — and every emitted kernel is fused into ONE
@@ -36,8 +36,8 @@
 # `_cse_read`; see the tier note below), an oversized spine —
 # declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
-# counted per reason in `_CASCADE_TALLY` (`:codegen_kernel` /
-# `:codegen_decline_<reason>`), the `_tally_cascade!` pattern.
+# counted per reason in the build's cascade tally (`:codegen_kernel` /
+# `:codegen_decline_<reason>`, `_tally_cascade!`).
 #
 # GENERATED CODE NEVER TOUCHES INTERPRETER STATE: CSE/invariant slots become
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
@@ -103,8 +103,9 @@ end
 # ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
 # REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
 # leaves a tree walk in the right-hand side.
-# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in
-# `_CASCADE_TALLY` — the observability hook for which tier Dual evaluation uses.
+# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in the
+# build's cascade tally — the observability hook for which tier Dual evaluation
+# uses.
 _dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
 _dual_codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
@@ -150,7 +151,7 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 # (primary and dual/f64 overflow) are only ever invoked from inside that
 # section, so every accepted read lands on a slot filled this call. Call sites
 # that cannot pin that ordering (the materialized-observed fill sections in
-# build.jl, hand-built test sections) pass `shared_cache = nothing` and keep
+# build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
 # Off, every such read is an unconditional `:foreign_scratch` decline.
@@ -228,7 +229,7 @@ mutable struct _CGCtx
     # rule its loop body folds each cell's term with — `(acc, a, b, op,
     # inclusive)`, the nest running ordinals `[a, b)` (one lane).
     scanmode::Any
-    # Two-buffer addressing (`_ObsSplitVec`, build.jl): the state length of the
+    # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
     # each state read is emitted against the buffer its slots live in
     # (`_cg_side`); `olnext` holds the output-slot extent of every kernel whose

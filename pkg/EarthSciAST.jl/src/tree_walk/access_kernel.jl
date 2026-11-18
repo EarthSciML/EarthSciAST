@@ -27,7 +27,7 @@
 #     every valence — the bound is data, not a structural split. The connectivity
 #     and valence arrays are INPUTS (const arrays), never built here.
 #
-# The spine reuses `_Node` (compile.jl). Two extra node kinds appear ONLY in an
+# The spine reuses `_Node` (node.jl). Two extra node kinds appear ONLY in an
 # access spine and are handled ONLY by `_eval_acc` (the scalar `_eval_node` never
 # sees them): `_NK_ACCESS` (a leaf; `idx` indexes the kernel's access table) and
 # `_NK_REDUCE` (children = [body]; `payload` = the `_Bound`; the ⊕-fold runs over
@@ -413,7 +413,7 @@ _AccKernel(
 
 # ---- The evaluator ----
 # ELTYPE-GENERIC in the value type `T`, exactly as the scalar `_eval_node`
-# (compile.jl) is, and for the same reason: the in-place `f!` must DIFFERENTIATE
+# (scalar_walk.jl) is, and for the same reason: the in-place `f!` must DIFFERENTIATE
 # through these kernels (ForwardDiff over state OR over parameters), not just
 # integrate them. `T` is threaded and passed down but leaves are NEVER converted
 # to it — the type flows naturally from the leaves (a state read yields
@@ -454,7 +454,7 @@ function _eval_acc(
         return _eval_acc_areduce(nd, u, p, t, c, n, oln, midx, K, T)
     elseif k === _NK_CONTRACTION
         # Fixed-width runtime ⊕-fold (the per-cell merge hosts einsum groups on
-        # the access spine). MIRRORS `_eval_contraction` (compile.jl) arm for
+        # the access spine). MIRRORS `_eval_contraction` (scalar_walk.jl) arm for
         # arm — seeded from the 0̄ identity on the node, sequential child-order
         # fold — so the value is bit-identical to the per-cell reference.
         return _eval_acc_contraction(nd, u, p, t, c, n, oln, midx, K, T)
@@ -531,7 +531,7 @@ end
 
 # Runtime ⊕-fold over an access-spine contraction node's children, seeded from
 # `nd.literal` (the 0̄ identity baked on at build time) — byte-for-byte the
-# `_eval_contraction` (compile.jl) fold shape, with `_eval_acc` as the child
+# `_eval_contraction` (scalar_walk.jl) fold shape, with `_eval_acc` as the child
 # walker.
 function _eval_acc_contraction(
         nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
@@ -788,7 +788,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
     # change slot decisions on shared spines), but the spine is a DAG whose
     # per-path recursion was exponential (ESS-0hh). Mirror `_cse_count!`
-    # (compile.jl): number each UNIQUE node once in identity-deduped postorder
+    # (scalar_cse.jl): number each UNIQUE node once in identity-deduped postorder
     # (a child's vn stays < its parent's, preserving the dependency-order
     # invariant the recipe tiers rely on), then propagate saturating path
     # multiplicities parent→child in reverse postorder and tally each unique
@@ -931,7 +931,7 @@ _alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
 # The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
 # without a per-call allocation.
 
-# One-time threading verdicts, in the `_CASCADE_TALLY` spirit: bumped once per
+# One-time threading verdicts: bumped once per
 # generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
 # Read it via `EarthSciAST._THREAD_TALLY`, reset with
 # `EarthSciAST._reset_thread_tally!()`.

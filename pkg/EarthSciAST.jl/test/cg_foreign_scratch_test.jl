@@ -4,8 +4,7 @@
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel
 # invariant-tier defs into bare `_NK_CACHED` reads of the build's SCALAR
 # prelude `_CSECache` — a payload that is no kernel's scratch. The codegen
-# emitter used to decline every such kernel (`:foreign_scratch`), dropping it
-# to the interpreter; it now emits the interpreter's exact read
+# emitter emits the interpreter's exact read
 # (`_cse_read(cache, idx, T)` — eltype-generic, Float64 `f64` buffer or the
 # Dual `alt` buffer), sound because `_make_rhs` fills every prelude tier into
 # that exact cache, at the same `T`, before the kernel section runs.
@@ -30,13 +29,13 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
+# `(f!, u0, p, var_map, stats, counts)` of one build, from the build report.
 function _cfs_build(model, ics; compiler::Symbol = :native)
-    ESM._reset_cascade_tally!()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+    f!, u0, p, _t, vm, rep = ESM.Internal.build(
         model;
         initial_conditions = ics, compiler = compiler
     )
-    return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
+    return (f!, u0, p, vm, rep.stats, rep.counts)
 end
 
 _cfs_du(f!, u, p, t) = (d = similar(u); fill!(d, zero(eltype(u))); f!(d, u, p, t); d)
@@ -72,8 +71,9 @@ function _cfs_model(N)
     return ESM.Model(vars, [eq("a", abody), eq("b", bbody)])
 end
 
+# By flattened name: the build makes the model component `M`.
 _cfs_ics(N) = Dict{String, Float64}(
-    "$x[$k]" => 0.2j + 0.01k
+    "M.$x[$k]" => 0.2j + 0.01k
         for (j, x) in enumerate(("a", "b")), k in 1:N
 )
 

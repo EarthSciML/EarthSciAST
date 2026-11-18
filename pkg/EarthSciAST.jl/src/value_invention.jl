@@ -30,7 +30,7 @@ failures) so they are machine-checkable across bindings.
 """
 
 # Base variable name of a typed-IR LHS (`VarExpr` / `index` / `D`), used by
-# build_evaluator to drop value-invention equations from the ODE and by
+# _build_evaluator to drop value-invention equations from the ODE and by
 # `_vi_detect` below.
 function _vi_typed_lhs_base(expr)
     expr isa VarExpr && return expr.name
@@ -193,9 +193,9 @@ end
 function _vi_param(ctx::_ViCtx, name::AbstractString)
     # The sharpest structural read there is: a scalar parameter consumed HERE
     # decides an invented index set's EXTENT, i.e. `length(u)`. Record it (see
-    # `_PARAM_READS`, build.jl) before resolving — override or default, either
+    # `_record_param_read`, build_caller_data.jl) before resolving — override or default, either
     # way the value is baked into the materialized extent.
-    _PARAM_READS[] === nothing || _record_param_read(name)
+    _record_param_read(name)
     haskey(ctx.params, name) && return ctx.params[name]
     v = get(ctx.variables, name, nothing)
     if v !== nothing && v.default !== nothing
@@ -749,13 +749,19 @@ function _vi_enumerate_join(
         ranges, gates::Union{Vector{_ViJoinGate}, Nothing},
         ctx::_ViCtx, cb
     )
-    counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
+    nvisit = Ref(0)
+    counted = bindings -> (nvisit[] += 1; cb(bindings))
     ov = _drivable_gate(gates)
-    ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
+    if ov === nothing
+        r = _vi_enumerate(ranges, ctx, counted)   # full product
+        _count!(:vi_enum_visits, nvisit[])
+        return r
+    end
     _vi_enumerate_driven(
         _vi_order_syms(ranges), ranges, ctx, Dict{String, Any}(), ov,
         counted
     )
+    _count!(:vi_enum_visits, nvisit[])
     return
 end
 
@@ -1055,8 +1061,8 @@ function _vic_produce(lens::Vector{Int}, cf, k, syms, column)
     n == 0 && return out
     sizehint!(out, n)
     v = ones(Int, length(lens))
+    _count!(:vi_enum_visits, n)
     for _ in 1:n
-        _VI_ENUM_VISITS[] += 1
         keep = true
         if cf !== nothing
             keep = _vi_truthy(cf(v))

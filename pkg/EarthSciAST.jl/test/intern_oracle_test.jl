@@ -26,13 +26,15 @@ _probe_states(n) = (
     Float64[1.5 + 0.25 * sin(0.7 * i) * cos(0.05 * i) for i in 1:n],
 )
 
-# Build `model` under `env` and return (du probes, u0, p, var_map).
+# Build `model` (as component `M`) under `compiler` and return
+# (du probes, u0, p, var_map). The const arrays are undeclared data names, which
+# flattening leaves bare.
 function _intern_probe_model(
         model; compiler = :native,
         ics = Dict{String, Float64}(), const_arrays = Dict()
     )
-    f, u0, p, _, vmap = ESM._build_evaluator(
-        model; initial_conditions = ics,
+    f, u0, p, _, vmap = ESM.Internal.build(
+        model; initial_conditions = Dict{String, Any}("M." * String(k) => v for (k, v) in ics),
         const_arrays = const_arrays,
         compiler = compiler
     )
@@ -273,8 +275,7 @@ end
             "transport_3axis_7cubed_fullrank.esm"
         )
         function bp(compiler)
-            flat = ESM.flatten(ESM.load_path(FIX))
-            f, u0, p, _, vmap = ESM._build_evaluator(flat; compiler = compiler)
+            f, u0, p, _, vmap = ESM.Internal.build(FIX; compiler = compiler)
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
                 du = similar(u0)

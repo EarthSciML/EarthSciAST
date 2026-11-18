@@ -1216,3 +1216,113 @@ end
         end
     end
 end
+
+# An elementwise operation over disjoint index sets spans their union, the
+# outer product (esm-spec §4.3.4, "An undeclared result takes the union").
+const _UNION_DOC = """
+{
+  "esm": "1.3.0",
+  "metadata": {"name": "union_shape"},
+  "index_sets": {"lon": {"kind": "interval", "size": 3}, "lat": {"kind": "interval", "size": 2}},
+  "models": {
+    "M": {
+      "variables": {
+        "a": {"type": "parameter", "units": "1/s", "shape": ["lon"], "default": [1.0, 2.0, 3.0]},
+        "b": {"type": "parameter", "units": "1/s", "shape": ["lat"], "default": [10.0, 20.0]},
+        "k": {"type": "unknown", "units": "1/s"},
+        "c": {"type": "unknown", "units": "1", "default": 1.0}
+      },
+      "equations": [
+        {"lhs": "k", "rhs": {"op": "+", "args": ["a", "b"]}},
+        {"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": {"op": "*", "args": ["k", "c"]}}
+      ]
+    }
+  }
+}
+"""
+
+@testset "elementwise over disjoint index sets: the union shape" begin
+    shapes = Dict("a" => ["lon"], "b" => ["lat"])
+    sum_ab = _op("+", _V("a"), _V("b"))
+    @test EarthSciAST._infer_expr_shape(sum_ab, shapes) == ["lon", "lat"]
+    @test EarthSciAST._infer_expr_shape(_op("*", _V("b"), _V("a")), shapes) == ["lat", "lon"]
+    # One inference: the lift reads the same answer.
+    env = EarthSciAST._ShapeEnv(Dict("a" => ["lon"], "b" => ["lat"]))
+    @test EarthSciAST._expr_axes(env, sum_ab) == ["lon", "lat"]
+    # A `broadcast` of a scalar operator is elementwise.
+    @test EarthSciAST._infer_expr_shape(
+        _op("broadcast", _V("a"), _V("b"); fn = "*"), shapes
+    ) == ["lon", "lat"]
+
+    file = EarthSciAST.load_string(_UNION_DOC)
+    flat = EarthSciAST.flatten(file)
+    # `c` is lifted onto the union grid, and the unshaped `k` it reads is
+    # gathered at the cell, not left a bare name inside the lifted `faq`.
+    @test flat.state_variables["M.c"].shape == ["lon", "lat"]
+    eq = only(e for e in flat.equations if e.lhs isa EarthSciAST.OpExpr && e.lhs.op == "faq")
+    gathered = Ref(false)
+    EarthSciAST.foreach_subexpr(eq.rhs.expr_body) do x
+        if x isa EarthSciAST.OpExpr && x.op == "index" && x.args[1] isa EarthSciAST.VarExpr &&
+                x.args[1].name == "M.k"
+            gathered[] = length(x.args) == 3
+        end
+        nothing
+    end
+    @test gathered[]
+
+    # Built and evaluated, `D(c[i, j]) = (a[i] + b[j]) * c[i, j]`.
+    prob = EarthSciAST.esm_problem(file, (0.0, 1.0))
+    du = zeros(length(prob.u0))
+    prob.f!(du, copy(prob.u0), prob.p, 0.0)
+    a, b = [1.0, 2.0, 3.0], [10.0, 20.0]
+    for i in 1:3, j in 1:2
+        @test du[Int(prob.var_map["M.c[$i,$j]"])] ≈ a[i] + b[j]
+    end
+end
+
+@testset "initialization equations are named by flatten" begin
+    doc = """
+    {
+      "esm": "1.3.0",
+      "metadata": {"name": "init_names"},
+      "models": {
+        "A": {
+          "variables": {"x": {"type": "unknown", "units": "1", "default": 0.0},
+                        "p": {"type": "parameter", "units": "1", "default": 2.0}},
+          "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "p"}],
+          "initialization_equations": [{"lhs": "x", "rhs": {"op": "*", "args": ["p", 3]}}]
+        },
+        "B": {
+          "variables": {"q": {"type": "parameter", "units": "1", "default": 5.0}},
+          "equations": []
+        }
+      },
+      "coupling": [{"type": "variable_map", "from": "B.q", "to": "A.p", "transform": "param_to_var"}]
+    }
+    """
+    flat = EarthSciAST.flatten(EarthSciAST.load_string(doc))
+    init = only(flat.initialization_equations)
+    @test init.lhs == _V("A.x")
+    # Namespaced, then substituted by the `variable_map` as the equations are.
+    @test EarthSciAST.free_variables(init.rhs) == Set(["B.q"])
+    # Kept by a copy.
+    @test only(EarthSciAST.FlattenedSystem(flat; domain = nothing).initialization_equations) === init
+end
+
+@testset "the subset maps are read off their parents" begin
+    flat = EarthSciAST.FlattenedSystem(;
+        parameters = EarthSciAST.OrderedDict(
+            "M.a" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 1.0),
+            "M.b" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 2.0),
+        ),
+        discrete_parameters = ["M.b", "M.gone"]
+    )
+    @test collect(keys(flat.discrete_parameters)) == ["M.b"]
+    newer = EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable; default = 3.0)
+    flat2 = EarthSciAST.FlattenedSystem(
+        flat; parameters = EarthSciAST.OrderedDict("M.b" => newer)
+    )
+    @test flat2.discrete_parameters["M.b"] === newer
+    @test :discrete_parameters in propertynames(flat2)
+    @test_throws ArgumentError EarthSciAST.FlattenedSystem(flat; no_such_field = 1)
+end

@@ -238,22 +238,22 @@ end
         model = E.Model(vars, [E.Equation(lhs, rhs)])
         ics = Dict{String, Float64}()
         for k in 1:N
-            ics["y[$k]"] = 0.0; ics["u[$k]"] = 1.0k
+            ics["M.y[$k]"] = 0.0; ics["M.u[$k]"] = 1.0k
         end
         ca = Dict("conn" => conn)
 
-        f!, u0, p, _, vmap, d = E._build_evaluator_impl(
+        f!, u0, p, _, vmap, rep = E.Internal.build(
             model;
             initial_conditions = ics, const_arrays = ca
         )
-        @test d.n_acc_kernels == 1                    # ONE kernel, not O(N) boxes
+        @test rep.stats.n_acc_kernels == 1                    # ONE kernel, not O(N) boxes
         du = fill(-1.0, length(u0)); f!(du, u0, p, 0.0)
         for i in 1:N
-            @test du[vmap["y[$i]"]] == u0[vmap["u[$(perm[i])]"]]
+            @test du[vmap["M.y[$i]"]] == u0[vmap["M.u[$(perm[i])]"]]
         end
 
         # forced per-cell reference: bit-identical on every written slot
-        fr!, u0r, pr, _, _ = EarthSciAST._build_evaluator(
+        fr!, u0r, pr, _, _ = EarthSciAST.Internal.build(
             model; initial_conditions = ics,
             const_arrays = ca,
             compiler = :interpreter

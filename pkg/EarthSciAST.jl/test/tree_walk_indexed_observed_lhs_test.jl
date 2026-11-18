@@ -63,24 +63,24 @@ const ESM_IOL = EarthSciAST
     )
     percell_eq = () -> ESM_IOL.Equation(_iol_agg(_idx("w", _v("k"))), _iol_body())
 
-    ics = Dict("u[$j]" => Float64(j) for j in 1:N)
-    _iol_build(eq) = ESM_IOL._build_evaluator_impl(
+    ics = Dict("M.u[$j]" => Float64(j) for j in 1:N)
+    _iol_build(eq) = ESM_IOL.Internal.build(
         ESM_IOL.Model(_iol_vars(), [eq(), _iol_deriv()]);
         index_sets = isets, initial_conditions = ics
     )
-    _iol_du(built, u) = (du = similar(u); built[1](du, u, built[3], 0.0); du)
+    _iol_du(built, u) = (du = similar(u); built.f!(du, u, built.p, 0.0); du)
 
     @testset "all three spellings build and agree" begin
         bare = _iol_build(bare_eq)
         indexed = _iol_build(indexed_eq)      # threw E_TREEWALK_UNSUPPORTED_SHAPE
         percell = _iol_build(percell_eq)      # threw E_TREEWALK_UNSUPPORTED_SHAPE
 
-        u0 = bare[2]
+        u0 = bare.u0
         @test length(u0) == N                 # `w` carries NO ode slot in any of them
-        @test indexed[2] == u0
-        @test percell[2] == u0
-        @test indexed[5] == bare[5]           # identical public var_map
-        @test percell[5] == bare[5]
+        @test indexed.u0 == u0
+        @test percell.u0 == u0
+        @test indexed.var_map == bare.var_map           # identical public var_map
+        @test percell.var_map == bare.var_map
 
         for probe in (u0, fill(1.0, N), collect(range(-3.0, 3.0; length = N)))
             want = 2.0 .* probe               # D(u[k]) = w[k] = 2·u[k]
@@ -215,19 +215,19 @@ end
         _bi_agg(_Didx("u", _v("k"))),
         _bi_agg(_idx("w", _v("k")))
     )
-    ics = Dict("u[$j]" => Float64(j) for j in 1:N)
-    _bi_build(eq) = ESM_IOL._build_evaluator_impl(
+    ics = Dict("M.u[$j]" => Float64(j) for j in 1:N)
+    _bi_build(eq) = ESM_IOL.Internal.build(
         ESM_IOL.Model(_bi_vars(), [eq, _bi_deriv()]);
         index_sets = isets, initial_conditions = ics
     )
-    _bi_du(built, u) = (du = similar(u); built[1](du, u, built[3], 0.0); du)
+    _bi_du(built, u) = (du = similar(u); built.f!(du, u, built.p, 0.0); du)
 
     @testset "the runnable form builds and agrees with the bare spelling" begin
         bare = _bi_build(ESM_IOL.Equation(_v("w"), _bi_agg(_bi_body())))
         bidx = _bi_build(ESM_IOL.Equation(_idx("w", _v("k")), _bi_agg(_bi_body())))
-        @test bidx[2] == bare[2]
-        @test bidx[5] == bare[5]
-        for probe in (bare[2], fill(1.0, N))
+        @test bidx.u0 == bare.u0
+        @test bidx.var_map == bare.var_map
+        for probe in (bare.u0, fill(1.0, N))
             @test _bi_du(bidx, probe) == _bi_du(bare, probe)
             @test _bi_du(bidx, probe) == 2.0 .* probe
         end
@@ -274,7 +274,7 @@ end
             # subscript, whose symbol IS bound, reaches the form check.
             @test occursin("indexed_definition_unsupported_form", msg) ||
                 occursin("unbound_index_symbol", msg)
-            @test occursin("'w'", msg)
+            @test occursin("'M.w'", msg)
         end
     end
 

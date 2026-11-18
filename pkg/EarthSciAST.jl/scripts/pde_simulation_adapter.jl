@@ -2,7 +2,7 @@
 #
 # Reference binding. For every fixture in the manifest it:
 #   * evaluates the discretized RHS f(u, t) at each declared probe state via the
-#     MTK-free tree-walk evaluator (`build_evaluator` -> `f!(du, u, p, t)`), and
+#     MTK-free tree-walk evaluator (`Internal.build` -> `f!(du, u, p, t)`), and
 #   * integrates the trajectory from the declared initial conditions with the
 #     pinned integrator (Tsit5 + manifest reltol/abstol), sampling at the
 #     declared output times.
@@ -18,41 +18,14 @@
 #         --manifest <manifest.json> --output <out.json> --compiler <value>
 #
 # `--compiler` is REQUIRED and names which strategy builds the right-hand side
-# (API_SPEC §5.8's closed vocabulary), passed straight to `build_evaluator` /
+# (API_SPEC §5.8's closed vocabulary), passed straight to `Internal.build` /
 # `esm_problem`. The stages pass `native`, because every fixture here builds
 # under it.
 
-# Self-contained environment bootstrap. The dedicated adapter project
-# (scripts/pde_sim_adapter/Project.toml) pins EarthSciAST (dev'd from
-# ../..) + OrdinaryDiffEqTsit5 + JSON3. Manifest.toml is gitignored repo-wide,
-# so on a fresh checkout we re-establish the local dev path then instantiate; on
-# warm runs (Manifest already present) this is just a fast resolve check.
-import Pkg
-let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manifest.toml")
-    bootstrap() = begin
-        Pkg.activate(env; io = devnull)
-        isfile(manifest) ||
-            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
-        Pkg.instantiate(; io = devnull)
-    end
-    try
-        bootstrap()
-    catch err
-        # Manifest.toml is a machine-local CACHE (gitignored), so it can lag a
-        # Project.toml that has moved on and then contradict it, and
-        # `Pkg.instantiate` then fails. The adapter would write no output and
-        # the Julia REFERENCE stage would fail, which also fails the Rust and
-        # Python stages that compare against it.
-        #
-        # A cache that cannot instantiate has no value, so rebuild it rather
-        # than fail the gate. `Pkg.develop` only writes the Manifest here —
-        # EarthSciAST is already in the Project's [deps], so the tracked
-        # Project.toml is not touched.
-        @warn "pde_sim_adapter env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force = true)
-        bootstrap()
-    end
-end
+# The adapter project (scripts/pde_sim_adapter/Project.toml) pins EarthSciAST
+# (developed from ../..), OrdinaryDiffEqTsit5 and JSON3.
+include(joinpath(@__DIR__, "adapter_support.jl"))
+activate_adapter_env(joinpath(@__DIR__, "pde_sim_adapter"))
 
 using EarthSciAST
 using JSON3
@@ -61,12 +34,11 @@ import SciMLBase
 const ODE = OrdinaryDiffEqTsit5
 const ESS = EarthSciAST
 
-# API_SPEC §5.8's closed vocabulary. `--compiler` is REQUIRED: a problem-building
-# stage NAMES the compiler it runs (CONFORMANCE_SPEC §5.44.5), so this adapter
-# never inherits the library default. Inheriting it would put the stage back in
-# the position the rule exists to prevent — a change to that default silently
-# changing what this tier measures.
-const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
+# `--compiler` is REQUIRED: a problem-building stage NAMES the compiler it runs
+# (CONFORMANCE_SPEC §5.44.5), so this adapter never inherits the library
+# default. Inheriting it would put the stage back in the position the rule
+# exists to prevent — a change to that default silently changing what this tier
+# measures.
 
 # The value after the flag at `args[i]`; a flag at the end of the line has none.
 _flag_value(args, i) =
@@ -91,11 +63,7 @@ function parse_args(args)
     manifest === nothing && error("--manifest is required")
     output === nothing && error("--output is required")
     compiler === nothing && error("--compiler is required")
-    compiler in COMPILER_VOCABULARY ||
-        error(
-        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-            ", got '$compiler'"
-    )
+    check_compiler(compiler, EarthSciAST.COMPILER_VOCABULARY)
     return (manifest, output, compiler)
 end
 
@@ -103,35 +71,37 @@ end
 # every key via float(k):g, so the exact rendering here only has to round-trip.
 tkey(t) = string(float(t))
 
-_ic_dict(obj) = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in pairs(obj))
+# The manifest names a component's states bare; the build names them qualified.
+_ic_dict(obj, mname) = Dict{String, Float64}(
+    "$mname.$(String(k))" => Float64(v) for (k, v) in pairs(obj)
+)
 
-function rhs_at(model, probe_state, t, compiler)
-    ics = _ic_dict(probe_state)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        model; initial_conditions = ics,
-        compiler = Symbol(compiler)
+# The component `mname` of a pre-discretized fixture, built on its own.
+_build_component(model, mname, ics, compiler) = EarthSciAST.Internal.build(
+    model; model_name = mname, initial_conditions = ics, compiler = Symbol(compiler)
+)
+
+function rhs_at(model, mname, probe_state, t, compiler)
+    f!, u0, p, _, vmap = _build_component(
+        model, mname, _ic_dict(probe_state, mname), compiler
     )
     # `zero`, not `similar`: a state with no `D` equation is never written by
     # `f!`, so its slot must start at zero rather than hold whatever memory
     # `similar` returned.
     du = zero(u0)
     f!(du, u0, p, Float64(t))
-    return Dict{String, Float64}(name => Float64(du[idx]) for (name, idx) in vmap)
+    return Dict{String, Float64}(bare_name(name) => Float64(du[idx]) for (name, idx) in vmap)
 end
 
-function trajectory(model, ic, t0, t1, out_times, reltol, abstol, compiler)
-    ics = _ic_dict(ic)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        model; initial_conditions = ics,
-        compiler = Symbol(compiler)
-    )
+function trajectory(model, mname, ic, t0, t1, out_times, reltol, abstol, compiler)
+    f!, u0, p, _, vmap = _build_component(model, mname, _ic_dict(ic, mname), compiler)
     prob = ODE.ODEProblem(f!, u0, (Float64(t0), Float64(t1)), p)
     sol = ODE.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol)
     out = Dict{String, Any}()
     for t in out_times
         st = sol(Float64(t))
         out[tkey(t)] = Dict{String, Float64}(
-            name => Float64(st[idx])
+            bare_name(name) => Float64(st[idx])
                 for (name, idx) in vmap
         )
     end
@@ -157,10 +127,6 @@ struct _StubLoaderProvider
 end
 ESS.provider_refresh_times(::_StubLoaderProvider) = Float64[]
 ESS.provider_sample(p::_StubLoaderProvider, ::Real) = p.fields
-
-# Strip a leading `Model.` namespace so an element name compares against the
-# manifest `state_order` (`Chemistry.O3[1,1]` → `O3[1,1]`).
-_bare(name::AbstractString) = occursin('.', name) ? split(name, '.'; limit = 2)[2] : name
 
 # Convert a manifest `inputs` value (nested JSON arrays, row=lon/col=lat) into a
 # dense Julia array: a `[[..],[..]]` grid → an (nlon×nlat) Matrix; a `[..]` line
@@ -189,34 +155,18 @@ function _stub_providers(inputs)
     return Dict{String, Any}(k => stub for k in keys(fields))
 end
 
-# Index of the saved time point closest to `t` (endpoints are `saveat`-pinned).
-function _time_index(times, t)
-    best = firstindex(times)
-    bestd = abs(times[best] - t)
-    for i in eachindex(times)
-        d = abs(times[i] - t)
-        if d < bestd
-            bestd = d
-            best = i
-        end
-    end
-    return best
-end
-
-# Build the provider-folded tree-walk evaluator exactly as `esm_problem` does: fold
-# every CONST provider's field into `const_arrays` under its loader name, then
-# `build_evaluator` (which folds scoped-`ic` `Loader.*` into u0 and resolves the
-# lifted consumer gather from the loader name).
+# Build the provider-folded tree-walk evaluator: fold every CONST provider's field
+# into `const_arrays` under its loader name, then build the flattened document
+# (which folds scoped-`ic` `Loader.*` into u0 and resolves the lifted consumer
+# gather from the loader name).
 function _pipeline_evaluator(path, providers, t0, compiler)
-    doc = ESS._prepare_run_doc(path)
     merged_const = Dict{String, Any}()
     for (rawk, prov) in providers
         k = String(rawk)
         merged_const[k] = ESS.forcing_from_sample(ESS.provider_sample(prov, t0), k)
     end
-    return EarthSciAST._build_evaluator(
-        doc; const_arrays = merged_const,
-        compiler = Symbol(compiler)
+    return EarthSciAST.Internal.build(
+        path; const_arrays = merged_const, compiler = Symbol(compiler)
     )
 end
 
@@ -231,7 +181,7 @@ function pipeline_fixture(fx, base, reltol, abstol, compiler)
     f!, u0, p, _, var_map = _pipeline_evaluator(path, providers, t0, compiler)
     baremap = Dict{String, Int}()
     for (k, idx) in var_map
-        baremap[_bare(k)] = idx
+        baremap[bare_name(k)] = idx
     end
     rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
@@ -268,7 +218,7 @@ function pipeline_fixture(fx, base, reltol, abstol, compiler)
     SciMLBase.successful_retcode(r) || error("solve failed: retcode $(r.retcode)")
     traj = Dict{String, Any}()
     for tc in checkpoints
-        ti = _time_index(r.t, tc)
+        ti = nearest_index(r.t, tc)
         traj[tkey(tc)] = Dict{String, Float64}(
             name => Float64(r.u[ti][idx])
                 for (name, idx) in var_map
@@ -282,17 +232,18 @@ end
 function discretized_fixture(fx, base, reltol, abstol, compiler)
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    model = file.models[String(fx.model)]
+    mname = String(fx.model)
+    model = file.models[mname]
 
     rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
-        rhs[String(pr.id)] = rhs_at(model, pr.state, pr.t, compiler)
+        rhs[String(pr.id)] = rhs_at(model, mname, pr.state, pr.t, compiler)
     end
 
     tr = fx.trajectory
     ts = tr.time_span
     traj = trajectory(
-        model, tr.initial_conditions,
+        model, mname, tr.initial_conditions,
         ts[Symbol("start")], ts[Symbol("end")],
         tr.output_times, reltol, abstol, compiler
     )

@@ -373,6 +373,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                     TESTUTILS_REPO_ROOT, "tests",
                     "version_compatibility", tgt_name
                 )
+                @test isfile(src_path) && isfile(tgt_path)
                 (isfile(src_path) && isfile(tgt_path)) || continue
 
                 src_version = String(JSON3.read(read(src_path, String))["esm"])

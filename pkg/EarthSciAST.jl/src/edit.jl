@@ -24,54 +24,6 @@ end
 
 Base.showerror(io::IO, e::EditError) = print(io, "EditError: ", e.msg)
 
-# ----------------------------------------------------------------------------
-# Copy-with-changes helpers
-#
-# Editing operations rebuild immutable structs. Routing every rebuild through
-# these helpers (instead of spelling out constructor arguments at each site)
-# means newly added struct fields are carried over automatically instead of
-# being silently dropped/reset. Private to edit.jl.
-# ----------------------------------------------------------------------------
-
-function _rebuild(
-        model::Model;
-        variables = model.variables,
-        equations = model.equations,
-        discrete_events = model.discrete_events,
-        continuous_events = model.continuous_events,
-        subsystems = model.subsystems
-    )
-    return Model(
-        variables, equations, discrete_events, continuous_events, subsystems;
-        tolerance = model.tolerance,
-        tests = model.tests,
-        analyses = model.analyses,
-        initialization_equations = model.initialization_equations,
-        guesses = model.guesses,
-        system_kind = model.system_kind,
-        reference = model.reference,
-    )
-end
-
-function _rebuild(
-        system::ReactionSystem;
-        species = system.species,
-        reactions = system.reactions
-    )
-    return ReactionSystem(
-        species, reactions;
-        parameters = system.parameters,
-        constraint_equations = system.constraint_equations,
-        discrete_events = system.discrete_events,
-        continuous_events = system.continuous_events,
-        subsystems = system.subsystems,
-        tolerance = system.tolerance,
-        tests = system.tests,
-        analyses = system.analyses,
-        reference = system.reference,
-    )
-end
-
 # Variable operations (Section 4.1)
 
 """
@@ -90,7 +42,7 @@ function add_variable(model::Model, name::String, variable::ModelVariable)::Mode
 
     new_variables[name] = variable
 
-    return _rebuild(model; variables = new_variables)
+    return reconstruct(model; variables = new_variables)
 end
 
 """
@@ -125,7 +77,7 @@ function remove_variable(model::Model, name::String)::Model
 
     delete!(new_variables, name)
 
-    return _rebuild(model; variables = new_variables)
+    return reconstruct(model; variables = new_variables)
 end
 
 """
@@ -213,7 +165,7 @@ function add_equation(model::Model, equation::Equation)::Model
     new_equations = copy(model.equations)
     push!(new_equations, equation)
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 """
@@ -234,17 +186,13 @@ function remove_equation(model::Model, index::Int)::Model
     new_equations = copy(model.equations)
     deleteat!(new_equations, index)
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
-    # The first equation whose LHS is structurally equal to the pattern: the
-    # two serialize to the same wire form.
-    want = serialize_expression(lhs_pattern)
+    # The first equation whose LHS is structurally equal to the pattern.
     for (i, eq) in enumerate(model.equations)
-        if eq.lhs === lhs_pattern || serialize_expression(eq.lhs) == want
-            return remove_equation(model, i)
-        end
+        _expr_equal(eq.lhs, lhs_pattern) && return remove_equation(model, i)
     end
 
     throw(EditError("No equation found with LHS matching: $lhs_pattern"))
@@ -267,7 +215,7 @@ function substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr}):
             for eq in model.equations
     ]
 
-    return _rebuild(model; equations = new_equations)
+    return reconstruct(model; equations = new_equations)
 end
 
 # Reaction operations (Section 4.3)
@@ -281,7 +229,7 @@ function add_reaction(system::ReactionSystem, reaction::Reaction)::ReactionSyste
     new_reactions = copy(system.reactions)
     push!(new_reactions, reaction)
 
-    return _rebuild(system; reactions = new_reactions)
+    return reconstruct(system; reactions = new_reactions)
 end
 
 """
@@ -298,7 +246,7 @@ function remove_reaction(system::ReactionSystem, id::String)::ReactionSystem
         throw(EditError("No reaction found with id: $id"))
     end
 
-    return _rebuild(system; reactions = new_reactions)
+    return reconstruct(system; reactions = new_reactions)
 end
 
 """
@@ -321,7 +269,7 @@ function add_species(system::ReactionSystem, name::String, species::Species)::Re
 
     push!(new_species, species)
 
-    return _rebuild(system; species = new_species)
+    return reconstruct(system; species = new_species)
 end
 
 """
@@ -356,7 +304,7 @@ function remove_species(system::ReactionSystem, name::String)::ReactionSystem
     # Remove species
     new_species = filter(s -> s.name != name, system.species)
 
-    return _rebuild(system; species = new_species)
+    return reconstruct(system; species = new_species)
 end
 
 # Event operations (Section 4.4)
@@ -370,7 +318,7 @@ function add_continuous_event(model::Model, event::ContinuousEvent)::Model
     new_events = copy(model.continuous_events)
     push!(new_events, event)
 
-    return _rebuild(model; continuous_events = new_events)
+    return reconstruct(model; continuous_events = new_events)
 end
 
 """
@@ -382,7 +330,7 @@ function add_discrete_event(model::Model, event::DiscreteEvent)::Model
     new_events = copy(model.discrete_events)
     push!(new_events, event)
 
-    return _rebuild(model; discrete_events = new_events)
+    return reconstruct(model; discrete_events = new_events)
 end
 
 """
@@ -409,7 +357,7 @@ function remove_event(model::Model, description::String)::Model
         throw(EditError("Event with description '$description' not found"))
     end
 
-    return _rebuild(model; discrete_events = new_discrete, continuous_events = new_continuous)
+    return reconstruct(model; discrete_events = new_discrete, continuous_events = new_continuous)
 end
 
 # Coupling operations (Section 4.5)

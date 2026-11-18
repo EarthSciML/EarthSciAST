@@ -3,7 +3,7 @@
 # (bead ess-my4.2.5).
 #
 # Loads the shared fixtures under tests/valid/faq/ that carry inline
-# `tests` blocks and evaluates each through `build_evaluator`. Julia, Rust, and
+# `tests` blocks and evaluates each through the build. Julia, Rust, and
 # Python all check the SAME inline expected values baked into these shared
 # fixtures, so agreement here is the cross-binding semiring-equivalence proof.
 # (The M2 many-to-many fixtures are Julia/Python only — the data-derived
@@ -27,22 +27,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 const _AGG_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 # Evaluate a shared aggregate fixture and return (du, vmap), seeding every
-# state element to zero (the constant-RHS worked examples start from rest).
+# state element of component `model_name` to zero (the constant-RHS worked
+# examples start from rest). `vmap` is that component's slice of the build's
+# map, keyed by its local element names.
 function _eval_aggregate_fixture(
         filename::AbstractString, model_name::AbstractString,
         elements::Vector{<:AbstractString}
     )
     path = joinpath(_AGG_REPO_ROOT, "tests", "valid", "faq", filename)
     @test isfile(path)
-    file = EarthSciAST.load_path(path)
-    ics = Dict(e => 0.0 for e in elements)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        file; model_name = model_name,
-        initial_conditions = ics
-    )
+    ics = Dict("$model_name.$e" => 0.0 for e in elements)
+    f!, u0, p, _, vmap = EarthSciAST.Internal.build(path; initial_conditions = ics)
     du = similar(u0)
     f!(du, u0, p, 0.0)
-    return du, vmap
+    prefix = model_name * "."
+    local_vm = Dict(k[(length(prefix) + 1):end] => v for (k, v) in vmap if startswith(k, prefix))
+    return du, local_vm
 end
 
 @testset "aggregate worked-example conformance (ess-my4.1.5)" begin
@@ -107,11 +107,11 @@ end
     end
 end
 
-# Resolver-level invalid fixture (bead ess-my4.1.6; RFC §5.2): a `faq`
-# `{from}` range naming an index set absent from the model `index_sets` registry
-# is SCHEMA-VALID (so `load` succeeds) but rejected by the index-set-registry
-# resolver inside `build_evaluator` — no implicit interval is inferred for an
-# undeclared name. Schema-only bindings (TypeScript/Go) accept it; see
+# Resolver-level invalid fixture (RFC §5.2): a `faq` `{from}` range naming an
+# index set absent from the model `index_sets` registry is SCHEMA-VALID (so
+# `load` succeeds) but refused before the build, as the structural finding
+# `undefined_index_set` — no implicit interval is inferred for an undeclared
+# name. Schema-only bindings (TypeScript/Go) accept it; see
 # tests/invalid/expected_errors.json (resolver_only entry).
 @testset "invalid: undeclared {from} index set rejected (ess-my4.1.6)" begin
     path = joinpath(
@@ -121,12 +121,14 @@ end
     @test isfile(path)
     file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
     err = try
-        EarthSciAST._build_evaluator(file; model_name = "UndeclaredFrom")
+        EarthSciAST.Internal.build(file)
         nothing
     catch e
         e
     end
-    @test err isa EarthSciAST.TreeWalkError
+    # Refused as the document's reference-integrity finding before the build
+    # runs (esm-libraries-spec §2.5.2), as `esm_problem` refuses it.
+    @test err isa EarthSciAST.ParseError && err.code == "undefined_index_set"
     @test occursin("ghost_cells", sprint(showerror, err))
 end
 
@@ -140,7 +142,7 @@ end
     @test any(e -> e.error_type == "undefined_index_set" && e.path == "/models/M/equations/0/rhs", errs)
     @test !any(e -> e.error_type == "undefined_variable", errs)
     err = try
-        EarthSciAST._build_evaluator(file; model_name = "M")
+        EarthSciAST.Internal.build(file)
         nothing
     catch e
         e
@@ -199,7 +201,7 @@ end
 # mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run
 # for a library file validated standalone. Before the fix `validate()` rejected
 # every conforming leaf. The typo case stays covered by the negative fixture
-# above (which DOES declare a registry) and by `build_evaluator`.
+# above (which DOES declare a registry) and by the build.
 @testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
     path = joinpath(
         _AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
@@ -298,7 +300,7 @@ end
     # fixtures live in tests/invalid/faq/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips
     # them) but rejected by the evaluating bindings at build. A float member or a
-    # null member in a join key set must make `build_evaluator` raise, never
+    # null member in a join key set must make the build raise, never
     # silently bucket on a non-portable key.
     @testset "build-time key-type rejection" begin
         function _build_error_msg(filename, model_name)
@@ -309,9 +311,8 @@ end
             @test isfile(path)
             file = EarthSciAST.load_path(path)
             try
-                EarthSciAST._build_evaluator(
-                    file; model_name = model_name,
-                    initial_conditions = Dict("count" => 0.0)
+                EarthSciAST.Internal.build(
+                    file; initial_conditions = Dict("$model_name.count" => 0.0)
                 )
                 return nothing
             catch e

@@ -164,12 +164,17 @@ const _IMA_F = [1.5, -2.0, 0.75]
         end
     end
 
-    # A build entry that does not adopt shapes refuses the array rather than
-    # reading a scalar the data never gave.
-    @testset "the bare build refuses array data for an unshaped parameter" begin
-        file = E_IMA.load_document(_ima_data_fed_doc())
-        @test_throws E_IMA.TreeWalkError E_IMA._build_evaluator(
-            file; const_arrays = Dict{String, Any}("F" => copy(_IMA_F))
-        )
+    # The internal build entry adopts the data's shape exactly as `esm_problem`
+    # does: the same right-hand side over the same layout.
+    @testset "the internal build adopts the data's shape as esm_problem does" begin
+        ca() = Dict{String, Any}("IfelseDataFed.F" => copy(_IMA_F))
+        b = E_IMA.Internal.build(E_IMA.load_document(_ima_data_fed_doc()); const_arrays = ca())
+        prob = E_IMA.esm_problem(_ima_data_fed_doc(), (0.0, 1.0); const_arrays = ca())
+        @test b.var_map == prob.var_map
+        u = collect(range(0.5, 1.5; length = length(prob.u0)))
+        du_b, du_p = zero(u), zero(u)
+        b.f!(du_b, u, b.p, 0.0)
+        prob.f!(du_p, u, prob.p, 0.0)
+        @test du_b == du_p
     end
 end

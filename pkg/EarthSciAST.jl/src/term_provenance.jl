@@ -217,15 +217,11 @@ _unattributed_contributions(
         for eq in equations
 ]
 
-"""Structural equality of two expressions: identity, else their serialized forms."""
-_same_expr(a::ASTExpr, b::ASTExpr)::Bool =
-    a === b || _stable_json(serialize_expression(a)) == _stable_json(serialize_expression(b))
-
 """True when `contributions` still fold to `body` (the sum the equation carries now)."""
 function _folds_to(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
-    length(contributions) == 1 && return _same_expr(contributions[1].expr, body)
+    length(contributions) == 1 && return _expr_equal(contributions[1].expr, body)
     _is_fold_of(contributions, body) && return true
-    return _same_expr(_fold_contributions(contributions), body)
+    return _expr_equal(_fold_contributions(contributions), body)
 end
 
 # The cheap check: `body` is the left fold `+(+(c1, c2), c3)` of these very

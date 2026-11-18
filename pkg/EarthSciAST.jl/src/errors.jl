@@ -28,14 +28,13 @@ catch e
 end
 ```
 
-Each concrete subtype has its own fields, messages and `Base.showerror` method,
-and `EarthSciASTError <: Exception`, so a plain `catch e` / `e isa Exception`
+`EarthSciASTError <: Exception`, so a plain `catch e` / `e isa Exception`
 catches every one of them too.
 
 Members span the whole pipeline: load/parse (`ParseError`,
 `SchemaValidationError`, `SubsystemRefError`), the
 load-time lowering passes (`ExpressionTemplateError`, `EnumLoweringError`),
-flattening (the eight `flatten_errors.jl` types), units
+flattening (the thirteen `flatten_errors.jl` types, under `_FlattenDiagnostic`), units
 (`UnitConversionError`), evaluation and simulation (`TreeWalkError`,
 `SimulateError`, `RefreshError`, `OutputError`), editing (`EditError`), and
 the two namespaced submodules (`Cadence.CadenceError`,

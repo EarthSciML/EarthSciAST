@@ -11,7 +11,7 @@
 # Two independent mechanisms name a repeated LANE-INVARIANT computation, and
 # they have nothing to say to each other:
 #
-#   * `_cse_compile_scalar` (compile.jl) shares subexpressions across SCALAR
+#   * `_cse_compile_scalar` (scalar_cse.jl) shares subexpressions across SCALAR
 #     equations and observed defs, keyed on `canonical_json`, into a prelude of
 #     `_CSECache` slots refilled at the top of every `f!` call.
 #   * `_build_acc_cse` (access_kernel.jl) hoists every loop-invariant OP subtree

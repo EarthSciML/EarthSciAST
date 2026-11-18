@@ -948,19 +948,17 @@ function _mtk_problem_impl(
         Vector{Float64}(prototype.u0)
     u0_run = EarthSciAST._seed_u0(u0_built, var_map, u0, seed_ic!)
 
-    insp = inspect === nothing ? EarthSciAST.BuildInspection() : inspect
-    report = _mtk_report(flat, system, rev)
-    insp.compiler_report = report
-    # This record now describes the `:mtk` build, whose observeds its backend
-    # answers: no earlier problem's read files a row into this report.
-    lock(() -> (insp.observed_build = Ref{Any}(nothing)), insp.observed_lock)
+    inspect === nothing || EarthSciAST._take_inspection!(inspect)
+    products = EarthSciAST.BuildProducts()
+    products.compiler_report = _mtk_report(flat, system, rev)
     merge!(
-        insp.params, Dict{String, Float64}(
+        products.params, Dict{String, Float64}(
             k => Float64(v) for (k, v) in resolved if v isa Real
         )
     )
     param_classes = _mtk_param_classes(flat)
-    merge!(insp.param_classes, param_classes)
+    merge!(products.param_classes, param_classes)
+    inspect === nothing || EarthSciAST._publish_inspection!(inspect, products)
 
     # The problem's own callbacks (§2.5.4). There are no PROVIDER refresh
     # callbacks on this path — a data-fed document is refused above — so the set
@@ -1000,7 +998,7 @@ function _mtk_problem_impl(
         f!, u0_run, span, prototype.p, var_map, Dict{String, Any}(),
         Dict{String, Any}(), dm, EarthSciAST._doc_equation_count(doc),
         Ref(sample_time), Ref(false), EarthSciAST.derive_output_meta(doc), doc,
-        Ref{Any}(nothing), param_classes, insp,
+        Ref{Any}(nothing), param_classes, EarthSciAST._ProblemBuild(products),
         EarthSciAST._compose_callbacks(cbs), tstops, save_everystep,
         sink_vec, EarthSciAST._distinct_sinks(sink_vec, ck_vec),
         Ref{Any}(nothing), merged_renames

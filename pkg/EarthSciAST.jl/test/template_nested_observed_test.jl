@@ -130,7 +130,7 @@ function nested_doc(n::Int; tests::Bool = false)
 end
 
 function rhs_at(doc, compiler; times = (0.0, 0.4, 1.3))
-    f!, u0, p, _, vm = EA._build_evaluator(doc; compiler = compiler)
+    f!, u0, p, _, vm = EA.Internal.build(doc; compiler = compiler)
     out = Dict{String, Vector{Float64}}()
     for t in times
         du = similar(u0)

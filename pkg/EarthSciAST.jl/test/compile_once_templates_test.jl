@@ -18,9 +18,7 @@ using JSON3
 using EarthSciAST
 using EarthSciAST: load_path, flatten, coerce_esm_file, TreeWalkError,
     expand_flattened_refs,
-    ExpressionTemplateError,
-    _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
-    _bench_reset!
+    ExpressionTemplateError
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalone)
 
@@ -44,15 +42,12 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         let
             flat = flatten(load_path(fix))
             atload && (flat = expand_flattened_refs(flat))
-            _BENCH_ON[] = true
-            _bench_reset!()
-            f, u0, p, _, _ = EarthSciAST._build_evaluator(flat; compiler = compiler)
+            f, u0, p, _, _, rep = EarthSciAST.Internal.build(flat; compiler = compiler)
             counters = (
-                branches = _BENCH_BRANCH_TEMPLATES[],
-                variants = _BENCH_BODY_VARIANTS[],
-                compiles = _BENCH_COMPILE_CALLS[],
+                branches = get(rep.counts, :branch_templates, 0),
+                variants = get(rep.counts, :body_variants, 0),
+                compiles = get(rep.counts, :compile_calls, 0),
             )
-            _BENCH_ON[] = false
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))
                 du = similar(u0)
@@ -106,7 +101,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # per-cell fallback kernel outright.
         FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
-        fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
+        fo, u0, p, _, _ = EarthSciAST.Internal.build(flat; form = :oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —
         # is its `rhs` field.
         oplans = getfield(getfield(fo, :rhs), :acc_plans)
@@ -268,7 +263,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # expression_templates block: the guard must fail the BUILD with a clear
         # code, not poison a kernel that only fails at RHS evaluation time.
         doc = Dict(
-            "esm" => "0.9.0",
+            "esm" => "2.0.0",
             "metadata" => Dict("name" => "orphan_ref"),
             "models" => Dict(
                 "T" => Dict(
@@ -289,7 +284,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         )
         file = coerce_esm_file(JSON3.read(JSON3.write(doc)))
         err = try
-            EarthSciAST._build_evaluator(file)
+            EarthSciAST.Internal.build(file)
             nothing
         catch e
             e

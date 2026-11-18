@@ -1,6 +1,8 @@
 # The document-scoped `solver` block (esm-spec §2.2).
 
 using EarthSciAST, Test, JSON3
+# `_pick_solver` hands out a loaded solver: both must be in the session.
+import OrdinaryDiffEqRosenbrock, OrdinaryDiffEqTsit5
 include("testutils.jl")
 
 const _SOLVER_FIXTURE = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "solver_block.esm")
@@ -123,9 +125,9 @@ _solver_emit(f) = JSON3.read(EarthSciAST.to_json(f), Dict{String, Any})
         # travel (§2.2.3). `low`/`moderate` are ignored: they say nothing the
         # default does not already handle.
         rb = EarthSciAST._try_require(EarthSciAST._ROSENBROCK_PKGID)
-        if rb === nothing
-            @test_skip "OrdinaryDiffEqRosenbrock not loaded"
-        else
+        # The stiff solver's package is a test dependency: missing, this fails.
+        @test rb !== nothing
+        if rb !== nothing
             @test EarthSciAST._pick_solver(""; stiffness = "high")[2] === :rosenbrock23
             for declared in ("moderate", "low", nothing)
                 @test EarthSciAST._pick_solver(""; stiffness = declared)[2] !== :rosenbrock23

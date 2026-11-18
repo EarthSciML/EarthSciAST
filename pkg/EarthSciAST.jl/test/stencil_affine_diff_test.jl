@@ -166,21 +166,21 @@ end
 
 # (du, u0, vmap, diag) for a model, under the affine path or the per-cell path.
 function _affine_build(model, ics; affine::Bool, form = :inplace, const_arrays = Dict())
-    f!, u0, p, _tspan, vmap, diag =
-        ESM._build_evaluator_impl(
+    f!, u0, p, _tspan, vmap, rep =
+        ESM.Internal.build(
         model; initial_conditions = ics, form = form,
         const_arrays = const_arrays,
         compiler = affine ? :native : :interpreter
     )
     du = zero(u0)
     f!(du, u0, p, 0.0)
-    return (du, u0, vmap, diag)
+    return (du, u0, vmap, rep.stats)
 end
 
 @testset "affine stencil ≡ per-cell (differential, ess-affine)" begin
 
     @testset "1D second-difference stencil (N=$N)" for N in (8, 32, 64)
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         du_aff, _, _, d = _affine_build(_stencil_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1          # affine path fired, not a silent fallback
@@ -192,7 +192,7 @@ end
     # per-cell / over-split paths.
     @testset "affine kernel count is N-independent" begin
         counts = map((8, 16, 64, 256)) do N
-            ics = Dict("u[$k]" => 0.1k for k in 1:N)
+            ics = Dict("M.u[$k]" => 0.1k for k in 1:N)
             _, _, _, d = _affine_build(_stencil_model(N), ics; affine = true)
             d.n_acc_kernels
         end
@@ -201,7 +201,7 @@ end
 
     @testset "2D 5-point Laplacian (N=$N)" for N in (5, 16, 33)
         ics = Dict(
-            "u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
+            "M.u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
                 for i in 1:N, j in 1:N
         )
         du_aff, _, _, d = _affine_build(_stencil2d_model(N), ics; affine = true)
@@ -212,7 +212,7 @@ end
 
     @testset "2D kernel count N-independent (interior+edges+corners)" begin
         counts = map((5, 16, 40)) do N
-            ics = Dict("u[$i,$j]" => 0.01i * j for i in 1:N, j in 1:N)
+            ics = Dict("M.u[$i,$j]" => 0.01i * j for i in 1:N, j in 1:N)
             _, _, _, d = _affine_build(_stencil2d_model(N), ics; affine = true)
             d.n_acc_kernels
         end
@@ -220,7 +220,7 @@ end
     end
 
     @testset "makearray 3-region piecewise (N=$N)" for N in (6, 24, 50)
-        ics = Dict("u[$k]" => cos(0.25k) + 0.05k for k in 1:N)
+        ics = Dict("M.u[$k]" => cos(0.25k) + 0.05k for k in 1:N)
         du_aff, _, _, d = _affine_build(_makearray_region_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_makearray_region_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
@@ -229,7 +229,7 @@ end
 
     @testset "makearray region kernel count N-independent" begin
         counts = map((6, 24, 100)) do N
-            ics = Dict("u[$k]" => 0.05k for k in 1:N)
+            ics = Dict("M.u[$k]" => 0.05k for k in 1:N)
             _, _, _, d = _affine_build(_makearray_region_model(N), ics; affine = true)
             d.n_acc_kernels
         end
@@ -238,7 +238,7 @@ end
 
     @testset "variable-coefficient K[i]·Δ²u (_AccConstBox, N=$N)" for N in (8, 32)
         K = Float64[0.5 + 0.3sin(0.2k) for k in 1:N]
-        ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         ca = Dict("K" => K)
         du_aff, _, _, d = _affine_build(_const_coef_model(N), ics; affine = true, const_arrays = ca)
         du_ref, _, _, _ = _affine_build(_const_coef_model(N), ics; affine = false, const_arrays = ca)
@@ -251,7 +251,7 @@ end
     # for bit.
     @testset "guarded singularity: affine tape ≡ per-cell (N=$N)" for N in (8, 32, 64)
         # sin dips negative and below 0.25, so BOTH guards exclude real cells
-        ics = Dict("u[$k]" => sin(0.4k) + 0.05k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.4k) + 0.05k for k in 1:N)
         du_aff, _, _, d = _affine_build(_guarded_stencil_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_guarded_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1          # affine path owned the guarded equation
@@ -263,7 +263,7 @@ end
     # the invariant tier runs unconditionally, so hoisting `log(c)` there would
     # raise a DomainError the lazy reference never meets.
     @testset "guarded invariant is not hoisted (N=$N)" for N in (8, 32)
-        ics = Dict("u[$k]" => sin(0.4k) + 0.05k for k in 1:N)
+        ics = Dict("M.u[$k]" => sin(0.4k) + 0.05k for k in 1:N)
         du_aff, _, _, d = _affine_build(_guarded_invariant_model(N), ics; affine = true)
         du_ref, _, _, _ = _affine_build(_guarded_invariant_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
@@ -276,14 +276,14 @@ end
     @testset "makearray region bounded in two dims ($ilo:$ihi × $jlo:$jhi)" for (ilo, ihi, jlo, jhi) in
         ((1, 3, 8, 10), (5, 7, 5, 7))
         N = 24
-        ics = Dict("u[$i,$j]" => 1.0 + 0.01i + 0.001j for i in 1:N, j in 1:N)
+        ics = Dict("M.u[$i,$j]" => 1.0 + 0.01i + 0.001j for i in 1:N, j in 1:N)
         model = _makearray_2d_region_model(N, ilo, ihi, jlo, jhi)
         du_aff, _, vmap, d = _affine_build(model, ics; affine = true)
         du_ref, _, _, _ = _affine_build(model, ics; affine = false)
         @test d.n_acc_kernels >= 1
         @test du_aff == du_ref
         u(i, j) = 1.0 + 0.01i + 0.001j
-        @test du_aff[vmap["u[$(ilo),$(jlo)]"]] == 3.0 * u(ilo, jlo)
-        @test du_aff[vmap["u[$(ihi + 1),$(jlo)]"]] == -1.0 * u(ihi + 1, jlo)
+        @test du_aff[vmap["M.u[$(ilo),$(jlo)]"]] == 3.0 * u(ilo, jlo)
+        @test du_aff[vmap["M.u[$(ihi + 1),$(jlo)]"]] == -1.0 * u(ihi + 1, jlo)
     end
 end

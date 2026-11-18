@@ -2,7 +2,7 @@
 #
 # The natural target of an inline test is a quantity computed FOR the test — a
 # tendency, a flux, a diagnostic — which by construction nothing else reads.
-# Such an observed never reaches `BuildInspection.observed_exprs`: the
+# Such an observed is absent from the build's `observed_exprs`: the
 # elementwise array-observed fold inlines an observed into its readers and drops
 # its equation, and a DEAD one has no readers to be inlined into, so it is
 # dropped outright. `_observed_field` then found no body and the assertion
@@ -473,5 +473,6 @@ end
     @test length(results) == 1
     @test results[1].status == EarthSciAST.ERROR
     @test results[1].actual === nothing
-    @test occursin("has no cells in var_map", results[1].message)
+    # The refusal names the variable and the component it is not declared in.
+    @test occursin("'nope' not found in component 'M'", results[1].message)
 end

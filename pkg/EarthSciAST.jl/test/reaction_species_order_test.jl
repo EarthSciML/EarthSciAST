@@ -29,7 +29,7 @@ using EarthSciAST
 
 # `testutils.jl` provides TESTUTILS_REPO_ROOT + `_require_fixture`. `Test` must
 # already be imported before it is included (its guard block expands
-# `@test_skip` at lowering time).
+# `@test` at lowering time).
 if !isdefined(Main, :ESM_TESTUTILS_LOADED)
     include("testutils.jl")
 end

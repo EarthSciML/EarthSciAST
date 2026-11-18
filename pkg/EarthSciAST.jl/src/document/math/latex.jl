@@ -17,7 +17,7 @@ import ..DNumber
 import ..DStrings
 using ..MParse: atom_start, units_of_raw
 using ..MPrint: char_digit_nat, char_of_nat, dig3, esc_t, key_special, raw_b, unesc_t
-using ..MSurface: drop_p, is_bin, lex_signed, sci_split
+using ..MSurface: drop_p, is_bin, lex_signed, render_toks, sci_split
 using ..MExpr: is_dig, is_greek, is_letter, let_run
 
 # ## Spelling
@@ -236,19 +236,7 @@ sp(p, t1::Tok, t2::Tok) = need_space(t1, t2) || pretty(p, t1, t2)
 
 """`Latex.render`: the LaTeX spelling of a token list (`renderAux`), as
 characters."""
-function render(ts)
-    out = Char[]
-    n = length(ts)
-    for i in 1:n
-        t = ts[i]
-        append!(out, tok_chars(t))
-        if i < n
-            p = i == 1 ? nothing : ts[i - 1]
-            sp(p, t, ts[i + 1]) && push!(out, ' ')
-        end
-    end
-    return out
-end
+render(ts) = render_toks(tok_chars, sp, ts)
 
 # ## Lexing
 

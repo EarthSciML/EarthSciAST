@@ -11,7 +11,7 @@
 # A `ComponentVector` is both at once, and that is why it is the shape this ABI
 # targets: the name → index axis lives in the TYPE, so `getdata` hands out the
 # plain dense `Vector` with no copy and the naming is erased before any arithmetic
-# happens. `ComponentVector(p)` converts `build_evaluator`'s `p` directly, in the
+# happens. `ComponentVector(p)` converts the build's `p` directly, in the
 # order `param_map(p)` reports.
 #
 # WHAT IS ASSERTED.
@@ -35,7 +35,7 @@
 #   5. No allocation regression. The `f!` zero-allocation discipline holds for
 #      every container; measured, an index into a homogeneous vector is strictly
 #      better than the runtime-symbol `getfield` on a heterogeneous NamedTuple
-#      that build.jl warns about (~48 B/call when the union boxes).
+#      that build_pipeline.jl warns about (~48 B/call when the union boxes).
 
 using Test
 using EarthSciAST
@@ -61,7 +61,7 @@ _pv_state(; kw...) = Dict{String, Any}(
 _pv_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 _pv_doc(name, vars, eqs; index_sets = nothing) = begin
     d = Dict{String, Any}(
-        "esm" => "0.5.0",
+        "esm" => "2.0.0",
         "metadata" => Dict{String, Any}("name" => name),
         "models" => Dict{String, Any}(
             "M" => Dict{String, Any}(
@@ -143,7 +143,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 @testset "parameter-vector ABI (`p::AbstractVector`)" begin
 
     @testset "param_map is the build's own parameter order" begin
-        _, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(8))
+        _, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(8))
         pm = param_map(p)
         @test pm isa Dict{String, Int}
         # It IS `keys(p)`'s order, and `keys(p)` is `sort!(param_names)`.
@@ -170,7 +170,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
                 ("0-D with a CSE prelude", _pv_zerod(), 2),
             ]
             @testset "$name" begin
-                fi, u0, p, _, _ = _PV_ESM._build_evaluator(doc)
+                fi, u0, p, _, _ = _PV_ESM.Internal.build(doc)
                 u = length(u0) == 2 ? [0.7, 0.4] : _pv_seed(N)
                 t = 0.37
 
@@ -193,7 +193,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
     @testset "ForwardDiff ∂/∂p over a vector `p`" begin
         N = 16
         doc = _pv_rd(N)
-        fi, _, p, _, _ = _PV_ESM._build_evaluator(doc)
+        fi, _, p, _, _ = _PV_ESM.Internal.build(doc)
         u = _pv_seed(N)
         t = 0.37
         w = [1.0 + 0.05k for k in 1:N]
@@ -223,19 +223,19 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         # The one failure mode a vector `p` has and a NamedTuple `p` does not.
         # `_read_param_data` is deliberately not `@inbounds` so this raises.
         N = 8
-        fi, _, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
+        fi, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
         @test_throws BoundsError _pv_ip(fi, u, short, 0.0)
     end
 
     @testset "no allocation regression on the scalar parameter read" begin
-        # build.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
+        # build_pipeline.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
         # on a heterogeneous NamedTuple boxes the union (~48 B/call). The scalar
         # `_NK_PARAM` path never had that problem (its symbol is on the node), and
         # an index into a homogeneous vector must not introduce one.
         N = 64
-        fi, u0, p, _, _ = _PV_ESM._build_evaluator(_pv_rd(N))
+        fi, u0, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
         u = _pv_seed(N)
         du = similar(u)
         for (name, q) in [

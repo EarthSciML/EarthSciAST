@@ -11,13 +11,13 @@
 # pure PARAMETER ALGEBRA — an Arrhenius factor `A*exp(-Ea/(R*Tref))` whose every leaf
 # is a parameter — and `p` does not change between the stages of a step, or between
 # steps, or (usually) over an entire integration. The `Cadence` lattice (src/cadence.jl)
-# names exactly this class (`const ⊏ discrete ⊏ continuous`) and `build_evaluator`
+# names exactly this class (`const ⊏ discrete ⊏ continuous`) and `_build_evaluator`
 # never consulted it: the `exp` was recomputed on every stage of every step, forever.
 #
 # So the prelude is now THREE tiers. `f!` refills the DYNAMIC slots every call, the
 # CONST slots only when `p` moved, and — the B3 tier this file grew — the TIME
 # slots only when `(p, t, forcing epoch)` moved. This file decides which is which;
-# the validity checks that decide "can have changed" live on `_CSECache` (compile.jl).
+# the validity checks that decide "can have changed" live on `_CSECache` (prelude_cache.jl).
 #
 # THE TIME TIER'S TARGET is the finite-difference Jacobian: a stiff solver's FD fill
 # makes N+1 RHS calls at the LITERALLY SAME `t` with a state perturbed one column at

@@ -1,5 +1,5 @@
 # The whole-array contraction nest's general form (array_contraction.jl,
-# `_ACTable`; build.jl `_try_compile_array_contraction`): the contractions that
+# `_ACTable`; build_array_equation.jl `_try_compile_array_contraction`): the contractions that
 # otherwise took the per-cell build — one resolve and compile per output cell.
 #
 #   * a JOIN-GATED contraction and a RAGGED (per-cell bound) one compile to ONE
@@ -21,11 +21,11 @@ const _ACT = EarthSciAST
 const _ACT_REPO = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
 function _act_problem(path, compiler)
-    _ACT._reset_cascade_tally!()
     # The starting values the documents' ODE states leave to the harness
     # (esm-spec §11.4).
-    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
-    return prob, copy(_ACT._CASCADE_TALLY)
+    return _ACT.Internal.counting() do
+        _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
+    end
 end
 
 function _act_du(prob, u)
@@ -553,13 +553,13 @@ end
             )
         )
         function pf_du(c)
-            f!, u0, p, _, vm = _ACT._build_evaluator(
+            f!, u0, p, _, vm = _ACT.Internal.build(
                 doc; compiler = c,
-                initial_conditions = Dict("u[$i]" => 0.1i + 0.3 for i in 1:n),
-                param_arrays = Dict("c" => collect(1.0:n))
+                initial_conditions = Dict("M.u[$i]" => 0.1i + 0.3 for i in 1:n),
+                param_arrays = Dict("M.c" => collect(1.0:n))
             )
             d = similar(u0); f!(d, u0, p, 0.0)
-            [d[vm["u[$i]"]] for i in 1:n]
+            [d[vm["M.u[$i]"]] for i in 1:n]
         end
         dn, di = pf_du(:native), pf_du(:interpreter)
         @test all(isequal.(dn, di))

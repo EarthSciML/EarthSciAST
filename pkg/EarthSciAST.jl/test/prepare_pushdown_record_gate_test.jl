@@ -1,8 +1,7 @@
-# PUBLIC-SURFACE projection pushdown — Phase 1 (clean consolidation).
+# PUBLIC-SURFACE projection pushdown.
 #
-# Phase 4/5 proved the automatic rewrite + gated deferral through the PRIVATE
-# `build_evaluator` front door (`_gated_providers`, hand-authored gate dicts).
-# This test drives the same clean pattern through the PUBLIC `esm_problem` surface:
+# This test drives the automatic rewrite and the gated deferral of the clean
+# pattern through the PUBLIC `esm_problem` surface:
 #
 #   * `esm_problem(input, tspan; pushdown_rewrite=true, providers=…)` — the rewrite runs
 #     on the AUTHORED document BEFORE flattening (post-flatten the coupling
