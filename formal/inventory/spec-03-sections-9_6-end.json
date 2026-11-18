@@ -608,7 +608,7 @@
     {
       "id": "spec.9.7.6.axis-scalars-not-substituted",
       "section": "9.7.6",
-      "quote": "the node `{\"op\": \"grad\", \"args\": [\"x\"], \"dim\": \"x\"}` MUST become `{\"op\": \"grad\", \"args\": [3], \"dim\": \"x\"}`",
+      "quote": "the node `{\"op\": \"upwind_gradient\", \"args\": [\"x\"], \"dim\": \"x\"}` MUST become `{\"op\": \"upwind_gradient\", \"args\": [3], \"dim\": \"x\"}`",
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
