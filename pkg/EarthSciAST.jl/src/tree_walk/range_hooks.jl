@@ -2,21 +2,15 @@
 # tree_walk/range_hooks.jl — the build's seams for a range-restricted
 # program (API_SPEC §5.8, `restrict` / `lanes`; src/range/).
 #
-# A restricted build runs the ordinary pipeline under a task-local range spec.
-# Without one (every other build) each hook below is the identity, so the
-# build is unchanged.
+# A restricted build runs the ordinary pipeline under a range spec on the build
+# context (`_with_range_spec`, compiler.jl). Without one (every other build)
+# each hook below is the identity, so the build is unchanged.
 # ========================================================================
 
-const _RANGE_SPEC_KEY = :earthsci_range_spec
-
-# A range spec (`_TileSpec`, `_LaneSpec`, `_CaptureSpec`; src/range/,
-# src/rhs_program.jl). Each hook below has ONE fallback, the identity, for no
-# spec and for every spec that does not define its own method.
-abstract type _RangeSpec end
+# A range spec (`_RangeSpec`, compiler.jl). Each hook below has ONE fallback,
+# the identity, for no spec and for every spec that does not define its own
+# method.
 const _AnySpec = Union{Nothing, _RangeSpec}
-
-_range_spec_now() = get(task_local_storage(), _RANGE_SPEC_KEY, nothing)
-_with_range_spec(f, spec) = task_local_storage(f, _RANGE_SPEC_KEY, spec)
 
 # The equation stream after the ODE partition, clipped to the needed cells.
 _range_restrict_parts(
@@ -325,24 +319,7 @@ function _range_real_fixed!(view::_RangeAffineView, kernels)
     return kernels
 end
 
-# ---- What a program build records for its workspaces (src/rhs_program.jl) ----
-#
-# A program's workspace is a private instance of its compiled right-hand side.
-# The instance needs, by identity, the arrays through which the build reads
-# each live buffer (its `_PGatherArray`s) and every array generated code
-# writes at run time besides `du` and the per-call state types (a build
-# registers each as scratch where it allocates it). A build with no capture
-# open records nothing.
-struct _WsCapture
-    pgathers::Vector{Any}
-    scratch::IdDict{Any, Nothing}
-end
-_WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
-
-const _WS_CAPTURE_KEY = :earthsci_ws_capture
-
-_ws_capture_now() = get(task_local_storage(), _WS_CAPTURE_KEY, nothing)
-_with_ws_capture(f, c::_WsCapture) = task_local_storage(f, _WS_CAPTURE_KEY, c)
+# ---- What a program build records for its workspaces (`_WsCapture`, compiler.jl) ----
 
 function _ws_note_pgather!(pgather)
     c = _ws_capture_now()

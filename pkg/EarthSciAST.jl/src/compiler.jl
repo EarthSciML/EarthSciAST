@@ -524,16 +524,36 @@ _with_build_record(f, rec::_BuildRecord) =
 # ---------------------------------------------------------------------------
 #
 # Everything that decides what ONE build produces and is not an argument: the
-# plan, the record, the build's mutable scratch (`_BuildState`) and its tuning
-# (`_Tuning`), read from the environment once when the build starts. It is
-# installed under one task-local key, so two builds on two tasks never share
-# any of it; concurrent builds are supported.
+# plan, the record, the build's mutable scratch (`_BuildState`), its tuning
+# (`_Tuning`, read from the environment once when the build starts) and the
+# settings a caller fixes for everything it starts (a range spec, a workspace
+# capture, the engagement-count sink, the merge re-check). It is installed
+# under one task-local key, so two builds on two tasks never share any of it;
+# concurrent builds are supported.
 #
 # The state is per build. `_build_evaluator_impl` starts every build with a
 # fresh one (`_new_build_ctx`); an output-time compile, which builds against a
 # layout of its own, starts a child (`_child_build_ctx`). Changing only the
-# plan or the record (`_with_compiler_plan`, `_with_build_record`) keeps the
-# state of the context it narrows.
+# plan, the record or a caller setting (`_with_compiler_plan`,
+# `_with_build_record`, `_with_range_spec`, …) keeps the state of the context it
+# narrows. A caller setting reaches every build and child started inside it.
+
+# A range-restricted program's spec (`_TileSpec`, `_LaneSpec`, `_CaptureSpec`;
+# src/range/, src/rhs_program.jl, tree_walk/range_hooks.jl).
+abstract type _RangeSpec end
+
+# What a program build records for its workspaces (src/rhs_program.jl). A
+# program's workspace is a private instance of its compiled right-hand side. The
+# instance needs, by identity, the arrays through which the build reads each
+# live buffer (its `_PGatherArray`s) and every array generated code writes at
+# run time besides `du` and the per-call state types (a build registers each as
+# scratch where it allocates it). A build with no capture open records nothing.
+struct _WsCapture
+    pgathers::Vector{Any}
+    scratch::IdDict{Any, Nothing}
+end
+_WsCapture() = _WsCapture(Any[], IdDict{Any, Nothing}())
+
 mutable struct _BuildState
     # A state array's flat slot table, by array name (`_resolve_state_gather`).
     # It depends on the layout the build resolves against.
@@ -549,10 +569,21 @@ mutable struct _BuildState
     array_cell_depth::Int
     # The build-time parameter-read sink (`_with_param_reads`), or `nothing`.
     param_reads::Union{Nothing, Set{String}}
+    # The kernels a shifted scatter's pieces compiled to, held out of the kernel
+    # class merge (scatter.jl); `nothing` outside a build, where nothing is held
+    # out.
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}}
+    # The scalar parameter values a join gate's computed key column reads while
+    # the gates resolve (`_with_join_params`, semiring.jl); empty otherwise.
+    join_params::Dict{String, Float64}
 end
-_BuildState(count::Base.RefValue{Int} = Ref(0)) = _BuildState(
+_BuildState(
+    count::Base.RefValue{Int} = Ref(0);
+    scatter_keep::Union{Nothing, IdDict{Any, Nothing}} = nothing
+) = _BuildState(
     Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-    Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing
+    Dict{Symbol, Base.RefValue{Int}}(), count, 0, nothing, scatter_keep,
+    Dict{String, Float64}()
 )
 
 """
@@ -610,10 +641,15 @@ struct _BuildContext
     record::Union{Nothing, _BuildRecord}
     state::_BuildState
     tuning::_Tuning
+    # Caller settings, inherited by every context started inside this one.
+    range_spec::Union{Nothing, _RangeSpec}
+    ws_capture::Union{Nothing, _WsCapture}
+    # The engagement-count sink (`_with_counts`), or `nothing`.
+    counts::Union{Nothing, Dict{Symbol, Int}}
+    # Apply the kernel class merge twice and count what the second application
+    # merges (tests only; `_merge_acc_kernel_classes`).
+    merge_recheck::Bool
 end
-
-_BuildContext(plan::CompilerPlan, record, state::_BuildState) =
-    _BuildContext(plan, record, state, _tuning_from_env())
 
 const _BUILD_CTX_KEY = :earthsci_build_context
 
@@ -625,33 +661,62 @@ _with_build_ctx(f, ctx::_BuildContext) = task_local_storage(f, _BUILD_CTX_KEY, c
 # The open build's tuning, or the environment's now when no build is open.
 _tuning_now()::_Tuning = (c = _build_ctx(); c === nothing ? _tuning_from_env() : c.tuning)
 
-# `c` with its plan or record replaced, the state kept; a fresh context when no
-# build is open.
-function _ctx_with(c::Union{Nothing, _BuildContext}; plan = nothing, record = nothing)
-    c === nothing && return _BuildContext(
-        something(plan, _DEFAULT_COMPILER_PLAN), record, _BuildState()
+# A context over `state` with the tuning read now and `outer`'s caller
+# settings (none when `outer` is `nothing`).
+function _fresh_ctx(
+        plan::CompilerPlan, record::Union{Nothing, _BuildRecord}, state::_BuildState,
+        outer::Union{Nothing, _BuildContext}
     )
     return _BuildContext(
-        something(plan, c.plan), something(record, Some(c.record)), c.state, c.tuning
+        plan, record, state, _tuning_from_env(),
+        outer === nothing ? nothing : outer.range_spec,
+        outer === nothing ? nothing : outer.ws_capture,
+        outer === nothing ? nothing : outer.counts,
+        outer === nothing ? false : outer.merge_recheck
     )
 end
 
-# The context a build runs in: its plan and record, fresh state, the tuning
-# read now. The loop-variable counter continues the enclosing context's.
+# `c` with its plan, record or a caller setting replaced, the state and tuning
+# kept; a fresh context when no build is open.
+function _ctx_with(
+        c::Union{Nothing, _BuildContext}; plan = nothing, record = nothing,
+        range_spec = nothing, ws_capture = nothing, counts = nothing,
+        merge_recheck = nothing
+    )
+    c === nothing && (
+        c = _fresh_ctx(something(plan, _DEFAULT_COMPILER_PLAN), record, _BuildState(), nothing)
+    )
+    return _BuildContext(
+        something(plan, c.plan), something(record, Some(c.record)), c.state, c.tuning,
+        something(range_spec, Some(c.range_spec)),
+        something(ws_capture, Some(c.ws_capture)),
+        something(counts, Some(c.counts)),
+        something(merge_recheck, c.merge_recheck)
+    )
+end
+
+# The context a build runs in: its plan and record, fresh state (with the
+# build's scatter set), the tuning read now. The loop-variable counter and the
+# caller settings continue the enclosing context's.
 function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord})
     outer = _build_ctx()
     count = outer === nothing ? Ref(0) : outer.state.loopvar_count
-    return _BuildContext(plan, record, _BuildState(count))
+    return _fresh_ctx(
+        plan, record,
+        _BuildState(count; scatter_keep = IdDict{Any, Nothing}()), outer
+    )
 end
 
 # A compile against a layout of its own, inside or after a build: the current
-# plan, record and tuning, fresh slot tables and loop registry, no
-# parameter-read sink.
+# plan, record, tuning and caller settings, fresh slot tables and loop registry,
+# no parameter-read sink. Inside a build it holds out the build's scatter set.
 function _child_build_ctx()
     outer = _build_ctx()
-    outer === nothing && return _BuildContext(_DEFAULT_COMPILER_PLAN, nothing, _BuildState())
+    outer === nothing && return _fresh_ctx(_DEFAULT_COMPILER_PLAN, nothing, _BuildState(), nothing)
     return _BuildContext(
-        outer.plan, outer.record, _BuildState(outer.state.loopvar_count), outer.tuning
+        outer.plan, outer.record,
+        _BuildState(outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep),
+        outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
     )
 end
 
@@ -680,6 +745,24 @@ function _build_state()::_BuildState
     return get!(_BuildState, task_local_storage(), _TASK_STATE_KEY)::_BuildState
 end
 
+# The caller settings, read and installed.
+_range_spec_now()::Union{Nothing, _RangeSpec} =
+    (c = _build_ctx(); c === nothing ? nothing : c.range_spec)
+_with_range_spec(f, spec::_RangeSpec) =
+    _with_build_ctx(f, _ctx_with(_build_ctx(); range_spec = spec))
+
+_ws_capture_now()::Union{Nothing, _WsCapture} =
+    (c = _build_ctx(); c === nothing ? nothing : c.ws_capture)
+_with_ws_capture(f, cap::_WsCapture) =
+    _with_build_ctx(f, _ctx_with(_build_ctx(); ws_capture = cap))
+
+_merge_recheck_on()::Bool = (c = _build_ctx(); c !== nothing && c.merge_recheck)
+_with_merge_recheck(f) = _with_build_ctx(f, _ctx_with(_build_ctx(); merge_recheck = true))
+
+# The open build's scatter set (scatter.jl), `nothing` outside a build.
+_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
+    (c = _build_ctx(); c === nothing ? nothing : c.state.scatter_keep)
+
 # ---------------------------------------------------------------------------
 # Engagement counts
 # ---------------------------------------------------------------------------
@@ -688,9 +771,9 @@ end
 # below that no `CompilerReport` row carries (a geometry sweep that took the
 # candidate drive, a setup map served by its fast path, a value-invention
 # binding visited). They are observations only; nothing reads them to decide
-# what to build. They land in the task-local `Dict` that
-# `Internal.counting` (or `Internal.build`) opens, and nowhere when none is
-# open, so an `esm_problem` build pays one lookup per event and keeps nothing.
+# what to build. They land in the `Dict` that `Internal.counting` (or
+# `Internal.build`) puts on the build context, and nowhere when none is open, so
+# an `esm_problem` build pays one lookup per event and keeps nothing.
 #
 #   :geom_overlap_drive / :geom_overlap_gate_only / :geom_overlap_none
 #                          — an overlap-gated setup geometry sweep, by how its
@@ -705,10 +788,8 @@ end
 #   :compile_calls / :branch_templates / :body_variants
 #                          — node lowerings, stencil spine templates and
 #                            stencil body variants
-const _COUNTS_KEY = :earthsci_build_counts
-
 _counts_sink()::Union{Nothing, Dict{Symbol, Int}} =
-    get(task_local_storage(), _COUNTS_KEY, nothing)
+    (c = _build_ctx(); c === nothing ? nothing : c.counts)
 
 function _count!(k::Symbol, n::Int = 1)
     c = _counts_sink()
@@ -721,7 +802,7 @@ end
 function _with_counts(f)
     outer = _counts_sink()
     c = Dict{Symbol, Int}()
-    v = task_local_storage(f, _COUNTS_KEY, c)
+    v = _with_build_ctx(f, _ctx_with(_build_ctx(); counts = c))
     if outer !== nothing
         for (k, n) in c
             outer[k] = get(outer, k, 0) + n

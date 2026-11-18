@@ -26,9 +26,7 @@ end
 
 function _compile_derivative_equations(
         derivative_eqs::Vector{Equation},
-        resolved_obs::Dict{String, ASTExpr}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, n_states::Int;
+        resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope, n_states::Int;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
         # observeds compiled as named prelude slots, so a slot reference stays a
@@ -72,9 +70,9 @@ function _compile_derivative_equations(
     # DIFFERENT equations share a class kernel directly. `nothing` (the class
     # merge off) keeps one `_acc_from_cell_entries` call per equation.
     pooled_cells = _cross_eq_class_emit_enabled() ? Tuple{Int, _Node}[] : nothing
+    var_map = cs.var_map
     faq_scope = _FaqScope(
-        resolved_obs, array_var_info, var_map, const_registry, pgather, param_sym_set,
-        template_sites, xeq, pooled_cells, rhs_list_compiled, obs_nst,
+        resolved_obs, cs, template_sites, xeq, pooled_cells, rhs_list_compiled, obs_nst,
         percell_scalar, acc_kernels, scan_folds, array_contractions, covered
     )
 
@@ -87,7 +85,7 @@ function _compile_derivative_equations(
             _claim_cell!(covered, idx, state_name.name)
             rhs = isempty(scalar_inline) ? eq.rhs :
                 _sub_preserving(eq.rhs, scalar_inline)
-            rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
+            rhs_r = _resolve_in(cs, rhs)
             push!(scalar_entries, (idx, rhs_r))
             _record_rule!(state_name.name, :equation, _scalar_rule_tier(rhs_r))
 
@@ -113,7 +111,7 @@ function _compile_derivative_equations(
             _claim_cell!(covered, idx, cname)
             rhs = isempty(scalar_inline) ? eq.rhs :
                 _sub_preserving(eq.rhs, scalar_inline)
-            rhs_r = _resolve_indices(rhs, array_var_info, var_map, const_registry, pgather)
+            rhs_r = _resolve_in(cs, rhs)
             push!(scalar_entries, (idx, rhs_r))
             _record_rule!(cname, :equation, _scalar_rule_tier(rhs_r))
 
@@ -164,8 +162,7 @@ _LevelParts(cadence::Symbol) = _LevelParts(
 
 """
     _compile_fill_level(names, cadence, fill_equations, recurrence, resolved_obs,
-                        array_var_info, var_map, const_registry, pgather,
-                        param_sym_set, n_total; label_by_name, kw...) -> _LevelParts
+                        cs, n_total; label_by_name, kw...) -> _LevelParts
 
 Compile the fills of the materialized observeds `names` (one level: none reads
 another) into one level's parts. `recurrence(name)` compiles a causal
@@ -177,7 +174,7 @@ observed's name.
 """
 function _compile_fill_level(
         names, cadence::Symbol, fill_equations, recurrence,
-        resolved_obs, array_var_info, var_map, const_registry, pgather, param_sym_set,
+        resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope,
         n_total::Int; label_by_name::Bool = false, kw...
     )
     lv = _LevelParts(cadence)
@@ -188,12 +185,11 @@ function _compile_fill_level(
             continue
         end
         ce = _compile_derivative_equations(
-            fill_equations(name), resolved_obs, array_var_info, var_map,
-            const_registry, pgather, param_sym_set, n_total;
+            fill_equations(name), resolved_obs, cs, n_total;
             rule_label = label_by_name ? String(name) : nothing, kw...
         )
         for (slot, ex) in ce.scalar_entries
-            push!(lv.scalars, (slot, _compile(ex, var_map, param_sym_set)))
+            push!(lv.scalars, (slot, _compile_in(cs, ex)))
         end
         append!(lv.scalars, ce.percell)
         append!(lv.kernels, ce.kernels)
@@ -202,6 +198,22 @@ function _compile_fill_level(
         append!(lv.contractions, ce.contractions)
     end
     return lv
+end
+
+"""
+    _OopFillLevel
+
+One level of materialized-observed fills in the out-of-place product: the
+scalar entries `(extended slot, node)`, the class-merged kernels and one
+vectorization plan per kernel, the prefix folds and the whole-array
+contractions writing the level's slots. A level reads only the levels before it.
+"""
+struct _OopFillLevel
+    scalars::Vector{Tuple{Int, _Node}}
+    kernels::Vector{_AccKernel}
+    plans::Vector{_OopAccPlan}
+    scans::Vector{_ScanFold}
+    contractions::Vector{_ArrayContraction}
 end
 
 # ---- Stage: one faq derivative equation → whole-array kernels ----
@@ -261,7 +273,7 @@ end
 # an ordinary one that the kernel-class merge can batch.
 function _affine_reduce_form(
         contract_names::Vector{String}, contract_const,
-        agg_gates, oplus::String, zerobar::Float64
+        agg_gates::Union{Vector{_JoinGate}, Nothing}, oplus::String, zerobar::Float64
     )
     isempty(contract_names) && return nothing
     agg_gates === nothing || return nothing
@@ -322,7 +334,7 @@ end
 #     cells sum DIFFERENT terms and share no partial result at all.
 function _detect_prefix_scan(
         idx_names::Vector{String}, range_iters,
-        contract_names::Vector{String}, contract_const, agg_gates, agg_filter,
+        contract_names::Vector{String}, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing}, agg_filter,
         rhs_body::ASTExpr
     )
     agg_gates === nothing || return nothing
@@ -576,7 +588,7 @@ end
 # The scan fold's slots in lane order (see `_build_scan_fold`), for an LHS whose
 # subscripts are affine.
 function _scan_fold_slots!(
-        slots::Vector{Int}, blk, var_map, vname::String,
+        slots::Vector{Int}, blk, var_map::AbstractDict{String, Int}, vname::String,
         forms::Vector{Tuple{Int, Int, Int}}, axis::Int,
         outer_iters, scan_range
     )
@@ -591,7 +603,7 @@ function _scan_fold_slots!(
     )
 end
 function _scan_fold_slots_lanes!(
-        slots::Vector{Int}, blk, var_map, vname::String,
+        slots::Vector{Int}, blk, var_map::AbstractDict{String, Int}, vname::String,
         forms::Vector{Tuple{Int, Int, Int}}, axis::Int,
         lanes, scan_range, cell::Vector{Int},
         loop::Vector{Int}, nd::Int
@@ -798,8 +810,8 @@ const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 # The tile view of a `faq` equation (`_range_affine_view`, range_hooks.jl) and
 # its whole-domain ranges in `idx_names` order, or `nothing`.
 function _faq_range_view(
-        lhs_body::OpExpr, idx_names, range_iters, var_map,
-        array_var_info, xeq
+        lhs_body::OpExpr, idx_names::Vector{String}, range_iters, var_map::AbstractDict{String, Int},
+        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}, xeq
     )
     spec = _range_spec_now()
     spec === nothing && return nothing
@@ -912,13 +924,9 @@ _output_cells(a::_FaqEq) = prod(length(r) for r in a.range_iters; init = 1)
 _empty_output(a::_FaqEq) = !isempty(a.range_iters) && any(isempty, a.range_iters)
 
 # What every tier resolves and compiles against, and where its products go.
-struct _FaqScope{O, AV, VM, CR, PG, PS}
+struct _FaqScope{O, S <: _CompileScope}
     resolved_obs::O
-    array_var_info::AV
-    var_map::VM
-    const_registry::CR
-    pgather::PG
-    param_sym_set::PS
+    cs::S
     template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     xeq::Union{Nothing, _XEqStore}
     # `nothing`, or the cross-equation cell-entry pool: per-cell entries are
@@ -1013,7 +1021,7 @@ function _analyse_faq_equation(eq::Equation, sc::_FaqScope, label::Union{Nothing
     # A tile that shares its code gives the affine tier this equation over its
     # whole-domain ranges (range_hooks.jl).
     rview = _faq_range_view(
-        lhs_body, idx_names, range_iters, sc.var_map, sc.array_var_info, sc.xeq
+        lhs_body, idx_names, range_iters, sc.cs.var_map, sc.cs.array_var_info, sc.xeq
     )
     label = label === nothing ? _faq_debug_label(lhs_body, idx_names, range_iters) : label
     return _FaqEq(
@@ -1048,7 +1056,7 @@ function _loop_decline(a::_FaqEq, sc::_FaqScope)
     pranges = [_expand_int_range(a.contract_ranges[d]) for d in 1:length(a.contract_names)]
     got = _try_build_contraction_loop(
         probe, a.contract_names, pranges, a.oplus,
-        a.zerobar, sc.array_var_info, sc.var_map, sc.const_registry, sc.pgather
+        a.zerobar, sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather
     )
     return got isa _Decline ? got : nothing
 end
@@ -1231,15 +1239,15 @@ function _affine_once(a::_FaqEq, sc::_FaqScope, body, iters, scan; kw...)
         if a.rview === nothing || scan !== nothing || iters !== a.range_iters
             _try_affine_stencil(
                 body, a.idx_names, iters, a.lhs_body, sc.resolved_obs,
-                sc.array_var_info, sc.var_map, sc.const_registry, sc.pgather,
-                sc.param_sym_set, sc.covered; xeq = sc.xeq, kw...
+                sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather,
+                sc.cs.param_index, sc.covered; xeq = sc.xeq, kw...
             )
         else
             rv = a.rview[1]
             _try_affine_stencil(
                 body, a.idx_names, a.rview[2], a.lhs_body, sc.resolved_obs,
-                rv.avi, rv.vm, sc.const_registry, sc.pgather,
-                sc.param_sym_set, sc.covered; xeq = rv.xeq,
+                rv.avi, rv.vm, sc.cs.const_registry, sc.cs.pgather,
+                sc.cs.param_index, sc.covered; xeq = rv.xeq,
                 view = rv, run_iters = a.range_iters, kw...
             )
         end
@@ -1301,7 +1309,7 @@ function _offer(::_AffineTier, a::_FaqEq, sc::_FaqScope, st::_FaqRun)
     if scan !== nothing
         sf = _build_scan_fold(
             scan[1], scan[2], a.idx_names, a.range_iters,
-            a.lhs_body, sc.var_map, a.oplus, a.zerobar; reverse = scan[5]
+            a.lhs_body, sc.cs.var_map, a.oplus, a.zerobar; reverse = scan[5]
         )
         scan_fold = _ScanFold(sf.slots, sf.len, sf.oplus, sf.zerobar, sf.inclusive, Any[kernels...])
     end
@@ -1626,7 +1634,7 @@ end
 # ranges as a tuple, so the loop is compiled for their rank rather than
 # dispatched per cell. Returns the number of cells.
 function _ac_claim_outs!(
-        outs::Vector{Int}, covered, blk, var_map, vname::String,
+        outs::Vector{Int}, covered::_Covered, blk, var_map::AbstractDict{String, Int}, vname::String,
         cell::Vector{Int}, forms, iters::Tuple
     )
     c = 0
@@ -1723,14 +1731,11 @@ function _faq_diagnostic_cell(::_PerCellAccess, a::_FaqEq, sc::_FaqScope)
             for d in eachindex(idx_names)
     )
     idx_exprs = Dict{String, ASTExpr}(k => IntExpr(Int64(v)) for (k, v) in idx_env)
-    _lhs_cell_slot_at(a.lhs_body, idx_exprs, sc.var_map)
+    _lhs_cell_slot_at(a.lhs_body, idx_exprs, sc.cs.var_map)
     memo = _BuildMemo()
     build(term) = begin
         t = isempty(sc.resolved_obs) ? term : _sub_preserving(term, sc.resolved_obs)
-        _compile(
-            _resolve_indices(t, sc.array_var_info, sc.var_map, sc.const_registry, sc.pgather, memo),
-            sc.var_map, sc.param_sym_set, memo
-        )
+        _compile_in(sc.cs, _resolve_in(sc.cs, t, memo), memo)
         nothing
     end
     sub_rhs = _sub_preserving(a.rhs_body, idx_exprs)
@@ -1744,7 +1749,7 @@ function _faq_diagnostic_cell(::_PerCellAccess, a::_FaqEq, sc::_FaqScope)
             return :cell
         end
         iters = _contract_iters_at(
-            contract_names, a.contract_ranges, idx_env, sc.const_registry, a.contract_const
+            contract_names, a.contract_ranges, idx_env, sc.cs.const_registry, a.contract_const
         )
         whole = (iters isa _ContractNest ? length(iters.tuples) : _dynamic(prod, length, iters)::Int) <=
             _REFUSAL_DIAGNOSTIC_TERMS
@@ -1811,13 +1816,13 @@ function _compile_cell_program(
     term = prepare(term)
     got = _resolve_array_contraction_term(
         term, idx_names, contract_names,
-        sc.array_var_info, sc.var_map, sc.const_registry, sc.pgather;
+        sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather;
         nest_scalar_loops = nest_scalar_loops, memo = memo
     )
     got isa _Decline && return got
     out_refs, contract_refs, resolved = got
     node = try
-        _compile(resolved, sc.var_map, sc.param_sym_set, memo)
+        _compile_in(sc.cs, resolved, memo)
     catch err
         (compile_declines && err isa EarthSciASTError) || rethrow()
         return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
@@ -1830,7 +1835,7 @@ function _compile_cell_program(
         _array_contraction_table(
             contract_refs, idx_names, cell_iters, contract_names,
             contract_ranges, contract_const, gates, oplus, zerobar,
-            sc.const_registry; reverse = rev
+            sc.cs.const_registry; reverse = rev
         )
     else
         _ACFold(
@@ -1868,7 +1873,7 @@ function _try_compile_array_contraction(a::_FaqEq, sc::_FaqScope)
     prog isa _Decline && throw(prog)
     out_refs, node, fold = prog.out_refs, prog.body, prog.fold
     idx_names = a.idx_names
-    outs = _ac_claim_all_outs!(sc.covered, a.lhs_body, idx_names, a.range_iters, sc.var_map)
+    outs = _ac_claim_all_outs!(sc.covered, a.lhs_body, idx_names, a.range_iters, sc.cs.var_map)
     los, stps, lens = _output_box(a)
     # Emit the nest (array_contraction.jl). The whole equation is ONE body, so
     # the emission is O(1) in both extents like the nest itself. A `_Decline`
@@ -1941,7 +1946,7 @@ end
 # literals by `idx_exprs`. The arithmetic reading of the same thing, for a
 # left-hand side whose subscripts are affine, is `_lhs_affine_target` /
 # `_lhs_cell_slot`.
-function _lhs_cell_slot_at(lhs_body::OpExpr, idx_exprs::Dict{String, ASTExpr}, var_map)
+function _lhs_cell_slot_at(lhs_body::OpExpr, idx_exprs::Dict{String, ASTExpr}, var_map::AbstractDict{String, Int})
     sub_lhs = _sub_preserving(lhs_body, idx_exprs)
     malformed(why) = throw(TreeWalkError("E_TREEWALK_ARRAYOP_MALFORMED_LHS", why))
     sub_lhs isa OpExpr && sub_lhs.op == "D" || malformed("expected D(index(...)) in faq body")
@@ -1957,7 +1962,7 @@ end
 
 # Mark output slot `idx` (cell key `cname`) written; a second writer is a
 # duplicate derivative.
-function _claim_cell!(covered, idx::Int, cname::AbstractString)
+function _claim_cell!(covered::_Covered, idx::Int, cname::AbstractString)
     covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
     covered[idx] = true
     return idx
@@ -1972,7 +1977,7 @@ end
 function _array_contraction_table(
         contract_refs::Vector{Base.RefValue{Int}},
         idx_names::Vector{String}, range_iters, contract_names::Vector{String},
-        contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
+        contract_ranges, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing}, oplus::String, zerobar::Float64,
         const_registry::AbstractDict; reverse::Bool = false
     )
     nc = length(contract_names)
@@ -1998,8 +2003,8 @@ end
 # `_array_contraction_table`'s cell loop, behind a barrier so it runs at the
 # concrete type of the cell iterator.
 function _ac_table_fill!(
-        seg, cols, iters, fixed, idx_env, cells, idx_names,
-        contract_names, contract_ranges, contract_const, agg_gates,
+        seg, cols, iters, fixed, idx_env, cells, idx_names::Vector{String},
+        contract_names, contract_ranges, contract_const, agg_gates::Union{Vector{_JoinGate}, Nothing},
         zerobar, const_registry, reverse::Bool = false
     )
     nc = length(contract_names)
@@ -2065,11 +2070,9 @@ function _compile_faq_percell!(
     agg_gates = a.gates
     agg_filter = a.filter
     resolved_obs = sc.resolved_obs
-    array_var_info = sc.array_var_info
-    var_map = sc.var_map
-    const_registry = sc.const_registry
-    pgather = sc.pgather
-    param_sym_set = sc.param_sym_set
+    cs = sc.cs
+    var_map = cs.var_map
+    const_registry = cs.const_registry
     covered = sc.covered
     contract_const = _contract_lists(a.contract_const)
     cell_entries = Tuple{Int, _Node}[]
@@ -2102,8 +2105,8 @@ function _compile_faq_percell!(
                 # No contracted indices — standard unrolled-body path.
                 sub_rhs = isempty(resolved_obs) ? sub_rhs_outer :
                     _sub_preserving(sub_rhs_outer, resolved_obs)
-                rhs_r = _resolve_indices(sub_rhs, array_var_info, var_map, const_registry, pgather, cell_memo)
-                push!(cell_entries, (idx, _compile(rhs_r, var_map, param_sym_set, cell_memo)))
+                rhs_r = _resolve_in(cs, sub_rhs, cell_memo)
+                push!(cell_entries, (idx, _compile_in(cs, rhs_r, cell_memo)))
             elseif contraction_loop
                 # Runtime contraction loop (ess-runtime-contraction): compile the inner
                 # reduction ONCE into an `_NK_CONTRACTION_LOOP` for THIS output cell —
@@ -2120,8 +2123,8 @@ function _compile_faq_percell!(
                 ]
                 marker = _try_build_contraction_loop(
                     body2, contract_names, pranges,
-                    rhs_oplus, rhs_zerobar, array_var_info, var_map,
-                    const_registry, pgather
+                    rhs_oplus, rhs_zerobar, cs.array_var_info, var_map,
+                    const_registry, cs.pgather
                 )
                 marker isa _Decline &&
                     throw(
@@ -2133,9 +2136,7 @@ function _compile_faq_percell!(
                 )
                 push!(
                     cell_entries, (
-                        idx, _compile(
-                            marker, var_map, param_sym_set, cell_memo
-                        ),
+                        idx, _compile_in(cs, marker, cell_memo),
                     )
                 )
             else
@@ -2175,8 +2176,8 @@ function _compile_faq_percell!(
                 ) do term
                     term = isempty(resolved_obs) ? term :
                         _sub_preserving(term, resolved_obs)
-                    rhs_r = _resolve_indices(term, array_var_info, var_map, const_registry, pgather, cell_memo)
-                    push!(k_nodes, _compile(rhs_r, var_map, param_sym_set, cell_memo))
+                    rhs_r = _resolve_in(cs, term, cell_memo)
+                    push!(k_nodes, _compile_in(cs, rhs_r, cell_memo))
                 end
                 if isempty(k_nodes)
                     # A per-cell dynamic bound can be empty (e.g. an isolated

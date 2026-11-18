@@ -3,19 +3,16 @@
 # ============================================================
 # 2c. Build phases
 # ============================================================
-# `_build_evaluator_impl` runs as four named phases, each a function of the
-# previous phases' NamedTuple-packed products (the packing only NAMES what used
-# to be ~20 locals threaded through one 400-line body; stage order and
-# semantics inside each phase are exactly the pre-split impl):
-#   1. `_build_lower_and_classify`        — equation pre-lowering + the
-#      build-owned variable classification (`cls`).
-#   2. `_build_partition_and_materialize` — the ODE variable partition, scalar
-#      parameter scope, setup-time geometry materialization, and the
-#      equation-stream rewrites down to the ic fold (`parts`).
+# `_build_evaluator_impl` runs as four phases, each a function of the records
+# the earlier ones return (build_records.jl):
+#   1. `_build_lower_and_classify`        — equation pre-lowering and the
+#      variable classification (`_VariableClasses`).
+#   2. `_build_partition_and_materialize` — the ODE variable partition, the
+#      scalar parameter scope, the setup-time arrays and the equation-stream
+#      rewrites down to the `ic` fold (`_EquationPartition`).
 #   3. `_build_state_layout`              — array-cell discovery, the flat
-#      state-vector layout, u0 seeding, and the parameter NamedTuple (`layout`).
-#   4. `_build_compile_evaluator`         — observed split, const-array
-#      registry, forcing buffers, derivative compile + CSE, and the closure.
+#      state layout, `u0` and the parameter tuple (`_StatePlan`).
+#   4. `_build_compile_evaluator`         — the right-hand side, in stages.
 
 # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
 # Everything through the bare-alias registration: the synthesized/folded/lifted
@@ -26,17 +23,21 @@
 function _build_lower_and_classify(
         model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
-        vi_vars, materialize_out, index_sets = nothing
+        vi_vars::Set{String}, materialize_out::Union{Nothing, DiscreteMaterializer}, index_sets = nothing
     )
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
     # WS4 elementwise array-observed fold, whole-array derivative lift)
     equations, folded_array_obs = _prepare_model_equations(model; vi_vars = vi_vars)
+    # Every reachability question phase 1 asks about the observed definitions.
+    graph = _DefGraph(equations)
 
     # ---- Geometry variable discovery ----
     # (see `_discover_geometry_vars`: build-once setup vars, live-field inline
     # vars, and the has_* gate)
-    geo = _discover_geometry_vars(model, equations, param_arrays, vi_vars; index_sets = index_sets)
+    geo = _discover_geometry_vars(
+        model, equations, graph, param_arrays, vi_vars; index_sets = index_sets
+    )
     geom_inline_vars = geo.inline_vars
 
     # ---- Promoted array observeds (shape-promotion inlining) ----
@@ -83,12 +84,12 @@ function _build_lower_and_classify(
                 if v.type == ParameterVariable && !_is_array_shape(v.shape)
         )
         discrete_vars, const_mat_vars = _discrete_materialize_split(
-            equations, union(geom_inline_vars, array_inline_vars),
+            graph, union(geom_inline_vars, array_inline_vars),
             copy(array_inline_vars), pre_state,
             Set{String}(String(k) for k in keys(param_arrays)), scalar_params
         )
         if !isempty(recur_vars)
-            reach = _recurrence_readers(equations, recur_vars)
+            reach = union!(_readers_of(graph, recur_vars), recur_vars)
             setdiff!(discrete_vars, reach)
             setdiff!(const_mat_vars, reach)
         end
@@ -148,34 +149,11 @@ function _build_lower_and_classify(
     # not anything reads it: the output-time routes read the same buffer.
     union!(mat_array_vars, recur_vars)
 
-    return (;
-        equations, folded_array_obs,
-        geom_setup_vars = geo.setup_vars,
-        geom_defs = geo.defs, geom_inline_vars, array_inline_vars,
-        discrete_vars, const_obs_vars, const_obs_arrays, mat_array_vars,
-        gated_geom_vars,
+    return _VariableClasses(
+        equations, folded_array_obs, geo.setup_vars, geo.defs, geom_inline_vars,
+        array_inline_vars, discrete_vars, const_obs_vars, const_obs_arrays,
+        mat_array_vars, gated_geom_vars
     )
-end
-
-# The names in `recur_vars` and every observed that reads one of them, directly
-# or through other observed definitions.
-function _recurrence_readers(equations::Vector{Equation}, recur_vars::Set{String})
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr && (defs[(eq.lhs::VarExpr).name] = eq.rhs)
-    end
-    reach = copy(recur_vars)
-    _saturate!() do
-        changed = false
-        for (n, rhs) in defs
-            n in reach && continue
-            if any(r -> r in reach, _referenced_var_names(rhs))
-                push!(reach, n); changed = true
-            end
-        end
-        changed
-    end
-    return reach
 end
 
 # ---- Phase 2: ODE variable partition + setup materialization + equation rewrites ----
@@ -186,10 +164,10 @@ end
 # join-gate resolution, index-set range resolution, value-invention drop,
 # discrete-cadence def extraction, and the `ic` fold.
 function _build_partition_and_materialize(
-        model::Model, cls;
+        model::Model, cls::_VariableClasses;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
-        param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars, vi_extents::AbstractDict,
+        param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars::Set{String}, vi_extents::AbstractDict,
         vi_maps,
         # Build-time parameter-read sink (see `_record_param_read`): the two consumers
         # below (`_materialize_geometry_setup`, the `ic` evaluation) record the
@@ -202,14 +180,7 @@ function _build_partition_and_materialize(
     )
     # ---- Partition variables ----
     param_names, observed_names, state_var_names, supplied_scalars = _partition_variables(
-        model;
-        vi_vars = vi_vars, geom_setup_vars = cls.geom_setup_vars,
-        geom_inline_vars = cls.geom_inline_vars,
-        array_inline_vars = cls.array_inline_vars,
-        folded_array_obs = cls.folded_array_obs,
-        const_obs_vars = cls.const_obs_vars,
-        const_arrays = const_arrays, param_arrays = param_arrays,
-        discrete_vars = cls.discrete_vars
+        model, cls; vi_vars = vi_vars, const_arrays = const_arrays, param_arrays = param_arrays
     )
 
     # ---- Scalar parameter scope (load-time constants) ----
@@ -394,11 +365,10 @@ function _build_partition_and_materialize(
         (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
 
-    return (;
+    return _EquationPartition(
         param_names, observed_names, state_var_names, param_scope,
-        geom_setup_arrays, derived_extents,
-        equations, init_equations, discrete_defs, eq_ics, field_ics, ic_start,
-        ic_plan,
+        geom_setup_arrays, derived_extents, equations, init_equations,
+        discrete_defs, eq_ics, field_ics, ic_start, ic_plan
     )
 end
 
@@ -408,8 +378,8 @@ end
 # order), fold the deferred field ics now that cells are known (mutating
 # `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
 function _build_state_layout(
-        model::Model, cls, parts;
-        initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars,
+        model::Model, cls::_VariableClasses, parts::_EquationPartition;
+        initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars::Set{String},
         # Build-time parameter-read sink (see `_record_param_read`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
         param_reads::Union{Nothing, Set{String}} = nothing,
@@ -572,406 +542,397 @@ function _build_state_layout(
     # locates it. (The public `param_map(p)` is this map keyed by NAME.)
     param_index = Dict{Symbol, Int}(s => i for (i, s) in enumerate(p_syms))
 
-    return (;
-        n_states = length(var_map), var_map, u0, p,
-        param_sym_set = param_index, array_var_info,
-        var_map_ext, array_var_info_ext, mat_dims,
-        n_total = length(var_map_ext), ic_reseed,
+    return _StatePlan(
+        u0, p, var_map, array_var_info, param_index, var_map_ext, array_var_info_ext,
+        mat_dims, ic_reseed
     )
 end
 
-# ---- Phase 4: registry + forcing buffers + derivative compile + closure ----
-# Observed substitution, the merged const-array registry, the live forcing
-# buffers, the (opt-in) discrete-cadence materializer, u0 seeding from
-# faq-valued initialization equations, the per-derivative compile + CSE,
-# and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
+# ---- Phase 4: compile the right-hand side ----
+
+# What the right-hand-side slot holds (tree_walk/oop.jl): `_InPlace`, the
+# zero-allocation evaluator `f!(du, u, p, t)`, or `_OutOfPlace`, the compiled IR
+# a compiled backend lowers and the host does not evaluate. Read once, at the
+# build entry (`_build_form`); every stage that differs by form is a method.
+abstract type _BuildForm end
+struct _InPlace <: _BuildForm end
+struct _OutOfPlace <: _BuildForm end
+
+function _build_form(form::Symbol)
+    form === :inplace && return _InPlace()
+    form === :oop && return _OutOfPlace()
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_UNKNOWN_FORM",
+            "the build's `form` must be :inplace or :oop, got :$(form)"
+        )
+    )
+end
+
+# Whether whatever consumes the scalar list compiles it: the out-of-place
+# product's emitters lower the per-cell contraction loop into a program of
+# their own; the in-place `f!` walks the list.
+_rhs_list_compiled(::_InPlace) = false
+_rhs_list_compiled(::_OutOfPlace) = true
+
+# Phase 4 (`_build_compile_evaluator`): the observed split, the const-array
+# registry, the live forcing buffers and the two compile scopes, the discrete
+# caches, the initialization-equation seed, the materialized-observed fill
+# levels, the state equations, the scalar prelude, and the assembled
+# right-hand side. Fills `products` (when given) and returns
+# `(f!, u0, p, tspan, var_map)`, `var_map` the ODE layout.
+#
+# The ordering constraints between the stages: the discrete materializer adds
+# its caches to `pgather` before the seed, the fill plan and every compile read
+# it; the in-place levels' sections are made after the state equations are
+# compiled (a fused scan may take in a state kernel); the class merge runs
+# before the cross-kernel sharing, and the sharing before the per-cell
+# reference is appended and before the prelude's cadence tiers.
 function _build_compile_evaluator(
-        model::Model, cls, parts, layout;
+        model::Model, cls::_VariableClasses, parts::_EquationPartition, layout::_StatePlan;
         index_sets::AbstractDict = Dict{String, Any}(), const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
-        initial_conditions::AbstractDict, tspan, products, materialize_out,
-        form::Symbol,
+        initial_conditions::AbstractDict, tspan,
+        products::Union{Nothing, BuildProducts}, materialize_out::Union{Nothing, DiscreteMaterializer},
+        form::_BuildForm,
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         caller_u0 = nothing
     )
     u0 = layout.u0
     p = layout.p
-    param_sym_set = layout.param_sym_set
-    n_states = layout.n_states
-    # The layout hands back TWO maps: the ODE-only one (`var_map` — the public
-    # return, and the scope the setup-time seeding evaluates in, where the
-    # observed buffers do not exist yet) and the EXTENDED one that also carries
-    # the factored array-observed buffer slots. Everything the per-call RHS
-    # compiles against uses the extended pair.
-    var_map = layout.var_map_ext
-    array_var_info = layout.array_var_info_ext
-    n_total = layout.n_total
+    n_states = _n_states(layout)
+    n_total = _n_total(layout)
     # The materialized set, narrowed to the observeds whose buffer extents
-    # actually resolved (`mat_dims`); the rest stayed on the inline path.
+    # resolved (`mat_dims`); the rest stayed on the inline path.
     mat_vars = Set{String}(keys(layout.mat_dims))
 
-    # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
-        parts.equations,
-        parts.observed_names, cls.geom_setup_vars,
-        cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
+    split = _split_observed_and_derivatives(
+        parts.equations, parts.observed_names, cls, mat_vars,
         Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     )
-
-    # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
     const_registry = _register_const_arrays(
         const_arrays, const_array_boundaries,
         parts.geom_setup_arrays, cls.const_obs_arrays
     )
+    products === nothing ||
+        _publish_build_time!(products, parts, const_registry, split, mat_vars)
 
-    # ---- The build's products (see `BuildProducts`) ----
-    # Copy the named build-time products into the record. The right-hand side
-    # does not consult them.
-    if products !== nothing
-        for (k, arr) in parts.geom_setup_arrays
-            # Published by reference, as the const arrays below are.
-            products.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
-        end
-        for (k, arr) in const_registry
-            products.const_arrays[String(k)] = arr
-        end
-        # The observed map published here is the FULLY RESOLVED one — the same
-        # bytes as before this change. A factored array observed no longer sits
-        # in the RHS substitution map (its readers gather its buffer), but the
-        # observability surface is not the RHS: `_observed_field`
-        # (inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
-        # observed's expression CELLWISE, off the ODE path, so every reference
-        # in it must be substituted — including references between factored
-        # observeds. Re-resolving the merged map restores exactly that, and only
-        # when a record asked for it.
-        # A recurrence's definition reads itself, so it has no fully substituted
-        # form: it is published as authored, and the others around it.
-        recur_pub = _recurrence_names(mat_defs, mat_vars)
-        published = isempty(mat_defs) ? resolved_obs :
-            _resolve_observed(
-                merge(
-                    Dict{String, ASTExpr}(resolved_obs),
-                    Dict{String, ASTExpr}(
-                        k => v for (k, v) in mat_defs
-                        if !(k in recur_pub)
-                    )
-                )
-            )
-        if !isempty(recur_pub)
-            published = Dict{String, ASTExpr}(published)
-            for k in recur_pub
-                published[k] = mat_defs[k]
-            end
-        end
-        # Filled as each sweep compiles (below), so the sweep's own checks
-        # run first and decide any error the build raises.
-        empty!(products.recurrences)
-        for (k, e) in published
-            _is_hoisted_name(String(k)) || (products.observed_exprs[String(k)] = e)
-        end
-        # ALSO publish the UN-inlined per-observed definitions, so a build-time
-        # field evaluation can materialize each producer once in dependency order
-        # instead of re-executing the chain per output cell (see
-        # `BuildProducts`). `observed_exprs` above keeps the substituted view.
-        for (k, e) in raw_obs
-            _is_hoisted_name(String(k)) || (products.observed_defs[String(k)] = e)
-        end
-        # Keyed by the PRODUCER id (`"emis_src_cells_faq" => 9`), exactly as the
-        # build holds it. A consumer resolving a `kind:"derived"` axis follows the
-        # set's `from_faq` to this map (see `_materialized_obs_scope`).
-        for (k, n) in parts.derived_extents
-            products.derived_extents[String(k)] = Int(n)
-        end
-        # Resolved scalar parameter values (load-time constants) so a build-time
-        # cellwise re-evaluation of a parameter-dependent observed / reference
-        # (§6.6.5) binds them — see `evaluate_cellwise(...; params=…)`.
-        for (k, val) in parts.param_scope
-            products.params[String(k)] = val
-        end
-    end
-
-    # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
-    # (see `_build_pgather` for the feasibility-gate design note)
+    # The live forcing buffers (`_build_pgather`), and the two scopes the build
+    # compiles against: the state-only one (construction-time fills and
+    # output-time reads, where the observed buffers do not exist) and the
+    # right-hand side's, whose layout adds the materialized observeds' blocks.
     pgather = _build_pgather(param_arrays)
     _ws_note_pgather!(pgather)
+    state_scope = _CompileScope(
+        layout.array_var_info, layout.var_map, const_registry, pgather, layout.param_index
+    )
+    rhs_scope = _CompileScope(
+        layout.array_var_info_ext, layout.var_map_ext, const_registry, pgather,
+        layout.param_index
+    )
     # This build's forcing epoch: the problem's (its discrete sink carries it),
     # bumped when a refresh of a buffer the build reads is announced to its owner.
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
         materialize_out.epoch
     products === nothing || (products.forcing_epoch = forcing_epoch)
 
-    # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
-    # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
-    # cache buffer added to `pgather`, so a downstream reader (a state RHS or a
-    # later discrete fill) GATHERS it live instead of inlining the whole met→physics
-    # stack. Runs BEFORE u0 seeding + derivative compile so both read the caches; the
-    # initial fill (inside) makes them valid immediately. No-op without the sink.
-    # Both the discrete fills and the u0 seeding run OUTSIDE the per-call RHS, so
-    # they compile against the ODE-ONLY layout: an observed buffer holds nothing
-    # valid there (a name that reaches one keeps the inline path — see
-    # `_collect_materialized_array_obs`).
+    # The discrete-cadence caches (`DiscreteMaterializer`): each discrete
+    # observed's cache joins `pgather`, so a reader gathers it live. The fills
+    # run outside the right-hand side, against the state-only scope, and the
+    # initial fill makes the caches valid before anything below reads them.
     discrete_refill = materialize_out === nothing ? nothing :
         _build_discrete_materializer!(
-            materialize_out, cls.discrete_vars,
-            parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
-            const_registry, pgather, param_sym_set, p, n_states
+            materialize_out, cls.discrete_vars, parts.discrete_defs, split.resolved,
+            state_scope, p, n_states
         )
 
-    # ---- The compiled observed program's context (observed_program.jl) ----
-    # Output-time reads compile against this build's ODE layout, its const
-    # arrays, live buffers (discrete caches included) and parameters. Captured
-    # only for a build with a sink to hold it; nothing here runs until a read.
+    # What an output-time read (observed_program.jl) compiles against.
     if products !== nothing
         products.observed_ctx = _ObsProgramCtx(
-            model, cls, parts, index_sets,
-            layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
-            const_registry, pgather, template_sites,
+            model, cls, parts, index_sets, state_scope, n_states, p, template_sites,
             materialize_out === nothing ? Dict{String, Array{Float64}}() :
                 materialize_out.caches,
-            merge(Dict{String, ASTExpr}(raw_obs), mat_defs),
+            merge(Dict{String, ASTExpr}(split.raw), split.materialized),
             _state_base_names(layout.var_map, layout.array_var_info),
             Dict{String, Any}(), ReentrantLock()
         )
     end
 
-    # ---- Evaluate faq-valued initialization_equations into u0 ----
-    # A caller's u0 override (esm_problem's `u0`) is part of the state the
-    # equations read, and a cell it names keeps it.
+    # The faq-valued initialization equations seed `u0`. A caller's `u0` is
+    # part of the state they read, and a cell it names keeps its value.
     caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations, caller_u0)
     _seed_faq_init_u0!(
-        u0, parts.init_equations, initial_conditions, layout.var_map,
-        layout.array_var_info, const_registry, pgather,
-        param_sym_set, p; skip_slots = caller_slots
+        u0, parts.init_equations, initial_conditions, state_scope, p;
+        skip_slots = caller_slots
     )
 
-    # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
-    # Decide which scalar observeds compile as named prelude slots and which
-    # stay inlined (see `_plan_observed_slots`). The SCALAR equation arms then
-    # substitute only the non-slot observeds; every array path below keeps the
-    # full `resolved_obs` and is byte-identical to the pre-slot build.
+    # The scalar observeds compiled once as named prelude slots
+    # (`_plan_observed_slots`), each resolved in dependency order through the
+    # scope the scalar equations use.
     obs_plan = _plan_observed_slots(
-        derivative_eqs, raw_obs, resolved_obs,
-        parts.observed_names
+        split.derivatives, split.raw, split.resolved, parts.observed_names
     )
-    # Each slot def resolves through the SAME context the scalar entries use,
-    # in dependency order (a def may read a state gather / const array / live
-    # forcing buffer exactly as its inlined copy did).
     obs_defs = Pair{String, ASTExpr}[
-        name => _resolve_indices(
-            body, array_var_info, var_map,
-            const_registry, pgather
-        )
-            for (name, body) in obs_plan.defs
+        name => _resolve_in(rhs_scope, body) for (name, body) in obs_plan.defs
     ]
 
-    # ---- Factored array-observed fill kernels (per RHS call, dependency order) ----
-    # Each materialized observed compiles through the SAME array-equation cascade
-    # its readers do, via a synthesized `faq(D(index(obs, i…))) = <body>`
-    # equation whose output slots land in the observed's buffer block. Kernels are
-    # class-merged WITHIN a level only — the merge reorders, and levels are an
-    # ordering constraint. Empty (and the closure below unwrapped) when nothing
-    # is materialized.
-    #
-    # ess-scan INSIDE A FILL. The fill cascade is the SAME cascade the state
-    # equations take, so it can return `_ScanFold`s, and they are collected PER
-    # LEVEL and applied after that level's kernel section over the extended
-    # vector the fills write into — a fold reads back only the slots its own term
-    # kernels wrote, and no observed in a level can read another observed of the
-    # SAME level (that is what a level means), so folding once behind the
-    # class-merged section is exactly the ordering `_make_rhs` gives the state
-    # equations. Dropping them would leave the buffer holding the per-cell TERMS
-    # instead of their running accumulation — a silent wrong answer, so the
-    # plumbing is not optional.
-    #
-    # The list is NOT empty in general, and it is `_unwrap_identity_gather` that
-    # fills it. A fill's RHS is the GATHER `index(<def>, i…)`
-    # (`_materialized_fill_equation`), which hides the aggregate from
-    # `_compile_faq_equation!` — but when the producer underneath actually
-    # CONTRACTS, the wrapper is lifted, `_detect_prefix_scan` sees the aggregate
-    # and a materialized observed defined by a prefix reduction lands here as a
-    # per-level `_ScanFold`. ReSEACT's diagnosed vertical air-mass flux
-    # (`Mz[ke] = -Σ_{k < ke} …` over the level NODES contracting the level
-    # centres) is exactly that shape, and it arrives as one fold on the level
-    # that materializes `Mz`. Note the consequence a consumer of `mat_levels`
-    # has to handle: a STAGGERED fold's last output node is left uncovered by the
-    # term kernels on purpose (see `_scan_term_iters`), so the fold reads a slot
-    # of the observed's buffer that nothing in the fill wrote — zero out of a
-    # freshly allocated extended vector, whatever the in-place buffer held
-    # before — and folds it into an accumulator it then discards.
-    # `mat_levels` carries the `:inplace` shape
-    # `(scalars, _KernelSection, scans, _ContractionSection)` that
-    # `_fill_obs_levels!` consumes; `mat_levels_oop` carries the same fills as
-    # `(scalars, kernels, oop_plans, scans, array_contractions)` because the
-    # out-of-place runners take the kernel and its plan separately rather than a
-    # fused callable. Only
-    # the emitter actually being built is populated.
-    mat_levels = Any[]
-    mat_levels_oop = Any[]
-    mat_scan_fold_count = 0
-    mat_array_contraction_count = 0
-    mat_recurrence_count = 0
-    mat_const_levels = Any[]
-    mat_time_levels = Any[]
-    recur_names = _recurrence_names(mat_defs, mat_vars)
-    # The const-cadence observeds fill in their own levels, ahead of the rest
-    # and only when `p` moves (`_RhsObserved`, rhs_assembly.jl). The untiered
-    # build (`compiler = :interpreter`, the oracle) refills everything on every
-    # call, as its prelude does; the out-of-place product has no such skip.
-    mat_const = if form === :inplace && !_untiered() && !isempty(mat_vars)
-        dyn_seed = _state_base_names(layout.var_map, layout.array_var_info)
-        push!(dyn_seed, "t")
-        union!(dyn_seed, keys(pgather))
-        _const_cadence_mat_obs(
-            mat_defs, mat_vars, raw_obs, dyn_seed,
-            param_sym_set, const_registry
-        )
-    else
-        Set{String}()
-    end
-    # The time-cadence observeds: no state anywhere below them, but `t` or a
-    # live buffer (a `param_arrays` buffer, a discrete cache) somewhere.
-    mat_time = if form === :inplace && !_untiered() && !isempty(mat_vars)
-        tleaves = Set{String}(keys(pgather))
-        push!(tleaves, "t")
-        setdiff!(
-            _const_cadence_mat_obs(
-                mat_defs, mat_vars, raw_obs,
-                _state_base_names(layout.var_map, layout.array_var_info),
-                param_sym_set, const_registry, tleaves
-            ), mat_const
-        )
-    else
-        Set{String}()
-    end
-    level_plan = Tuple{Vector{String}, Symbol}[]
-    if !isempty(mat_vars)
-        isempty(mat_const) || foreach(
-            l -> push!(level_plan, (l, :const)),
-            _materialized_obs_levels(mat_defs, mat_const, raw_obs)
-        )
-        isempty(mat_time) || foreach(
-            l -> push!(level_plan, (l, :time)),
-            _materialized_obs_levels(mat_defs, mat_time, raw_obs)
-        )
-        foreach(
-            l -> push!(level_plan, (l, :dynamic)),
-            _materialized_obs_levels(
-                mat_defs,
-                setdiff(mat_vars, mat_const, mat_time), raw_obs
-            )
-        )
-    end
-    # A causal self-reference is an ordered sweep, not a fill equation
-    # (`_level_recurrence`).
-    level_recurrence = let form = form, recur_names = recur_names, mat_defs = mat_defs,
-            layout = layout, model = model, resolved_obs = resolved_obs,
-            array_var_info = array_var_info, var_map = var_map,
-            const_registry = const_registry, pgather = pgather,
-            param_sym_set = param_sym_set, products = products
-        name -> _level_recurrence(
-            name, form, recur_names, mat_defs, layout, model, resolved_obs,
-            array_var_info, var_map, const_registry, pgather, param_sym_set, products
-        )
-    end
-    level_fill = let mat_defs = mat_defs, layout = layout, array_var_info = array_var_info
-        name -> _range_fill_equations(
-            _range_spec_now(), name, mat_defs[name], layout.mat_dims[name], array_var_info[name]
-        )
-    end
-    pending_levels = _LevelParts[]
-    for (lvl, lvl_cadence) in level_plan
-        lv = _compile_fill_level(
-            lvl, lvl_cadence, level_fill, level_recurrence,
-            resolved_obs, array_var_info, var_map, const_registry,
-            pgather, param_sym_set, n_total;
-            template_sites = template_sites,
-            rhs_list_compiled = form === :oop,
-            obs_nst = form === :inplace ? n_states : 0
-        )
-        mat_scan_fold_count += length(lv.scans)
-        mat_array_contraction_count += length(lv.contractions)
-        mat_recurrence_count += length(lv.recurrences)
-        if form === :oop
-            merged, _ = _merge_acc_kernel_classes(lv.kernels)
-            push!(
-                mat_levels_oop,
-                (
-                    lv.scalars, merged,
-                    _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
-                    lv.scans, lv.contractions,
-                )
-            )
-        else
-            # The in-place sections are made once the state equations are
-            # compiled, so a fused scan can take in a state kernel that
-            # consumes it (`_scan_consumer_plan`).
-            push!(pending_levels, lv)
-        end
-    end
+    levels = _compile_fill_levels(
+        form, split, mat_vars, layout, model, rhs_scope, products;
+        template_sites = template_sites
+    )
+    oop_levels = _oop_fill_levels(form, levels)
     products === nothing || sort!(products.recurrences; by = r -> r.var)
 
-    # ---- Build per-derivative compiled-IR list ----
-    # (see `_compile_derivative_equations` / `_compile_faq_equation!`)
-    # `array_var_info` here is the EXTENDED map (`layout.array_var_info_ext`,
-    # bound above): a reader's `index(<materialized observed>, i…)` must resolve
-    # through the ordinary array-gather path onto the observed's buffer block.
-    # `scan_folds` is the ess-scan post-pass list for the STATE equations.
+    # The state equations, against the right-hand side's scope: a reader's
+    # `index(<materialized observed>, i…)` gathers the observed's buffer block.
+    # A state without a `D` equation keeps du = 0.
     state_eqs = _compile_derivative_equations(
-        derivative_eqs,
-        resolved_obs, array_var_info, var_map, const_registry, pgather,
-        param_sym_set, n_states; template_sites = template_sites,
+        split.derivatives, split.resolved, rhs_scope, n_states;
+        template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
-        rhs_list_compiled = form === :oop,
-        obs_nst = (form === :inplace && n_total > n_states) ? n_states : 0
+        rhs_list_compiled = _rhs_list_compiled(form),
+        obs_nst = (form isa _InPlace && n_total > n_states) ? n_states : 0
     )
-    scalar_entries = state_eqs.scalar_entries
-    percell_scalar = state_eqs.percell
+
+    sealed = _seal_fill_levels(form, levels, oop_levels, state_eqs, split, n_states, n_total)
+    rhs = _compile_scalar_rhs(
+        form, state_eqs, sealed.acc_kernels, obs_defs, rhs_scope, forcing_epoch
+    )
+    tspan_default = _pick_tspan(tspan)
+    if products !== nothing
+        # Published for both forms, from the `pgather` the out-of-place product
+        # carries, so `forcing_buffers(prob)` does not depend on the form.
+        products.forcing_buffers, products.forcing_buffer_index =
+            _forcing_buffer_container(pgather)
+    end
+    f! = _assemble_rhs(
+        form, rhs, sealed, state_eqs, pgather, n_states, n_total, forcing_epoch,
+        discrete_refill
+    )
+    if products !== nothing
+        products.stats = _rhs_stats(rhs, sealed, state_eqs, levels, obs_plan, mat_vars, n_states, n_total)
+        products.kernels = sealed.acc_kernels
+    end
+    # The public map is the ODE layout: the observed buffers are build-owned
+    # scratch above `length(u0)`.
+    return f!, u0, p, tspan_default, layout.var_map
+end
+
+# Copy the build-time products into `products`. The right-hand side does not
+# consult them. `observed_exprs` is the fully resolved observed map, factored
+# observeds included (an output-time cellwise read substitutes every
+# reference); a recurrence has no substituted form and is published as authored.
+# `observed_defs` keeps each observed's definition before substitution.
+function _publish_build_time!(
+        products::BuildProducts, parts::_EquationPartition, const_registry::AbstractDict,
+        split::_ObservedSplit, mat_vars::Set{String}
+    )
+    for (k, arr) in parts.geom_setup_arrays
+        # Published by reference, as the const arrays are.
+        products.setup_arrays[String(k)] = arr isa Array{Float64} ? arr : Array{Float64}(arr)
+    end
+    for (k, arr) in const_registry
+        products.const_arrays[String(k)] = arr
+    end
+    mat_defs = split.materialized
+    recur_pub = _recurrence_names(mat_defs, mat_vars)
+    published = isempty(mat_defs) ? split.resolved :
+        _resolve_observed(
+            merge(
+                Dict{String, ASTExpr}(split.resolved),
+                Dict{String, ASTExpr}(k => v for (k, v) in mat_defs if !(k in recur_pub))
+            )
+        )
+    if !isempty(recur_pub)
+        published = Dict{String, ASTExpr}(published)
+        for k in recur_pub
+            published[k] = mat_defs[k]
+        end
+    end
+    # Filled as each sweep compiles, so the sweep's own checks run first and
+    # decide any error the build raises.
+    empty!(products.recurrences)
+    for (k, e) in published
+        _is_hoisted_name(String(k)) || (products.observed_exprs[String(k)] = e)
+    end
+    for (k, e) in split.raw
+        _is_hoisted_name(String(k)) || (products.observed_defs[String(k)] = e)
+    end
+    # Keyed by producer id, as the build holds it; a `kind: "derived"` axis
+    # follows its set's `from_faq` here.
+    for (k, n) in parts.derived_extents
+        products.derived_extents[String(k)] = Int(n)
+    end
+    for (k, val) in parts.param_scope
+        products.params[String(k)] = val
+    end
+    return nothing
+end
+
+# The cadence of the materialized observeds the in-place right-hand side fills
+# outside every call: `const`, filled only when `p` moves, and `time`, filled
+# only when `(p, t, forcing epoch)` moves. Neither under the untiered
+# interpreter, which refills everything on every call, nor in the out-of-place
+# product, which has no such skip.
+_fill_cadences(::_OutOfPlace, split, mat_vars, layout, scope) = (Set{String}(), Set{String}())
+function _fill_cadences(
+        ::_InPlace, split::_ObservedSplit, mat_vars::Set{String}, layout::_StatePlan,
+        scope::_CompileScope
+    )
+    (_untiered() || isempty(mat_vars)) && return (Set{String}(), Set{String}())
+    dyn_seed = _state_base_names(layout.var_map, layout.array_var_info)
+    push!(dyn_seed, "t")
+    union!(dyn_seed, keys(scope.pgather))
+    mat_const = _const_cadence_mat_obs(
+        split.materialized, mat_vars, split.raw, dyn_seed,
+        scope.param_index, scope.const_registry
+    )
+    # Time cadence: no state below them, but `t` or a live buffer (a
+    # `param_arrays` buffer, a discrete cache) somewhere.
+    tleaves = Set{String}(keys(scope.pgather))
+    push!(tleaves, "t")
+    mat_time = setdiff!(
+        _const_cadence_mat_obs(
+            split.materialized, mat_vars, split.raw,
+            _state_base_names(layout.var_map, layout.array_var_info),
+            scope.param_index, scope.const_registry, tleaves
+        ), mat_const
+    )
+    return mat_const, mat_time
+end
+
+# The fill levels of the materialized observeds, in fill order: the const
+# levels, the time levels, then the rest, each `(names, cadence)` with no name
+# reading another of the same level.
+function _fill_level_plan(
+        form::_BuildForm, split::_ObservedSplit, mat_vars::Set{String},
+        layout::_StatePlan, scope::_CompileScope
+    )
+    plan = Tuple{Vector{String}, Symbol}[]
+    isempty(mat_vars) && return plan
+    mat_const, mat_time = _fill_cadences(form, split, mat_vars, layout, scope)
+    mat_defs = split.materialized
+    isempty(mat_const) || foreach(
+        l -> push!(plan, (l, :const)),
+        _materialized_obs_levels(mat_defs, mat_const, split.raw)
+    )
+    isempty(mat_time) || foreach(
+        l -> push!(plan, (l, :time)),
+        _materialized_obs_levels(mat_defs, mat_time, split.raw)
+    )
+    foreach(
+        l -> push!(plan, (l, :dynamic)),
+        _materialized_obs_levels(mat_defs, setdiff(mat_vars, mat_const, mat_time), split.raw)
+    )
+    return plan
+end
+
+# The materialized observeds' fill levels, compiled. Each observed's fill is a
+# synthesized `faq(D(index(obs, i…))) = <body>` equation through the cascade its
+# readers take (`_compile_fill_level`), its output slots its buffer block; a
+# causal self-reference is an ordered sweep (`_level_recurrence`). A level's
+# prefix folds run after its kernel section, over the slots its own kernels
+# wrote. An in-place level is sealed once the state equations are compiled
+# (`_seal_fill_levels`); an out-of-place one as soon as the levels are
+# (`_oop_fill_levels`).
+function _compile_fill_levels(
+        form::_BuildForm, split::_ObservedSplit, mat_vars::Set{String},
+        layout::_StatePlan, model::Model, scope::_CompileScope,
+        products::Union{Nothing, BuildProducts};
+        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing
+    )
+    plan = _fill_level_plan(form, split, mat_vars, layout, scope)
+    mat_defs = split.materialized
+    recur_names = _recurrence_names(mat_defs, mat_vars)
+    recurrence = name -> _level_recurrence(
+        name, form, recur_names, mat_defs, layout, model, split.resolved, scope,
+        products
+    )
+    fill = name -> _range_fill_equations(
+        _range_spec_now(), name, mat_defs[name], layout.mat_dims[name],
+        scope.array_var_info[name]
+    )
+    n_states = _n_states(layout)
+    return _LevelParts[
+        _compile_fill_level(
+            lvl, cadence, fill, recurrence, split.resolved, scope, _n_total(layout);
+            template_sites = template_sites,
+            rhs_list_compiled = _rhs_list_compiled(form),
+            obs_nst = form isa _InPlace ? n_states : 0
+        )
+            for (lvl, cadence) in plan
+    ]
+end
+
+# An out-of-place level is sealed as soon as the levels are compiled: its
+# kernels class-merged, with one vectorization plan per merged kernel.
+_oop_fill_levels(::_InPlace, levels::Vector{_LevelParts}) = _OopFillLevel[]
+function _oop_fill_levels(::_OutOfPlace, levels::Vector{_LevelParts})
+    out = _OopFillLevel[]
+    for lv in levels
+        merged, _ = _merge_acc_kernel_classes(lv.kernels)
+        push!(
+            out, _OopFillLevel(
+                lv.scalars, merged,
+                _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
+                lv.scans, lv.contractions
+            )
+        )
+    end
+    return out
+end
+
+# The right-hand side's fill levels and its state kernels, ready to run.
+struct _SealedFills
+    # The in-place fill levels (`_RhsStage`s) by cadence (empty out of place), and the
+    # out-of-place levels (empty in place).
+    levels::Vector{Any}
+    const_levels::Vector{Any}
+    time_levels::Vector{Any}
+    oop_levels::Vector{_OopFillLevel}
+    # The state equations' kernels after the class merge, their prefix folds
+    # (a `_ScanSection` in place) and the fused scans the state section takes.
+    acc_kernels::Vector{_AccKernel}
+    scan_folds::Any
+    fused_scans::Tuple
+    class_merge_diag::Any
+    n_state_scan_folds::Int
+end
+
+function _seal_fill_levels(
+        ::_OutOfPlace, levels::Vector{_LevelParts}, oop_levels::Vector{_OopFillLevel},
+        state_eqs::_CompiledEquations, split::_ObservedSplit, n_states::Int, n_total::Int
+    )
+    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(state_eqs.kernels; keep_affine = false)
+    return _SealedFills(
+        Any[], Any[], Any[], oop_levels, acc_kernels, state_eqs.scan_folds, (),
+        class_merge_diag, length(state_eqs.scan_folds)
+    )
+end
+
+# In place, a scan whose term kernel compiles into its fold's own pass
+# (scan_fused.jl) leaves that kernel out of its level's section, and a state
+# kernel it takes in as its consumer leaves the state kernels; the state RHS
+# runs on the two-buffer slot space (`_ObsSplitVec`) only when something is
+# materialized. The affine box kernels stay out of the class merge
+# (`keep_affine`), each its own loop nest.
+function _seal_fill_levels(
+        ::_InPlace, levels::Vector{_LevelParts}, ::Vector{_OopFillLevel},
+        state_eqs::_CompiledEquations, split::_ObservedSplit, n_states::Int, n_total::Int
+    )
     acc_kernels_pre = state_eqs.kernels
     scan_folds = state_eqs.scan_folds
-    array_contractions = state_eqs.contractions
-    # States without a D(...) equation get du=0 (integrator leaves them
-    # at their initial value — a common pattern for reified constants).
-
-    # ---- Kernel-CLASS merge (oop_merge.jl), for BOTH emitters ----
-    # Collapse per-cell-fragmented same-structure kernels into lane-batched
-    # class kernels — value-exact (bit-identical output on every runner), and on a
-    # class-fragmented model an order-of-magnitude reduction in kernel count. For
-    # a compiled backend it is the difference between a program that compiles and
-    # one that does not. MUST run here, before the xcse
-    # gate below: xcse rewrites kernel invariant-tier defs into SCALAR-cache
-    # reads (`_NK_CACHED` payloads that are no kernel's scratch), which the
-    # merge signature/clone does not model — merge first, then xcse runs over
-    # the (fewer) merged kernels. Bound ONCE to a fresh local (`acc_kernels`),
-    # never reassigned, so every downstream closure captures it unboxed.
-    # With the class merge off the build is the unmerged one, byte for byte.
-    # The in-place build keeps its affine box kernels out of the merge
-    # (`keep_affine`, oop_merge.jl), so the emitter compiles each as its own
-    # loop nest instead of a slot-table lane loop.
-    # The per-cell reference is untouched either way: its trees live on
-    # `percell_scalar`, never in the kernel list.
-    # A state scan whose term kernel compiles into its fold's own pass
-    # (scan_fused.jl) leaves that kernel out of the merge and the section.
     n_state_scan_folds = length(scan_folds)
-    state_fused_scans = ()
-    # The state RHS runs on the two-buffer slot space (`_ObsSplitVec`) only
-    # when something is materialized; its generated code then addresses each
-    # buffer directly.
-    obs_nst = n_total > n_states ? n_states : 0
-
-    # ---- The in-place observed levels' sections ----
-    # A scan whose term kernel compiles into its fold's own pass (scan_fused.jl)
-    # leaves that kernel out of the level's section, and a state kernel it
-    # takes in as its consumer leaves the state kernels.
-    if !isempty(pending_levels)
+    out = (dynamic = Any[], constant = Any[], time = Any[])
+    if !isempty(levels)
         consumers = _scan_consumer_plan(
-            pending_levels, acc_kernels_pre, n_states,
-            scalar_entries, percell_scalar, array_contractions,
-            (raw_obs, mat_defs, resolved_obs)
+            levels, acc_kernels_pre, n_states,
+            state_eqs.scalar_entries, state_eqs.percell, state_eqs.contractions,
+            (split.raw, split.materialized, split.resolved)
         )
         consumed = IdDict{Any, Bool}()
-        for lv in pending_levels
-            lvl_kernels, lvl_scans, lvl_fused =
-                _detach_fused_scans(
+        for lv in levels
+            lvl_kernels, lvl_scans, lvl_fused = _detach_fused_scans(
                 lv.kernels, lv.scans; nst = n_states,
                 consumers = consumers, consumed = consumed
             )
@@ -979,8 +940,8 @@ function _build_compile_evaluator(
                 _ac_take_consumers(lv.contractions, acc_kernels_pre, n_states, consumed) :
                 lv.contractions
             push!(
-                lv.cadence === :const ? mat_const_levels :
-                    lv.cadence === :time ? mat_time_levels : mat_levels,
+                lv.cadence === :const ? out.constant :
+                    lv.cadence === :time ? out.time : out.dynamic,
                 _inplace_fill_level(
                     lv.scalars, lvl_kernels, _make_scan_section(lvl_scans, lvl_fused),
                     lvl_acs, lv.recurrences; nst = n_states
@@ -990,235 +951,144 @@ function _build_compile_evaluator(
         isempty(consumed) ||
             (acc_kernels_pre = _AccKernel[K for K in acc_kernels_pre if !haskey(consumed, K)])
     end
-    if form === :inplace
-        acc_kernels_pre, scan_folds, state_fused_scans =
-            _detach_fused_scans(acc_kernels_pre, scan_folds; nst = obs_nst)
-    end
-    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(
-        acc_kernels_pre;
-        keep_affine = form === :inplace
+    obs_nst = n_total > n_states ? n_states : 0
+    acc_kernels_pre, scan_folds, fused_scans =
+        _detach_fused_scans(acc_kernels_pre, scan_folds; nst = obs_nst)
+    acc_kernels, class_merge_diag = _merge_acc_kernel_classes(acc_kernels_pre; keep_affine = true)
+    return _SealedFills(
+        out.dynamic, out.constant, out.time, _OopFillLevel[], acc_kernels, scan_folds,
+        fused_scans, class_merge_diag, n_state_scan_folds
     )
+end
 
-    # ---- Common-subexpression elimination on the scalar/indexed-D RHS (ess-r7h) ----
-    # Batched compile of every scalar resolved-RHS expr: subexpressions sharing a
-    # canonical_json key (within one RHS or across equations) are compiled once
-    # into a prelude that fills a per-call scratch cache, and each occurrence is a
-    # `_NK_CACHED` ref. Numerically identical to per-equation `_compile`; with no
-    # shared subexpressions the prelude is empty and the rhs nodes are byte-identical.
-    # `has_pgather` tells the pass whether any resolved live-forcing gather can be in
-    # the trees — if so it keys them through a canonicalizable stand-in, without which
-    # every expression built over a forcing buffer declines sharing (ess-qic). Note
-    # `pgather` holds BOTH the raw `param_arrays` buffers and the discrete-cadence
-    # caches, which is why this is read after `_build_discrete_materializer!` ran.
-    rhs_list, scalar_prelude, scalar_cache, cse_diag =
-        _cse_compile_scalar(
-        scalar_entries, var_map, param_sym_set;
-        has_pgather = !isempty(pgather), obs_defs = obs_defs
+# The scalar right-hand side: the state equations' scalar entries compiled in
+# one batch with their shared subexpressions in a prelude (`_cse_compile_scalar`;
+# with `has_pgather` a live-buffer gather keys through a stand-in), the
+# cross-kernel sharing (in place), the per-cell reference appended after it,
+# the prelude's cadence tiers, and in place the scalar section as generated
+# code (its report rows move to the `*_codegen` tiers).
+function _compile_scalar_rhs(
+        form::_BuildForm, state_eqs::_CompiledEquations, acc_kernels::Vector{_AccKernel},
+        obs_defs::Vector{Pair{String, ASTExpr}}, scope::_CompileScope,
+        forcing_epoch::_ForcingEpoch
     )
-    scalar_cache.epoch = forcing_epoch
-
-    # ---- Cross-kernel / kernel↔prelude CSE (perf plan B4; xcse.jl) ----
-    # A lane-invariant expensive subtree appearing in several array kernels'
-    # invariant tiers (and possibly in scalar equations too) collapses to ONE
-    # shared scalar prelude slot; each kernel's inv def becomes a bare cache
-    # read. `:inplace` only — a compiled backend emits the prelude itself and
-    # never consults the `_CSECache` the kernel-side reads do. Runs BEFORE
-    # the percell append (the per-cell reference trees stay exactly the
-    # `_compile` output) and BEFORE the cadence split (a hoisted
-    # parameter-only def still joins the const tier).
-    xcse_diag = if form === :inplace && !_xcse_disabled()
-        _share_kernel_invariants!(
-            rhs_list, scalar_prelude, scalar_cache,
-            acc_kernels
-        )
-    else
-        _XCSE_NONE_DIAG
-    end
-
-    # ---- The per-cell reference, with the affine stencil tier off ----
-    # Its compiled per-cell nodes join the scalar list —
-    # each cell evaluated by the plain scalar walker `_eval_node`, with no merge
-    # machinery of any kind between it and the equation: the maximally
-    # independent oracle the acc≡per-cell differential tests compare against.
-    # Empty on every default build. Appended AFTER the CSE pass so the
-    # reference trees are exactly the `_compile` output, untouched by sharing.
+    var_map = scope.var_map
+    rhs_list, prelude, cache, cse_diag = _cse_compile_scalar(
+        state_eqs.scalar_entries, var_map, scope.param_index;
+        has_pgather = !isempty(scope.pgather), obs_defs = obs_defs
+    )
+    cache.epoch = forcing_epoch
+    xcse_diag = _share_invariants!(form, rhs_list, prelude, cache, acc_kernels)
     n_scalar_rhs = length(rhs_list)
-    isempty(percell_scalar) || append!(rhs_list, percell_scalar)
+    isempty(state_eqs.percell) || append!(rhs_list, state_eqs.percell)
+    const_slots, time_slots, dyn_slots = _classify_const_slots(prelude, cache)
+    section = _scalar_section(
+        form, rhs_list, n_scalar_rhs, prelude, cache, const_slots, time_slots,
+        dyn_slots, acc_kernels, var_map
+    )
+    return (;
+        rhs_list, prelude, cache, cse_diag, xcse_diag, n_scalar_rhs, const_slots,
+        time_slots, dyn_slots, section,
+    )
+end
 
-    # ---- Cadence tiers of the (now final) prelude (4qf + B3, const_tier.jl) ----
-    # Runs AFTER the sharing pass, because that pass APPENDS prelude defs — a
-    # lane-invariant kernel subtree hoisted into the scalar prelude is a cadence-tier
-    # candidate exactly like any other def. A slot is CONST iff its def touches no
-    # state / time / live forcing buffer, TIME iff it touches `t` and/or a live
-    # forcing buffer but no state, and DYNAMIC otherwise — with every cache ref in a
-    # def contributing the tier of the slot it reads (that clause is the trap: an
-    # `_NK_CACHED` node carries no leaf of its own, so a leaf scan alone would call a
-    # def const while it reads a dynamic slot). `f!` then refills the const slots
-    # only when `p` has moved, and the time slots only when `(p, t, forcing epoch)`
-    # has — so an FD Jacobian's N+1 same-`t` calls fill the time tier once.
-    const_slots, time_slots, dyn_slots =
-        _classify_const_slots(scalar_prelude, scalar_cache)
+# A lane-invariant subtree shared by several kernels' invariant tiers (and
+# scalar equations) collapses to one prelude slot (xcse.jl). In place only: a
+# compiled backend emits the prelude itself and never reads the cache.
+_share_invariants!(::_OutOfPlace, rhs_list, prelude, cache, kernels) = _XCSE_NONE_DIAG
+_share_invariants!(::_InPlace, rhs_list, prelude, cache, kernels) =
+    _xcse_disabled() ? _XCSE_NONE_DIAG :
+    _share_kernel_invariants!(rhs_list, prelude, cache, kernels)
 
-    # ---- The scalar equations and the prelude as generated code (scalar_codegen.jl) ----
-    # `:inplace` only: the out-of-place product hands the compiled IR itself to a
-    # compiled backend. The per-cell reference entries past `n_scalar_rhs` stay
-    # walked. Their report rows move to the `*_codegen` tiers here.
-    scalar_section = form === :inplace ?
-        _build_scalar_section(
-            rhs_list, n_scalar_rhs,
-            scalar_prelude, scalar_cache, const_slots, time_slots, dyn_slots,
-            acc_kernels; rule_of = s -> var_map isa StateLayout ?
+_scalar_section(::_OutOfPlace, args...) = nothing
+function _scalar_section(
+        ::_InPlace, rhs_list, n_scalar_rhs, prelude, cache, const_slots, time_slots,
+        dyn_slots, kernels, var_map
+    )
+    sec = _build_scalar_section(
+        rhs_list, n_scalar_rhs, prelude, cache, const_slots, time_slots, dyn_slots,
+        kernels; rule_of = s -> var_map isa StateLayout ?
             _slot_key(var_map, s) : "state slot $s"
-        ) :
-        nothing
-    scalar_section === nothing ||
-        _retier_scalar_rules!(var_map, rhs_list, scalar_section)
+    )
+    sec === nothing || _retier_scalar_rules!(var_map, rhs_list, sec)
+    return sec
+end
 
-    # ---- Default tspan ----
-    tspan_default = _pick_tspan(tspan)
+# The in-place evaluator (`_Rhs`, rhs_assembly.jl): the materialized
+# observeds' fill levels run before the state stage (`_RhsObserved`, `nothing`
+# when nothing is materialized), and the discrete caches are brought up to the
+# call's `p` first (`_DiscreteRefill`, absent without a cache).
+function _assemble_rhs(
+        ::_InPlace, rhs, sealed::_SealedFills, state_eqs::_CompiledEquations,
+        pgather, n_states::Int, n_total::Int, forcing_epoch::_ForcingEpoch,
+        discrete_refill
+    )
+    return _make_rhs(
+        rhs.rhs_list, rhs.prelude, rhs.cache, sealed.acc_kernels,
+        rhs.const_slots, rhs.time_slots, rhs.dyn_slots, sealed.scan_folds,
+        _make_contraction_section(state_eqs.contractions);
+        scalar = rhs.section, fused_scans = sealed.fused_scans,
+        nst = n_total > n_states ? n_states : 0,
+        observed = _rhs_observed(
+            n_total, n_states, Tuple(sealed.levels), Tuple(sealed.const_levels),
+            Tuple(sealed.time_levels), forcing_epoch
+        ),
+        refill = discrete_refill
+    )
+end
 
-    # ---- The live forcing buffers (see `BuildProducts`) ----
-    # Published for BOTH forms, from the same `pgather` the out-of-place product
-    # carries as a field, so that `forcing_buffers(prob)` is a question about
-    # the PROBLEM rather than about which build form happened to produce it.
-    if products !== nothing
-        _fb, _fbi = _forcing_buffer_container(pgather)
-        products.forcing_buffers = _fb
-        products.forcing_buffer_index = _fbi
-    end
+# The out-of-place product: the compiled IR, with `pgather` (the
+# `param_arrays` buffers and the discrete caches) so its live buffers are
+# arguments of the compiled program (`_OopRHS`).
+_assemble_rhs(
+    ::_OutOfPlace, rhs, sealed::_SealedFills, state_eqs::_CompiledEquations,
+    pgather, n_states::Int, n_total::Int, forcing_epoch::_ForcingEpoch, discrete_refill
+) = _make_rhs_oop(
+    rhs.rhs_list, rhs.prelude, sealed.acc_kernels, n_states, pgather,
+    sealed.scan_folds, Tuple(sealed.oop_levels), n_total, state_eqs.contractions
+)
 
-    # ---- The RHS slot ----
-    # Two products of the SAME compiled IR (tree_walk/oop.jl explains why both
-    # exist): `:inplace` is the zero-alloc, eltype-generic Float64 evaluator
-    # `f!(du, u, p, t)`; `:oop` is the compiled IR itself, for a compiled
-    # backend to lower. `:oop` does not evaluate on the host.
-    f! = if form === :inplace
-        # The materialized array observeds fill their buffers in dependency
-        # order before the state stage runs over the extended slot space
-        # (`_RhsObserved`, `nothing` when nothing is materialized); the discrete
-        # caches are brought up to the call's `p` first (`_DiscreteRefill`).
-        # The state stage keeps its own `scan_folds` (the prefix reductions
-        # among the STATE equations); each fill level carries its own.
-        _make_rhs(
-            rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-            const_slots, time_slots, dyn_slots, scan_folds,
-            _make_contraction_section(array_contractions);
-            scalar = scalar_section, fused_scans = state_fused_scans,
-            nst = obs_nst,
-            observed = _rhs_observed(
-                n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
-                Tuple(mat_time_levels), forcing_epoch
-            ),
-            refill = discrete_refill
-        )
-    elseif form === :oop
-        # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
-        # along so the out-of-place build can expose its live forcing buffers as
-        # ARGUMENTS (`_OopRHS`) — the binding a compiled backend needs.
-        _make_rhs_oop(
-            rhs_list, scalar_prelude, acc_kernels, n_states, pgather,
-            scan_folds, Tuple(mat_levels_oop), n_total,
-            array_contractions
-        )
-    else
-        throw(
-            TreeWalkError(
-                "E_TREEWALK_UNKNOWN_FORM",
-                "the build's `form` must be :inplace or :oop, got :$(form)"
-            )
-        )
-    end
-
-    # Diagnostics for the N-independence property: the number of array kernels
-    # (and their CSE tiers) must be invariant across grid sizes; only the
-    # embedded slot/value vectors grow with N. `n_cse_slots` /
-    # `n_cse_occurrences` witness the scalar CSE evaluate-once property
-    # (ess-r7h #2); `n_const_slots` / `n_time_slots` / `n_dynamic_slots` partition
-    # the prelude by cadence (4qf + B3) — `n_const_slots` is the number of slots
-    # `f!` skips on a call whose `p` has not moved, and `n_time_slots` the number
-    # it additionally skips while `(p, t, forcing epoch)` stand still (the FD
-    # Jacobian's same-`t` columns).
-    #
-    # `n_acc_kernels` (and the slot sums below) count the POST-class-merge
-    # list — the kernels the emitted RHS actually carries — deliberately: the
-    # N-independence property still holds (a class is a structural fact of the
-    # document, not of the grid), and the pre-merge count is available as
-    # `n_classmerge_in`. A merged class folds varying inv defs into the cell
-    # tier (value-identical ones keep a real inv tier), so `n_acc_inv_slots`
-    # can shrink relative to a disabled-merge build.
-    diag = (;
-        # ess-scan: forward cumulative (prefix) reductions rewritten into a
-        # term pass + an O(N) accumulation (scan.jl). Zero on every model
-        # without one; the per-equation cascade tally records `:scan`.
-        # Counts BOTH the state equations' folds and those inside the
-        # factored array-observed fills — a prefix reduction that defines a
-        # materialized observed is the same rewrite in the same position,
-        # just over the observed's buffer block instead of the state.
-        n_scan_folds = n_state_scan_folds + mat_scan_fold_count,
-        # ess-array-contraction: array einsums compiled to ONE loop nest
-        # each (array_contraction.jl). Zero on every model whose reductions
-        # stay under the tier's floor; counted here for the same reason
-        # `n_scan_folds` is — it is a section of the emitted RHS, invisible
-        # to the kernel counts above.
-        n_array_contractions = length(array_contractions) +
-            mat_array_contraction_count,
-        # Causal self-references (recurrence_sweep.jl), each one ordered
-        # sweep in the observed fill levels.
-        n_recurrence_sweeps = mat_recurrence_count,
+# The emitted right-hand side's structural counts (`BuildProducts.stats`). The
+# kernel and slot counts are of the post-merge list the right-hand side
+# carries; the class merge's input count is `n_classmerge_in`. None grows with
+# the grid; only the embedded slot and value vectors do.
+function _rhs_stats(
+        rhs, sealed::_SealedFills, state_eqs::_CompiledEquations,
+        levels::Vector{_LevelParts}, obs_plan, mat_vars::Set{String},
+        n_states::Int, n_total::Int
+    )
+    acc_kernels = sealed.acc_kernels
+    cmd = sealed.class_merge_diag
+    return (;
+        n_scan_folds = sealed.n_state_scan_folds +
+            sum(lv -> length(lv.scans), levels; init = 0),
+        n_array_contractions = length(state_eqs.contractions) +
+            sum(lv -> length(lv.contractions), levels; init = 0),
+        n_recurrence_sweeps = sum(lv -> length(lv.recurrences), levels; init = 0),
         n_acc_kernels = length(acc_kernels),
         n_acc_cse_slots = sum(length(K.cse.recipes) for K in acc_kernels; init = 0),
         n_acc_inv_slots = sum(length(K.cse.inv_recipes) for K in acc_kernels; init = 0),
-        # Kernel-CLASS merge (oop_merge.jl, hoisted pre-xcse for both
-        # emitters): pre-merge kernel count / merge-ineligible kernels /
-        # classes whose group merge declined at build. All three equal
-        # their no-op values (n_acc_kernels / 0 / 0) when the pass is
-        # disabled or trivially small.
-        n_classmerge_in = class_merge_diag === nothing ?
-            length(acc_kernels) : class_merge_diag.n_in,
-        n_classmerge_blocked = class_merge_diag === nothing ? 0 :
-            class_merge_diag.n_blocked,
-        n_classmerge_failed = class_merge_diag === nothing ? 0 :
-            class_merge_diag.n_failed,
-        n_scalar_entries = length(rhs_list),
-        n_cse_slots = cse_diag.n_slots,
-        n_cse_occurrences = cse_diag.n_occurrences,
-        # Named scalar-observed prelude slots (ess-obs-slots): observeds
-        # compiled once as named defs vs observed equations left inlined
-        # (array-valued + leaf-bodied + structurally/guard-demoted). An
-        # aliased slot (an observed whose whole body was already a CSE
-        # slot) still counts as a named slot; the PRELUDE length is
-        # `n_cse_slots + n_obs_slots` minus aliases.
-        n_obs_slots = cse_diag.n_obs_slots,
+        n_classmerge_in = cmd === nothing ? length(acc_kernels) : cmd.n_in,
+        n_classmerge_blocked = cmd === nothing ? 0 : cmd.n_blocked,
+        n_classmerge_failed = cmd === nothing ? 0 : cmd.n_failed,
+        n_scalar_entries = length(rhs.rhs_list),
+        n_cse_slots = rhs.cse_diag.n_slots,
+        n_cse_occurrences = rhs.cse_diag.n_occurrences,
+        n_obs_slots = rhs.cse_diag.n_obs_slots,
         n_obs_inlined = obs_plan.n_inlined,
-        # Cross-kernel CSE (plan B4; xcse.jl): shared prelude slots
-        # minted by the pass / kernel inv defs rewritten to shared-slot
-        # reads / scalar RHS sites rewritten onto new shared slots.
-        n_xcse_slots = xcse_diag.n_xcse_slots,
-        n_xcse_kernel_shared = xcse_diag.n_xcse_kernel_shared,
-        n_xcse_scalar_shared = xcse_diag.n_xcse_scalar_shared,
-        n_const_slots = length(const_slots),
-        n_time_slots = length(time_slots),
-        n_dynamic_slots = length(dyn_slots),
-        # Factored array observeds (this change): how many array observeds
-        # were cut out of their readers into per-call buffers, how many
-        # buffer cells that is, and the dependency depth the fills run in.
+        n_xcse_slots = rhs.xcse_diag.n_xcse_slots,
+        n_xcse_kernel_shared = rhs.xcse_diag.n_xcse_kernel_shared,
+        n_xcse_scalar_shared = rhs.xcse_diag.n_xcse_scalar_shared,
+        n_const_slots = length(rhs.const_slots),
+        n_time_slots = length(rhs.time_slots),
+        n_dynamic_slots = length(rhs.dyn_slots),
         n_mat_array_obs = length(mat_vars),
         n_mat_array_cells = n_total - n_states,
-        n_mat_levels = length(mat_levels) + length(mat_const_levels) +
-            length(mat_time_levels),
-        n_mat_const_levels = length(mat_const_levels),
-        n_mat_time_levels = length(mat_time_levels),
+        n_mat_levels = length(sealed.levels) + length(sealed.const_levels) +
+            length(sealed.time_levels),
+        n_mat_const_levels = length(sealed.const_levels),
+        n_mat_time_levels = length(sealed.time_levels),
     )
-
-    if products !== nothing
-        products.stats = diag
-        products.kernels = acc_kernels
-    end
-    # The PUBLIC map is the ODE layout only: the factored array-observed buffer
-    # slots are build-owned scratch above `length(u0)`, not integrator slots, and
-    # every caller (solution indexing, cellwise evaluation, the conformance
-    # runners) reads `var_map` as "state name → `u` index".
-    return f!, u0, p, tspan_default, layout.var_map
 end
 
 # `compiler` (API_SPEC §5.8) is resolved FIRST, because the plan it expands to
@@ -1251,7 +1121,7 @@ function _build_evaluator_impl(
     # behind is read.
     return _with_build_ctx(_new_build_ctx(plan, record)) do
         try
-            return _build_evaluator_impl_pools(model; kwargs...)
+            return _build_evaluator_impl_inner(model; kwargs...)
         finally
             # The report is filled even when the build THREW: a refusal is
             # exactly the case a caller wants the partial tier record for.
@@ -1259,11 +1129,6 @@ function _build_evaluator_impl(
         end
     end
 end
-
-# The shifted-scatter kernels this build holds out of the class merge
-# (scatter.jl).
-_build_evaluator_impl_pools(model::Model; kwargs...) =
-    _with_scatter_keep(() -> _build_evaluator_impl_inner(model; kwargs...))
 
 function _build_evaluator_impl_inner(
         model::Model;
@@ -1380,6 +1245,7 @@ function _build_evaluator_impl_inner(
     # run file, which carries no events, so `_prepare_run` refuses them earlier,
     # while the events are still in hand. The ModelingToolkit compiler runs both
     # kinds of event and does not come through here.
+    build_form = _build_form(form)
     ev = _first_event(model)
     ev === nothing || throw(_event_refusal(ev))
     # An unknown carrying BOTH `D(x) ~ f` and `x ~ g` is one more equation than
@@ -1640,7 +1506,7 @@ function _build_evaluator_impl_inner(
         index_sets = index_sets, const_arrays = const_arrays,
         const_array_boundaries = const_array_boundaries, param_arrays = param_arrays,
         initial_conditions = initial_conditions, tspan = tspan, products = products,
-        materialize_out = materialize_out, form = form,
+        materialize_out = materialize_out, form = build_form,
         template_sites = _template_sites, caller_u0 = _caller_u0
     )
 end
@@ -1656,11 +1522,13 @@ _pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float6
 # product has no sweep section, so a compiler that builds it refuses the rule by
 # name.
 function _level_recurrence(
-        name, form, recur_names, mat_defs, layout, model, resolved_obs,
-        array_var_info, var_map, const_registry, pgather, param_sym_set, products
+        name::String, form::_BuildForm, recur_names::Set{String},
+        mat_defs::Dict{String, ASTExpr}, layout::_StatePlan, model::Model,
+        resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope,
+        products::Union{Nothing, BuildProducts}
     )
     name in recur_names || return nothing
-    form === :oop && _refuse_rule(
+    form isa _OutOfPlace && _refuse_rule(
         name,
         "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
             "lowering in the out-of-place product this compiler emits; " *
@@ -1669,9 +1537,7 @@ function _level_recurrence(
     )
     sw = _compile_recurrence_sweep(
         name, mat_defs[name],
-        layout.mat_dims[name], get(model.variables, name, nothing),
-        resolved_obs, array_var_info, var_map, const_registry,
-        pgather, param_sym_set
+        layout.mat_dims[name], get(model.variables, name, nothing), resolved_obs, cs
     )
     _record_rule!(name, :observed, _recurrence_tier(sw))
     products === nothing ||

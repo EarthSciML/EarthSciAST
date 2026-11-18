@@ -50,17 +50,11 @@
 # bound reads an output index, or a term or key that does not resolve with its
 # indices symbolic.
 
-# The kernels a shifted scatter's pieces compiled to, held out of the kernel
-# class merge (`_merge_acc_kernel_classes`). One set per build, in the
-# building task's local storage for the length of the build
-# (`_with_scatter_keep`), so the set dies with the build and two builds on two
-# tasks never see each other's. Outside a build there is no set and nothing is
-# held out.
-const _SCATTER_KEEP_KEY = :earthsci_scatter_keep
-
-_scatter_keep_now()::Union{Nothing, IdDict{Any, Nothing}} =
-    get(task_local_storage(), _SCATTER_KEEP_KEY, nothing)
-_with_scatter_keep(f) = task_local_storage(f, _SCATTER_KEEP_KEY, IdDict{Any, Nothing}())
+# The kernels a shifted scatter's pieces compiled to are held out of the kernel
+# class merge (`_merge_acc_kernel_classes`) through one set per build, on the
+# build's state (`_scatter_keep_now`, compiler.jl), so the set dies with the
+# build and two builds on two tasks never see each other's. Outside a build
+# there is no set and nothing is held out.
 
 # The equality conjuncts that pin output indices, and the conjuncts left over.
 struct _ScatterSpec
@@ -951,8 +945,8 @@ function _try_compile_scatter(a, fs, sc::_ScatterSpec)
     term = sc.rem === nothing ? a.rhs_body :
         OpExpr("ifelse", ASTExpr[sc.rem, a.rhs_body, NumExpr(a.zerobar)])
     sym(e) = _scatter_symbolic(
-        e, resolved_obs, idx_names, contract_names, fs.array_var_info,
-        fs.var_map, fs.const_registry, fs.pgather, fs.param_sym_set
+        e, resolved_obs, idx_names, contract_names, fs.cs.array_var_info,
+        fs.cs.var_map, fs.cs.const_registry, fs.cs.pgather, fs.cs.param_index
     )
     tgot = sym(term)
     tgot isa _Decline && throw(tgot)
@@ -974,10 +968,10 @@ function _try_compile_scatter(a, fs, sc::_ScatterSpec)
         end
         fold = _scatter_table(
             contract_refs, contract_names, contract_ranges, contract_const, keys, pinpos,
-            idx_names, los, stps, lens, a.oplus, a.zerobar, fs.const_registry
+            idx_names, los, stps, lens, a.oplus, a.zerobar, fs.cs.const_registry
         )
         fold === nothing && _decline(:scatter_too_many_pinned_cells)
-        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.var_map)
+        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.cs.var_map)
         emit = cons -> _try_codegen_array_contraction(
             out_refs, los, stps, lens, outs, node;
             fold = fold, nst = obs_nst, consumer = cons
@@ -998,10 +992,10 @@ function _try_compile_scatter(a, fs, sc::_ScatterSpec)
             _scatter_box_shared(contract_ranges, contract_const, idx_names) ||
                 _decline(:scatter_ragged_reads_output)
             points = _scatter_nest_points(
-                contract_names, contract_ranges, deps, Dict{String, Int}(), fs.const_registry
+                contract_names, contract_ranges, deps, Dict{String, Int}(), fs.cs.const_registry
             ).cols
         end
-        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.var_map)
+        outs = _ac_claim_all_outs!(covered, a.lhs_body, idx_names, a.range_iters, fs.cs.var_map)
         ktups = Tuple{_Node, Vector{Base.RefValue{Int}}, Vector{Base.RefValue{Int}}}[
             (g[3], g[2], g[1]) for g in kgots
         ]

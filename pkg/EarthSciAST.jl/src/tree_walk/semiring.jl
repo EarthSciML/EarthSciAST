@@ -930,12 +930,18 @@ function _key_at_cell(e::ASTExpr, c::Vector{Int})
 end
 
 # The build's scalar parameter values while its join gates resolve
-# (`_with_join_params`), empty outside one.
-const _JOIN_PARAMS_KEY = :earthsci_join_params
-_join_params()::AbstractDict{String, Float64} =
-    get(task_local_storage(), _JOIN_PARAMS_KEY, Dict{String, Float64}())
-_with_join_params(f, params::AbstractDict) =
-    task_local_storage(f, _JOIN_PARAMS_KEY, Dict{String, Float64}(params))
+# (`_with_join_params`), on the build state; empty outside one.
+_join_params()::Dict{String, Float64} = _build_state().join_params
+function _with_join_params(f, params::AbstractDict)
+    st = _build_state()
+    saved = st.join_params
+    st.join_params = Dict{String, Float64}(params)
+    try
+        return f()
+    finally
+        st.join_params = saved
+    end
+end
 
 # One cell of a document-literal `makearray` key column, as a raw value, or
 # `nothing` when the cell is not a literal (a computed column, which

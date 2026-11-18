@@ -94,34 +94,25 @@ function _setup_range_ok(r, index_sets)
     return s isa IndexSet && (s.kind == "interval" || (s.kind == "derived" && s.from_faq !== nothing))
 end
 
-function _model_has_setup_const_reduction(model, equations, index_sets, state_var_names)
+function _model_has_setup_const_reduction(
+        model::Model, g::_DefGraph, index_sets, state_var_names::Set{String}
+    )
     sp = Set{String}(
         n for (n, v) in model.variables if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
-    defs = Dict{String, ASTExpr}(
-        (eq.lhs::VarExpr).name => eq.rhs for eq in equations if eq.lhs isa VarExpr
-    )
-    dynamic = _dynamic_names(defs, state_var_names)
+    dynamic = _dynamic_names(g, state_var_names)
     return _anyof(
-        n -> !(n in dynamic) && _is_setup_const_reduction(defs[n], index_sets, sp), collect(keys(defs))
+        n -> !(n in dynamic) && _is_setup_const_reduction(g.defs[n], index_sets, sp),
+        collect(keys(g.defs))
     )
 end
 
 # The defined names that read a state or `t`, directly or through other
 # definitions: never a build-once table.
-function _dynamic_names(defs, state_var_names)
-    dynamic = Set{String}()
-    _saturate!() do
-        changed = false
-        for (n, rhs) in defs
-            n in dynamic && continue
-            if _anyof(r -> r == "t" || r in state_var_names || r in dynamic, _referenced_var_names(rhs))
-                push!(dynamic, n); changed = true
-            end
-        end
-        changed
-    end
-    return dynamic
+function _dynamic_names(g::_DefGraph, state_var_names::Set{String})
+    seeds = copy(state_var_names)
+    push!(seeds, "t")
+    return _readers_of(g, seeds)
 end
 
 # True iff `e` is a `const`-op node (build-time literal data — a vertex ring
@@ -251,11 +242,9 @@ function _geo_index_extent(ref, index_sets, derived_extents)
     return Int(sz)
 end
 
-# (The setup-time geometry SCALAR LADDER — `_geo_apply_scalar` and its
-# arity-specialized 1/2/3-arg twins — is gone: the geometry body is now
-# COMPILED ONCE per sweep into the shared `_Node` IR, so the scalar vocabulary
-# evaluates through `_eval_node_op`'s registry-generated arms. See
-# tree_walk/geometry_compile.jl.)
+# A geometry body is compiled once per sweep into the shared `_Node` IR and its
+# scalar operators evaluate through `_eval_node_op`'s registry-generated arms
+# (tree_walk/geometry_compile.jl).
 
 # Map a join key column to the aggregate loop var that indexes it (via its
 # declared 1-D shape's index set), by the right-hand side's rule
@@ -335,7 +324,7 @@ function _resolve_geo_join_gates(expr, ctx::_GeoCtx, setof)
         expr.output_idx, expr.ranges === nothing ? Dict{String, Any}() : expr.ranges
     )
     for clause in expr.join
-        # Only bin-equality (key-column-pair) clauses resolve HERE. A Phase-2a
+        # Only bin-equality (key-column-pair) clauses resolve HERE. An
         # `overlap` clause is a `_OverlapJoinSpec` (not a pair vector) and is
         # handled separately, at the TOP-LEVEL sweep, by `_geo_overlap_gate` /
         # `_geo_overlap_drive` below — because its candidate set does not just
@@ -487,34 +476,22 @@ end
 
 # ---- The OVERLAP broad phase at SETUP (RFC §5.3 / projection-pushdown 2a) ----
 #
-# `_resolve_geo_join_gates` above resolves only bin-EQUALITY clauses; a Phase-2a
-# `overlap` clause was once skipped here entirely, on the reasoning that "the
-# semiring / VI join resolvers handle it". For an array that MATERIALIZES AT SETUP
-# there is no other resolver — this sweep is the only evaluation the aggregate ever
-# gets — so the gate was simply not applied, and a gated conservative-regrid weight
-# matrix ran the full `#src × #tgt` product instead of the candidate set its
-# contract promises.
+# `_resolve_geo_join_gates` above resolves only bin-EQUALITY clauses. For an
+# array that materializes at setup this sweep is the only evaluation the
+# aggregate gets, so the `overlap` clause is applied here, and its candidate set
+# DRIVES the enumeration rather than filtering the `#src × #tgt` product. Which
+# symbol(s) it drives is `_overlap_drive_plan`'s policy (src/broad_phase.jl),
+# shared with the value-invention producer (`_vi_enumerate_join`) and the dense
+# aggregate expansion (`_foreach_aggregate_term`), and the candidate set comes
+# from the same primitive (`_overlap_candidate_set` → `broad_phase_candidates`).
 #
-# The gate is now honored, and — the point — it DRIVES enumeration rather than
-# merely filtering it. WHICH symbol(s) the candidate set drives is not re-derived
-# here: `_overlap_drive_plan` (src/broad_phase.jl) is the one implementation of
-# that policy, already used by the value-invention producer (`_vi_enumerate_join`)
-# and the dense aggregate expansion (`_foreach_aggregate_term`). This is its third
-# consumer, and the candidate set comes from the same Phase-3a primitive the other
-# two use (`_overlap_candidate_set` → `broad_phase_candidates`).
-#
-# WHAT THIS CHANGES. Applying a gate that was previously ignored is a SEMANTIC
-# change, not a pure optimization: a tuple outside the candidate set no longer
-# contributes its body, it contributes the fold identity 0̄ (§5.3). That is the
-# specified meaning of the clause and what every other resolver already does. For
-# the conservative-regrid shapes it is also value-NEUTRAL: disjoint envelopes ⇒
-# disjoint polygons ⇒ the overlap-area template returns exactly `+0.0`, which is
-# what the `zeros` init already holds, and the applies' `A_ij > atol` filter drops
-# those terms anyway. Where a pruned tuple WOULD contribute (a `min`/`prod` fold
-# with no sliver filter, a body that is not zero off the overlap) the clause
-# changes the answer, and both compilers give the gated one (CONFORMANCE_SPEC
-# §5.5.6, join admission and identity fill): the interpreter tests membership
-# per tuple, `native` drives. `geom_overlap_drive_test.jl` pins that case.
+# A tuple outside the candidate set contributes the fold identity 0̄ (§5.3), the
+# clause's specified meaning (CONFORMANCE_SPEC §5.5.6, join admission and
+# identity fill): the interpreter tests membership per tuple, `native` drives.
+# For the conservative-regrid shapes it is value-neutral (disjoint envelopes
+# give an overlap area of exactly `+0.0`); where a pruned tuple would contribute
+# (a `min`/`prod` fold, a body not zero off the overlap) both compilers give the
+# gated answer (`geom_overlap_drive_test.jl`).
 #
 # SCOPE: the TOP-LEVEL materialization sweep only. A nested `:geo_agg` in the body
 # keeps its ungated behaviour (`_geo_compile_agg` still routes through
@@ -610,9 +587,9 @@ function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
         # Every envelope factor must be a materialized array of the rank
         # `_envelope_vectors_from_cols` expects for that list length: 1 name is a
         # `[pos, verts, coord]` RING stack (3-D), 2 or 4 names are per-position
-        # columns (1-D). Checking here means a document that would have made the
-        # Phase-3a primitive throw DECLINES to the historic ungated sweep
-        # instead of failing a build that used to succeed.
+        # columns (1-D). A factor of another rank declines the drive here, and
+        # the sweep runs ungated, rather than letting `broad_phase_candidates`
+        # throw.
         _geo_env_ok(names) = begin
             want = _overlap_env_rank(length(names))
             want === nothing && return false
@@ -1033,24 +1010,19 @@ end
 # ============================================================
 # A build-once array observed need not be geometry. When a per-cell field (e.g.
 # `FuelModelLookup.code`, temperature, wind) is produced by an in-model regridder,
-# the behavior stack that consumed the formerly-scalar params (FuelModelLookup /
-# EquilibriumMoistureContent / OneHourFuelMoisture / MidflameWind /
-# RothermelFireSpread) is promoted to a build-once MAP over the fire `[x,y]` grid.
-# Its body is PURE PHYSICS — `and`/`or`/`ifelse`, comparisons, `const`,
-# `exp`/`log` — ops the limited setup-time geometry LANGUAGE does
-# NOT speak. Such a MAP must materialize through the GENERAL build-time cell
-# evaluator (`_eval_cellwise`), the same one `_materialize_setup_wholearray` uses.
+# the physics that reads it is promoted to a build-once MAP over that grid. A
+# body that reaches an operator outside the setup-time geometry language
+# (`_GEO_EVAL_OPS`, below) materializes through the GENERAL build-time cell
+# evaluator (`_eval_cellwise`), the one `_materialize_setup_wholearray` uses.
 
-# The exact op vocabulary of the setup-time geometry language (compiled by
-# `_geo_compile`, tree_walk/geometry_compile.jl): the scalar arithmetic /
-# comparison / rounding ops, the geometry leaves, and the nested
-# aggregate/index gathers. A build-once MAP whose body uses ONLY these needs
-# no help — the geometry materializer already handles it (a loader-field
-# reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`, a constructed cell ring
-# `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry weight over a derived set).
-# A body that reaches for an op OUTSIDE this set — `and`/`or`/`not`,
-# `const`, `exp`/`log`/`tan`/… — is a PROMOTED PHYSICS lookup that
-# only the general evaluator speaks; those, and only those, route to `_eval_cellwise`.
+# The op vocabulary of the setup-time geometry language (compiled by
+# `_geo_compile`, tree_walk/geometry_compile.jl): the operators the registry
+# flags `:geo_eval`. A build-once MAP whose body uses only these stays on the
+# geometry materializer (a loader-field reindex `F[c] = F_raw[floor((c-1)/GX)+1, …]`,
+# a constructed cell ring `tgt_poly[j,v,k] = ifelse(k==1, …, …)`, a geometry
+# weight over a derived set); one that reaches any other operator (`const`,
+# `exp`, `log`, `tan`, …) is a promoted physics lookup and routes to
+# `_eval_cellwise`.
 # Membership is declared per-op in src/op_registry.jl (flag `:geo_eval`) and
 # pinned by op_registry_test.jl.
 const _GEO_EVAL_OPS = _ops_with(:geo_eval)
@@ -1073,12 +1045,11 @@ end
 # evaluator: an array-producing `faq` (non-empty `output_idx`) that
 # is a pure MAP — every range key is an output index, so no top-level CONTRACTION —
 # carries no join/filter gate, and whose body reaches an op OUTSIDE the geometry
-# vocabulary `_GEO_EVAL_OPS` (`and`/`fn`/`const`/`exp`/`log`/…) — i.e. a promoted
-# per-cell physics lookup.
-# Every genuine geometry aggregate — an overlap-area weight, a
-# `A_j[j] = Σ_i A_ij[i,j]` row-sum, a constructed cell ring, a binning coordinate, a
-# loader-field reindex — uses ONLY `_GEO_EVAL_OPS` and so
-# stays on the compiled geometry path (`_materialize_geom_array`), byte-identical.
+# vocabulary `_GEO_EVAL_OPS` (the registry's geometry operators) — i.e. a
+# promoted per-cell physics lookup. Every geometry aggregate — an overlap-area
+# weight, a `A_j[j] = Σ_i A_ij[i,j]` row-sum, a constructed cell ring, a binning
+# coordinate, a loader-field reindex — uses only `_GEO_EVAL_OPS` and stays on
+# the compiled geometry path (`_materialize_geom_array`).
 function _is_setup_general_map(rhs)
     (rhs isa OpExpr && _is_faq_op(rhs.op)) || return false
     (rhs.output_idx !== nothing && any(s -> s isa AbstractString, rhs.output_idx)) || return false
@@ -1497,7 +1468,7 @@ end
 # trigger AND the cadence materialization split (`_discrete_materialize_split`),
 # where a MISSED reference is a silent wrong answer: a def whose only state read
 # sits in an aggregate `filter` used to classify as state-free and get frozen
-# into a discrete-cadence cache at `u = 0` (ess-5d1). Routing through
+# into a discrete-cadence cache at `u = 0`. Routing through
 # `child_exprs` is what keeps this walker from drifting out of sync with the
 # rest of the IR again; `_build_discrete_materializer!` additionally CHECKS the
 # result on the compiled fill nodes, so a future divergence fails loudly.
@@ -1540,45 +1511,27 @@ end
 # them WITHOUT touching a state variable. Returns the set, the name → RHS map and
 # the live-tainted names.
 function _geometry_setup_vars(
-        model, equations, state_var_names,
-        live_params; index_sets = nothing
+        model::Model, g::_DefGraph, state_var_names::Set{String},
+        live_params::Set{String}; index_sets = nothing
     )
     scalar_params = Set{String}(
         n for (n, v) in model.variables
             if v.type == ParameterVariable && !_is_array_shape(v.shape)
     )
-    defs = Dict{String, ASTExpr}()
-    for eq in equations
-        eq.lhs isa VarExpr || continue
-        defs[(eq.lhs::VarExpr).name] = eq.rhs
-    end
-    # The names each definition reads, walked once: the saturation passes below
-    # ask again on every sweep.
-    refmemo = Dict{String, Set{String}}()
-    refs_of(n) = get!(() -> _referenced_var_names(defs[n]), refmemo, n)
+    defs = g.defs
+    refs_of(n) = g.reads[n]
     observed_here = Set{String}(observed_unknowns(model))
     is_arr_obs(n) = haskey(model.variables, n) && n in observed_here &&
         _is_array_shape(model.variables[n].shape)
-    # Live taint (ess-14f.4): a var whose defining expression (transitively)
+    # Live taint: a var whose defining expression (transitively)
     # reads a `param_arrays` buffer is a LIVE-FIELD observed — its value changes
     # each refresh, so it CANNOT be a build-once setup const. `F_tgt = A_ij ⊗
     # F_src / A_j` mixes setup-const weights (A_ij/A_j) with a live field (F_src):
     # the weights materialize at setup, but F_tgt itself must stay a runtime
     # observed (inlined into its readers below), never pulled into setup where
-    # F_src is unbound. Seed from the live param names, propagate through `defs`.
-    tainted = Set{String}()
-    _saturate!() do   # LIVE-TAINT pass: propagate live-param reads through `defs`
-        changed = false
-        for (n, rhs) in defs
-            n in tainted && continue
-            refs = refs_of(n)
-            if any(r -> (r in live_params) || (r in tainted), refs)
-                push!(tainted, n); changed = true
-            end
-        end
-        changed
-    end
-    dynamic = _dynamic_names(defs, state_var_names)
+    # F_src is unbound.
+    tainted = _readers_of(g, live_params)
+    dynamic = _dynamic_names(g, state_var_names)
     setup = Set{String}()
     for (n, _) in defs
         (is_arr_obs(n) && !(n in tainted) && haskey(defs, n)) || continue
@@ -1678,29 +1631,21 @@ function _geometry_setup_vars(
         end
         changed
     end
-    return setup, defs, tainted
+    return setup, copy(defs), tainted
 end
 
 # Dependency order over the setup vars (A_ij before its row sums).
 function _geom_setup_order(setup, defs)
-    order = String[]; done = Set{String}()
     deps = Dict{String, Set{String}}(n => intersect(_referenced_var_names(defs[n]), setup) for n in setup)
-    while length(order) < length(setup)
-        progressed = false
-        for n in setup
-            n in done && continue
-            if all(d -> d in done, deps[n])
-                push!(order, n); push!(done, n); progressed = true
-            end
-        end
-        progressed || throw(
+    return _dependency_order(
+        setup, n -> deps[n];
+        on_cycle = _ -> throw(
             TreeWalkError(
                 "E_TREEWALK_GEOMETRY_SETUP",
                 "cyclic setup-time geometry dependency"
             )
         )
-    end
-    return order
+    )
 end
 
 # A materialized value-invention join column (`Dict(position => integer key)`,
@@ -2013,11 +1958,11 @@ function _derive_binning_coords(
             ok || continue
             # A coordinate whose body reaches an op OUTSIDE the setup-time geometry
             # vocabulary (`_GEO_EVAL_OPS`) — a Lambert-conformal PROJECTION (`X[e] =
-            # lambert_conformal_forward_x(lon[e],lat[e])`, trig/`^`/`fn`, an
+            # lambert_conformal_forward_x(lon[e],lat[e])`, trig, `^`, an
             # `apply_expression_template` expansion) — cannot be compiled by
             # `_materialize_geom_array` (whose `_geo_compile` speaks only that
             # vocabulary). Route it to the GENERAL build-time cell pipeline
-            # (`_eval_cellwise`, the full scalar + `fn` op set the ODE RHS resolver
+            # (`_eval_cellwise`, the full scalar op set the right-hand side
             # uses), exactly as a promoted-physics MAP is materialised in
             # `_materialize_geometry_setup`. Because this runs BEFORE
             # `materialize_value_invention` (the seeds feed `const_arrays`), a

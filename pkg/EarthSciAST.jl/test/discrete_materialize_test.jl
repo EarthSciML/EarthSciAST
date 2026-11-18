@@ -116,7 +116,7 @@ _dmc_agg(; kw...) = _dmc_op(
 # Run the cadence split on a single def. Returns the discrete set.
 _dmc_split(rhs) = first(
     _DM_ESS._discrete_materialize_split(
-        _DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)],
+        _DM_ESS._DefGraph(_DM_ESS.Equation[_DM_ESS.Equation(_dmc_v("Fcache"), rhs)]),
         Set(["Fcache"]),      # inline candidates (array observeds)
         Set{String}(),        # const-tier pool
         ["u"],                # continuous state var names
@@ -205,13 +205,15 @@ end
         Set(["Fcache"]),
         Dict{String, _DM_ESS.ASTExpr}("Fcache" => pgather),
         Dict{String, _DM_ESS.ASTExpr}(),                                  # resolved_obs
-        Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),  # array_var_info
-        Dict{String, Int}("u[$j]" => j for j in 1:4),                     # var_map
-        Dict{String, Any}(),                                              # const_arrays
-        Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
-            "raw" => _DM_ESS._PGatherArray(raw, [4])
-        ),
-        Set{Symbol}(), nothing, 4
+        _DM_ESS._CompileScope(
+            Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),  # array_var_info
+            Dict{String, Int}("u[$j]" => j for j in 1:4),                     # var_map
+            Dict{String, Any}(),                                              # const_arrays
+            Dict{String, _DM_ESS._PGatherArray}(                              # live buffers
+                "raw" => _DM_ESS._PGatherArray(raw, [4])
+            ),
+            Dict{Symbol, Int}()
+        ), nothing, 4
     )
 
     @testset "a state-reading fill throws E_TREEWALK_DISCRETE_MATERIALIZE" begin
@@ -248,13 +250,15 @@ end
             Set(["Fcache"]),
             Dict{String, _DM_ESS.ASTExpr}("Fcache" => _dmc_agg()),
             Dict{String, _DM_ESS.ASTExpr}(),
-            Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),
-            Dict{String, Int}("u[$j]" => j for j in 1:4),
-            Dict{String, Any}(),
-            Dict{String, _DM_ESS._PGatherArray}(
-                "raw" => _DM_ESS._PGatherArray(raw, [4])
-            ),
-            Set{Symbol}(), nothing, 4
+            _DM_ESS._CompileScope(
+                Dict{String, Tuple{Vector{Int}, Vector{Int}}}("u" => ([1], [4])),
+                Dict{String, Int}("u[$j]" => j for j in 1:4),
+                Dict{String, Any}(),
+                Dict{String, _DM_ESS._PGatherArray}(
+                    "raw" => _DM_ESS._PGatherArray(raw, [4])
+                ),
+                Dict{Symbol, Int}()
+            ), nothing, 4
         )
         @test dm.caches["Fcache"] == raw       # initial fill reads the live buffer
         raw .= [9.0, 9.0, 9.0, 9.0]

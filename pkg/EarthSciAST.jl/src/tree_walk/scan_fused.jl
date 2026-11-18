@@ -713,7 +713,7 @@ const _COLSCAN_BLOCK = 4096
 
 # The least lanes per chunk of a threaded column scan. Its cells are a vector
 # loop across the lanes of one level, far cheaper per node than the loops the
-# work floor (`_thread_min_work`) is set for, so a chunk is held to a whole
+# work floor (`_Tuning.thread_min_work`) is set for, so a chunk is held to a whole
 # vector row of this many lanes per level instead, the same kind of floor as
 # `_THREAD_MIN_RMW_CELLS`.
 const _COLSCAN_MIN_LANES = 1024

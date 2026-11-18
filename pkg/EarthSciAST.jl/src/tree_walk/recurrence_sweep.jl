@@ -238,9 +238,8 @@ end
 # ---- Build: one recurrence → its sweep ---------------------------------------
 #
 # `name` is the materialized observed, `def` its definition, `dims` its frame
-# (each axis `1…dims[d]`), and the rest the resolve/compile context the fill
-# route compiles against, with `var_map`/`array_var_info` the EXTENDED layout
-# that carries the buffer block.
+# (each axis `1…dims[d]`), and `cs` the scope the fill route compiles against,
+# whose layout is the EXTENDED one that carries the buffer block.
 #
 # The block is the whole frame except in a range-restricted program
 # (src/range/), where it may cover only the cells the program needs.
@@ -256,10 +255,9 @@ end
 # (`E_TREEWALK_RECUR_UNAVAILABLE`, `_eval_recur_gather`).
 function _compile_recurrence_sweep(
         name::String, def::ASTExpr, dims::Vector{Int},
-        var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set
+        var, resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope
     )
+    var_map = cs.var_map
     _check_recurrence_precision(name, var)
     (
         def isa OpExpr && _is_faq_op((def::OpExpr).op) &&
@@ -317,7 +315,7 @@ function _compile_recurrence_sweep(
         dop.expr_body::ASTExpr, idx_names, [collect(lo[d]:blk.hi[d]) for d in 1:rank],
         contract_names, contract_ranges, contract_const, dop.join_gates, dop.filter,
         oplus, zerobar,
-        (; resolved_obs, array_var_info, var_map, const_registry, pgather, param_sym_set);
+        (; resolved_obs, cs);
         prepare = t -> _mark_self_reads(t, name, _RecurGatherRef(rg))
     )
     prog isa _Decline && throw(

@@ -153,7 +153,7 @@ _lower_broadcast_model(model::Model)::Model = map_expressions(_lower_broadcast, 
 # later, so its definitions are left exactly as authored.
 function _normalize_indexed_observed_lhs(
         eqs::Vector{Equation}, model::Model;
-        vi_vars = Set{String}()
+        vi_vars::Set{String} = Set{String}()
     )
     observed_here = Set{String}(observed_unknowns(model))
     isempty(observed_here) && return eqs
@@ -259,7 +259,7 @@ end
 # subscript matches its binder in either spelling.
 function _rewrite_bare_index_observed_lhs(
         eq::Equation, model::Model,
-        observed_here::Set{String}, vi_vars
+        observed_here::Set{String}, vi_vars::Set{String}
     )
     gather = eq.lhs::OpExpr
     isempty(gather.args) && return nothing

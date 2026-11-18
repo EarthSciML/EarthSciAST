@@ -51,7 +51,7 @@
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.
 # Returns `(equations, folded_array_obs)`.
-function _prepare_model_equations(model::Model; vi_vars = Set{String}())
+function _prepare_model_equations(model::Model; vi_vars::Set{String} = Set{String}())
     # esm 1.0.0: an observed unknown's defining right-hand side IS an equation
     # (esm-spec §6.3), so there is no variable-level `expression` left to
     # synthesize an equation from — the list is already complete.
@@ -86,15 +86,15 @@ end
 #    const-fed (they stay setup vars).
 # `has_setup_geometry` gates the setup-vars discovery / materialization.
 function _discover_geometry_vars(
-        model::Model, equations::Vector{Equation},
-        param_arrays::AbstractDict, vi_vars; index_sets = nothing
+        model::Model, equations::Vector{Equation}, g::_DefGraph,
+        param_arrays::AbstractDict, vi_vars::Set{String}; index_sets = nothing
     )
     has_geometry_seed = _model_has_setup_join_reduction(equations)
     pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
     has_setup_geometry = has_geometry_seed ||
         _model_has_setup_const_reduction(
-        model, equations, index_sets,
-        union(pre_state_names, (String(k) for k in keys(param_arrays)))
+        model, g, index_sets,
+        union!(copy(pre_state_names), (String(k) for k in keys(param_arrays)))
     )
     setup_vars = Set{String}()
     defs = Dict{String, ASTExpr}()
@@ -103,8 +103,7 @@ function _discover_geometry_vars(
         live_param_names = Set{String}(String(k) for k in keys(param_arrays))
         setup_vars, defs, live_tainted =
             _geometry_setup_vars(
-            model, equations,
-            pre_state_names, live_param_names; index_sets = index_sets
+            model, g, pre_state_names, live_param_names; index_sets = index_sets
         )
         # GEOMETRY-DERIVED restriction. `live_tainted` is a DOCUMENT-WIDE set:
         # every var transitively reading a live `param_arrays` buffer. The
@@ -130,19 +129,7 @@ function _discover_geometry_vars(
         # Derived = reads a geometry setup var, transitively. The
         # regrid's own outputs still qualify (they read `A_ij`), so the motivating
         # met→fire coupling edge is unchanged.
-        geom_derived = Set{String}()
-        refmemo = Dict{String, Set{String}}()
-        _saturate!() do
-            changed = false
-            for (name, rhs) in defs
-                name in geom_derived && continue
-                refs = get!(() -> _referenced_var_names(rhs), refmemo, name)
-                if any(r -> r in setup_vars || r in geom_derived, refs)
-                    push!(geom_derived, name); changed = true
-                end
-            end
-            changed
-        end
+        geom_derived = _readers_of(g, setup_vars)
         obs_here = Set{String}(observed_unknowns(model))
         # Constant reduction tables alone (`_is_setup_const_reduction`) are
         # not geometry: they inline no live reader.
@@ -239,7 +226,7 @@ end
 # producer and keeps the scalar-observed path.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
-        geom_setup_vars, geom_inline_vars
+        geom_setup_vars::Set{String}, geom_inline_vars::Set{String}
     )
     array_inline_vars = Set{String}()
     observed_here = Set{String}(observed_unknowns(model))
@@ -318,7 +305,7 @@ _array_obs_inline_forced() = _compiler_plan_now().name === :interpreter
 # materialized (an unread one costs nothing inlined and is not recorded).
 function _collect_materialized_array_obs(
         model::Model, equations::Vector{Equation},
-        array_inline_vars, discrete_vars;
+        array_inline_vars::Set{String}, discrete_vars::Set{String};
         why::Union{Nothing, Dict{String, String}} = nothing
     )
     (_array_obs_inline_forced() || isempty(array_inline_vars)) && return Set{String}()
@@ -660,8 +647,8 @@ function _register_bare_alias_arrays!(
         const_obs_vars::Set{String},
         model::Model, equations::Vector{Equation};
         const_arrays::AbstractDict,
-        geom_setup_vars, geom_inline_vars,
-        array_inline_vars
+        geom_setup_vars::Set{String}, geom_inline_vars::Set{String},
+        array_inline_vars::Set{String}
     )
     alias_defs = Dict{String, ASTExpr}()
     for eq in equations
@@ -701,23 +688,14 @@ end
 
 # ---- Stage: variable partition ----
 # Split `model.variables` into the ODE partition: scalar parameter names
-# (sorted), scalar observed names, and state-variable names. Variables owned by
-# a setup/inline/fold mechanism (value invention, geometry setup, live-field or
-# promoted inlining, WS4 folds, const-op arrays) carry no partition slot.
-# Array-shaped parameters must be array-backed (const data or a live
-# `param_arrays` buffer — the scalar `p` NamedTuple stays homogeneous Float64,
-# see the JL-J0 note); an array-shaped observed must be owned by one of those
-# mechanisms. The ownership-exclusion sets are keyword-only:
-# they are all same-typed `Set{String}`s, so positional passing could silently
-# swap two of them. Returns `(param_names, observed_names, state_var_names)`.
+# (sorted), scalar observed names, state-variable names, and the scalar
+# parameters whose value arrives as data. A variable a build mechanism owns
+# (`_partition_owner`) carries no partition slot. An array-shaped parameter must
+# be array-backed (const data or a live `param_arrays` buffer; the scalar `p`
+# tuple stays homogeneous Float64); an array-shaped observed must be owned.
 function _partition_variables(
-        model::Model;
-        vi_vars, geom_setup_vars,
-        geom_inline_vars, array_inline_vars,
-        folded_array_obs, const_obs_vars,
-        const_arrays::AbstractDict,
-        param_arrays::AbstractDict,
-        discrete_vars = Set{String}()
+        model::Model, cls::_VariableClasses;
+        vi_vars::Set{String}, const_arrays::AbstractDict, param_arrays::AbstractDict
     )
     param_names = String[]
     observed_names = String[]
@@ -725,33 +703,13 @@ function _partition_variables(
     # Scalar parameters whose value arrives as data (`_scalar_supplied_data`),
     # with their build-time value; they take no `p` slot.
     supplied_scalars = Dict{String, Float64}()
-    # The unknown split is DERIVED (esm-spec §6.3.1). An ODE state or an
-    # algebraic unknown occupies a partition slot the solver integrates or
-    # solves; an observed unknown is eliminable and gets the observed bucket.
-    # Both were the declared `state` / `observed` types before 1.0.0.
+    # The unknown split is derived (esm-spec §6.3.1): an ODE state or an
+    # algebraic unknown occupies a slot the solver integrates or solves; an
+    # observed unknown is eliminable and gets the observed bucket.
     observed_here = Set{String}(observed_unknowns(model))
     unknown_state_names = Set{String}(solver_unknowns(model))
     for (name, v) in model.variables
-        # Value-invention outputs (distinct sets, key columns) are materialized
-        # once at setup (RFC §6.1) and never enter the ODE — drop them from every
-        # partition.
-        name in vi_vars && continue
-        # Geometry-setup vars are materialized at setup; not an ODE partition member.
-        name in geom_setup_vars && continue
-        # Live-field geometry observeds (F_tgt …) and promoted array observeds are
-        # inlined into their readers (ess-14f.4 / shape-promotion); no partition slot.
-        name in geom_inline_vars && continue
-        name in array_inline_vars && continue
-        # Discrete-cadence materialized array observeds: cut out of the per-step RHS
-        # into a cache buffer (filled per refresh) and gathered via `pgather`; like
-        # an inline var, they carry no ODE partition slot.
-        name in discrete_vars && continue
-        # Elementwise array observeds folded into their readers (WS4): their
-        # defining equation is gone and their value lives inline in the state RHS.
-        name in folded_array_obs && continue
-        # const-op array observeds (in-file ring stacks / source fields) are
-        # materialized into const_arrays; build-time data, not a partition member.
-        name in const_obs_vars && continue
+        _partition_owner(cls, vi_vars, name) === nothing || continue
         if name in unknown_state_names
             push!(state_var_names, name)
         elseif v.type == ParameterVariable
@@ -804,17 +762,17 @@ end
 # geometry observed (F_tgt …) or a promoted array observed enters the
 # substitution map as a faq value; `index(obs, j)` in a reader
 # beta-reduces to its body via `_resolve_indices` (ess-14f.4 /
-# shape-promotion). Returns `(derivative_eqs, resolved_obs, raw_obs)`; the RAW
-# map preserves the author-declared observed-into-observed references so the
+# shape-promotion). Returns an `_ObservedSplit`; its `raw` map preserves the author-declared observed-into-observed references so the
 # scalar-slot plan (`_plan_observed_slots`) can compile each observed once as a
 # named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(
-        equations::Vector{Equation},
-        observed_names, geom_setup_vars, geom_inline_vars,
-        array_inline_vars,
-        mat_array_vars = _EMPTY_NAME_SET,
-        array_shaped_vars = _EMPTY_NAME_SET
+        equations::Vector{Equation}, observed_names::Vector{String},
+        cls::_VariableClasses, mat_array_vars::AbstractSet{String},
+        array_shaped_vars::AbstractSet{String}
     )
+    geom_setup_vars = cls.geom_setup_vars
+    geom_inline_vars = cls.geom_inline_vars
+    array_inline_vars = cls.array_inline_vars
     observed_exprs = Dict{String, ASTExpr}()
     # FACTORED array observeds are pulled OUT of the substitution map: their
     # readers gather the buffer by name (`index(obs, i…)` → a slot read), so
@@ -884,7 +842,9 @@ function _split_observed_and_derivatives(
     # and is refused here by name. A bare self-reference keeps the cycle
     # diagnosis it earns.
     _decline_unmaterialized_recurrences(observed_exprs, array_shaped_vars)
-    return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
+    return _ObservedSplit(
+        derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
+    )
 end
 
 # Fail closed on a recurrence definition that did not become a materialized
@@ -918,8 +878,6 @@ function _decline_unmaterialized_recurrences(
     end
     return nothing
 end
-
-const _EMPTY_NAME_SET = Set{String}()
 
 # ---- Stage: scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
 #
@@ -967,7 +925,7 @@ function _plan_observed_slots(
         derivative_eqs::Vector{Equation},
         raw_obs::Dict{String, ASTExpr},
         resolved_obs::Dict{String, ASTExpr},
-        observed_names
+        observed_names::Vector{String}
     )
     n_total = length(raw_obs)
     none = (; defs = Pair{String, ASTExpr}[], inline = nothing, n_inlined = n_total)

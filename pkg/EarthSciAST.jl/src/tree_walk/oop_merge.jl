@@ -924,12 +924,6 @@ function _affine_boxes_to_keep(kernels::AbstractVector{_AccKernel})
     return sort!(cand)
 end
 
-# Whether this task builds with the class merge applied twice (tests only; see
-# `_merge_acc_kernel_classes`).
-const _MERGE_RECHECK_KEY = :__earthsciast_merge_recheck
-_merge_recheck_on() = get(task_local_storage(), _MERGE_RECHECK_KEY, false)::Bool
-_with_merge_recheck(f) = task_local_storage(f, _MERGE_RECHECK_KEY, true)
-
 """
     _merge_acc_kernel_classes(kernels) -> (kernels′, diag_or_nothing)
 
