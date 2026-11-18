@@ -2660,70 +2660,13 @@ end
 
 # The affine form `coef * loop_index[pos] + c` of an index expression, as
 # `(pos, coef, c)` with `pos = 0` for a constant, or `nothing` when the
-# expression is not one (another operator, a name that is not a loop index, a
-# non-integer literal, or two different loop indices). Integer arithmetic wraps
-# exactly as `_eval_const_int`'s does.
+# expression is not one (`_affine_form`, with no subexpression moving with two
+# different loop indices).
 function _lhs_index_affine(a::ASTExpr, idx_names::Vector{String})
-    if a isa IntExpr
-        return (0, 0, Int(a.value))
-    elseif a isa NumExpr
-        v = a.value
-        (isinteger(v) && -9.0e18 <= v <= 9.0e18) || return nothing
-        return (0, 0, Int(v))
-    elseif a isa VarExpr
-        pos = findfirst(==(a.name), idx_names)
-        pos === nothing && return nothing
-        return (pos, 1, 0)
-    elseif a isa OpExpr
-        op = a.op
-        c = a.args
-        if op == "+"
-            isempty(c) && return nothing
-            pos, coef, k = 0, 0, 0
-            for x in c
-                t = _lhs_index_affine(x, idx_names)
-                t === nothing && return nothing
-                p2, c2, k2 = t
-                if p2 != 0
-                    (pos == 0 || pos == p2) || return nothing
-                    pos = p2
-                    coef += c2
-                end
-                k += k2
-            end
-            return (coef == 0 ? 0 : pos, coef, k)
-        elseif op == "-" || op == "neg"
-            if length(c) == 1
-                t = _lhs_index_affine(c[1], idx_names)
-                t === nothing && return nothing
-                return (t[1], -t[2], -t[3])
-            end
-            (op == "-" && length(c) == 2) || return nothing
-            t1 = _lhs_index_affine(c[1], idx_names)
-            t2 = _lhs_index_affine(c[2], idx_names)
-            (t1 === nothing || t2 === nothing) && return nothing
-            (t1[1] == 0 || t2[1] == 0 || t1[1] == t2[1]) || return nothing
-            coef = t1[2] - t2[2]
-            pos = t1[1] != 0 ? t1[1] : t2[1]
-            return (coef == 0 ? 0 : pos, coef, t1[3] - t2[3])
-        elseif op == "*"
-            isempty(c) && return nothing
-            pos, coef, k = 0, 0, 1
-            for x in c
-                t = _lhs_index_affine(x, idx_names)
-                t === nothing && return nothing
-                if t[1] != 0 && t[2] != 0
-                    pos == 0 || return nothing          # a product of two loop indices
-                    pos, coef, k = t[1], k * t[2], k * t[3]
-                else
-                    coef *= t[3]
-                    k *= t[3]
-                end
-            end
-            return (coef == 0 ? 0 : pos, coef, k)
-        end
-    end
-    return nothing
+    f = _affine_form(a, idx_names; single = true)
+    f === nothing && return nothing
+    pos = findfirst(!iszero, f.c)
+    return pos === nothing ? (0, 0, f.c0) : (pos, f.c[pos], f.c0)
 end
 
 # The box a `faq` LHS's subscripts sweep over `range_iters`, as `(lo, hi)`, or

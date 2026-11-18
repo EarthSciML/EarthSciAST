@@ -220,60 +220,95 @@ struct _FastKey
     strides::Vector{Vector{Int}}
 end
 
-# `(c0, c)` with `e == c0 + Σ_d c[d]·loop[d]` for every cell, by the same integer
-# arithmetic `_eval_const_int` does; `nothing` for anything but integer literals,
-# the loop names, `+`, `-`, `neg` and a `*` with at most one non-constant factor.
-function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
+# ---- Affine subscripts ----------------------------------------------------
+# One model of an integer subscript that is AFFINE in the loop indices:
+# `c0 + Σ_d c[d]·loop[d]`, computed by the same wrapping integer arithmetic
+# `_eval_const_int` does. The recognizer admits integer literals, the loop
+# names, `+`, `-` (one or two operands), `neg`, and `*` with at most one factor
+# that names a loop index; anything else (a clamp `max(k-1,1)`, a fold, a
+# `mod`, a gather through a const table, a division, a non-loop name, a
+# non-integer or non-finite literal) is not affine. It is the licence for
+# skipping a per-cell check (an affine subscript cannot deviate from its model
+# at any cell), so it errs only towards "not affine", which costs a per-cell
+# evaluation and never a wrong value.
+#
+# `single = true` also refuses any subexpression that moves with two different
+# loop indices (the LHS reading, `_lhs_index_affine`, which allows one).
+struct _AffineForm
+    c0::Int
+    c::Vector{Int}
+end
+
+# A subexpression names no loop index (it is a constant over the loop).
+_names_no_loop(e::ASTExpr, idx_names) =
+    e isa VarExpr ? !((e::VarExpr).name in idx_names) :
+    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), (e::OpExpr).args) : true
+
+function _affine_form(e::ASTExpr, idx_names::AbstractVector{String}; single::Bool = false)
     D = length(idx_names)
     if e isa IntExpr
-        return ((e::IntExpr).value, zeros(Int, D))
+        return _AffineForm(Int((e::IntExpr).value), zeros(Int, D))
     elseif e isa NumExpr
         v = (e::NumExpr).value
         (isfinite(v) && isinteger(v) && abs(v) < 9.0e18) || return nothing
-        return (Int(v), zeros(Int, D))
+        return _AffineForm(Int(v), zeros(Int, D))
     elseif e isa VarExpr
         d = findfirst(==((e::VarExpr).name), idx_names)
         d === nothing && return nothing
         c = zeros(Int, D); c[d] = 1
-        return (0, c)
+        return _AffineForm(0, c)
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    _affine_idx_expr(o, idx_names) || return nothing
-    parts = Tuple{Int, Vector{Int}}[]
-    for a in o.args
-        r = _affine_int_coeffs(a, idx_names)
-        r === nothing && return nothing
-        push!(parts, r)
+    (
+        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
+            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
+            o.filter === nothing && o.key === nothing && o.values === nothing
+    ) || return nothing
+    n = length(o.args)
+    n >= 1 || return nothing
+    op = o.op
+    if op == "*"
+        # At most one factor names a loop index; the product of the others
+        # scales it.
+        count(a -> !_names_no_loop(a, idx_names), o.args) <= 1 || return nothing
+    elseif !(op == "+" || (op == "-" && n <= 2) || (op == "neg" && n == 1))
+        return nothing
     end
-    n = length(parts)
-    if o.op == "+" && n >= 1
-        c0 = parts[1][1]; c = copy(parts[1][2])
+    parts = Vector{_AffineForm}(undef, n)
+    for j in 1:n
+        r = _affine_form(o.args[j], idx_names; single = single)
+        r === nothing && return nothing
+        parts[j] = r
+    end
+    r = if op == "+"
+        c0 = parts[1].c0; c = copy(parts[1].c)
         for j in 2:n
-            c0 += parts[j][1]; c .+= parts[j][2]
+            c0 += parts[j].c0; c .+= parts[j].c
         end
-        return (c0, c)
-    elseif (o.op == "-" || o.op == "neg") && n == 1
-        return (-parts[1][1], -parts[1][2])
-    elseif o.op == "-" && n == 2
-        return (parts[1][1] - parts[2][1], parts[1][2] .- parts[2][2])
-    elseif o.op == "*" && n >= 1
-        # At most one factor moves with the loop (`_affine_idx_expr`); the
-        # product of the constant ones scales it.
+        _AffineForm(c0, c)
+    elseif n == 1                                   # `-` or `neg`
+        _AffineForm(-parts[1].c0, -parts[1].c)
+    elseif op == "-"
+        _AffineForm(parts[1].c0 - parts[2].c0, parts[1].c .- parts[2].c)
+    else                                            # `*`
         k = 1; var = nothing
-        for (c0, c) in parts
-            if any(!iszero, c)
-                var === nothing || return nothing
-                var = (c0, c)
+        for (j, p) in enumerate(parts)
+            if _names_no_loop(o.args[j], idx_names)
+                k *= p.c0
             else
-                k *= c0
+                var = p
             end
         end
-        var === nothing && return (k, zeros(Int, D))
-        return (k * var[1], k .* var[2])
+        var === nothing ? _AffineForm(k, zeros(Int, D)) : _AffineForm(k * var.c0, k .* var.c)
     end
-    return nothing
+    (single && count(!iszero, r.c) > 1) && return nothing
+    return r
 end
+
+# Whether a subscript is structurally affine in the loop indices `idx`.
+_affine_idx_expr(e::ASTExpr, idx::AbstractVector{String}) = _affine_form(e, idx) !== nothing
+_affine_idx_expr(e::ASTExpr, idx) = _affine_form(e, collect(String, idx)) !== nothing
 
 # The body's `_FastKey`, or `false`. `branch` is its one branch, `id` that
 # branch key's number.
@@ -295,9 +330,9 @@ function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
         (length(rec.lo) == n && length(rec.hi) == n && length(aff[2]) == n) || return false
         c0 = Int[]; c = Vector{Int}[]
         for a in rec.idx_args
-            r = _affine_int_coeffs(a, idx_names)
+            r = _affine_form(a, idx_names)
             r === nothing && return false
-            push!(c0, r[1]); push!(c, r[2])
+            push!(c0, r.c0); push!(c, r.c)
         end
         push!(los, rec.lo); push!(his, rec.hi); push!(c0s, c0); push!(cs, c)
         push!(bases, aff[1]); push!(strs, aff[2])
@@ -439,49 +474,6 @@ end
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
 # looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
-
-# Is this subscript expression an AFFINE function of the loop indices — a sum of
-# integer literals and loop-index terms with integer coefficients? Such an
-# expression cannot deviate from its own affine model at ANY cell, so it can
-# never open a cut and never has to be evaluated for the signature. Everything
-# else (a clamp `max(k-1,1)`, a fold, a `mod`, a gather through a const table, a
-# division, a registered function) is classified NON-affine and DOES get its
-# per-cell deviation keyed. Conservative in the safe direction: mis-classifying
-# an affine expression as non-affine only costs a per-cell evaluation, while the
-# reverse is impossible -- the recognizer admits nothing but `+ - neg *`.
-function _affine_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return (e::NumExpr).value == round((e::NumExpr).value)
-    e isa VarExpr && return ((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    o = e::OpExpr
-    (
-        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
-            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
-            o.filter === nothing && o.key === nothing && o.values === nothing
-    ) || return false
-    if o.op == "+" || o.op == "-"
-        return _allof(a -> _affine_idx_expr(a, idxset), o.args)
-    elseif o.op == "neg"
-        return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
-    elseif o.op == "*"
-        nvar = 0
-        for a in o.args
-            _affine_idx_expr(a, idxset) || return false
-            _const_idx_expr(a, idxset) || (nvar += 1)
-        end
-        return nvar <= 1
-    end
-    return false
-end
-# Loop-index-free (hence constant over the loop) -- the multiplication guard.
-function _const_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return true
-    e isa VarExpr && return !((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    return _allof(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
-end
 
 # Classify (and cache) one branch's lane subscripts: `true` for an argument that
 # is NOT structurally affine in the loop indices and therefore has to be
