@@ -58,10 +58,10 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units = "1", defaul
     # Three ARRAY observeds over one index set reading each other elementwise:
     # gamfac -> hpbl -> wscale -> gamfac. The fourth observed, `in_pbl`, is the
     # whole reason the fixture has this shape — it is declared, defined and
-    # referenced perfectly well and merely reads `hpbl`, and it is the name the
-    # build used to report (`E_TREEWALK_UNBOUND_NAME: 'in_pbl'`) because it is
-    # what the materialization walk happened to try first after the cycle
-    # stalled. A binding that names it has misattributed the defect.
+    # referenced perfectly well and merely reads `hpbl`, and it is what a
+    # materialization walk may try first after the cycle stalls
+    # (`E_TREEWALK_UNBOUND_NAME: 'in_pbl'`). A binding that names it has
+    # misattributed the defect.
     @testset "tests/invalid/observed_cycle_array_elementwise.esm is rejected" begin
         path = joinpath(
             TESTUTILS_REPO_ROOT, "tests", "invalid",

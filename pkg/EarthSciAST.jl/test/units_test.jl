@@ -155,8 +155,8 @@ using Unitful
         @test dimension(P("°C")) == Unitful.𝚯
 
         # `h` is the HOUR. In Unitful `u"h"` is PLANCK'S CONSTANT, which is why
-        # this registry does not delegate to `uparse`: `L/h` used to parse as
-        # litre-per-joule-second and made every pharmacokinetic fixture look
+        # this registry does not delegate to `uparse`: there `L/h` parses as
+        # litre-per-joule-second and makes every pharmacokinetic fixture look
         # dimensionally inconsistent.
         @test dimension(P("h")) == Unitful.𝐓
         @test dimension(P("L/h")) == Unitful.𝐋^3 / Unitful.𝐓
@@ -784,7 +784,7 @@ using Unitful
         @test inferred_units isa Union{String, Nothing}
     end
 
-    @testset "Cross-binding units fixtures (gt-gtf)" begin
+    @testset "Cross-binding units fixtures" begin
         # Wire the canonical units fixtures into the Julia binding so
         # that every binding agrees on what these files mean. These fixtures
         # are deliberately shared across Julia/Python/Rust/TypeScript/Go.

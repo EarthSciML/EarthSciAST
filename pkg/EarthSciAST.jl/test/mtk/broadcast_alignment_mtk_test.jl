@@ -13,7 +13,7 @@ include("../testutils.jl")  # _v/_op builders
 @testset "MTK exporter speaks the same `fn` vocabulary" begin
     # The shared `tests/fixtures/faq/` corpus runs through the MTK exporter,
     # not the tree-walk evaluator, so its `broadcast` vocabulary must be the same
-    # one `validate()` accepts. It used to be a hand-listed dozen ops; it is now
+    # one `validate()` accepts. It is
     # derived from the registry (arithmetic + elementary rows with a scalar fn).
     MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
     @test MTKExt !== nothing

@@ -176,9 +176,8 @@ end
 # An `enums` member may be ANY integer — negative, zero or positive
 # (esm-spec §9.3; CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a Position").
 #
-# The schema used to carry `minimum: 1` on
-# `EnumDeclaration.additionalProperties`, and `coerce_enums` mirrored it with
-# an `int_v <= 0` rejection, so a zero-valued identifier could not be named.
+# A `minimum: 1` on `EnumDeclaration.additionalProperties`, or an `int_v <= 0`
+# rejection in `coerce_enums`, would leave a zero-valued identifier unnameable.
 # MOVES has load-bearing ones: `operatingmode.opModeID = 0` is Braking (an
 # emitting mode with its own rate, not an absence) and
 # `opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes

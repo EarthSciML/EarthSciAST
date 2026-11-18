@@ -1,9 +1,9 @@
-# Foundation test for the unified access-kernel IR (ess-affine): hand-build a
+# Foundation test for the unified access-kernel IR: hand-build a
 # structured (affine, periodic) and an unstructured (indirect, variable-valence)
 # kernel and check the evaluator is BIT-IDENTICAL to a per-cell reference.
 # Exercises _eval_acc / _run_acc_kernel! and every access descriptor + bound
-# kind, plus the codegen tier (the compiled runner that replaced the retired
-# Float64 lane tape) on the same hand-built kernels.
+# kind, plus the codegen tier (the compiled runner) on the same hand-built
+# kernels.
 using Test
 using EarthSciAST
 const E = EarthSciAST
@@ -19,7 +19,7 @@ function _akf_cg_run!(du, u, p, t, kernels::Vector{E._AccKernel})
     return du
 end
 
-@testset "access-kernel IR foundation (ess-affine)" begin
+@testset "access-kernel IR foundation" begin
 
     # ---------- STRUCTURED: 3-wide periodic stencil D(q[i,j,k]) = (qW - 2qC) + qE ----------
     @testset "structured affine periodic ≡ per-cell (N=$N1×$N2×$N3)" for (N1, N2, N3) in ((7, 7, 7), (16, 5, 3), (32, 8, 4))

@@ -1,4 +1,4 @@
-# Unit test for the affine-build lowering (ess-affine): `_lower_to_access` turns a
+# Unit test for the affine-build lowering: `_lower_to_access` turns a
 # compiled sentinel spine template (the SAME kind `_stencilize`+`_compile` produce
 # — `_NK_STATE(idx=-k)` lane leaves, invariant fixed-slot leaves, params, literals)
 # into an access spine + descriptor table, and the resulting `_AccKernel` must be

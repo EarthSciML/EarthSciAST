@@ -1,11 +1,11 @@
-# Allocation tests for the tree-walk PDE RHS (ess-9cc).
+# Allocation tests for the tree-walk PDE RHS.
 #
-# The codebase's FIRST allocation test. It pins the hard property that the
+# It pins the hard property that the
 # in-place RHS `f!(du, u, p, t)` the build returns allocates NOTHING per
 # call in steady state — at two+ grid sizes, so the property is N-independent
 # (no per-cell allocation hiding behind a small absolute number). This guards the
-# zero-allocation discipline of the vectorized array-kernel runner (ess-dhq +
-# ess-9cc): `@views`/gather slices, preallocated per-node scratch buffers, fused
+# zero-allocation discipline of the vectorized array-kernel runner:
+# `@views`/gather slices, preallocated per-node scratch buffers, fused
 # in-place broadcasts, in-place semiring folds, and an explicit `du` scatter
 # (never `du[slots] .= …`, whose `dotview` allocates a SubArray).
 #
@@ -119,9 +119,9 @@ function _advection_esm(n)
 end
 
 
-# Live forcing gather (ess-14f.3): D(u[i]) = forcing[i] + u[i]. `forcing` is a
+# Live forcing gather: D(u[i]) = forcing[i] + u[i]. `forcing` is a
 # refreshable buffer bound BY REFERENCE via `param_arrays` and read through the
-# new `_VK_PGATHER` kernel — the zero-alloc dual of a frozen const-array gather.
+# `_VK_PGATHER` kernel — the zero-alloc dual of a frozen const-array gather.
 # Pins that a discrete-cadence forcing read stays allocation-free and
 # N-independent: the only Float64 arrays are the captured flat buffer and the
 # preallocated gather `slots`/`buf`, none allocated per call.
@@ -135,11 +135,10 @@ _forcing_gather_model(N) = ESM.Model(
     ]
 )
 
-# Scalar CSE over a LIVE forcing buffer (ess-qic): `F[1]*k` occurs three times
-# across two scalar equations, so it is now hoisted into the CSE prelude — whose
-# slot is filled by a live `_NK_PARAM_GATHER` read. Before ess-qic the gather's
-# un-canonicalizable payload made `_cse_key` decline, so this shape never reached
-# the prelude at all; pin that hoisting it keeps `f!` at 0 bytes (the prelude
+# Scalar CSE over a LIVE forcing buffer: `F[1]*k` occurs three times
+# across two scalar equations, so it is hoisted into the CSE prelude — whose
+# slot is filled by a live `_NK_PARAM_GATHER` read. Pin that hoisting it keeps
+# `f!` at 0 bytes (the prelude
 # scratch is preallocated at build; the gather is a bare indexed load into the
 # aliased flat buffer).
 #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
@@ -193,7 +192,7 @@ const _TWALLOC_CHILD = get(ENV, "ESS_TWALLOC_CHILD", "") == "1"
 
 if !_TWALLOC_CHILD
     withenv(_SERIAL_PIN...) do
-        @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
+        @testset "tree_walk PDE RHS is allocation-free" begin
 
             @testset "vectorized stencil RHS: 0 bytes, N-independent" begin
                 # Two+ grid sizes — the steady-state allocation must be EXACTLY 0 at
@@ -218,7 +217,7 @@ if !_TWALLOC_CHILD
                 end
             end
 
-            @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent (ess-14f.3)" begin
+            @testset "vectorized forcing gather (param_arrays) RHS: 0 bytes, N-independent" begin
                 # Two+ grid sizes — the per-RHS allocation must be EXACTLY 0 at every size
                 # (a per-cell leak in the live forcing read would grow with N). Mirrors the
                 # stencil/reduction cases but exercises the `_VK_PGATHER` kernel.
@@ -232,7 +231,7 @@ if !_TWALLOC_CHILD
                 end
             end
 
-            @testset "CSE'd scalar forcing gather RHS: 0 bytes (ess-qic)" begin
+            @testset "CSE'd scalar forcing gather RHS: 0 bytes" begin
                 # The CSE prelude now hoists expressions built over a live forcing buffer.
                 # The hoisted slot is filled from a `_NK_PARAM_GATHER` read every call, so the
                 # zero-allocation discipline has to hold through the prelude too.

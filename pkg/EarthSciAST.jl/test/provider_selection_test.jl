@@ -1,4 +1,4 @@
-# Phase 1b — projection pushdown across the EarthSciAST↔EarthSciIO provider seam.
+# Projection pushdown across the EarthSciAST↔EarthSciIO provider seam.
 #
 # Exercises the neutral, 1-based, per-axis `selection` on `provider_sample` and
 # its translation (in ext/EarthSciASTEarthSciIOExt.jl) into EarthSciIO's native

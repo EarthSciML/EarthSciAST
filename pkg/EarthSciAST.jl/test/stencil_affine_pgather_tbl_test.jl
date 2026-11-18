@@ -6,8 +6,8 @@
 # — the GEOS-FP Mz/OMEGA column-wall pattern that observed inlining splices
 # into every stencil lane) has a non-affine flat index across a box, and the
 # clamp transition is invisible to the per-cell cut signature, so the corner
-# verification used to throw the WHOLE equation onto the per-cell fallback.
-# It now lowers to `_AccArrTblBox`: a per-box table of linear INDICES into the
+# verification cannot hold. It lowers to `_AccArrTblBox` instead of sending the
+# WHOLE equation to the per-cell fallback: a per-box table of linear INDICES into the
 # ALIASED live buffer (indices static, values read live).
 #
 # Two-way oracle per model, everything bit-identical:

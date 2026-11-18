@@ -44,7 +44,7 @@ function _cf_lane(arr, ix, n)
     )
 end
 
-@testset "LANE_CONST fold is index-derived, not value-sampled (ess-affine)" begin
+@testset "LANE_CONST fold is index-derived, not value-sampled" begin
     @testset "unit: corner-coinciding weights do NOT fold to a literal" begin
         # W[j] over j∈1:3 reads (1, 5, 1): the corners agree, the interior does not.
         r = _cf_lane([1.0, 5.0, 1.0], _v("j"), 3)

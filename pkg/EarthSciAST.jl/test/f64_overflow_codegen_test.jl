@@ -1,11 +1,9 @@
-# The Float64 overflow routing (ess-f64ofl, codegen_kernel.jl).
+# The Float64 overflow routing (codegen_kernel.jl).
 #
-# Kernels the PRIMARY codegen emission declines on the node budget used to run
-# the per-cell interpreter at Float64. The dual overflow tier (ess-dualfp)
-# re-emits them into a second generated function for non-Float64 `T`;
-# ess-f64ofl routes Float64 calls through that SAME function too. With the
-# routing off — which is `compiler=:interpreter`, since no environment variable
-# selects an evaluator any more — the residual Float64 kernels run the per-cell
+# The dual overflow tier re-emits kernels the PRIMARY codegen emission declines
+# on the node budget into a second generated function for non-Float64 `T`; the
+# Float64 overflow routing sends Float64 calls through that SAME function too.
+# With the routing off — which is `compiler=:interpreter` — the residual Float64 kernels run the per-cell
 # interpreter, which is the slower but bit-identical oracle.
 #
 # Pinned here, on the dual_fast_path_test overflow-class fixture (primary

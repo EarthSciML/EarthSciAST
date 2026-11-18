@@ -1,5 +1,5 @@
 # Differential + behavioural test for CUMULATIVE (prefix) reductions on the
-# O(N) scan path (ess-scan, tree_walk/scan.jl).
+# O(N) scan path (tree_walk/scan.jl).
 #
 # A prefix reduction is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1). The build recognizes the FORWARD
@@ -89,7 +89,7 @@ function _scan_du(model; tier = :scan)
     end
 end
 
-@testset "cumulative (prefix) reductions — O(N) scan (ess-scan)" begin
+@testset "cumulative (prefix) reductions — O(N) scan" begin
 
     @testset "forward scan ≡ per-cell reference, bitwise" begin
         for n in (1, 2, 3, 8, 33, 64), filt in ("<=", "<"),

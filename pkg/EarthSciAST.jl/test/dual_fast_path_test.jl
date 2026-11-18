@@ -1,13 +1,13 @@
-# The Dual overflow codegen tier (ess-dualfp, codegen_kernel.jl).
+# The Dual overflow codegen tier (codegen_kernel.jl).
 #
 # Kernels the PRIMARY codegen emission declines — in practice on the node
-# budget (ESS_CODEGEN_NODE_BUDGET), which bounds Float64 build latency — used
-# to drop, under non-Float64 value types
+# budget (ESS_CODEGEN_NODE_BUDGET), which bounds Float64 build latency — would
+# otherwise drop, under non-Float64 value types
 # (ForwardDiff `Dual` in a stiff-solver Jacobian), to the
 # per-cell interpreter `_run_acc_kernel!`: slow and allocating on the hot AD
 # path. The dual overflow tier re-emits those residual kernels into a second
-# generated function called under non-Float64 `T` (and, since ess-f64ofl, at
-# Float64 too when that routing is armed).
+# generated function called under non-Float64 `T` (and at Float64 too when the
+# Float64 overflow routing is armed).
 #
 # Pinned here, on a fixture whose kernels are all budget-declinable (primary
 # codegen declined via a forced zero budget):

@@ -8,12 +8,13 @@
 #     index(1 + cos(pi*zc), j)
 #
 # and `_resolve_indices_op`'s push-down branch has to distribute that gather over
-# the elementwise combination. It used to test only the IMMEDIATE operands for
-# array-ness: `1` is a literal and `cos(pi*zc)` is neither a producer node nor a
-# variable, so nothing was wrapped, the gather was dropped, and the array leaf
-# `zc` reached `_compile` bare as `E_TREEWALK_UNBOUND_VARIABLE: zc`. The operand
-# test (`_index_pushdown_arrayish`) now looks THROUGH nested elementwise ops, so
-# the gather lands on the leaves: `1 + cos(pi*index(zc, j))`.
+# the elementwise combination. Testing only the IMMEDIATE operands for
+# array-ness is not enough: `1` is a literal and `cos(pi*zc)` is neither a
+# producer node nor a variable, so nothing would be wrapped, the gather would be
+# dropped, and the array leaf `zc` would reach `_compile` bare as
+# `E_TREEWALK_UNBOUND_VARIABLE: zc`. The operand test (`_index_pushdown_arrayish`)
+# looks THROUGH nested elementwise ops, so the gather lands on the leaves:
+# `1 + cos(pi*index(zc, j))`.
 #
 # The two spellings the issue reports as already working — the same body written
 # as an explicit `aggregate(i from lev; … index(zc, i) …)` gather, and the same

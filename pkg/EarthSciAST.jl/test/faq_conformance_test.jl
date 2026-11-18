@@ -1,6 +1,5 @@
 # Cross-binding conformance tests for the M1 semiring / index-set worked
-# examples (bead ess-my4.1.5) and the M2 value-equality join.on worked examples
-# (bead ess-my4.2.5).
+# examples and the M2 value-equality join.on worked examples.
 #
 # Loads the shared fixtures under tests/valid/faq/ that carry inline
 # `tests` blocks and evaluates each through the build. Julia, Rust, and
@@ -45,7 +44,7 @@ function _eval_aggregate_fixture(
     return du, local_vm
 end
 
-@testset "aggregate worked-example conformance (ess-my4.1.5)" begin
+@testset "aggregate worked-example conformance" begin
     # 7.1 FVM diffusion as the default sum_product ring, plus the empty-range
     # 0̄ identity: degenerate[i] = Σ_{j∈∅} i·j = 0 (sum_product 0̄).
     @testset "fvm_diffusion_sum_product" begin
@@ -89,7 +88,7 @@ end
         @test du[vmap["emissions[2]"]] ≈ 12.0
     end
 
-    # §7.3 DOWNSTREAM geometric FAQ (bead ess-my4.3.10): the second half of the
+    # §7.3 DOWNSTREAM geometric FAQ: the second half of the
     # value-invention end-to-end chain. The first half (mesh-edge enumeration via
     # bool_and_or + distinct over edge keys) MINTS the `edges` index set as a
     # CONST-fold whose byte-identical output is pinned by the determinism
@@ -113,7 +112,7 @@ end
 # `undefined_index_set` — no implicit interval is inferred for an undeclared
 # name. Schema-only bindings (TypeScript/Go) accept it; see
 # tests/invalid/expected_errors.json (resolver_only entry).
-@testset "invalid: undeclared {from} index set rejected (ess-my4.1.6)" begin
+@testset "invalid: undeclared {from} index set rejected" begin
     path = joinpath(
         _AGG_REPO_ROOT, "tests", "invalid", "faq",
         "undeclared_from_name.esm"
@@ -214,13 +213,13 @@ end
     @test result.is_valid
 end
 
-# M2 join.on conformance (bead ess-my4.2.5). Evaluates the shared join fixtures
+# M2 join.on conformance. Evaluates the shared join fixtures
 # under tests/valid/faq/. Julia and Python check the SAME inline expected
 # values; Rust additionally checks the degenerate fixture (the value-equality
 # m·n engine is M3 in Rust, so the m2m fixtures are Julia/Python here). The
 # RFC §5.3 / §5.7 / §7.2 semantics: inner-only; m·n defined; output in declared
 # index order (permutation-invariant value); float/null keys rejected at build.
-@testset "join.on worked-example conformance (ess-my4.2.5)" begin
+@testset "join.on worked-example conformance" begin
     # §7.2 MOVES running-exhaust contraction as the degenerate positional join:
     # the join key columns are the loop indices, so the gate admits every
     # (sourceType x fuelType) combination — byte-identical to the join-free

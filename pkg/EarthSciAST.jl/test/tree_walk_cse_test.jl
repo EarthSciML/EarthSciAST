@@ -1,4 +1,4 @@
-# Common-subexpression elimination on the tree-walk evaluator (ess-r7h).
+# Common-subexpression elimination on the tree-walk evaluator.
 #
 # Approach (a) eval-time memo: a subexpression that occurs K times is compiled
 # once into a prelude that fills a per-call scratch cache, and each occurrence
@@ -30,7 +30,7 @@ _cse_op(op, args...; kw...) = OpExpr(op, ESM.ASTExpr[args...]; kw...)
 _cse_D(varname) = _cse_op("D", _cse_v(varname); wrt = "t")
 _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
 
-@testset "tree_walk common-subexpression elimination (ess-r7h)" begin
+@testset "tree_walk common-subexpression elimination" begin
 
     # ----------------------------------------------------------------
     # #2 evaluate-once: intra-RHS + cross-equation sharing of `a+b`.
@@ -131,8 +131,7 @@ _cse_const(v) = OpExpr("const", ESM.ASTExpr[]; value = v)
     end
 
     # ----------------------------------------------------------------
-    # Cross-equation CSE on a realistic reaction network (the redundancy the
-    # bead calls out). The two reaction fluxes appear in every species' balance.
+    # Cross-equation CSE on a realistic reaction network. The two reaction fluxes appear in every species' balance.
     #   d[A] = -f1 + f2 ; d[B] = -f1 + f2 ; d[C] = f1 - f2
     #   f1 = k1*A*B , f2 = k2*C
     # ----------------------------------------------------------------
@@ -244,11 +243,11 @@ end
     end
 
     # ----------------------------------------------------------------
-    # The regression itself: a guarded `sqrt(a)` at a NEGATIVE `a`, written twice.
+    # A guarded `sqrt(a)` at a NEGATIVE `a`, written twice.
     #   D(a) =     ifelse(a >= 0, sqrt(a), 0)
     #   D(b) = 2 * ifelse(a >= 0, sqrt(a), 0)     ← the second occurrence
-    # One occurrence always worked; two used to throw `DomainError with -1.0` from
-    # inside the prelude loop.
+    # Two occurrences must not hoist it into the prelude, where it would throw
+    # `DomainError with -1.0`.
     # ----------------------------------------------------------------
     @testset "a guarded sqrt is not hoisted out of its ifelse" begin
         guarded() = _cse_op(
@@ -283,8 +282,8 @@ end
 
     # ----------------------------------------------------------------
     # Same story for a short-circuiting `or`: `log(a)` sits in arg 2, which is only
-    # evaluated when arg 1 is false. Two occurrences used to hoist it into the
-    # prelude and throw at `a = -1`.
+    # evaluated when arg 1 is false. Two occurrences must not hoist it into the
+    # prelude, where it would throw at `a = -1`.
     #   D(a) = D(b) = or(a < 0, log(a) > 1)
     # ----------------------------------------------------------------
     @testset "a short-circuited log is not hoisted out of its `or`" begin
@@ -446,18 +445,18 @@ end
 end
 
 # ================================================================
-# CSE over LIVE forcing buffers (ess-qic).
+# CSE over LIVE forcing buffers.
 #
 # A resolved `param_arrays` gather is an argless `index` node carrying a
 # `_PGatherRef` runtime payload in `value`. `canonical_json` emits `value`, and
-# a `_PGatherRef` is not a JSON type — so keying ANY ancestor of a live gather
-# threw `E_CANONICAL_BAD_CONST`, `_cse_key` caught it and declined, and CSE was
-# silently switched off for every expression built over a forcing buffer (the
-# met→physics stack, i.e. the biggest CSE target there is). The gather now keys
-# as a leaf with a canonicalizable `(buffer name, linear offset)` identity, and
-# stays CSE-opaque so it is never itself hoisted.
+# a `_PGatherRef` is not a JSON type, so keying an ancestor of a live gather
+# through it would throw `E_CANONICAL_BAD_CONST` and silently switch CSE off for
+# every expression built over a forcing buffer (the met→physics stack, i.e. the
+# biggest CSE target there is). The gather therefore keys as a leaf with a
+# canonicalizable `(buffer name, linear offset)` identity, and stays CSE-opaque
+# so it is never itself hoisted.
 # ================================================================
-@testset "tree_walk CSE over live forcing buffers (ess-qic)" begin
+@testset "tree_walk CSE over live forcing buffers" begin
 
     # `F[1]*k` three times over: twice inside D(x), once as D(y).
     #   D(x) = sin(F[1]*k) + cos(F[1]*k);   D(y) = F[1]*k
@@ -479,7 +478,7 @@ end
         end
     )
 
-    @testset "a shared expression over a LIVE forcing buffer is cached (ess-qic)" begin
+    @testset "a shared expression over a LIVE forcing buffer is cached" begin
         # Baseline: bound as a FROZEN const array the gather folds to a literal, so
         # `F[1]*k` is a plain parameter product — 1 slot, 3 occurrences.
         _, _, _, _, _, d_const = ESM.Internal.build(
@@ -490,7 +489,6 @@ end
         @test d_const.stats.n_cse_occurrences == 3
 
         # The SAME model with `F` bound as a LIVE buffer must share identically.
-        # Before ess-qic this reported 0 slots / 0 occurrences.
         buf = [5.0, 6.0]
         f!, u0, p, _ts, vm, d_live = ESM.Internal.build(
             _pg_shared_model();
@@ -508,7 +506,7 @@ end
         @test du[vm["M.y"]] === F1 * k
     end
 
-    @testset "live-gather keys are distinct per OFFSET and per BUFFER (ess-qic)" begin
+    @testset "live-gather keys are distinct per OFFSET and per BUFFER" begin
         # The one way this change could be catastrophic: if two gathers collided on a
         # key, CSE would MERGE two different reads into one slot and the model would
         # compute silently wrong numbers. Three products that must NOT share —
@@ -553,7 +551,7 @@ end
         @test du[vm["M.w"]] === 3.0 * k
     end
 
-    @testset "a CSE'd live gather still reads the buffer LIVE (ess-qic)" begin
+    @testset "a CSE'd live gather still reads the buffer LIVE" begin
         # Hoisting caches the value for one `(p, t, forcing-epoch)` stamp (B3): the
         # buffer cannot change mid-call, and an in-place refresh BETWEEN calls must
         # show through the cached slot — through the epoch bump when the refresh
@@ -629,7 +627,7 @@ end
         end
     )
 
-    @testset "discrete-cadence cache gathers are CSE'd, distinct, and refresh (ess-qic)" begin
+    @testset "discrete-cadence cache gathers are CSE'd, distinct, and refresh" begin
         src = [1.0, 1.0]
         dm = ESM.DiscreteMaterializer()
         f!, u0, p, _ts, vm, rep = ESM.Internal.build(
@@ -670,11 +668,11 @@ end
 end
 
 # ================================================================
-# The CONST-CADENCE tier of the prelude (4qf; audit finding #5).
+# The CONST-CADENCE tier of the prelude.
 #
-# The prelude used to refill EVERY slot on EVERY call. Many slots are pure parameter
+# Many prelude slots are pure parameter
 # algebra — an Arrhenius factor `A*exp(-Ea/(R*Tref))`, all four leaves parameters —
-# and `p` does not move between the stages of a step. `f!` now refills the CONST slots
+# and `p` does not move between the stages of a step. `f!` refills the CONST slots
 # only when `p` has changed (`_classify_const_slots` / `_cse_const_stale`).
 #
 # THE FAILURE MODE THESE TESTS EXIST FOR IS SILENT. A const tier that freezes too much
@@ -723,7 +721,7 @@ _ct_arrhenius() = ESM.Model(
 
 _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
 
-@testset "tree_walk CSE const-cadence tier (4qf)" begin
+@testset "tree_walk CSE const-cadence tier" begin
 
     # ----------------------------------------------------------------
     # (5) The probe. The audit measured "5 of 5 prelude slots state-free AND

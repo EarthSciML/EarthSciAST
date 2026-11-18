@@ -235,10 +235,9 @@ end
     end
 
     @testset "a data source may NOT be a model subsystem" begin
-        # The 0.x shape mounted a loader under `models.<M>.subsystems.<key>`.
-        # From 1.0.0 the subsystems union is [Model, SubsystemRef] only, so the
-        # loader-shaped entry is no longer a legal subsystem and the document is
-        # rejected rather than silently reinterpreted.
+        # The subsystems union is [Model, SubsystemRef] only, so a loader
+        # mounted under `models.<M>.subsystems.<key>` is not a legal subsystem
+        # and the document is rejected rather than silently reinterpreted.
         tmp_dir = mktempdir()
         try
             path = joinpath(tmp_dir, "main.esm")
@@ -730,11 +729,10 @@ end
     end
 
     @testset "load_path(::IO) runs the same pipeline as load_path(::String)" begin
-        # REGRESSION: `load_path(::IO)` used to call the typed pipeline directly,
-        # skipping top-level `{ref}` inlining AND `resolve_subsystem_refs!`.
-        # A stream-loaded document therefore kept its subsystem refs as
-        # unresolved `SubsystemRef`s — which `flatten` SILENTLY SKIPS. Same
-        # bytes, smaller system, no error.
+        # `load_path(::IO)` must run top-level `{ref}` inlining AND
+        # `resolve_subsystem_refs!`. A stream-loaded document that kept its
+        # subsystem refs as unresolved `SubsystemRef`s would be SILENTLY
+        # SKIPPED by `flatten`: same bytes, smaller system, no error.
         tmp_dir = mktempdir()
         try
             write(

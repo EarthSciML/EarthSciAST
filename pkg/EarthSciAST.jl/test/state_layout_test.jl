@@ -1,8 +1,8 @@
 # The flat state layout (src/tree_walk/state_layout.jl): `StateLayout` must
-# answer every lookup, and iterate, exactly as the `Dict{String,Int}` of one
-# `_cell_key` string per cell it replaced; the discovery arithmetic must find
+# answer every lookup, and iterate, exactly as a `Dict{String,Int}` of one
+# `_cell_key` string per cell would; the discovery arithmetic must find
 # the same cells as the per-cell enumeration; `_InlineICs` must read as the
-# per-cell keys an inline profile used to be expanded into.
+# per-cell keys an inline profile expands to.
 using Test
 using EarthSciAST
 

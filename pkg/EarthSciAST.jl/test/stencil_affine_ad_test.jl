@@ -1,7 +1,7 @@
-# AD + out-of-place differential test for the affine access-kernel path (ess-affine).
+# AD + out-of-place differential test for the affine access-kernel path.
 #
-# Task #7 gate. Two properties the affine path must inherit from the per-cell one
-# now that `_eval_acc` is eltype-generic and `_make_rhs_oop` runs acc kernels:
+# Two properties the affine path must inherit from the per-cell one, given that
+# `_eval_acc` is eltype-generic and `_make_rhs_oop` runs acc kernels:
 #
 #   1. The ForwardDiff Jacobian of an AFFINE-built in-place `f!` is bit-identical
 #      to the per-cell reference's — over STATE and over a PARAMETER. Same primal
@@ -101,7 +101,7 @@ function _ad_param_model(N; alpha = 0.5)
     )
 end
 
-@testset "affine access kernels: AD + out-of-place (ess-affine)" begin
+@testset "affine access kernels: AD + out-of-place" begin
 
     # ---- 1. State Jacobian: affine ≡ per-cell, bit-for-bit ----
     @testset "state Jacobian ≡ per-cell — 1D 2nd-diff (N=$N)" for N in (8, 24)

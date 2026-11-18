@@ -379,7 +379,7 @@ end
         # `mem[i, j]` (a const gather of an output and a contracted counter)
         # and `y[j]` (a state gather that is out of `y`'s range, the zero
         # ghost, at the longest parent's last member). Bit-identical to the
-        # interpreter; the gathers no longer resolve subscripts per term.
+        # interpreter; the gathers do not resolve subscripts per term.
         # `C[j]` past its end is the run's error under both compilers.
         sizes = [1, 3, 2, 0, 4]
         n, mx, nf = length(sizes), maximum(sizes), sum(sizes)

@@ -1,7 +1,6 @@
 # Differential test for LIVE-forcing (pgather) gathers on the affine access-kernel
-# path (ess-affine). A per-cell forcing read `index(forcing, i…)` whose index
-# varies with the loop used to force a whole-equation fallback (`_derive_lane_repl`
-# threw on LANE_PGATHER). It is now lowered to `_AccForcingBox` over the *aliased*
+# path. A per-cell forcing read `index(forcing, i…)` whose index varies with the
+# loop is lowered to `_AccForcingBox` over the *aliased*
 # `_PGatherArray.flat` buffer: the flat linear index is finite-differenced across
 # unit loop steps and verified affine at every box corner, exactly like a const
 # box, EXCEPT the value is never folded to a literal (the buffer is refreshed in
@@ -92,7 +91,7 @@ function _pg_2d_model(N)
     return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
-@testset "affine live-forcing pgather ≡ per-cell (differential, ess-affine)" begin
+@testset "affine live-forcing pgather ≡ per-cell (differential)" begin
     @testset "pure forcing D(u[i])=forcing[i] (N=$N)" for N in (8, 32)
         buf = Float64[0.5 + 0.2k for k in 1:N]
         ics = Dict("M.u[$k]" => 0.0 for k in 1:N)

@@ -91,10 +91,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
     end
 
     @testset "gate: template sub-kernels take the vectorized acc form" begin
-        # gordian subcall-vectorize: a template-body sub-kernel (`K.subs` /
-        # `_NK_SUBCALL`) used to force the per-cell FALLBACK, which addresses the
-        # state one element at a time and so cannot be compiled. It now plans each
-        # variant as its OWN whole-array op over the parent lanes, splicing the
+        # A template-body sub-kernel (`K.subs` / `_NK_SUBCALL`) must not force the
+        # per-cell FALLBACK, which addresses the state one element at a time and
+        # so cannot be compiled. The build plans each variant as its OWN whole-array op over the parent lanes, splicing the
         # lane-aligned result into the parent operand stream. Pin structurally:
         # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
         # which is the property a compiled backend needs — the emitter refuses a

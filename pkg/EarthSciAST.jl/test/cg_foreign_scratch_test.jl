@@ -1,5 +1,4 @@
-# Shared-prelude (xcse) cache reads in the codegen tier (ess-cgfsc,
-# codegen_kernel.jl).
+# Shared-prelude (xcse) cache reads in the codegen tier (codegen_kernel.jl).
 #
 # The cross-kernel fn-CSE pass (xcse.jl, plan B4) rewrites kernel
 # invariant-tier defs into bare `_NK_CACHED` reads of the build's SCALAR
@@ -77,7 +76,7 @@ _cfs_ics(N) = Dict{String, Float64}(
         for (j, x) in enumerate(("a", "b")), k in 1:N
 )
 
-@testset "codegen shared-prelude reads (ess-cgfsc)" begin
+@testset "codegen shared-prelude reads" begin
     N = 8
     model, ics = _cfs_model(N), _cfs_ics(N)
 
