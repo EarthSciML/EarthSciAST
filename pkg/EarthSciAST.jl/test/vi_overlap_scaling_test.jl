@@ -254,7 +254,7 @@ end
             "Mirror" => Dict(
                 "variables" => merge(
                     _rectvars,
-                    Dict("P" => Dict("type" => "unknown", "shape" => ["points"]))
+                    Dict("P" => Dict("type" => "unknown", "shape" => ["points"], "default" => 0.0))
                 ),
                 "equations" => [
                     Dict(

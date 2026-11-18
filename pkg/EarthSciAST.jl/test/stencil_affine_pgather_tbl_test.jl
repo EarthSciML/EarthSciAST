@@ -31,11 +31,13 @@ _pgt_q(ics) = Dict("M.$k" => v for (k, v) in ics)
 function _pgt_build3(model, ics, bufs)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
+        dm = ESM.DiscreteMaterializer()
         b = ESM.Internal.build(
             model;
-            initial_conditions = _pgt_q(ics), param_arrays = bufs, compiler = compiler
+            initial_conditions = _pgt_q(ics), param_arrays = bufs, compiler = compiler,
+            materialize_out = dm
         )
-        out[tag] = (b.f!, b.u0, b.p, b.report.counts, b)
+        out[tag] = (b.f!, b.u0, b.p, b.report.counts, b, dm)
     end
     return out
 end
@@ -145,16 +147,21 @@ function _pgt_oracle(model, ics, bufs; refresh!)
     # LIVENESS: refresh the buffers in place; every path sees the new values
     # (the index tables are static, the VALUES are read through the aliased
     # buffer) and they still agree bit-for-bit. A state-free observed over a
-    # buffer is memoized on (p, t, forcing epoch), so the refresh is seen at
-    # a `t` not evaluated yet, and at an already-seen `t` once announced
-    # (`notify_forcing_refresh!`'s contract).
+    # buffer is either memoized on (p, t, forcing epoch), so the refresh is
+    # seen at a `t` not evaluated yet and at an already-seen `t` once announced
+    # (`notify_forcing_refresh!`'s contract), or cut into a discrete-cadence
+    # cache, which the refresh re-fills (`materialize!`, what a Problem's
+    # refresh callback runs after it writes a buffer).
+    rematerialize!() = foreach(tag -> b[tag][6].materialize!(), (:tbl, :ref))
     refresh!()
+    rematerialize!()
     du2 = Dict(tag => _pgt_eval(b[tag], 1.0) for tag in (:tbl, :ref))
     @test du2[:tbl] == du2[:ref]
     @test du2[:tbl] != du[:tbl]
     for buf in values(bufs)
         buf .= 0.5 .- 1.5 .* buf
     end
+    rematerialize!()
     ESM.notify_forcing_refresh!(b[:tbl][5])
     ESM.notify_forcing_refresh!(b[:ref][5])
     du3 = Dict(tag => _pgt_eval(b[tag], 1.0) for tag in (:tbl, :ref))

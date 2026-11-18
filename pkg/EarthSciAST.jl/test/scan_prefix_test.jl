@@ -34,8 +34,8 @@ _bits(v::AbstractVector{Float64}) = reinterpret(UInt64, v)
 # `u` is held fixed (D(u)=0) so the equation under test owns `c` alone.
 function _scan_model(n::Int; filt = "<=", reduce = "+", body = nothing)
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "c" => ESM.ModelVariable(ESM.UnknownVariable)
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+        "c" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0)
     )
     b = body === nothing ? _idx("u", _v("j")) : body
     rhs = ESM.OpExpr(
@@ -57,8 +57,8 @@ end
 # term build must not be asked to construct.
 function _scan_model_staggered(n::Int; filt = "<", reduce = "+")
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "c" => ESM.ModelVariable(ESM.UnknownVariable)
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+        "c" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0)
     )
     rhs = ESM.OpExpr(
         "faq", ESM.ASTExpr[]; output_idx = Any["i"],
@@ -110,8 +110,8 @@ end
         n, nk = 9, 5
         for filt in ("<=", "<"), red in ("+", "*", "max", "min")
             vars = Dict(
-                "u" => ESM.ModelVariable(ESM.UnknownVariable),
-                "c" => ESM.ModelVariable(ESM.UnknownVariable)
+                "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+                "c" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0)
             )
             rhs = ESM.OpExpr(
                 "faq", ESM.ASTExpr[]; output_idx = Any["i", "k"],
@@ -186,8 +186,8 @@ end
         n = 16
         m = _scan_model(n)                                   # j <= i
         vars = Dict(
-            "u" => ESM.ModelVariable(ESM.UnknownVariable),
-            "c" => ESM.ModelVariable(ESM.UnknownVariable)
+            "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+            "c" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0)
         )
         rhs = ESM.OpExpr(
             "faq", ESM.ASTExpr[]; output_idx = Any["i"],
@@ -311,8 +311,8 @@ end
         # recurrence on this axis at all.
         n = 8
         vars = Dict(
-            "u" => ESM.ModelVariable(ESM.UnknownVariable),
-            "c" => ESM.ModelVariable(ESM.UnknownVariable)
+            "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+            "c" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0)
         )
         rhs = ESM.OpExpr(
             "faq", ESM.ASTExpr[]; output_idx = Any["i"],
@@ -417,7 +417,7 @@ end
 
     @testset "a model with no prefix reduction carries no folds" begin
         n = 8
-        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0))
         plain = ESM.Model(
             vars, [
                 ESM.Equation(

@@ -38,8 +38,8 @@ _cs_q(d) = Dict{String, Any}("M.$k" => v for (k, v) in d)
 # affine in `j` alone while the output slot moves with both `i` and `j`.
 function _cs_model(N)
     vars = Dict{String, ESM_CS.ModelVariable}(
-        "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     ao2(body, lhs) = ESM_CS.OpExpr(
         "faq", ESM_CS.ASTExpr[];
@@ -163,8 +163,8 @@ end
     N, i0 = 40, 20
     perm = collect(1:N); perm[i0] = i0 + 1        # identity but for one swap
     vars = Dict{String, ESM_CS.ModelVariable}(
-        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     ao2(body) = ESM_CS.OpExpr(
         "faq", ESM_CS.ASTExpr[];
@@ -237,8 +237,8 @@ end
         end
     end
     vars() = Dict{String, ESM_CS.ModelVariable}(
-        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
 
     # 1-D: D(u[i]) = w[conn[i]]
@@ -285,7 +285,7 @@ end
     # swap reads the wrong element, and a table that is 1 at every corner derives
     # a zero stride and folds the whole box to one literal.
     cvars = Dict{String, ESM_CS.ModelVariable}(
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable; default = 0.0)
     )
     mc = ESM_CS.Model(
         cvars, [

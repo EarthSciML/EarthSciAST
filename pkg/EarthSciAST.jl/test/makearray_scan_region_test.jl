@@ -65,10 +65,10 @@ function _msr_nodes_model(n::Int, ncol::Int; filt = "<", top = :total)
     )
     cshape = ncol == 0 ? String[] : ["col"]
     vars = Dict(
-        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = [cshape; "lev"]),
-        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = [cshape; "lev_nodes"]),
-        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = [cshape; "lev_nodes"])
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = [cshape; "lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = [cshape; "lev_nodes"]),
+        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = [cshape; "lev_nodes"])
     )
     ci = ncol == 0 ? Pair[] : Pair["c" => "col"]
     cv = ncol == 0 ? ESM_MSR.ASTExpr[] : ESM_MSR.ASTExpr[_v("c")]
@@ -98,10 +98,10 @@ end
 # The layer-centre form: F = scan + 0.5·u·dz, whole-array arithmetic.
 function _msr_centre_model(n::Int; filt = "<")
     vars = Dict(
-        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"])
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"])
     )
     eqs = [
         ESM_MSR.Equation(
@@ -144,9 +144,9 @@ function _msr_divergence_model(n::Int, ncol::Int; top::Bool = false)
         ]
     )
     vars = Dict(
-        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["col", "lev"]),
-        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["col", "lev_nodes"])
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["col", "lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["col", "lev_nodes"])
     )
     div = _op(
         "/", _op(
@@ -206,10 +206,10 @@ end
 # `w` (so the right-hand side reads every cell of `F`); `u` is `lev`-shaped.
 function _msr_obs_model(def, fshape::Vector{String}, isets)
     vars = Dict(
-        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = ["lev"]),
-        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = fshape),
-        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape = fshape)
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = fshape),
+        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; default = 0.0, shape = fshape)
     )
     eqs = [
         ESM_MSR.Equation(
