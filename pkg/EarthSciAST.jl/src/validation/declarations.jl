@@ -212,8 +212,9 @@ end
 """
     validate_variable_map_units(file::EsmFile) -> Vector{StructuralError}
 
-Mirror of the flatten-time [`_check_variable_map_units`](@ref) (coupling_apply.jl)
-as a `validate()` structural check (F-6, esm-spec §4.7.6). A `variable_map`
+The flatten-time [`_check_variable_map_units`](@ref) rule as a `validate()`
+structural check (esm-spec §4.7.6); both read `_variable_map_unit_conflict`
+(coupling_apply.jl). A `variable_map`
 coupling entry with `transform == "identity"` whose `from` and `to` variables
 carry DECLARED units that are both present, non-empty, and DIFFERENT is a
 domain-unit mismatch — the identity map asserts the two variables are the same
@@ -227,17 +228,10 @@ by the whole entry.
 """
 function validate_variable_map_units(file::EsmFile)::Vector{StructuralError}
     errors = StructuralError[]
-    isempty(file.coupling) && return errors
     for (i, entry) in enumerate(file.coupling)
-        entry isa CouplingVariableMap || continue
-        entry.transform == "identity" || continue
-        src_units = _lookup_variable_units(file, entry.from)
-        tgt_units = _lookup_variable_units(file, entry.to)
-        # Absent (`nothing`) or empty units are legal — the mismatch is only a
-        # defect when BOTH sides declare a real, non-empty unit and they differ.
-        (src_units === nothing || tgt_units === nothing) && continue
-        (isempty(src_units) || isempty(tgt_units)) && continue
-        src_units == tgt_units && continue
+        conflict = _variable_map_unit_conflict(file, entry)
+        conflict === nothing && continue
+        src_units, tgt_units = conflict
         push!(
             errors, StructuralError(
                 "/coupling/$(i - 1)",
