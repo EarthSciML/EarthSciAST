@@ -61,7 +61,7 @@
                   "c"
                 ],
                 "dim": "lev",
-                "op": "grad"
+                "op": "upwind_gradient"
               },
               {
                 "args": [

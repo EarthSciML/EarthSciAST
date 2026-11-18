@@ -47,7 +47,7 @@
           "shape": [
             "cells"
           ],
-          "description": "div of an edge-field: the constrained rule fires"
+          "description": "x-derivative of an edge field: the constrained rule fires"
         },
         "div_cell": {
           "type": "unknown",
@@ -55,7 +55,7 @@
           "shape": [
             "cells"
           ],
-          "description": "div of a cell-field: constraint-excluded, stays unlowered"
+          "description": "x-derivative of a cell field: constraint-excluded, stays unlowered"
         }
       },
       "equations": [
@@ -72,10 +72,11 @@
         {
           "lhs": "div_cell",
           "rhs": {
-            "op": "div",
+            "op": "D",
             "args": [
               "F_cell"
-            ]
+            ],
+            "wrt": "x"
           }
         }
       ]

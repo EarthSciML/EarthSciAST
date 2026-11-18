@@ -46,11 +46,11 @@
                 "op": "/",
                 "args": [
                   {
-                    "op": "grad",
+                    "op": "D",
                     "args": [
                       "pressure"
                     ],
-                    "dim": "x"
+                    "wrt": "x"
                   },
                   "density"
                 ]
@@ -79,10 +79,11 @@
               -1,
               "density",
               {
-                "op": "div",
+                "op": "D",
                 "args": [
                   "velocity"
-                ]
+                ],
+                "wrt": "x"
               }
             ]
           }
@@ -136,10 +137,17 @@
                 ]
               },
               {
-                "op": "laplacian",
+                "op": "D",
                 "args": [
-                  "temperature"
-                ]
+                  {
+                    "op": "D",
+                    "args": [
+                      "temperature"
+                    ],
+                    "wrt": "x"
+                  }
+                ],
+                "wrt": "x"
               }
             ]
           }
@@ -158,11 +166,11 @@
               -1,
               "thermal_conductivity",
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "temperature"
                 ],
-                "dim": "x"
+                "wrt": "x"
               }
             ]
           }
@@ -204,10 +212,17 @@
             "args": [
               "diffusivity",
               {
-                "op": "laplacian",
+                "op": "D",
                 "args": [
-                  "concentration"
-                ]
+                  {
+                    "op": "D",
+                    "args": [
+                      "concentration"
+                    ],
+                    "wrt": "x"
+                  }
+                ],
+                "wrt": "x"
               }
             ]
           }
@@ -226,11 +241,11 @@
               -1,
               "diffusivity",
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "concentration"
                 ],
-                "dim": "x"
+                "wrt": "x"
               }
             ]
           }

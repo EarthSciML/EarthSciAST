@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "constraint_unknown_index_set",
-    "description": "INVALID: the div rule's `where` shape constraint names index set 'edges', but the consuming document's index_sets registry declares only 'cells'. Rejected at rule registration with `template_constraint_unknown_index_set` (esm-spec §9.6.1/§9.6.6) — a constraint typo fails loudly, mirroring template_import_unknown_name, instead of silently producing a rule that can never fire.",
+    "description": "INVALID: the spatial-D rule's `where` shape constraint names index set 'edges', but the consuming document's index_sets registry declares only 'cells'. Rejected at rule registration with `template_constraint_unknown_index_set` (esm-spec §9.6.1/§9.6.6) — a constraint typo fails loudly, mirroring template_import_unknown_name, instead of silently producing a rule that can never fire.",
     "authors": [
       "match-pattern-scoping-constraints conformance"
     ]
@@ -37,17 +37,18 @@
           "shape": [
             "cells"
           ],
-          "description": "div target"
+          "description": "D target"
         }
       },
       "equations": [
         {
           "lhs": "d",
           "rhs": {
-            "op": "div",
+            "op": "D",
             "args": [
               "F"
-            ]
+            ],
+            "wrt": "x"
           }
         }
       ],
@@ -57,10 +58,11 @@
             "Q"
           ],
           "match": {
-            "op": "div",
+            "op": "D",
             "args": [
               "Q"
-            ]
+            ],
+            "wrt": "x"
           },
           "where": {
             "Q": {
