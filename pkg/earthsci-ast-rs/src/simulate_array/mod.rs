@@ -72,6 +72,7 @@ mod normalize;
 pub(crate) mod range;
 mod recurrence_group;
 mod rhs;
+pub(crate) mod scalar_ops;
 #[cfg(feature = "solve")]
 mod session;
 mod shape_table;
