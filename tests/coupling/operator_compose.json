@@ -27,8 +27,8 @@
           {
             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
             "rhs": {"op": "+", "args": [
-              {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "grad", "args": ["_var"], "dim": "x"}]},
-              {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "grad", "args": ["_var"], "dim": "y"}]}
+              {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "D", "args": ["_var"], "wrt": "x"}]},
+              {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "D", "args": ["_var"], "wrt": "y"}]}
             ]}
           }
         ]
@@ -46,16 +46,16 @@
           "lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
           "rhs": {"op": "+", "args": [
             {"op": "*", "args": [-0.001, "O3", "NO"]},
-            {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "grad", "args": ["O3"], "dim": "x"}]},
-            {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "grad", "args": ["O3"], "dim": "y"}]}
+            {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "D", "args": ["O3"], "wrt": "x"}]},
+            {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "D", "args": ["O3"], "wrt": "y"}]}
           ]}
         },
         {
           "lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
           "rhs": {"op": "+", "args": [
             {"op": "*", "args": [0.001, "O3", "NO"]},
-            {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "grad", "args": ["NO"], "dim": "x"}]},
-            {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "grad", "args": ["NO"], "dim": "y"}]}
+            {"op": "*", "args": [{"op": "-", "args": ["u_wind"]}, {"op": "D", "args": ["NO"], "wrt": "x"}]},
+            {"op": "*", "args": [{"op": "-", "args": ["v_wind"]}, {"op": "D", "args": ["NO"], "wrt": "y"}]}
           ]}
         }
       ]

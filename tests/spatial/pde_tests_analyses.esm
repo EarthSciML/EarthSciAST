@@ -47,7 +47,7 @@
             "op": "*",
             "args": [
               "alpha",
-              { "op": "laplacian", "args": ["u"] }
+              { "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "x" }], "wrt": "x" }
             ]
           }
         }
@@ -134,7 +134,7 @@
     },
     "HeatEquation2D": {
       "reference": {
-        "notes": "2-D heat equation u_t = alpha * laplacian(u) on (x,y) in [0,1]^2 — used for the field_snapshot plot type. IC u(x,y,0) = sin(pi x) sin(pi y)."
+        "notes": "2-D heat equation u_t = alpha * (u_xx + u_yy) on (x,y) in [0,1]^2 — used for the field_snapshot plot type. IC u(x,y,0) = sin(pi x) sin(pi y)."
       },
       "variables": {
         "u": { "type": "unknown", "units": "1", "default": 0.0 },
@@ -164,7 +164,7 @@
             "op": "*",
             "args": [
               "alpha",
-              { "op": "laplacian", "args": ["u"] }
+              { "op": "+", "args": [{ "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "x" }], "wrt": "x" },{ "op": "D", "args": [{ "op": "D", "args": ["u"], "wrt": "y" }], "wrt": "y" }] }
             ]
           }
         }

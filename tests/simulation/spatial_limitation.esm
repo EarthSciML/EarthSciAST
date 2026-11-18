@@ -63,9 +63,34 @@
                 "args": [
                   "diffusivity",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "concentration"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "concentration"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "concentration"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -99,7 +124,7 @@
     },
     "AdvectionDiffusion": {
       "reference": {
-        "notes": "Advection-diffusion with gradient operators"
+        "notes": "Advection-diffusion with spatial derivatives (spatial D)"
       },
       "variables": {
         "tracer": {
@@ -144,9 +169,34 @@
                 "args": [
                   "diffusion_coeff",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "tracer"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "tracer"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "tracer"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -165,10 +215,11 @@
                         ]
                       },
                       {
-                        "op": "grad",
+                        "op": "D",
                         "args": [
                           "tracer"
-                        ]
+                        ],
+                        "wrt": "x"
                       }
                     ]
                   }
