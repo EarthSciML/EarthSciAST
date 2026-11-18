@@ -661,7 +661,8 @@ end
 function _geo_overlap_drive(
         ov::_GeoOverlapGate, out::Vector{String},
         contract::Vector{String}, exts::Vector{Int},
-        index_sets, derived_extents, faq
+        index_sets, derived_extents, faq;
+        cexts::Vector{Int} = _geo_contract_extents(faq, contract, index_sets, derived_extents)
     )
     g = ov.gate
     nout = length(out)
@@ -685,10 +686,6 @@ function _geo_overlap_drive(
     # A CONTRACTION: bind the output indices (the planner only needs to know
     # WHICH are bound, so the probe cell's positions are immaterial) and ask
     # what the still-free contracted symbols may be restricted to.
-    cexts = Int[
-        _geo_index_extent(faq.ranges[c], index_sets, derived_extents)
-            for c in contract
-    ]
     probe = Dict{String, Int}(o => 1 for o in out)
     plan = _overlap_drive_plan(
         g, contract, probe,
@@ -731,15 +728,15 @@ end
 function _geo_equality_drive(
         gates, out::Vector{String}, contract::Vector{String},
         exts::Vector{Int}, index_sets, derived_extents, faq;
-        eq_cache = nothing
+        eq_cache = nothing,
+        cexts::Vector{Int} = _geo_contract_extents(faq, contract, index_sets, derived_extents)
     )
     (gates === nothing || isempty(gates)) && return nothing
     _join_on_gate_disabled() && return nothing
     nout = length(out)
     nslot = nout + length(contract)
     slotname(s) = s <= nout ? out[s] : contract[s - nout]
-    slotext(s) = s <= nout ? exts[s] :
-        _geo_index_extent(faq.ranges[contract[s - nout]], index_sets, derived_extents)
+    slotext(s) = s <= nout ? exts[s] : cexts[s - nout]
     for gt in gates
         sA, sB = gt.slotA, gt.slotB
         (sA != sB && 1 <= sA <= nslot && 1 <= sB <= nslot) || continue
@@ -764,7 +761,9 @@ function _geo_equality_drive(
                 Dict{Int, Int}(), oi
             ), sA, sB
         )
-        d = _geo_overlap_drive(g, out, contract, exts, index_sets, derived_extents, faq)
+        d = _geo_overlap_drive(
+            g, out, contract, exts, index_sets, derived_extents, faq; cexts = cexts
+        )
         d === nothing || return (g, d)
     end
     return nothing
@@ -855,93 +854,90 @@ function _geom_sweep_restrict_contract!(
     return arr
 end
 
-# Materialize a geometry-derived array observed (e.g. `area[p]`, `A_ij[i,j]`) by
-# evaluating its `faq` body once per output cell against the (already
-# materialized) geometry in `env`.
-#
-# Two shapes are handled uniformly. A pure MAP (`output_idx == ranges` keys, e.g.
-# `A_ij[i,j] = overlap_area_planar(src, i, nv, tgt, j, nv)`) evaluates the body once
-# per output cell. A CONTRACTING aggregate — the on-disk einsum form where some
-# `ranges` keys are NOT in `output_idx` (e.g. `A_j[j] = Σ_i A_ij[i,j]`, the
-# row-sum) — sums the body over the contracted indices for each output cell. Both
-# honor the aggregate's `join` / `filter` gate (`_geo_gate_ok`): a rejected
-# contraction tuple contributes the additive identity 0̄ (RFC §5.3 / §5.8). This is
-# the setup-time twin of the ODE faq einsum path.
-function _materialize_geom_array(
-        faq, env, index_sets, derived_extents,
-        var_shapes = Dict{String, Vector{String}}();
-        ov_cache = nothing, eq_cache = nothing, kernel_cache = nothing
-    )
+# The extents of an aggregate's contracted indices, in `contract` order.
+_geo_contract_extents(faq, contract::Vector{String}, index_sets, derived_extents) =
+    Int[_geo_index_extent(faq.ranges[c], index_sets, derived_extents) for c in contract]
+
+# The frame one sweep runs in: the output indices and their extents, the
+# contracted indices (`ranges` keys not among the outputs, §5.1) and theirs,
+# the loop-var → index-set map (seeded with BOTH, so a join can resolve a key
+# column indexed by either: per-cell F_tgt keys on an outer output var, the
+# row-sum keys on the contracted `i`), and each loop var's frame slot (outputs
+# first, then the contracted vars, in declaration order). `nslots` grows while
+# the body compiles (a nested aggregate takes slots of its own).
+struct _GeoFrame
+    out::Vector{String}
+    exts::Vector{Int}
+    contract::Vector{String}
+    cexts::Vector{Int}
+    setof::Dict{String, String}
+    scope::Dict{String, Int}
+    nslots::Base.RefValue{Int}
+end
+function _geo_frame(faq, index_sets, derived_extents)
     out = String[v for v in faq.output_idx]
     exts = Int[_geo_index_extent(faq.ranges[v], index_sets, derived_extents) for v in out]
-    # Contracted indices: `ranges` keys not among the output indices (§5.1). Their
-    # extents are reduced (⊕ = + for the sum_product FAQ) per output cell.
     contract = String[k for k in keys(faq.ranges) if !(k in out)]
-    # Seed the loop-var → index-set map with this faq's output AND contracted
-    # indices, so a join can resolve a key column indexed by either (per-cell F_tgt
-    # keys on an outer output var; the row-sum keys on the contracted `i`).
     setof = Dict{String, String}()
+    scope = Dict{String, Int}()
     for v in Iterators.flatten((out, contract))
         r = faq.ranges[v]
         r isa IndexSetRef && (setof[v] = r.from)
+        scope[v] = length(scope) + 1
     end
-    ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
-    # COMPILE ONCE per sweep (tree_walk/geometry_compile.jl): the loop vars
-    # become frame slots (outputs first, then the contracted vars, in
-    # declaration order), the body and filter lower to `_Node` trees, and the
-    # join gate resolves to slot-addressed array equalities. The per-cell work
-    # below is then one `_eval_node` walk over the Float64 frame — no string
-    # dispatch, no per-node Dict lookups, no raw-AST re-walk (this sweep was
-    # the #1 build hotspot).
-    nslots = Ref(0)
-    scope = Dict{String, Int}()
-    for v in Iterators.flatten((out, contract))
-        nslots[] += 1
-        scope[v] = nslots[]
-    end
-    g = _GeoCompileCtx(ctx, scope, setof, nslots)
-    gates = _geo_slot_gates(faq, g)
-    filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
-    body = _geo_compile(faq.expr_body, g)
+    return _GeoFrame(
+        out, exts, contract, _geo_contract_extents(faq, contract, index_sets, derived_extents),
+        setof, scope, Ref(length(scope))
+    )
+end
+
+# The compiled body and filter as the sweep calls them. With subtree sharing
+# on, a body keyed like one already compiled in this pass takes that kernel
+# over its own arrays, with no memoize pass and no emission
+# (`_GeoKernelCache`); otherwise the shared sub-trees are memoized and the
+# body is emitted as native code when the emitter models it (the walker
+# otherwise).
+function _geo_body_callable(body, filt, kernel_cache)
     share = _compiler_plan_now().share_subtrees
-    # A body keyed like one already compiled in this pass takes that kernel
-    # over its own arrays, with no memoize pass and no emission (see
-    # `_GeoKernelCache`).
     shape = share && filt === nothing && kernel_cache !== nothing ? _geo_shape_key(body) : nothing
     known = shape === nothing ? missing : get(kernel_cache.byshape, shape[1], missing)
-    kbody = nothing
     if known isa Tuple
         f, order = known
-        kbody = _GeoKernel(f, Tuple(shape[2][i] for i in order))
         _tally_cascade!(:geo_kernel)
-    else
-        if share
-            roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
-            filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
-        end
-        # The body as native code when the emitter models it (the walker otherwise).
-        if known === missing
-            kbody = _geo_kernel(body; cache = kernel_cache)
-            if shape !== nothing
-                kernel_cache.byshape[shape[1]] = kbody === nothing ? nothing :
-                    (kbody.f, Int[findfirst(a -> a === s, shape[2]) for s in kbody.srcs])
-            end
-        end
+        return _GeoKernel(f, Tuple(shape[2][i] for i in order)), filt
     end
-    body = kbody === nothing ? body : kbody
-    u = zeros(Float64, nslots[])
-    nout = length(out)
-    # ---- The OVERLAP broad phase (see `_geo_overlap_gate` above) ----
-    # Resolve the gate, then ask the SHARED planner (`_overlap_drive_plan`,
-    # src/broad_phase.jl) which symbol(s) its candidate set drives. Only the two
-    # shapes the conservative-regrid templates produce are driven here; anything
-    # else keeps the dense sweep with the membership test applied per tuple
-    # (`ov`), which is the same admitted set at the full product's cost.
-    ov = _geo_overlap_gate(faq, ctx, setof, scope, ov_cache)
+    if share
+        roots = _geo_memoize!(filt === nothing ? _Node[body] : _Node[filt, body])
+        filt === nothing ? (body = roots[1]) : ((filt, body) = (roots[1], roots[2]))
+    end
+    known === missing || return body, filt          # a shape the emitter declined
+    kbody = _geo_kernel(body; cache = kernel_cache)
+    if shape !== nothing
+        kernel_cache.byshape[shape[1]] = kbody === nothing ? nothing :
+            (kbody.f, Int[findfirst(a -> a === s, shape[2]) for s in kbody.srcs])
+    end
+    return (kbody === nothing ? body : kbody), filt
+end
+
+# How the sweep is driven: `(drive, dov, ovdense)` — the candidate drive
+# (`_GeoOverlapDrive`) or `nothing` for the dense product, the gate whose
+# candidate index a driven sweep reads, and the overlap gate a dense sweep
+# tests per tuple (`nothing` when there is none or the sweep is driven).
+#
+# The OVERLAP broad phase (see `_geo_overlap_gate` above): resolve the gate,
+# then ask the SHARED planner (`_overlap_drive_plan`, src/broad_phase.jl) which
+# symbol(s) its candidate set drives. Only the two shapes the
+# conservative-regrid templates produce are driven; anything else keeps the
+# dense sweep with the membership test applied per tuple, which is the same
+# admitted set at the full product's cost. With no overlap gate, a
+# bin-equality (`on`) gate drives instead, through the same two sweep shapes
+# (`_geo_equality_drive`).
+function _geo_choose_drive(faq, fr::_GeoFrame, gates, ctx::_GeoCtx, index_sets, derived_extents, ov_cache, eq_cache)
+    ov = _geo_overlap_gate(faq, ctx, fr.setof, fr.scope, ov_cache)
     drive = ov === nothing || _geom_overlap_drive_disabled() ? nothing :
         _geo_overlap_drive(
-            ov, out, contract, exts, index_sets, derived_extents,
-            faq
+            ov, fr.out, fr.contract, fr.exts, index_sets, derived_extents, faq;
+            cexts = fr.cexts
         )
     ovdense = drive === nothing ? ov : nothing     # gate per tuple only if not driven
     if ov === nothing
@@ -951,55 +947,80 @@ function _materialize_geom_array(
     else
         _count!(:geom_overlap_drive)
     end
-    # With no overlap gate, a bin-equality (`on`) gate drives instead, through
-    # the same two sweep shapes (see `_geo_equality_drive`). `dov` is the gate
-    # whose candidate index the driven sweep reads.
     dov = ov
     if ov === nothing
         eq = _geo_equality_drive(
-            gates, out, contract, exts, index_sets,
-            derived_extents, faq; eq_cache = eq_cache
+            gates, fr.out, fr.contract, fr.exts, index_sets,
+            derived_extents, faq; eq_cache = eq_cache, cexts = fr.cexts
         )
         if eq !== nothing
             dov, drive = eq
             _count!(:geom_eq_drive)
         end
     end
+    return drive, dov, ovdense
+end
+
+# Materialize a geometry-derived array observed (e.g. `area[p]`, `A_ij[i,j]`) by
+# evaluating its `faq` body once per output cell against the (already
+# materialized) geometry in `env`.
+#
+# Two shapes are handled uniformly. A pure MAP (`output_idx == ranges` keys, e.g.
+# `A_ij[i,j] = overlap_area_planar(src, i, nv, tgt, j, nv)`) evaluates the body once
+# per output cell. A CONTRACTING aggregate — the on-disk einsum form where some
+# `ranges` keys are NOT in `output_idx` (e.g. `A_j[j] = Σ_i A_ij[i,j]`, the
+# row-sum) — folds the body over the contracted indices for each output cell.
+# Both honor the aggregate's `join` / `filter` gate (`_geo_gate_ok`): a
+# rejected contraction tuple contributes the identity 0̄ (RFC §5.3 / §5.8).
+# This is the setup-time twin of the ODE faq einsum path.
+#
+# The steps: the frame (`_geo_frame`); the body, filter and join gate compiled
+# ONCE against it (tree_walk/geometry_compile.jl: the loop vars become frame
+# slots and the per-cell work is one `_eval_node` walk, or a call of the
+# emitted kernel, over the Float64 frame); the drive; the sweep.
+function _materialize_geom_array(
+        faq, env, index_sets, derived_extents,
+        var_shapes = Dict{String, Vector{String}}();
+        ov_cache = nothing, eq_cache = nothing, kernel_cache = nothing
+    )
+    fr = _geo_frame(faq, index_sets, derived_extents)
+    ctx = _GeoCtx(env, index_sets, derived_extents, var_shapes)
+    g = _GeoCompileCtx(ctx, fr.scope, fr.setof, fr.nslots)
+    gates = _geo_slot_gates(faq, g)
+    filt = faq.filter === nothing ? nothing : _geo_compile(faq.filter, g)
+    body, filt = _geo_body_callable(_geo_compile(faq.expr_body, g), filt, kernel_cache)
+    drive, dov, ovdense = _geo_choose_drive(
+        faq, fr, gates, ctx, index_sets, derived_extents, ov_cache, eq_cache
+    )
+    u = zeros(Float64, fr.nslots[])
     # A candidate-driven MAP writes only the cells its pairs reach.
-    arr = _zeros_f64(exts...; sparse = drive !== nothing && isempty(contract))
-    # ---- The sweep (see `_geom_sweep_map!` / `_geom_sweep_contract!`) ----
-    # A candidate-driven sweep is counted as `:geom_overlap_drive`; the overlap
-    # gate is what returns an overlap-gated array to the ungated dense path.
-    if isempty(contract)
+    arr = _zeros_f64(fr.exts...; sparse = drive !== nothing && isempty(fr.contract))
+    if isempty(fr.contract)
         if drive !== nothing
             rp = Tuple(drive.restpos)
             _geom_sweep_pairs_map!(
                 arr, body, gates, filt, u,
                 _overlap_sorted_pairs(dov.gate.candidates::_OverlapIndex),
                 drive.pos_l, drive.pos_r, rp,
-                CartesianIndices(map(k -> exts[k], rp))
+                CartesianIndices(map(k -> fr.exts[k], rp))
             )
         else
             _geom_sweep_map!(arr, body, gates, filt, u, ovdense)
         end
     else
         init, fold = _geo_reduce_fold(faq.reduce, faq.semiring)
-        cexts = Int[
-            _geo_index_extent(faq.ranges[c], index_sets, derived_extents)
-                for c in contract
-        ]
         if drive !== nothing
             _geom_sweep_restrict_contract!(
                 arr, body, gates, filt, u,
                 dov.gate.candidates::_OverlapIndex,
                 drive.side, drive.pos_l,
-                Tuple(cexts), drive.pos_r, nout,
+                Tuple(fr.cexts), drive.pos_r, length(fr.out),
                 Float64(init), fold
             )
         else
             _geom_sweep_contract!(
                 arr, body, gates, filt, u,
-                CartesianIndices(Tuple(cexts)), Float64(init), fold,
+                CartesianIndices(Tuple(fr.cexts)), Float64(init), fold,
                 ovdense
             )
         end
