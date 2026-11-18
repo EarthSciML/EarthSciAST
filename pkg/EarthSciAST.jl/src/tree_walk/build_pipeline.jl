@@ -694,6 +694,15 @@ function _build_compile_evaluator(
     # (see `_build_pgather` for the feasibility-gate design note)
     pgather = _build_pgather(param_arrays)
     _ws_note_pgather!(pgather)
+    # The two scopes the build compiles against: the state-only one (the
+    # construction-time fills and the output-time reads, where the observed
+    # buffers do not exist) and the right-hand side's, whose layout adds the
+    # materialized observeds' buffer blocks. Both read the same registries;
+    # the discrete materializer adds its caches to `pgather` below.
+    state_scope = _CompileScope(
+        layout.array_var_info, layout.var_map, const_registry, pgather, param_sym_set
+    )
+    rhs_scope = _CompileScope(array_var_info, var_map, const_registry, pgather, param_sym_set)
     # This build's forcing epoch: the problem's (its discrete sink carries it),
     # bumped when a refresh of a buffer the build reads is announced to its owner.
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
@@ -712,9 +721,8 @@ function _build_compile_evaluator(
     # `_collect_materialized_array_obs`).
     discrete_refill = materialize_out === nothing ? nothing :
         _build_discrete_materializer!(
-            materialize_out, cls.discrete_vars,
-            parts.discrete_defs, resolved_obs, layout.array_var_info, layout.var_map,
-            const_registry, pgather, param_sym_set, p, n_states
+            materialize_out, cls.discrete_vars, parts.discrete_defs, resolved_obs,
+            state_scope, p, n_states
         )
 
     # ---- The compiled observed program's context (observed_program.jl) ----
@@ -723,9 +731,7 @@ function _build_compile_evaluator(
     # only for a build with a sink to hold it; nothing here runs until a read.
     if products !== nothing
         products.observed_ctx = _ObsProgramCtx(
-            model, cls, parts, index_sets,
-            layout.var_map, layout.array_var_info, n_states, p, param_sym_set,
-            const_registry, pgather, template_sites,
+            model, cls, parts, index_sets, state_scope, n_states, p, template_sites,
             materialize_out === nothing ? Dict{String, Array{Float64}}() :
                 materialize_out.caches,
             merge(Dict{String, ASTExpr}(raw_obs), mat_defs),
@@ -739,9 +745,8 @@ function _build_compile_evaluator(
     # equations read, and a cell it names keeps it.
     caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations, caller_u0)
     _seed_faq_init_u0!(
-        u0, parts.init_equations, initial_conditions, layout.var_map,
-        layout.array_var_info, const_registry, pgather,
-        param_sym_set, p; skip_slots = caller_slots
+        u0, parts.init_equations, initial_conditions, state_scope, p;
+        skip_slots = caller_slots
     )
 
     # ---- Scalar-observed slot plan (named prelude defs; ess-obs-slots) ----
@@ -757,11 +762,7 @@ function _build_compile_evaluator(
     # in dependency order (a def may read a state gather / const array / live
     # forcing buffer exactly as its inlined copy did).
     obs_defs = Pair{String, ASTExpr}[
-        name => _resolve_indices(
-            body, array_var_info, var_map,
-            const_registry, pgather
-        )
-            for (name, body) in obs_plan.defs
+        name => _resolve_in(rhs_scope, body) for (name, body) in obs_plan.defs
     ]
 
     # ---- Factored array-observed fill kernels (per RHS call, dependency order) ----
@@ -865,12 +866,10 @@ function _build_compile_evaluator(
     # (`_level_recurrence`).
     level_recurrence = let form = form, recur_names = recur_names, mat_defs = mat_defs,
             layout = layout, model = model, resolved_obs = resolved_obs,
-            array_var_info = array_var_info, var_map = var_map,
-            const_registry = const_registry, pgather = pgather,
-            param_sym_set = param_sym_set, products = products
+            rhs_scope = rhs_scope, products = products
         name -> _level_recurrence(
-            name, form, recur_names, mat_defs, layout, model, resolved_obs,
-            array_var_info, var_map, const_registry, pgather, param_sym_set, products
+            name, form, recur_names, mat_defs, layout, model, resolved_obs, rhs_scope,
+            products
         )
     end
     level_fill = let mat_defs = mat_defs, layout = layout, array_var_info = array_var_info
@@ -881,9 +880,7 @@ function _build_compile_evaluator(
     pending_levels = _LevelParts[]
     for (lvl, lvl_cadence) in level_plan
         lv = _compile_fill_level(
-            lvl, lvl_cadence, level_fill, level_recurrence,
-            resolved_obs, array_var_info, var_map, const_registry,
-            pgather, param_sym_set, n_total;
+            lvl, lvl_cadence, level_fill, level_recurrence, resolved_obs, rhs_scope, n_total;
             template_sites = template_sites,
             rhs_list_compiled = form === :oop,
             obs_nst = form === :inplace ? n_states : 0
@@ -917,9 +914,7 @@ function _build_compile_evaluator(
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
     state_eqs = _compile_derivative_equations(
-        derivative_eqs,
-        resolved_obs, array_var_info, var_map, const_registry, pgather,
-        param_sym_set, n_states; template_sites = template_sites,
+        derivative_eqs, resolved_obs, rhs_scope, n_states; template_sites = template_sites,
         scalar_obs_inline = obs_plan.inline,
         rhs_list_compiled = form === :oop,
         obs_nst = (form === :inplace && n_total > n_states) ? n_states : 0
@@ -1654,8 +1649,10 @@ _pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float6
 # product has no sweep section, so a compiler that builds it refuses the rule by
 # name.
 function _level_recurrence(
-        name, form, recur_names, mat_defs, layout, model, resolved_obs,
-        array_var_info, var_map, const_registry, pgather, param_sym_set, products
+        name::String, form::Symbol, recur_names::Set{String},
+        mat_defs::Dict{String, ASTExpr}, layout, model::Model,
+        resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope,
+        products::Union{Nothing, BuildProducts}
     )
     name in recur_names || return nothing
     form === :oop && _refuse_rule(
@@ -1667,9 +1664,7 @@ function _level_recurrence(
     )
     sw = _compile_recurrence_sweep(
         name, mat_defs[name],
-        layout.mat_dims[name], get(model.variables, name, nothing),
-        resolved_obs, array_var_info, var_map, const_registry,
-        pgather, param_sym_set
+        layout.mat_dims[name], get(model.variables, name, nothing), resolved_obs, cs
     )
     _record_rule!(name, :observed, _recurrence_tier(sw))
     products === nothing ||

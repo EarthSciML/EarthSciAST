@@ -38,14 +38,12 @@ mutable struct _ObsProgramCtx
     cls::Any
     parts::Any
     index_sets::AbstractDict
-    var_map::Any                         # the ODE layout (a `StateLayout`)
-    array_var_info::Any
+    # The build's state-only scope: the ODE layout, its const arrays, live
+    # buffers (discrete caches included) and parameter positions.
+    scope::_CompileScope
     n_states::Int
     p::Any                               # the parameter NamedTuple the build bound (the fallback)
-    param_sym_set::Any
-    const_registry::AbstractDict
-    pgather::AbstractDict
-    template_sites::Any
+    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
@@ -208,13 +206,12 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 ctx.index_sets, parts.derived_extents
             )
     end
-    avi = copy(ctx.array_var_info)
-    blocks = Pair{String, Tuple{Vector{Int}, Vector{Int}}}[]
-    for m in sort(mat_vars)
-        avi[m] = (ones(Int, length(mat_dims[m])), copy(mat_dims[m]))
-        push!(blocks, m => avi[m])
-    end
-    vm = _layout_extend(ctx.var_map, blocks)
+    cs = _extend_scope(
+        ctx.scope, Pair{String, Tuple{Vector{Int}, Vector{Int}}}[
+            m => (ones(Int, length(mat_dims[m])), copy(mat_dims[m])) for m in sort(mat_vars)
+        ]
+    )
+    vm = cs.var_map
     n_total = length(vm)
     # Whether the program reads the state or `t`: a property of every body it
     # evaluates, each with the non-materialized observeds substituted in.
@@ -235,15 +232,13 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         recurrence = m -> m in recur_names ? _with_open_rule_label(
                 () -> _compile_recurrence_sweep(
                     m, mat_defs[m], mat_dims[m],
-                    get(model.variables, m, nothing), resolved_obs, avi, vm,
-                    ctx.const_registry, ctx.pgather, ctx.param_sym_set
+                    get(model.variables, m, nothing), resolved_obs, cs
                 ), m
             ) : nothing
         fill = m -> _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
             lv = _compile_fill_level(
-                lvl, :dynamic, fill, recurrence, resolved_obs, avi, vm,
-                ctx.const_registry, ctx.pgather, ctx.param_sym_set, n_total;
+                lvl, :dynamic, fill, recurrence, resolved_obs, cs, n_total;
                 label_by_name = true, template_sites = ctx.template_sites
             )
             push!(
@@ -265,10 +260,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         body === nothing && return nothing
         s1, t1 = _def_state_time_refs(body, ctx.state_names)
         st |= s1; tm |= t1
-        scalar = _compile(
-            _resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
-            vm, ctx.param_sym_set
-        )
+        scalar = _compile_in(cs, _resolve_in(cs, body))
     end
     return _ObservedProgram(
         name, dims, cells, Tuple(levels), scalar, nothing,

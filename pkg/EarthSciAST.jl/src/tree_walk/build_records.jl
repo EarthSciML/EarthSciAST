@@ -1,5 +1,46 @@
 # tree_walk/build_records.jl — the records a build hands back: `BuildInspection`, `BuildProducts`,
-# `DiscreteMaterializer`, `RecurrenceInfo` and the per-Problem observed memo.
+# `DiscreteMaterializer`, `RecurrenceInfo` and the per-Problem observed memo; and
+# `_CompileScope`, what one build stage resolves and compiles against.
+
+"""
+    _CompileScope
+
+What an expression resolves (`_resolve_in`) and compiles (`_compile_in`) against
+in one build stage: each array's cell bounds (`array_var_info`) and the slot
+layout (`var_map`), the build-time arrays (`const_registry`), the live forcing
+buffers and discrete caches (`pgather`, name => `_PGatherArray`), and each scalar
+parameter's position in `p` (`param_index`). A build makes two: the state-only
+scope, which construction-time fills and output-time reads use, and the
+right-hand side's, whose layout adds a block per materialized array observed
+(`_extend_scope`).
+"""
+struct _CompileScope{L <: AbstractDict{String, Int}, C <: AbstractDict, G <: AbstractDict}
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    var_map::L
+    const_registry::C
+    pgather::G
+    param_index::Dict{Symbol, Int}
+end
+
+# `e` with its index operations resolved to slot, const and buffer reads.
+_resolve_in(s::_CompileScope, e::ASTExpr, memo = nothing) =
+    _resolve_indices(e, s.array_var_info, s.var_map, s.const_registry, s.pgather, memo)
+
+# `e`, already resolved, compiled to a `_Node`.
+_compile_in(s::_CompileScope, e::ASTExpr, memo = nothing) =
+    _compile(e, s.var_map, s.param_index, memo)
+
+# `s` with one block per `name => (lo, hi)` of `blocks` laid out after its slots.
+function _extend_scope(s::_CompileScope, blocks::Vector{Pair{String, Tuple{Vector{Int}, Vector{Int}}}})
+    isempty(blocks) && return s
+    avi = copy(s.array_var_info)
+    for (name, box) in blocks
+        avi[name] = box
+    end
+    return _CompileScope(
+        avi, _layout_extend(s.var_map, blocks), s.const_registry, s.pgather, s.param_index
+    )
+end
 
 # One `observed_field` answer: the forcing epoch it was computed at
 # (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only

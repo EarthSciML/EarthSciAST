@@ -661,14 +661,15 @@ function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations, cu)
     return slots
 end
 
+# Each `faq`-valued initialization equation (esm-spec §6.2) evaluated into the
+# cells of `u0` it sets, against the state-only scope `cs`. A cell an explicit
+# initial condition or the caller's `u0` names (`skip_slots`) keeps its value.
 function _seed_faq_init_u0!(
-        u0::Vector{Float64}, init_equations,
-        initial_conditions::AbstractDict,
-        var_map::AbstractDict{String, Int}, array_var_info,
-        const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, p;
+        u0::Vector{Float64}, init_equations::Vector{Equation},
+        initial_conditions::AbstractDict, cs::_CompileScope, p;
         skip_slots::Set{Int} = Set{Int}()
     )
+    var_map = cs.var_map
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
@@ -716,10 +717,7 @@ function _seed_faq_init_u0!(
         # The compiled fill (setup_fill.jl): the aggregate filled through the
         # right-hand-side cascade and emitted code, once, over its own ranges.
         filled = _init_equation_fill(
-            rhs_op,
-            [_expand_int_range(ranges_dict[n]) for n in idx_names],
-            var_map, const_arrays,
-            pgather, param_sym_set, p;
+            rhs_op, [_expand_int_range(ranges_dict[n]) for n in idx_names], cs, p;
             u0 = u0, target = var_name
         )
         if filled !== nothing
@@ -742,9 +740,7 @@ function _seed_faq_init_u0!(
                     for d in 1:length(idx_names)
             )
             sub_body = _sub_preserving(body, idx_exprs)
-            body_r = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
-            node = _compile(body_r, var_map, param_sym_set)
-            _eval_node(node, u0, pp, 0.0)
+            _eval_node(_compile_in(cs, _resolve_in(cs, sub_body)), u0, pp, 0.0)
         end
         lic = _percell_license(
             rule,
@@ -762,10 +758,7 @@ function _seed_faq_init_u0!(
         # With the construction-time compile-once forms off the seed is the
         # per-cell reference, as the field-`ic` fast path is.
         once = _setup_compile_once_enabled() ?
-            _compile_init_once(
-                body, idx_names, array_var_info, var_map,
-                const_arrays, pgather, param_sym_set
-            ) :
+            _compile_init_once(body, idx_names, cs) :
             nothing
         if once !== nothing
             _record_rule!(rule, :equation, :setup_compiled)
@@ -795,19 +788,16 @@ end
 # `(refs, node)` — the output-index counters, in `idx_names` order, and the body
 # compiled once against them — or `nothing` when the body does not resolve or
 # compile with its indices symbolic.
-function _compile_init_once(
-        body::ASTExpr, idx_names::Vector{String}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set
-    )
+function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, cs::_CompileScope)
     isempty(idx_names) && return nothing
     got = _resolve_array_contraction_term(
-        body, idx_names, String[], array_var_info, var_map, const_arrays, pgather
+        body, idx_names, String[], cs.array_var_info, cs.var_map, cs.const_registry,
+        cs.pgather
     )
     got isa _Decline && return nothing
     refs, _, resolved = got
     node = try
-        _compile(resolved, var_map, param_sym_set)
+        _compile_in(cs, resolved)
     catch err
         # Only a document-level refusal is a decline (see resolve.jl).
         err isa EarthSciASTError || rethrow()

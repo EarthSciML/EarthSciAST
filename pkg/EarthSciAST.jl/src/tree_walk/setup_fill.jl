@@ -98,7 +98,7 @@ reference untouched.
 """
 function _compile_setup_fill(
         def::ASTExpr, lo::Vector{Int}, hi::Vector{Int};
-        const_arrays::AbstractDict, p, param_sym_set,
+        const_arrays::AbstractDict, p, param_sym_set::Dict{Symbol, Int},
         pgather::AbstractDict = Dict{String, _PGatherArray}()
     )
     nd = length(lo)
@@ -117,20 +117,19 @@ function _compile_setup_fill(
     )
     eq = Equation(lhs, _index_at_cell_sym(def, loops))
     box = (copy(lo), copy(hi))
-    avi = Dict{String, Tuple{Vector{Int}, Vector{Int}}}(_SETUP_FILL_NAME => box)
-    layout = StateLayout(String[], [_SETUP_FILL_NAME => box])
-    n = length(layout)
+    cs = _CompileScope(
+        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(_SETUP_FILL_NAME => box),
+        StateLayout(String[], [_SETUP_FILL_NAME => box]), const_arrays, pgather,
+        param_sym_set
+    )
+    n = length(cs.var_map)
     # A record of its own: the fill's cascade rows and refusals belong to the
     # fill, not to the rule the caller files, and the caller's report gets one
     # row for it (`_record_rule!`, at the call site).
     rec = _BuildRecord(_compiler_plan_now())
     return _with_build_record(rec) do
         try
-            ce = _compile_derivative_equations(
-                Equation[eq],
-                Dict{String, ASTExpr}(), avi, layout, const_arrays, pgather,
-                param_sym_set, n
-            )
+            ce = _compile_derivative_equations(Equation[eq], Dict{String, ASTExpr}(), cs, n)
             (isempty(ce.scalar_entries) && isempty(ce.percell)) || return nothing
             tiers = Symbol[r.tier for r in rec.rules]
             (length(tiers) == 1 && tiers[1] in _SETUP_FILL_TIERS) || return nothing
@@ -265,14 +264,14 @@ end
 _colmajor_strides(hi::Vector{Int}) = Int[prod(hi[1:(d - 1)]; init = 1) for d in eachindex(hi)]
 
 """
-    _init_equation_fill(agg, range_iters, var_map, const_arrays, pgather,
-                        param_sym_set, p)
+    _init_equation_fill(agg, range_iters, cs, p)
         -> Union{Tuple{_SetupFill,Vector{Float64}},Nothing}
 
 A `faq`-valued initialization equation's aggregate `agg` filled over its own
 output ranges (`range_iters`, unit-step), as the fill and its buffer, or
 `nothing` when no compiled fill serves it. The fill reads the build's scalar
-parameters (`p`), const arrays and live forcing buffers. A body that reads a
+parameters (`p`), and the const arrays and live forcing buffers of the
+state-only scope `cs`. A body that reads a
 state reads the initial state seeded so far (`u0`, the caller's override
 included): each state it reads enters the fill as a snapshot of its current
 values — a const array for an array state with unit origin, a literal for a
@@ -280,11 +279,12 @@ scalar — which is what the per-cell reference reads, since the equation's own
 target is not among them. Any other state read is left to the caller's route.
 """
 function _init_equation_fill(
-        agg::OpExpr, range_iters, var_map, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, p;
+        agg::OpExpr, range_iters, cs::_CompileScope, p;
         u0::Union{Nothing, Vector{Float64}} = nothing,
         target::AbstractString = ""
     )
+    var_map = cs.var_map
+    const_arrays = cs.const_registry
     _setup_compile_once_enabled() || return nothing
     all(r -> !isempty(r) && step(r) == 1, range_iters) || return nothing
     # A pure map, as the per-cell reference reads it: that reference substitutes
@@ -312,7 +312,7 @@ function _init_equation_fill(
     hi = Int[last(r) for r in range_iters]
     sf = _compile_setup_fill(
         agg, lo, hi; const_arrays = const_arrays, p = p,
-        param_sym_set = param_sym_set, pgather = pgather
+        param_sym_set = cs.param_index, pgather = cs.pgather
     )
     sf === nothing && return nothing
     buf = _try_run_setup_fill(sf)
