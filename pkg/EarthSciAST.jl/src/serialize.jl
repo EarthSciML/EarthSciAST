@@ -794,9 +794,7 @@ Does `node` contain an `"op" => "faq"` anywhere?
 """
 function _contains_faq(node)::Bool
     if node isa AbstractDict
-        for key in (:op, "op")
-            haskey(node, key) && get(node, key, nothing) == "faq" && return true
-        end
+        _raw_get(node, "op") == "faq" && return true
         for v in values(node)
             _contains_faq(v) && return true
         end

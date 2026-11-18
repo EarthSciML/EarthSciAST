@@ -2954,7 +2954,7 @@ source of truth from which BOTH wire directions are generated
       `:custom` (`parse_fn` on the fetched value; `emit_fn` on the struct).
     - `mode`: parse-side fetch policy — `:req` (`data[wire]`, KeyError when
       missing, exactly as the historical direct index), `:req_err`
-      (`_has_field` guard throwing the PINNED `req_err` message; a JSON
+      (`_raw_haskey` guard throwing the PINNED `req_err` message; a JSON
       `null` value then flows to the converter — or to `default` when the
       row has one — matching each historical site), `:req_nullerr`
       (null-or-absent throws `req_err`), `:opt` (absent/null → `nothing`),

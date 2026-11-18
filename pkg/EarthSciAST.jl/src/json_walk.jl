@@ -54,17 +54,23 @@ function _leaves_only(x::AbstractVector)
 end
 
 """
-    _raw_get(x, key::String)
+    _raw_get(x, key::String[, default])
     _raw_haskey(x, key::String) -> Bool
 
-String-keyed access over a raw JSON object. Post-wire trees are string-keyed
+The access layer over raw JSON. Post-wire trees are string-keyed
 (`_to_ordered`), and a `JSON3.Object` — the only pre-normalization carrier a
 wire-boundary gate still sees — resolves string keys natively, so one plain
-`get`/`haskey` covers every carrier. `_raw_get` reports an absent key as
-`nothing`.
+`get`/`haskey` covers every carrier. `_raw_get` reads an absent key, a JSON
+`null` and a non-object `x` alike as `nothing` (or `default`); `_raw_haskey` is
+the one way to tell a present `null` from an absent key, and is `false` for a
+non-object.
 """
-_raw_get(x, key::String) = get(x, key, nothing)
-_raw_haskey(x, key::String) = haskey(x, key)
+_raw_get(x, key::AbstractString) = _is_object(x) ? get(x, key, nothing) : nothing
+function _raw_get(x, key::AbstractString, default)
+    v = _raw_get(x, key)
+    return v === nothing ? default : v
+end
+_raw_haskey(x, key::AbstractString) = _is_object(x) && haskey(x, key)
 
 """
     _components(root)

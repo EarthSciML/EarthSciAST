@@ -1147,7 +1147,7 @@ function _apply_couple!(
         # A `{from, to, transform, expression}` connector-transform equation
         # (esm-spec §10.3) is discriminated by its `transform` key, which the
         # plain `{lhs, rhs}` form never carries.
-        if _has_field(item, :transform)
+        if _raw_haskey(item, "transform")
             _apply_connector_transform!(
                 equations, contribs, item, entry, opaque_refs;
                 origin = origin, owners = owners, states = states,
@@ -1215,9 +1215,9 @@ function _apply_connector_transform!(
         states::AbstractDict,
         components::Vector{String}
     )
-    transform_raw = _get_field(item, :transform, nothing)
-    to_raw = _get_field(item, :to, nothing)
-    expr_raw = _get_field(item, :expression, nothing)
+    transform_raw = _raw_get(item, "transform", nothing)
+    to_raw = _raw_get(item, "to", nothing)
+    expr_raw = _raw_get(item, "expression", nothing)
 
     if !(transform_raw isa AbstractString) || to_raw === nothing || expr_raw === nothing
         push!(

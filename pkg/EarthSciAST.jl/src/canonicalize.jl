@@ -707,26 +707,17 @@ function _rewrite_deprecated_document_op!(out::OrderedDict{String, Any})
     return out
 end
 
-# A field of a decoded JSON object, whose keys are Strings (Dict) or Symbols
-# (JSON3.Object).
-function _document_field(d::AbstractDict, key::String)
-    for k in keys(d)
-        String(k) == key && return d[k]
-    end
-    return nothing
-end
-
 function _canonicalize_document_value(value, is_map::Bool)
     if value isa AbstractVector
         return Any[_canonicalize_document_value(v, false) for v in value]
     elseif value isa AbstractDict
-        units = _document_field(value, "units")
-        op = _document_field(value, "op")
+        units = _raw_get(value, "units")
+        op = _raw_get(value, "op")
         drop_units = false
         if !is_map && op == "const" && units isa AbstractString && _canonical_units(units) == "1"
             # A dimensionless const drops its units: a scalar becomes the bare
             # literal, an array a unitless const.
-            literal = _document_field(value, "value")
+            literal = _raw_get(value, "value")
             literal isa Real && !(literal isa Bool) && return literal
             drop_units = true
         end
