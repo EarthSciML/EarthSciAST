@@ -1190,9 +1190,9 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
    across threads, across workspaces, whatever a workspace evaluated before, and
    under any interleaving of concurrent calls.
 2. **Reference.** On the same inputs a program equals the binding's existing
-   single-threaded evaluation bitwise: in Rust, `debug_eval_rhs_into` with a
-   scratch from `debug_new_scratch_taped` whose forcing buffer holds the same
-   data; in Julia, the Problem's `f!` with its forcing buffers holding the same
+   single-threaded evaluation bitwise: in Rust, the solve's taped right-hand
+   side (the hidden `EsmProblem::debug_solve_rhs` handle) with its forcing
+   buffer holding the same data; in Julia, the Problem's `f!` with its forcing buffers holding the same
    data. Same kernels, same order.
 3. **Output.** A whole-domain program zeroes `du` and then writes it; a state
    with no `D(·)` equation comes back `0`. A tile writes only its owned rows and
@@ -1257,8 +1257,8 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   `ParamSlot.default` is the declared default (`None` / `nothing` when there is
   none). `parameter_vector(prog, overrides)` is strict: each entry is the
   override if one is given, else the default; a parameter with neither, and an
-  override key that names no parameter, is an error naming it. The lenient
-  `debug_resolve_params` stays a debug seam. Rust's `parameter_names` and
+  override key that names no parameter, is an error naming it. Rust's lenient
+  resolution stays behind the hidden `SolveRhs` handle. Rust's `parameter_names` and
   `default_parameters` are folded into `parameters()`.
 - Derived programs (`select`, `tile`, `lanes`) have the parent's `parameters`
   and the parent's `forcing_slots`, in the same order, so one `p` and one

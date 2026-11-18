@@ -49,7 +49,7 @@ with `sample_time` when a case gives one.
    parameter vector, `t = tspan[0]` and the default forcing set equals
    `du_default` bitwise.
 4. The Problem's own right-hand side (Julia `prob.f!`; Rust
-   `debug_eval_rhs_into` on the Problem's compiled model with a taped scratch)
+   `EsmProblem::debug_solve_rhs`, the taped right-hand side the solve integrates)
    at its initial state, its parameters and `t = tspan[0]` equals `du_default`
    bitwise.
 

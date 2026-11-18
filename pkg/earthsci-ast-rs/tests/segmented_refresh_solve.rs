@@ -607,7 +607,7 @@ fn const_materialized_once_discrete_refreshed_once_per_boundary() {
 /// product the executor wrote — proving both forcings reach the RHS live.
 #[test]
 fn forcing_is_constant_within_a_segment_so_rhs_is_pure() {
-    let compiled = build_compiled();
+    let compiled = std::rc::Rc::new(build_compiled());
     let Wiring {
         mut exec, forcing, ..
     } = build_executor(&compiled);
@@ -620,9 +620,12 @@ fn forcing_is_constant_within_a_segment_so_rhs_is_pure() {
     // not touched again until the next boundary.
     let names = compiled.state_variable_names().to_vec();
     let state = vec![0.0f64; names.len()];
-    let params = HashMap::new();
-    let (dy_at_0, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
-    let (dy_at_half, _) = compiled.debug_eval_rhs(&state, 0.5, &params);
+    let mut rhs = earthsci_ast::simulate_array::SolveRhs::oracle(
+        std::rc::Rc::clone(&compiled),
+        &HashMap::new(),
+    );
+    let dy_at_0 = rhs.eval(&state, 0.0);
+    let dy_at_half = rhs.eval(&state, 0.5);
     assert_eq!(
         dy_at_0, dy_at_half,
         "forcing is frozen within the segment → the RHS is time-invariant here (pure)"

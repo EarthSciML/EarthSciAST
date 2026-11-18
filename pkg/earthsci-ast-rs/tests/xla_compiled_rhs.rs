@@ -4,7 +4,7 @@
 //! This is the in-crate half of the phase-2 gate. The cross-language half is
 //! `scripts/run-compiled-rhs-conformance.py --engine compiled`, which compares
 //! the same numbers against the Julia-interpreter golden; here the reference
-//! is THIS crate's interpreter (`ArrayCompiled::debug_eval_rhs`), so a
+//! is THIS crate's interpreter (`SolveRhs::oracle`), so a
 //! divergence localizes to the emitter rather than to the two bindings'
 //! evaluators.
 //!
@@ -25,9 +25,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::rc::Rc;
 
 use earthsci_ast::load_string;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, SolveRhs};
 use earthsci_ast::xla_runtime::{CompileRhsError, CompiledRhs};
 use serde_json::Value;
 
@@ -89,11 +90,20 @@ fn runtime_available() -> bool {
     true
 }
 
-fn build(path: &Path) -> ArrayCompiled {
+fn build(path: &Path) -> Rc<ArrayCompiled> {
     let text =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let file = load_string(&text).unwrap_or_else(|e| panic!("load {}: {e:?}", path.display()));
-    ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile {}: {e:?}", path.display()))
+    Rc::new(
+        ArrayCompiled::from_file(&file)
+            .unwrap_or_else(|e| panic!("compile {}: {e:?}", path.display())),
+    )
+}
+
+/// The per-cell oracle over `compiled` with `params` over its defaults: the
+/// reference, and the positional parameter vector `CompiledRhs` reads.
+fn oracle(compiled: &Rc<ArrayCompiled>, params: &HashMap<String, f64>) -> SolveRhs {
+    SolveRhs::oracle(Rc::clone(compiled), params)
 }
 
 /// `|got - want| <= atol + rtol * |want|` with the manifest's classes. The
@@ -144,7 +154,7 @@ fn run_fixture(fx: &Value) -> Outcome {
     };
     let names: Vec<String> = compiled.state_variable_names().to_vec();
     let params: HashMap<String, f64> = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
+    let param_vec = oracle(&compiled, &params).params().to_vec();
 
     let mut worst = 0.0f64;
     let mut probes = 0usize;
@@ -163,7 +173,7 @@ fn run_fixture(fx: &Value) -> Outcome {
                     .unwrap_or_else(|| panic!("{rel} probe {pid}: no state for {bare}"))
             })
             .collect();
-        let (want, _) = compiled.debug_eval_rhs(&u, t, &params);
+        let want = oracle(&compiled, &params).eval(&u, t);
         let got = program.eval(&u, &param_vec, t).expect("compiled eval");
         assert_eq!(got.len(), want.len(), "{rel} probe {pid}: length");
         let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
@@ -271,7 +281,7 @@ fn a_fallback_rule_is_refused_by_name() {
         }}
     }"#;
     let file = load_string(text).expect("fixture loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let compiled = Rc::new(ArrayCompiled::from_file(&file).expect("fixture compiles"));
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!(
             "the fixture now lowers completely. If the tape really did learn a \
@@ -427,7 +437,7 @@ fn the_device_resident_path_agrees_with_the_host_round_trip() {
             Err(CompileRhsError::Runtime(msg)) => panic!("{rel}: xla runtime: {msg}"),
         };
         let params: HashMap<String, f64> = HashMap::new();
-        let pv = compiled.debug_resolve_params(&params);
+        let pv = oracle(&compiled, &params).params().to_vec();
         let names: Vec<String> = compiled.state_variable_names().to_vec();
 
         for probe in fx["rhs_probes"].as_array().expect("rhs_probes") {
@@ -500,7 +510,7 @@ fn the_on_device_euler_loop_tracks_the_host_loop() {
     let compiled = build(&path);
     let program = CompiledRhs::compile(&compiled).expect("diffusion_1d_periodic_n8 lowers");
     let params: HashMap<String, f64> = HashMap::new();
-    let pv = compiled.debug_resolve_params(&params);
+    let pv = oracle(&compiled, &params).params().to_vec();
     let n = program.n_states();
     let u0: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();
     let dt = 1e-6;
@@ -579,7 +589,7 @@ fn scans_assemblies_and_promoted_contractions_lower() {
 }}"#
     );
     let file = load_string(&doc).expect("the probe document loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let compiled = Rc::new(ArrayCompiled::from_file(&file).expect("it compiles"));
     let program = match CompiledRhs::compile(&compiled) {
         Ok(p) => p,
         Err(CompileRhsError::Refused(e)) => {
@@ -599,13 +609,13 @@ fn scans_assemblies_and_promoted_contractions_lower() {
         );
     }
     let params: HashMap<String, f64> = HashMap::new();
-    let pv = compiled.debug_resolve_params(&params);
+    let pv = oracle(&compiled, &params).params().to_vec();
     let m = compiled.state_variable_names().len();
     for seed in 0..4 {
         let u: Vec<f64> = (0..m)
             .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
             .collect();
-        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
+        let want = oracle(&compiled, &params).eval(&u, 0.0);
         let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
         let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
         for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -673,7 +683,7 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
     use earthsci_ast::simulate_array::tape::xla_emit::emit_rhs;
     let hlo_len = |n: usize| {
         let file = load_string(&scan_doc(n)).expect("the probe document loads");
-        let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+        let compiled = Rc::new(ArrayCompiled::from_file(&file).expect("it compiles"));
         let emitted = emit_rhs(&compiled).expect("the emitter lowers the scans");
         emitted.hlo_text().expect("HLO text").len()
     };
@@ -686,7 +696,7 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
 
     let n = 300;
     let file = load_string(&scan_doc(n)).expect("the probe document loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("it compiles");
+    let compiled = Rc::new(ArrayCompiled::from_file(&file).expect("it compiles"));
     let program = match CompiledRhs::compile(&compiled) {
         Ok(p) => p,
         Err(CompileRhsError::Refused(e)) => {
@@ -696,12 +706,12 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
     };
     assert_eq!(program.opcode_count("Scan"), 3);
     let params: HashMap<String, f64> = HashMap::new();
-    let pv = compiled.debug_resolve_params(&params);
+    let pv = oracle(&compiled, &params).params().to_vec();
     let m = compiled.state_variable_names().len();
     let u: Vec<f64> = (0..m)
         .map(|k| ((k * 37) % 101) as f64 * 0.013 - 0.61)
         .collect();
-    let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
+    let want = oracle(&compiled, &params).eval(&u, 0.0);
     let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
     for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
         assert_eq!(
@@ -785,7 +795,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
     }
     let n = 6usize;
     let file = load_string(&forced_doc(n as i64)).expect("loads");
-    let compiled = ArrayCompiled::from_file(&file).expect("compiles");
+    let compiled = Rc::new(ArrayCompiled::from_file(&file).expect("compiles"));
     feed_forced(&compiled, n, 1.0, 0.7);
     let program = match CompiledRhs::compile(&compiled) {
         Ok(p) => p,
@@ -793,7 +803,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     };
     let params: HashMap<String, f64> = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
+    let param_vec = oracle(&compiled, &params).params().to_vec();
     let u: Vec<f64> = (0..n).map(|i| 0.2 + i as f64 * 0.11).collect();
     let close = |got: &[f64], want: &[f64], label: &str| {
         for (i, (g, w)) in got.iter().zip(want).enumerate() {
@@ -805,7 +815,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
     };
     for scale in [1.0, 3.0] {
         feed_forced(&compiled, n, scale, 0.7);
-        let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
+        let want = oracle(&compiled, &params).eval(&u, 0.0);
         let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
         close(&got, &want, &format!("scale {scale}"));
         let mut dev = program.on_device(&u, &param_vec).expect("upload");
@@ -819,7 +829,7 @@ fn forcing_reads_lower_and_follow_the_buffer() {
 
     compiled.forcing_handle().borrow_mut().remove("M.bc");
     earthsci_ast::simulate_array::take_const_array_oob();
-    compiled.debug_eval_rhs(&u, 0.0, &params);
+    oracle(&compiled, &params).eval(&u, 0.0);
     let want = earthsci_ast::simulate_array::take_const_array_oob().expect("the oracle faults");
     let got = program.eval(&u, &param_vec, 0.0).expect("compiled eval");
     let fault = earthsci_ast::simulate_array::take_const_array_oob().expect("the program faults");
@@ -874,7 +884,7 @@ fn phase3_array_forms_lower() {
     for (rel, opcode, class) in cases {
         let path = common::repo_root().join(rel);
         let compiled = build(&path);
-        let listing = compiled.debug_tape_listing();
+        let listing = oracle(&compiled, &HashMap::new()).tape_listing();
         assert!(
             opcode.is_empty() || listing.contains(&format!(" {opcode} {{")),
             "{rel}: the tape carries no {opcode}:\n{listing}"
@@ -886,13 +896,13 @@ fn phase3_array_forms_lower() {
             }
             Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
         };
-        let pv = compiled.debug_resolve_params(&params);
+        let pv = oracle(&compiled, &params).params().to_vec();
         let m = compiled.state_variable_names().len();
         for seed in 0..3 {
             let u: Vec<f64> = (0..m)
                 .map(|k| ((k * 7 + seed * 3) % 11) as f64 * 0.37 - 1.5)
                 .collect();
-            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
+            let want = oracle(&compiled, &params).eval(&u, 0.0);
             let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
             let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -917,7 +927,11 @@ fn a_program_that_faults_is_refused_with_the_fault() {
     let path = common::repo_root()
         .join("tests/conformance/const_array_gather_bounds/fixtures/named_1d_past_end.esm");
     let compiled = build(&path);
-    assert!(compiled.debug_tape_listing().contains(" Fault {"));
+    assert!(
+        oracle(&compiled, &HashMap::new())
+            .tape_listing()
+            .contains(" Fault {")
+    );
     match CompiledRhs::compile(&compiled) {
         Ok(_) => panic!("a faulting program compiled"),
         Err(CompileRhsError::Refused(e)) => assert!(
@@ -948,7 +962,7 @@ fn geometry_and_data_subscript_gathers_lower() {
         ),
     ] {
         let compiled = build(&root.join(path));
-        let report = compiled.debug_build_tape_report();
+        let report = oracle(&compiled, &HashMap::new()).tape_report();
         let has = |op: &str| report.opcode_counts.iter().any(|(o, n)| o == op && *n > 0);
         // The fused program folds a rank-1 IndexGather into its consumer; the
         // emitter runs the unfused one, where the instruction stands alone.
@@ -967,13 +981,13 @@ fn geometry_and_data_subscript_gathers_lower() {
             Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
         };
         let params: HashMap<String, f64> = HashMap::new();
-        let pv = compiled.debug_resolve_params(&params);
+        let pv = oracle(&compiled, &params).params().to_vec();
         let m = compiled.state_variable_names().len();
         for seed in 0..3 {
             let u: Vec<f64> = (0..m)
                 .map(|k| 1.0 + 0.1 * ((k * 7 + seed * 3) as f64 * 0.37).sin())
                 .collect();
-            let (want, _) = compiled.debug_eval_rhs(&u, 0.0, &params);
+            let want = oracle(&compiled, &params).eval(&u, 0.0);
             let got = program.eval(&u, &pv, 0.0).expect("compiled eval");
             let scale = want.iter().fold(0.0f64, |a, v| a.max(v.abs()));
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {

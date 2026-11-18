@@ -1048,15 +1048,28 @@ impl EsmProblem {
         self.precision.document
     }
 
+    /// The right-hand side a solve of this Problem integrates, with the
+    /// Problem's parameters ([`Self::p`]) over the declared defaults, and the
+    /// tape behind it ([`crate::simulate_array::SolveRhs`]): for measurement
+    /// and inspection tooling outside the crate, which the public program
+    /// ([`crate::rhs_program`]) does not serve. A static Problem has no
+    /// right-hand side; a tape that declines a rule is a solve's refusal.
+    #[doc(hidden)]
+    pub fn debug_solve_rhs(&self) -> Result<crate::simulate_array::SolveRhs, SimulateError> {
+        match &*self.backend {
+            Backend::Array(c) => crate::simulate_array::SolveRhs::new(Rc::clone(c), &self.p),
+            Backend::Static(_) => Err(SimulateError::Compile(
+                crate::compile_error::CompileError::build_err(
+                    "this Problem is static: it has no right-hand side".to_string(),
+                ),
+            )),
+        }
+    }
+
     /// The compiled array model behind this Problem's right-hand side, or
     /// `None` for a static Problem.
-    ///
-    /// Read-only access for measurement tooling (the scaling conformance
-    /// tier's adapter and the wasm suite), which drive the same compiled
-    /// artifact through the `debug_*` entry points of [`ArrayCompiled`]
-    /// rather than through a solve.
-    #[doc(hidden)]
-    pub fn debug_array_compiled(&self) -> Option<Rc<ArrayCompiled>> {
+    #[cfg(test)]
+    pub(crate) fn debug_array_compiled(&self) -> Option<Rc<ArrayCompiled>> {
         match &*self.backend {
             Backend::Array(c) => Some(Rc::clone(c)),
             Backend::Static(_) => None,

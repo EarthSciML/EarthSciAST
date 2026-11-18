@@ -1,8 +1,9 @@
 //! Solver plumbing on [`ArrayCompiled`]: `solve` / `solve_inspect`, what a
 //! solve session sets up once (parameter vector, initial state, tape, cadence
 //! partition, static hoist), the right-hand-side evaluators its segments run,
-//! the observed trajectory exposure, the `debug_*` RHS entry points, and the
-//! external forcing-channel handle ([`ArrayCompiled::forcing_handle`]). The
+//! the observed trajectory exposure, the crate-private `debug_*` RHS entry
+//! points behind [`super::SolveRhs`] and the tests, and the external
+//! forcing-channel handle ([`ArrayCompiled::forcing_handle`]). The
 //! segment loop itself is in `session`.
 
 #[cfg(feature = "solve")]
@@ -15,7 +16,7 @@ use crate::simulate::{ReturnCode, Solution, SolutionMetadata, SolveOptions};
 // The solver is optional (esm-libraries-spec §2.5.9). Everything below that
 // touches `diffsol` is gated on the `solve` feature; the `debug_*` RHS entry
 // points and the forcing-channel handle are not, because a caller that only
-// BUILDS a EsmProblem still reaches them.
+// BUILDS an EsmProblem still reaches them (through `SolveRhs`).
 #[cfg(feature = "solve")]
 use std::collections::HashSet;
 
@@ -821,8 +822,7 @@ impl ArrayCompiled {
     /// Evaluate the RHS `f(state, t)` once through the per-cell oracle and
     /// return `(dy, stats)`: the reference a compiler's evaluation is checked
     /// against.
-    #[doc(hidden)]
-    pub fn debug_eval_rhs(
+    pub(crate) fn debug_eval_rhs(
         &self,
         state: &[f64],
         t: f64,
@@ -918,29 +918,18 @@ impl ArrayCompiled {
     ///
     /// A model whose tape declined a rule has no program to install, so this
     /// is the same refusal a solve raises ([`Self::strict_tape`]).
-    #[doc(hidden)]
-    pub fn debug_new_scratch_taped(&self) -> Result<RhsScratch, SimulateError> {
+    #[cfg(test)]
+    pub(crate) fn debug_new_scratch_taped(&self) -> Result<RhsScratch, SimulateError> {
         let mut s = self.new_scratch();
         s.install_tape(self.strict_tape(&HashSet::new())?);
         Ok(s)
-    }
-
-    /// The precision environment this model was compiled under (the
-    /// document's element type and its per-variable ones), which a solve arms
-    /// for its whole run. The `debug_*` right-hand-side entries do not arm it;
-    /// a caller comparing them on a document that declares element types
-    /// holds this guard around the calls, as a solve would.
-    #[doc(hidden)]
-    pub fn debug_precision_env(&self) -> crate::precision::Env {
-        self.precision.clone()
     }
 
     /// Resolve a parameter map into the positional parameter vector once, so the
     /// zero-allocation RHS test can pre-build it outside the measured loop.
     /// Keys are matched as a solve matches them (esm-spec §6.6.2); leniently,
     /// so a key that designates no parameter is ignored.
-    #[doc(hidden)]
-    pub fn debug_resolve_params(&self, params: &HashMap<String, f64>) -> Vec<f64> {
+    pub(crate) fn debug_resolve_params(&self, params: &HashMap<String, f64>) -> Vec<f64> {
         use crate::simulate::KeyHit;
         let namespaces = self.override_namespaces();
         let mut resolved: HashMap<String, f64> = HashMap::new();
@@ -972,8 +961,7 @@ impl ArrayCompiled {
     /// ([`Self::debug_new_scratch_taped`]), else the per-cell oracle. With a
     /// warmed taped scratch and a pre-resolved `param_vec`, this performs no
     /// heap allocation.
-    #[doc(hidden)]
-    pub fn debug_eval_rhs_into(
+    pub(crate) fn debug_eval_rhs_into(
         &self,
         state: &[f64],
         t: f64,

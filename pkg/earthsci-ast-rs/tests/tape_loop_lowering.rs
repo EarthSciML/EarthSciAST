@@ -15,7 +15,7 @@
 //! per-cell oracle (the interpreter) at a state chosen so that a re-associated
 //! fold would show in the low bits.
 
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, SolveRhs};
 use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem, load_string};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ impl Checked {
 fn check(doc: &Value) -> Checked {
     let file = load_string(&doc.to_string()).expect("document loads");
     let compiled = ArrayCompiled::from_file(&file).expect("document compiles");
-    let report = compiled.debug_build_tape_report();
+    let report = SolveRhs::oracle(std::rc::Rc::new(compiled), &Default::default()).tape_report();
     assert!(
         report.fallbacks.is_empty(),
         "every rule must stay on the tape: {:?}",

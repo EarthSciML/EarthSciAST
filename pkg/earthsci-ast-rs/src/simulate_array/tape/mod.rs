@@ -628,15 +628,14 @@ impl ArrayCompiled {
     /// Build the tape and return the diagnostic report (see
     /// [`TapeBuildReport`]). Evaluation is unchanged: this is a build-and-
     /// discard entry for inspection tooling (`examples/tape_report.rs`).
-    pub fn debug_build_tape_report(&self) -> TapeBuildReport {
+    pub(crate) fn debug_build_tape_report(&self) -> TapeBuildReport {
         (*self.tape(&HashSet::new()).1).clone()
     }
 
     /// The program as text, one instruction per line with its section and
     /// the box it defines, then the fused groups (`TAPE_LISTING=1` in
     /// `examples/tape_report.rs`). Diagnostics only.
-    #[doc(hidden)]
-    pub fn debug_tape_listing(&self) -> String {
+    pub(crate) fn debug_tape_listing(&self) -> String {
         use std::fmt::Write;
         let (prog, report) = self.tape(&HashSet::new());
         let Ok(prog) = prog else {
@@ -731,13 +730,16 @@ impl ArrayCompiled {
         (records, report)
     }
 
-    /// Step 4 diagnostic: dump per-group shape statistics of the fused
-    /// program to stderr (`examples/fuse_stats.rs`).
-    pub fn debug_dump_fuse_stats(&self) {
+    /// Per-group shape statistics of the fused program, then the micro-op,
+    /// adjacency and chain-length histograms of the fusion pass, as text
+    /// (`examples/fuse_stats.rs`). Diagnostics only.
+    pub(crate) fn debug_fuse_stats(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
         let (prog, report) = self.tape(&HashSet::new());
-        eprintln!("{report}");
+        let _ = writeln!(out, "{report}");
         let Ok(prog) = prog else {
-            return;
+            return out;
         };
         let mut by_regs: Vec<&FusedSpec> = prog.fused.iter().collect();
         by_regs.sort_by_key(|f| std::cmp::Reverse(f.n_regs));
@@ -752,11 +754,13 @@ impl ArrayCompiled {
             .iter()
             .map(|f| f.outputs.len() * f.n_elems())
             .sum();
-        eprintln!(
+        let _ = writeln!(
+            out,
             "element-ops per call: {} micro x elems | output elems stored {}",
             tot_elem_ops, tot_out_elems
         );
-        eprintln!(
+        let _ = writeln!(
+            out,
             "fused groups: {} | micro ops {} | inputs {} | outputs {} | runs {} | max n_regs {}",
             prog.fused.len(),
             tot_micro,
@@ -765,20 +769,21 @@ impl ArrayCompiled {
             tot_runs,
             max_regs
         );
-        eprintln!("micro-op histogram (element-weighted, post-superop):");
+        let _ = writeln!(out, "micro-op histogram (element-weighted, post-superop):");
         for (k, n) in prog.fuse_stats.micro_hist.iter().take(24) {
-            eprintln!("  {n:>10}  {k}");
+            let _ = writeln!(out, "  {n:>10}  {k}");
         }
-        eprintln!("single-use adjacency (element-weighted, pre-superop):");
+        let _ = writeln!(out, "single-use adjacency (element-weighted, pre-superop):");
         for (k, n) in prog.fuse_stats.adj_hist.iter().take(24) {
-            eprintln!("  {n:>10}  {k}");
+            let _ = writeln!(out, "  {n:>10}  {k}");
         }
-        eprintln!("arith chain lengths (element-weighted, pre-superop):");
+        let _ = writeln!(out, "arith chain lengths (element-weighted, pre-superop):");
         for (len, n) in prog.fuse_stats.chain_hist.iter() {
-            eprintln!("  {n:>10}  len={len}");
+            let _ = writeln!(out, "  {n:>10}  len={len}");
         }
         for f in by_regs.iter().take(12) {
-            eprintln!(
+            let _ = writeln!(
+                out,
                 "  group: shape={:?} micro={} regs={} inputs={} (shifted {}) scalars={} \
                  outputs={} runs={} folded_gathers={}",
                 &f.shape[..],
@@ -792,5 +797,6 @@ impl ArrayCompiled {
                 f.n_folded_gathers
             );
         }
+        out
     }
 }

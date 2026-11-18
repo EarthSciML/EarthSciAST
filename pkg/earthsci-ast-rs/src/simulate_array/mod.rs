@@ -40,9 +40,11 @@
 //!   range-restricted programs share.
 //! * [`rhs`] — per-call RHS evaluation: the zero-allocation scratch/buffer
 //!   pool (ess-mro), observed-rule materialization, and the rule driver.
-//! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`,
-//!   `debug_*` entry points) and the external refreshable forcing channel
-//!   (PR-1, ess-14f.7) exposed via `forcing_handle`.
+//! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`, the
+//!   crate-private `debug_*` entry points) and the external refreshable
+//!   forcing channel (PR-1, ess-14f.7) exposed via `forcing_handle`.
+//! * [`solve_rhs`] — [`SolveRhs`], the hidden out-of-crate handle on the
+//!   right-hand side a solve integrates and the tape it runs.
 //! * [`layout`] — column-major flat↔multi index/array conversion helpers.
 //!
 //! This file keeps the shared data model: [`Value`], the per-variable
@@ -76,6 +78,7 @@ pub(crate) mod scalar_ops;
 #[cfg(feature = "solve")]
 mod session;
 mod shape_table;
+mod solve_rhs;
 #[cfg(feature = "solve")]
 pub(crate) use session::{RunSpec, SolveSession};
 pub mod tape;
@@ -129,6 +132,8 @@ pub(crate) use tape::StandaloneError;
 // simplifier) routes through the SAME definition.
 pub(crate) use eval::apply_binary;
 pub use rhs::RhsScratch;
+#[doc(hidden)]
+pub use solve_rhs::SolveRhs;
 
 /// The names `expr` reads that no enclosing `faq` binds (strip and expose,
 /// API_SPEC §5.8).
@@ -667,7 +672,7 @@ pub(crate) enum RuntimeMode {
     /// side, the build-time and per-segment observed passes and the observeds
     /// reported at output times all run on the tape. The default: every
     /// entry point that names no compiler (`compile_array`, the `from_*`
-    /// constructors, the `debug_*` seams) builds this.
+    /// constructors) builds this.
     #[default]
     Native,
     /// [`crate::Compiler::Interpreter`]: no tape — the per-cell oracle for the
@@ -842,8 +847,8 @@ pub struct ArrayCompiled {
     namespace: Option<String>,
     /// The working precision this model was COMPILED under
     /// (`crate::precision`), captured so evaluation reproduces it even when the
-    /// caller reaches an `ArrayCompiled` directly (`compile_array`, the
-    /// `debug_*` entry points) rather than through an `EsmProblem`. Build-time
+    /// caller reaches an `ArrayCompiled` directly (`compile_array`,
+    /// [`SolveRhs`]) rather than through an `EsmProblem`. Build-time
     /// folding and run-time evaluation must round identically, and the
     /// artifact carrying its own precision is what makes that true by
     /// construction rather than by the caller remembering.

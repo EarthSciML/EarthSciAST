@@ -779,8 +779,9 @@ fn the_count_rewrite_is_a_problem_option() {
         .expect("builds under native")
     };
     let counts = |p: &EsmProblem| {
-        let c = p.debug_array_compiled().expect("a right-hand side");
-        c.debug_tape_listing()
+        p.debug_solve_rhs()
+            .expect("a taped right-hand side")
+            .tape_listing()
             .lines()
             .filter(|l| l.contains(" Count {"))
             .count()
