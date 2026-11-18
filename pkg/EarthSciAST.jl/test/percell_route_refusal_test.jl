@@ -604,8 +604,7 @@ end
     )
 
     no_codegen(f) = withenv(
-        f, "ESS_CODEGEN_NODE_BUDGET" => "0",
-        "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0"
+        f, "ESS_CODEGEN_NODE_BUDGET" => "0"
     )
 
     @testset "observed_field: a read native cannot compile refuses" begin

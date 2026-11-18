@@ -222,7 +222,7 @@ end
 )
 
 # ============================================================
-# 5c-join. M2 — value-equality joins (RFC semiring-faq-unified-ir §5.3)
+# 5c-join. Value-equality joins (RFC semiring-faq-unified-ir §5.3)
 # ============================================================
 #
 # A `join` clause gates which (output × contracted) index combinations of an
@@ -287,7 +287,7 @@ end
 # the default can fill:
 #   * `:binder` — the key names an INDEX SET (§5.5.8 precedence step 1). An
 #     author who meant a particular side can already name the RANGE SYMBOL
-#     instead, which is what the historic diagnostic advises, so an ambiguous set
+#     instead, which is what the diagnostic advises, so an ambiguous set
 #     stays an error and only an explicit `syms` resolves it.
 #   * `:column_axis` — the symbol came from a DATA COLUMN's declared 1-D axis
 #     (step 2). Here there is nothing else the author can write: the pair holds
@@ -339,7 +339,7 @@ function _join_sym_for_key(
         )
     elseif via === :binder
         # A key that NAMES the index set can already say which side it means by
-        # naming the range symbol instead, so the historic rejection stands.
+        # naming the range symbol instead, so the rejection stands.
         throw(
             TreeWalkError(
                 "E_TREEWALK_JOIN_AMBIGUOUS_KEY",
@@ -1015,7 +1015,7 @@ _computed_keys(vals) = _ComputedKeys(
 )
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
-# runs over (Phase 2a). The list's length fixes every factor's rank
+# runs over. The list's length fixes every factor's rank
 # (`_overlap_env_rank`, CONFORMANCE_SPEC §5.5.6): 2 or 4 names are 1-D columns,
 # 1 name a `[pos, verts, coord]` RING stack. In both forms a factor's FIRST axis
 # is its position axis, so the first factor's first shape index set names the
@@ -1220,7 +1220,7 @@ function _join_admits(gates, binding::AbstractDict)
             # OVERLAP gate has empty `codes_l` and falls through.)
             g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
         else
-            # OVERLAP gate (Phase 2a): the (pos_l, pos_r) pair must be in the
+            # OVERLAP gate: the (pos_l, pos_r) pair must be in the
             # prebuilt broad-phase candidate set (envelope candidacy).
             (binding[g.sym_l], binding[g.sym_r]) in g.candidates || return false
         end
@@ -1228,34 +1228,12 @@ function _join_admits(gates, binding::AbstractDict)
     return true
 end
 
-# True if any node in the subtree carries a `join` clause — used to skip the
-# resolution pre-pass (and stay byte-identical) for join-free documents.
-# INTENTIONAL field subset (behavior-pinned — do NOT widen to `child_exprs`
-# coverage without a spec decision): walks args / expr_body / values / filter
-# only, NOT lower / upper / key / ranges bounds. A join buried in
-# e.g. an integral bound would therefore skip the pre-pass even though
-# `_resolve_join_in_expr` does recurse those fields — flagged for Wave 3.
-# Identity-deduped (ESS-0hh): a pure existence predicate is path-multiplicity-
-# insensitive, so the visited set is exactly equivalent — and O(nodes) on a
-# structurally-shared tree instead of once per path.
-_expr_has_join(expr::OpExpr) = _expr_has_join(expr, IdDict{OpExpr, Nothing}())
-function _expr_has_join(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
-    expr.join !== nothing && return true
-    haskey(seen, expr) && return false
-    seen[expr] = nothing
-    for a in expr.args
-        a isa OpExpr && _expr_has_join(a, seen) && return true
-    end
-    expr.expr_body isa OpExpr && _expr_has_join(expr.expr_body::OpExpr, seen) && return true
-    if expr.values !== nothing
-        for v in expr.values
-            v isa OpExpr && _expr_has_join(v, seen) && return true
-        end
-    end
-    expr.filter isa OpExpr && _expr_has_join(expr.filter::OpExpr, seen) && return true
-    return false
-end
-_expr_has_join(::ASTExpr) = false
+# True if any node in the subtree carries a `join` clause, in any
+# expression-bearing field — the gate that skips the resolution pre-pass for
+# join-free documents. It walks the fields `_resolve_join_in_expr` rewrites, so
+# the gate and the pass cannot disagree.
+_expr_has_join(expr::ASTExpr) =
+    _any_subexpr_once(e -> e isa OpExpr && (e::OpExpr).join !== nothing, expr)
 _eq_has_join(eq::Equation) = _expr_has_join(eq.lhs) || _expr_has_join(eq.rhs)
 
 # Rewrite each aggregate node's `join` clauses into build-time `join_gates`
@@ -1271,38 +1249,18 @@ function _resolve_join_in_expr(
         obs_defs::AbstractDict = Dict{String, ASTExpr}(),
         memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
     )
-    # IDENTITY-MEMOIZED and IDENTITY-PRESERVING, as `_resolve_isr` is: a shared
-    # node resolves to one shared output node, and a subtree with no `join`
-    # below it is returned as it is, so a shared graph is neither walked once
-    # per path nor re-inflated into a tree.
+    # Memoized by identity and identity-preserving, as `_resolve_isr` is: a
+    # shared node resolves to one shared output node, and a subtree with no
+    # `join` below it is returned as it is.
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
-    changed = false
-    res(x) = begin
-        r = _resolve_join_in_expr(
-            x, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo
-        )
-        r === x || (changed = true)
-        r
-    end
-    new_args = ASTExpr[res(a) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
-    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
-    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
-    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
-    own_join = _is_faq_op(expr.op) && expr.join !== nothing
-    out = if own_join || changed
-        gates = own_join ?
-            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) :
-            expr.join_gates
-        reconstruct(
-            expr; args = new_args, expr_body = new_body,
-            values = new_values, lower = new_lower, upper = new_upper,
-            filter = new_filter, join_gates = gates
-        )
-    else
+    out = map_children(
+        x -> _resolve_join_in_expr(x, index_sets, vi_maps, const_arrays, var_shapes, obs_defs, memo),
         expr
+    )
+    if _is_faq_op(expr.op) && expr.join !== nothing
+        gates = _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
+        out = reconstruct(out::OpExpr; join_gates = gates)
     end
     memo[expr] = out
     return out

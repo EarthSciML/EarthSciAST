@@ -86,8 +86,7 @@ function _ot_acc_kernel(op::String)
     acc = ESM._AccDesc[]
     spine = ESM._acc_merge_nodes(ESM._Node[node, node], 2, acc)
     return ESM._AccKernel(
-        ESM._outs_cells([1, 2]), spine, acc,
-        ESM._FixedBound(0), 0.0
+        ESM._outs_cells([1, 2]), spine, acc
     )
 end
 function _ot_vector_supported(op::String)

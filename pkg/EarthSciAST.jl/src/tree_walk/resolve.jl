@@ -144,54 +144,19 @@ function _resolve_one_index_set_ref(
     )
 end
 
-# True iff any node in the subtree carries a `ranges` entry that is an IndexSetRef.
-# Every expression-bearing field is searched (`filter` and an expression-valued
-# range bound included), as `_resolve_isr` rewrites them all.
-# Identity-deduped (ESS-0hh): a pure existence predicate over a possibly
-# structurally-shared tree — the per-path recursion was exponential on a DAG.
-_has_index_set_ref(expr::OpExpr) = _has_index_set_ref(expr, IdDict{OpExpr, Nothing}())
-function _has_index_set_ref(expr::OpExpr, seen::IdDict{OpExpr, Nothing})
-    haskey(seen, expr) && return false
-    seen[expr] = nothing
-    if expr.ranges !== nothing
-        for v in values(expr.ranges)
-            v isa IndexSetRef && return true
-            if v isa AbstractVector
-                for b in v
-                    b isa OpExpr && _has_index_set_ref(b, seen) && return true
-                end
-            end
-        end
-    end
-    expr.filter isa OpExpr && _has_index_set_ref(expr.filter::OpExpr, seen) && return true
-    for a in expr.args
-        a isa OpExpr && _has_index_set_ref(a, seen) && return true
-    end
-    expr.expr_body isa OpExpr && _has_index_set_ref(expr.expr_body::OpExpr, seen) && return true
-    if expr.values !== nothing
-        for v in expr.values
-            v isa OpExpr && _has_index_set_ref(v, seen) && return true
-        end
-    end
-    expr.lower isa OpExpr && _has_index_set_ref(expr.lower::OpExpr, seen) && return true
-    expr.upper isa OpExpr && _has_index_set_ref(expr.upper::OpExpr, seen) && return true
-    return false
-end
-_has_index_set_ref(::ASTExpr) = false
+# True iff any node in the subtree carries a `ranges` entry that is an
+# IndexSetRef, in any expression-bearing field (the generated walk).
+_ranges_hold_isr(e::ASTExpr) =
+    e isa OpExpr && (e::OpExpr).ranges !== nothing &&
+    any(v -> v isa IndexSetRef, values((e::OpExpr).ranges))
+_has_index_set_ref(expr::ASTExpr) = _any_subexpr_once(_ranges_hold_isr, expr)
 _has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_ref(eq.rhs)
 
 # Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
-# form, rebuilding OpExpr nodes while preserving all fields.
-#
-# IDENTITY-MEMOIZED and IDENTITY-PRESERVING (ESS-0hh): the rewrite is a pure
-# function of the node under one call's fixed registries, so a shared node
-# resolves to ONE shared output node, and a node with no IndexSetRef anywhere
-# below is returned VERBATIM instead of reconstruct-copied. The unconditional
-# per-path rebuild both did exponential work on a structurally-shared
-# equation (e.g. a folded array-observed chain) and re-inflated the DAG into
-# an exponentially large tree for every stage downstream. Identity
-# preservation also keeps `_translate_equation_sites!` cheap: its lockstep
-# walk short-circuits on `old === new`.
+# form, in every expression-bearing field (`map_children`). Memoized by
+# identity and identity-preserving: a shared node resolves to one shared output
+# node, and a node with no IndexSetRef below it is returned as it is, so a
+# shared expression is neither walked once per path nor re-inflated into a tree.
 function _resolve_isr(
         expr::OpExpr, index_sets::AbstractDict,
         derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
@@ -200,43 +165,17 @@ function _resolve_isr(
     )
     cached = get(memo, expr, nothing)
     cached === nothing || return cached
-    changed = false
-    res(x) = begin
-        r = _resolve_isr(x, index_sets, derived_extents, factor_scope, memo)
-        r === x || (changed = true)
-        r
-    end
-    new_args = ASTExpr[res(a) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : res(expr.expr_body)
-    new_values = expr.values === nothing ? nothing : ASTExpr[res(v) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : res(expr.lower)
-    new_upper = expr.upper === nothing ? nothing : res(expr.upper)
-    new_filter = expr.filter === nothing ? nothing : res(expr.filter)
-    new_ranges = expr.ranges
-    if expr.ranges !== nothing
-        # A range bound may itself be an expression holding a reference; `res`
-        # marks `changed` when it rewrites one.
+    e = map_children(x -> _resolve_isr(x, index_sets, derived_extents, factor_scope, memo), expr)
+    if _ranges_hold_isr(e)
         resolved = Dict{String, Any}()
-        for (k, v) in expr.ranges
-            resolved[k] = if v isa IndexSetRef
-                changed = true
-                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope)
-            elseif v isa AbstractVector && any(b -> b isa OpExpr, v)
-                Any[b isa OpExpr ? res(b) : b for b in v]
-            else
-                v
-            end
+        for (k, v) in (e::OpExpr).ranges
+            resolved[k] = v isa IndexSetRef ?
+                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
         end
-        changed && (new_ranges = resolved)
+        e = reconstruct(e::OpExpr; ranges = resolved)
     end
-    result = changed ?
-        reconstruct(
-            expr; args = new_args, expr_body = new_body,
-            values = new_values, lower = new_lower, upper = new_upper,
-            filter = new_filter, ranges = new_ranges
-        ) : expr
-    memo[expr] = result
-    return result
+    memo[expr] = e
+    return e
 end
 _resolve_isr(
     expr::ASTExpr, ::AbstractDict, ::AbstractDict = _EMPTY_DERIVED_EXTENTS,
@@ -280,12 +219,12 @@ end
 # (`_resolve_index_of_faq`), and the scalar reduction
 # (`_resolve_scalar_faq`) — all unroll the same product: iterate the
 # Cartesian product of the contracted-index iterators, drop join-rejected
-# combinations at build time (M2, §5.3), substitute the concrete contracted
+# combinations at build time, substitute the concrete contracted
 # indices into the (already output-index-substituted) `body`, and guard
 # filter-rejected terms with a runtime `ifelse(pred, term, 0̄)` (§7.2). `emit!`
 # receives each surviving term; the caller owns what happens next (resolve to a
 # scalar ASTExpr vs resolve+compile to a `_Node`) and how the terms are ⊕-combined.
-# With neither gates nor filter this is the unchanged M1 expansion.
+# With neither gates nor filter this is the plain expansion.
 #
 # Dict reuse: `_sub_preserving`/`_join_admits` only READ these dicts (never
 # retain them), and the key SET is identical every iteration — only the values
@@ -542,9 +481,14 @@ end
 _contracted_index_names(ranges_dict, output_idx) =
     sort!(String[n for n in keys(ranges_dict) if !(n in output_idx)])
 
-_ast_reads(e, name::AbstractString) =
-    e isa VarExpr ? (e::VarExpr).name == name :
-    e isa OpExpr ? _anyof(a -> _ast_reads(a, name), (e::OpExpr).args) : false
+# `pred` holds for `e` or a node under it reached through `args` alone. The
+# walk for a subscript or a range bound, which is integer arithmetic over names
+# with no expression-bearing field but its operands.
+_args_any(pred::P, e::ASTExpr) where {P} =
+    pred(e)::Bool || (e isa OpExpr && _anyof(a -> _args_any(pred, a), (e::OpExpr).args))
+
+_ast_reads(e::ASTExpr, name::AbstractString) =
+    _args_any(x -> x isa VarExpr && (x::VarExpr).name == name, e)
 
 # For each contracted index, the other contracted indices its range reads, or
 # `nothing` when no range reads one (the common case: a product).
@@ -664,9 +608,8 @@ _expand_contract_range(rspec, idx_env::Dict{String, Int}, const_arrays::Abstract
 
 # Resolve index(faq(...), k1, k2, ...) in expression position by
 # substituting the output_idx values and unrolling contracted indices at
-# build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`,
-# the `_is_faq_D_lhs` branch of the derivative loop) but produces a scalar
-# ASTExpr instead of writing to rhs_list.
+# build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`) but
+# produces a scalar ASTExpr instead of writing to rhs_list.
 function _resolve_index_of_faq(
         faq_expr::OpExpr, idx_args::Vector{ASTExpr},
         array_var_info, var_map, const_arrays,
@@ -697,9 +640,8 @@ function _resolve_index_of_faq(
     # Output-index substitution. Each output-index arg is EITHER a bound symbol —
     # kept SYMBOLIC, substituted as its own resolved-in-place expression so the
     # unrolled body reads `A[c, <sym>]` and lowers to a runtime `_ConstGatherRef`
-    # (wall2 Phase C, compile-once fast path) — OR a build-time constant, folded to
-    # an `IntExpr` exactly as before. With an EMPTY `bound_syms` every arg is
-    # constant, so this is byte-identical to the pre-Phase-C concrete expansion.
+    # — OR a build-time constant, folded to an `IntExpr`. With an EMPTY
+    # `bound_syms` every arg is constant.
     nd = length(output_idx_strs)
     symbolic = falses(nd)
     k_vals = Vector{Int}(undef, nd)
@@ -1091,15 +1033,9 @@ function _resolve_index_of_makearray_symbolic(
     )
 end
 
-# Whether `e` reads one of `syms` as a free name.
-function _reads_bound_sym(e::ASTExpr, syms::Set{String})::Bool
-    e isa VarExpr && return (e::VarExpr).name in syms
-    e isa OpExpr || return false
-    for a in (e::OpExpr).args
-        _reads_bound_sym(a, syms) && return true
-    end
-    return false
-end
+# Whether the subscript `e` reads one of `syms` as a free name.
+_reads_bound_sym(e::ASTExpr, syms::Set{String})::Bool =
+    _args_any(x -> x isa VarExpr && (x::VarExpr).name in syms, e)
 
 # A subscript whose value is the same in integer and in floating-point
 # arithmetic: integers and names under `+`, `-` and `*`.
@@ -1358,7 +1294,7 @@ function _broadcast_operand_subs(
     return adj ? out : nothing
 end
 
-# ── Runtime contraction loop gate (ess-runtime-contraction) ─────────────────
+# ── Runtime contraction loop gate ─────────────────────────────────────────────
 # Depth of the array-equation per-cell resolve (`_compile_faq_percell!`). A
 # scalar aggregate nested INSIDE an array-equation cell body must keep unrolling:
 # its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
@@ -1431,7 +1367,7 @@ function _resolve_symbolic(
 end
 
 # Try to compile a uniform contraction to a single runtime loop node instead of
-# unrolling it (ess-runtime-contraction). Returns a `__contract_loop` marker-op
+# unrolling it. Returns a `__contract_loop` marker-op
 # ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
 # the resolve's `_Decline` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
 # (a reserved bound-sym `VarExpr`) and resolves the body ONCE: a loop var reaching
@@ -1469,7 +1405,7 @@ function _try_build_contraction_loop(
     return node
 end
 
-# ── Whole-array contraction loop nest (ess-array-contraction) ────────────────
+# ── Whole-array contraction loop nest ────────────────
 # Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
 # symbolic too (see `_resolve_array_contraction_term`). WHICH tier gets an
 # equation is decided by POSITION in the cascade: `_compile_faq_equation!`
@@ -1560,10 +1496,9 @@ function _resolve_scalar_faq(
     contract_iters = _contract_iters_at(
         contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, const_arrays
     )
-    # M2 (§5.3 / §7.2): build-time join gates + runtime filter guard. Every join
+    # Build-time join gates + runtime filter guard (§5.3 / §7.2). Every join
     # key of a scalar aggregate is a contracted symbol, so the binding is the
-    # contraction tuple (no output-index seed). With neither join nor filter,
-    # this is the unchanged M1 scalar expansion.
+    # contraction tuple (no output-index seed).
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
@@ -1572,10 +1507,10 @@ function _resolve_scalar_faq(
             pgather, memo, bound_syms
         )
     end
-    # ── Runtime contraction loop opt-in (ess-runtime-contraction) ──────────────
-    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else keeps
-    # unrolling exactly as before. Gated conservatively (correctness first):
-    #   * enabled (env), and NOT already inside an array-equation cell resolve
+    # ── Runtime contraction loop opt-in ──────────────
+    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else
+    # unrolls. Gated conservatively (correctness first):
+    #   * enabled by the compiler plan, and NOT already inside an array-equation cell resolve
     #     (loop node is confined to scalar-walker contexts — see `_BuildState.array_cell_depth`);
     #   * NOT the symbolic compile-once cellwise path (`bound_syms` empty) — that
     #     path binds its own reserved symbols and runs a separate evaluator;
@@ -1654,18 +1589,17 @@ const _EMPTY_CONST_ARRAYS = Dict{String, AbstractArray{Float64}}()
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PARAMS = Dict{String, Float64}()
 
-# A live forcing buffer bound by reference into the evaluator (ess-14f.3, JL-J0).
+# A live forcing buffer bound by reference into the evaluator.
 # Unlike `const_arrays` (build-time-FROZEN: `index(arr,…)` const-folds to a
 # `NumExpr` literal, tree_walk.jl const-array branch), a `_PGatherArray` reroutes
 # the SAME `index(forcing,…)` gather to a LIVE read of a captured `flat`
 # `Vector{Float64}`. `flat = vec(buffer)` aliases the caller's dense
 # `Array{Float64}` buffer, so a discrete refresh callback's in-place `buffer .= …`
-# (ess-14f.3 J1) shows through to the RHS with zero reallocation. `dims` carries
+# shows through to the RHS with zero reallocation. `dims` carries
 # the source shape for bounds-checking + column-major linearization at build time.
 # Reading the captured `flat` (NOT `getfield(p, runtime_sym)`) is what keeps the
 # read zero-alloc: a runtime-symbol `getfield` on a heterogeneous NamedTuple boxes
-# the union and would also regress the scalar `_NK_PARAM` path — see the JL-J0
-# feasibility-gate note in `_build_evaluator_impl`.
+# the union and would also regress the scalar `_NK_PARAM` path.
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time
@@ -1680,14 +1614,15 @@ _PGatherArray(flat, dims) = _PGatherArray(flat, dims, false)
 # `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_PGATHER = Dict{String, _PGatherArray}()
 
-# The set of OUTPUT-INDEX symbol names kept SYMBOLIC through `_resolve_indices`
-# (wall2 Phase C). It is EMPTY on every path except the compile-once
-# `evaluate_cellwise` fast path, so the DEFAULT threaded through the whole
-# resolve recursion is this shared read-only empty set — making every existing
-# caller byte-identical to the pre-Phase-C behaviour (a name in this set is the
-# ONLY thing that turns a const-array read into a runtime `_ConstGatherRef`
-# instead of a folded `NumExpr`). Read-only sentinel — see the `_EMPTY_*`
-# invariant block next to `_EMPTY_DERIVED_EXTENTS`.
+# The set of index symbol names kept SYMBOLIC through `_resolve_indices`: the
+# compile-once cellwise path's output indices, and the loop indices of a
+# contraction loop, a ragged loop, the whole-array nest and the scatter. A
+# const-array read whose subscript names one becomes a runtime
+# `_ConstGatherRef` rather than a folded `NumExpr`; so does one whose subscript
+# reads a parameter, a state or `t` (`_subscript_is_runtime`), whatever the
+# set holds. The default threaded through the resolve recursion is this shared
+# read-only empty set — see the `_EMPTY_*` invariant block next to
+# `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_BOUND_SYMS = Set{String}()
 
 # True iff a subscript's value is known only at run time: it references a name
@@ -1957,8 +1892,7 @@ function _const_subscript_int(a::ASTExpr, const_arrays::AbstractDict)
     _holds_faq(a) && (a = _fold_faq_terms(a, const_arrays, IdDict{OpExpr, ASTExpr}()))
     return _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
 end
-_holds_faq(::ASTExpr) = false
-_holds_faq(e::OpExpr) = _is_faq_op(e.op) || _anyof(_holds_faq, e.args)
+_holds_faq(e::ASTExpr) = _args_any(x -> x isa OpExpr && _is_faq_op((x::OpExpr).op), e)
 
 # `e` with each `faq` sub-term replaced by the literal it evaluates to; the
 # nodes above one are copied, every other node is `e`'s own. Memoized by
@@ -1973,11 +1907,7 @@ function _fold_faq_terms(e::ASTExpr, const_arrays::AbstractDict, memo::IdDict{Op
         )
         NumExpr(_eval_node(_compile(t, Dict{String, Int}(), Set{Symbol}()), Float64[], NamedTuple(), 0.0))
     else
-        c = OpExpr(e.op, ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
-        for f in fieldnames(OpExpr)
-            f === :args || setfield!(c, f, getfield(e, f))
-        end
-        c
+        reconstruct(e; args = ASTExpr[_fold_faq_terms(x, const_arrays, memo) for x in e.args])
     end
     return memo[e] = r
 end
@@ -2019,19 +1949,16 @@ function _intern_new_const(vals, name::String, const_arrays::AbstractDict)
     return vals, name
 end
 
-# True iff `e` references a runtime contraction LOOP variable (a reserved
-# `__esm_lv_*` name — `_LOOPVAR_PREFIX`). This is the SOLE trigger for lowering a
-# state-array read to a runtime `_NK_STATE_GATHER` (ess-runtime-contraction):
-# those names appear ONLY when `_try_build_contraction_loop` keeps a contracted
-# index symbolic, so a state gather is never emitted on the normal RHS build or the
-# compile-once cellwise path (whose bound symbols use different names). Distinct
-# from `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
-_refs_loopvar(e::VarExpr) = startswith(e.name, _LOOPVAR_PREFIX)
-_refs_loopvar(e::OpExpr) = _anyof(_refs_loopvar, e.args)
-_refs_loopvar(::ASTExpr) = false
+# True iff the subscript `e` references a runtime contraction LOOP variable (a
+# reserved `__esm_lv_*` name — `_LOOPVAR_PREFIX`); such names appear only where
+# a contraction is kept as a run-time loop. One of the triggers for lowering a
+# state-array read to a runtime `_NK_STATE_GATHER`. Distinct from
+# `_reads_bound_sym`, which fires for ANY symbol in a caller-supplied set.
+_refs_loopvar(e::ASTExpr) =
+    _args_any(x -> x isa VarExpr && startswith((x::VarExpr).name, _LOOPVAR_PREFIX), e)
 
 # Lower a STATE-array read whose subscripts depend on a contraction loop variable
-# (`q[donor(i,k)]`, ess-runtime-contraction) to a runtime `_NK_STATE_GATHER`. The
+# (`q[donor(i,k)]`) to a runtime `_NK_STATE_GATHER`. The
 # frozen slot table maps every in-bounds state cell to its flat `u` slot (built
 # once per state var per build, shared across output cells via the build state's slot tables);
 # the subscript expressions resolve normally (a loop var → `_NK_LOOPVAR`; an indirect
@@ -2250,8 +2177,8 @@ function _resolve_indices_op(
         first_arg = expr.args[1]
         # Expression-position faq: index(faq(...), k1, k2, ...)
         # Expand the faq at build time by substituting output_idx and
-        # unrolling contracted indices (same strategy as the `_is_faq_D_lhs`
-        # branch of `_build_evaluator_impl`'s derivative loop).
+        # unrolling contracted indices (the strategy `_compile_faq_percell!`
+        # uses for a whole-array derivative equation).
         if first_arg isa OpExpr && _is_faq_op(first_arg.op)
             return _resolve_index_of_faq(
                 first_arg::OpExpr, expr.args[2:end],
@@ -2374,7 +2301,7 @@ function _resolve_indices_op(
                     "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"
                 )
             )
-            # Runtime state gather (ess-runtime-contraction): a subscript depends on
+            # Runtime state gather: a subscript depends on
             # a contraction loop variable, so the slot is not a build-time constant.
             # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
             # the loop-build path (`__esm_lv_*` names); the concrete path below is
@@ -2418,7 +2345,7 @@ function _resolve_indices_op(
                 throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
             return VarExpr(cname)
         end
-        # Live forcing buffer bound via `param_arrays` (ess-14f.3, JL-J0): reroute
+        # Live forcing buffer bound via `param_arrays`: reroute
         # this gather to a LIVE read instead of the frozen const-fold below. The
         # array is a discrete-cadence loader buffer (the driver routes const-cadence
         # data to `const_arrays` and discrete-cadence data here), so its contents
@@ -2430,7 +2357,7 @@ function _resolve_indices_op(
         # gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
         # the gather from being hoisted itself, it does NOT keep the ref out of
         # `canonical_json`, which sees it as a child of every hoistable ancestor
-        # (ess-qic; see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
+        # (see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
         if first_arg isa VarExpr && haskey(pgather, first_arg.name)
             pg = pgather[first_arg.name]::_PGatherArray
             idx_args_expr = expr.args[2:end]
@@ -2500,8 +2427,7 @@ function _resolve_indices_op(
         end
         # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
         # RUNTIME-VARYING vs. fully-constant subscripts are handled uniformly by
-        # `_resolve_const_array_gather` (see there); with an empty `bound_syms`
-        # this is byte-identical to the pre-Phase-C const-fold.
+        # `_resolve_const_array_gather` (see there).
         if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
             return _resolve_const_array_gather(
                 const_arrays[first_arg.name],
@@ -2660,70 +2586,13 @@ end
 
 # The affine form `coef * loop_index[pos] + c` of an index expression, as
 # `(pos, coef, c)` with `pos = 0` for a constant, or `nothing` when the
-# expression is not one (another operator, a name that is not a loop index, a
-# non-integer literal, or two different loop indices). Integer arithmetic wraps
-# exactly as `_eval_const_int`'s does.
+# expression is not one (`_affine_form`, with no subexpression moving with two
+# different loop indices).
 function _lhs_index_affine(a::ASTExpr, idx_names::Vector{String})
-    if a isa IntExpr
-        return (0, 0, Int(a.value))
-    elseif a isa NumExpr
-        v = a.value
-        (isinteger(v) && -9.0e18 <= v <= 9.0e18) || return nothing
-        return (0, 0, Int(v))
-    elseif a isa VarExpr
-        pos = findfirst(==(a.name), idx_names)
-        pos === nothing && return nothing
-        return (pos, 1, 0)
-    elseif a isa OpExpr
-        op = a.op
-        c = a.args
-        if op == "+"
-            isempty(c) && return nothing
-            pos, coef, k = 0, 0, 0
-            for x in c
-                t = _lhs_index_affine(x, idx_names)
-                t === nothing && return nothing
-                p2, c2, k2 = t
-                if p2 != 0
-                    (pos == 0 || pos == p2) || return nothing
-                    pos = p2
-                    coef += c2
-                end
-                k += k2
-            end
-            return (coef == 0 ? 0 : pos, coef, k)
-        elseif op == "-" || op == "neg"
-            if length(c) == 1
-                t = _lhs_index_affine(c[1], idx_names)
-                t === nothing && return nothing
-                return (t[1], -t[2], -t[3])
-            end
-            (op == "-" && length(c) == 2) || return nothing
-            t1 = _lhs_index_affine(c[1], idx_names)
-            t2 = _lhs_index_affine(c[2], idx_names)
-            (t1 === nothing || t2 === nothing) && return nothing
-            (t1[1] == 0 || t2[1] == 0 || t1[1] == t2[1]) || return nothing
-            coef = t1[2] - t2[2]
-            pos = t1[1] != 0 ? t1[1] : t2[1]
-            return (coef == 0 ? 0 : pos, coef, t1[3] - t2[3])
-        elseif op == "*"
-            isempty(c) && return nothing
-            pos, coef, k = 0, 0, 1
-            for x in c
-                t = _lhs_index_affine(x, idx_names)
-                t === nothing && return nothing
-                if t[1] != 0 && t[2] != 0
-                    pos == 0 || return nothing          # a product of two loop indices
-                    pos, coef, k = t[1], k * t[2], k * t[3]
-                else
-                    coef *= t[3]
-                    k *= t[3]
-                end
-            end
-            return (coef == 0 ? 0 : pos, coef, k)
-        end
-    end
-    return nothing
+    f = _affine_form(a, idx_names; single = true)
+    f === nothing && return nothing
+    pos = findfirst(!iszero, f.c)
+    return pos === nothing ? (0, 0, f.c0) : (pos, f.c[pos], f.c0)
 end
 
 # The box a `faq` LHS's subscripts sweep over `range_iters`, as `(lo, hi)`, or

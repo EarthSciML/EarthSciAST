@@ -178,26 +178,29 @@ end
 # full list is introspectable).
 # ============================================================================
 
-# In-place builds. `codegen=false` puts the primary emission's node budget at
-# zero — a retained tuning threshold — so nothing is emitted away and
-# `getfield(f!, :kernel_section).kernels` holds every merged kernel; the
-# default `codegen=true` build exercises the codegen emitter OVER merged
-# kernels (source generation + compiled loop nests). `compiler=:interpreter` is
-# the reference: no merge, no codegen, no affine tier.
+# In-place builds. `codegen=false` puts the emission's node budget at zero —
+# a refusal boundary under strict native, so that build is non-strict — and
+# nothing is emitted away: `getfield(f!, :kernel_section).kernels` holds every
+# merged kernel. The default `codegen=true` build exercises the codegen
+# emitter OVER merged kernels (source generation + compiled loop nests).
+# `compiler=:interpreter` is the reference: no merge, no codegen, no affine
+# tier.
 function _im_build(
         model, ics; codegen::Bool = true, compiler::Symbol = :native,
         param_arrays = Dict{String, Any}()
     )
+    plan = codegen || compiler !== :native ? compiler :
+        ESM._plan_with(ESM._compiler_plan(:native); strict = false)
     return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
             initial_conditions = _om_q(ics), param_arrays = param_arrays,
-            compiler = compiler
+            compiler = plan
         )
         (f!, u0, p, vm, rep.stats)
     end
 end
-# Full kernel count of the in-place closure — the whole list when the primary
+# Full kernel count of the in-place closure — the whole list when the
 # emission declined everything (n_emitted == 0).
 function _im_nkernels(f!)
     ks = getfield(f!, :kernel_section)

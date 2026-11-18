@@ -246,53 +246,6 @@ function _de_build_subrt(plan::_E._OopAccPlan)
     return _DESubRT(subs, plan.sub_plans, invvals, cellvals)
 end
 
-# ---- CSR reduces -------------------------------------------------------------
-#
-# The CSR segment fold, in SSA form. The body has already been emitted ONCE over the
-# flat E-lane buffer; each cell's answer is `zerobar ⊕ body[seg[c]] ⊕ … ` in
-# ascending (CSR) order. Emitted as `W = max segment width` whole-lane steps:
-# step `m` reads each cell's `m`-th entry (a read of the body value at
-# `seg[c]+m-1`) and, for the cells whose segment is shorter than `m`, selects the
-# ⊕-identity instead — so every cell folds its own entries, in order, and the
-# short cells fold identities after them.
-#
-# `⊕ 0̄` is exact for every semiring the IR uses (`+` with 0.0 on a value that is
-# never `-0.0` because the seed is `+0.0`; `*` with 1.0; `max`/`min` with ∓Inf),
-# so the padding changes no value. The op count is O(W) — the widest cell's
-# valence, a property of the connectivity — and never O(#cells).
-function _de_reduce_fold(
-        ctx::_DECtx, bodyE::_DEVal, seg::Vector{Int},
-        zerobar::Float64, op::Symbol
-    )::_DEVal
-    N = length(seg) - 1
-    N >= 1 || _de_refuse(ctx, "_NK_REDUCE", "the CSR row-pointer vector is empty.")
-    widths = Int[seg[c + 1] - seg[c] for c in 1:N]
-    W = maximum(widths)
-    W == 0 && return _de_bcast(ctx, _de_const(ctx, zerobar), N)
-    E = bodyE.len
-    f = _de_semiring_fn(ctx, op)
-    s = _de_bcast(ctx, _de_const(ctx, zerobar), N)
-    zpad = _de_const(ctx, zerobar)
-    for m in 1:W
-        if bodyE.len == 1
-            term = bodyE            # a body that hoisted lane-invariant
-        else
-            pos = Int[min(max(seg[c] + m - 1, 1), E) for c in 1:N]
-            term = _de_take(ctx, bodyE, pos)
-        end
-        short = Bool[widths[c] < m for c in 1:N]
-        if any(short)
-            term = _de_select(
-                ctx, _de_boolconst(ctx, short), N, zpad,
-                _de_bcast(ctx, term, N)
-            )
-        end
-        s = _de_bin(ctx, f, s, term)
-    end
-    _de_tally!(ctx, :csr_reduce)
-    return s
-end
-
 # ---- access kernels ----------------------------------------------------------
 
 # ---- an access kernel's own leaves -------------------------------------------
@@ -303,8 +256,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
     if k === _E._NK_ACCESS
         a = K.acc[nd.idx]
         ak = a.kind
-        if ak === _E._AK_STATE_AFFINE || ak === _E._AK_STATE_INDIRECT ||
-                ak === _E._AK_STATE_INDIRECT_COL
+        if ak === _E._AK_STATE_AFFINE
             return _de_gather(ctx, ctx.ue, plan.gathers[nd.idx])
         elseif ak === _E._AK_STATE_TBL_BOX
             g = _de_gather(ctx, ctx.ue, plan.gathers[nd.idx])
@@ -313,8 +265,6 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             return _de_select(ctx, _de_boolconst(ctx, m), g.len, _de_const(ctx, 0.0), g)
         elseif ak === _E._AK_STATE_FIXED
             return _de_read(ctx, ctx.ue, a.idx, :akfixed)
-        elseif ak === _E._AK_SCALAR
-            return _de_const(ctx, a.v)
         elseif ak === _E._AK_ARR_FIXED
             # LIVE forcing, invariant slot: one element of a program input.
             buf = _de_buffer(ctx, a.arr)
@@ -325,8 +275,7 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
             buf = _de_buffer(ctx, a.arr)
             return _de_take(ctx, buf, plan.forc[nd.idx])
         else
-            # CONST_AFFINE / CONST_BOX / LOOP_IDX / CONST_CELL / CONST_EDGE:
-            # frozen lane data, one interned array constant.
+            # CONST_BOX / LOOP_IDX: frozen lane data, one interned array constant.
             return _de_arrconst(ctx, plan.consts[nd.idx])
         end
     elseif k === _E._NK_SUBCALL
@@ -339,15 +288,6 @@ function _de_leaf(ctx::_DECtx, fr::_DEKernelFrame, nd::_E._Node)::_DEVal
         end
         _de_tally!(ctx, :subcall)
         return _de_walk(ctx, sfr, S.spine)
-    elseif k === _E._NK_REDUCE
-        isempty(plan.red_plan) &&
-            _de_refuse(
-            ctx, "_NK_REDUCE", "this kernel's plan carries no E-lane " *
-                "reduce plan, so the body cannot be evaluated per entry."
-        )
-        efr = _DEKernelFrame(K, plan.red_plan[1], fr.inv, fr.cell, sub)
-        bodyE = _de_walk(ctx, efr, nd.children[1])
-        return _de_reduce_fold(ctx, bodyE, plan.red_seg, K.zerobar, :+)
     end
     return _de_refuse(
         ctx, "the access-kernel node kind $(_de_kindname(k))",

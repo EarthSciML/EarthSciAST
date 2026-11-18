@@ -123,7 +123,6 @@ function _gi_sig(K::ESM._AccKernel)
         cell_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.recipes],
         inv_recipe_nodes = Int[_gi_nodes(r) for r in K.cse.inv_recipes],
         n_subs = length(K.subs),
-        bound = nameof(typeof(K.bound)),
     )
 end
 # Sorted-by-repr so the comparison pins the kernel SET, not an incidental

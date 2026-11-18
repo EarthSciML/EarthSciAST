@@ -1,14 +1,12 @@
 # ========================================================================
-# tree_walk/stencil_affine.jl — part of the tree-walk evaluator (ess-affine).
+# tree_walk/stencil_affine.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl AFTER stencil.jl; see that file for the layout.
 #
 # The POLYHEDRAL affine build: turn a lowered `makearray` rule body into a small
 # set of `_AccKernel`s (access_kernel.jl) in O(#structural groups), NOT O(#cells).
-# This is the replacement for the per-cell / per-branch symbolic-stencil path
-# (stencil.jl), whose cost is O(#cells × body) and made the monotone-PPM build
-# take tens of minutes (see esd-ess-build-oom-memoless-substitution).
+# The per-cell path costs O(#cells × body).
 #
-# HOW IT WILL WORK (the box processor, built incrementally):
+# HOW IT WORKS (the box processor):
 #   1. Reuse `_build_branch_template` (stencil.jl) to compile ONE sentinel spine
 #      per structural signature — a `_Node` tree whose loop-var-dependent gather
 #      leaves are `_NK_STATE(idx = -k)` placeholders (lane k ↔ `recipes[k]`).
@@ -56,7 +54,7 @@ end
 # Anything not modelled (a contraction node) throws a `_Decline` so the
 # caller runs the per-cell path — never a wrong kernel.
 #
-# IDENTITY-MEMOIZED (ESS-0hh): the compiled template is a DAG (`_stencilize` /
+# IDENTITY-MEMOIZED: the compiled template is a DAG (`_stencilize` /
 # `_compile` preserve sharing via their identity memos), and the lowering is a
 # pure function of the node under one call's fixed `lane_repl`/`subcalls`, so
 # a shared template node lowers to ONE shared access node — the per-path
@@ -143,7 +141,7 @@ function _lower_subcall(site::_SubCallSite, lane_repl::Vector{<:_LaneRepl})::_No
         raw = _lower_to_access(variant.tmpl, seg, a, variant.subcalls)
         sp, cse = _build_acc_cse(raw, a)
         _AccKernel(
-            _contig_cells(0), sp, a, _FixedBound(0), 0.0, cse,
+            _no_cells(), sp, a, cse,
             _collect_subkernels(sp, cse)
         )
     end
@@ -220,60 +218,95 @@ struct _FastKey
     strides::Vector{Vector{Int}}
 end
 
-# `(c0, c)` with `e == c0 + Σ_d c[d]·loop[d]` for every cell, by the same integer
-# arithmetic `_eval_const_int` does; `nothing` for anything but integer literals,
-# the loop names, `+`, `-`, `neg` and a `*` with at most one non-constant factor.
-function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
+# ---- Affine subscripts ----------------------------------------------------
+# One model of an integer subscript that is AFFINE in the loop indices:
+# `c0 + Σ_d c[d]·loop[d]`, computed by the same wrapping integer arithmetic
+# `_eval_const_int` does. The recognizer admits integer literals, the loop
+# names, `+`, `-` (one or two operands), `neg`, and `*` with at most one factor
+# that names a loop index; anything else (a clamp `max(k-1,1)`, a fold, a
+# `mod`, a gather through a const table, a division, a non-loop name, a
+# non-integer or non-finite literal) is not affine. It is the licence for
+# skipping a per-cell check (an affine subscript cannot deviate from its model
+# at any cell), so it errs only towards "not affine", which costs a per-cell
+# evaluation and never a wrong value.
+#
+# `single = true` also refuses any subexpression that moves with two different
+# loop indices (the LHS reading, `_lhs_index_affine`, which allows one).
+struct _AffineForm
+    c0::Int
+    c::Vector{Int}
+end
+
+# A subexpression names no loop index (it is a constant over the loop).
+_names_no_loop(e::ASTExpr, idx_names) =
+    e isa VarExpr ? !((e::VarExpr).name in idx_names) :
+    e isa OpExpr ? _allof(a -> _names_no_loop(a, idx_names), (e::OpExpr).args) : true
+
+function _affine_form(e::ASTExpr, idx_names::AbstractVector{String}; single::Bool = false)
     D = length(idx_names)
     if e isa IntExpr
-        return ((e::IntExpr).value, zeros(Int, D))
+        return _AffineForm(Int((e::IntExpr).value), zeros(Int, D))
     elseif e isa NumExpr
         v = (e::NumExpr).value
         (isfinite(v) && isinteger(v) && abs(v) < 9.0e18) || return nothing
-        return (Int(v), zeros(Int, D))
+        return _AffineForm(Int(v), zeros(Int, D))
     elseif e isa VarExpr
         d = findfirst(==((e::VarExpr).name), idx_names)
         d === nothing && return nothing
         c = zeros(Int, D); c[d] = 1
-        return (0, c)
+        return _AffineForm(0, c)
     end
     e isa OpExpr || return nothing
     o = e::OpExpr
-    _affine_idx_expr(o, idx_names) || return nothing
-    parts = Tuple{Int, Vector{Int}}[]
-    for a in o.args
-        r = _affine_int_coeffs(a, idx_names)
-        r === nothing && return nothing
-        push!(parts, r)
+    (
+        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
+            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
+            o.filter === nothing && o.key === nothing && o.values === nothing
+    ) || return nothing
+    n = length(o.args)
+    n >= 1 || return nothing
+    op = o.op
+    if op == "*"
+        # At most one factor names a loop index; the product of the others
+        # scales it.
+        count(a -> !_names_no_loop(a, idx_names), o.args) <= 1 || return nothing
+    elseif !(op == "+" || (op == "-" && n <= 2) || (op == "neg" && n == 1))
+        return nothing
     end
-    n = length(parts)
-    if o.op == "+" && n >= 1
-        c0 = parts[1][1]; c = copy(parts[1][2])
+    parts = Vector{_AffineForm}(undef, n)
+    for j in 1:n
+        r = _affine_form(o.args[j], idx_names; single = single)
+        r === nothing && return nothing
+        parts[j] = r
+    end
+    r = if op == "+"
+        c0 = parts[1].c0; c = copy(parts[1].c)
         for j in 2:n
-            c0 += parts[j][1]; c .+= parts[j][2]
+            c0 += parts[j].c0; c .+= parts[j].c
         end
-        return (c0, c)
-    elseif (o.op == "-" || o.op == "neg") && n == 1
-        return (-parts[1][1], -parts[1][2])
-    elseif o.op == "-" && n == 2
-        return (parts[1][1] - parts[2][1], parts[1][2] .- parts[2][2])
-    elseif o.op == "*" && n >= 1
-        # At most one factor moves with the loop (`_affine_idx_expr`); the
-        # product of the constant ones scales it.
+        _AffineForm(c0, c)
+    elseif n == 1                                   # `-` or `neg`
+        _AffineForm(-parts[1].c0, -parts[1].c)
+    elseif op == "-"
+        _AffineForm(parts[1].c0 - parts[2].c0, parts[1].c .- parts[2].c)
+    else                                            # `*`
         k = 1; var = nothing
-        for (c0, c) in parts
-            if any(!iszero, c)
-                var === nothing || return nothing
-                var = (c0, c)
+        for (j, p) in enumerate(parts)
+            if _names_no_loop(o.args[j], idx_names)
+                k *= p.c0
             else
-                k *= c0
+                var = p
             end
         end
-        var === nothing && return (k, zeros(Int, D))
-        return (k * var[1], k .* var[2])
+        var === nothing ? _AffineForm(k, zeros(Int, D)) : _AffineForm(k * var.c0, k .* var.c)
     end
-    return nothing
+    (single && count(!iszero, r.c) > 1) && return nothing
+    return r
 end
+
+# Whether a subscript is structurally affine in the loop indices `idx`.
+_affine_idx_expr(e::ASTExpr, idx::AbstractVector{String}) = _affine_form(e, idx) !== nothing
+_affine_idx_expr(e::ASTExpr, idx) = _affine_form(e, collect(String, idx)) !== nothing
 
 # The body's `_FastKey`, or `false`. `branch` is its one branch, `id` that
 # branch key's number.
@@ -295,9 +328,9 @@ function _fast_key_model(sig, body, branch, id::Int, idx_names, idxset)
         (length(rec.lo) == n && length(rec.hi) == n && length(aff[2]) == n) || return false
         c0 = Int[]; c = Vector{Int}[]
         for a in rec.idx_args
-            r = _affine_int_coeffs(a, idx_names)
+            r = _affine_form(a, idx_names)
             r === nothing && return false
-            push!(c0, r[1]); push!(c, r[2])
+            push!(c0, r.c0); push!(c, r.c)
         end
         push!(los, rec.lo); push!(his, rec.hi); push!(c0s, c0); push!(cs, c)
         push!(bases, aff[1]); push!(strs, aff[2])
@@ -410,8 +443,8 @@ end
 
 # ── LANE-AFFINE SIGNATURE (the cut key measures the LANE, not the output) ─────
 #
-# The gather key historically recorded, per STATE lane, `Δ = slot − oln` — the
-# lane's slot relative to the OUTPUT cell's slot. That is the right key only for
+# A gather key that recorded, per STATE lane, `Δ = slot − oln` — the lane's
+# slot relative to the OUTPUT cell's slot — would be the right key only for
 # a gather from an array laid out exactly like the output: a Cartesian stencil
 # neighbour. It is the WRONG key for a gather whose array has a DIFFERENT shape
 # from the output's — a lower-rank geometry column (`coslat_e[j]` read from an
@@ -428,7 +461,7 @@ end
 #     (branch key, corner verification, lane derivation, spine memo key) is paid
 #     once per box.
 #
-# The fix keys each lane by its SUBSCRIPTS' own local behaviour instead: a
+# So each lane is keyed by its SUBSCRIPTS' own local behaviour instead: a
 # subscript that is STRUCTURALLY affine in the loop indices (`+ - neg *` over
 # loop names and integer literals) can never open a cut and is skipped outright,
 # and any other subscript contributes its per-dim BACKWARD DIFFERENCE
@@ -439,49 +472,6 @@ end
 # deviation from an affine model derived at some probe cell silently poisons the
 # scan whenever that probe sits on the clamped side of the transition being
 # looked for. Ghost membership (a state slot resolving to 0) keeps its own bit.
-
-# Is this subscript expression an AFFINE function of the loop indices — a sum of
-# integer literals and loop-index terms with integer coefficients? Such an
-# expression cannot deviate from its own affine model at ANY cell, so it can
-# never open a cut and never has to be evaluated for the signature. Everything
-# else (a clamp `max(k-1,1)`, a fold, a `mod`, a gather through a const table, a
-# division, a registered function) is classified NON-affine and DOES get its
-# per-cell deviation keyed. Conservative in the safe direction: mis-classifying
-# an affine expression as non-affine only costs a per-cell evaluation, while the
-# reverse is impossible -- the recognizer admits nothing but `+ - neg *`.
-function _affine_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return (e::NumExpr).value == round((e::NumExpr).value)
-    e isa VarExpr && return ((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    o = e::OpExpr
-    (
-        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
-            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
-            o.filter === nothing && o.key === nothing && o.values === nothing
-    ) || return false
-    if o.op == "+" || o.op == "-"
-        return _allof(a -> _affine_idx_expr(a, idxset), o.args)
-    elseif o.op == "neg"
-        return length(o.args) == 1 && _affine_idx_expr(o.args[1], idxset)
-    elseif o.op == "*"
-        nvar = 0
-        for a in o.args
-            _affine_idx_expr(a, idxset) || return false
-            _const_idx_expr(a, idxset) || (nvar += 1)
-        end
-        return nvar <= 1
-    end
-    return false
-end
-# Loop-index-free (hence constant over the loop) -- the multiplication guard.
-function _const_idx_expr(e::ASTExpr, idxset)::Bool
-    e isa IntExpr && return true
-    e isa NumExpr && return true
-    e isa VarExpr && return !((e::VarExpr).name in idxset)
-    e isa OpExpr || return false
-    return _allof(a -> _const_idx_expr(a, idxset), (e::OpExpr).args)
-end
 
 # Classify (and cache) one branch's lane subscripts: `true` for an argument that
 # is NOT structurally affine in the loop indices and therefore has to be
@@ -580,8 +570,8 @@ end
 # gather key.
 #
 # The gather key has TWO strengths, selected by `okey`:
-#   * `okey === nothing` — the historical ghost-bit key (in-bounds vs ghost per
-#     state lane). Used by `_process_affine_box!`, which only needs bkey+branch.
+#   * `okey === nothing` — the ghost-bit key (in-bounds vs ghost per state
+#     lane), for the scans that need only the branch.
 #   * `okey = (base, strides)` (the VERIFIED output affine map) — each state
 #     lane's Δ = slot − oln (or 'G' for a ghost) enters the key, so a PERIODIC
 #     WRAP — where the slot legally jumps by ±N·stride with no region or ghost
@@ -838,7 +828,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
     # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
     # map depends on none (a constant, a contracted index, a variable).
     alias0 = Dict{String, Any}(idx_names[d] => (d, 0) for d in 1:D)
-    # Deduped per (node, alias map CONTENT) (ESS-0hh): a Set-collector over the
+    # Deduped per (node, alias map CONTENT): a Set-collector over the
     # region bounds is path-multiplicity-insensitive, so entering each distinct
     # node once per distinct binding collects exactly the same candidate sets,
     # and a template gathered along many paths at the same subscripts is walked
@@ -1185,11 +1175,9 @@ end
 # ISBITS key (perf): a uniform `Tuple{UInt8,UInt64,Int,Int,Int,Int}` — `(tag, id,
 # a, b, c, d)` — instead of an allocated `String`. The leading `tag` disambiguates
 # the kinds (so e.g. a STATE_AFFINE and a LOOP_IDX with equal payload never
-# collide, exactly as the old "SA"/"LI" prefixes did), and the fixed shape means
+# collide), and the fixed shape means
 # `_acc_vn_key`'s per-ACCESS-node CSE key and `_lane_repl_key`'s per-lane key hash
-# with no per-node string materialization. Equality classes are identical to the
-# old strings: two descriptors map to the same tuple iff they mapped to the same
-# string.
+# with no per-node string materialization.
 function _desc_key(d::_AccDesc)
     k = d.kind
     k === _AK_STATE_AFFINE && return (0x01, UInt64(0), d.delta, d.idx, 0, 0)
@@ -1377,8 +1365,7 @@ function _fill_box_table_nt!(
     return tbl
 end
 
-# Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
-# array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
+# Materialize a NON-AFFINE state lane as a per-box slot table: one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
 # marking a ghost (fetched as the ghost literal 0.0). This is what an
 # unstructured gather (slot indirect through a connectivity const) lowers to;
@@ -1400,10 +1387,9 @@ function _materialize_state_tbl_inner(
 end
 
 # Materialize a NON-AFFINE live-forcing (pgather) lane as a per-box INDEX table
-# into the ALIASED live buffer (perf-plan A2). The forcing chains that observed
+# into the ALIASED live buffer. The forcing chains that observed
 # inlining splices into stencil lanes gather their raw buffers with clamped
-# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls — the GEOS-FP
-# Mz/OMEGA pattern); the clamp makes the flat index non-affine across a box,
+# subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls); the clamp makes the flat index non-affine across a box,
 # and — pgather transitions being invisible to the per-cell cut signature —
 # the corner verification then threw the WHOLE equation onto the per-cell
 # fallback — which on a real multi-level transport equation is a large fraction
@@ -1463,24 +1449,47 @@ function _materialize_const_box_inner(
     return _AccRepl(_AccConstBox(vals, s, off))
 end
 
-# Derive one lane's lowering for a box and VERIFY it is uniform across the box
-# corners (state Δ constant, ghost uniform, const/forcing index affine). A
-# non-uniform STATE lane (an unstructured/indirect gather, or a fold pattern
-# past the Δ-cut cap), a non-affine CONST index, and a non-affine LIVE-forcing
-# (pgather) index all MATERIALIZE per-box tables instead of declining — see
-# `_materialize_state_tbl` / `_materialize_const_box` /
-# `_materialize_pgather_tbl` (the pgather table holds indices into the aliased
-# live buffer, so it stays refresh-live; with that lowering off the whole
-# equation takes the per-cell fallback, the differential oracle). A live
-# forcing lane otherwise lowers to `_AccForcingBox` over the aliased buffer
-# (never folded to a literal, so it stays refresh-live).
-# `structural` is `_affine_idx_expr` over every one of the lane's subscripts.
-# Every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
+# `(s, off)` with `index(l) == off + Σ_d (l[d]-1)·s[d]` on the whole box, or
+# `nothing`. The strides are finite differences of `index` across one step of
+# each non-thin dim from `rep`, checked at every corner. A corner check is a
+# PROOF only for a structurally affine subscript (`structural`, `_affine_form`:
+# such an index cannot leave its model anywhere inside the box once two
+# corners pin it); for any other subscript (a gather through connectivity
+# data, which can agree at the corners and differ in between) the map is
+# checked at every cell of the box (`_box_holds`, memoized under `key()`).
+function _affine_index_on_box(index_at, rep, corners, thin, D, structural::Bool, box, run, key)
+    i_rep = index_at(rep)
+    s = zeros(Int, max(D, 3))
+    for d in 1:D
+        if !thin[d]
+            l2 = copy(rep); l2[d] += 1
+            s[d] = index_at(l2) - i_rep
+        end
+    end
+    off = i_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
+    model(l) = off + sum((l[d] - 1) * s[d] for d in 1:D)
+    for cn in corners
+        model(cn) == index_at(cn) || return nothing
+    end
+    structural || _box_holds(l -> model(l) == index_at(l), box, run, D, key) || return nothing
+    return s, off
+end
+
+# Derive one lane's lowering for a box and VERIFY it holds on the whole box —
+# one method per lane kind (`_lane_repl`). A lane that does not reduce to a
+# literal or a box-addressed descriptor MATERIALIZES a per-box table instead of
+# declining (`_materialize_state_tbl` / `_materialize_const_box` /
+# `_materialize_pgather_tbl`; the pgather table holds indices into the aliased
+# live buffer, so it stays refresh-live). A live forcing lane otherwise lowers
+# to `_AccForcingBox` over the aliased buffer (never folded to a literal, so it
+# stays refresh-live).
+# `structural` is `_affine_idx_expr` over every one of the lane's subscripts:
+# every corner-derived conclusion below (ghost fold, uniform Δ, affine const /
 # forcing index) is a PROOF only when it holds; otherwise the conclusion is
-# re-checked at every cell of the box. It is a property of the EXPRESSION, not of
-# a cell or a box, so the box processor passes the per-branch classification
-# `_lane_nonaffine_args!` already memoizes; the default derives it for a direct
-# caller.
+# re-checked at every cell of the box (`_affine_index_on_box`). It is a
+# property of the EXPRESSION, not of a cell or a box, so the box processor
+# passes the per-branch classification `_lane_nonaffine_args!` already
+# memoizes; the default derives it for a direct caller.
 #
 # `le` is the lane's compiled evaluator (`_lane_evaluator`) or `nothing`; a STATE
 # lane is evaluated through it wherever it answers, which is the same slot
@@ -1495,235 +1504,184 @@ function _derive_lane_repl(
     )
     env = Dict{String, Int}()
     ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
-    if rec.kind == LANE_STATE
-        slot_rep = ev(rep)
-        if slot_rep == 0                              # ghost → literal 0.0
-            for cn in corners
-                ev(cn) == 0 ||
-                    return _materialize_state_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
-            end
-            _ghost_box(
-                rec, idx_names, corners, structural, box, D, ev,
-                const_arrays, le, run
-            ) ||
-                return _materialize_state_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-            return _LitRepl(0.0)
-        end
-        Δ = slot_rep - oln_rep
-        uniform = true
+    lp = _LaneProbe(rec, idx_names, rep, corners, thin, D, box, run, structural, var_map, const_arrays)
+    k = rec.kind
+    k == LANE_STATE && return _lane_repl_state(lp, ev, le, oln_rep, base, strides)
+    k == LANE_LOOPLIT && return _lane_repl_looplit(lp)
+    k == LANE_EXPRTBL && return _lane_repl_exprtbl(lp)
+    k == LANE_CONST && return _lane_repl_const(lp, ev, flat_cache)
+    return _lane_repl_pgather(lp, ev)
+end
+
+# What every lane lowering reads: the lane, the box (its representative cell,
+# corners, thin dims, rank, the run it is cut from) and the build's maps.
+struct _LaneProbe{RP, CN, TH, BX, RN, VM, CA}
+    rec::_LaneRecipe
+    idx_names::Any
+    rep::RP
+    corners::CN
+    thin::TH
+    D::Int
+    box::BX
+    run::RN
+    structural::Bool
+    var_map::VM
+    const_arrays::CA
+end
+
+_lane_tbl_state(lp::_LaneProbe) =
+    _materialize_state_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_const(lp::_LaneProbe) =
+    _materialize_const_box(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+_lane_tbl_pgather(lp::_LaneProbe) =
+    _materialize_pgather_tbl(lp.rec, lp.idx_names, lp.box, lp.D, lp.var_map, lp.const_arrays, lp.run)
+
+# A STATE lane: a ghost box (literal 0.0), a constant offset from the output
+# slot (`_AccStateAffine`), the lane's own affine map on its array's block
+# (`_AccStateTblBox` over the block's identity table), or a slot table.
+function _lane_repl_state(lp::_LaneProbe, ev, le, oln_rep, base, strides)
+    rec, idx_names, rep, corners, thin, D, box, run = lp.rec, lp.idx_names, lp.rep, lp.corners, lp.thin, lp.D, lp.box, lp.run
+    structural = lp.structural
+    slot_rep = ev(rep)
+    if slot_rep == 0                              # ghost → literal 0.0
         for cn in corners
-            sc = ev(cn)
-            if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
-                uniform = false
-                break
-            end
+            ev(cn) == 0 || return _lane_tbl_state(lp)
         end
-        uniform && (
-            structural || _box_holds(
-                box, run, D,
-                () -> _lane_box_key(:offset, rec, idx_names, box)
-            ) do l
-                sc = ev(l)
-                sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
-            end
-        ) && return _AccRepl(_AccStateAffine(Δ))
-        # Not at a constant offset from the output slot. Before paying for a
-        # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
-        # STATE BOX note above): finite-difference the slot across a unit step in
-        # each non-thin dim, then VERIFY at every corner — the same derivation
-        # the const / live-forcing branches below use. A ghost anywhere in the
-        # probe or the corners declines (the table's per-cell 0 sentinel is what
-        # models a ghost).
-        #
-        # GUARD — every subscript must be STRUCTURALLY affine in the output loop
-        # indices. Corner verification alone does NOT license this lowering: a
-        # 2^D-corner check cannot see the interior, and a state subscript can be
-        # arbitrary data (an unstructured `index(conn, i)` gather, whose slot map
-        # is affine at the corners and at `rep + e_d` whenever the connectivity
-        # happens to agree there). The `_derive_var_affine` slot map is affine in
-        # the SUBSCRIPT VALUES, so the composed map is affine in the loop exactly
-        # when the subscripts are — and `_affine_idx_expr` admits nothing but
-        # `+ - neg *` over loop names and integer literals, which is a proof, not
-        # a sample. Anything else keeps the exact per-box table it had before.
-        # (This is the same reasoning the LANE_CONST branch below spells out: its
-        # index affinity holds "BY CONSTRUCTION within a box", not by corner
-        # agreement.) The motivating shapes — a lower-rank geometry column, a
-        # staggered face field, a 2-D surface field — all pass this guard.
-        if structural
-            blk = _state_slot_block(rec)
-            if blk !== nothing
-                lo0, hi0 = blk
-                ls = zeros(Int, max(D, 3))
-                ok = lo0 <= slot_rep <= hi0
-                if ok
-                    for d in 1:D
-                        thin[d] && continue
-                        l2 = copy(rep); l2[d] += 1
-                        v2 = ev(l2)
-                        if v2 == 0
-                            ok = false
-                            break
-                        end
-                        ls[d] = v2 - slot_rep
-                    end
-                end
-                if ok
-                    o = slot_rep - lo0 + 1
-                    @inbounds for d in 1:D
-                        o -= (rep[d] - 1) * ls[d]
-                    end
-                    for cn in corners
-                        sc = ev(cn)
-                        a = o
-                        @inbounds for d in 1:D
-                            a += (cn[d] - 1) * ls[d]
-                        end
-                        if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
-                            ok = false
-                            break
-                        end
-                    end
-                end
-                ok && return _AccRepl(
-                    _AccStateTblBox(
-                        _state_slot_identity(lo0, hi0), ls, o
-                    )
-                )
-            end
+        _ghost_box(
+            rec, idx_names, corners, structural, box, D, ev,
+            lp.const_arrays, le, run
+        ) || return _lane_tbl_state(lp)
+        return _LitRepl(0.0)
+    end
+    Δ = slot_rep - oln_rep
+    uniform = true
+    for cn in corners
+        sc = ev(cn)
+        if !(sc != 0 && sc - _box_oln(base, strides, cn, D) == Δ)
+            uniform = false
+            break
         end
-        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_LOOPLIT
-        dim = findfirst(==(rec.loop_name), idx_names)
-        dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
-        return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
-    elseif rec.kind == LANE_EXPRTBL
-        # Rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE
-        # RESCUE): the value is an arbitrary function of the loop indices, so
-        # there is no index-affine map to derive, and the LANE_CONST comment
-        # below forbids folding from sampled VALUES — so ALWAYS materialize
-        # the dense per-box value table. `_materialize_const_box` is generic
-        # over `_eval_recipe` (which routes this kind to its `_CellEval`),
-        # its exhaustive all-equal fold collapses a box-invariant subtree to
-        # a literal, and its cost is O(box cells) per lane — the same class
-        # as `_materialize_state_tbl` / `_materialize_pgather_tbl`. The
-        # resulting `_AccConstBox` keys by table object identity in
-        # `_desc_key`, exactly like every materialized const/state/pgather
-        # table: boxes never falsely SHARE a spine (over-split only), so
-        # spine memoization stays sound with no branch-key change — the lane
-        # is one sentinel leaf to the branch key, and its per-cell values are
-        # exact by exhaustive evaluation, never assumed uniform.
-        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays, run)
-    elseif rec.kind == LANE_CONST
-        # Loop-invariance is derived from the INDEX, never sampled from the
-        # VALUES.  The historical fast path here compared `_eval_recipe`'s value
-        # at `rep` against its value at the 2^D box CORNERS and folded the lane
-        # to a literal when they agreed.  That is unsound: a const array is
-        # arbitrary data, so corner agreement says nothing about the interior —
-        # a regrid weight column reading (0, 0.5, 0) across a box coincides at
-        # both ends and folded to a literal 0.0, silently zeroing the interior
-        # cell with no error and no warning.  Nothing licenses interpolating
-        # between sampled data values; a denser sample would only make the wrong
-        # answer rarer, not impossible.
-        #
-        # The corner checks that REMAIN below are a different kind of test and
-        # stay: they verify the resolved LINEAR INDEX (`_recipe_const_lin`) is
-        # affine in the loop index, which it is BY CONSTRUCTION within a box when
-        # the subscripts are affine expressions of the loop names — every
-        # boundary-fold transition already forces a box cut (`_const_fold_key!`),
-        # so two corners pin the affine map exactly. A subscript that is NOT
-        # (a gather through connectivity data) has no such construction, so the
-        # derived map is checked at every cell of the box instead. Invariance
-        # then follows STRUCTURALLY: an all-zero stride vector means the index —
-        # hence the value — does not move over the box, and only then is the
-        # literal fold legal. That test cannot be fooled by adversarial data,
-        # and for an affine subscript it costs the same O(2^D) corner evals as
-        # before: no per-cell work is added on the fast path.
-        val_rep = ev(rep)
-        lenv = Dict{String, Int}()
-        clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
-        lin_rep = clin(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = clin(l2) - lin_rep
-            end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            (off + sum((cn[d] - 1) * s[d] for d in 1:D)) == clin(cn) ||
-                return _materialize_const_box(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
+    end
+    uniform && (
         structural || _box_holds(
             box, run, D,
-            () -> _lane_box_key(:const, rec, idx_names, box)
+            () -> _lane_box_key(:offset, rec, idx_names, box)
         ) do l
-            (off + sum((l[d] - 1) * s[d] for d in 1:D)) == clin(l)
-        end || return _materialize_const_box(
-            rec, idx_names, box, D,
-            var_map, const_arrays, run
-        )
-        # Index verified affine over the box; a zero stride in every dim means it
-        # is the SAME element for every cell (thin dims contribute nothing — the
-        # box is one cell wide there), so the read is genuinely loop-invariant
-        # and folds to a literal. `flat[_recipe_const_lin(...)] ==
-        # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
-        # element and the fold is bit-identical.
-        all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do;
-            _const_flat(rec.arr)
+            sc = ev(l)
+            sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
         end
-        return _AccRepl(_AccConstBox(arr_flat, s, off))
-    else  # LANE_PGATHER — LIVE forcing gather
-        # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
-        # own grid), so this is the LANE_CONST derivation applied to the INDEX, not
-        # the value: finite-difference across unit loop steps for the affine strides,
-        # then VERIFY at every corner. Two differences from LANE_CONST: (1) never
-        # fold to a literal even when the index is constant — the buffer contents are
-        # refreshed in place, so the read must stay live; (2) pass `pg.flat`
-        # (the aliased live buffer) straight through, NEVER a copy.
-        pg = rec.arr::_PGatherArray
-        lin_rep = ev(rep)
-        s = zeros(Int, max(D, 3))
-        for d in 1:D
-            if !thin[d]
-                l2 = copy(rep); l2[d] += 1
-                s[d] = ev(l2) - lin_rep
+    ) && return _AccRepl(_AccStateAffine(Δ))
+    # Not at a constant offset from the output slot. Before paying for a dense
+    # per-box table, try the lane's OWN affine map (see the LANE-AFFINE STATE
+    # BOX note above): finite-difference the slot across a unit step in each
+    # non-thin dim, then VERIFY at every corner. A ghost anywhere in the probe
+    # or the corners declines (the table's per-cell 0 sentinel is what models a
+    # ghost). Only a structurally affine subscript qualifies: the block's slot
+    # map is affine in the SUBSCRIPT VALUES, so the composed map is affine in
+    # the loop exactly when the subscripts are, and the corner check is then a
+    # proof (`_affine_index_on_box`).
+    if structural
+        blk = _state_slot_block(rec)
+        if blk !== nothing
+            lo0, hi0 = blk
+            ls = zeros(Int, max(D, 3))
+            ok = lo0 <= slot_rep <= hi0
+            if ok
+                for d in 1:D
+                    thin[d] && continue
+                    l2 = copy(rep); l2[d] += 1
+                    v2 = ev(l2)
+                    if v2 == 0
+                        ok = false
+                        break
+                    end
+                    ls[d] = v2 - slot_rep
+                end
             end
-        end
-        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
-        for cn in corners
-            if (off + sum((cn[d] - 1) * s[d] for d in 1:D)) != ev(cn)
-                # Clamped/folded forcing subscript (non-affine across the box):
-                # materialize the per-box index table.
-                return _materialize_pgather_tbl(
-                    rec, idx_names, box, D,
-                    var_map, const_arrays, run
-                )
+            if ok
+                o = slot_rep - lo0 + 1
+                @inbounds for d in 1:D
+                    o -= (rep[d] - 1) * ls[d]
+                end
+                for cn in corners
+                    sc = ev(cn)
+                    a = o
+                    @inbounds for d in 1:D
+                        a += (cn[d] - 1) * ls[d]
+                    end
+                    if !(sc != 0 && 1 <= a <= (hi0 - lo0 + 1) && lo0 + a - 1 == sc)
+                        ok = false
+                        break
+                    end
+                end
             end
+            ok && return _AccRepl(_AccStateTblBox(_state_slot_identity(lo0, hi0), ls, o))
         end
-        if !structural && !_box_holds(
-                box, run, D,
-                () -> _lane_box_key(:forcing, rec, idx_names, box)
-            ) do l
-                (off + sum((l[d] - 1) * s[d] for d in 1:D)) == ev(l)
-            end
-            return _materialize_pgather_tbl(
-                rec, idx_names, box, D,
-                var_map, const_arrays, run
-            )
-        end
-        return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
+    return _lane_tbl_state(lp)
+end
+
+# The loop index itself: a literal on a thin dim, else a loop-index read.
+function _lane_repl_looplit(lp::_LaneProbe)
+    rec = lp.rec
+    dim = findfirst(==(rec.loop_name), lp.idx_names)
+    dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
+    return lp.thin[dim] ? _LitRepl(Float64(lp.rep[dim])) : _AccRepl(_AccLoopIdx(dim))
+end
+
+# A rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE RESCUE):
+# its value is an arbitrary function of the loop indices, so there is no
+# index-affine map to derive and no value may be folded from samples — it is
+# always the dense per-box value table, which folds to a literal only when
+# every cell's value is equal, exhaustively.
+_lane_repl_exprtbl(lp::_LaneProbe) = _lane_tbl_const(lp)
+
+# A CONST lane. Loop-invariance is derived from the INDEX, never sampled from
+# the VALUES: a const array is arbitrary data, so agreement at the corners
+# says nothing about the interior (a regrid weight column reading (0, 0.5, 0)
+# across a box coincides at both ends). The resolved LINEAR INDEX
+# (`_recipe_const_lin`) is affine on the box when the subscripts are affine
+# expressions of the loop names — every boundary-fold transition already
+# forces a box cut (`_const_fold_key!`). An all-zero stride vector then means
+# the index — hence the value — does not move over the box, and only then is
+# the literal fold legal. `flat[_recipe_const_lin(...)] == _eval_recipe(...)`
+# (see `_recipe_const_lin`), so `val_rep` is that element and the fold is
+# bit-identical.
+function _lane_repl_const(lp::_LaneProbe, ev, flat_cache)
+    rec, idx_names = lp.rec, lp.idx_names
+    val_rep = ev(lp.rep)
+    lenv = Dict{String, Int}()
+    clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), lp.const_arrays)
+    aff = _affine_index_on_box(
+        clin, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:const, rec, idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_const(lp)
+    s, off = aff
+    all(iszero, s) && return _LitRepl(Float64(val_rep))
+    arr_flat = get!(flat_cache, rec.arr) do;
+        _const_flat(rec.arr)
+    end
+    return _AccRepl(_AccConstBox(arr_flat, s, off))
+end
+
+# A LIVE forcing (pgather) lane. `_eval_recipe` returns the flat LINEAR INDEX
+# into the forcing buffer (its own grid), so this is the CONST derivation
+# applied to the index, with two differences: it never folds to a literal even
+# when the index is constant (the buffer is refreshed in place, so the read
+# must stay live), and it passes `pg.flat` (the aliased live buffer) straight
+# through, never a copy. A clamped or folded subscript (non-affine across the
+# box) materializes the per-box index table.
+function _lane_repl_pgather(lp::_LaneProbe, ev)
+    rec = lp.rec
+    pg = rec.arr::_PGatherArray
+    aff = _affine_index_on_box(
+        ev, lp.rep, lp.corners, lp.thin, lp.D, lp.structural, lp.box, lp.run,
+        () -> _lane_box_key(:forcing, rec, lp.idx_names, lp.box)
+    )
+    aff === nothing && return _lane_tbl_pgather(lp)
+    s, off = aff
+    return _AccRepl(_AccForcingBox(pg.flat, s, off))
 end
 
 # One lane's `_eval_recipe` at `loop`, through its compiled evaluator `le` where
@@ -2207,7 +2165,7 @@ function _process_affine_box!(
         UnitRange{Int}[cbox[d] for d in 1:nout],
         base - (view === nothing ? 0 : view.shift), Int[], slab
     )
-    return push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
+    return push!(kernels, _AccKernel(cs, spine, acc, cse, subs))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per

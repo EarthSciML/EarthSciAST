@@ -315,8 +315,7 @@ end
                 ESM._acc(3)
             )
             ESM._AccKernel(
-                ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc,
-                ESM._FixedBound(0), 0.0
+                ESM._CellSet([1], UnitRange{Int}[lo:hi], 0), sp, acc
             )
         end
         K1 = mk1d(2, N - 1, -1, 1)
@@ -332,7 +331,7 @@ end
         )
         K2 = ESM._AccKernel(
             ESM._CellSet([1, 2, 4, 8], UnitRange{Int}[1:2, 1:2, 1:2, 1:3], -14),
-            sp4, acc4, ESM._FixedBound(0), 0.0
+            sp4, acc4
         )
         kernels = ESM._AccKernel[K1, K2]
         section, tally = ESM.Internal.counting(() -> ESM._make_kernel_section(kernels))
@@ -376,8 +375,7 @@ end
             end
             sp = ESM._aop(:+, terms...)
             K = ESM._AccKernel(
-                ESM._CellSet(strides, ranges, base), sp, acc,
-                ESM._FixedBound(0), 0.0
+                ESM._CellSet(strides, ranges, base), sp, acc
             )
             section, tally = ESM.Internal.counting(
                 () -> ESM._make_kernel_section(ESM._AccKernel[K])

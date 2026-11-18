@@ -358,16 +358,13 @@ end
 
 # ---- access-kernel views of the two shapes ------------------------------------
 
-# A key's host value inside an access kernel: a literal, an invariant scalar
-# descriptor, a frozen lane table holding one value in every lane, or an
+# A key's host value inside an access kernel: a literal, a frozen lane table holding one value in every lane, or an
 # operator over those.
 function _de_acck_keyval(nd::_E._Node, K::_E._AccKernel, plan::_E._OopAccPlan)
     k = nd.kind
     if k === _E._NK_LITERAL
         return nd.literal
     elseif k === _E._NK_ACCESS
-        a = K.acc[nd.idx]
-        a.kind === _E._AK_SCALAR && return a.v
         vals = plan.consts[nd.idx]
         isempty(vals) && return nothing
         v1 = vals[1]
@@ -403,8 +400,6 @@ function _de_acck_same(a::_E._Node, b::_E._Node, K::_E._AccKernel, plan::_E._Oop
             ak = da.kind
             if ak === _E._AK_STATE_FIXED
                 da.idx == db.idx || return false
-            elseif ak === _E._AK_SCALAR
-                isequal(da.v, db.v) || return false
             elseif !isempty(plan.gathers[a.idx]) || !isempty(plan.gathers[b.idx])
                 (
                     plan.gathers[a.idx] == plan.gathers[b.idx] &&

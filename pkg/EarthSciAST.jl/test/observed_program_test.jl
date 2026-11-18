@@ -348,8 +348,7 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         doc["models"]["M"]["equations"] = doc["models"]["M"]["equations"][[1, 3, 4]]
         pn = esm_problem(doc, (0.0, 1.0))
         refused = withenv(
-            "ESS_CODEGEN_NODE_BUDGET" => "0",
-            "ESS_DUAL_CODEGEN_NODE_BUDGET" => "0"
+            "ESS_CODEGEN_NODE_BUDGET" => "0"
         ) do
             try
                 observed_field(pn, "h"); nothing

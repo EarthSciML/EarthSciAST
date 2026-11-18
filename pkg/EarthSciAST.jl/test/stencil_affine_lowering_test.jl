@@ -45,7 +45,7 @@ const E = EarthSciAST
     function mkkernel(l1, l2, l3, ir)
         acc = E._AccDesc[]
         spine = E._lower_to_access(tmpl, E._LaneRepl[l1, l2, l3], acc)
-        E._AccKernel(box(ir), spine, acc, E._FixedBound(0), 0.0)
+        E._AccKernel(box(ir), spine, acc)
     end
 
     kernels = E._AccKernel[]

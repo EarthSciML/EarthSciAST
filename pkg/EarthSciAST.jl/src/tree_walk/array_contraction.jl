@@ -45,7 +45,7 @@
 #
 # What the emitter models is the SCALAR `_Node` spine — the kinds `_eval_node`
 # dispatches on. `_cg_emit`'s other method models the ACCESS-KERNEL spine
-# (`_NK_ACCESS` / `_NK_REDUCE` / `_NK_SUBCALL`), a disjoint set of kinds over the
+# (`_NK_ACCESS` / `_NK_SUBCALL` / `_NK_AREDUCE`), a disjoint set of kinds over the
 # same `_Node` type, so the two are methods of one generic function on two
 # context types and the op ladder (`_cg_emit_op` / `_cg_emit_fn`, the registry
 # rows) is shared rather than written twice.
@@ -1784,7 +1784,7 @@ function _ac_take_consumers(
         c = _scan_consumer(outs, free, nst)
         g2 = c === nothing ? nothing : emit(c)
         if g2 isa _ArrayContraction
-            consumed[c[1]] = true
+            consumed[c.K] = true
             _tally_cascade!(:array_contraction_consumer)
             push!(out, g2)
         else

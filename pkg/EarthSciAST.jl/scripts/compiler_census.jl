@@ -11,15 +11,11 @@
 #     The faq equation declined every whole-array tier and was scalarized one
 #     output cell at a time. That is a BUILD-time fact; the resulting access
 #     kernels are then offered to the codegen tier.
-#   * codegen decline — `codegen_decline_<reason>`. The PRIMARY (Float64)
-#     RuntimeGeneratedFunction emission declined that kernel. With
-#     `ESS_F64_OVERFLOW_CODEGEN` on (the default) the dual/overflow emission
-#     below still serves it compiled at Float64, so a primary decline alone
-#     does NOT mean the interpreter runs.
-#   * dual decline    — `dual_codegen_decline_<reason>`. The overflow emission
-#     declined it too. THESE are the kernels in `_KernelSection.dual_resid`,
-#     the ones `_run_acc_kernel!` walks per cell on every RHS call, under every
-#     element type. This count is the census's headline.
+#   * codegen decline — `codegen_decline_<reason>`. The
+#     RuntimeGeneratedFunction emission declined that kernel. THESE are the
+#     kernels in `_KernelSection.kernels`, the ones `_run_acc_kernel!` walks
+#     per cell on every RHS call, under every element type. This count is the
+#     census's headline.
 #
 # Every build names its compiler: `--compiler native` (the default) or
 # `--compiler interpreter`, carried to the worker processes as the
@@ -191,11 +187,8 @@ function _census_one(M, path::AbstractString)
 
     percell_build = sum(get(tally, k, 0) for k in PERCELL_BUILD_KEYS)
     cg_decl = Dict{String, Int}()
-    dual_decl = Dict{String, Int}()
     for (k, v) in tally
-        if startswith(k, "dual_codegen_decline_")
-            dual_decl[k[(length("dual_codegen_decline_") + 1):end]] = v
-        elseif startswith(k, "codegen_decline_")
+        if startswith(k, "codegen_decline_")
             cg_decl[k[(length("codegen_decline_") + 1):end]] = v
         end
     end
@@ -230,13 +223,11 @@ function _census_one(M, path::AbstractString)
     rec["tally"] = tally
     rec["percell_build"] = percell_build
     rec["codegen_kernels"] = get(tally, "codegen_kernel", 0)
-    rec["dual_codegen_kernels"] = get(tally, "dual_codegen_kernel", 0)
     rec["codegen_declines"] = cg_decl
-    rec["dual_declines"] = dual_decl
     rec["n_codegen_decline"] = isempty(cg_decl) ? 0 : sum(values(cg_decl))
-    # THE headline: kernels neither emission covered, i.e. `dual_resid` —
+    # THE headline: kernels the emission did not cover —
     # `_run_acc_kernel!` walks these per cell on every RHS call.
-    rec["n_interp_at_rhs"] = isempty(dual_decl) ? 0 : sum(values(dual_decl))
+    rec["n_interp_at_rhs"] = rec["n_codegen_decline"]
     # The whole-array contraction tier. Its nest is EMITTED (array_contraction.jl),
     # so an equation landing here carries no tree walk at RHS-call time; it is
     # counted separately anyway because it is a different unit — these are

@@ -283,11 +283,7 @@ function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes)
             end
         end
         lane_repl[k] = _AccRepl(
-            _AccDesc(
-                a.kind, a.arr, conn, a.delta,
-                _range_var_slot(view, rec, b), a.width, a.col,
-                a.dim, a.s1, a.s2, a.s3, off, a.v, a.sx
-            )
+            _acc_with_box(a; conn = conn, idx = _range_var_slot(view, rec, b), off = off)
         )
     end
     return lane_repl
