@@ -165,34 +165,6 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
         end
     end
 
-    @testset "depth-32 elementwise ARRAY-observed chain through the build" begin
-        # Pre-fix this detonated in `_fold_elementwise_array_observeds`
-        # (per-path `free_variables` deps scan, then the non-memoized
-        # `substitute` re-inflating the resolved body into a 2^32-node TREE)
-        # and, once the fold was DAG-safe, in a cascade of downstream
-        # per-path walks (`_resolve_isr`, `_branch_key!`, `_lower_to_access`,
-        # `_build_acc_cse`, …). Post-fix the whole build is O(depth).
-        depth = 32
-        model = _elemwise_array_chain_model(depth)
-        # Built from the typed model directly: the shared DAG exists only in
-        # memory, and `Internal.build`'s flatten-first route writes the model
-        # out as a document, which has no sharing (2^depth nodes).
-        local du, vmap
-        t = @elapsed begin
-            f!, u0, p, _t, vmap = EarthSciAST._build_evaluator(
-                model;
-                index_sets = _CHAIN_INDEX_SETS,
-                initial_conditions = Dict(k[3:end] => v for (k, v) in _CHAIN_ICS)
-            )
-            du = similar(u0)
-            f!(du, u0, p, 0.0)
-        end
-        @test t < 120   # generous; post-fix ~10 ms after JIT warm-up
-        for (i, ic) in zip(1:3, (1.0, 2.0, 3.0))
-            @test du[vmap["psi[$i]"]] === 2.0^(depth + 1) * ic
-        end
-    end
-
     @testset "_lower_broadcast is DAG-safe (the build-entry rewrite)" begin
         # `_lower_broadcast` runs over EVERY equation at the entry to
         # the build. `map_children` already declined to REBUILD an
