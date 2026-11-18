@@ -488,14 +488,6 @@ function format_julia_expression_node(node::OpExpr)
         return "Pre($(join(map(format_julia_expression, args), ", ")))"
     elseif op == "^"
         return fmt_chain(" ^ ")
-    elseif op == "grad"
-        # grad(x,y) → Differential(y)(x)
-        if length(args) >= 2
-            return "Differential($(format_julia_expression(args[2])))($(format_julia_expression(args[1])))"
-        elseif length(args) == 1
-            return "Differential(x)($(format_julia_expression(args[1])))"
-        end
-        return "Differential(x)()"
     elseif op == "-"
         if length(args) == 1
             return "-$(_format_unary_minus_operand(args[1], _JULIA_CODEGEN_PRECEDENCE, format_julia_expression))"

@@ -3,11 +3,12 @@
 #
 # A migration is a pure version-MARKER bump, sound along an ADDITIVE line — a
 # run of releases whose changes were additive, so an older file already loads
-# under the newer schema; the current line is `2.0.0 … SCHEMA_VERSION` — and
-# across the 2.0.0 break for a 1.x document that uses none of what 2.0.0 removed
-# (`fn`, `function_tables`/`table_lookup`, `skolem`, `rank`, `argmin`/`argmax`,
-# the two geometry leaves). One that does is refused with `removed_op`; the
-# Python codemod rewrites it.
+# under the newer schema; the current line is `3.0.0 … SCHEMA_VERSION` — and
+# across the 2.0.0 and 3.0.0 breaks for a 1.x or 2.x document that uses none of
+# what they removed (at 2.0.0 `fn`, `function_tables`/`table_lookup`, `skolem`,
+# `rank`, `argmin`/`argmax`, the two geometry leaves; at 3.0.0 `grad`, `div`,
+# `laplacian`). One that does is refused with `removed_op`; the Python codemod
+# rewrites the 2.0.0 removals, and the 3.0.0 ones have no codemod.
 #
 # Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
 # declared variable types collapse to two, an observed variable's `expression`
@@ -46,15 +47,16 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             end
         end
 
-        @testset "a bump to the current schema for 1.x and additive-line sources" begin
-            for source in ["1.0.0", "1.3.0", _MIG_SCHEMA_VERSION]
+        @testset "a bump to the current schema for 1.x, 2.x and additive-line sources" begin
+            for source in ["1.0.0", "1.3.0", "2.0.0", "2.3.0", _MIG_SCHEMA_VERSION]
                 @test supported_migration_targets(source) == String[_MIG_SCHEMA_VERSION]
             end
         end
 
         @test supported_migration_targets("1.4.0") == String[]    # past the last 1.x release
-        @test supported_migration_targets("2.99.0") == String[]   # past the additive ceiling
-        @test supported_migration_targets("3.0.0") == String[]    # higher major
+        @test supported_migration_targets("2.4.0") == String[]    # past the last 2.x release
+        @test supported_migration_targets("2.99.0") == String[]   # past the last 2.x release
+        @test supported_migration_targets("4.0.0") == String[]    # higher major
         @test supported_migration_targets("12.34.56") == String[] # much higher major
 
         @testset "malformed version strings" begin
@@ -89,6 +91,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
 
         @test can_migrate("1.0.0", _MIG_SCHEMA_VERSION) == true
         @test can_migrate("1.3.0", _MIG_SCHEMA_VERSION) == true
+        @test can_migrate("2.3.0", _MIG_SCHEMA_VERSION) == true
         # Identity no-op: the current version migrated to itself.
         @test can_migrate(_MIG_SCHEMA_VERSION, _MIG_SCHEMA_VERSION) == true
 
@@ -99,7 +102,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             # The current version is skipped rather than listed, so the case
             # never asserts the opposite of the line above it as the library
             # advances.
-            for target in ("1.0.1", "1.1.0", "1.3.0", "2.0.0", "2.1.0", "2.2.0", "2.3.0")
+            for target in ("1.0.1", "1.1.0", "1.3.0", "2.0.0", "2.1.0", "2.2.0", "2.3.0", "3.0.0")
                 target == _MIG_SCHEMA_VERSION && continue
                 @test can_migrate("1.0.0", target) == false
             end
@@ -126,13 +129,13 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
             @test source.esm == "0.9.0"
         end
 
-        @testset "relabels a 1.x file using no removed construct" begin
-            source = _mig_file("1.0.0")
+        @testset "relabels a $(v) file using no removed construct" for v in ("1.0.0", "2.3.0")
+            source = _mig_file(v)
             migrated = migrate(source, _MIG_SCHEMA_VERSION)
 
             @test migrated.esm == _MIG_SCHEMA_VERSION
             @test migrated !== source
-            @test source.esm == "1.0.0"
+            @test source.esm == v
         end
 
         @testset "a current-version file migrated to the current schema (no-op)" begin
@@ -279,6 +282,70 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         @test err isa MigrationError && err.code == "removed_op"
     end
 
+    @testset "a 2.x document using an op esm 3.0.0 removed is refused" begin
+        # `grad`, `div` and `laplacian` have no codemod: the message points at
+        # spatial `D` and MIGRATION.md, not at `python -m earthsci_ast.migrate`.
+        for (name, node) in (
+                ("grad", Dict{String, Any}("op" => "grad", "dim" => "x", "args" => Any["x"])),
+                ("div", Dict{String, Any}("op" => "div", "args" => Any["x"])),
+                ("laplacian", Dict{String, Any}("op" => "laplacian", "args" => Any["x"])),
+            )
+            d = Dict{String, Any}(
+                "esm" => "2.3.0", "metadata" => Dict{String, Any}("name" => "m"),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "x" => Dict{String, Any}("type" => "unknown", "default" => 0.0)
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}(
+                                "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                "rhs" => node,
+                            ),
+                        ],
+                    ),
+                ),
+            )
+            @test can_migrate(d, _MIG_SCHEMA_VERSION) == false
+            err = try
+                migrate(d, _MIG_SCHEMA_VERSION)
+                nothing
+            catch e
+                e
+            end
+            @test err isa MigrationError
+            @test err.code == "removed_op"
+            @test err.path == "/models/M/equations/0/rhs"
+            @test occursin("`\"op\": \"$(name)\"`", err.message)
+            @test occursin("esm 3.0.0", err.message)
+            @test !occursin("earthsci_ast.migrate", err.message)
+        end
+        # A typed file built in memory is refused the same way.
+        built = EarthSciAST.EsmFile(
+            "2.3.0", EarthSciAST.Metadata("m");
+            models = Dict(
+                "M" => EarthSciAST.Model(
+                    Dict{String, EarthSciAST.ModelVariable}(),
+                    [
+                        EarthSciAST.Equation(
+                            EarthSciAST.VarExpr("x"),
+                            EarthSciAST.OpExpr("laplacian", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("u")])
+                        ),
+                    ]
+                ),
+            )
+        )
+        @test can_migrate(built, _MIG_SCHEMA_VERSION) == false
+        err = try
+            migrate(built, _MIG_SCHEMA_VERSION)
+            nothing
+        catch e
+            e
+        end
+        @test err isa MigrationError && err.code == "removed_op" &&
+            occursin("esm 3.0.0", err.message)
+    end
+
     @testset "marker-only: every other field survives" begin
         # A real loaded document, so the carried-across fields are the populated
         # ones an actual file has rather than a hand-built skeleton's `nothing`s.
@@ -354,10 +421,11 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                 parsed = match(r"^(\d+)\.(\d+)\.(\d+)$", fv)
                 parsed === nothing && continue
                 v = (parse(Int, parsed[1]), parse(Int, parsed[2]), parse(Int, parsed[3]))
-                # Reachable iff on the additive line [2.0.0, current] or a 1.x
-                # release up to 1.3.0 (the relabel across the 2.0.0 break).
-                on_line = (v[1] == current[1] && v >= (2, 0, 0) && v <= current) ||
-                    ((1, 0, 0) <= v <= (1, 3, 0))
+                # Reachable iff on the additive line [3.0.0, current], a 1.x
+                # release up to 1.3.0 or a 2.x release up to 2.3.0 (the relabel
+                # across the 2.0.0 and 3.0.0 breaks).
+                on_line = (v[1] == current[1] && v >= (3, 0, 0) && v <= current) ||
+                    ((1, 0, 0) <= v <= (1, 3, 0)) || ((2, 0, 0) <= v <= (2, 3, 0))
                 @test !isempty(supported_migration_targets(fv)) == on_line
             end
 

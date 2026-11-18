@@ -424,13 +424,9 @@ end
 # Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)
 # ========================================
 
-# The spatial-calculus sugar `grad`/`div`/`laplacian` carry NO privilege: they
-# are ordinary open-tier rewrite-target ops (op_registry.jl leaves them
-# unregistered). Spatial axes are harvested STRUCTURALLY from the `dim`/`wrt`
-# scalar FIELDS of any node — never from a hand-maintained op-name list — so
-# there is no `_SPATIAL_OPS` / `_DIM_SPATIAL_OPS` set anymore, and a user
-# rewrite-target op carrying a `dim` contributes its axis exactly as `grad`
-# does. (A fully shape-derived rederivation over `index_sets`, §11.2, is the
+# Spatial axes are harvested STRUCTURALLY from the `dim`/`wrt` scalar FIELDS
+# of any node — never from a hand-maintained op-name list — so a user
+# rewrite-target op carrying a `dim` contributes its axis. (A fully shape-derived rederivation over `index_sets`, §11.2, is the
 # other admissible structural signal; the by-field `dim`/`wrt` harvest is the
 # smaller one and is what §4.9.1(ii) pins for coordinate-name resolution.)
 
@@ -439,7 +435,7 @@ end
 
 Collect every spatial-axis name referenced in `expr`, resolved STRUCTURALLY by
 field (esm-spec §4.9.1(ii)): the value of a `dim` field on ANY Expression node
-(a user rewrite-target op's `dim` names an axis exactly as `grad`'s does), plus
+(a user rewrite-target op's `dim` names an axis), plus
 a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on
 a `D` node. No op name is privileged.
 

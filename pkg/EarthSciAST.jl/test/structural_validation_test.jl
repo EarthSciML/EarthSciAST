@@ -555,14 +555,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
-    @testset "grad/div/laplacian carry no gradient-units rule (§4.2/§4.8.3)" begin
-        # esm-spec §4.2: the spatial-calculus sugar is an ordinary open-tier
-        # rewrite-target op with NO dimensional rule — "any other op ⇒
-        # UNDETERMINABLE" (§4.8.3/§4.8.4). The former bespoke gradient-units
-        # rule (`validate_model_gradient_units`, which divided the operand's
-        # units by the coordinate's) was REMOVED, so a grad over a coordinate
-        # declared without units is DELIBERATELY not an error — the units engine
-        # reports the grad dimension as unknown and skips the enclosing check.
+    @testset "a user op with a dim carries no gradient-units rule (§4.2/§4.8.3)" begin
+        # esm-spec §4.2: an open-tier user op (here a gradient scheme written as
+        # one) has NO dimensional rule — "any other op ⇒ UNDETERMINABLE"
+        # (§4.8.3/§4.8.4). The former bespoke gradient-units rule
+        # (`validate_model_gradient_units`, which divided the operand's units by
+        # the coordinate's) was REMOVED, so the op over a coordinate declared
+        # without units is DELIBERATELY not an error — the units engine reports
+        # its dimension as unknown and skips the enclosing check.
         metadata = EarthSciAST.Metadata("test-grad-units")
 
         grad_model(x_var) = begin
@@ -578,7 +578,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
                         "D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; wrt = "t"
                     ),
                     EarthSciAST.OpExpr(
-                        "grad", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; dim = "x"
+                        "fv_gradient", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("c")]; dim = "x"
                     )
                 ),
             ]
@@ -588,7 +588,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # The removed rule is gone as a callable/exported symbol.
         @test !isdefined(EarthSciAST, :validate_model_gradient_units)
 
-        @testset "grad over a units-less / units-bearing / undeclared coordinate is never flagged" begin
+        @testset "the op over a units-less / units-bearing / undeclared coordinate is never flagged" begin
             for x_var in (
                     EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.0),
                     EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable, default = 0.0, units = "m"),

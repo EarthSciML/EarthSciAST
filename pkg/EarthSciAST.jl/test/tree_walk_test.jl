@@ -104,8 +104,8 @@ end
         @test_throws ESM.TreeWalkError _eval1(_op("faq", _n(1.0)))
         @test_throws ESM.TreeWalkError _eval1(
             _op(
-                "grad", _v("x");
-                dim = "x"
+                "D", _v("x");
+                wrt = "x"
             );
             u_vals = Dict("x" => 1.0)
         )
@@ -120,16 +120,16 @@ end
     end
 
     @testset "unlowered rewrite-target op surfaced before evaluation" begin
-        # grad/div/laplacian are rewrite-target sugar (esm-spec §4.2 / §9.6.8),
-        # NOT evaluable-core ops. One that reaches the compiler unlowered (no
+        # A spatial `D` is a rewrite target (esm-spec §4.2 / §9.6.8), NOT an
+        # evaluable-core op. One that reaches the compiler unlowered (no
         # discretization rule matched) must be rejected with the uniform
         # `unlowered_operator` code — never silently evaluated to zero (the
         # historical stub-to-zero pattern in other bindings). The gate fires
         # before evaluation. Supersedes the old E_TREEWALK_UNREACHABLE_SPATIAL_OP.
-        for opname in ("grad", "div", "laplacian")
+        for wrt in ("x", "y")
             err = try
                 _eval1(
-                    _op(opname, _v("x"); dim = "x");
+                    _op("D", _v("x"); wrt = wrt);
                     u_vals = Dict("x" => 1.0)
                 )
                 nothing
@@ -138,15 +138,15 @@ end
             end
             @test err isa ESM.TreeWalkError
             @test err.code == "unlowered_operator"
-            @test occursin(opname, err.detail)
+            @test occursin("wrt=$(wrt)", err.detail)
             @test occursin("unlowered", err.detail)
         end
-        # The gate is GENERIC, not a grad/div/laplacian name list: an arbitrary
+        # The gate is GENERIC, not an op-name list: an arbitrary
         # OPEN-TIER user op (no evaluable-core registry entry) reaching the
         # compiler is the SAME violation and gets the SAME `unlowered_operator`
         # code — NOT `unevaluable_operator` (esm-spec §4.2 / §9.6.6 uniform
         # rule; mirrors the other bindings). Decided by the `_op_in_T` tier
-        # predicate, so grad/div/laplacian carry no bespoke registry flag.
+        # predicate.
         # (`integral` is also in T but carries its OWN earlier
         # structural handling in resolve.jl, so they never reach this gate.)
         for opname in ("godunov_hamiltonian", "my_custom_flux")

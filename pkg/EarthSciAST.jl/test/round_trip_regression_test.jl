@@ -48,9 +48,9 @@ const ESM = EarthSciAST
         ),
         (
             field = :dim,
-            json = """{"op":"grad","args":["u"],"dim":"x"}""",
+            json = """{"op":"upwind_flux","args":["u"],"dim":"x"}""",
             expected = "x",
-            cop = "grad", cargs = E(VarExpr("u")), kw = (dim = "x",),
+            cop = "upwind_flux", cargs = E(VarExpr("u")), kw = (dim = "x",),
         ),
         (
             field = :int_var,

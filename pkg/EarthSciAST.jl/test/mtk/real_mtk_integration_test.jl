@@ -65,9 +65,8 @@ import Symbolics
     end
 
     @testset "ModelingToolkit.System refuses a system with a spatial independent variable" begin
-        # The spatial dimension `z` is harvested STRUCTURALLY from the `dim="z"`
-        # scalar field carried on the operator nodes (esm-spec §4.9.1(ii)) — by
-        # field, not by op name; the `grad` sugar has no privilege (§4.2).
+        # The spatial dimension `z` is harvested STRUCTURALLY from the spatial
+        # `wrt="z"` field carried on the `D` nodes (esm-spec §4.9.1(ii)).
         vars = Dict{String, ModelVariable}(
             "u" => ModelVariable(UnknownVariable; default = 1.0),
             "D" => ModelVariable(ParameterVariable; default = 0.1),
@@ -78,9 +77,9 @@ import Symbolics
                 "*", EarthSciAST.ASTExpr[
                     VarExpr("D"),
                     OpExpr(
-                        "grad", EarthSciAST.ASTExpr[
-                            OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("u")], dim = "z"),
-                        ], dim = "z"
+                        "D", EarthSciAST.ASTExpr[
+                            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt = "z"),
+                        ], wrt = "z"
                     ),
                 ]
             ),

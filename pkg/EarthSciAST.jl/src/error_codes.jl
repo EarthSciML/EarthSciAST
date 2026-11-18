@@ -377,13 +377,14 @@ const ERROR_CODES = (
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:
     #    it is the uniform cross-binding wire code every implementation
-    #    surfaces when a rewrite-target operator (an RHS-position `D`, or
-    #    `grad`/`div`/`laplacian`) reaches evaluation unlowered. ────────────
+    #    surfaces when a rewrite-target operator (an RHS-position or spatial
+    #    `D`, or a user op) reaches evaluation unlowered. ────────────
     UNLOWERED_OPERATOR = "unlowered_operator",
     # An expression node spelling an op that was REMOVED rather than deprecated
     # (`arrayop` at 0.8.0; `fn`, `table_lookup`, `skolem`, `rank`,
     # `intersect_polygon`, `polygon_intersection_area`, `argmin`, `argmax`,
-    # `aggregate` and the `function_tables` block at 2.0.0), rejected by name at the wire
+    # `aggregate` and the `function_tables` block at 2.0.0; `grad`, `div` and
+    # `laplacian` at 3.0.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
     # A document spells `"op": "faq"` while declaring esm below 1.1.0, the

@@ -69,7 +69,7 @@ parameter_names(model::Model)::Vector{String} = parameters(model)
 # | `D(u, t)`, `D(u[i])`, `faq{expr: D(index(u,i))}` | `(:derivative, "u")` |
 # | `"y"`, `index(y,i)`, `faq{expr: index(y,i)}` | `(:definition, "y")` |
 # | `ic(u)` | `(:none, "")` — an initial condition defines no dynamics |
-# | `H*H*SO4`, `laplacian(phi)`, anything else | `(:implicit, "")` |
+# | `H*H*SO4`, `D(D(phi, x), x)`, anything else | `(:implicit, "")` |
 
 """Strip the array-addressing wrappers (`index` / `faq`) and the
 vectorising `faq` from an LHS, returning the node they address."""
@@ -92,14 +92,9 @@ _is_time_derivative(e::ASTExpr)::Bool =
     e isa OpExpr && e.op == "D" && (e.wrt === nothing || e.wrt == "t")
 
 """True iff `e` is a SPATIAL derivative — a `D` whose `wrt` is present and is
-not `"t"`, or one of the `grad` / `div` / `laplacian` sugar ops (esm-spec
-§6.3.1). Both spellings count: they are open-tier rewrite targets, so neither
-is canonical."""
+not `"t"` (esm-spec §6.3.1)."""
 _is_spatial_derivative(e::ASTExpr)::Bool =
-    e isa OpExpr && (
-    (e.op == "D" && e.wrt !== nothing && e.wrt != "t") ||
-        e.op == "grad" || e.op == "div" || e.op == "laplacian"
-)
+    e isa OpExpr && e.op == "D" && e.wrt !== nothing && e.wrt != "t"
 
 """
     _LhsShape
@@ -398,8 +393,7 @@ _equation_has(pred, eq::Equation)::Bool =
     has_spatial_derivative(model::Model) -> Bool
 
 True iff some equation of `model` contains a spatial derivative anywhere in its
-LHS or RHS — a `D` whose `wrt` is present and is not `"t"`, or a `grad` / `div`
-/ `laplacian` sugar op (esm-spec §6.3.1).
+LHS or RHS — a `D` whose `wrt` is present and is not `"t"` (esm-spec §6.3.1).
 """
 has_spatial_derivative(model::Model)::Bool =
     any(eq -> _equation_has(_is_spatial_derivative, eq), model.equations)
@@ -427,7 +421,7 @@ tested **in this order**, first match winning:
 | 4 | otherwise | `"ode"` |
 
 Both orderings are load-bearing. `"pde"` precedes `"nonlinear"` so a
-steady-state PDE (`laplacian(phi) ~ f`, no ∂/∂t) is a PDE rather than falling
+steady-state PDE (`D(D(phi, x), x) ~ f`, no ∂/∂t) is a PDE rather than falling
 through to `"nonlinear"`. `"sde"` precedes `"pde"` because there is no
 `SPDESystem` constructor to select, so a model that is both assembles as an SDE.
 

@@ -56,7 +56,7 @@ _mtkc_uc(name) = _mtkc_fixture(
 const _MTKC_RTOL = 1.0e-6
 const _MTKC_ATOL = 1.0e-9
 
-# A document with a CONTINUOUS spatial dimension: `dim = "z"` on the operator
+# A document with a CONTINUOUS spatial dimension: `wrt = "z"` on the `D`
 # nodes is what makes `z` an independent variable (esm-spec §4.9.1(ii)), which
 # is the ODE-vs-PDE split this compiler refuses on.
 _mtkc_pde_doc() = Dict{String, Any}(
@@ -75,9 +75,9 @@ _mtkc_pde_doc() = Dict{String, Any}(
                         "op" => "*", "args" => Any[
                             "Dc",
                             Dict{String, Any}(
-                                "op" => "grad", "dim" => "z", "args" => Any[
+                                "op" => "D", "wrt" => "z", "args" => Any[
                                     Dict{String, Any}(
-                                        "op" => "grad", "dim" => "z",
+                                        "op" => "D", "wrt" => "z",
                                         "args" => Any["u"]
                                     ),
                                 ]

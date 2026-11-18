@@ -180,18 +180,6 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr, L::_Lowering)
     end
 end
 
-# The first spatial differential operator (`grad`/`div`/`laplacian`) anywhere in
-# `expr`, or `nothing`. Used by `ModelingToolkit.System` to refuse an
-# undiscretized spatial operator with a message that says so.
-function _find_spatial_op(expr::EsmExpr)::Union{String, Nothing}
-    hit = nothing
-    EarthSciAST.foreach_subexpr(expr) do x
-        hit === nothing && x isa OpExpr && x.op in ("grad", "div", "laplacian") &&
-            (hit = x.op)
-    end
-    return hit
-end
-
 # Build a native `Array{Num}` from a `makearray` node. We construct the
 # output array directly rather than going through `SymbolicUtils.ArrayMaker`,
 # whose public binding disappeared in the Symbolics v7 / SymbolicUtils v4

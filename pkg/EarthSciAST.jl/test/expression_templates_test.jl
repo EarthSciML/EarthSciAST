@@ -640,7 +640,7 @@ end
             "d": {"type": "unknown", "units": "1"}
           },
           "equations": [
-              {"lhs": "d", "rhs": {"op": "div", "args": ["F_cell"]}}
+              {"lhs": "d", "rhs": {"op": "D", "wrt": "x", "args": ["F_cell"]}}
             ],
           "expression_templates": $templates_json
         }
@@ -656,13 +656,13 @@ end
             {
               "fancy_edges_only": {
                 "params": ["F"], "priority": 10,
-                "match": {"op": "div", "args": ["F"]},
+                "match": {"op": "D", "wrt": "x", "args": ["F"]},
                 "where": {"F": {"shape": ["edges"]}},
                 "body": {"op": "*", "args": [1.5, "F"]}
               },
               "plain_any": {
                 "params": ["F"], "priority": 0,
-                "match": {"op": "div", "args": ["F"]},
+                "match": {"op": "D", "wrt": "x", "args": ["F"]},
                 "body": {"op": "*", "args": ["s", "F"]}
               }
             }
@@ -675,7 +675,7 @@ end
     end
 
     @testset "compound argument fails a shape constraint (conservative judgment)" begin
-        # div(2.5 * F_edge): the bound sub-AST is not a bare variable
+        # D(2.5 * F_edge, x): the bound sub-AST is not a bare variable
         # reference, so the constraint fails and the node survives.
         src = replace(
             _scoped_doc(
@@ -683,18 +683,18 @@ end
                 {
                   "edges_only": {
                     "params": ["F"],
-                    "match": {"op": "div", "args": ["F"]},
+                    "match": {"op": "D", "wrt": "x", "args": ["F"]},
                     "where": {"F": {"shape": ["edges"]}},
                     "body": {"op": "*", "args": ["s", "F"]}
                   }
                 }
                 """
-            ), "{\"op\": \"div\", \"args\": [\"F_cell\"]}" =>
-                "{\"op\": \"div\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}"
+            ), "{\"op\": \"D\", \"wrt\": \"x\", \"args\": [\"F_cell\"]}" =>
+                "{\"op\": \"D\", \"wrt\": \"x\", \"args\": [{\"op\": \"*\", \"args\": [2.5, \"F_edge\"]}]}"
         )
         out = _lowerx(JSON3.read(src))
         expr = _nw(_et_defrhs(out["models"]["m"], "d"))
-        @test expr["op"] == "div"   # never rewritten; not an error
+        @test expr["op"] == "D"   # never rewritten; not an error
     end
 
     @testset "where without match is an invalid declaration" begin
@@ -724,7 +724,7 @@ end
             {
               "broken": {
                 "params": ["F"],
-                "match": {"op": "div", "args": ["F"]},
+                "match": {"op": "D", "wrt": "x", "args": ["F"]},
                 "where": {"G": {"shape": ["edges"]}},
                 "body": {"op": "*", "args": ["s", "F"]}
               }
@@ -746,7 +746,7 @@ end
             {
               "broken": {
                 "params": ["F"],
-                "match": {"op": "div", "args": ["F"]},
+                "match": {"op": "D", "wrt": "x", "args": ["F"]},
                 "where": {"F": {"units": "m"}},
                 "body": {"op": "*", "args": ["s", "F"]}
               }
@@ -769,7 +769,7 @@ end
             {
               "two_axes_only": {
                 "params": ["F"],
-                "match": {"op": "div", "args": ["F"]},
+                "match": {"op": "D", "wrt": "x", "args": ["F"]},
                 "where": {"F": {"shape": ["cells", "edges"]}},
                 "body": {"op": "*", "args": ["s", "F"]}
               }
@@ -778,7 +778,7 @@ end
         )
         out = _lowerx(JSON3.read(src))
         expr = _nw(_et_defrhs(out["models"]["m"], "d"))
-        @test expr["op"] == "div"   # constraint unsatisfied; rule never fires
+        @test expr["op"] == "D"   # constraint unsatisfied; rule never fires
     end
 end
 
@@ -799,9 +799,9 @@ end
                 "edges": {"kind": "interval", "size": 6}
               },
               "expression_templates": {
-                "fv_div_edges": {
+                "fv_dx_edges": {
                   "params": ["F"],
-                  "match": {"op": "div", "args": ["F"]},
+                  "match": {"op": "D", "wrt": "x", "args": ["F"]},
                   "where": {"F": {"shape": ["edges"]}},
                   "body": {"op": "*", "args": [0.5, "F"]}
                 }
@@ -825,8 +825,8 @@ end
                     "d_cell": {"type": "unknown", "units": "1"}
                   },
                   "equations": [
-                      {"lhs": "d_edge", "rhs": {"op": "div", "args": ["F_edge"]}},
-                      {"lhs": "d_cell", "rhs": {"op": "div", "args": ["F_cell"]}}
+                      {"lhs": "d_edge", "rhs": {"op": "D", "wrt": "x", "args": ["F_edge"]}},
+                      {"lhs": "d_cell", "rhs": {"op": "D", "wrt": "x", "args": ["F_cell"]}}
                     ]
                 }
               }
@@ -836,7 +836,7 @@ end
         f = EarthSciAST.load_path(model_path)
         m = f.models["m"]
         @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired
-        @test (observed_definition(m, "d_cell")::OpExpr).op == "div"  # excluded, survives load
+        @test (observed_definition(m, "d_cell")::OpExpr).op == "D"  # excluded, survives load
         @test f.index_sets["edges"].size == 6                   # merged registry
     end
 end
