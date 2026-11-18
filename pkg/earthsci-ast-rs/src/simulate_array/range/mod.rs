@@ -1355,9 +1355,8 @@ fn check_lengths(
     Ok(())
 }
 
-/// The index-set name of each axis of each compiled state, from its
-/// flattened declaration, else the shape the build gave it
-/// ([`ShapeTable::built_axes`]); empty when it names none at the compiled
+/// The index-set name of each axis of each compiled state, from the build's
+/// shape table ([`state_axes`]); empty when it names none at the compiled
 /// rank.
 fn state_set_names(
     flat: &FlattenedSystem,
@@ -1369,15 +1368,20 @@ fn state_set_names(
         .var_shapes
         .iter()
         .map(|(name, vs)| {
-            let declared = flat
-                .state_variables
-                .get(name)
-                .and_then(|v| v.shape.clone())
-                .or_else(|| shapes.built_axes(name).map(<[String]>::to_vec));
             let extents: Vec<i64> = vs.shape.iter().map(|&n| n as i64).collect();
-            (name.clone(), axis_set_names(declared, &extents, &sizes))
+            (
+                name.clone(),
+                axis_set_names(state_axes(shapes, name), &extents, &sizes),
+            )
         })
         .collect()
+}
+
+/// `name`'s axes as its flattened declaration states them, else as the build
+/// decided them where no declaration records them
+/// ([`ShapeTable::flattened_or_built_axes`]).
+fn state_axes(shapes: &ShapeTable, name: &str) -> Option<Vec<String>> {
+    shapes.flattened_or_built_axes(name).map(<[String]>::to_vec)
 }
 
 /// The index-set name of each axis of extents `extents`: the declared shape
@@ -1494,14 +1498,8 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
                     .unwrap_or_default(),
             ),
         };
-        let declared = flat
-            .observed_variables
-            .get(var)
-            .or_else(|| flat.state_variables.get(var))
-            .and_then(|v| v.shape.clone())
-            .or_else(|| prog.shapes.built_axes(var).map(<[String]>::to_vec));
         let extents: Vec<i64> = ranges.iter().map(|r| r.1).collect();
-        let sets = axis_set_names(declared, &extents, &sizes);
+        let sets = axis_set_names(state_axes(&prog.shapes, var), &extents, &sizes);
         let axes = (0..ranges.len())
             .map(|d| axis_spec(dec, sets.get(d).map(String::as_str), &sizes))
             .collect();

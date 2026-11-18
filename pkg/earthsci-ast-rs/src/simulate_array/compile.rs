@@ -740,7 +740,13 @@ impl ArrayCompiled {
             runtime_params,
             const_scope,
             any_index,
-        } = resolve_for_compile(model, index_sets, supplied, runtime_array_parameters)?;
+        } = resolve_for_compile(
+            model,
+            index_sets,
+            &shapes,
+            supplied,
+            runtime_array_parameters,
+        )?;
         let index_sets = &index_sets;
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
@@ -875,10 +881,12 @@ struct ResolvedModel {
 /// clauses lowered, and every `{ "from": <set> }` range made a concrete
 /// interval. The order is fixed here: the joins read the `from` linkage the
 /// range resolution erases, and value invention reads the producers the strip
-/// drops.
+/// drops. `shapes` is the normalized model's table, whose declared axes the
+/// join lowering reads.
 fn resolve_for_compile(
     mut model: Model,
     mut index_sets: HashMap<String, IndexSet>,
+    shapes: &ShapeTable,
     supplied: BuildTimeData<'_>,
     runtime_array_parameters: bool,
 ) -> Result<ResolvedModel, CompileError> {
@@ -953,7 +961,9 @@ fn resolve_for_compile(
     // loop symbols is the data-derived value-equality case and is lowered
     // into a member-equality `filter` over the contraction; a join over a
     // genuine (non-loop) data column is rejected rather than mis-combined.
-    crate::join::resolve_aggregate_joins(&mut model, &index_sets)?;
+    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |model| {
+        shapes.declared_map(|n| model.variables.contains_key(n))
+    })?;
     // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
     // into a concrete `[lo, hi]` interval before shape inference / rule
     // building, so every downstream consumer sees only dense intervals.

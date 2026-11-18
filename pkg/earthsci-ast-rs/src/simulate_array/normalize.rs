@@ -60,7 +60,8 @@ pub(crate) struct NormalizedModel {
 ///    the elementwise lift and the shapes of unshaped mixed-rank `ifelse`
 ///    variables, then the bare-array-operand check on the lifted equations,
 ///    which leave the build's [`ShapeTable`];
-/// 3. stack each recurrence group, which reads the shapes step 2 decided.
+/// 3. stack each recurrence group, which reads the shapes step 2 decided,
+///    and record each stacked variable's shape in the table.
 pub(crate) fn normalize(
     input: BuildInput<'_>,
     mut index_sets: HashMap<String, IndexSet>,
@@ -80,8 +81,8 @@ pub(crate) fn normalize(
         }
         BuildInput::Flattened { flat, inherited } => (model_from_flattened(flat), inherited),
     };
-    let shapes = apply_shape_rewrites(&mut model, &index_sets, inherited)?;
-    lower_recurrence_groups(&mut model, &mut index_sets)?;
+    let mut shapes = apply_shape_rewrites(&mut model, &index_sets, inherited)?;
+    shapes.record_stacked(lower_recurrence_groups(&mut model, &mut index_sets)?);
     Ok(NormalizedModel {
         model,
         index_sets,
