@@ -493,8 +493,8 @@ const (
 
 	// codeDeprecatedRecordsPerSample is the load-time WARNING (not an error)
 	// for a document that writes the deprecated `from.records_per_sample` or
-	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed in a later
-	// major version). Unexported for the same reason as the codes above: it only ever
+	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed at esm
+	// 3.0.0). Unexported for the same reason as the codes above: it only ever
 	// appears in the text of the stderr warning.
 	codeDeprecatedRecordsPerSample = "deprecated_records_per_sample"
 )

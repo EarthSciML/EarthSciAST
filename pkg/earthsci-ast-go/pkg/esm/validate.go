@@ -2326,7 +2326,7 @@ func typedUpdateSites(update any, varPath string, out []string) []string {
 
 // DeprecatedRecordsPerSampleSites lists, sorted, the JSON pointers at which a
 // loaded document writes the deprecated `records_per_sample` (esm-spec §8.3,
-// §8.5.1; removed in a later major): `/data_sources/<S>/temporal/records_per_sample`,
+// §8.5.1; removed at esm 3.0.0): `/data_sources/<S>/temporal/records_per_sample`,
 // `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
 // and
 // `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
@@ -2375,7 +2375,7 @@ func warnDeprecatedRecordsPerSample(file *ESMFile) {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"warning: %s: `records_per_sample` is deprecated and is removed in a later major version; "+
+		"warning: %s: `records_per_sample` is deprecated and is removed at esm 3.0.0; "+
 			"the number of records a data-fed parameter receives is said by its record shape, "+
 			"two when its first axis is an interval index set with \"records\": true (esm-spec §8.5.1). "+
 			"Written at: %s.\n", codeDeprecatedRecordsPerSample, strings.Join(sites, ", "))

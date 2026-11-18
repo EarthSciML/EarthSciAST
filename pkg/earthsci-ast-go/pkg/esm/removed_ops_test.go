@@ -24,8 +24,8 @@ func removedOpDoc(esm, node string) string {
 }
 
 // requireRemovedOp asserts err is the `removed_op` diagnostic naming name at
-// path and, for a 2.0.0 removal, the codemod; a 3.0.0 removal has no codemod
-// and points at MIGRATION.md "esm 3.0.0" instead.
+// path and, for a 2.0.0 removal, the codemod; a 2.4.0 removal has no codemod
+// and points at MIGRATION.md "esm 2.4.0" instead.
 func requireRemovedOp(t *testing.T, err error, name, path string) {
 	t.Helper()
 	var de DiagnosticError
@@ -46,11 +46,11 @@ func requireRemovedOp(t *testing.T, err error, name, path string) {
 	}
 	switch removedOps[name] {
 	case "0.8.0":
-	case "3.0.0":
+	case "2.4.0":
 		if strings.Contains(err.Error(), migrateCommand) {
-			t.Errorf("message %q points at the codemod, which has no 3.0.0 rewrite", err.Error())
+			t.Errorf("message %q points at the codemod, which has no 2.4.0 rewrite", err.Error())
 		}
-		for _, want := range []string{"esm 3.0.0", "spatial `D`", "MIGRATION.md"} {
+		for _, want := range []string{"esm 2.4.0", "spatial `D`", "MIGRATION.md"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("message %q does not name %q", err.Error(), want)
 			}
@@ -62,20 +62,20 @@ func requireRemovedOp(t *testing.T, err error, name, path string) {
 	}
 }
 
-// The spatial-calculus ops esm 3.0.0 removed are refused BY NAME at load
-// whatever version the document declares: a 1.x, a 2.x and a 3.0.0 document
-// alike.
-func TestSpatialCalculusOpsRemovedAt3AreRefusedAtLoad(t *testing.T) {
+// The spatial-calculus ops esm 2.4.0 removed are refused BY NAME at load
+// whatever version the document declares: a 1.x, a 2.3.0 and a 2.4.0
+// document alike.
+func TestSpatialCalculusOpsRemovedAt240AreRefusedAtLoad(t *testing.T) {
 	nodes := map[string]string{
 		"grad":      `{"op": "grad", "args": ["x"], "dim": "x"}`,
 		"div":       `{"op": "div", "args": ["x"], "dim": "x"}`,
 		"laplacian": `{"op": "laplacian", "args": ["x"]}`,
 	}
 	for name, node := range nodes {
-		if removedOps[name] != "3.0.0" {
-			t.Fatalf("removedOps[%q] = %q, want 3.0.0", name, removedOps[name])
+		if removedOps[name] != "2.4.0" {
+			t.Fatalf("removedOps[%q] = %q, want 2.4.0", name, removedOps[name])
 		}
-		for _, esm := range []string{"1.3.0", "2.3.0", "3.0.0"} {
+		for _, esm := range []string{"1.3.0", "2.3.0", "2.4.0"} {
 			t.Run(name+"@"+esm, func(t *testing.T) {
 				_, err := LoadString(removedOpDoc(esm, node))
 				requireRemovedOp(t, err, name, "/models/M/equations/0/rhs/args/1")
@@ -86,7 +86,7 @@ func TestSpatialCalculusOpsRemovedAt3AreRefusedAtLoad(t *testing.T) {
 
 // Every shared fixture under tests/invalid/removed_ops/ is refused at load
 // with `removed_op`, naming the construct its file name carries. The three
-// 3.0.0 fixtures declare esm 2.3.0: the refusal does not depend on the
+// 2.4.0 fixtures declare esm 2.3.0: the refusal does not depend on the
 // declared version.
 func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "..", "tests", "invalid", "removed_ops")
