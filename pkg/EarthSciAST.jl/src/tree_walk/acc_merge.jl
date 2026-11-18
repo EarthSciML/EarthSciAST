@@ -1,72 +1,30 @@
-# ========================================================================
-# tree_walk/acc_merge.jl — part of the tree-walk evaluator (array-IR B, stage 3/4).
-# Included by src/tree_walk.jl AFTER access_kernel.jl (`_AccKernel` and
-# descriptors). Owns the per-cell → access-kernel merge and its structural
-# grouping signature.
+# tree_walk/acc_merge.jl — the per-cell build's merge into access kernels: an
+# array equation's compiled per-cell `(du_slot, _Node)` entries grouped by
+# structural signature, each group merged into one `_AccKernel` over an
+# indirect-outs cell set, which the codegen tier, the scalar `_eval_acc`
+# runner and the out-of-place form all consume.
 #
-# The PER-CELL fallback's whole-array host: group an array equation's compiled
-# per-cell `(du_slot, _Node)` entries by structural signature and merge each
-# group into ONE `_AccKernel` over an INDIRECT-OUTS cell set. The codegen tier
-# then compiles the kernel into a straight loop nest, the scalar `_eval_acc`
-# walk stays the eltype-generic / lazy-guard reference (and the runner for
-# declined kernels), and the oop vectorized form gets whole-array gathers —
-# one IR family for every array-equation tier.
+# Bit identity: the merge is a structural transpose. A leaf equal across the
+# group stays a scalar; a varying one becomes a per-cell table read by the cell
+# ordinal; every runner applies the same scalar op sequence per cell
+# (`_eval_acc_op` mirrors `_eval_node_op`, and a contraction keeps its seeded
+# sequential fold).
 #
-# Bit-identity by construction: the merge is a structural transpose — a leaf
-# that is equal across the group stays a scalar (literal / fixed slot /
-# invariant), a varying one becomes a per-cell table indexed by the cell
-# ordinal — and the evaluators apply the identical scalar op sequence per lane
-# (`_eval_acc_op` mirrors `_eval_node_op`; `_NK_CONTRACTION` keeps its seeded
-# sequential ⊕-fold on every runner). The per-cell reference skips the merge
-# entirely — plain compiled scalar nodes on `rhs_list`, evaluated by
-# `_eval_node` — so the differentials compare against a build with no merge
-# machinery at all.
-#
-# LAZY GUARDS. `_eval_acc_op`'s `ifelse`/`and`/`or` arms short-circuit exactly
-# like the scalar walker's, so on the SCALAR reference runner a merged group
-# with a lazy guard keeps per-cell guard semantics (the codegen tier emits the
-# same lazy semantics — ternaries and `&&`/`||` chains).
-#
-# The per-cell/invariant CSE tiers are SKIPPED on a lazy-bearing spine here.
-# `_build_acc_cse` itself only gives a slot to a value with an occurrence
-# outside every guarded operand, so a subtree whose occurrences all sit under
-# a guard never reaches the UNCONDITIONAL CSE prelude on any tier; the skip
-# is the stricter of the two rules.
-# ========================================================================
+# Lazy guards: `ifelse`/`and`/`or` short-circuit on every runner as in the
+# scalar walker, and a spine carrying one skips the merged CSE, so no value
+# computed only under a guard reaches an unconditional prelude.
 
 # Does this spine carry an op whose scalar evaluation is lazy?
 _acc_node_has_lazy(n::_Node) =
     _node_any(m -> m.kind === _NK_OP && _op_lazy_from(m.op) > 0, n)
 
-# CROSS-EQUATION + AFFINE-BOX direct class emission — the two class families
-# a per-equation grouping cannot see, folded into direct emission:
-#
-#   1. CROSS-EQUATION per-cell classes. The scalarizer's grouping runs per
-#      `_acc_from_cell_entries` call. So that structurally identical cells
-#      arising in DIFFERENT equations (twin species balances, per-band
-#      photolysis equations) share a kernel, `_compile_derivative_equations`
-#      (build_array_equation.jl) POOLS every per-cell equation's cell entries and calls
-#      `_acc_from_cell_entries` ONCE, above the equation loop — the same
-#      emitter, the same shape-keyed signature, one global grouping. Out-slot
-#      uniqueness across equations is guaranteed by `covered` (a duplicate
-#      derivative throws at compile), and kernels only read `u`/`p`/`t`/live
-#      forcing and assignment-scatter disjoint `du` slots, so which kernel
-#      hosts a cell — and where in the kernel list it lands — cannot change
-#      any evaluated bit.
-#
-#   2. AFFINE-BOX (assembled-kernel) classes. The affine stencil path mints
-#      `_AccKernel`s per box directly — including the subterm-granular
-#      LANE_EXPRTBL per-box tables (`:affine_subtree_tbl`, stencil.jl) — with
-#      no per-cell scalar trees for the scalarizer-level emitter to pool:
-#      the box compiler exists precisely to never scalarize. For that family
-#      the class facts only come into existence AT ASSEMBLY, so the emitter
-#      for it is sited at the assembled-kernel level:
-#      `_merge_acc_kernel_classes` (oop_merge.jl) runs its two class-merge
-#      rounds over the assembled kernels (tallies
-#      `:classmerge_round{1,2}_merge`), with the lockstep clone's
-#      bit-identity argument.
-#
-# The stage runs whenever the class merge does.
+# Cross-equation classes: `_compile_derivative_equations` pools every per-cell
+# equation's entries and groups them once, so structurally identical cells of
+# different equations share a kernel. Out-slots are unique across equations
+# and kernels write disjoint `du` slots, so which kernel hosts a cell changes no
+# bit. Kernels the affine tier mints per box merge at assembly instead
+# (`_merge_acc_kernel_classes`, oop_merge.jl). Both run whenever the class
+# merge does.
 _cross_eq_class_emit_enabled() = !_oop_merge_disabled()
 
 # ---- Structural grouping signature ------------------------------------------
