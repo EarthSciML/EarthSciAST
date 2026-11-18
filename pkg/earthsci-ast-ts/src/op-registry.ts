@@ -8,7 +8,7 @@
  *   - a relative computational-cost weight for complexity analysis.
  *
  * Adding a new scalar operator is ONE entry here. Open-tier rewrite-target
- * sugar (grad, div, laplacian, integral) is NOT registered here — it carries
+ * ops (integral, user ops) are NOT registered here — it carries
  * no evaluator and, per esm-spec §4.2, gets no special treatment: it is
  * lowered by rewrite rules before evaluation. Structural ops (const, enum, fn, aggregate, ...) are handled
  * specially by their consumers and carry no `evaluate`.

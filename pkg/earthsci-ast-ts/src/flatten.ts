@@ -748,8 +748,8 @@ function hasArrayOp(expr: Expression): boolean {
  * differential into `into`.
  *
  * Read STRUCTURALLY from every node's `dim` axis field (esm-spec §4.9.1), NOT
- * from a list of op names: the open-tier sugar ops carry no spatial-detection
- * privilege, and only an undiscretized differential node carries `dim`. A
+ * from a list of op names: an open-tier op (`integral`, a user op) carries no
+ * spatial-detection privilege, and only an undiscretized node carries `dim`. A
  * discretized system has folded its spatial axes into array dimensions and yields
  * the empty set, so it stays a pure ODE.
  */
@@ -759,8 +759,7 @@ function spatialDimsInExpr(expr: Expression, into: Set<string>): void {
     if (typeof dim === 'string' && dim !== '') into.add(dim)
     // `wrt` is the other axis-naming scalar field, and a differential taken with
     // respect to anything but time names a spatial axis exactly as `dim` does --
-    // §4.7.6 step 2 lists it alongside grad/div/laplacian as "`D` with
-    // `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
+    // §4.7.6 step 2 names it as "`D` with `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
     // equation, come out as a pure ODE.
     const wrt = (node as { wrt?: unknown }).wrt
     if (typeof wrt === 'string' && wrt !== '' && wrt !== 't') into.add(wrt)
@@ -1477,7 +1476,7 @@ function buildTranslateMap(entry: CouplingEntry): Record<string, [string, number
 
 /**
  * Expand `_var` placeholders in B's equations against A's state variables
- * (esm-spec §4.7.1): an equation like `D(_var, t) = -u·grad(_var)` is cloned once
+ * (esm-spec §4.7.1): an equation like `D(_var, t) = -u·D(_var, wrt: x)` is cloned once
  * per state variable of A, with `_var` substituted for the namespaced name.
  */
 function expandOperatorComposePlaceholders(
@@ -2988,7 +2987,7 @@ function collectFieldIcs(flat: FlattenedSystem): void {
 // (reactions -> generic `D(sp) = Σ terms`; then `operator_compose` merges each
 // species' reaction ODE with the spatial operator's advection makearray). What
 // operator_compose does NOT do is array-ify the result: the merged
-// `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+// `D(sp) = <reaction> + <-u·makearray(D(sp, wrt: x))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. The same holds for every
 // other route a grid reaches a 0-D system by (a `variable_map` feeding a shaped
 // field into a rate, an operator written elementwise, a partial translate).

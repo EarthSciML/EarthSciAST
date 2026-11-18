@@ -1088,16 +1088,15 @@ function computeDimensions(
 
     default:
       // Structural / not-dimensionally-modelled ops AND
-      // every OPEN-TIER rewrite-target op — the spatial-calculus sugar
-      // `grad`/`div`/`laplacian`/`integral` and any user op such as
-      // `godunov_hamiltonian`. These sugar ops carry NO dimensional rule
+      // every OPEN-TIER rewrite-target op — `integral` and any user op such as
+      // `godunov_hamiltonian`. These ops carry NO dimensional rule
       // (esm-spec §4.2 / §4.8.3 "any other op"): their result dimension is
       // UNDETERMINABLE until a discretization rule lowers them to a `D` stencil,
       // so the honest answer is UNKNOWN and the enclosing check is SKIPPED
       // (§4.8.4). They are resolved by the SAME machinery as any other
       // rewrite-target op — no bespoke coordinate-divided gradient rule, no
       // op-name special case. Inventing a dimension here (the old
-      // `dimensionless()` — or the removed grad-over-coordinate divide) asserts
+      // `dimensionless()` — or the old gradient-over-coordinate divide) asserts
       // a dimension these nodes do not have, which manufactured false mismatches
       // across the valid corpus and, under the hard-error severity policy, false
       // rejections. Go returns `nil, nil` here and skips the check; so do we. No
@@ -1189,8 +1188,8 @@ function checkAndReport(
  * `units` string names no real unit.
  *
  * This is what remains of the old `buildCoordinateBindings` after the bespoke
- * gradient-units rule was removed. `grad`/`div`/`laplacian` are ordinary
- * open-tier rewrite-target ops with NO dimensional rule (esm-spec §4.2 / §4.8.3
+ * gradient-units rule was removed. Open-tier rewrite-target ops (`integral`, user
+ * ops) carry NO dimensional rule (esm-spec §4.2 / §4.8.3
  * "any other op"), so there is no coordinate → units table for the checker to
  * build any more — a spatial derivative's dimension is UNDETERMINABLE until it is
  * lowered, and the checker simply reports UNKNOWN and skips (§4.8.4).
@@ -1300,8 +1299,7 @@ function sharedUnitBindings(file: EsmFile, warnings: UnitWarning[]): Map<string,
  * top-level reaction system's `constraint_equations` still resolve fully,
  * because that system's species/parameters ARE in the shared environment.
  *
- * SPATIAL-CALCULUS SUGAR: `grad`/`div`/`laplacian` (and `integral`, and any user
- * op) are ordinary open-tier rewrite-target ops with NO dimensional rule
+ * OPEN-TIER OPS: `integral` and any user op are ordinary open-tier rewrite-target ops with NO dimensional rule
  * (esm-spec §4.2 / §4.8.3 "any other op"): their dimension is UNDETERMINABLE
  * until a discretization rule lowers them to a `D` stencil, so `checkDimensions`
  * reports UNKNOWN and skips the enclosing check (§4.8.4). There is no coordinate
