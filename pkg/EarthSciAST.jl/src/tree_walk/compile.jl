@@ -16,23 +16,15 @@ end
 _register_loopvar!(name::AbstractString, ref::Base.RefValue{Int}) =
     (_build_state().loopvars[Symbol(name)] = ref; nothing)
 
-# ── Per-equation build memo (compile one representative per group) ──
-# Within one array equation's cell loop every cell resolves/compiles against the
-# SAME resolve context (array_var_info / var_map / const_arrays / pgather) and
-# compile context (var_map / param_syms), so `_resolve_indices` and
-# `_compile` are pure functions of the input expression OBJECT. A subexpression shared across cells — every state-independent
-# subtree is the SAME object across cells, thanks to the `_sub_preserving` /
-# `_resolve_indices` identity short-circuits — is then resolved and compiled ONCE
-# instead of once per cell. `_Node` is immutable and `_acc_merge_nodes` never mutates
-# its inputs, so sharing a compiled node across cells is safe.
-#
-# The memo is a plain local value created in `_build_evaluator_impl` and passed
-# EXPLICITLY down the resolve/compile recursion (no module-level or task-local
-# state — safe under concurrent builds). Threading is fail-safe: a `_resolve_indices`
-# / `_compile` call that receives `nothing` (the default, used everywhere outside
-# the array-cell loop) is byte-identical to the un-memoized function, and a
-# recursion that forgets to forward the memo merely stops memoizing that subtree —
-# it never changes a result.
+# ── Per-equation build memo ──
+# Within one array equation's cell loop every cell resolves and compiles against
+# the same context, so `_resolve_indices` and `_compile` are pure functions of
+# the expression object; a subexpression shared across cells (the same object,
+# by the identity short-circuits of `_sub_preserving` and `_resolve_indices`)
+# is resolved and compiled once. `_Node` is immutable, so sharing a compiled
+# node is safe. The memo is passed explicitly (`_ResolveCtx.memo`, `memo`
+# here); `nothing` means no memo, and a recursion that drops it only stops
+# memoizing, it never changes a result.
 #
 # `deferrals` counts the guarded out-of-range const reads the resolve deferred to
 # run time (gather_resolve.jl). Such a result depends on the guards the node was
@@ -172,7 +164,7 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             )
         )
     elseif op_sym === :D
-        # esm-spec §4.2 / §9.6.8 (open-op-namespace RFC, Change B): `D` is an
+        # esm-spec §4.2 / §9.6.8: `D` is an
         # evaluable-core op only in its STRUCTURAL equation-LHS role. A `D`
         # reaching `_compile` — a spatial `D`, or any `D` in an RHS / observed /
         # rate position — is an unlowered rewrite-target: a discretization rule
@@ -228,16 +220,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             )
         )
     elseif op_sym === :index
-        # A forcing gather over a live `param_arrays` buffer: the
-        # `index` branch of `_resolve_indices` already bounds-checked and
-        # linearized it, stashing a `_PGatherRef` in `value` (the `index` op is
-        # CSE-opaque, so the gather is never HOISTED; `_cse_key` still keys its
-        # ancestors, and swaps the ref for a canonicalizable stand-in to do so —
-        # see `_PGatherRef`). Lower it to a
-        # live-read `_NK_PARAM_GATHER` instead of the const-fold a frozen
-        # `const_arrays` entry would get. This is the binding-time reroute of an
-        # EXISTING gather by its cadence class — no new IR op (the wire op is still
-        # `index`).
+        # A live forcing buffer read at an offset resolve already checked and
+        # linearized (`_PGatherRef`): a live read on every call.
         if expr.value isa _PGatherRef
             ref = expr.value::_PGatherRef
             return _mknode(kind = _NK_PARAM_GATHER, idx = ref.lin, payload = ref.flat)
@@ -279,20 +263,11 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             )
         )
     end
-    # ── Generic open-tier rejection gate (esm-spec §4.2 / §9.6.6, the uniform
-    #    `unlowered_operator` rule) ──
-    # Any op that is NOT evaluable-core, reaching compilation, is an unlowered
-    # rewrite target: the spatial-calculus sugar `grad`/`div`/`laplacian`, a
-    # named rewrite-target like `integral`, OR any unregistered
-    # open-namespace custom op (`godunov_hamiltonian`, …). The decision is the
-    # registry-sourced tier predicate `_op_in_T` (a member of `_REWRITE_TARGET_OPS`
-    # or an op with no registry row) — NOT a hardcoded op-name list — so a user's
-    # own open-tier op is rejected identically to grad/div/laplacian, by predicate.
-    # Mirrors the other bindings: unregistered/open-tier op → `unlowered_operator`;
-    # a registered-but-non-scalar CORE form (const/faq/makearray/broadcast/…)
-    # reports `unevaluable_operator`, from the arms above or the rule gate below. The `D` arm (bespoke `wrt` detail) likewise handles its
-    # own T member above. The gate fires before evaluation; the op is lowered to a
-    # stencil by a discretization rule (e.g. EarthSciDiscretizations), not here.
+    # An op that is not evaluable core (esm-spec §4.2 / §9.6.6) is an unlowered
+    # rewrite target: `grad`/`div`/`laplacian`, `integral`, or any open-namespace
+    # op with no registry row (`_op_in_T`). A discretization rule must lower it
+    # first. A registered core form with no scalar meaning reports
+    # `unevaluable_operator` instead, from the arms above or the gate below.
     if _op_in_T(expr.op)
         throw(
             TreeWalkError(
