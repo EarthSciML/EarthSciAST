@@ -1,57 +1,26 @@
-# The load-time rewrite pass for `expression_templates` on the raw document:
-# substitution, apply-site expansion, `match` rules and the §9.6.3 fixpoint.
-
-"""
-Load-time rewrite pass for `expression_templates` (esm-spec §9.6,
-docs/content/rfcs/ast-expression-templates.md).
-
-`expression_templates` is the single structural-substitution mechanism in the
-format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
-(the replacement Expression), applied in one of two ways:
-
-- WITHOUT a `match` field — invoked explicitly by an `apply_expression_template`
-  node whose `bindings` supply each param's AST (named-template expansion).
-- WITH a `match` field — an auto-applied rewrite rule: `match` is a pattern
-  Expression whose param occurrences are wildcards, fired wherever it
-  structurally matches a node. A param in an operand/`args` position binds to the
-  matched sub-AST; a param in a scalar field (`dim`, `side`, …) binds to the
-  matched literal. An optional `where` block (esm-spec §9.6.1,
-  docs/content/rfcs/match-pattern-scoping-constraints.md) adds STATIC scoping
-  constraints on the captured params: `{"F": {"shape": ["edges"]}}` makes the
-  rule eligible only where `F` bound to a bare variable reference whose
-  declaration in the enclosing component carries exactly that `shape` (ordered
-  index-set names). Constraint evaluation consults declared shapes only —
-  never runtime values — and is part of match ELIGIBILITY: a
-  constraint-excluded rule is a non-matching rule at that node, filtered
-  before the priority / declaration-order selection.
-
-Rewriting is an OUTERMOST-FIRST, PRIORITY-ORDERED, BOUNDED-FIXPOINT process
-(esm-spec §9.6.3, `_rewrite_to_fixpoint`). Rule application proceeds in passes;
-one pass (`_rewrite_pass`) is a single pre-order (outermost-first) walk of the
-tree. At each node the engine first tries to fire a rule AT that node before
-descending: an `apply_expression_template` op is expanded, otherwise the `match`
-rules are consulted and the winner is selected deterministically — highest
-`priority` (integer, default 0), ties broken by DECLARATION order. The winner's
-`body` replaces the node and the walk does NOT descend into that freshly-produced
-body during the current pass; if no rule fires, the walk descends into children.
-Passes repeat until a pass performs zero rewrites (the fixpoint) or until
-`MAX_REWRITE_PASSES` productive passes have run without converging, in which case
-the file is rejected with `rewrite_rule_nonterminating` (the pass bound — not a
-static check — is the authoritative termination guard, so a self-reintroducing
-rule simply fails to converge). Because selection and traversal are fully
-deterministic, all bindings produce byte-identical fixpoints. After convergence
-(esm-spec §9.6.4, Option B / esm 0.9.0) NON-EAGER `apply_expression_template`
-references SURVIVE as leaves and each component's `expression_templates` block
-is RETAINED as its registered registry — emit materializes it (rule 5), `Expand`
-consumes it (rule 2), and the build paths resolve surviving references against
-it. Only eager references (target-bearing, §9.6.4 rule 3) are expanded here.
-Any rewrite-target op (e.g. a spatial `D`) that survives the fixpoint into an
-evaluation position is caught later by the `unlowered_operator` gate, not here.
-
-Operates on the raw JSON view (JSON3.Object/Array or the post-wire native
-tree) and returns the rewritten `OrderedDict{String,Any}` document ready for
-`coerce_esm_file`.
-"""
+# The load-time rewrite pass for `expression_templates` on the raw document
+# (esm-spec §9.6): substitution, apply-site expansion, `match` rules and the
+# §9.6.3 fixpoint. It works on the raw JSON view and returns the rewritten
+# `OrderedDict{String,Any}` document for `coerce_esm_file`.
+#
+# A template without `match` is expanded where an `apply_expression_template`
+# node names it, its `bindings` supplying each param. A template with `match` is
+# an auto-applied rule: its params are wildcards (an operand param binds the
+# matched sub-AST, a scalar-field param the matched literal), and an optional
+# `where` block (§9.6.1) restricts it statically to captures whose declared
+# `shape` matches; a rule `where` excludes does not match at that node.
+#
+# Rewriting (`_rewrite_to_fixpoint`) runs passes of one outermost-first walk
+# each (`_rewrite_pass`). At each node the walk first tries a rule: an
+# `apply_expression_template` is expanded, else the matching rule with the
+# highest `priority` (default 0, ties by declaration order) fires. Its body
+# replaces the node and is not descended into in the same pass. Passes repeat
+# until one rewrites nothing; `MAX_REWRITE_PASSES` productive passes without
+# converging reject the file with `rewrite_rule_nonterminating`. Only eager
+# (target-bearing, §9.6.4 rule 3) apply references are expanded here; the rest
+# survive as leaves and each component keeps its `expression_templates` block as
+# the registry the build resolves them against. A rewrite-target op that
+# survives into an evaluation position is refused later (`unlowered_operator`).
 
 const APPLY_EXPRESSION_TEMPLATE_OP = "apply_expression_template"
 

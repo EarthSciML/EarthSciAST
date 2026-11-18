@@ -1163,7 +1163,7 @@ function materialize_value_invention(
             TreeWalkError(
                 "relational_node_in_continuous",
                 "value-invention producer '$id' classifies CONTINUOUS — it may not run per " *
-                    "step (RFC §5.7 guard 2); its inputs must be CONST/DISCRETE"
+                    "step (CONFORMANCE_SPEC §5.7.6 guard 2); its inputs must be CONST/DISCRETE"
             )
         )
         # Any other failure leaves the derived set with no members to count, so it

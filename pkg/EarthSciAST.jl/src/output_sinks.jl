@@ -1,28 +1,13 @@
-# Streaming output sinks — the EarthSciAST-Julia producer surface
-# (streaming-output-sinks RFC §16). This file is the OUTPUT mirror of the
-# pure-I/O data-loader INPUT seam in `data_refresh.jl`.
+# Streaming output sinks: the output mirror of the data-loader input seam in
+# data_refresh.jl. A `PresetTimeCallback` snapshots the integrator state (and any
+# caller-named observed fields) at each output boundary and hands it to each
+# sink, so the trajectory need not be kept in memory (`save_everystep=false`).
 #
-# Where `data_refresh.jl` PULLS native arrays from a data Provider into the live
-# forcing buffers at each cadence boundary, this file PUSHES simulation state to a
-# Sink at each output boundary: a `PresetTimeCallback` whose `affect!` snapshots
-# the integrator state (and any caller-named observed fields) and hands it to each
-# sink for persistence. The trajectory never has to be fully resident — the sink
-# IS the trajectory store, so the solver is told `save_everystep=false` and peak
-# memory stops being `O(n_timepoints × length(u0))`.
-#
-# EarthSciAST returns the *pieces* (`build_output_callback -> (cb, tstops)`); the
-# USER attaches them to their own `ODEProblem`/`solve`. EarthSciAST ships no
-# `solve`, no `ODEProblem`, no solver. The callback constructor itself lives in a
-# package extension gated on `DiffEqCallbacks` + `SciMLBase` (see
-# ext/EarthSciASTCallbacksExt.jl) so the base library never pulls a
-# solver-adjacent stack into `[deps]`.
-#
-# This file (core) owns the CONTRACT (the Sink protocol generics + a host-gather
-# `state_snapshot` seam); concrete sinks live OUTSIDE EarthSciAST, exactly like the
-# Provider protocol's concrete impl is the EarthSciIO `Provider`; the Zarr sink
-# is the EarthSciIO extension's (`build_zarr_sink`). EarthSciAST never imports
-# EarthSciIO; it calls these generics, which the data binding (or a mock) fills
-# in.
+# This file owns the contract: the Sink protocol generics and the host-gather
+# `state_snapshot`. Concrete sinks live outside EarthSciAST (the Zarr sink is the
+# EarthSciIO extension's `build_zarr_sink`). `build_output_callback`'s method
+# lives in ext/EarthSciASTCallbacksExt.jl so the core pulls in no solver stack;
+# `esm_problem(…; sinks)` composes it, or a caller attaches it to its own solve.
 
 """
     OutputError(msg)
@@ -81,11 +66,9 @@ Fields (RFC §16.3):
 
 * `t::Float64` — the solver time (seconds) of this record.
 * `state::Vector{Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}}` — the state as
-  `(slab, global-range tuple)` pairs. In v1 (host-gather) this is exactly ONE
-  entry, `(Array(u), (1:length(u),))` — the whole flat state at offset 0. The
-  vector-of-slabs shape is what lets the deferred Reactant shard-local
-  [`state_snapshot`](@ref) return each rank's addressable shard with its GLOBAL
-  range instead of a gathered whole, with no change to the sink or the callback.
+  `(slab, global-range tuple)` pairs. [`state_snapshot`](@ref) gives exactly one
+  entry, `(Array(u), (1:length(u),))`, the whole flat state at offset 0; a
+  sharded snapshot may give one slab per shard with its global range.
 * `observed::Dict{String,Array}` — caller-named observed/derived arrays,
   host-materialized (empty unless a sink's schema names observed outputs; those
   names drive what `pre_write` evaluates — the evaluator already produces them).
@@ -151,10 +134,9 @@ observed arrays into `sink`'s gridded arrays. The output-side mirror of
 
 `selection` is the write-side mirror of the Provider's read-side projection
 pushdown: an optional per-axis sub-slab so a sink is handed only part of an axis
-(distributed region writes). It is INERT in v1 (host-gather delivers the whole
-state as a single offset-0 slab, `selection===nothing`); it becomes live with the
-deferred Reactant shard-local [`state_snapshot`](@ref) + [`sink_supports_partial`](@ref).
-Concrete impls live in the data binding or a test mock.
+(distributed region writes). The output callback always passes
+`selection === nothing`, since [`state_snapshot`](@ref) delivers the whole state;
+see [`sink_supports_partial`](@ref). Concrete impls live in the data binding or a test mock.
 """
 function sink_write! end
 sink_write!(s, ::StateSnapshot; selection = nothing) = throw(
@@ -198,9 +180,8 @@ sink_close!(s) = throw(
 
 True if `sink` can accept a sub-slab (region) write — the write-side mirror of
 [`provider_supports_selection`](@ref), used for distributed shard-local output.
-Defaults to `false`; it is INERT in v1 (host-gather is a single whole-state write)
-and becomes load-bearing with the deferred Reactant shard-local phase. A concrete
-binding overrides it.
+Defaults to `false`; nothing in this package issues a partial write. A
+concrete binding overrides it.
 """
 function sink_supports_partial end
 sink_supports_partial(::Any) = false
@@ -217,28 +198,16 @@ function sink_observed_names end
 sink_observed_names(::Any) = String[]
 
 # --------------------------------------------------------------------------- #
-# state_snapshot — the ONE place the output callback touches the solver state.
-# HOST-GATHER v1 impl (RFC §6, §16.4): the whole flat state as a single offset-0
-# slab. Kept a small standalone function so the Reactant shard-local impl (return
-# each device's addressable shard with its GLOBAL range, no gather) can be added
-# later WITHOUT touching any caller — the same "ship behind a stable seam" pattern
-# the input side uses for `_write_forcing!` / `sync_forcing!`.
+# state_snapshot — the one place the output callback touches the solver state.
 # --------------------------------------------------------------------------- #
 
 """
     state_snapshot(integrator) -> Vector{Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}}
 
 Host-gather the integrator's state into the [`StateSnapshot`](@ref) `state` shape:
-in v1 exactly one `(Array(integrator.u), (1:length(integrator.u),))` pair — the
-whole flat state materialized on the host at global offset 0. `Array(u)` triggers
-XLA's gather to host under a replicated/single-host Reactant tier and is a plain
-copy on the CPU tree-walk path, so this one impl is correct at any scale that fits
-one host's write bandwidth.
-
-This is the mirror of what the INPUT side already does when it materializes host
-forcing buffers. The multi-slab (shard-local) return — each device's local shard
-with its global range, no global gather — is the deferred Reactant drop-in; adding
-it changes only this function, not the sink or the callback.
+one `(Array(integrator.u), (1:length(integrator.u),))` pair, the whole flat
+state on the host at global offset 0. `Array(u)` gathers a device array to the
+host and is a plain copy for a host array.
 """
 function state_snapshot(integrator)
     u = integrator.u
@@ -252,18 +221,15 @@ end
 # --------------------------------------------------------------------------- #
 
 """
-    build_output_callback(; sinks, snapshot = state_snapshot,
-                          pre_write = () -> nothing)
+    build_output_callback(; sinks, snapshot, pre_write = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
-Build the streaming-output callback and its tstops, WITHOUT embedding a solver
-— the output-side mirror of
-[`build_refresh_callback`](@ref). The callback is a pure function of the `sinks`
-and the `snapshot`/`pre_write` seams; it never reads the model. The caller attaches
-it to their own problem:
+Build the streaming-output callback and its tstops, the output-side mirror of
+[`build_refresh_callback`](@ref). The callback reads only `sinks`, `snapshot`
+and `pre_write`, never the model. The caller attaches it to their own problem:
 
 ```julia
-cb, tstops = build_output_callback(; sinks = [my_sink])
+cb, tstops = build_output_callback(; sinks = [my_sink], snapshot = state_snapshot)
 prob = ODEProblem(f!, u0, tspan, p)              # USER's solver call
 sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops, save_everystep = false)
 ```
@@ -271,9 +237,10 @@ sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops, save_everystep = fal
 * `sinks` — a collection of objects implementing the Sink protocol
   ([`sink_output_times`](@ref) / [`sink_write!`](@ref) / …). Each has its OWN
   output cadence; multiple sinks with different cadences are first-class.
-* `snapshot` — an `integrator -> StateSnapshot` function. Defaults to
-  [`state_snapshot`](@ref) wrapped to also fold in the observed caches; a caller
-  supplies one that captures its observed caches when writing observed fields.
+* `snapshot` — required: an `integrator -> snapshot` function returning a
+  [`StateSnapshot`](@ref) or, like [`state_snapshot`](@ref), just its state
+  slabs. A caller writing observed fields supplies one that captures its
+  observed caches.
 * `pre_write` — a `() -> nothing` hook the `affect!` calls at each output boundary
   BEFORE `snapshot(integrator)`, so the caller-named observed caches are fresh when
   the snapshot reads them. Defaults to a no-op.
@@ -283,9 +250,9 @@ sol  = solve(prob, Tsit5(); callback = cb, tstops = tstops, save_everystep = fal
 tick, call `sink_write!(sink, snap)`.
 
 `cb` is a `PresetTimeCallback`; `tstops` is the sorted, de-duplicated UNION of
-every sink's [`sink_output_times`](@ref) — the identical construction
-[`build_refresh_callback`](@ref) uses for provider refresh times, so **input
-refresh and output write compose in one `CallbackSet`** (union the two tstops).
+every sink's [`sink_output_times`](@ref), built as [`build_refresh_callback`](@ref)
+builds its tstops, so refresh and output compose in one `CallbackSet` (union
+the two tstops).
 Returns an empty-tstops no-op callback when every sink is predicate-only.
 
 Requires `DiffEqCallbacks` and `SciMLBase` to be loaded (the constructor is a

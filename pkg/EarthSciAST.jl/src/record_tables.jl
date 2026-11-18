@@ -1,9 +1,8 @@
 """
     OPEXPR_FIELD_TABLE
 
-THE `OpExpr` field-spec table — the single source of truth for what each of
-the struct's fields IS, from which every field-generic consumer is derived
-(by `@eval` metaprogramming or direct table lookup):
+The `OpExpr` field-spec table, from which every field-generic consumer is
+derived:
 
 - the wire contract [`OPEXPR_WIRE_KEYS`](@ref) (parse + serialize key set),
 - `_parse_op_optional_fields` (parse.jl, generated field extraction),
@@ -40,11 +39,10 @@ Columns:
   dispatches on (`:string`, `:int`, `:int_vec`, `:bool`, `:json`,
   `:output_idx`, `:regions`, `:shape`, `:attrs`); `nothing`
   when the `kind` alone determines parsing.
-- `binds_scope`: `true` for the one field whose KEYS validate's
-  `_bound_index_symbols` credits into reference-check scope (`bindings` —
-  template formal-parameter names). A legitimate consumer DIFFERENCE, not a
-  traversal property: `free_variables`' binder subtraction (`_bound_symbols`,
-  expression.jl) deliberately does NOT use it.
+- `binds_scope`: `true` for the one field whose keys validate's
+  `_bound_index_symbols` puts in reference-check scope (`bindings`, the
+  template formal-parameter names). `free_variables`' binder subtraction
+  (`_bound_symbols`) does not use it.
 
 Adding an `OpExpr` field without a row here fails the load-time assert below;
 `round_trip_regression_test.jl` then pins its real parse/serialize behavior.
@@ -179,10 +177,9 @@ constructor, so its normalizations and checks run.
 """
     RECORD_FIELD_TABLES
 
-The per-type field-spec tables for the REGULAR record types — the single
-source of truth from which BOTH wire directions are generated
-(`coerce_<fn>` in parse.jl, `serialize_<fn>` in serialize.jl), following the
-[`OPEXPR_FIELD_TABLE`](@ref) precedent. One entry per type:
+The per-type field-spec tables for the regular record types, from which both
+wire directions are generated (`coerce_<fn>` in parse.jl, `serialize_<fn>` in
+serialize.jl). One entry per type:
 
 - `T`: the struct's name (a `Symbol`; resolved in this module).
 - `fn`: the coercer/serializer name suffix (`coerce_<fn>` / `serialize_<fn>`).
@@ -192,10 +189,9 @@ source of truth from which BOTH wire directions are generated
 - `injected`: `true` when the record's `name` is the KEY of an enclosing
   name-keyed map, injected as the coercer's first argument and never
   read from or emitted to the record's own wire body (Species, Parameter).
-- `rows`: one row per struct field, in HISTORICAL PARSE ORDER (which pins
-  ParseError precedence on multiply-invalid nodes; emission follows the same
-  order — JSON object equality, the round-trip contract, is key-order
-  agnostic). Row columns:
+- `rows`: one row per struct field, in parse order (which fixes which
+  ParseError a node with several invalid fields reports; emission follows the
+  same order). Row columns:
     - `f`: struct field name == constructor keyword name.
     - `wire`: the JSON key (renames live here: `stop` ↔ `"end"`).
     - `kind`: the value class, naming the coercion/encoding pair —
@@ -226,14 +222,10 @@ source of truth from which BOTH wire directions are generated
     - `pos`: `true` for the constructor's positional arguments (in row
       order); all other rows pass as keywords.
 
-The IRREGULAR residue deliberately stays hand-written and is NOT here:
-discriminated-union sniffing (`coerce_coupling_entry`, `coerce_trigger` /
-`serialize_trigger`, `_coerce_subsystem_entry` / `_serialize_subsystem`),
-name-keyed-map↔vector conversions with injected names (`ReactionSystem`),
-`Reaction` (null-vs-absent substrates/products + `_emit_stoich`),
-`CouplingVariableMap` (transform union + constructor-error rebranding),
-`coerce_enums` (enum-name-context-threaded ParseError messages), and the
-`EsmFile` orchestrator.
+Hand-written instead: the discriminated unions (`coerce_coupling_entry`,
+`coerce_trigger` / `serialize_trigger`, `_coerce_subsystem_entry` /
+`_serialize_subsystem`), `ReactionSystem`, `Reaction`, `CouplingVariableMap`,
+`coerce_enums` and the `EsmFile` orchestrator.
 
 A load-time assert (below) pins each entry's rows to `fieldnames(T)` exactly;
 `round_trip_regression_test.jl` / `conformance_round_trip_test.jl` pin the

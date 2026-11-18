@@ -347,4 +347,22 @@ _xq_directmerge(t) = get(t, :classmerge_round1_merge, 0) +
         # had NOTHING to do.
         @test repair_total == 0
     end
+
+    # A per-cell cell holding a kind an access kernel has no form for (here a
+    # state read at a slot computed per call, `_NK_STATE_GATHER`) is walked per
+    # cell, never handed to the class merge, whose signature refuses it by name.
+    # The column search's hoisted gather reaches the out-of-place per-cell tier
+    # with exactly such cells.
+    @testset "a state read at a computed slot stays a per-cell scalar cell" begin
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance", "scaling", "fixtures",
+            "column_search", "column_search_N100.esm"
+        )
+        b = ESM.Internal.build(path; form = :oop)
+        tiers = Dict(r.rule => r.tier for r in b.report.compiler_report.rules)
+        @test get(tiers, "D(Column.u) (hoisted gather)[_mo0=5]", nothing) === :percell_build
+        sg = ESM._mknode(kind = ESM._NK_STATE_GATHER)
+        @test ESM._acc_scalar_only(ESM._mknode(kind = ESM._NK_OP, op = :+, children = [sg]))
+        @test !ESM._acc_scalar_only(ESM._mknode(kind = ESM._NK_STATE, idx = 1))
+    end
 end

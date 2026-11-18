@@ -3,27 +3,22 @@
 # tree-walk IR. Included by ext/EarthSciASTReactantExt.jl.
 # ========================================================================
 #
-# WHAT THIS IS. The COMPILED backend for the out-of-place RHS. It does not trace
-# the emitter's broadcast Julia code: it walks the SAME compiled IR the `:oop`
-# closure captured — the materialized-observed fill levels, the CSE prelude, the
-# `rhs_list` scalar spines, the `_AccKernel`s with their `_OopAccPlan`s, the
-# template sub-kernels, the CSR reduces and the prefix scan folds — and
-# constructs `stablehlo.*` operations directly through
-# `Reactant.MLIR.Dialects.stablehlo`, the way `Reactant.Ops` does internally. It
-# runs INSIDE `Reactant.@compile`, so the compile pipeline, the PJRT client and
-# the argument/result plumbing are Reactant's; what changes is that every op in
-# the module comes from an IR node rather than from Julia's broadcast machinery.
+# The compiled backend for the out-of-place right-hand side. It walks the same
+# compiled IR the `:oop` closure captured (materialized-observed fill levels, the
+# CSE prelude, the `rhs_list` scalar spines, the `_AccKernel`s with their
+# `_OopAccPlan`s, template sub-kernels, CSR reduces and prefix-scan folds) and
+# builds `stablehlo.*` operations directly through
+# `Reactant.MLIR.Dialects.stablehlo`, inside `Reactant.@compile`.
 #
 # VALUE MODEL. Every emitted value is a rank-1 `tensor<Lxf64>`; a scalar is
-# `L == 1`. There is NO extended flat state buffer `ue`: a materialized
-# observed's fill result is recorded in a SLOT MAP (slot -> (producer value,
-# position)), and a later read of those slots becomes slices of the producer
-# values plus one concatenate. `du` is assembled the same way, unwritten slots
-# becoming a zero-constant run.
+# `L == 1`. There is no extended flat state buffer: a materialized observed's
+# fill result is recorded in a slot map (slot -> (producer value, position)), and
+# a later read of those slots becomes slices of the producer values plus one
+# concatenate. `du` is assembled the same way, unwritten slots becoming a
+# zero-constant run.
 #
-# HARD ERRORS, NOT FALLBACKS. Anything this backend cannot lower raises
-# `EarthSciAST.DirectEmitError` naming the node kind / descriptor kind / kernel
-# shape and the rule it came from. See api.jl for why.
+# Anything this backend cannot lower raises `EarthSciAST.DirectEmitError` naming
+# the node, descriptor or kernel shape; there is no fallback.
 #
 # FILES
 #   options.jl  `DirectEmitOptions`, the tuning switches, read from ENV once
@@ -35,16 +30,14 @@
 #   emit.jl     the walk — spines, kernels, sub-kernels, reduces, scans, the RHS
 #   batch.jl    the LANE-BATCHED scalar surface: the `:oop` build's congruent
 #               per-cell entry groups emitted once over their lane axis
-#   device.jl   WHERE it runs: the XLA client (cpu/gpu), the cell-axis sharding
-#               of the flat state across several devices, and the device-input
-#               builders, held BESIDE the callable rather than in it. Included
-#               BEFORE api.jl: it declares the `DirectCallable` supertype and
-#               the placement table api.jl registers into.
+#   device.jl   the XLA client (cpu/gpu), cell-axis sharding of the flat state
+#               across devices, and the device-input builders. Included before
+#               api.jl: it declares the `DirectCallable` supertype and the
+#               placement table api.jl registers into.
 #   api.jl      `direct_rhs` / `direct_rhs_with_buffers` and the call methods
 #   problem.jl  `esm_problem(…; compiler = :xla)`: the emitted program compiled
-#               once per BUILD and wrapped in the Problem's in-place `f!`
-#               calling convention. Included LAST: it is the only file here that
-#               reaches back into the package's Problem surface.
+#               once per build behind the Problem's in-place `f!`. Included
+#               last: it is the only file here that uses the Problem surface.
 
 import EarthSciAST
 # The entry points are declared in src/compiler_xla.jl; the methods are here.

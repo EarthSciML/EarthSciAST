@@ -121,7 +121,7 @@ The operator registry. **To add (or re-classify) an operator, edit this table**
 — the following consts derive from it at load time and must NOT be edited by
 hand:
 
-- `_WS4_FOLDABLE_ELEMENTWISE_OPS` (src/tree_walk/build_helpers.jl) — elementwise
+- `_WS4_FOLDABLE_ELEMENTWISE_OPS` (src/tree_walk/build_equation_prep.jl) — elementwise
   ops the array-observed fold may inline; every member MUST have a scalar
   arm in `_eval_node_op` (see the invariant comment at its definition site).
 - `_CSE_OPAQUE_OPS` (src/tree_walk/scalar_cse.jl) — ops `_compile` handles
@@ -133,18 +133,17 @@ hand:
   src/tree_walk/geometry_compile.jl).
 - `_KNOWN_OPS` (ext/mtk_ext/export.jl) — ops the MTK exporter recognizes;
   anything else is reported as an `unknown_operator` gap.
-- `_ARRAY_PRODUCER_OPS` / `_SELF_INDEXED_OPS` (src/shape_promotion.jl) —
+- `_ARRAY_PRODUCER_OPS` / `_SELF_INDEXED_OPS` (src/cell_read.jl) —
   array-producing nodes for the shape-promotion / pointwise-lift rewrites,
   and the nodes that carry their own indexing (the producers plus `index`),
   which the leaf-indexing rewrites never descend into.
 - `_BUILTIN_FUNCTION_NAMES` (src/validation/references.jl) — bare names the reference
   checker excuses as always-in-scope builtins (mirrors Rust
   `is_builtin_function`, structural.rs).
-- `_XCSE_EXPENSIVE_OPS` (src/tree_walk/xcse.jl) — ops at least as expensive
-  as an fn/interp call, the cross-kernel fn-CSE cost gate (plan B4
-  criterion (c)): closed-function calls and the transcendental / power-class
-  elementary ops. Bare arithmetic / comparisons / min-max are deliberately
-  unflagged — never worth a store + K loads on their own.
+- `_XCSE_EXPENSIVE_OPS` (src/tree_walk/xcse.jl) — the cross-kernel CSE cost
+  gate: closed-function calls and the transcendental / power-class elementary
+  ops. Bare arithmetic, comparisons and min/max are not worth a store and K
+  loads on their own.
 - `_TRANSCENDENTAL_OPS` / `_CIRCULAR_OPS` / `_INVERSE_CIRCULAR_OPS` /
   `_COMPARISON_OPS` / `_BOOLEAN_OPS` (src/units.jl) — the dimensional-rule
   op classes (from the `dim_class` column via
@@ -156,11 +155,9 @@ hand:
   mechanical ladder-arm tables the evaluator ladders generate their arms from
   (derived by filter, not by flag).
 
-Membership is BEHAVIOR: these sets gate fold/CSE/fast-path/materialization
-decisions with cross-language conformance consequences, so every flag change
-must be deliberate and is pinned by test/op_registry_test.jl (update the
-literal there in the same commit, citing the spec section that motivates the
-change). Row order is meaningful only for the derived ordered table
+These sets gate fold, CSE, fast-path and materialization decisions, and
+test/op_registry_test.jl pins each membership literally (update it with any
+flag change). Row order is meaningful only for the derived ordered table
 `_UNARY_ELEMENTWISE_OPS`, which preserves it — the elementary rows below are
 listed in the `_eval_node_op` / `_eval_acc_op` ladder-arm order.
 """

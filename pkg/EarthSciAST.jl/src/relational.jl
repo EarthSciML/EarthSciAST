@@ -1,10 +1,8 @@
 """
     EarthSciAST.Relational
 
-Build-time relational engine — the primitives the unified-IR value-invention
-pass (RFC `semiring-faq-unified-ir` §5.5, §6.1) runs **once at setup**, off the
-per-timestep hot path, to materialise the data-derived index sets that the
-numeric stencil then consumes:
+Build-time relational engine: the primitives value invention runs once at
+setup to materialize the data-derived index sets:
 
 1. [`distinct`](@ref)        — deduplicate keys (unique mesh edges from face→vertex lists)
 2. [`equijoin`](@ref)        — value-equality equi-join (connectivity inversion, *edges of cell i*)
@@ -14,38 +12,25 @@ A key is a scalar integer: the `pair_key` / `edge_key` templates of
 `lib/relational.esm` encode a tuple as one integer, and a key's dense position in
 the distinct set is the `rank_of` / `rank_of_set` template.
 
-# Determinism (the reason this module exists)
+# Determinism
 
-`EarthSciAST` is **parallel native implementations** (Julia, Rust, Python)
-verified by a conformance suite, not one core behind FFI. So the hard problem is
-**bit-for-bit determinism across the bindings**: identical deduped sets and
-identical dense IDs. The governing principle (`CONFORMANCE_SPEC.md`
-§5.5 = RFC §5.7) is that *every emitted set, key, and dense ID is a pure function
-of a defined total order over tuples* — **no observable output may depend on
-`Dict`/`Set` iteration order or on a `Base.hash` value** (Julia's `Dict`/`Set`
-order is an unspecified implementation detail and `Base.hash` is process-seeded
-and not cross-version / cross-language stable).
+Every emitted set, key and dense ID is a pure function of a defined total order
+over tuples (`CONFORMANCE_SPEC.md` §5.5), so the bindings produce identical
+sets and IDs. No output may depend on `Dict`/`Set` iteration order or on
+`Base.hash`.
 
 Concretely, per `CONFORMANCE_SPEC.md` §5.5.1:
 
 - **Total order** — lexicographic over tuple fields; integers by value; strings
-  by Unicode code-point (UTF-8 byte) order. Julia's default `sort` and `isless`
-  on `String`/`Tuple` already give exactly this, and `sort`/`sort!` are stable by
-  default since Julia 1.9. **Floats are forbidden in keys** (rule 1) — rejected
-  at the boundary by [`FloatKeyError`](@ref).
+  by Unicode code-point (UTF-8 byte) order, which Julia's `isless` on
+  `String`/`Tuple` gives. **Floats are forbidden in keys** (rule 1), rejected by
+  [`FloatKeyError`](@ref).
 - **`distinct`** — sort by the total order, drop *adjacent* duplicates; output
   order *is* sorted order, never first-seen / `Set` order (rule 2).
 - **`join` / group-by** — hashing may bucket only; the result is emitted **sorted
   by the canonical key** (rule 5). The semiring `⊕` must be associative +
   commutative; for a floating-point `⊕` the per-bucket reduction is done
   sequentially in canonical value order to avoid last-ULP drift.
-
-# Implementation notes
-
-Built with Julia stdlib `sort`/`Dict` (+ the `OrderedCollections` dep) per RFC
-Appendix A.4; DataFrames.jl and DuckDB.jl are deliberately not dependencies
-(A.3). The Rust and Python bindings implement the same §5.5 contract, so all
-three produce byte-identical index sets.
 """
 module Relational
 

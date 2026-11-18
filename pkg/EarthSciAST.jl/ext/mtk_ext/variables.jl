@@ -357,8 +357,8 @@ scalar expression: an entry `lhs ~ rhs` names the zero-crossing function
 
 An ESM condition (esm-spec §5) is a zero-crossing FUNCTION, so the mapping is:
 
-  * `{"op":"-","args":[a,b]}` — the canonical spelling, 70 of the corpus's 88
-    conditions — is the crossing `a - b`, i.e. `a ~ b`.
+  * `{"op":"-","args":[a,b]}`, the canonical spelling, is the crossing `a - b`,
+    i.e. `a ~ b`.
   * a RELATIONAL condition (`a < b`, `a >= b`, …) crosses exactly where its two
     sides are equal, so it is also `a ~ b`. The direction is carried by the
     edge (`affect` vs `affect_neg`), not by the operator.

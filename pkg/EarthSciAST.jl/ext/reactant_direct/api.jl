@@ -23,13 +23,9 @@ body does not contain the `sharding_constraint` call at all; see `_de_constrain`
 below for why that matters.
 """
 mutable struct DirectRHS{F, SHARDED} <: DirectCallable{SHARDED}
-    # THESE THREE FIELDS AND NO OTHERS. `Reactant.@compile d(u, p, t)` traces
-    # the callable itself, so every field here is walked by Reactant and
-    # inferred through at the call site. WHERE the program runs — the XLA
-    # client, the mesh, the shardings — is therefore held BESIDE the wrapper,
-    # in device.jl's `_DE_PLACES`, not in it; a placement field wedges the
-    # compile (see the long note in device.jl). Read the placement with
-    # `direct_client` / `direct_shard`.
+    # These three fields only: `@compile` traces the callable, so the placement
+    # is held beside it in device.jl's `_DE_PLACES` (read it with
+    # `direct_client` / `direct_shard`).
     f::F
     names::Dict{Int, String}
     stats::Dict{Symbol, Int}
@@ -54,7 +50,8 @@ struct DirectRHSBuffers{F, SHARDED} <: DirectCallable{SHARDED}
 end
 
 """
-    direct_rhs(f; var_map = nothing) -> DirectRHS
+    direct_rhs(f; var_map = nothing, client = nothing, sharding = nothing,
+               options = DirectEmitOptions(ENV)) -> DirectRHS
 
 Wrap the out-of-place RHS `f` (`EarthSciAST.Internal.build(model; form = :oop)[1]`) in the
 direct StableHLO emitter, and return a callable `(u, p, t) -> du` to compile:
@@ -69,10 +66,9 @@ xla = Reactant.@compile d(ur, pr, tr)
 du  = Array(xla(ur, pr, tr))
 ```
 
-`var_map` is the evaluator's flat variable map; it NAMES the originating rule in
-a refusal, and it is what the cell-axis sharding checks the slab cut against. It
-may be omitted (refusals then say "flat slot 17", and the shard's block-alignment
-check is skipped because there are no block names to check).
+`var_map` is the evaluator's flat variable map; it names the originating rule in
+a refusal and is what the cell-axis sharding checks the slab cut against. Omitted,
+refusals name flat slots and the shard's block-alignment check is skipped.
 
 `client` chooses WHERE the program compiles and runs: `nothing` (Reactant's
 default backend), `:cpu`, `:gpu`, or an `XLA.AbstractClient`. `sharding` cuts the
@@ -86,14 +82,11 @@ see device.jl for what a slab shard means and when it is refused.
 switches that change the program's shape. The default reads them from `ENV`
 once, here.
 
-DIRECT EMISSION IS THE COMPILED PATH. A model containing any node kind or kernel
-shape the emitter cannot lower raises `EarthSciAST.DirectEmitError` naming the
-construct and the rule it came from. There is no fallback to the interpreter — a
-compiled lane that silently answered with a different evaluator would make the
-`compiled_rhs` conformance tier report agreement between the interpreter and
-itself.
+A model containing any node kind or kernel shape the emitter cannot lower raises
+`EarthSciAST.DirectEmitError` naming the construct and the rule it came from;
+there is no fallback to the interpreter.
 
-AGREEMENT WITH THE INTERPRETER is numerical, within the tolerance classes of
+Agreement with the interpreter is numerical, within the tolerance classes of
 tests/conformance/compiled_rhs/README.md, never bit-for-bit: `stablehlo.power`
 is not Julia's `^`, `stablehlo.maximum`/`minimum` do not pin Julia's NaN
 propagation, and a long `⊕`-fold becomes one `stablehlo.reduce`, which XLA may

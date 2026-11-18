@@ -449,8 +449,8 @@ function _hoist_lift_producer(
     )
     key = (objectid(g), vcat(String["\0producer"], something(shape, String[])))
     return _hoist_define!(hc, key, "a", owner) do name
-        # Not `something`: its fallback is evaluated eagerly, and an operand
-        # with integer-bound ranges has no index-set names to read.
+        # An explicit `shape` comes with integer-bound output ranges, which are
+        # not index-set references; only the named form reads its sets.
         sh = shape !== nothing ? shape :
             String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx]
         sh, g, VarExpr(name)

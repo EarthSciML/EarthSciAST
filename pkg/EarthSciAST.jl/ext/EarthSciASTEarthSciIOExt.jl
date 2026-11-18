@@ -204,7 +204,7 @@ function _code_lookup(cm::CodeMap, raw::AbstractString, var::AbstractString)
         RefreshError(
             "loader variable '$var': value $(repr(String(raw))) is not in its declared " *
                 "`codes` map (set codes.unmapped to \"drop\" or a number to accept it)",
-            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+            EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
         )
     )
 end
@@ -274,7 +274,7 @@ function _widen_column(name::AbstractString, data)
         RefreshError(
             "loader variable '$name' decoded as strings; a model forcing must be " *
                 "numeric (declare a `codes` map for it)",
-            EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+            EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
         )
     )
 end
@@ -344,7 +344,7 @@ function _table_columns(t::RecordTable, u::Float64)
                     "loader '$(t.loader)' variable '$(spec.name)' declares `codes`, but " *
                         "the column decoded as $(eltype(f.data)); a code map maps a TEXT " *
                         "column to numbers",
-                    EarthSciAST.ERROR_CODES.INVALID_ARGUMENT
+                    EarthSciAST.ERROR_CODES.PROVIDER_DATA_INVALID
                 )
             )
         end

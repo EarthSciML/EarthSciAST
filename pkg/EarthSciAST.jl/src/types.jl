@@ -301,14 +301,13 @@ an optional keyword (default `nothing`) that only some operators use. The
   field is not confused with Julia's own `Core.Expr`.
 - `reduce`: for `faq`, the reduction operator applied to
   contracted indices (one of "+", "*", "max", "min"; default "+"). Names the
-  semiring ⊕ only; it is the shorthand retained for files that omit `semiring`
-  (RFC semiring-faq-unified-ir §5.1).
+  semiring ⊕ only, for files that omit `semiring`.
 - `semiring`: for `faq`, the named semiring `(⊕, ⊗)` with
   normative identity elements that parameterizes the reduction (closed registry:
   "sum_product", "max_product", "min_sum", "max_sum", "bool_and_or"). Absent ⇒
   "sum_product", the ordinary einsum semantics. When present it supersedes
-  `reduce`; the ⊕/⊗ operators and BOTH identities come from the registry table,
-  never the file (RFC §5.1).
+  `reduce`; the ⊕/⊗ operators and both identities come from the registry table,
+  never the file.
 - `ranges`: for `faq`, map from index symbol name to iteration range
   (vector of 2 or 3 ints `[start, stop]` / `[start, step, stop]`).
 - `regions`: for `makearray`, list of sub-region boxes, each a list of

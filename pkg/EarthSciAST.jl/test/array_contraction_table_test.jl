@@ -146,12 +146,12 @@ end
         @test same
         @test get(tally, :array_contraction_consumer, 0) == 1
         f = pn.f!
-        stages = f.observed === nothing ? (f.state,) : (f.state, f.observed.levels...)
-        flat(g) = g isa Tuple ? reduce(vcat, map(flat, g); init = Any[]) : Any[g]
-        gens = reduce(vcat, (flat(st.contractions.gens) for st in stages); init = Any[])
+        # The observed fill stages the right-hand side runs before its state stage.
+        levels = f.observed.levels
+        gens = levels[1].contractions.gens
         @test length(gens) == 1 && gens[1].mask !== nothing
         # No contraction the right-hand side keeps holds its re-emission closure.
-        @test all(g -> g.remit === nothing, gens)
+        @test all(g -> g.remit === nothing, (g for lvl in levels for g in lvl.contractions.gens))
         # Every parameter value takes the interpreter's result bit for bit,
         # through each refill and back: atol past the half-overlaps closes
         # their gates, a negative atol opens the zero-overlap ones too.
