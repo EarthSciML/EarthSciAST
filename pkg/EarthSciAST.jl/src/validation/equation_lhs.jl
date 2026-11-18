@@ -13,20 +13,14 @@ function _lhs_defined_name(e)
     return s.role === :definition || s.role === :derivative ? s.name : nothing
 end
 
-# The declaration `name` refers to from `model`: a local variable, or a scoped
-# reference into a subsystem, written from the model or from the root model.
-function _lhs_variable(model::Model, name::String, root_name::String, root::Model)
-    v = get(model.variables, name, nothing)
-    v === nothing || return v
-    parts = split(name, '.')
-    for (start, from) in ((1, model), (2, parts[1] == root_name ? root : nothing))
-        from === nothing && continue
-        cur = _subsystem_at(from, parts[start:(end - 1)])
-        cur === nothing && continue
-        v = get(cur.variables, String(parts[end]), nothing)
-        v === nothing || return v
-    end
-    return nothing
+# The model variable `name` refers to from the component at scoped name
+# `scope`: a local variable, a scoped reference into a subsystem, or one
+# written from the top-level model `root_name` (and from no other).
+function _lhs_variable(ix::_ScopedIndex, scope::String, name::String, root_name::String)
+    d = _resolve_declaration(
+        ix, scope, name; kinds = (:variable,), absolute = startswith(name, root_name * ".")
+    )
+    return d === nothing ? nothing : d.decl
 end
 
 # Free string subscripts of `index` nodes in `e`: not bound by an enclosing faq
@@ -63,18 +57,19 @@ function _free_lhs_index_symbols!(
 end
 
 """
-    _check_equation_lhs_names!(errors, model, path, root_name, root, metaparameters)
+    _check_equation_lhs_names!(errors, ix, model, path, scope, root_name, metaparameters)
 
 esm-spec §6.3.1, what an equation's left-hand side may name: an equation defines
 unknowns, never a parameter (`equation_defines_parameter`, for a bare, indexed
 or faq-wrapped left side and for a scoped reference into a subsystem), and an
 index symbol on it must be bound by a faq on that side or, for the bare-index
 definition, by the right side's faq `output_idx` (`unbound_index_symbol`).
-Recurses into inline subsystems.
+Checks `model`'s own equations; `scope` is its scoped name, `root_name` the
+top-level model it sits in, and `ix` the document's declarations.
 """
 function _check_equation_lhs_names!(
-        errors::Vector{StructuralError}, model::Model,
-        path::String, root_name::String, root::Model,
+        errors::Vector{StructuralError}, ix::_ScopedIndex, model::Model,
+        path::String, scope::String, root_name::String,
         meta::Set{String}
     )
     names = Set{String}(keys(model.variables))
@@ -82,10 +77,10 @@ function _check_equation_lhs_names!(
     for (k, eq) in enumerate(model.equations)
         lhs = eq.lhs
         (lhs isa OpExpr && (lhs::OpExpr).op == "ic") && continue
-        lpath = "$path/equations/$(k - 1)/lhs"
+        lpath = _pointer(path, "equations", k, "lhs")
         dn = _lhs_defined_name(lhs)
         if dn !== nothing
-            v = _lhs_variable(model, dn, root_name, root)
+            v = _lhs_variable(ix, scope, dn, root_name)
             if v !== nothing && v.type == ParameterVariable
                 _report!(
                     errors, ERROR_CODES.EQUATION_DEFINES_PARAMETER,
@@ -111,10 +106,6 @@ function _check_equation_lhs_names!(
                 Dict{String, Any}("symbol" => sym)
             )
         end
-    end
-    for (sname, sub) in model.subsystems
-        sub isa Model || continue
-        _check_equation_lhs_names!(errors, sub, "$path/subsystems/$sname", root_name, root, meta)
     end
     return errors
 end

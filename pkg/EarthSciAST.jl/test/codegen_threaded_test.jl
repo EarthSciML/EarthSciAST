@@ -164,8 +164,8 @@ _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(d
 
 # The serial oracle: the SAME program built with the per-chunk work floor
 # above the whole section, which is what keeps a section off the threaded
-# route. It has to be a fresh build — the verdict caches on a section's first
-# call, so moving the floor afterwards changes nothing.
+# route. It has to be a fresh build: a section keeps the floor of the build
+# that made it.
 _cgt_serial(model, ics; env...) =
     withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
     _cgt_build(model, ics; env...)
@@ -179,7 +179,7 @@ _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 function _cgt_ranks(model, ics)
     lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
     f!, _, _, _ = _cgt_build(model, ics; compiler = lax, ESS_CODEGEN_NODE_BUDGET = "0")
-    ks = getfield(f!, :kernel_section)
+    ks = f!.state.kernels
     return [length(K.cells.strides) for K in getfield(ks, :kernels)]
 end
 
@@ -203,7 +203,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             fS, _uS, pS, _ = _cgt_serial(model, ics)
             fR, uR, pR, _ = _cgt_build(model, ics; compiler = :interpreter)
             @test get(tallyA, :codegen_kernel, 0) >= 1
-            ksA = getfield(fA, :kernel_section)
+            ksA = fA.state.kernels
             @test getfield(ksA, :tcache).disjoint      # build-time global check
             for k in 1:4, t in (0.0, 0.7, 3.25)
                 u = k == 1 ? copy(uA) :
@@ -227,17 +227,17 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             ESM._reset_thread_tally!()
             fS, uS, pS, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
             du = _cgt_du(fS, uS, pS, 0.3)     # 96 cells, under two chunks of work ⇒ serial
-            @test getfield(getfield(fS, :kernel_section), :tcache).state == -1
+            @test getfield(fS.state.kernels, :tcache).state == -1
             @test get(ESM._THREAD_TALLY, :cg_serial_small, 0) >= 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) == 0
             @test any(x -> x !== 0.0, du)
             # ... and a lowered threshold flips the SAME model to threaded.
             ESM._reset_thread_tally!()
-            fT, uT, pT, _ = _cgt_build(_cgt_1d_model(48), _cgt_1d_ics(48))
-            duT = withenv("ESS_THREADS_MIN_WORK" => "8") do
-                _cgt_du(fT, uT, pT, 0.3)
-            end
-            @test getfield(getfield(fT, :kernel_section), :tcache).state == 1
+            fT, uT, pT, _ = _cgt_build(
+                _cgt_1d_model(48), _cgt_1d_ics(48); ESS_THREADS_MIN_WORK = "8"
+            )
+            duT = _cgt_du(fT, uT, pT, 0.3)
+            @test getfield(fT.state.kernels, :tcache).state == 1
             @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
             @test _cgt_bitsame(duT, du)
         end
@@ -255,7 +255,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test get(ESM._THREAD_TALLY, :cg_serial_shared_outs, 0) == 1
             tc2 = ESM._SecTCache(1_000_000, true)
             @test ESM._sec_prep_threads!(tc2).state == 1
-            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._thread_min_work())
+            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._tuning_from_env().thread_min_work)
         end
 
         @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
@@ -274,7 +274,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]]), body) ==
                 2 + 5 * 3
             # 600 cells alone stay serial at the floor; their fold terms do not.
-            minw = ESM._thread_min_work()
+            minw = ESM._tuning_from_env().thread_min_work
             @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
             w3 = ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:20]), body)
             tc3 = ESM._SecTCache(600, true, w3)
@@ -331,7 +331,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             f2s, _u2s, p2s, _ = _cgt_serial(_cgt_2d_model(N2), _cgt_2d_ics(N2))
             du_thr = _cgt_du(f2, u2, p2, 0.4)
             du_ser = _cgt_du(f2s, u2, p2s, 0.4)
-            @test getfield(getfield(f2, :kernel_section), :tcache).state == 1
+            @test getfield(f2.state.kernels, :tcache).state == 1
             @test _cgt_bitsame(du_thr, du_ser)
         end
 
@@ -342,7 +342,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             if VERSION >= v"1.12"
                 @test bytes == 0
             end
-            @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+            @test getfield(fA.state.kernels, :tcache).state == 1
         end
 
         @testset "dual numbers thread: threaded ≡ serial, partials included" begin
@@ -358,10 +358,8 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 ]
                 dthr = similar(ud); dser = similar(ud)
                 Base.invokelatest(fA, dthr, ud, pA, 0.7)
-                withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
-                    Base.invokelatest(fS, dser, ud, pS, 0.7)
-                end
-                @test getfield(getfield(fA, :kernel_section), :tcache).state == 1
+                Base.invokelatest(fS, dser, ud, pS, 0.7)
+                @test getfield(fA.state.kernels, :tcache).state == 1
                 @test all(i -> dthr[i] === dser[i], eachindex(dthr))
             end
         end
@@ -382,7 +380,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             fE, uE, pE, _ = _cgt_build(m, ic)
             du = similar(uE)
             fE(du, uE, pE, 0.0)
-            @test getfield(getfield(fE, :kernel_section), :tcache).state == 1
+            @test getfield(fE.state.kernels, :tcache).state == 1
             bad = copy(uE); bad[end] = -1.0          # a cell in the last chunk
             @test_throws DomainError fE(du, bad, pE, 0.0)
             fE(du, uE, pE, 0.0)                      # the pool is usable again
@@ -481,7 +479,7 @@ else
             @test wantrank in _cgt_ranks(model, ics)
             f!, u0, p, tally = _cgt_build(model, ics)
             @test get(tally, :codegen_kernel, 0) >= 1
-            ks = getfield(f!, :kernel_section)
+            ks = f!.state.kernels
             cgf = getfield(ks, :cgf)
             tabs = getfield(ks, :cgtabs)
             @test cgf !== nothing
@@ -512,7 +510,7 @@ else
             N = 4096
             model, ics = _cgt_1d_model(N), _cgt_1d_ics(N)
             f!, u0, p, _ = _cgt_serial(model, ics)
-            ks = getfield(f!, :kernel_section)
+            ks = f!.state.kernels
             @test getfield(ks, :ntiles) > 1
             fi!, ui, pi_, _ = _cgt_build(model, ics; compiler = :interpreter)
             u = u0 .* (1.0 .+ 1.0e-3 .* sin.(1:length(u0)))

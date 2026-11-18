@@ -133,7 +133,7 @@ const _NO_STATE_U = Float64[]
 # ranges on an inner node are conservatively rejected.
 function _ic_body_is_closed_form(e)::Bool
     e isa OpExpr || return true
-    (e.op == "index" || e.op == "makearray" || e.op == "faq") && return false
+    _is_self_indexed_op(e.op) && return false
     _is_array_producer(e) && return false
     (
         e.lower !== nothing || e.upper !== nothing || e.filter !== nothing ||

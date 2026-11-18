@@ -2,7 +2,7 @@
 # tree_walk/scalar_codegen.jl — the Julia CODEGEN tier for the scalar
 # equation list and the cached prelude.
 #
-# Without this tier the in-place `f!` (`_rhs_closure`, below) evaluates the
+# Without this tier the in-place `f!` (`_StateScalars`, rhs_assembly.jl) evaluates the
 # scalar equations (`rhs_list`) and the three cadence tiers of the
 # shared-subexpression prelude (const_tier.jl) by walking each `_Node` tree with
 # `_eval_node`, once per equation or slot, on every call. This tier emits them
@@ -1054,9 +1054,8 @@ end
     _run_scgens!(b.gens, args[1], args[2], args[3], args[4], b.cache, c, nc)
 
 @inline function (sp::_ScalarProgram)(du, u, p, t, cache, ::Type{T}) where {T}
-    if sp.threaded && _threads_available() &&
-            _sec_prep_threads!(sp.tcache).state == 1
-        _run_chunked!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
+    if sp.threaded
+        _run_section!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
     else
         _run_scgens!(sp.gens, du, u, p, t, cache, 1, 1)
     end
@@ -1427,89 +1426,4 @@ function _walked_scalar_section(
         nothing, nothing, _ScalarLevels(()), collect(Int, dyn_slots),
         collect(Tuple{Int, _Node}, rhs_list), Int[], walk
     )
-end
-
-# ---- The right-hand side -------------------------------------------------
-# The in-place `f!` of a build. It computes in `T = _rhs_value_type(u, p, t)`,
-# a compile-time constant per specialization, so at `T === Float64` the scratch
-# lookups are field loads; handed dual-number state or parameters, the same
-# closure evaluates in that type on buffers created on its first such call. It
-# allocates nothing in steady state and is not reentrant (it writes the build's
-# scratch): one instance per integrator.
-#
-# The sections run in this order:
-#   1. const tier: the prelude slots that are a pure function of `p`
-#      (const_tier.jl), refilled only when `p` moved (`_cse_const_stale`). Not
-#      folded at build time: `p` changes under `remake`, and its values are
-#      dual numbers under a parameter sensitivity.
-#   2. time tier: the slots that are a pure function of `p`, `t` and the
-#      contents of the live forcing buffers they gather, refilled when `p`, `t`
-#      or the build's forcing epoch moved (`_cse_t_stale`). A Jacobian's columns
-#      at one `t` evaluate it once; revisiting a `t` after a rejected step
-#      recomputes the same values, since the slots carry no history.
-#   3. dynamic slots and scalar equations, every call: the generated units,
-#      then whatever the section left on the walker. Every slot is evaluated
-#      before any equation, which is safe because `_cse_compile_scalar` never
-#      makes a slot whose every occurrence is under a lazy `ifelse`/`and`/`or`
-#      arm (scalar_cse.jl).
-#   4. the access kernels (codegen_kernel.jl), which may read the prelude cache
-#      filled above at the same `T`;
-#   5. the prefix scans, which read back the terms the kernels wrote into `du`;
-#   6. the whole-array contractions, each over its own `du` slots.
-# A tier the section emitted runs as generated code, otherwise it is walked
-# (`_walk_prelude_slots!`). The walked prelude is captured only when something
-# is still walked, so a fully emitted build carries no tree.
-function _rhs_closure(
-        sec::_ScalarSection, full_prelude::AbstractVector{_Node},
-        cse_cache::_CSECache,
-        acc_kernels::AbstractVector{_AccKernel},
-        const_slots::AbstractVector{Int},
-        time_slots::AbstractVector{Int},
-        scan_section::_ScanSection,
-        array_contractions; nst::Int = 0
-    )
-    kernel_section = _make_kernel_section(acc_kernels; shared_cache = cse_cache, nst = nst)
-    constp = sec.constp
-    timep = sec.timep
-    dynp = sec.dynp
-    resid_dyn = sec.resid_dyn
-    resid_rhs = sec.resid_rhs
-    walks_prelude = (constp === nothing && !isempty(const_slots)) ||
-        (timep === nothing && !isempty(time_slots)) || !isempty(resid_dyn)
-    cse_prelude = walks_prelude ? collect(_Node, full_prelude) : _Node[]
-    const_walk = constp === nothing ? collect(Int, const_slots) : Int[]
-    time_walk = timep === nothing ? collect(Int, time_slots) : Int[]
-    walk = sec.walk
-    has_const = !isempty(const_slots)
-    has_time = !isempty(time_slots)
-    function f!(du, u, p, t)
-        _reject_float32_state(u)
-        T = _rhs_value_type(u, p, t)
-        cache = _cse_buf(cse_cache, T)
-        if has_const && _cse_const_stale(cse_cache, T, p)
-            if constp === nothing
-                _walk_prelude_slots!(walk, cache, const_walk, cse_prelude, u, p, t, T)
-            else
-                constp(du, u, p, t, cache, T)
-            end
-            _cse_mark_const!(cse_cache, T, p)
-        end
-        if has_time && _cse_t_stale(cse_cache, T, p, t)
-            if timep === nothing
-                _walk_prelude_slots!(walk, cache, time_walk, cse_prelude, u, p, t, T)
-            else
-                timep(du, u, p, t, cache, T)
-            end
-            _cse_mark_t!(cse_cache, T, p, t)
-        end
-        dynp(du, u, p, t, cache, T)
-        _walk_prelude_slots!(walk, cache, resid_dyn, cse_prelude, u, p, t, T)
-        _walk_scalar_rhs!(walk, du, resid_rhs, u, p, t, T)
-        kernel_section(du, u, p, t, T)
-        isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
-        isempty(array_contractions) ||
-            _apply_array_contractions!(du, u, p, t, array_contractions, T)
-        return nothing
-    end
-    return f!
 end

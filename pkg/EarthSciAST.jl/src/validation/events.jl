@@ -27,7 +27,7 @@ function _validate_event_consistency_here(
 
     # Validate discrete events
     for (i, event) in enumerate(model.discrete_events)
-        event_path = "$path/discrete_events/$(i - 1)"
+        event_path = _pointer(path, "discrete_events", i)
         append!(
             errors, validate_single_event_consistency(
                 model, event, event_path;
@@ -38,7 +38,7 @@ function _validate_event_consistency_here(
 
     # Validate continuous events
     for (i, event) in enumerate(model.continuous_events)
-        event_path = "$path/continuous_events/$(i - 1)"
+        event_path = _pointer(path, "continuous_events", i)
         append!(
             errors, validate_single_event_consistency(
                 model, event, event_path;
@@ -101,7 +101,7 @@ function _check_event_affect_targets!(
         _is_declared_event_target(model, affect.lhs, is_coupled) && continue
         _report!(
             errors, ERROR_CODES.EVENT_VAR_UNDECLARED,
-            "$at/$(j - 1)/lhs",
+            _pointer(at, j, "lhs"),
             "Variable '$(affect.lhs)' in event affects is not declared",
             Dict{String, Any}("variable" => affect.lhs)
         )
@@ -144,7 +144,7 @@ function _check_event_affects_unknowns!(
         subject = ename === nothing ? "Event" : "Event '$(ename)'"
         _report!(
             errors, ERROR_CODES.EVENT_AFFECTS_PARAMETER,
-            "$at/$(j - 1)",
+            _pointer(at, j),
             "$(subject) affects '$(affect.lhs)', which is a parameter; " *
                 "an event may affect unknowns only",
             details

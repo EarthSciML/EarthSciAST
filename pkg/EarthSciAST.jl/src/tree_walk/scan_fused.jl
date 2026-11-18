@@ -101,13 +101,7 @@ end
 # The section's unfused folds, over the terms already in `du`.
 function _apply_scan_folds!(du, s::_ScanSection)
     isempty(s.folds) && return nothing
-    tc = s.tcache
-    if _threads_available() && _sec_prep_threads!(tc).state == 1
-        tc.nchunks = min(tc.nchunks, s.lanecum[end])
-        _run_chunked!(tc, _ScanChunk(s.folds, s.lanecum), (du,))
-    else
-        _apply_scan_folds!(du, s.folds)
-    end
+    _run_section!(s.tcache, _ScanChunk(s.folds, s.lanecum), (du,), s.lanecum[end])
     return nothing
 end
 
@@ -490,13 +484,7 @@ end
 @inline _run_fused_scans!(::Tuple{}, du, u, p, t) = nothing
 @inline function _run_fused_scans!(fs::Tuple, du, u, p, t)
     g = fs[1]
-    tc = g.tcache
-    if _threads_available() && _sec_prep_threads!(tc).state == 1
-        tc.nchunks = min(tc.nchunks, g.nlanes)
-        _run_chunked!(tc, _CGChunk(g.f, g.tabs), (du, u, p, t))
-    else
-        g.f(du, u, p, t, g.tabs, 1, 1)
-    end
+    _run_section!(g.tcache, _CGChunk(g.f, g.tabs), (du, u, p, t), g.nlanes)
     return _run_fused_scans!(Base.tail(fs), du, u, p, t)
 end
 
@@ -725,7 +713,7 @@ const _COLSCAN_BLOCK = 4096
 
 # The least lanes per chunk of a threaded column scan. Its cells are a vector
 # loop across the lanes of one level, far cheaper per node than the loops the
-# work floor (`_thread_min_work`) is set for, so a chunk is held to a whole
+# work floor (`_Tuning.thread_min_work`) is set for, so a chunk is held to a whole
 # vector row of this many lanes per level instead, the same kind of floor as
 # `_THREAD_MIN_RMW_CELLS`.
 const _COLSCAN_MIN_LANES = 1024

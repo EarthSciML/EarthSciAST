@@ -1170,8 +1170,7 @@ end
 # node (faq / makearray / index) being a leaf whose referenced names are
 # tallied once per path to it. Additions saturate at `typemax(Int)`; the rule
 # only asks whether the unconditional count is zero.
-_count_obs_barrier(op::String) =
-    _is_faq_op(op) || op == "makearray" || op == "index"
+_count_obs_barrier(op::String) = _is_self_indexed_op(op)
 
 _count_obs_kids(n::OpExpr) = _count_obs_barrier(n.op) ? () : n.args
 

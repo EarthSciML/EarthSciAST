@@ -359,7 +359,8 @@ function _run_observed_program(
         throw(
             SimulateError(
                 "observed_field: `u` has $(length(u)) elements but the " *
-                    "problem's state vector has $(prog.n_states)"
+                    "problem's state vector has $(prog.n_states)",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
     end

@@ -463,6 +463,34 @@ const ERROR_CODES = (
     # An event affect compiled as a kernel reads, bare, a variable its event
     # also assigns.
     AFFECT_READS_POST_VALUE = "affect_reads_post_value",
+    # ── Problem construction and the run-time API (`SimulateError`,
+    #    `RefreshError`). Julia's own vocabulary for refusals no shared code
+    #    names; no other binding raises them yet. ─────────────────────────────
+    # A caller argument the API cannot take: a value of the wrong type, two
+    # options that exclude each other, a path that names no file, metaparameters
+    # handed with an input whose metaparameters are already closed.
+    INVALID_ARGUMENT = "invalid_argument",
+    # The call needs a package extension that is not loaded; the message names
+    # the package to load.
+    EXTENSION_UNAVAILABLE = "extension_unavailable",
+    # `observed_field` names something that is not a build-time field of the
+    # problem: not an observed, or an observed that reads the continuous state
+    # and no state was passed.
+    OBSERVED_FIELD_UNAVAILABLE = "observed_field_unavailable",
+    # A parameter with no default that no override binds.
+    PARAMETER_UNBOUND = "parameter_unbound",
+    # A `remake` override of a parameter whose value the build fixed
+    # (structural, const-folded data, live forcing data).
+    PARAMETER_NOT_OVERRIDABLE = "parameter_not_overridable",
+    # Providers disagree on a loader's record extent, or a provider's extent
+    # contradicts the caller's metaparameter binding or its own gate.
+    PROVIDER_EXTENT_CONFLICT = "provider_extent_conflict",
+    # A provider's projection-pushdown gate spec is malformed (esm-spec §8.9.2).
+    PROVIDER_GATE_INVALID = "provider_gate_invalid",
+    # A provider lacks a method of the provider protocol the run needs.
+    PROVIDER_METHOD_MISSING = "provider_method_missing",
+    # An invariant of this binding's own build does not hold; a bug to report.
+    INTERNAL_ERROR = "internal_error",
 )
 
 """

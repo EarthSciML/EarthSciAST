@@ -226,6 +226,76 @@ end
 # a key may be a scalar name, an explicit element `name[i,j]`, or a bare array
 # name that broadcasts a single value over every element of that array.
 # --------------------------------------------------------------------------- #
+
+# The state elements an `initial_conditions` key can address in `var_map`: the
+# scalar names with their slots, and each array base name. A `StateLayout` is
+# read through its blocks, so no cell's key is spelled; any other map is read
+# by decoding its cell keys (`_parse_cell_key`).
+struct _IcSpace
+    scalars::Dict{String, Int}
+    bases::Vector{String}
+    layout::Union{Nothing, StateLayout}
+    cells::Dict{String, Vector{Tuple{Vector{Int}, Int}}}   # when `layout` is nothing
+end
+function _IcSpace(L::StateLayout)
+    bases = String[b.name for b in _layout_blocks(L)]
+    return _IcSpace(L.scalars, bases, L, Dict{String, Vector{Tuple{Vector{Int}, Int}}}())
+end
+function _IcSpace(var_map::AbstractDict)
+    scalars = Dict{String, Int}()
+    cells = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
+    for (vname, idx) in var_map
+        parsed = _parse_cell_key(String(vname))
+        if parsed === nothing
+            scalars[String(vname)] = idx
+        else
+            push!(get!(cells, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
+        end
+    end
+    return _IcSpace(scalars, collect(keys(cells)), nothing, cells)
+end
+
+# The slot of cell `idx` of array `base`, or 0.
+function _ic_slot(sp::_IcSpace, base::String, idx::Vector{Int})
+    sp.layout === nothing || return _layout_slot(sp.layout, base, idx)
+    for (c, slot) in get(sp.cells, base, ())
+        c == idx && return slot
+    end
+    return 0
+end
+
+# `f(idx, slot)` for every cell of array `base`, in slot order.
+function _ic_foreach_cell(f, sp::_IcSpace, base::String)
+    if sp.layout === nothing
+        for (idx, slot) in sort(sp.cells[base]; by = last)
+            f(idx, slot)
+        end
+    else
+        b = _layout_block(sp.layout, base)
+        for slot in b.base:(b.base + b.len - 1)
+            f(_block_cell!(Vector{Int}(undef, length(b.lo)), b, slot), slot)
+        end
+    end
+    return nothing
+end
+
+# Resolve a cell key `base[i,…]` (`parsed`, from `_parse_cell_key`) through the
+# array base names: the bases the key's base designates, kept only when they
+# hold that cell. The resolution names the cell key.
+function _ic_cell_resolution(sp::_IcSpace, bases::NameTable, parsed)
+    base, idx = parsed
+    r = resolve_key(bases, base)
+    if r.how === :ambiguous
+        held = String[c for c in r.candidates if _ic_slot(sp, c, idx) != 0]
+        isempty(held) && return KeyResolution(nothing, :unknown, String[])
+        length(held) == 1 && return KeyResolution(_cell_key(held[1], idx), :suffix, String[])
+        return KeyResolution(nothing, :ambiguous, String[_cell_key(c, idx) for c in held])
+    end
+    (r.name === nothing || _ic_slot(sp, r.name, idx) == 0) &&
+        return KeyResolution(nothing, :unknown, String[])
+    return KeyResolution(_cell_key(r.name, idx), r.how, String[])
+end
+
 function _apply_initial_conditions!(
         u0::Vector{Float64}, var_map::AbstractDict,
         ics::AbstractDict
@@ -236,38 +306,36 @@ function _apply_initial_conditions!(
     # onto a state by the one resolver every caller key goes through
     # (`resolve_key`, src/name_table.jl), and an ambiguous suffix is refused, never
     # guessed at.
-    element_names = Set{String}(String(k) for k in keys(var_map))
-    # Each array base name's cells as `(multi-index, slot)` pairs: the slot is
-    # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
-    # DATA (esm-spec §6.3 / §6.6.2) is read at, so a whole authored profile
-    # lands cell-for-cell rather than by flat position.
-    cells_of = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
-    for (vname, idx) in var_map
-        parsed = _parse_cell_key(String(vname))
-        parsed === nothing && continue
-        push!(get!(cells_of, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
-    end
-    base_names = Set{String}(keys(cells_of))
-    # Two name spaces, tried in order: the ELEMENT names (`M.u`, `M.f[1]`), then
-    # the array BASE names for the broadcast form (`M.f` sets every `M.f[...]`
-    # cell). Rule 2 validates a key's leading segments against the components
-    # the build's names carry (`M.u` ⇒ `M`), so `Missing.u` is reported rather
-    # than re-pointed at `u`.
-    namespaces = _override_namespaces(union(element_names, base_names))
-    spaces = (
-        (NameTable(element_names; namespaces = namespaces), :element),
-        (NameTable(base_names; namespaces = namespaces), :base),
-    )
-    function state_key(key)
-        for (table, space) in spaces
-            r = resolve_key(table, key)
-            r.how === :ambiguous && throw(
-                SimulateError(
-                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
-                )
+    sp = _IcSpace(var_map)
+    scalar_names = Set{String}(keys(sp.scalars))
+    base_names = Set{String}(sp.bases)
+    # Two name spaces, tried in order: the ELEMENT names (`M.u`, and a cell key
+    # `M.f[1]` resolved through its base), then the array BASE names for the
+    # broadcast form (`M.f` sets every `M.f[...]` cell). Rule 2 validates a
+    # key's leading segments against the components the build's names carry
+    # (`M.u` ⇒ `M`), so `Missing.u` is reported rather than re-pointed at `u`.
+    namespaces = _override_namespaces(union(scalar_names, base_names))
+    scalars = NameTable(scalar_names; namespaces = namespaces)
+    bases = NameTable(base_names; namespaces = namespaces)
+    function refuse_ambiguous(key, r)
+        r.how === :ambiguous && throw(
+            SimulateError(
+                _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"),
+                ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
             )
-            r.name === nothing || return r, space
+        )
+        return r
+    end
+    function state_key(key)
+        r = refuse_ambiguous(key, resolve_key(scalars, key))
+        r.name === nothing || return r, :element
+        parsed = _parse_cell_key(key)
+        if parsed !== nothing
+            r = refuse_ambiguous(key, _ic_cell_resolution(sp, bases, parsed))
+            r.name === nothing || return r, :cell
         end
+        r = refuse_ambiguous(key, resolve_key(bases, key))
+        r.name === nothing || return r, :base
         return nothing
     end
     # An exact key wins outright; two NON-EXACT keys designating one state is an
@@ -296,7 +364,8 @@ function _apply_initial_conditions!(
             SimulateError(
                 _override_collision_message(
                     "initial_conditions", "state", name, sort!(claimed[name])
-                ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
+                ),
+                ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
     end
@@ -304,35 +373,36 @@ function _apply_initial_conditions!(
         key = String(rawkey)
         r, space = resolved_keys[key]
         resolved = r.name::String
-        if space === :element
+        if space === :element || space === :cell
             is_inline_array(value) && throw(
                 SimulateError(
                     "esm_problem: initial_conditions['$key'] carries inline array data for a " *
                         "single state element; only a SHAPED unknown's whole-variable key takes " *
-                        "a nested array (esm-spec §6.6.2)"
+                        "a nested array (esm-spec §6.6.2)",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
-            u0[var_map[resolved]] = Float64(value)
+            slot = space === :element ? sp.scalars[resolved] :
+                _ic_slot(sp, _parse_cell_key(resolved)...)
+            u0[slot] = Float64(value)
             continue
         end
-        cells = cells_of[resolved]
         if is_inline_array(value)
-            for (idxs, idx) in cells
+            _ic_foreach_cell(sp, resolved) do idxs, idx
                 checkbounds(Bool, value, idxs...) || throw(
                     SimulateError(
                         "esm_problem: initial_conditions['$key'] has shape $(size(value)), " *
                             "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
                             "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
-                            "shape after metaparameter folding)"
+                            "shape after metaparameter folding)",
+                        ERROR_CODES.ARRAY_SHAPE_MISMATCH
                     )
                 )
                 u0[idx] = Float64(value[idxs...])
             end
         else
             v = Float64(value)
-            for (_, idx) in cells
-                u0[idx] = v
-            end
+            _ic_foreach_cell((_, idx) -> (u0[idx] = v), sp, resolved)
         end
     end
     return u0
@@ -449,6 +519,9 @@ end
 # The seed's expression compiled once with the dimension names as parameters:
 # a `_CellEval` whose "cell" is the vector of coordinate values, or `nothing`
 # when a name collides with the time symbol or the expression does not compile.
+# The time symbol is the build compiler's (`_compile` reads the name `"t"` as
+# time whatever the document's independent variable), so a dimension spelled
+# `"t"` could not be read as a parameter.
 function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     any(==("t"), dims) && return nothing
     allunique(dims) || return nothing
@@ -654,7 +727,8 @@ function _callback_set end
 _callback_set(cbs) = throw(
     SimulateError(
         "composing $(length(cbs)) problem-level callbacks needs the SciMLBase extension; " *
-            "add `using SciMLBase` so EarthSciASTSimulateExt is active"
+            "add `using SciMLBase` so EarthSciASTSimulateExt is active",
+        ERROR_CODES.EXTENSION_UNAVAILABLE
     )
 )
 
@@ -695,13 +769,17 @@ function _mtk_problem end
 # --------------------------------------------------------------------------- #
 function _solve_problem end
 _solve_problem(prob, alg; kwargs...) = throw(
-    SimulateError(
-        alg === nothing ?
+    alg === nothing ?
+        SimulateError(
             "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-            "(and `using OrdinaryDiffEqTsit5`)" :
+            "(and `using OrdinaryDiffEqTsit5`)",
+            ERROR_CODES.INVALID_ARGUMENT
+        ) :
+        SimulateError(
             "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
-            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"
-    )
+            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active",
+            ERROR_CODES.EXTENSION_UNAVAILABLE
+        )
 )
 
 # --------------------------------------------------------------------------- #
@@ -979,7 +1057,8 @@ function _pushdown_input(input, model_name, metaparams, base_path)
         throw(
             SimulateError(
                 "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
-                "EsmFile input — a FlattenedSystem is already past the rewrite point"
+                "EsmFile input — a FlattenedSystem is already past the rewrite point",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     raw = serialize_esm_file(pfile)
@@ -1014,7 +1093,8 @@ function _discover_loader_extents(
             SimulateError(
                 "provider '$rawk' both GATES on a derived index set and declares the " *
                     "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
-                    "not a discovered one"
+                    "not a discovered one",
+                ERROR_CODES.PROVIDER_EXTENT_CONFLICT
             )
         )
         # Only the record count is read here; the field is checked and
@@ -1026,7 +1106,8 @@ function _discover_loader_extents(
             prev == n || throw(
                 SimulateError(
                     "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
-                        "'$rawk' — the loader's variables are not aligned on one record axis"
+                        "'$rawk' — the loader's variables are not aligned on one record axis",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         elseif haskey(out, mp) && out[mp] != n
@@ -1034,7 +1115,8 @@ function _discover_loader_extents(
                 SimulateError(
                     "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
                         "provider '$rawk' discovers $n records; drop the binding and let the " *
-                        "loader declare its own extent"
+                        "loader declare its own extent",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         end
@@ -1439,7 +1521,8 @@ function _refuse_program_build_request(req::_ProblemRequest)
     req.materialize_out === nothing || throw(
         SimulateError(
             "esm_problem: program_build = true takes no materialize_out: a Problem built as " *
-                "its program has no discrete-cadence cut, so nothing would fill the materializer"
+                "its program has no discrete-cadence cut, so nothing would fill the materializer",
+            ERROR_CODES.INVALID_ARGUMENT
         )
     )
     return nothing
@@ -1461,7 +1544,8 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
     input isa Union{AbstractString, AbstractDict, EsmFile} || throw(
         SimulateError(
             "esm_problem: `strip` removes constructs from a document; pass a path, a " *
-                "native Dict or an EsmFile, not a $(typeof(input))"
+                "native Dict or an EsmFile, not a $(typeof(input))",
+            ERROR_CODES.INVALID_ARGUMENT
         )
     )
     # The providers are described and any loader extent discovered before the
@@ -1512,7 +1596,8 @@ function _discover_extents(input, req::_ProblemRequest)
                 "esm_problem: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
                     "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
                     "are already closed — pass the path or the native Dict to esm_problem (and drop " *
-                    "the pre-`load`), or bind them in that `load` call instead" * why
+                    "the pre-`load`), or bind them in that `load` call instead" * why,
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -1552,7 +1637,8 @@ function _esm_problem(
                     SimulateError(
                         "provider '$k' both GATES on a derived index set and declares the extent " *
                             "metaparameter '$(traits[k].extent_metaparameter)'; a gated " *
-                            "slab's extent is the gating set's, not a discovered one"
+                            "slab's extent is the gating set's, not a discovered one",
+                        ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                     )
                 )
                 traits[k] = _with_gate(traits[k], _GateSpec(gate, k))
@@ -2002,7 +2088,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         length(u0) == length(out) || throw(
             SimulateError(
                 "u0 has $(length(u0)) elements but the flattened state vector has " *
-                    "$(length(out)); pass a Dict of named overrides to set a subset"
+                    "$(length(out)); pass a Dict of named overrides to set a subset",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
         out = collect(Float64, u0)
@@ -2010,7 +2097,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         throw(
             SimulateError(
                 "u0 must be an AbstractDict of named overrides or an AbstractVector " *
-                    "replacing the whole state, got a $(typeof(u0))"
+                    "replacing the whole state, got a $(typeof(u0))",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -2139,7 +2227,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
             _override_collision_message(
                 "remake(prob; p)", "parameter",
                 first(sort!(collect(collisions), by = first))...
-            ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
+            ),
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     isempty(unknown) || throw(
@@ -2148,7 +2237,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
                 join(("'" * k * "'" for k in sort(unknown)), ", ") *
                 " in the problem (keys may be local or namespaced; a name the " *
                 "flattener's coupling rewired onto a loader variable is spelled by its " *
-                "SURVIVING name). Known: " * _elide_names(sort(collect(names)))
+                "SURVIVING name). Known: " * _elide_names(sort(collect(names))),
+            ERROR_CODES.UNKNOWN_OVERRIDE_KEY
         )
     )
     isempty(ambiguous) || throw(
@@ -2168,14 +2258,15 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     vals = Any[]
     for name in sort(collect(keys(normalized)))
         cls = get(classes, name, haskey(pm, name) ? :numeric : :unclassified)
-        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls)))
+        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls), ERROR_CODES.PARAMETER_NOT_OVERRIDABLE))
         # A `:numeric` parameter is by definition a slot of `p`; if it somehow is
         # not, refuse rather than silently drop the override.
         haskey(pm, name) || throw(
             SimulateError(
                 "remake(prob; p): '$name' classifies :numeric but is not a " *
                     "slot of the problem's `p` — refusing to apply an override that would " *
-                    "have no effect (this is a build bug; please report it)."
+                    "have no effect (this is a build bug; please report it).",
+                ERROR_CODES.INTERNAL_ERROR
             )
         )
         push!(syms, Symbol(name))

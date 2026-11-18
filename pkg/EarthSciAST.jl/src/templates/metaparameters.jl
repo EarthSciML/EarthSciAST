@@ -299,13 +299,12 @@ template's own `params` shadow like-named metaparameters inside its `body`
 and `match` (a param is the inner binder; substitution must not capture it).
 """
 function _substitute_metaparams_decl(decl, values::AbstractDict{String})
-    params = _raw_get(decl, "params")
+    params = _TemplateDecl(decl).params
     shadowed = values
-    if params !== nothing && _is_array(params) &&
-            any(p -> haskey(values, string(p)), params)
+    if any(p -> haskey(values, p), params)
         v2 = Dict(values)
         for p in params
-            delete!(v2, string(p))
+            delete!(v2, p)
         end
         shadowed = v2
     end

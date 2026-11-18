@@ -59,7 +59,7 @@ function compiled(def, n; const_arrays = Dict{String, Any}(), params = Dict{Stri
     end
 end
 
-emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.level.section, :cgf))
+emitted(sf) = EA.RuntimeGeneratedFunctions.get_expression(getfield(sf.level.kernels, :cgf))
 
 @testset "construction-time fills" begin
 

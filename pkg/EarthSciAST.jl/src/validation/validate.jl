@@ -17,8 +17,9 @@ validate_structural(file::EsmFile)::Vector{StructuralError} =
 # What the checks of one validation pass share, built once: the independent
 # variable; the systems a coupling entry names (`coupled`) or composes
 # (`composed`); the document-wide declared names, coordinate names and
-# callback-injected names reference integrity scopes with; the document-wide
-# scoped-reference units (esm-spec §4.8.4); each top-level model's and reaction
+# callback-injected names reference integrity scopes with; every declaration by
+# scoped name (`index`) and the document-wide scoped-reference units read off
+# it (esm-spec §4.8.4); each top-level model's and reaction
 # system's template-expanded view (`_units_view`); and the units checker's
 # result once it has run (`_unit_check!`).
 struct _ValidationContext
@@ -29,6 +30,7 @@ struct _ValidationContext
     declared::Set{String}
     coordinates::Set{String}
     injected::Set{String}
+    index::_ScopedIndex
     toplevel::Dict{String, Union{String, Nothing}}
     models::Dict{String, Model}
     reaction_systems::Dict{String, ReactionSystem}
@@ -50,11 +52,12 @@ function _ValidationContext(file::EsmFile)
             rss[name] = _reaction_system_units_view(file, name, rs)
         end
     end
+    index = _scoped_index(file)
     return _ValidationContext(
         file, _indep_var(file), _coupled_system_names(file),
         _operator_composed_systems(file), _document_declared_names(file),
         _coordinate_names(file), _callback_injected_names(file),
-        _toplevel_scoped_units(file), models, rss, Ref{Any}(nothing)
+        index, _scoped_units(index), models, rss, Ref{Any}(nothing)
     )
 end
 
@@ -73,7 +76,7 @@ function _check_balance!(errors, ctx)
         name ∈ ctx.coupled && continue
         append!(
             errors, validate_model_balance(
-                model, "/models/$name"; check_excess = name ∉ ctx.composed
+                model, _pointer("", "models", name); check_excess = name ∉ ctx.composed
             )
         )
     end
@@ -93,8 +96,8 @@ function _check_reactions!(errors, ctx)
     rss === nothing && return errors
     for name in sort!(collect(keys(rss)))
         rs = rss[name]
-        append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$name"; indep = ctx.indep))
-        append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$name"; toplevel = ctx.toplevel))
+        append!(errors, validate_reaction_consistency(rs, _pointer("", "reaction_systems", name); indep = ctx.indep))
+        append!(errors, validate_reaction_rate_units(rs, _pointer("", "reaction_systems", name); toplevel = ctx.toplevel))
     end
     return errors
 end
@@ -110,28 +113,28 @@ function _check_update_bindings!(errors, ctx)
     available = file.data_sources === nothing ? String[] :
         sort!(String[String(k) for k in keys(file.data_sources)])
     for (name, model) in _sorted_models(file)
-        _check_update_unit_conversions!(errors, file, model, "/models/$name", scope)
+        _check_update_unit_conversions!(errors, file, model, _pointer("", "models", name), scope)
     end
     for (name, model) in _sorted_models(file)
-        _check_update_sources!(errors, model, "/models/$name", available)
+        _check_update_sources!(errors, model, _pointer("", "models", name), available)
     end
     return errors
 end
 
 # Record axes and data-fed record shapes (esm-spec §8.5.1).
 _check_records!(errors, ctx) =
-    (_check_record_axes!(errors, ctx.file); _check_record_shapes!(errors, ctx.file))
+    (_check_record_axes!(errors, ctx.file); _check_record_shapes!(errors, ctx.file, ctx.index))
 
 # Declarations: a present `system_kind` agrees with the derivation (esm-spec
 # §6.3.1); no declaration spells the independent variable or `_var`
 # (§4.9.1.1); inline array data sits only on a shaped variable (§6.3).
 function _check_declarations!(errors, ctx)
     for (name, model) in _sorted_models(ctx.file)
-        _check_system_kind!(errors, model, "/models/$name")
+        _check_system_kind!(errors, model, _pointer("", "models", name))
     end
     _check_reserved_file_names!(errors, ctx.file)
     for (name, model) in _sorted_models(ctx.file)
-        _check_array_defaults_have_shape!(errors, model, "/models/$name", "Model '$name'")
+        _check_array_defaults_have_shape!(errors, model, _pointer("", "models", name), "Model '$name'")
     end
     return errors
 end
@@ -145,7 +148,9 @@ function _check_equation_lhs!(errors, ctx)
         Set{String}(String(k) for k in keys(file.metaparameters))
     push!(meta, ctx.indep)
     for (name, m) in _sorted_models(file)
-        _check_equation_lhs_names!(errors, m, "/models/$name", name, m, meta)
+        _foreach_component(m, _pointer("", "models", name); scope = name) do c, p, _, s
+            _check_equation_lhs_names!(errors, ctx.index, c, p, s, name, meta)
+        end
     end
     return errors
 end
@@ -156,7 +161,7 @@ function _check_events!(errors, ctx)
     for (name, model) in _sorted_models(ctx.file)
         append!(
             errors, validate_event_consistency(
-                model, "/models/$name"; is_coupled = name ∈ ctx.coupled
+                model, _pointer("", "models", name); is_coupled = name ∈ ctx.coupled
             )
         )
     end
@@ -168,8 +173,8 @@ end
 function _check_units!(errors, ctx)
     append!(errors, _unit_check!(ctx).errors)
     for (name, model) in _sorted_models(ctx.file)
-        append!(errors, validate_physical_constant_units(model, "/models/$name"))
-        append!(errors, validate_conversion_factor_consistency(model, "/models/$name"))
+        append!(errors, validate_physical_constant_units(model, _pointer("", "models", name)))
+        append!(errors, validate_conversion_factor_consistency(model, _pointer("", "models", name)))
     end
     return errors
 end
@@ -179,7 +184,7 @@ end
 _check_coupling_cycles!(errors, ctx) =
     append!(errors, validate_coupling_cycles(ctx.file; toplevel = ctx.toplevel))
 _check_bounds!(errors, ctx) =
-    append!(errors, validate_variable_bounds(ctx.file; toplevel = ctx.toplevel))
+    append!(errors, validate_variable_bounds(ctx.file; toplevel = ctx.toplevel, index = ctx.index))
 
 # The faq checks (index sets, joins, relational nodes, bare array operands) and
 # the broadcast checks (the `fn` contract, element-wise axis alignment,
@@ -199,7 +204,8 @@ _check_observed_dependency_cycles!(errors, ctx) =
 
 # A `variable_map` identity coupling between differently declared units
 # (esm-spec §4.7.6), at `/coupling/<i>`.
-_check_variable_maps!(errors, ctx) = append!(errors, validate_variable_map_units(ctx.file))
+_check_variable_maps!(errors, ctx) =
+    append!(errors, validate_variable_map_units(ctx.file; index = ctx.index))
 
 # A species with both an explicit derivative equation and a reaction
 # contribution (§4.7.5 item E). It spans two top-level blocks, so it is
@@ -386,7 +392,7 @@ function load_failure_structural_error(e)::Union{StructuralError, Nothing}
     if e isa SubsystemRefError
         return StructuralError(
             isempty(e.parent_model) ? e.path :
-                "/models/$(e.parent_model)/subsystems/$(e.subsystem)",
+                _pointer("", "models", e.parent_model, "subsystems", e.subsystem),
             e.message,
             e.code,
             merge(

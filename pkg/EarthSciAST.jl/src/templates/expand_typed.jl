@@ -279,9 +279,8 @@ function _tpl_skeleton(name::String, reg, memo::_ExpandCache)
 end
 
 function _build_tpl_skeleton(name::String, reg, memo::_ExpandCache)
-    decl = reg[name]
-    params_raw = _raw_get(decl, "params")
-    params = params_raw === nothing ? String[] : String[string(p) for p in params_raw]
+    decl = _TemplateDecl(reg[name])
+    params = decl.params
     allunique(params) || return nothing
     sent = Dict{String, Any}(p => _TPL_SENTINEL * p for p in params)
     nested = IdDict{OpExpr, OpExpr}()
@@ -290,8 +289,7 @@ function _build_tpl_skeleton(name::String, reg, memo::_ExpandCache)
     outer_bind = memo.bind
     memo.bind = Dict{Tuple{String, String}, OpExpr}()
     root = try
-        body = _raw_get(decl, "body")
-        _expand_expr_refs(expression_from_json(_substitute(body, sent)), reg, nested, memo)
+        _expand_expr_refs(expression_from_json(_substitute(decl.body, sent)), reg, nested, memo)
     catch e
         _is_resource_error(e) && rethrow()
         # The direct route raises the real diagnostic at each site.

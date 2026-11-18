@@ -256,7 +256,7 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             return OpExpr("index", ASTExpr[VarExpr("__lane_in_$k"), VarExpr(sc.first)])
         end
     end
-    if target isa OpExpr && (target::OpExpr).op == "makearray"
+    if _index_target_kind(target) === _IT_MAKEARRAY
         ma = target::OpExpr
         regions = Vector{Vector{Any}}[]
         for region in ma.regions

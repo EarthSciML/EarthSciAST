@@ -1491,14 +1491,16 @@ function _pushdown_gate_axes(
             RefreshError(
                 "data_sources.$loader gated_select template puts the gated axis at " *
                     "non-fixed position $gpos, but the rewrite record gates model axis " *
-                    "$gaxis — the loader template and the rewritten arrays disagree"
+                    "$gaxis — the loader template and the rewritten arrays disagree",
+                ERROR_CODES.PROVIDER_GATE_INVALID
             )
         )
         return axes
     end
     (0 <= gaxis < mrank) || throw(
         RefreshError(
-            "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays"
+            "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays",
+            ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     axes = Any[fill("all", mrank)...]

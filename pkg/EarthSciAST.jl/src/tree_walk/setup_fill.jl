@@ -45,12 +45,12 @@ const _SETUP_FILL_TIERS = (:affine, :scan, :array_contraction_codegen)
     _SetupFill
 
 A compiled fill over the box `lo:hi` (inclusive, per dimension): the fill
-level (`_FillLevel`) the cascade produced for the fill equation, and the
+level (`_RhsStage`) the cascade produced for the fill equation, and the
 parameter tuple it reads.
 [`_run_setup_fill`](@ref) runs it once and returns the buffer, column-major
 over the box (first index fastest).
 """
-struct _SetupFill{L <: _FillLevel, P}
+struct _SetupFill{L <: _RhsStage, P}
     lo::Vector{Int}
     hi::Vector{Int}
     n::Int
@@ -137,7 +137,7 @@ function _compile_setup_fill(
             level = _inplace_fill_level(
                 lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences
             )
-            _section_interprets(level.section) && return nothing
+            _section_interprets(level.kernels) && return nothing
             return _SetupFill(box[1], box[2], n, level, p, tiers[1])
         catch err
             # A document-level refusal (an `EarthSciASTError`, a strict

@@ -179,7 +179,7 @@ end
 
 # In-place builds. `codegen=false` puts the emission's node budget at zero —
 # a refusal boundary under strict native, so that build is non-strict — and
-# nothing is emitted away: `getfield(f!, :kernel_section).kernels` holds every
+# nothing is emitted away: `f!.state.kernels.kernels` holds every
 # merged kernel. The default `codegen=true` build exercises the codegen
 # emitter OVER merged kernels (source generation + compiled loop nests).
 # `compiler=:interpreter` is the reference: no merge, no codegen, no affine
@@ -199,10 +199,10 @@ function _im_build(
         (f!, u0, p, vm, rep.stats)
     end
 end
-# Full kernel count of the in-place closure — the whole list when the
+# Full kernel count of the in-place right-hand side — the whole list when the
 # emission declined everything (n_emitted == 0).
 function _im_nkernels(f!)
-    ks = getfield(f!, :kernel_section)
+    ks = f!.state.kernels
     @test getfield(ks, :n_emitted) == 0
     return length(getfield(ks, :kernels))
 end

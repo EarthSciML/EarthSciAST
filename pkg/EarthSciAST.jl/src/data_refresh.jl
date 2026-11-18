@@ -72,7 +72,8 @@ function provider_refresh_times end
 provider_refresh_times(p) = throw(
     RefreshError(
         "provider_refresh_times not implemented for $(typeof(p)); the data binding " *
-            "(EarthSciIO) or a mock must add a method"
+            "(EarthSciIO) or a mock must add a method",
+        ERROR_CODES.PROVIDER_METHOD_MISSING
     )
 )
 
@@ -287,7 +288,8 @@ function provider_sample end
 provider_sample(p, ::Real; selection = nothing) = throw(
     RefreshError(
         "provider_sample not implemented for $(typeof(p)); the data binding " *
-            "(EarthSciIO) or a mock must add a method"
+            "(EarthSciIO) or a mock must add a method",
+        ERROR_CODES.PROVIDER_METHOD_MISSING
     )
 )
 
@@ -306,7 +308,8 @@ provider_sample(p, ::Real; selection = nothing) = throw(
 _sample_field(sample::AbstractDict, var::AbstractString) = begin
     haskey(sample, var) || throw(
         RefreshError(
-            "provider sample has no variable '$var' (present: $(collect(keys(sample))))"
+            "provider sample has no variable '$var' (present: $(collect(keys(sample))))",
+            ERROR_CODES.UNDEFINED_VARIABLE
         )
     )
     sample[var]
@@ -316,7 +319,8 @@ _sample_field(sample::Real, ::AbstractString) = sample
 _sample_field(sample, var::AbstractString) = throw(
     RefreshError(
         "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
-            "supply an AbstractDict (var => field), a bare AbstractArray or a number"
+            "supply an AbstractDict (var => field), a bare AbstractArray or a number",
+        ERROR_CODES.INVALID_ARGUMENT
     )
 )
 
@@ -407,7 +411,8 @@ function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
             "forcing '$var': the provider field has size $(size(field)) but the buffer " *
                 "has size $(size(buffer)); the provider must deliver the native forcing on the " *
                 "buffer's grid, in the same dimension order (regridding is an in-model " *
-                "coupling, not a refresh-time transform)"
+                "coupling, not a refresh-time transform)",
+            ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     field isa Real ? (buffer[] = Float64(field)) : copyto!(buffer, field)
@@ -498,7 +503,8 @@ function RefreshBuffers(d::AbstractDict)
             RefreshError(
                 "RefreshBuffers['$k_str'] must be a dense Array{Float64} (the SAME object " *
                     "bound to `esm_problem`'s `param_arrays`, captured by reference for live " *
-                    "refresh), got $(typeof(v))"
+                    "refresh), got $(typeof(v))",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
         out[k_str] = v
@@ -592,7 +598,8 @@ build_refresh_callback(args...; kwargs...) = throw(
     RefreshError(
         "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
             "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-            "EarthSciASTCallbacksExt is active"
+            "EarthSciASTCallbacksExt is active",
+        ERROR_CODES.EXTENSION_UNAVAILABLE
     )
 )
 
@@ -649,7 +656,8 @@ function sync_forcing!(dest::NamedTuple, src::NamedTuple)
         haskey(dest, k) || throw(
             RefreshError(
                 "sync_forcing!: destination has no buffer '$k' (present: " *
-                    "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)"
+                    "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)",
+                ERROR_CODES.UNDEFINED_VARIABLE
             )
         )
         copyto!(getfield(dest, k), getfield(src, k))

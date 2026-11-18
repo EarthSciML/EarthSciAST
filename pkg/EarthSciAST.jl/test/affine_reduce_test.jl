@@ -92,7 +92,7 @@ function _ar_agree(doc, ics)
 end
 
 _ar_emitted_nodes(f!) = begin
-    ks = getfield(f!, :kernel_section)
+    ks = f!.state.kernels
     cgf = getfield(ks, :cgf)
     ex = _AR.RuntimeGeneratedFunctions.get_expression(cgf)
     sz(e) = e isa Expr ? 1 + sum(sz, e.args; init = 0) : 1
@@ -244,7 +244,7 @@ _ar_sr_ics(n, m) = merge(
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
         ex = _AR.RuntimeGeneratedFunctions.get_expression(
-            getfield(getfield(fn, :kernel_section), :cgf)
+            getfield(fn.state.kernels, :cgf)
         )
         @test occursin("eltype(du) === Float64", string(ex))
         seed = Float64[0.3 + 0.01 * sin(i) for i in eachindex(u)]

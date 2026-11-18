@@ -884,7 +884,7 @@ end
 
 # The right-hand side's fill levels and its state kernels, ready to run.
 struct _SealedFills
-    # The in-place `_FillLevel`s by cadence (empty out of place), and the
+    # The in-place fill levels (`_RhsStage`s) by cadence (empty out of place), and the
     # out-of-place levels (empty in place).
     levels::Vector{Any}
     const_levels::Vector{Any}
@@ -1014,27 +1014,27 @@ function _scalar_section(
     return sec
 end
 
-# The in-place evaluator: the materialized observeds' fills wrap the state
-# right-hand side (`_make_rhs_with_obs_buffers`, the identity when nothing is
-# materialized), and the discrete caches are brought up to the call's `p`
-# first (`_DiscreteRefill`, absent without a cache).
+# The in-place evaluator (`_Rhs`, rhs_assembly.jl): the materialized
+# observeds' fill levels run before the state stage (`_RhsObserved`, `nothing`
+# when nothing is materialized), and the discrete caches are brought up to the
+# call's `p` first (`_DiscreteRefill`, absent without a cache).
 function _assemble_rhs(
         ::_InPlace, rhs, sealed::_SealedFills, state_eqs::_CompiledEquations,
         pgather, n_states::Int, n_total::Int, forcing_epoch::_ForcingEpoch,
         discrete_refill
     )
-    rhs0 = _make_rhs_with_obs_buffers(
-        _make_rhs(
-            rhs.rhs_list, rhs.prelude, rhs.cache, sealed.acc_kernels,
-            rhs.const_slots, rhs.time_slots, rhs.dyn_slots, sealed.scan_folds,
-            _make_contraction_section(state_eqs.contractions);
-            scalar = rhs.section, fused_scans = sealed.fused_scans,
-            nst = n_total > n_states ? n_states : 0
+    return _make_rhs(
+        rhs.rhs_list, rhs.prelude, rhs.cache, sealed.acc_kernels,
+        rhs.const_slots, rhs.time_slots, rhs.dyn_slots, sealed.scan_folds,
+        _make_contraction_section(state_eqs.contractions);
+        scalar = rhs.section, fused_scans = sealed.fused_scans,
+        nst = n_total > n_states ? n_states : 0,
+        observed = _rhs_observed(
+            n_total, n_states, Tuple(sealed.levels), Tuple(sealed.const_levels),
+            Tuple(sealed.time_levels), forcing_epoch
         ),
-        n_total, n_states, Tuple(sealed.levels), Tuple(sealed.const_levels),
-        Tuple(sealed.time_levels), forcing_epoch
+        refill = discrete_refill
     )
-    return discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
 end
 
 # The out-of-place product: the compiled IR, with `pgather` (the

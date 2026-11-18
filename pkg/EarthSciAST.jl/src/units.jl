@@ -870,70 +870,20 @@ const _ScopedUnits = Dict{String, Union{String, Nothing}}
 _scoped_unit(units) =
     (units === nothing || isempty(units) || parse_units(units) === nothing) ? nothing : units
 
-# Every member of a component — a model's `variables`, a reaction system's
-# `species` and `parameters` — with its declared unit (see `_ScopedUnits`).
-function _component_member_units(c)::Vector{Pair{String, Union{String, Nothing}}}
-    out = Pair{String, Union{String, Nothing}}[]
-    if c isa Model
-        for (name, var) in c.variables
-            push!(out, name => _scoped_unit(var.units))
-        end
-    elseif c isa ReactionSystem
-        for s in c.species
-            push!(out, s.name => _scoped_unit(s.units))
-        end
-        for p in c.parameters
-            push!(out, p.name => _scoped_unit(p.units))
-        end
-    end
-    return out
-end
-
-# Register `<prefix>.<member>` for every member of `c` and, recursively, of
-# every RESOLVED subsystem it carries. An unresolved `SubsystemRef` contributes
-# nothing.
-function _collect_scoped_units!(out::_ScopedUnits, prefix::AbstractString, c)
-    for (name, units) in _component_member_units(c)
-        out["$prefix.$name"] = units
-    end
-    (c isa Model || c isa ReactionSystem) || return out
-    for (sub_name, sub) in c.subsystems
-        (sub isa Model || sub isa ReactionSystem) || continue
-        _collect_scoped_units!(out, "$prefix.$sub_name", sub)
-    end
-    return out
-end
+# The declared unit of every member of the scoped index `ix` (see `_ScopedUnits`).
+_scoped_units(ix::_ScopedIndex)::_ScopedUnits =
+    _ScopedUnits(k => _scoped_unit(d.decl.units) for (k, d) in ix.members)
 
 # The document-wide part of the scoped map: `<System>.<member>` (and deeper)
 # for every top-level model and reaction system of `file`. It does not depend
 # on the component doing the referencing, so a validation pass builds it once.
-function _toplevel_scoped_units(file)::_ScopedUnits
-    out = _ScopedUnits()
-    file === nothing && return out
-    if file.models !== nothing
-        for (name, m) in file.models
-            _collect_scoped_units!(out, name, m)
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (name, rs) in file.reaction_systems
-            _collect_scoped_units!(out, name, rs)
-        end
-    end
-    return out
-end
+_toplevel_scoped_units(file)::_ScopedUnits = _scoped_units(_scoped_index(file))
 
 # The component-relative part: `<sub>.<member>` (and deeper) through
 # `component`'s own subsystems.
-function _relative_scoped_units(component)::_ScopedUnits
-    out = _ScopedUnits()
-    (component isa Model || component isa ReactionSystem) || return out
-    for (sub_name, sub) in component.subsystems
-        (sub isa Model || sub isa ReactionSystem) || continue
-        _collect_scoped_units!(out, sub_name, sub)
-    end
-    return out
-end
+_relative_scoped_units(component)::_ScopedUnits =
+    component isa Union{Model, ReactionSystem} ?
+    _scoped_units(_scoped_index(pairs(component.subsystems))) : _ScopedUnits()
 
 """
     scoped_reference_units(file, component) -> Dict{String, Union{String, Nothing}}
@@ -2418,7 +2368,7 @@ end
 function _declaration_unit_findings!(out, m::Model)
     for name in sort!(collect(keys(m.variables)))
         var = m.variables[name]
-        at = "variables/$(_ptr_escape(name))"
+        at = _pointer("variables", name)
         for (field, str) in (("units", var.units), ("default_units", var.default_units))
             (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
             push!(
@@ -2450,7 +2400,7 @@ function _declaration_unit_findings!(out, rs::ReactionSystem)
             (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
             push!(
                 out, UnitFinding(
-                    "$block/$(_ptr_escape(decl.name))",
+                    _pointer(block, decl.name),
                     "Unit string '$str' is not a recognised unit " *
                         "($(block == "species" ? "species" : "parameter") '$(decl.name)', field '$field')",
                     UNIT_PARSE_ERROR
@@ -2472,7 +2422,7 @@ function _unit_site!(errors, warnings, c, pointer, p, kind, lhs, rhs, env)
             for msg in (isempty(internal) ? comparison : internal)
                 push!(
                     errors, UnitFinding(
-                        "variables/$(_ptr_escape(name))", "$msg (variable '$name')",
+                        _pointer("variables", name), "$msg (variable '$name')",
                         UNIT_DIMENSION_MISMATCH
                     )
                 )
@@ -2548,19 +2498,17 @@ end
 """
 Validate dimensions for all equations and variable definitions in a model.
 
-Returns true when nothing in the model is PROVABLY dimensionally inconsistent.
-Recurses into model subsystems.
+Returns true when nothing in the model or its subsystems is PROVABLY
+dimensionally inconsistent.
 """
 function validate_model_dimensions(model::Model)::Bool
-    findings = model_unit_findings(model)
-    for f in findings
-        @warn "Unit finding at $(f.subpath) [$(f.code)]: $(f.message)"
-    end
-
-    all_valid = isempty(findings)
-    for (_, subsys) in model.subsystems
-        subsys isa Model || continue
-        validate_model_dimensions(subsys) || (all_valid = false)
+    all_valid = true
+    _foreach_component(model, "") do m, _, _
+        findings = model_unit_findings(m)
+        for f in findings
+            @warn "Unit finding at $(f.subpath) [$(f.code)]: $(f.message)"
+        end
+        isempty(findings) || (all_valid = false)
     end
     return all_valid
 end

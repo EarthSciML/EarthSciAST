@@ -221,7 +221,7 @@ end
 function _strippable_implicit(lhs::ASTExpr)
     first(_lhs_role(lhs)) === :implicit || return false
     head = _lhs_unwrap(lhs)
-    return !(head isa OpExpr && head.op in ("ic", "D", "grad", "div", "laplacian"))
+    return !(head isa OpExpr && _is_calculus_op(head.op))
 end
 
 function _strips_update(rules, classes::Vector{String})
@@ -827,7 +827,7 @@ function compile_kernels(prob::EsmProblem, specs)
         )
     )
     seed = prob.build.seed
-    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed"))
+    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed", ERROR_CODES.COMPILER_UNAVAILABLE))
     flat = seed.prep.flat
     s = stripped(prob)
     znames = String[b.name for b in s.z_layout]
@@ -899,7 +899,7 @@ end
 # Every name `e` reads resolves: time, a declared variable, or an index set.
 function _kresolve_names(cx::_KernelCx, e, what)
     for n in free_variables(e)
-        (n == "t" || _declared_sets(n, cx.flat) !== nothing || haskey(cx.flat.index_sets, n)) &&
+        (n == _indep_var(cx.flat) || _declared_sets(n, cx.flat) !== nothing || haskey(cx.flat.index_sets, n)) &&
             continue
         throw(_kunresolved(cx, "$what reads '$n', which"))
     end
@@ -1108,7 +1108,7 @@ function _kernel_plans(kname, prog, rhs, outs::Vector{_KernelOutput}, ulay, zlay
     for x in parameters(prog)
         j = findfirst(==(x.name), set_params)
         j === nothing && throw(
-            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not")
+            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not", ERROR_CODES.KERNEL_OUTPUT_UNRESOLVED)
         )
         push!(p_map, j)
     end

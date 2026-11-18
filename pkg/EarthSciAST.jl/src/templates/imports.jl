@@ -337,10 +337,9 @@ function _rename_decl(
         isetmap::AbstractDict{String, String},
         tplmap::AbstractDict{String, String}
     )
-    params = _raw_get(decl, "params")
+    pset = Set{String}(_TemplateDecl(decl).params)
     v2, i2 = varmap, isetmap
-    if params !== nothing && _is_array(params) && !isempty(params)
-        pset = Set{String}(string(p) for p in params if p isa AbstractString)
+    if !isempty(pset)
         if any(p -> haskey(varmap, p), pset)
             v2 = OrderedDict{String, String}(k => v for (k, v) in varmap if !(k in pset))
         end
@@ -527,13 +526,7 @@ function _check_rebind(scope::_TemplateScope, maps, ctx::String)
     params_all = Set{String}()
     for (_, d) in scope.templates
         _collect_bound_syms!(bound, d)
-        shadowed = Set{String}()
-        params = _raw_get(d, "params")
-        if params !== nothing && _is_array(params)
-            for p in params
-                p isa AbstractString && push!(shadowed, string(p))
-            end
-        end
+        shadowed = Set{String}(_TemplateDecl(d).params)
         union!(params_all, shadowed)
         _collect_ref_names!(free, d, shadowed)
     end
@@ -1086,12 +1079,7 @@ end
 # lowered against the library's `enums` block. An op spelled with one of
 # `decl`'s `params` stays open.
 function _lower_library_template_body(library, name::String, decl, body, origin::String)
-    params_raw = _raw_get(decl, "params")
-    params = Set{String}(
-        String(p) for p in
-            (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
-            if p isa AbstractString
-    )
+    params = Set{String}(_TemplateDecl(decl).params)
     try
         return _lower_enum_ops_for_file(library, body, params)
     catch e
