@@ -239,7 +239,7 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 # This is the WHOLE §4.8.2 rewrite table. A degree sign is rewritten only as
 # part of `°C`/`°F`: a bare `°` (or `°K`) stays an unexpected character and the
 # string does not resolve. `%` is NOT rewritten here: it is a one-character
-# symbol token of its own (`_up_atom!`), so `%h` is `%`·`h`.
+# symbol token of its own (`_canon_lex`), so `%h` is `%`·`h`.
 const _UNIT_SPELLINGS = [
     "\u00B0C" => "degC",
     "\u00B0F" => "degF",
@@ -294,19 +294,6 @@ function _normalize_unit_string(s::AbstractString)::String
     return String(take!(io))
 end
 
-# Raised by the recursive-descent parser and caught by `parse_units`, which
-# turns it into `nothing`. Callers distinguish "unresolvable" from "absent" by
-# checking for `nothing`, and the structural validator promotes it to a hard
-# `unit_parse_error` (esm-spec §4.8.4).
-struct _UnitParseError <: EarthSciASTError
-    msg::String
-end
-
-mutable struct _UnitParser
-    src::Vector{Char}
-    pos::Int
-end
-
 # ---------------------------------------------------------------------------
 # AFFINE UNITS INSIDE A COMPOSITION.
 #
@@ -324,208 +311,14 @@ end
 # ---------------------------------------------------------------------------
 _linear(u) = Unitful.absoluteunit(u)
 _u_mul(a, b) = _linear(a) * _linear(b)
-_u_div(a, b) = _linear(a) / _linear(b)
 _u_pow(a, n) = _linear(a)^n
-
-_up_eof(p::_UnitParser) = p.pos > length(p.src)
 
 # §4.8.2 whitespace is ASCII: space, tab, carriage return, line feed.
 _up_space(c::Char) = c == ' ' || c == '\t' || c == '\r' || c == '\n'
 
-function _up_skip_space!(p::_UnitParser)
-    while !_up_eof(p) && _up_space(p.src[p.pos])
-        p.pos += 1
-    end
-    return
-end
-
-# Peek at the next non-space character, or `nothing` at end of input.
-function _up_peek(p::_UnitParser)
-    _up_skip_space!(p)
-    return _up_eof(p) ? nothing : p.src[p.pos]
-end
-
 _up_digit(c::Char) = '0' <= c <= '9'
 # The §4.8.2 identifier characters: a RUN of these is one token.
 _up_ident(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || _up_digit(c) || c == '_'
-# Can `c` BEGIN an atom? This is the lookahead that drives implicit
-# multiplication (`"ppb^-1 s^-1"`, `"%h"`).
-_up_starts_atom(c) = c !== nothing && (_up_ident(c) || c == '(' || c == '%')
-
-# Scan one RUN token starting at `p.pos` (esm-spec §4.8.2): a maximal sequence
-# of identifier characters. A run of digits alone, optionally followed by `.`
-# and a second digit-only run, is a NUMBER; every other run is ONE symbol, so
-# `s1`, `1s`, `kgm` are never split into a table key and a remainder, and `1e3`
-# is a symbol, not exponent notation. Returns `(text, is_number)`.
-function _up_run!(p::_UnitParser)
-    start = p.pos
-    while !_up_eof(p) && _up_ident(p.src[p.pos])
-        p.pos += 1
-    end
-    run = p.src[start:(p.pos - 1)]
-    all(_up_digit, run) || return (String(run), false)
-    if p.pos + 1 <= length(p.src) && p.src[p.pos] == '.' && _up_digit(p.src[p.pos + 1])
-        p.pos += 1
-        frac = p.pos
-        while !_up_eof(p) && _up_ident(p.src[p.pos])
-            p.pos += 1
-        end
-        return (String(p.src[start:(p.pos - 1)]), all(_up_digit, p.src[frac:(p.pos - 1)]))
-    end
-    return (String(run), true)
-end
-
-# unit := term (('*' | '/')? term)*
-#
-# Whitespace between two terms means MULTIPLICATION. Division is LEFT
-# associative: "L/mol/s" is L·mol⁻¹·s⁻¹, not L/(mol/s).
-function _up_unit!(p::_UnitParser)
-    u = _up_term!(p)
-    while true
-        c = _up_peek(p)
-        if c == '*' || c == '/'
-            p.pos += 1
-            rhs = _up_term!(p)
-            u = c == '*' ? _u_mul(u, rhs) : _u_div(u, rhs)
-        elseif _up_starts_atom(c)
-            # Juxtaposition. The scanner is greedy over identifier characters,
-            # so `ms` stays ONE symbol (millisecond) rather than m*s —
-            # juxtaposition can only arise across a real token boundary.
-            u = _u_mul(u, _up_term!(p))
-        else
-            return u
-        end
-    end
-    return
-end
-
-# term := atom (('^' | '**') exponent)?
-function _up_term!(p::_UnitParser)
-    u = _up_atom!(p)
-    c = _up_peek(p)
-    if c == '^'
-        p.pos += 1
-    elseif c == '*' && p.pos + 1 <= length(p.src) && p.src[p.pos + 1] == '*'
-        # `**` is the Python/pint spelling of `^` ("Pa*m**3"). `_up_peek` has
-        # already skipped whitespace, so `p.pos` is on the first `*`.
-        p.pos += 2
-    else
-        return u
-    end
-    return _u_pow(u, _up_exponent!(p))
-end
-
-# atom := '1' | symbol | '(' unit ')'
-function _up_atom!(p::_UnitParser)
-    _up_skip_space!(p)
-    _up_eof(p) && throw(_UnitParseError("unexpected end of input"))
-    c = p.src[p.pos]
-
-    if c == '('
-        p.pos += 1
-        u = _up_unit!(p)
-        _up_peek(p) == ')' || throw(_UnitParseError("missing ')'"))
-        p.pos += 1
-        return u
-    end
-
-    if c == '%'
-        # `%` is a one-character symbol token whatever is adjacent (§4.8.2).
-        p.pos += 1
-        return u"percent"
-    end
-
-    _up_ident(c) || throw(_UnitParseError("unexpected '$c' at position $(p.pos)"))
-    tok, is_number = _up_run!(p)
-    if is_number
-        # A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
-        # leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01`
-        # and `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not
-        # a quantity. This is not pedantry: `(m/s)^-1/3` -- an author reaching
-        # for a rational exponent -- parses under this grammar as
-        # `((m/s)^-1)/3`, and the five bindings gave it three different
-        # meanings (magnitude dropped, magnitude retained, whole string
-        # rejected). Rejecting the scaling factor makes `^(-1/3)` the only
-        # spelling of that unit, so the same string cannot silently mean two
-        # things.
-        tok == "1" || throw(
-            _UnitParseError(
-                "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
-            )
-        )
-        return Unitful.NoUnits
-    end
-    tok == "dimensionless" && return Unitful.NoUnits
-    u = get(_UNIT_REGISTRY, tok, nothing)
-    u === nothing && throw(_UnitParseError("unknown unit '$tok'"))
-    return u
-end
-
-# exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
-#
-# RATIONAL exponents are legitimate, not a curiosity: `1/s^0.5` is the noise
-# intensity of an SDE and is already in the corpus. A grammar restricted to
-# integers cannot express it, and under a hard-error severity that is a FALSE
-# REJECTION of a well-formed file — so the exponent is a Rational and the
-# result is `Unitful`'s rational-power representation.
-function _up_exponent!(p::_UnitParser)
-    _up_skip_space!(p)
-    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
-
-    # Parenthesised rational: `m^(1/2)`.
-    if p.src[p.pos] == '('
-        p.pos += 1
-        num = _up_signed_int!(p)
-        _up_peek(p) == '/' || throw(_UnitParseError("expected '/' in a rational exponent"))
-        p.pos += 1
-        den = _up_signed_int!(p)
-        den == 0 && throw(_UnitParseError("zero denominator in a rational exponent"))
-        _up_peek(p) == ')' || throw(_UnitParseError("missing ')' after a rational exponent"))
-        p.pos += 1
-        return num // den
-    end
-
-    negative = _up_minus!(p)
-    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
-    start = p.pos
-    _up_digit(p.src[p.pos]) || throw(
-        _UnitParseError(
-            "an exponent must be an integer, a decimal, or a rational ^(p/q) at position $start"
-        )
-    )
-    tok, is_number = _up_run!(p)
-    is_number || throw(_UnitParseError("malformed exponent '$tok' at position $start"))
-    # EXACT: a decimal `1.5` is 15//10, never a float rationalised back.
-    ip, fp = occursin('.', tok) ? split(tok, '.') : (tok, "")
-    n = tryparse(Int, ip * fp)
-    (n === nothing || length(fp) > 18) && throw(_UnitParseError("exponent '$tok' out of range"))
-    v = isempty(fp) ? n : n // 10^length(fp)
-    return negative ? -v : v
-end
-
-# An optional exponent sign. Only `-` exists: a positive exponent is unsigned
-# and `m^+2` does not resolve (§4.8.2). Whitespace may follow the sign.
-function _up_minus!(p::_UnitParser)
-    _up_skip_space!(p)
-    neg = !_up_eof(p) && p.src[p.pos] == '-'
-    neg && (p.pos += 1)
-    _up_skip_space!(p)
-    return neg
-end
-
-# A bare signed integer — the components of a parenthesised rational exponent.
-function _up_signed_int!(p::_UnitParser)
-    negative = _up_minus!(p)
-    start = p.pos
-    (!_up_eof(p) && _up_digit(p.src[p.pos])) ||
-        throw(_UnitParseError("expected an integer at position $start"))
-    tok, is_number = _up_run!(p)
-    (is_number && !occursin('.', tok)) ||
-        throw(_UnitParseError("expected an integer at position $start"))
-    v = tryparse(Int, tok)
-    v === nothing && throw(_UnitParseError("integer '$tok' out of range"))
-    return negative ? -v : v
-end
 
 """
     parse_units_reason(unit_str) -> Union{String, Nothing}
@@ -541,17 +334,8 @@ the corpus-pinned `unit_parse_error` message text.
 """
 function parse_units_reason(unit_str::AbstractString)::Union{String, Nothing}
     isempty(unit_str) && return nothing
-    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
-    try
-        _up_unit!(p)
-        _up_skip_space!(p)
-        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
-        return nothing
-    catch e
-        e isa _UnitParseError && return e.msg
-        e isa ArgumentError && return sprint(showerror, e)
-        rethrow()
-    end
+    r = _resolve_units(unit_str)
+    return r isa String ? r : nothing
 end
 
 """
@@ -566,54 +350,74 @@ grammar (§4.8.2):
     atom     := '1' | symbol | '(' unit ')'
 
 A symbol is a whole run of `[A-Za-z0-9_]` (or `%`) and must be a table key;
-the only numeric atom is the literal `1`. Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
-LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
-denominator (`"J/(mol*K)"`). An exponent may be RATIONAL — `"1/s^0.5"` is the
-noise intensity of an SDE and is in the corpus.
+the only numeric atom is the literal `1`. Whitespace between terms is
+multiplication (`"ppb^-1 s^-1"`); division is LEFT-associative (`"L/mol/s"` is
+L·mol⁻¹·s⁻¹); parentheses group a compound denominator (`"J/(mol*K)"`). An
+exponent may be RATIONAL — `"1/s^0.5"` is the noise intensity of an SDE.
 
 Normalised before parsing: `µ`/`μ`→`u`, `°C`→`degC`, `°F`→`degF`, `Ω`→`Ohm`,
 `·`/`⋅`→`*`, and superscript runs (`m²`, `cm³`, `m⁻³`) → `^n`. `""`, `"1"` and
 `"dimensionless"` are the dimensionless unit.
 
+The string is parsed once, by the parser the canonical spelling uses
+(`_unit_factors`), and its factor list is resolved through the registry. A
+string that is a single symbol to the first power (`"degC"`, `"(degC)"`) is the
+registry entry itself, so a standalone affine unit keeps its identity; inside a
+composition an affine unit is its absolute counterpart (`_linear`).
+
 Returns `nothing` when the string does not parse or names a symbol outside the
 registry. That is a DEFECT IN THE FILE, not a limit of the checker: the
 structural validator promotes it to a hard `unit_parse_error` (§4.8.4). It is
-therefore silent here — the caller decides the severity, and an incomplete
-registry must be fixed by extending the registry, never by downgrading this to
-a warning.
+silent here — the caller decides the severity.
 """
 function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
     # Only "" is the empty unit. A whitespace-only string has no tokens and is
     # rejected by the grammar (§4.8.2), not read as dimensionless.
     isempty(unit_str) && return Unitful.NoUnits
-
-    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
-    try
-        u = _up_unit!(p)
-        _up_skip_space!(p)
-        _up_eof(p) || throw(_UnitParseError("unexpected trailing input"))
-        return u
-    catch e
-        e isa _UnitParseError && return nothing
-        # Unitful can still reject an otherwise well-formed composition (e.g. a
-        # power it cannot represent). Unresolvable is unresolvable.
-        e isa ArgumentError && return nothing
-        rethrow()
-    end
+    r = _resolve_units(unit_str)
+    return r isa String ? nothing : r
 end
 
+# The unit `unit_str` denotes, or the reason it denotes none.
+function _resolve_units(unit_str::AbstractString)
+    fs = _unit_factors(unit_str)
+    fs isa String && return fs
+    units = Any[]
+    for (sym, _) in fs
+        u = sym == "%" ? u"percent" : get(_UNIT_REGISTRY, sym, nothing)
+        u === nothing && return "unknown unit '$sym'"
+        push!(units, u)
+    end
+    length(fs) == 1 && isone(fs[1][2]) && return units[1]
+    out = Unitful.NoUnits
+    try
+        for (u, (_, q)) in zip(units, fs)
+            out = _u_mul(out, _u_pow(u, _unit_exponent(q)))
+        end
+    catch e
+        # Unitful can still reject an otherwise well-formed composition (a
+        # power it cannot represent). Unresolvable is unresolvable.
+        (e isa ArgumentError || e isa OverflowError || e isa InexactError) ||
+            rethrow()
+        return sprint(showerror, e)
+    end
+    return out
+end
+
+# A factor exponent as Unitful takes it: an `Int` when integral.
+_unit_exponent(q::Rational{BigInt}) =
+    isone(denominator(q)) ? Int(numerator(q)) : Rational{Int}(q)
+
 # ---------------------------------------------------------------------------
-# The canonical unit spelling (esm-spec §4.8.2 "Canonical spelling"). The
-# authority is the Lean definition `Esm.Units.canon`
-# (formal/Esm/Units/Canonical.lean); this is a port of it, and the
-# cross-binding fixture tests/conformance/canonical/unit_spelling.json pins
-# the output.
+# The §4.8.2 lexer and parser, ports of the Lean `Esm.Units.lex` and
+# `Esm.Units.parse` (formal/Esm/Units/), and the canonical unit spelling
+# (esm-spec §4.8.2 "Canonical spelling", the Lean `Esm.Units.canon`;
+# tests/conformance/canonical/unit_spelling.json pins its output).
 #
-# It rewrites the PARSED string; it does not resolve it. Symbols are kept as
-# written (`km` stays `km`), no table lookup decides the spelling, and nothing
-# cancels across the fraction bar (`mol/mol` stays `mol/mol`). It has its own
-# lexer and parser, mirroring the Lean ones, because the resolving parser above
-# rejects unknown symbols and the spelling keeps them.
+# The parser builds a factor list and keeps every symbol as written: resolving
+# the symbols through the registry is `parse_units`' step, so the spelling
+# keeps a symbol the registry does not know (`km` stays `km`, and nothing
+# cancels across the fraction bar: `mol/mol` stays `mol/mol`).
 # ---------------------------------------------------------------------------
 
 # One token: `kind` is :sym, :num, :star, :dstar, :slash, :caret, :lp, :rp or
@@ -694,9 +498,11 @@ end
 
 const _CanonFactor = Tuple{String, Rational{BigInt}}
 
-# Thrown inside the spelling parser on input outside the grammar; caught in
-# `_canonical_units`, which then returns the string unchanged.
-struct _CanonFail <: EarthSciASTError end
+# Thrown inside the parser on input outside the grammar, with the reason.
+struct _CanonFail <: EarthSciASTError
+    msg::String
+end
+_CanonFail() = _CanonFail("malformed unit string")
 
 mutable struct _CanonParser
     toks::Vector{_CanonTok}
@@ -774,12 +580,22 @@ end
 function _cp_atom!(p::_CanonParser)::Vector{_CanonFactor}
     k = _cp_kind(p)
     if k == :num
-        # Any number but the literal `1` is a scaling factor.
-        _cp_take!(p).text == "1" || throw(_CanonFail())
+        # Any number but the literal `1` (including `01` and `1.0`) is a
+        # SCALING FACTOR, and a unit string denotes a unit, not a quantity:
+        # `(m/s)^-1/3` reads as `((m/s)^-1)/3`, so `^(-1/3)` must be the only
+        # spelling of that unit.
+        _cp_take!(p).text == "1" || throw(
+            _CanonFail(
+                "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); " *
+                    "a rational exponent is spelled ^(p/q)"
+            )
+        )
         return _CanonFactor[]
     elseif k == :sym
         name = _cp_take!(p).text
         return name == "dimensionless" ? _CanonFactor[] : _CanonFactor[(name, 1 // 1)]
+    elseif k == :eof
+        throw(_CanonFail("unexpected end of input"))
     elseif k == :lp
         _cp_take!(p)
         inner = _cp_unit!(p)
@@ -811,11 +627,64 @@ end
 _canon_symbol_ok(s::String) =
     s == "%" || (!isempty(s) && all(_up_ident, s) && !_canon_digit_run(collect(s)))
 
+# THE §4.8.2 parser's entry: the factor list of `unit` (each symbol with its
+# exponent, `*` and juxtaposition concatenating, `/` negating, in the order
+# written), or the reason the string is outside the grammar.
+function _unit_factors(unit::AbstractString)::Union{Vector{_CanonFactor}, String}
+    cs = collect(_normalize_unit_string(unit))
+    toks = _canon_lex(cs)
+    toks === nothing && return "unexpected character in '$(String(cs))'"
+    p = _CanonParser(toks, 1)
+    try
+        fs = _cp_unit!(p)
+        p.i == length(toks) + 1 || return "unexpected trailing input"
+        return fs
+    catch e
+        e isa _CanonFail && return e.msg
+        rethrow()
+    end
+end
+
+"""
+    _canonical_unit_factors(unit) -> Union{Nothing, Vector{_CanonFactor}}
+
+The factors of the canonical spelling of `unit` (esm-spec §4.8.2): the parse's
+factors normalized per side (`_canon_side`), the numerator side (positive
+exponents) then the denominator side. `nothing` when the string is outside the
+grammar.
+"""
+function _canonical_unit_factors(unit::AbstractString)::Union{Nothing, Vector{_CanonFactor}}
+    fs = _unit_factors(unit)
+    fs isa String && return nothing
+    return vcat(_canon_side(filter(f -> f[2] > 0, fs)), _canon_side(filter(f -> !(f[2] > 0), fs)))
+end
+
+"""
+    _spell_unit_factors(factors) -> String
+
+The canonical spelling of a factor list from [`_canonical_unit_factors`](@ref):
+the positive-exponent factors joined by `*` (`1` when there are none), then
+`/` and the others written with their exponent's absolute value,
+parenthesized when there is more than one.
+"""
+function _spell_unit_factors(l)::String
+    num = [_canon_factor(f) for f in l if f[2] > 0]
+    den = [_canon_factor(f) for f in l if !(f[2] > 0)]
+    out = isempty(num) ? "1" : join(num, "*")
+    if length(den) == 1
+        out *= "/" * den[1]
+    elseif length(den) > 1
+        out *= "/(" * join(den, "*") * ")"
+    end
+    return out
+end
+
 """
     _canonical_units(unit) -> String
 
 The canonical spelling of a unit string (esm-spec §4.8.2), a port of the Lean
-`Esm.Units.canon`.
+`Esm.Units.canon`: [`_spell_unit_factors`](@ref) of
+[`_canonical_unit_factors`](@ref).
 
 The numerator is the factors with a positive exponent, each symbol once with
 its exponents summed, sorted by symbol (codepoint order) and joined by `*`. The
@@ -831,32 +700,16 @@ spelling would have to write a symbol containing `.`, and when it would drop
 """
 function _canonical_units(unit::AbstractString)::String
     isempty(unit) && return "1"
-    toks = _canon_lex(collect(_normalize_unit_string(unit)))
-    toks === nothing && return String(unit)
-    p = _CanonParser(toks, 1)
-    factors = try
-        fs = _cp_unit!(p)
-        p.i == length(toks) + 1 || return String(unit)
-        fs
-    catch e
-        e isa _CanonFail && return String(unit)
-        rethrow()
-    end
-    num = _canon_side(filter(f -> f[2] > 0, factors))
-    den = _canon_side(filter(f -> f[2] <= 0, factors))
-    kept = Set{String}(first.(vcat(num, den)))
+    factors = _unit_factors(unit)
+    factors isa String && return String(unit)
+    l = _canonical_unit_factors(unit)
+    kept = Set{String}(first.(l))
     all(_canon_symbol_ok, kept) || return String(unit)
-    # `%` is a table key in every other binding; here the resolving parser
+    # `%` is a table key in every other binding; here the resolver
     # special-cases it instead of registering it.
     all(f -> f[1] in kept || f[1] == "%" || haskey(_UNIT_REGISTRY, f[1]), factors) ||
         return String(unit)
-    spelled = isempty(num) ? "1" : join(map(_canon_factor, num), "*")
-    if length(den) == 1
-        spelled *= "/" * _canon_factor(den[1])
-    elseif !isempty(den)
-        spelled *= "/(" * join(map(_canon_factor, den), "*") * ")"
-    end
-    return spelled
+    return _spell_unit_factors(l)
 end
 
 # ---------------------------------------------------------------------------

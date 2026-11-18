@@ -43,7 +43,7 @@ the two namespaced submodules (`Cadence.CadenceError`,
 
 A handful of subtypes are INTERNAL control-flow signals rather than user-facing
 diagnostics — `EarthSciAST`-private types whose names begin with `_`
-(`_UnitParseError`, `_CodegenDecline`, `_StencilFallback`,
+(`_CanonFail`, `_CodegenDecline`, `_StencilFallback`,
 `_BroadcastBudgetExceeded`). They are caught by their concrete type at the
 throw's immediate call site and never escape the package; they subtype this
 root only so the rule "every exception in the package is an

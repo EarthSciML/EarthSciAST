@@ -17,16 +17,20 @@ module MUnits
 
 using ..DJson
 
+# The package the document module sits in, whose unit parser defines the
+# factor type and the character classes of §4.8.2.
+const HOST = parentmodule(parentmodule(@__MODULE__))
+
 """`Esm.Units.Factor`: a unit symbol and its (signed, rational) exponent."""
-const Factor = Tuple{String, Rational{BigInt}}
+const Factor = HOST._CanonFactor
 
 const ONE = Rational{BigInt}(1)
 
 """`Esm.Units.isDigitC`."""
-is_digit_c(c::Char) = '0' <= c <= '9'
+const is_digit_c = HOST._up_digit
 
 """`Esm.Units.isIdent`: characters that may occur in a symbol run."""
-is_ident(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || ('0' <= c <= '9') || c == '_'
+const is_ident = HOST._up_ident
 
 """`Esm.Units.numFactors`: the factors with a positive exponent."""
 num_factors(l) = Factor[f for f in l if f[2] > 0]
