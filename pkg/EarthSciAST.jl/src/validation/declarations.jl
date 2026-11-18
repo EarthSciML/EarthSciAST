@@ -7,7 +7,10 @@ esm-spec §6.3.1: a binding uses the `system_kind` DERIVATION when the field is
 absent, and reports `system_kind_mismatch` when a present field contradicts it.
 Recurses into subsystems.
 """
-function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String)
+_check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String) =
+    (_foreach_component((m, p, _) -> _check_system_kind_here!(errors, m, p), model, path); errors)
+
+function _check_system_kind_here!(errors::Vector{StructuralError}, model::Model, path::String)
     declared = declared_system_kind(model)
     derived = system_kind(model)
     if declared !== nothing && declared != derived
@@ -18,9 +21,6 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
                 "parameters derive '$derived'",
             Dict{String, Any}("declared" => declared, "derived" => derived)
         )
-    end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_system_kind!(errors, subsys, "$path/subsystems/$subsys_name")
     end
     return errors
 end
@@ -131,6 +131,18 @@ recursing into subsystems.
 """
 function _check_reserved_model_names!(
         errors::Vector{StructuralError}, model::Model,
+        path::String, owner::AbstractString; indep::AbstractString = "t"
+    )
+    _foreach_component(model, path) do m, p, k
+        _check_reserved_model_names_here!(
+            errors, m, p, k === nothing ? owner : "Model '$k'"; indep = indep
+        )
+    end
+    return errors
+end
+
+function _check_reserved_model_names_here!(
+        errors::Vector{StructuralError}, model::Model,
         path::String, owner::AbstractString;
         indep::AbstractString = "t"
     )
@@ -138,12 +150,6 @@ function _check_reserved_model_names!(
         errors, keys(model.variables), "$path/variables",
         owner, "variable"; indep = indep
     )
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_reserved_model_names!(
-            errors, subsys, "$path/subsystems/$subsys_name",
-            "Model '$subsys_name'"; indep = indep
-        )
-    end
     return errors
 end
 
@@ -158,6 +164,15 @@ is nothing for it to fill. Variables are walked in sorted order, as every bindin
 can produce.
 """
 function _check_array_defaults_have_shape!(
+        errors::Vector{StructuralError}, model::Model, path::String, owner::AbstractString
+    )
+    _foreach_component(model, path; sorted = true) do m, p, k
+        _check_array_defaults_have_shape_here!(errors, m, p, k === nothing ? owner : "Model '$k'")
+    end
+    return errors
+end
+
+function _check_array_defaults_have_shape_here!(
         errors::Vector{StructuralError}, model::Model,
         path::String, owner::AbstractString
     )
@@ -174,12 +189,6 @@ function _check_array_defaults_have_shape!(
                 "variable" => name,
                 "variable_type" => _variable_type_word(var.type)
             )
-        )
-    end
-    for (subsys_name, subsys) in sort!(collect(model_subsystems(model)); by = first)
-        _check_array_defaults_have_shape!(
-            errors, subsys, "$path/subsystems/$subsys_name",
-            "Model '$subsys_name'"
         )
     end
     return errors

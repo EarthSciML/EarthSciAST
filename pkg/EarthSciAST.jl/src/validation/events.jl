@@ -8,6 +8,18 @@ discrete conditions produce booleans, affect variables declared,
 functional affect refs valid.
 """
 function validate_event_consistency(
+        model::Model, path::String; is_coupled::Bool = false
+    )::Vector{StructuralError}
+    # A subsystem of a coupled model is composed along with its parent, so it
+    # inherits the exemption.
+    errors = StructuralError[]
+    _foreach_component(model, path) do m, p, _
+        append!(errors, _validate_event_consistency_here(m, p; is_coupled = is_coupled))
+    end
+    return errors
+end
+
+function _validate_event_consistency_here(
         model::Model, path::String;
         is_coupled::Bool = false
     )::Vector{StructuralError}
@@ -35,16 +47,6 @@ function validate_event_consistency(
         )
     end
 
-    # Recursively check subsystems. A subsystem of a coupled model is composed
-    # along with its parent, so it inherits the exemption.
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(
-            errors, validate_event_consistency(
-                subsys, "$path/subsystems/$subsys_name";
-                is_coupled = is_coupled
-            )
-        )
-    end
 
     return errors
 end
