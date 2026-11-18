@@ -318,7 +318,7 @@ def test_godunov_compound_rule_beats_inner_derivative():
 
 
 def test_nested_derivative_fixpoint_converges_across_passes():
-    """laplacian → D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D → stencil
+    """lap_xy(u) → D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D → stencil
     (pass 2). Exercises the bounded fixpoint: a produced body is re-scanned only in
     a SUBSEQUENT pass."""
     out = lower_expression_templates(_conf_fixture("fixpoint_nested_deriv"))
@@ -334,7 +334,7 @@ def test_nested_derivative_fixpoint_converges_across_passes():
         ],
     }
     expr_json = json.dumps(lap)
-    assert "laplacian" not in expr_json
+    assert "lap_xy" not in expr_json
     assert '"D"' not in expr_json
 
 
@@ -616,14 +616,14 @@ def test_where_constraint_conformance_matches_golden(fix):
 
 
 def test_where_constraint_scopes_positive_and_negative_case():
-    """constrained_match_scope: one shape-constrained div rule, two shaped
-    variables. div(F_edge) (shape [edges]) is rewritten; div(F_cell) (shape
-    [cells]) is constraint-excluded and survives lowering intact."""
+    """constrained_match_scope: one shape-constrained spatial-D rule, two shaped
+    variables. D(F_edge, wrt: x) (shape [edges]) is rewritten; D(F_cell, wrt: x)
+    (shape [cells]) is constraint-excluded and survives lowering intact."""
     out = _expand_conf("constrained_match_scope")
     # F_edge matched the shape [edges] constraint → rewritten to inv_area * F.
     assert _defining(out, "m", "div_edge")["op"] == "*"
-    # F_cell failed the constraint → the div node stays un-lowered.
-    assert _defining(out, "m", "div_cell")["op"] == "div"
+    # F_cell failed the constraint → the spatial D node stays un-lowered.
+    assert _defining(out, "m", "div_cell")["op"] == "D"
 
 
 def test_where_unknown_index_set_rejected_at_registration():
@@ -651,7 +651,7 @@ def _where_pin_doc(templates: dict) -> dict:
                     "d": {"type": "unknown", "units": "1", "shape": ["edges"]},
                 },
                 # `d` is an OBSERVED unknown defined by this equation.
-                "equations": [{"lhs": "d", "rhs": {"op": "div", "args": ["Fe"]}}],
+                "equations": [{"lhs": "d", "rhs": {"op": "D", "args": ["Fe"], "wrt": "x"}}],
                 "expression_templates": templates,
             }
         },
@@ -670,7 +670,7 @@ def test_where_constraint_filters_before_priority():
             "hi": {
                 "params": ["X"],
                 "priority": 10,
-                "match": {"op": "div", "args": ["X"]},
+                "match": {"op": "D", "args": ["X"], "wrt": "x"},
                 "where": {"X": {"shape": ["cells_nope_unused"]}},
                 "body": {"op": "*", "args": [999, "X"]},
             },
@@ -678,7 +678,7 @@ def test_where_constraint_filters_before_priority():
             "lo": {
                 "params": ["X"],
                 "priority": 0,
-                "match": {"op": "div", "args": ["X"]},
+                "match": {"op": "D", "args": ["X"], "wrt": "x"},
                 "where": {"X": {"shape": ["edges"]}},
                 "body": {"op": "*", "args": ["k", "X"]},
             },
@@ -694,27 +694,28 @@ def test_where_constraint_filters_before_priority():
 
 
 def test_where_constraint_compound_argument_fails_conservatively():
-    """§9.6.1 non-fixture pin: the judgment is bare-variable-only. A `div` of a
+    """§9.6.1 non-fixture pin: the judgment is bare-variable-only. A spatial `D` of a
     COMPOUND expression (not a bare declared variable) fails the constraint —
     no error, no rewrite (conservative)."""
     doc = _where_pin_doc(
         {
             "r": {
                 "params": ["X"],
-                "match": {"op": "div", "args": ["X"]},
+                "match": {"op": "D", "args": ["X"], "wrt": "x"},
                 "where": {"X": {"shape": ["edges"]}},
                 "body": {"op": "*", "args": ["k", "X"]},
             },
         }
     )
-    # div of a compound (Fe + Fe), not a bare variable reference.
+    # D of a compound (Fe + Fe), not a bare variable reference.
     doc["models"]["m"]["equations"][0]["rhs"] = {
-        "op": "div",
+        "op": "D",
         "args": [{"op": "+", "args": ["Fe", "Fe"]}],
+        "wrt": "x",
     }
     out = lower_expression_templates(doc)
     expr = _defining(out, "m", "d")
-    assert expr["op"] == "div"  # unchanged: constraint not satisfied
+    assert expr["op"] == "D"  # unchanged: constraint not satisfied
 
 
 @pytest.mark.parametrize(
@@ -736,7 +737,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
             {
                 "t": {
                     "params": ["X"],
-                    "match": {"op": "div", "args": ["X"]},
+                    "match": {"op": "D", "args": ["X"], "wrt": "x"},
                     "where": {"Y": {"shape": ["edges"]}},
                     "body": {"op": "*", "args": ["k", "X"]},
                 }
@@ -748,7 +749,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
             {
                 "t": {
                     "params": ["X"],
-                    "match": {"op": "div", "args": ["X"]},
+                    "match": {"op": "D", "args": ["X"], "wrt": "x"},
                     "where": {"X": {"rank": 1}},
                     "body": {"op": "*", "args": ["k", "X"]},
                 }
@@ -760,7 +761,7 @@ def test_where_constraint_compound_argument_fails_conservatively():
             {
                 "t": {
                     "params": ["X"],
-                    "match": {"op": "div", "args": ["X"]},
+                    "match": {"op": "D", "args": ["X"], "wrt": "x"},
                     "where": {"X": {"shape": []}},
                     "body": {"op": "*", "args": ["k", "X"]},
                 }

@@ -22,7 +22,7 @@ time. (``codegen`` does NOT warn at runtime: an op reaching the
 generic ``op(args)`` fallback is either an evaluable-core function that renders
 correctly as a call — ``sin(x)`` — or an open-tier rewrite-target op that is a
 legitimate document element lowered before evaluation. Both are correct outputs,
-so neither a registered sugar op like ``grad`` nor an unregistered custom op like
+so neither ``integral`` nor an unregistered custom op like
 ``godunov_hamiltonian`` is privileged over the other — they render identically.)
 
 **Contract for renderers/dispatchers.** Every op below is part of the accepted
@@ -69,11 +69,13 @@ Categories
 ``relational``       value-invention companions: distinct, join
                      (RFC semiring-faq-unified-ir)
 
-The open-tier rewrite-target sugar (grad/div/laplacian/curl/integral, esm-spec
-§4.2) is intentionally **NOT** registered: those ops carry no dimensional rule,
+The open-tier rewrite-target ops (``integral``, ``curl``, any user op, esm-spec
+§4.2) are intentionally **NOT** registered: those ops carry no dimensional rule,
 no evaluator, no privileged arity, and are not used for spatial detection, so
 they are ordinary unregistered rewrite-target ops indistinguishable from a
-custom user op (``godunov_hamiltonian``).
+custom user op (``godunov_hamiltonian``). ``grad``, ``div`` and ``laplacian``
+were removed at esm 3.0.0 (:data:`REMOVED_OPS`); a spatial derivative is a
+``D`` with a spatial ``wrt``.
 
 Tiers
 -----
@@ -83,8 +85,8 @@ Tiers
                     is ``core`` (the default).
 ``rewrite_target``  open-tier op with **no** evaluator; it MUST be eliminated by
                     a rewrite rule before evaluation (``unlowered_operator`` if
-                    not, esm-spec §9.6.6). Every rewrite-target op — the sugar
-                    (grad/div/…) and any custom op — is UNregistered, a
+                    not, esm-spec §9.6.6). Every rewrite-target op — ``integral``
+                    and any custom op — is UNregistered, a
                     rewrite-target by virtue of not being evaluable-core; the tier
                     label is retained in :data:`TIERS` for that vocabulary.
 """
@@ -126,6 +128,9 @@ REMOVED_OPS: dict[str, str] = {
     "polygon_intersection_area": "2.0.0",
     "argmin": "2.0.0",
     "argmax": "2.0.0",
+    "grad": "3.0.0",
+    "div": "3.0.0",
+    "laplacian": "3.0.0",
 }
 
 #: Ops the format has DEPRECATED, each with its replacement (esm-spec §4.2
@@ -366,8 +371,8 @@ _ALL: tuple[OpSpec, ...] = (
         note="dedup reducer / aggregate distinct flag (cadence guard)",
     ),
     OpSpec("join", "relational", "special", note="equi-join gate (cadence guard)"),
-    # --- open-tier rewrite-target sugar (esm-spec §4.2) is NOT registered ---
-    # grad/div/laplacian/curl/integral are ORDINARY open-tier rewrite-target ops
+    # --- open-tier rewrite-target ops (esm-spec §4.2) are NOT registered ---
+    # integral/curl and any user op are ORDINARY open-tier rewrite-target ops
     # with NO privilege over any other user op (`godunov_hamiltonian`): no
     # dimensional rule (dimension UNDETERMINABLE until lowered, §4.8.3/§4.8.4), no
     # evaluator (a discretization rule MUST lower them, `unlowered_operator`
@@ -531,8 +536,8 @@ def is_known(op: str) -> bool:
 
     Used by :mod:`.lower_expression_templates` to classify an op as an
     evaluable-core registry op versus an open-namespace rewrite-target op (a
-    custom op, or the unregistered sugar grad/div/laplacian/curl/integral, none
-    of which are in the registry): an op that is not known is a rewrite-target
+    custom op such as ``integral`` or ``godunov_hamiltonian``, none of which
+    are in the registry): an op that is not known is a rewrite-target
     tier **T** member by virtue of having no evaluable-core entry.
     """
     return op in OPS

@@ -8,7 +8,7 @@ An ESM document in Typst is markup plus the functions of an `esm` Typst package:
 
 ```
 #import "@preview/esm:0.1.0": *
-#show: esm-document.with(esm: "2.3.0", name: "Decay")
+#show: esm-document.with(esm: "3.0.0", name: "Decay")
 
 #description[First\-order radioactive decay.]
 

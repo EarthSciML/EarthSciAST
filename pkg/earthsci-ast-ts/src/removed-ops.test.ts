@@ -1,5 +1,8 @@
 /**
- * The esm 2.0.0 removals are refused at the wire boundary with `removed_op`.
+ * The esm 2.0.0 and 3.0.0 removals are refused at the wire boundary with
+ * `removed_op`. (`grad`, `div` and `laplacian`, removed at 3.0.0, are covered
+ * in their own block below: their message points at spatial `D`, not at a
+ * codemod.)
  *
  * `fn`, `table_lookup`, `skolem`, `rank`, `intersect_polygon`,
  * `polygon_intersection_area`, `argmin` and `argmax` are well-formed op names,
@@ -108,6 +111,44 @@ describe('removed_op: ops removed at esm 2.0.0', () => {
         expression_template_imports: [{ ref: 'esm:std/relational.esm', only: ['argmin'] }],
       },
     )
+    expect(() => loadDocument(doc)).not.toThrow(/removed_op/)
+  })
+})
+
+describe('removed_op: ops removed at esm 3.0.0', () => {
+  const V3_NODES: [string, Record<string, unknown>][] = [
+    ['grad', { op: 'grad', args: ['p'], dim: 'x' }],
+    ['div', { op: 'div', args: ['p'] }],
+    ['laplacian', { op: 'laplacian', args: ['p'] }],
+  ]
+  for (const [op, node] of V3_NODES) {
+    for (const esm of [SCHEMA_VERSION, '2.3.0', '1.3.0']) {
+      it(`refuses \`${op}\` by name in a ${esm} document, pointing at spatial D`, () => {
+        const err = loadError({ ...docWithRhs({ op: '*', args: ['p', node] }), esm })
+        expect(err.code).toBe('removed_op')
+        expect(err.message).toContain(`removed_op at /models/M/equations/0/rhs/args/1:`)
+        expect(err.message).toContain(`"op": "${op}"`)
+        expect(err.message).toContain('removed at esm 3.0.0')
+        expect(err.message).toContain('spatial `D`')
+        expect(err.message).toContain('MIGRATION.md, "esm 3.0.0"')
+        // No codemod for the 3.0.0 removals.
+        expect(err.message).not.toContain('earthsci_ast.migrate')
+      })
+    }
+  }
+
+  it('reports the first removed op in pre-order, whichever major removed it', () => {
+    const err = loadError(
+      docWithRhs({
+        op: '+',
+        args: [V3_NODES[0][1], REMOVED_NODES[3][1]],
+      }),
+    )
+    expect(err.message).toContain('"op": "grad"')
+  })
+
+  it('leaves `/` (division) and spatial `D` alone', () => {
+    const doc = docWithRhs({ op: '/', args: [{ op: 'D', args: ['p'], wrt: 'x' }, 2] })
     expect(() => loadDocument(doc)).not.toThrow(/removed_op/)
   })
 })

@@ -390,8 +390,8 @@ _BINARY_SYMPY: dict[str, tuple] = {
 }
 
 #: The evaluable-core op vocabulary (esm-spec §4.2), DERIVED from the single-source
-#: registry. An op that is NOT core is an open-tier rewrite-target — the sugar ops
-#: grad/div/laplacian/curl/integral OR a custom op such as ``godunov_hamiltonian``
+#: registry. An op that is NOT core is an open-tier rewrite-target — ``integral``,
+#: ``curl`` OR a custom op such as ``godunov_hamiltonian``
 #: — and the SymPy bridge treats them all UNIFORMLY (no privilege): opaque
 #: ``sp.Function`` placeholders under the symbolic ``to_sympy`` contract, and an
 #: ``unlowered_operator`` error under the lambdify path. ``D`` is core and keeps
@@ -422,16 +422,15 @@ def _expr_to_sympy(
         expr: Expression to convert
         symbol_map: Mapping from variable names to SymPy symbols
         structural_ops: When False (the simulation-lowering default), a genuine
-            ``D`` and every non-evaluable-core op — the open-tier sugar
-            ``grad``/``div``/``laplacian``/``curl``/``integral`` and any custom
-            op, treated identically with no privilege — raise
+            ``D`` and every non-evaluable-core op — ``integral``, ``curl`` and
+            any custom op, treated identically with no privilege — raise
             :class:`UnreachableSpatialOperatorError` (they must have been
             consumed structurally or rewritten to a stencil before the lambdify
             path) and ``Pre(x)`` lowers to ``x``. When True (the public
             :func:`to_sympy` contract, used for symbolic analysis such as
             :func:`symbolic_jacobian`), ``D`` becomes a genuine
-            :class:`sympy.Derivative`, while every non-core op (the sugar ops and
-            any custom op) plus ``Pre`` becomes an opaque
+            :class:`sympy.Derivative`, while every non-core op (``integral``
+            and any custom op) plus ``Pre`` becomes an opaque
             :class:`sympy.Function` placeholder that preserves structure.
 
     Returns:
@@ -472,15 +471,14 @@ def _expr_to_sympy(
             return sp.Derivative(sympy_args[0], wrt_symbol)
 
         # Every OTHER non-evaluable-core op is an ordinary open-tier
-        # rewrite-target with NO privilege — the sugar ops
-        # grad/div/laplacian/curl/integral AND any custom op such as
-        # `godunov_hamiltonian` are handled by the SAME path (esm-spec §4.2). On
+        # rewrite-target with NO privilege — integral, curl AND any custom op
+        # such as `godunov_hamiltonian` are handled by the SAME path (esm-spec §4.2). On
         # the lambdify path (`structural_ops=False`) one reaching here was never
         # lowered to a stencil: surface the uniform `unlowered_operator`
         # diagnostic. Under the symbolic `to_sympy` contract (`structural_ops=
         # True`) preserve it as an opaque `sp.Function` placeholder so structure
         # survives for analysis — no arity privilege, no coordinate-derivative
-        # rewrite (grad is no longer special-cased into an `sp.Derivative`).
+        # rewrite.
         if expr.op not in _EVALUABLE_CORE_OPS:
             if not structural_ops:
                 raise UnreachableSpatialOperatorError(expr.op)
@@ -644,8 +642,7 @@ def to_sympy(expr: Expr, symbol_map: dict[str, sp.Symbol] | None = None) -> sp.E
     converter shared with the simulation tier (``sympy_bridge.py``) — run
     with ``structural_ops=True`` so the genuine ``D`` converts to a
     :class:`sympy.Derivative` while every open-tier rewrite-target op
-    (``grad``/``div``/``laplacian``/``curl``/``integral`` and any custom op,
-    all unprivileged) plus ``Pre`` becomes an opaque :class:`sympy.Function`
+    (``integral``, ``curl`` and any custom op, all unprivileged) plus ``Pre`` becomes an opaque :class:`sympy.Function`
     placeholder (symbolic-analysis semantics, e.g. for
     :func:`symbolic_jacobian`).
 
@@ -807,7 +804,7 @@ def from_sympy(sympy_expr: sp.Expr) -> Expr:
     # Boolean constants -> number.
     if sympy_expr.__class__.__name__ in ("BooleanTrue", "BooleanFalse"):
         return float(sympy_expr)
-    # Generic function (Pre, div, laplacian, unknown) — the function name is
+    # Generic function (Pre, integral, a user op) — the function name is
     # the ESM op.
     if isinstance(sympy_expr, sp.Function):
         return ExprNode(

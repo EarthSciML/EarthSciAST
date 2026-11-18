@@ -250,10 +250,10 @@ def test_unsupported_op_raises() -> None:
         eval_expr(ExprNode(op="bogus_op", args=[1.0]), _ctx({}))
 
 
-@pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian", "D"])
+@pytest.mark.parametrize("spatial_op", ["D", "integral", "flux_divergence"])
 def test_spatial_operator_in_simulator_rejected(spatial_op: str) -> None:
-    """A non-lowered rewrite-target op — a spatial/RHS `D` or a
-    `grad`/`div`/`laplacian` sugar op — fed to the simulator's RHS evaluator
+    """A non-lowered rewrite-target op — a spatial/RHS `D`, an `integral`, or a
+    user op — fed to the simulator's RHS evaluator
     must raise the uniform `unlowered_operator` diagnostic (esm-spec §4.2 /
     §9.6.8) rather than silently returning zero or evaluating its inner arg (the
     historical stub behaviour). Supersedes the old per-binding code."""

@@ -2,10 +2,11 @@
 
 A migration is a pure version-MARKER bump, sound only along an ADDITIVE line —
 a run of releases whose changes were additive, so an older file already loads
-under the newer schema. The current line is ``2.0.0 … <current schema version>``.
-esm 2.0.0 removed operators, so a 1.x source is relabelled only when it uses none
-of them; one that does is refused with ``removed_op``, naming the codemod
-(``test_migration_codemod.py``).
+under the newer schema. The current line is ``3.0.0 … <current schema version>``.
+esm 2.0.0 and esm 3.0.0 removed operators, so a 1.x or 2.x source is relabelled
+only when it uses none of them; one that does is refused with ``removed_op``,
+naming the codemod for a 2.0.0 removal (``test_migration_codemod.py``) and
+MIGRATION.md for a 3.0.0 one (``grad``, ``div``, ``laplacian``; no codemod).
 
 Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
 declared variable types collapse to two, an observed variable's ``expression``
@@ -65,15 +66,17 @@ class TestSupportedMigrationTargets:
         """The clean break is uncrossable, whatever the 0.x version."""
         assert supported_migration_targets(source) == []
 
-    @pytest.mark.parametrize("source", ["1.0.0", "1.3.0", "1.99.0", SCHEMA_VERSION])
-    def test_1x_and_additive_line_sources_bump_to_current(self, source):
+    @pytest.mark.parametrize(
+        "source", ["1.0.0", "1.3.0", "1.99.0", "2.0.0", "2.3.0", "2.99.0", SCHEMA_VERSION]
+    )
+    def test_1x_2x_and_additive_line_sources_bump_to_current(self, source):
         assert supported_migration_targets(source) == [SCHEMA_VERSION]
 
     def test_version_newer_than_the_current_schema(self):
         """Same major, but beyond the current additive ceiling."""
-        assert supported_migration_targets("2.99.0") == []
+        assert supported_migration_targets("3.99.0") == []
 
-    @pytest.mark.parametrize("source", ["3.0.0", "12.34.56"])
+    @pytest.mark.parametrize("source", ["4.0.0", "12.34.56"])
     def test_higher_major(self, source):
         assert supported_migration_targets(source) == []
 
@@ -125,6 +128,8 @@ class TestCanMigrate:
             "2.0.0",
             "2.99.0",
             "3.0.0",
+            "3.99.0",
+            "4.0.0",
             "bogus",
             SCHEMA_VERSION,
         ]
@@ -170,7 +175,7 @@ class TestMigrate:
 
     @pytest.mark.parametrize(
         ("source_version", "target"),
-        [("1.0.0", "3.0.0"), ("0.1.0", SCHEMA_VERSION), ("1.0.0", "1.0.1")],
+        [("1.0.0", "4.0.0"), ("2.3.0", "2.3.0"), ("0.1.0", SCHEMA_VERSION), ("1.0.0", "1.0.1")],
     )
     def test_unsupported_pair_raises(self, baseline_file, source_version, target):
         with pytest.raises(MigrationError):
@@ -192,6 +197,34 @@ class TestMigrate:
             assert "`fn`" in str(e.value)
         finally:
             reaction.rate_constant = rate
+        assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
+
+    @pytest.mark.parametrize("op", ["grad", "div", "laplacian"])
+    @pytest.mark.parametrize("version", ["1.2.0", "2.3.0"])
+    def test_refuses_a_file_that_uses_an_op_removed_at_3_0_0(self, baseline_file, op, version):
+        """A 1.x or 2.x document that uses `grad`, `div` or `laplacian` cannot be
+        relabelled: `removed_op`, pointing at spatial `D` and MIGRATION.md, NOT
+        at the 2.0.0 codemod (there is no codemod for the 3.0.0 removals)."""
+        from earthsci_ast.esm_types import ExprNode
+
+        source = _at_version(baseline_file, version)
+        reaction = next(iter(source.reaction_systems.values())).reactions[0]
+        rate = reaction.rate_constant
+        reaction.rate_constant = ExprNode(op=op, args=["T"], dim="x")
+        try:
+            with pytest.raises(MigrationError, match="removed at esm 3.0.0") as e:
+                migrate(source, SCHEMA_VERSION)
+            assert e.value.code == "removed_op"
+            assert f"`{op}`" in str(e.value)
+            assert 'MIGRATION.md, "esm 3.0.0"' in str(e.value)
+            assert "D(f, wrt: x)" in str(e.value)
+            assert "earthsci_ast.migrate" not in str(e.value)
+        finally:
+            reaction.rate_constant = rate
+        assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
+
+    def test_2x_file_relabels_to_current(self, baseline_file):
+        source = _at_version(baseline_file, "2.3.0")
         assert migrate(source, SCHEMA_VERSION).version == SCHEMA_VERSION
 
     def test_missing_version_field_raises(self, baseline_file):
@@ -287,7 +320,7 @@ class TestSharedFixtures:
             "version_0_1_0_pre_break.esm",
             "version_0_0_1_pre_break.esm",
             "version_0_9_0_last_pre_break.esm",
-            "version_2_5_1_major_rejection.esm",
+            "version_4_0_0_major_rejection.esm",
             "version_12_34_56_large_numbers.esm",
         ],
     )

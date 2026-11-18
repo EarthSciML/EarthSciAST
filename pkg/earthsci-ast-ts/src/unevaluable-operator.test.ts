@@ -84,7 +84,7 @@ describe('unevaluable_operator versus unlowered_operator', () => {
     expect(err?.code).toBe('unevaluable_operator')
   })
 
-  for (const op of ['grad', 'godunov_hamiltonian']) {
+  for (const op of ['integral', 'godunov_hamiltonian']) {
     it(`${op} (open tier) stays unlowered_operator`, () => {
       const err = refusal(() => evaluateExpression({ op, args: ['x'] } as Expr, x))
       expect(err?.code).toBe('unlowered_operator')
@@ -122,23 +122,23 @@ describe('the up-front walk also carries the unlowered_operator gate (issue #277
   // An op OUTSIDE the §4.2 core is refused even where lazy evaluation would
   // never reach it: an untaken `ifelse` branch, or an `and`/`or` operand past
   // the short-circuit (esm-spec §9.6.3 constraint 6).
-  const grad = { op: 'grad', args: ['p'], dim: 'x' }
+  const spatialD = { op: 'D', args: ['p'], wrt: 'x' }
   const cases: Record<string, Expr> = {
     'ifelse untaken branch': {
       op: 'ifelse',
-      args: [{ op: '>', args: ['u', 100] }, grad, 1],
+      args: [{ op: '>', args: ['u', 100] }, spatialD, 1],
     } as Expr,
-    'and after a false operand': { op: 'and', args: [0, grad] } as Expr,
-    'or after a true operand': { op: 'or', args: [1, grad] } as Expr,
+    'and after a false operand': { op: 'and', args: [0, spatialD] } as Expr,
+    'or after a true operand': { op: 'or', args: [1, spatialD] } as Expr,
   }
   for (const [label, expr] of Object.entries(cases)) {
-    it(`evaluateExpression refuses grad in the ${label}`, () => {
+    it(`evaluateExpression refuses a spatial D in the ${label}`, () => {
       const err = refusal(() => evaluateExpression(expr, bindings))
-      expect(err, 'grad must be refused, not evaluated').toBeDefined()
+      expect(err, 'a spatial D must be refused, not evaluated').toBeDefined()
       expect(err?.code).toBe('unlowered_operator')
-      expect(err?.message).toContain("'grad'")
+      expect(err?.message).toContain("'D'")
     })
-    it(`compileExpression refuses grad in the ${label}`, () => {
+    it(`compileExpression refuses a spatial D in the ${label}`, () => {
       expect(refusal(() => compileExpression(expr))?.code).toBe('unlowered_operator')
     })
   }

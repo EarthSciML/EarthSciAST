@@ -218,6 +218,9 @@ def test_parse_math_refuses_as_a_document_read_does():
         ("k +", "markdown", "parse_error"),
         ("1.0e400 k", "typst", "parse_error"),
         ("\\operatorname{arrayop}(k)", "markdown", "removed_op"),
+        ("\\operatorname{grad}(k)", "markdown", "removed_op"),
+        ("\\operatorname{div}(k)", "markdown", "removed_op"),
+        ('op("laplacian")(k)', "typst", "removed_op"),
         (deep, "typst", "parse_error"),
     ):
         with pytest.raises(ParseError) as info:

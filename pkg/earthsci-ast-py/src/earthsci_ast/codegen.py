@@ -323,7 +323,7 @@ def _format_reaction(reaction: dict[str, Any]) -> str:
 # identical renderers. Ops whose rendered *shape* is the same across targets
 # (variadic infix joins, unary minus/negation, the generic call fallback) read
 # their spelling from these tables; the handful whose shape genuinely differs
-# (D, grad, ifelse) keep an explicit per-target branch in ``_format_expr_node``.
+# (D, ifelse) keep an explicit per-target branch in ``_format_expr_node``.
 # ---------------------------------------------------------------------------
 
 # Variadic infix operators: op -> per-target join separator.
@@ -393,12 +393,11 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
             return f"D({r(args[0])})" if args else "D()"
         # D(x,t) → sp.Derivative(x(t), t)
         return f"sp.Derivative({r(args[0])}(t), t)" if args else "sp.Derivative()"
-    # `grad`/`div`/`laplacian`/`curl` are no longer special operators here: they
-    # are open-tier rewrite-target keywords a discretization template lowers to a
-    # stencil before any code-generation. One reaching codegen was never rewritten;
-    # render it via the generic `grad(args)` fallback — an ordinary unregistered
-    # rewrite-target op, treated exactly like a custom user op — rather than
-    # inventing a Differential/Derivative form.
+    # Open-tier rewrite-target ops (`integral`, `curl`, a user op) are not special
+    # operators here: a discretization template lowers them to a stencil before
+    # any code-generation. One reaching codegen was never rewritten; render it via
+    # the generic `op(args)` fallback rather than inventing a Differential/
+    # Derivative form.
     if op == "ifelse":
         if target == "julia":
             return f"ifelse({', '.join(r(arg) for arg in args)})"
@@ -409,8 +408,8 @@ def _format_expr_node(node: dict[str, Any], target: str) -> str:
 
     # For other operators, use function call syntax. This is the correct rendering
     # both for evaluable-core elementary calls (`sin(x)`, `min(a, b)`) and for
-    # open-tier rewrite-target ops — the sugar `grad`/`div`/… and any custom user
-    # op (`godunov_hamiltonian`), which are legitimate document elements a rewrite
+    # open-tier rewrite-target ops — `integral` and any custom user op
+    # (`godunov_hamiltonian`), which are legitimate document elements a rewrite
     # rule lowers before evaluation. No op reaching here is an error, so no warning.
     return f"{op}({', '.join(r(arg) for arg in args)})"
 

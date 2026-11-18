@@ -493,8 +493,8 @@ const (
 
 	// codeDeprecatedRecordsPerSample is the load-time WARNING (not an error)
 	// for a document that writes the deprecated `from.records_per_sample` or
-	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed at esm
-	// 3.0.0). Unexported for the same reason as the codes above: it only ever
+	// `temporal.records_per_sample` (esm-spec §8.3, §8.5.1; removed in a later
+	// major version). Unexported for the same reason as the codes above: it only ever
 	// appears in the text of the stderr warning.
 	codeDeprecatedRecordsPerSample = "deprecated_records_per_sample"
 )
@@ -525,7 +525,7 @@ const (
 const (
 	// CodeUnloweredOperator: evaluation reached a rewrite-target op — one
 	// OUTSIDE the esm-spec §4.2 evaluable core (a spatial or right-hand-side
-	// `D`, `grad`, a user op) — that no rewrite rule eliminated.
+	// `D`, a user op) — that no rewrite rule eliminated.
 	CodeUnloweredOperator = "unlowered_operator"
 	// CodeUnevaluableOperator: evaluation reached an op that IS in the esm-spec
 	// §4.2 evaluable core but that this evaluator has no rule for (esm-spec
@@ -640,7 +640,7 @@ const (
 const DefaultIndepVar = "t"
 
 // operatorPlaceholderVar is the esm-spec §6.4 placeholder an operator-style
-// model uses for the state it operates on ("D(_var, t) ~ -u*grad(_var)"). When
+// model uses for the state it operates on ("D(_var, t) ~ -u*D(_var, wrt: x)"). When
 // the model is coupled via `operator_compose` it is substituted with each
 // matching state variable of the target system, so it is a legal reference — in
 // equations and in event affects alike — and never an undeclared variable.

@@ -951,11 +951,11 @@ class TestVersionConstraintValidation:
             jsonschema.validate(invalid_data, schema)
 
         # Incompatible major version - rejected by library. The library reads
-        # majors 1 and 2; the 1.0.0 break has NO deprecation path, so a 0.x
-        # document is rejected exactly as a future 3.x one is.
+        # majors 1, 2 and 3; the 1.0.0 break has NO deprecation path, so a 0.x
+        # document is rejected exactly as a future 4.x one is.
         from earthsci_ast.parse import UnsupportedVersionError
 
-        for version in ("0.9.0", "3.0.0"):
+        for version in ("0.9.0", "4.0.0"):
             invalid_data = {
                 "esm": version,
                 "metadata": {"name": "Test"},

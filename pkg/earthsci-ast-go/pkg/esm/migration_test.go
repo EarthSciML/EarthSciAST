@@ -88,8 +88,8 @@ func TestSchemaVersionMatchesMatrix(t *testing.T) {
 // version-compatibility corpus through SupportedMigrationTargets / CanMigrate /
 // Migrate and asserts the contract the matrix states:
 //
-//   - a fixture on the additive line (2.0.0 … current) or the 1.x line
-//     (1.0.0 … 1.3.0) migrates to SchemaVersion by a marker bump;
+//   - a fixture on the additive line (3.0.0 … current), the 2.x line
+//     (2.0.0 … 2.3.0) or the 1.x line (1.0.0 … 1.3.0) migrates to SchemaVersion by a marker bump;
 //   - every other fixture — the 0.x pre-break documents, the future majors,
 //     and the malformed markers — has NO supported target, and Migrate refuses.
 func TestMigrationOverSharedCorpus(t *testing.T) {
@@ -408,9 +408,74 @@ func TestMigrationRefusesRemovedOps(t *testing.T) {
 					t.Errorf("message %q does not name %s", me.Message, want)
 				}
 			}
-			if op != "arrayop" && !strings.Contains(me.Message, migrateCommand) {
-				t.Errorf("message %q does not name the codemod", me.Message)
+			switch removedOps[op] {
+			case "2.0.0":
+				if !strings.Contains(me.Message, migrateCommand) {
+					t.Errorf("message %q does not name the codemod", me.Message)
+				}
+			case "3.0.0":
+				if strings.Contains(me.Message, migrateCommand) || !strings.Contains(me.Message, "esm 3.0.0") {
+					t.Errorf("message %q must point at MIGRATION.md \"esm 3.0.0\", not the codemod", me.Message)
+				}
 			}
 		})
+	}
+}
+
+// v3 is the 3.0.0 schema version: the library implements major 3 and relabels
+// majors 1 and 2.
+var v3 = semVer{Major: 3}
+
+// Under a 3.x library a 1.x or 2.x document that uses no removed construct is
+// relabelled to current; a minor past the last release of its major (1.3.0,
+// 2.3.0), a 0.x document and a future major are not offered.
+func TestMigrationRelabels1xAnd2xTo3(t *testing.T) {
+	for _, v := range []string{"1.0.0", "1.3.0", "2.0.0", "2.1.0", "2.3.0", "3.0.0"} {
+		if got := migrationTargets(v, v3, "3.0.0"); len(got) != 1 || got[0] != "3.0.0" {
+			t.Errorf("migrationTargets(%q) = %v, want [3.0.0]", v, got)
+		}
+	}
+	for _, v := range []string{"0.9.0", "1.4.0", "1.10.0", "2.3.1", "2.5.1", "3.0.1", "4.0.0"} {
+		if got := migrationTargets(v, v3, "3.0.0"); len(got) != 0 {
+			t.Errorf("migrationTargets(%q) = %v, want []", v, got)
+		}
+	}
+	file := &ESMFile{
+		ESM:      "2.3.0",
+		Metadata: Metadata{Name: "m"},
+		Models: map[string]Model{"m": {
+			Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+			Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: "D", Args: []any{"x"}, Wrt: strPtr("y")}}},
+		}},
+	}
+	got, err := migrateAgainst(file, "3.0.0", v3, "3.0.0")
+	if err != nil {
+		t.Fatalf("relabel: %v", err)
+	}
+	if got.ESM != "3.0.0" || file.ESM != "2.3.0" {
+		t.Fatalf("esm = %q (input %q), want 3.0.0 (input 2.3.0)", got.ESM, file.ESM)
+	}
+}
+
+// A 2.x document that uses `grad`, `div` or `laplacian` is refused with
+// `removed_op`, pointing at MIGRATION.md "esm 3.0.0" and not at the codemod.
+func TestMigrationRefuses3xRemovedOpsFrom2x(t *testing.T) {
+	for _, op := range []string{"grad", "div", "laplacian"} {
+		file := &ESMFile{
+			ESM:      "2.3.0",
+			Metadata: Metadata{Name: "m"},
+			Models: map[string]Model{"m": {
+				Variables: map[string]ModelVariable{"x": {Type: VarTypeUnknown}},
+				Equations: []Equation{{LHS: "x", RHS: ExprNode{Op: op, Args: []any{"x"}}}},
+			}},
+		}
+		_, err := migrateAgainst(file, "3.0.0", v3, "3.0.0")
+		var me *MigrationError
+		if !errors.As(err, &me) || me.Code != "removed_op" {
+			t.Fatalf("%s: err = %v, want a MigrationError with code removed_op", op, err)
+		}
+		if strings.Contains(me.Message, migrateCommand) || !strings.Contains(me.Message, "esm 3.0.0") {
+			t.Errorf("%s: message %q must point at MIGRATION.md \"esm 3.0.0\", not the codemod", op, me.Message)
+		}
 	}
 }

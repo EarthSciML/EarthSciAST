@@ -143,9 +143,7 @@ def __getattr__(name: str):  # PEP 562: lazy module-level attribute.
 # supplies exactly the ops that carry a structural arity check — array /
 # relational ops (index-set-driven shapes), spelling aliases, boolean literals,
 # and `apply_expression_template` (which carries no `args`) are intentionally
-# absent, exactly as before. Notably `grad`/
-# `div` are (1, 2): they accept an optional per-field boundary metavariable bound
-# by a two-arg `grad(f, inflow, dim)` expression-template `match` (esm-spec §9.6).
+# absent, exactly as before.
 _OPERATOR_ARITY = op_registry.arity_bounds_map()
 
 # Built-in symbols always available in expressions.
@@ -247,7 +245,7 @@ def _expression_bound_symbols(expr) -> set[str]:
 
     Explicit binders live in ``ranges`` (dict keys), ``output_idx`` (string
     entries), ``wrt`` (derivative variable) and ``var`` (integral variable).
-    A ``makearray`` stencil lowered from a grad/div template, however, carries
+    A ``makearray`` stencil lowered from a spatial-``D`` template, however, carries
     NO explicit binder field once round-tripped — its loop symbols (``i``/``j``)
     appear only as the COORDINATE arguments of the ``index`` ops in its region
     bodies (``index(field, i + 1, j)``). Those coordinate symbols are therefore
@@ -1791,7 +1789,7 @@ def _check_variable_references(
                 # variable of the target system at operator_compose time. It is
                 # never a declared symbol, so it is a valid reference at ANY
                 # nesting depth — not merely in the top-level `D(_var)` position
-                # but also nested, as in the advection idiom `grad(_var, dim)`.
+                # but also nested, as in the advection idiom `D(_var, wrt: x)`.
                 if ref == "_var":
                     continue
                 # A symbol BOUND by an aggregate/makearray/integral in this

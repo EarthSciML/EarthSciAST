@@ -2761,7 +2761,7 @@ class UnitValidator:
             )
 
         # Structural / array / query / rewrite-target ops (index, aggregate,
-        # const, makearray, grad, ...) carry no dimensional
+        # const, makearray, integral, ...) carry no dimensional
         # rule here. Report UNKNOWN, not dimensionless.
         return None
 

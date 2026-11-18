@@ -33,9 +33,6 @@ export type UnknownClass = 'ode_state' | 'observed' | 'algebraic'
 /** The MTK system type a model maps to. */
 export type SystemKind = 'ode' | 'nonlinear' | 'sde' | 'pde'
 
-/** Sugar spellings of a spatial differential operator (esm-spec §4.2). */
-const SPATIAL_SUGAR_OPS = new Set(['grad', 'div', 'laplacian'])
-
 function isExpressionNode(e: unknown): e is ExpressionNode {
   return typeof e === 'object' && e !== null && typeof (e as { op?: unknown }).op === 'string'
 }
@@ -132,14 +129,12 @@ function hasTimeDerivative(model: Model): boolean {
 
 /**
  * True when an expression contains a SPATIAL differential operator: a `D` whose
- * `wrt` is present and is not `t`, or one of the `grad` / `div` / `laplacian`
- * sugar ops.
+ * `wrt` is present and is not `t`.
  */
 function containsSpatialDerivative(expr: Expression): boolean {
   if (!isExpressionNode(expr)) return false
 
   if (expr.op === 'D' && expr.wrt !== undefined && expr.wrt !== 't') return true
-  if (SPATIAL_SUGAR_OPS.has(expr.op)) return true
 
   for (const arg of expr.args ?? []) {
     if (containsSpatialDerivative(arg)) return true
@@ -337,7 +332,7 @@ export function constantParameters(model: Model): string[] {
  *   4. `ode`       — otherwise.
  *
  * Two orderings that look equivalent are not. `pde` is tested BEFORE
- * `nonlinear`, so a steady-state PDE (`laplacian(phi) ~ f`, no time derivative)
+ * `nonlinear`, so a steady-state PDE (`D(D(phi, wrt: x), wrt: x) ~ f`, no time derivative)
  * is `pde`. `sde` is tested BEFORE `pde`, so a model carrying both a wiener
  * parameter and a spatial derivative is `sde` — not because it is not spatial,
  * but because there is no SPDESystem constructor to select.
