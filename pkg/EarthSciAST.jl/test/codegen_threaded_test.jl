@@ -255,7 +255,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test get(ESM._THREAD_TALLY, :cg_serial_shared_outs, 0) == 1
             tc2 = ESM._SecTCache(1_000_000, true)
             @test ESM._sec_prep_threads!(tc2).state == 1
-            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._thread_min_work())
+            @test tc2.nchunks == min(Threads.nthreads(), 1_000_000 ÷ ESM._tuning_from_env().thread_min_work)
         end
 
         @testset "contraction verdict weighs fold terms, chunks never exceed cells" begin
@@ -274,7 +274,7 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]]), body) ==
                 2 + 5 * 3
             # 600 cells alone stay serial at the floor; their fold terms do not.
-            minw = ESM._thread_min_work()
+            minw = ESM._tuning_from_env().thread_min_work
             @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
             w3 = ESM._ac_work(600, ESM._ACFold([r], :+, 0.0, [1:1:20]), body)
             tc3 = ESM._SecTCache(600, true, w3)
