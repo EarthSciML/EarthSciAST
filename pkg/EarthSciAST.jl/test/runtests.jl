@@ -66,6 +66,7 @@ const GROUPS = [
         "data_source_unbound_conformance_test.jl",
         "records_per_sample_conformance_test.jl",
         "pointwise_lift_axis_names_test.jl",
+        "pointwise_lift_through_references_test.jl",
         "coupling_imports_test.jl",
         "flattened_to_esm_test.jl",
         "shape_promotion_test.jl",

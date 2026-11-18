@@ -53,6 +53,11 @@ end
 
 _iset(n) = ESM.IndexSet("interval"; size = n)
 
+# The lift reads each operator `makearray` with the frame it sits in (`nothing`
+# at the top level, outside any template reference).
+_mas(ma) = Tuple{ESM.OpExpr, Any}[(ma, nothing)]
+const _W = ESM._RefWalk(nothing)
+
 @testset "pointwise lift axis names (§10.5)" begin
 
     # A deliberately hostile size table: EVERY one of the three cell axes
@@ -84,12 +89,12 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
     size_to_names = ESM._index_sets_by_size(index_sets)
 
     @testset "names are propagated, staggered operands self-exclude" begin
-        named = ESM._lift_axis_names([ma], loops, ext, var_shapes, index_sets, nothing)
+        named = ESM._lift_axis_names(_mas(ma), loops, ext, var_shapes, index_sets, _W)
         @test named == ["lon", "lat", "lev"]
 
         gaxes, ranges = ESM._pointwise_lift_axes(
             ma, loops, size_to_names, "sp", 3;
-            mas = [ma], var_shapes = var_shapes, index_sets = index_sets, reg = nothing,
+            mas = _mas(ma), var_shapes = var_shapes, index_sets = index_sets, walk = _W,
             registry = copy(index_sets)
         )
         @test gaxes == ["lon", "lat", "lev"]
@@ -105,10 +110,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # its dimension's extent, so the filter rejects all of them rather than
         # naming a face axis.
         only_faces = _mk_operator(ext, ["Mx" => loops])
-        named = ESM._lift_axis_names(
-            [only_faces], loops, ext, var_shapes,
-            index_sets, nothing
-        )
+        named = ESM._lift_axis_names(_mas(only_faces), loops, ext, var_shapes,
+            index_sets, _W)
         @test named[1] === nothing            # lon_nodes is 7, the extent is 6
         @test named[2] == "lat"               # Mx's OTHER positions are cell-centred
         @test named[3] == "lev"
@@ -122,7 +125,7 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
             Dict("ring" => ["tgt.ring_x", "lat", "lev"])
         )
         ma2 = _mk_operator(ext, ["dp" => loops, "ring" => loops])
-        named = ESM._lift_axis_names([ma2], loops, ext, shapes2, index_sets, nothing)
+        named = ESM._lift_axis_names(_mas(ma2), loops, ext, shapes2, index_sets, _W)
         @test named[1] === nothing
         @test named[2] == "lat"
         @test named[3] == "lev"
@@ -130,7 +133,7 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # dimension while naming the other two.
         gaxes, _ = ESM._pointwise_lift_axes(
             ma2, loops, size_to_names, "sp", 3;
-            mas = [ma2], var_shapes = shapes2, index_sets = index_sets, reg = nothing,
+            mas = _mas(ma2), var_shapes = shapes2, index_sets = index_sets, walk = _W,
             registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "lat", "lev"]
@@ -143,8 +146,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         bare = _mk_operator(ext, Pair[])
         gaxes, _ = ESM._pointwise_lift_axes(
             bare, loops, size_to_names, "sp", 3;
-            mas = [bare], var_shapes = Dict{String, Vector{String}}(),
-            index_sets = index_sets, reg = nothing, registry = copy(index_sets)
+            mas = _mas(bare), var_shapes = Dict{String, Vector{String}}(),
+            index_sets = index_sets, walk = _W, registry = copy(index_sets)
         )
         @test gaxes == ["_liftdim1_6", "_liftdim2_6", "_liftdim3_8"]
     end
@@ -155,10 +158,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         # alternative is a silent wrong axis.)
         diag_loops = ["i", "i", "k"]
         ma3 = _mk_operator(ext, ["dp" => diag_loops])
-        named = ESM._lift_axis_names(
-            [ma3], diag_loops, ext, var_shapes,
-            index_sets, nothing
-        )
+        named = ESM._lift_axis_names(_mas(ma3), diag_loops, ext, var_shapes,
+            index_sets, _W)
         @test named[1] === nothing
         @test named[2] === nothing
         @test named[3] == "lev"
@@ -173,8 +174,8 @@ _iset(n) = ESM.IndexSet("interval"; size = n)
         reg = copy(index_sets)
         lift_axes(registry) = ESM._pointwise_lift_axes(
             bare, loops, size_to_names, "sp", 3;
-            mas = [bare], var_shapes = Dict{String, Vector{String}}(),
-            index_sets = index_sets, reg = nothing, registry = registry
+            mas = _mas(bare), var_shapes = Dict{String, Vector{String}}(),
+            index_sets = index_sets, walk = _W, registry = registry
         )
         gaxes, ranges = lift_axes(reg)
         for (d, l) in enumerate(loops)
