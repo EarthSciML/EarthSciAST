@@ -4227,6 +4227,21 @@
     "is_valid": false,
     "notes": "Rejected at LOAD with `removed_op`: `\"op\": \"aggregate\"`, the deprecated alias of `faq`, was removed at esm 2.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
   },
+  "removed_op_grad.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `grad` op was removed at esm 3.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, which still loads, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_div.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `div` op was removed at esm 3.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, which still loads, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
+  "removed_op_laplacian.esm": {
+    "parse_error": true,
+    "is_valid": false,
+    "notes": "Rejected at LOAD with `removed_op`: the `laplacian` op was removed at esm 3.0.0 (esm-spec \u00a74.2 \"Removed ops\", CONFORMANCE_SPEC \u00a77 `removed_op`). The document declares esm 2.3.0, which still loads, so the refusal comes from the op alone, whatever version a document declares. The check is BY NAME at the wire boundary, ahead of the version gates and schema validation, so there is no (keyword, path) or (code, path) tuple to pin; the `parse_error` category's contract is exactly 'must be rejected at load', as for `arrayop_op_removed.esm`."
+  },
   "recurrence_group_not_candidate_bare_only.esm": {
     "schema_errors": [],
     "structural_errors": [
