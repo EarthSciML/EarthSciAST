@@ -1325,10 +1325,7 @@ const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
 # tier compiles the equation and therefore whether the compiler can express it.
 _contraction_loop_enabled() = _compiler_plan_now().contraction_loop
 # The build reads it once, when it starts (`_BuildContext`, compiler.jl).
-_contraction_loop_min() = (
-    c = _build_ctx();
-    c === nothing ? _env_floor("ESS_CONTRACTION_LOOP_MIN", 8) : c.contraction_loop_min
-)
+_contraction_loop_min() = _tuning_now().contraction_loop_min
 
 # Resolve `body` with each of `names` replaced by a fresh reserved loop-var
 # name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
@@ -1424,10 +1421,7 @@ end
 # between this tier and the per-cell build.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
-_array_contraction_min() = (
-    c = _build_ctx();
-    c === nothing ? _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024) : c.array_contraction_min
-)
+_array_contraction_min() = _tuning_now().array_contraction_min
 
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:

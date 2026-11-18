@@ -366,7 +366,8 @@ end
 # is serial; this one is decided for every call, not measured.
 const _SECT_SERIAL_WORKSPACE = -3
 _ws_fresh(x::_SecTCache, c) = c.memo[x] = _SecTCache(
-    _SECT_SERIAL_WORKSPACE, x.ncells, x.disjoint, x.work, 1, nothing, nothing, x.rmw
+    _SECT_SERIAL_WORKSPACE, x.ncells, x.disjoint, x.work, 1, nothing, nothing, x.rmw,
+    x.min_work
 )
 function _ws_fresh(x::_ACMask, c)
     y = typeof(x)(_inst(x.f, c), _CSE_INVALID, 0)

@@ -26,9 +26,9 @@
 # slices, preallocated scratch, fused in-place broadcasts, in-place semiring
 # folds, explicit `du` scatter) is a property of the kernels themselves, so the
 # testsets below pin the serial path and keep asserting EXACTLY 0 — via
-# `ESS_THREADS_MIN_WORK`, which `_sec_prep_threads!` reads ONCE per section
-# and caches. A gate re-read on EVERY call could not be used here at all: the
-# `get(ENV, …)` itself allocates a String per call once the variable is set.
+# `ESS_THREADS_MIN_WORK`, which a build reads once into its tuning and each
+# section keeps. A gate re-read on EVERY call could not be used here at all:
+# the `get(ENV, …)` itself allocates a String per call once the variable is set.
 #
 # The threaded dispatch is then covered on its own terms by the final testset.
 
@@ -181,9 +181,8 @@ end
 
 # Force the SERIAL path for every exact-zero measurement below, so the numbers
 # are a property of the kernels rather than of whichever packages a previously
-# included test file happened to load. `_sec_prep_threads!` reads this once per
-# section and caches the verdict, so it costs no per-call allocation of its own
-# (see the header note).
+# included test file happened to load. A build reads this once and its sections
+# keep it, so it costs no per-call allocation of its own (see the header note).
 const _SERIAL_PIN = ("ESS_THREADS_MIN_WORK" => string(typemax(Int)),)
 
 # Set in the two-thread child the threaded testset below launches from a
@@ -278,7 +277,7 @@ end  # if !_TWALLOC_CHILD
         end
     else
         # Small min-cells so every N below genuinely chunks; read once per
-        # section and cached, so it adds no per-call allocation.
+        # build, so it adds no per-call allocation.
         withenv("ESS_THREADS_MIN_WORK" => "256") do
             bytes = map((1024, 4096, 16384)) do N
                 ics = Dict("M.u[$k]" => sin(0.3k) + 0.1k for k in 1:N)

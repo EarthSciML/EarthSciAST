@@ -58,8 +58,7 @@ _codegen_disabled() = !_compiler_plan_now().codegen
 # runaway. It is a REFUSAL BOUNDARY under `native`: a kernel past it is a
 # refused rule, never a quiet demotion to the per-cell runner. Override with
 # ESS_CODEGEN_NODE_BUDGET.
-_codegen_node_budget() =
-    something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
+_codegen_node_budget() = _tuning_now().node_budget
 
 # Emitted-node size of a tree: a node shared by several parents is counted
 # once per parent, as the emitter writes it once per use.
@@ -1931,8 +1930,7 @@ _node_work(root::_Node) =
 # ESS_CODEGEN_FN_NODE_CAP; 0 disables splitting (one function, one flat body).
 # Every supported Julia can split (`_cg_split_transport` picks the transport),
 # so an oversized body is compiled rather than declined, on every version.
-_codegen_fn_node_cap() =
-    something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
+_codegen_fn_node_cap() = _tuning_now().fn_node_cap
 
 # Whether this Julia can carry an emitted sub-function as an INNER DEFINITION —
 # a `function` written inside the emitted body. Julia < 1.12 cannot, and takes
@@ -1997,11 +1995,12 @@ const _CG_FNS = :_cgfns
 # which its sub-functions are carried by value. A count of expression nodes, so
 # a build's transport is a function of the document alone. Chosen from first-call
 # measurements: every split section of the test suite sits well under it, and
-# the reseact transport section sits well over it (see the PR that set it).
-# A `Ref` so a test can lower it to reach the size-based choice on a small body.
+# the reseact transport section sits well over it. A `Ref`, read into each
+# build's `_Tuning`, so a test can lower it to reach the size-based choice on a
+# small body.
 const _CG_BY_VALUE_MIN_NODES = Ref(100_000)
 
-_cg_split_transport_override() = get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", "")
+_cg_split_transport_override() = _tuning_now().split_transport
 
 # The transport the Julia version or the override fixes regardless of size:
 # `true` (by value), `false` (inner definitions), or `nothing` (decide by size).
@@ -2017,7 +2016,7 @@ end
 # sub-functions by value (see the TRANSPORT note above).
 function _cg_carry_by_value(nodes::Integer)
     fixed = _cg_fixed_transport()
-    return fixed === nothing ? nodes > _CG_BY_VALUE_MIN_NODES[] : fixed
+    return fixed === nothing ? nodes > _tuning_now().by_value_min_nodes : fixed
 end
 
 # The same choice for the generated function `ex`. Its size is counted only
@@ -2025,7 +2024,7 @@ end
 function _cg_carry_by_value(ex::Expr)
     fixed = _cg_fixed_transport()
     fixed === nothing || return fixed
-    lim = _CG_BY_VALUE_MIN_NODES[]
+    lim = _tuning_now().by_value_min_nodes
     return _cg_expr_size_upto(ex, lim) > lim
 end
 

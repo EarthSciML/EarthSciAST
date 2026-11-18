@@ -164,8 +164,8 @@ _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(d
 
 # The serial oracle: the SAME program built with the per-chunk work floor
 # above the whole section, which is what keeps a section off the threaded
-# route. It has to be a fresh build — the verdict caches on a section's first
-# call, so moving the floor afterwards changes nothing.
+# route. It has to be a fresh build: a section keeps the floor of the build
+# that made it.
 _cgt_serial(model, ics; env...) =
     withenv("ESS_THREADS_MIN_WORK" => string(typemax(Int))) do
     _cgt_build(model, ics; env...)
