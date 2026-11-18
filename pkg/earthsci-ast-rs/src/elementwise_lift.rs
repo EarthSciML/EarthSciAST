@@ -28,6 +28,7 @@
 //! read an author wrote by hand in a reduction body or a subscript is never
 //! given this meaning.
 
+use crate::binders::Binders;
 use crate::types::{Expr, ExpressionNode, Model, RangeSpec};
 use std::collections::{HashMap, HashSet};
 
@@ -329,7 +330,9 @@ fn walk<'a>(expr: &'a Expr, bound: &HashSet<String>, inside: bool, f: &mut dyn F
                         walk(b, &inner, true, f);
                     }
                 }
-                "const" if inside && node.value.as_ref().is_some_and(|v| v.is_array()) => {
+                "const"
+                    if inside && node.value.as_ref().is_some_and(crate::ConstValue::is_array) =>
+                {
                     f(Seen::Anonymous { node });
                 }
                 "reshape" if inside => f(Seen::Anonymous { node }),
@@ -377,9 +380,9 @@ fn refuse_anonymous_arrays(rhs: &Expr, lhs: &Expr) -> Result<(), String> {
 /// `bound` plus the loop symbols a reduction `faq` binds.
 fn reduction_bound(node: &ExpressionNode, bound: &HashSet<String>) -> HashSet<String> {
     let mut inner = bound.clone();
-    if let Some(r) = &node.ranges {
-        inner.extend(r.keys().cloned());
-    }
+    node.for_each_binder(Binders::RANGES, |n| {
+        inner.insert(n.to_string());
+    });
     inner
 }
 
@@ -437,19 +440,16 @@ fn names_in(expr: &Expr, out: &mut HashSet<String>) {
         }
         Expr::Number(_) | Expr::Integer(_) => {}
         Expr::Operator(node) => {
-            for name in [&node.int_var, &node.wrt, &node.dim].into_iter().flatten() {
+            node.for_each_binder(Binders::SCOPE, |n| {
+                out.insert(n.to_string());
+            });
+            for name in [&node.wrt, &node.dim].into_iter().flatten() {
                 out.insert(name.clone());
             }
-            if let Some(r) = &node.ranges {
-                for (k, spec) in r {
-                    out.insert(k.clone());
-                    if let RangeSpec::IndexSetRef { of: Some(of), .. } = spec {
-                        out.extend(of.iter().cloned());
-                    }
+            for spec in node.ranges.iter().flat_map(|r| r.values()) {
+                if let RangeSpec::IndexSetRef { of: Some(of), .. } = spec {
+                    out.extend(of.iter().cloned());
                 }
-            }
-            if let Some(o) = &node.output_idx {
-                out.extend(o.iter().cloned());
             }
             node.for_each_child(&mut |c| names_in(c, out));
         }

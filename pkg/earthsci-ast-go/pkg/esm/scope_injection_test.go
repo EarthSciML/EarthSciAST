@@ -163,6 +163,45 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	}
 }
 
+// esm-spec §4.7 / §9.7.10 form A: the edge's injected import ref is written by
+// the mounting document, so it resolves against THAT document's directory, at
+// both mount forms. The leaf sits in leaves/, where the injected relative ref
+// names nothing.
+func TestScopeInjection_FormA_RefResolvesAgainstTheMountingDirectory(t *testing.T) {
+	dir := tiConfDir(t, "inject_mounting_directory")
+	for _, tc := range []struct {
+		file string
+		path []string
+	}{
+		{"subsystem_form.esm", []string{"Assembly", "subsystems", "Runoff"}},
+		{"toplevel_form.esm", []string{"Runoff"}},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			f, err := LoadPath(filepath.Join(dir, tc.file))
+			if err != nil {
+				t.Fatalf("the injected library resolves beside the mounting document: %v", err)
+			}
+			text, err := ToJSON(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(text), &doc); err != nil {
+				t.Fatal(err)
+			}
+			comp := doc["models"].(map[string]any)
+			for _, seg := range tc.path {
+				comp = comp[seg].(map[string]any)
+			}
+			rhs := comp["equations"].([]any)[0].(map[string]any)["rhs"]
+			args := siNodeArgs(rhs)
+			if len(args) != 2 || siNodeOp(args[1]) != "makearray" {
+				t.Errorf("mounted leaf lon-derivative not lowered by the injected rule: %v", rhs)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Form B — coupling-entry injection (§10.8 / §9.7.10)
 // ---------------------------------------------------------------------------

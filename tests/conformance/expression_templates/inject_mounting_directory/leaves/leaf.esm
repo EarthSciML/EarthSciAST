@@ -1,0 +1,57 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "advection_leaf",
+    "description": "The discretization-agnostic leaf of inject_subsystem_ref/leaf.esm, kept in a subdirectory of the documents that mount it so that the library they inject is NOT beside it. An injected `expression_template_imports` ref is resolved against the mounting document's directory (esm-spec §4.7, §9.7.10), so resolving it against this file's directory would not find the library."
+  },
+  "models": {
+    "Advection": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "kg/m^3",
+          "shape": [
+            "lon",
+            "lat"
+          ],
+          "description": "tracer"
+        },
+        "u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 5.5,
+          "description": "zonal wind"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "c"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "u"
+                ]
+              },
+              {
+                "op": "D",
+                "args": [
+                  "c"
+                ],
+                "wrt": "lon"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

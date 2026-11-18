@@ -6,10 +6,10 @@
 use earthsci_ast::*;
 use std::path::PathBuf;
 
+use crate::common;
+
 fn corpus(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests")
-        .join(rel)
+    common::repo_tests_dir().join(rel)
 }
 
 fn findings(rel: &str) -> (bool, Vec<(String, String)>) {

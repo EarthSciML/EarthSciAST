@@ -10,7 +10,7 @@
 //! A memo keyed on too little is a SILENT WRONG ANSWER, so this file is the
 //! invalidation suite, and it works two ways at once:
 //!
-//! 1. **By count.** The `build_providers` FACTORY is called exactly once per
+//! 1. **By count.** The provider FACTORY is called exactly once per
 //!    BUILD (it used to be once per test, which is precisely what the memo
 //!    changes). A counting factory therefore reports the number of builds
 //!    directly, so a key that fails to invalidate is visible as a count that is
@@ -22,13 +22,11 @@
 //! `BuildKey::of` in `src/inline_tests.rs` and the matching
 //! `rebuilds_when_*` test fails on both counts.
 
-use earthsci_ast::{
-    AssertionResult, BuildProviderFactory, SolveOptions, load_string, run_inline_tests_filtered,
-    run_inline_tests_with_base_dir, run_inline_tests_with_providers,
-};
+use earthsci_ast::{AssertionResult, BuildProviderFactory, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use serde_json::{Value, json};
-use std::cell::Cell;
-use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn opts() -> SolveOptions {
     SolveOptions {
@@ -72,17 +70,26 @@ fn test_entry(id: &str, start: f64, end: f64, at: f64, expected: f64) -> Value {
 /// number of times the factory was called, i.e. the number of BUILDS.
 fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<AssertionResult>, usize) {
     let file = load_string(&file_json.to_string()).expect("document loads");
-    let builds = Cell::new(0usize);
+    let builds = Arc::new(AtomicUsize::new(0));
     // An EMPTY provider set: this document reads no `data_sources`, and the
     // factory is here to be counted, not to feed anything. It still puts the
     // runner on the with-providers path, which is the path every real
     // invocation of `esm test` takes.
-    let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
-        builds.set(builds.get() + 1);
+    let counter = Arc::clone(&builds);
+    let make: Arc<BuildProviderFactory<'static>> = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
         Ok(Vec::new())
     });
-    let results = run_inline_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
-    (results, builds.get())
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            solve: opts(),
+            test_filter: filter.map(str::to_string),
+            providers: Some(make),
+            ..Default::default()
+        },
+    );
+    (results, builds.load(Ordering::Relaxed))
 }
 
 fn actual(results: &[AssertionResult], id: &str) -> f64 {
@@ -260,7 +267,14 @@ fn rebuilds_when_expression_template_imports_differ() {
         let base = dir.path().join("model.esm");
         std::fs::write(&base, leaf_doc(tests).to_string()).expect("write model");
         let file = earthsci_ast::load_path(&base).expect("model loads");
-        run_inline_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
+        run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                solve: opts(),
+                base_dir: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+        )
     };
 
     let fwd = run(json!([two.clone(), three.clone()]));
@@ -349,8 +363,7 @@ fn filter_matching_nothing_builds_nothing() {
     assert_eq!(builds, 0);
 }
 
-/// The unfiltered entry points keep their meaning: `run_inline_tests_with_providers`
-/// is `run_inline_tests_filtered(.., None)`.
+/// No `test_filter` runs every test.
 #[test]
 fn unfiltered_entry_point_runs_everything() {
     let file = load_string(
@@ -361,13 +374,20 @@ fn unfiltered_entry_point_runs_everything() {
         .to_string(),
     )
     .expect("document loads");
-    let builds = Cell::new(0usize);
-    let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
-        builds.set(builds.get() + 1);
+    let builds = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&builds);
+    let make: Arc<BuildProviderFactory<'static>> = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
         Ok(Vec::new())
     });
-    let results =
-        run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results = run_inline_tests_with_options(
+        &file,
+        &InlineTestOptions {
+            solve: opts(),
+            providers: Some(make),
+            ..Default::default()
+        },
+    );
     assert_eq!(results.len(), 2);
-    assert_eq!(builds.get(), 1);
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
 }

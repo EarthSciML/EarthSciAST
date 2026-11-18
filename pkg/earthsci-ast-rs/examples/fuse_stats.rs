@@ -1,4 +1,4 @@
-//! Ad-hoc Step 4 diagnostic: fused-group shape statistics for a model.
+//! Fused-group shape statistics and fusion histograms for a model's tape.
 use earthsci_ast::load_path_with_options;
 use std::collections::BTreeMap;
 
@@ -13,6 +13,10 @@ fn main() -> Result<(), String> {
     let file = load_path_with_options(std::path::Path::new(&path), &mp)
         .map_err(|e| format!("load: {e:?}"))?;
     let compiled = earthsci_ast::compile_array(file).map_err(|e| format!("compile: {e:?}"))?;
-    compiled.debug_dump_fuse_stats();
+    let rhs = earthsci_ast::simulate_array::SolveRhs::oracle(
+        std::rc::Rc::new(compiled),
+        &std::collections::HashMap::new(),
+    );
+    eprint!("{}", rhs.fuse_stats());
     Ok(())
 }

@@ -23,36 +23,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::flatten;
-use earthsci_ast::provider::{
-    CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
-};
+use earthsci_ast::provider::{DataProvider, ForcingBuffer, ProviderError, RefreshExecutor};
 use earthsci_ast::simulate_array::{ArrayCompiled, BuildInspection};
 use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
 const FIELD_RTOL: f64 = 1e-9;
 const FIELD_ATOL: f64 = 1e-11;
 const TRAJ_RTOL: f64 = 1e-4;
 const TRAJ_ATOL: f64 = 1e-6;
-
-fn fixture_dir() -> PathBuf {
-    common::repo_fixture("conformance/refresh")
-}
-
-fn read_json(path: &PathBuf) -> Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    let diff = (actual - expected).abs();
-    diff <= abs || diff <= rel * expected.abs().max(actual.abs())
-}
 
 fn f64_vec(v: &Value) -> Vec<f64> {
     v.as_array()
@@ -71,30 +53,28 @@ fn by_anchor(field: &Value, anchor: f64) -> Vec<f64> {
 
 /// An offline provider seeded from the golden's `native_fields`, standing in for
 /// the EarthSciIO provider. A DISCRETE loader has per-anchor fields; a CONST
-/// loader has a single materialize baseline. `out_key` is the namespaced
-/// forcing-buffer key the RHS reads (e.g. `"M.F_src"`).
+/// loader has a single materialize baseline.
 struct GoldenProvider {
-    out_key: String,
     const_value: Option<Vec<f64>>,
     schedule: Vec<(f64, Vec<f64>)>,
 }
 
-fn native(v: &[f64]) -> NativeField {
-    NativeField::new(ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap())
+fn native(v: &[f64]) -> ArrayD<f64> {
+    ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
 }
 
-impl CadenceProvider for GoldenProvider {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
+impl DataProvider for GoldenProvider {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
         let v = self
             .const_value
             .clone()
             .expect("materialize on a provider with no CONST baseline");
-        Ok(HashMap::from([(self.out_key.clone(), native(&v))]))
+        Ok(native(&v))
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         for (anchor, value) in &self.schedule {
             if (*anchor - t).abs() < 1e-9 {
-                return Ok(Some(HashMap::from([(self.out_key.clone(), native(value))])));
+                return Ok(Some(native(value)));
             }
         }
         Ok(None)
@@ -127,7 +107,6 @@ fn build_executor(raw: &Value, golden: &Value) -> RefreshExecutor {
         .map(|k| k.parse::<f64>().unwrap())
         .collect();
     let emis = GoldenProvider {
-        out_key: "M.F_src".to_string(),
         const_value: None,
         schedule: anchors
             .iter()
@@ -135,18 +114,17 @@ fn build_executor(raw: &Value, golden: &Value) -> RefreshExecutor {
             .collect(),
     };
     let factors = GoldenProvider {
-        out_key: "M.scale_src".to_string(),
         const_value: Some(f64_vec(&nf["M.scale_src"]["values"])),
         schedule: Vec::new(),
     };
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = HashMap::from([
+    let providers: HashMap<String, Box<dyn DataProvider>> = HashMap::from([
         (
-            "emis".to_string(),
-            Box::new(emis) as Box<dyn CadenceProvider>,
+            "M.F_src".to_string(),
+            Box::new(emis) as Box<dyn DataProvider>,
         ),
         (
-            "factors".to_string(),
-            Box::new(factors) as Box<dyn CadenceProvider>,
+            "M.scale_src".to_string(),
+            Box::new(factors) as Box<dyn DataProvider>,
         ),
     ]);
     RefreshExecutor::new(&raw["models"]["M"], raw, providers).expect("classify + pair providers")
@@ -183,8 +161,12 @@ fn base_opts() -> SolveOptions {
 /// `M.scale_tgt` that the RHS materializes, via [`BuildInspection`].
 #[test]
 fn refresh_regrid_band_matches_golden() {
-    let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(
+        common::category_dir("refresh").join("fixtures/coupled_refresh_regrid.esm"),
+    );
+    let golden = common::read_json(
+        common::category_dir("refresh").join("golden/coupled_refresh_regrid.json"),
+    );
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
@@ -214,7 +196,7 @@ fn refresh_regrid_band_matches_golden() {
         assert_eq!(got.len(), want.len(), "{name} @ {at}: shape");
         for (g, w) in got.iter().zip(want) {
             assert!(
-                approximately_equal(*g, *w, FIELD_RTOL, FIELD_ATOL),
+                common::close(*g, *w, FIELD_RTOL, FIELD_ATOL),
                 "{name} @ {at}: got {got:?}, want {want:?}"
             );
         }
@@ -249,8 +231,12 @@ fn refresh_regrid_band_matches_golden() {
 /// boundary refresh the DISCRETE forcing, integrate the segment, thread state.
 #[test]
 fn refresh_trajectory_band_matches_golden() {
-    let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
-    let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
+    let raw = common::read_json(
+        common::category_dir("refresh").join("fixtures/coupled_refresh_regrid.esm"),
+    );
+    let golden = common::read_json(
+        common::category_dir("refresh").join("golden/coupled_refresh_regrid.json"),
+    );
 
     let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
@@ -304,7 +290,7 @@ fn refresh_trajectory_band_matches_golden() {
         for cell in &cells {
             let want = expected[cell].as_f64().unwrap();
             assert!(
-                approximately_equal(got[cell], want, TRAJ_RTOL, TRAJ_ATOL),
+                common::close(got[cell], want, TRAJ_RTOL, TRAJ_ATOL),
                 "{cell} @ t={t}: got {}, want {want}",
                 got[cell]
             );

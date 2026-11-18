@@ -167,6 +167,11 @@ end
                     "the document around it."
             )
 
+            # 2b. SAVED VERSION (esm-spec §4.7, "Save-time version floors").
+            if haskey(fixture, :saved_esm)
+                @test emitted_v["esm"] == String(fixture.saved_esm)
+            end
+
             # 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — required alongside load preservation.
             second_json = to_json_compact(
                 EarthSciAST.load_document(

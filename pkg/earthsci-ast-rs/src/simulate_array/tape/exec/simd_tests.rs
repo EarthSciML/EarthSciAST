@@ -15,7 +15,6 @@
 
 use super::fused::{
     FCHUNK, RunCursor, Window, dispatch_bin_kernel, dispatch_un_kernel, exec_fused_runs_generic,
-    node_elems,
 };
 #[cfg(target_arch = "x86_64")]
 use super::fused::{exec_fused_runs_avx2, exec_fused_runs_avx512};
@@ -266,38 +265,6 @@ fn drive(with_nan: bool) {
             });
         }
     }
-    // Bin3: the full arith cube in all four swap orientations, cycling
-    // operand kinds through aligned / shifted (incl. ghost) / strided /
-    // splat-scalar / register sources.
-    let mut pat = 0usize;
-    for op1 in arith {
-        for op2 in arith {
-            for op3 in arith {
-                for (swap2, swap3) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let (a, b, c, d) = match pat % 4 {
-                        0 => (MRef::In(0), MRef::In(1), MRef::In(2), MRef::In(3)),
-                        1 => (MRef::In(2), MRef::Scal(0), MRef::In(0), MRef::Scal(3)),
-                        2 => (MRef::Scal(2), MRef::In(3), MRef::Scal(1), MRef::In(1)),
-                        _ => (MRef::In(1), MRef::In(0), MRef::Reg(0), MRef::In(2)),
-                    };
-                    pat += 1;
-                    let out = micro.len() as GroupIx;
-                    micro.push(MicroOp::Bin3 {
-                        op1,
-                        a,
-                        b,
-                        op2,
-                        c,
-                        swap2,
-                        op3,
-                        d,
-                        swap3,
-                        out,
-                    });
-                }
-            }
-        }
-    }
     let n_ops = micro.len();
     let n_regs = n_ops as GroupIx;
     let mut inputs = inputs;
@@ -335,7 +302,6 @@ fn drive(with_nan: bool) {
         micro,
         n_regs,
         n_load_regs: 1,
-        n_splat_regs: 6,          // 5 scalars + the zero register
         outputs: SmallVec::new(), // outs are passed directly
         direct: SmallVec::new(),
         scan_fuse: SmallVec::new(),
@@ -348,7 +314,7 @@ fn drive(with_nan: bool) {
     };
 
     let bases: Vec<*const f64> = vec![a.as_ptr(), b.as_ptr(), shifted.as_ptr(), strided.as_ptr()];
-    let ne = node_elems(&fs.schedule.nodes);
+    let ne = crate::simulate_array::tape::prepared::node_elems(&fs.schedule.nodes);
     // Runs the group as the given `(lo, hi, period)` windows, in order (the
     // whole group when `windows` is `[(0, usize::MAX, 0)]`), into fresh
     // output buffers.

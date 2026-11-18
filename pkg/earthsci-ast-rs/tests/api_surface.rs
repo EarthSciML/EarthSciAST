@@ -17,8 +17,8 @@
 //! is the public name" — and additionally proves, at COMPILE time, that a
 //! sample of the manifest's names really resolve (see `manifest_names_resolve`).
 //!
-//! Module interiors (`earthsci_ast::intern::…`, `::performance::…`,
-//! `::simulate_array::…`) are extension seams under `API_SPEC.md` §3 and are
+//! Module interiors (`earthsci_ast::intern::…`, `::simulate_array::…`) are
+//! extension seams under `API_SPEC.md` §3 and are
 //! pinned only at module granularity, via `binding_profiles.rust.public_modules`.
 //!
 //! If this test fails you have changed the public API. That is allowed — but
@@ -33,12 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is pkg/earthsci-ast-rs.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-}
+use crate::common;
 
 fn lib_rs() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
@@ -46,7 +41,7 @@ fn lib_rs() -> String {
 }
 
 fn manifest() -> serde_json::Value {
-    let path = repo_root().join("api-surface.json");
+    let path = common::repo_root().join("api-surface.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     serde_json::from_str(&text).expect("api-surface.json parses")

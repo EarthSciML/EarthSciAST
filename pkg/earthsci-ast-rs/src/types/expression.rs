@@ -32,8 +32,7 @@ pub enum Expr {
     /// occurrence was a full copy. Sharing the payload lets the load-time interner
     /// ([`crate::intern`]) collapse structurally identical subtrees to one
     /// allocation, and makes `Expr::clone` O(1) for operator trees. `Arc`
-    /// rather than `Rc` so `Expr` stays `Send + Sync` (the feature-gated
-    /// `performance::ParallelEvaluator` iterates `&[Expr]` with rayon); the
+    /// rather than `Rc` so `Expr` stays `Send + Sync`; the
     /// atomic refcount is off every evaluation hot path.
     ///
     /// Mutation goes through [`std::sync::Arc::make_mut`] (see
@@ -216,25 +215,8 @@ fn serialize_canonical_eps<S: serde::Serializer>(
     }
 }
 
-/// `serialize_with` adapter for [`ExpressionNode::value`]: a `const` node's
-/// inline value written in canonical-number form (§5.5.3.1 rule 1). Every
-/// number at any depth (nested arrays, and the objects a `bc` value may hold)
-/// goes through [`serialize_canonical_f64`], so `[100.0, 0.5]` is written
-/// `[100,0.5]` whether it was parsed from a document or built in code, as the
-/// Julia binding writes it. The value in
-/// memory is left as it was parsed or built.
-fn serialize_canonical_value<S: serde::Serializer>(
-    value: &Option<serde_json::Value>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        Some(v) => CanonicalJson(v).serialize(serializer),
-        None => serializer.serialize_none(),
-    }
-}
-
 /// A JSON value that serializes its numbers in canonical-number form.
-struct CanonicalJson<'a>(&'a serde_json::Value);
+pub(super) struct CanonicalJson<'a>(pub(super) &'a serde_json::Value);
 
 impl Serialize for CanonicalJson<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -696,15 +678,11 @@ pub struct ExpressionNode {
 
     /// For the `const` op: inline literal value (any JSON number, integer,
     /// or nested array thereof). `args` MUST be empty when this is set.
-    /// Held as parsed or built; written in canonical-number form
-    /// (§5.5.3.1): every integral number that fits `i64`, at any depth, is
-    /// written as an integer.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_canonical_value"
-    )]
-    pub value: Option<serde_json::Value>,
+    /// A numeric array is held dense ([`ConstValue`]); every form is written
+    /// in canonical-number form (§5.5.3.1): every integral number that fits
+    /// `i64`, at any depth, is written as an integer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<super::ConstValue>,
 
     /// For the `const` op (esm 1.2.0): the declared unit `value` is in. A
     /// unit-bearing constant has that dimension and exact scale in dimensional
@@ -780,45 +758,12 @@ pub struct ExpressionNode {
 //
 // Every child-`Expr`-bearing field of `ExpressionNode` is declared exactly once,
 // in traversal order, by the `expr_children! { … }` invocation below. From that
-// one ordered spec we generate BOTH the typed walkers (`for_each_child` /
-// `for_each_child_mut` / `any_child` / `map_children`) AND the crate-internal
-// `EXPR_{SCALAR,ARRAY,MAP}_CHILD_KEYS` JSON-key constants that the pre-lowering
-// raw-JSON walker in `crate::parse` iterates. Adding a child field is a one-line
-// spec edit that updates all seven sites at once, so the historical "add a
-// field, forget a walker (or a key constant)" drift class is now impossible.
+// one ordered spec we generate the typed walkers (`for_each_child` /
+// `for_each_child_mut` / `any_child` / `map_children`). Adding a child field is
+// a one-line spec edit that updates every walker at once.
 //
 // Traversal order is CONTRACT (other crates depend on it): args, lower, upper,
 // expr, filter, values, key, bindings (sorted key).
-
-/// Child-field wire-shape tags for each [`EXPR_CHILD_FIELDS`] entry. The two
-/// array shapes (`Vec<Expr>` for `args`, `Option<Vec<Expr>>` for `values`) share
-/// one JSON-key bucket but need different walker code, so they are distinct spec
-/// tokens (`array` / `opt_array`) that both map to `CHILD_ARRAY` here.
-const CHILD_ARRAY: u8 = 0;
-const CHILD_SCALAR: u8 = 1; // `Option<Box<Expr>>`
-const CHILD_MAP: u8 = 2; // `Option<HashMap<String, Expr>>`, visited sorted-key
-
-/// Const-fold the ordered [`EXPR_CHILD_FIELDS`] spec to the JSON keys of one wire
-/// shape, preserving spec order. `N` MUST equal the number of fields carrying
-/// `tag`; a mismatch is a compile-time error (an index-out-of-bounds write or the
-/// `assert!`), which is what keeps the three derived key arrays honest.
-const fn child_keys<const N: usize>(tag: u8) -> [&'static str; N] {
-    let mut out = [""; N];
-    let mut i = 0;
-    let mut j = 0;
-    while i < EXPR_CHILD_FIELDS.len() {
-        if EXPR_CHILD_FIELDS[i].1 == tag {
-            out[j] = EXPR_CHILD_FIELDS[i].0;
-            j += 1;
-        }
-        i += 1;
-    }
-    assert!(
-        j == N,
-        "child-key count does not match the declared array length"
-    );
-    out
-}
 
 /// Per-walker, per-shape code fragments. Each `expr_children!`-generated method
 /// body is a repetition of one of these over the ordered spec, so the four
@@ -927,34 +872,12 @@ macro_rules! expr_child_visit {
             .as_ref()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), $f(v))).collect());
     };
-
-    // Shape → JSON-key-constant bucket tag.
-    (@tag array) => {
-        CHILD_ARRAY
-    };
-    (@tag opt_array) => {
-        CHILD_ARRAY
-    };
-    (@tag scalar) => {
-        CHILD_SCALAR
-    };
-    (@tag map) => {
-        CHILD_MAP
-    };
 }
 
-/// Declare the ordered child-field spec once; expand it into the flat
-/// [`EXPR_CHILD_FIELDS`] table plus the four `ExpressionNode` walkers.
+/// Declare the ordered child-field spec once; expand it into the four
+/// `ExpressionNode` walkers.
 macro_rules! expr_children {
     ($( $field:ident : $shape:ident ),* $(,)?) => {
-        /// The ordered, shape-tagged child-`Expr` field spec — the single source
-        /// the walkers (above, generated) and the [`EXPR_SCALAR_CHILD_KEYS`] /
-        /// [`EXPR_ARRAY_CHILD_KEYS`] / [`EXPR_MAP_CHILD_KEYS`] constants (below,
-        /// derived via [`child_keys`]) are all produced from.
-        const EXPR_CHILD_FIELDS: &[(&str, u8)] = &[
-            $( (stringify!($field), expr_child_visit!(@tag $shape)) ),*
-        ];
-
         impl ExpressionNode {
             /// Visit every expression-bearing child of this node, in the
             /// contractual order: `args` first, then the scalar sidecars `lower`,
@@ -1074,14 +997,6 @@ impl ExpressionNode {
     }
 }
 
-/// Single-child slots (`Option<Box<Expr>>`), derived from [`EXPR_CHILD_FIELDS`].
-pub(crate) const EXPR_SCALAR_CHILD_KEYS: [&str; 5] = child_keys::<5>(CHILD_SCALAR);
-/// Array-of-children slots (`Vec<Expr>` / `Option<Vec<Expr>>`).
-pub(crate) const EXPR_ARRAY_CHILD_KEYS: [&str; 2] = child_keys::<2>(CHILD_ARRAY);
-/// Name→child-`Expr` map slots (`Option<HashMap<String, Expr>>`), visited in
-/// sorted-key order.
-pub(crate) const EXPR_MAP_CHILD_KEYS: [&str; 1] = child_keys::<1>(CHILD_MAP);
-
 /// Pins the JSON-token → [`Expr`] variant mapping that the hand-written
 /// `Deserialize` impl performs, INCLUDING the corner cases where it has to
 /// reproduce a decision the old `#[serde(untagged)]` derive reached only by
@@ -1120,7 +1035,25 @@ mod expr_deserialize_token_mapping_tests {
             );
             // Memory keeps what was parsed: only the output is canonical.
             let Expr::Operator(node) = &e else { panic!() };
-            assert!(node.value.as_ref().unwrap()[0][0].is_f64());
+            let held = node.value.as_ref().unwrap().to_json();
+            assert!(held[0][0].is_f64() && held[0][2].is_i64());
+            // A dense payload (all floats, or all integers) writes the same.
+            for (src, want) in [
+                ("[[100.0, 0.5], [-0.0, 1.0e300]]", "[[100,0.5],[0,1e+300]]"),
+                (
+                    "[[1, -2], [3, 9007199254740992]]",
+                    "[[1,-2],[3,9007199254740992]]",
+                ),
+            ] {
+                let e =
+                    parse(&format!(r#"{{"op": "const", "args": [], "value": {src}}}"#)).unwrap();
+                let Expr::Operator(node) = &e else { panic!() };
+                assert!(node.value.as_ref().unwrap().as_dense().is_some(), "{src}");
+                assert_eq!(
+                    serde_json::to_string(&e).unwrap(),
+                    format!(r#"{{"op":"const","args":[],"value":{want}}}"#)
+                );
+            }
             let scalar = parse(r#"{"op": "const", "args": [], "value": 4.0}"#).unwrap();
             assert_eq!(
                 serde_json::to_value(&scalar).unwrap()["value"],
@@ -1143,7 +1076,7 @@ mod expr_deserialize_token_mapping_tests {
         // Built in code (holding `f64`s): same bytes.
         let built = Expr::operator(ExpressionNode {
             op: "const".to_string(),
-            value: Some(serde_json::json!([100.0, 0.5])),
+            value: Some(serde_json::json!([100.0, 0.5]).into()),
             ..Default::default()
         });
         assert_eq!(
@@ -1298,26 +1231,7 @@ mod expr_deserialize_token_mapping_tests {
 mod expr_child_spec_tests {
     use super::*;
 
-    /// Drift guard 1: the three shape-partitioned key constants derived from the
-    /// single `EXPR_CHILD_FIELDS` spec still equal the historical, cross-file-
-    /// pinned key sets (the `crate::parse` raw-JSON walker depends on these), and
-    /// every spec entry lands in exactly one bucket (no empty derived key).
-    #[test]
-    fn child_key_constants_match_pinned_sets() {
-        assert_eq!(EXPR_ARRAY_CHILD_KEYS, ["args", "values"]);
-        assert_eq!(
-            EXPR_SCALAR_CHILD_KEYS,
-            ["lower", "upper", "expr", "filter", "key"]
-        );
-        assert_eq!(EXPR_MAP_CHILD_KEYS, ["bindings"]);
-
-        let bucketed =
-            EXPR_ARRAY_CHILD_KEYS.len() + EXPR_SCALAR_CHILD_KEYS.len() + EXPR_MAP_CHILD_KEYS.len();
-        assert_eq!(bucketed, EXPR_CHILD_FIELDS.len());
-        assert!(EXPR_CHILD_FIELDS.iter().all(|(k, _)| !k.is_empty()));
-    }
-
-    /// Drift guard 2: `for_each_child` visits exactly one child per
+    /// Drift guard: `for_each_child` visits exactly one child per
     /// child-bearing field, in the CONTRACTUAL order (args, lower, upper, expr,
     /// filter, values, key, bindings sorted). `any_child` and
     /// `map_children` agree on the same set. Adding a child-bearing field without

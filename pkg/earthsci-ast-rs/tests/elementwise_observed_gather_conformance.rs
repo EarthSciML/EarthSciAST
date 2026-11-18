@@ -27,121 +27,23 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_inline_tests_with_base_dir;
-use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/elementwise_observed_gather")
-}
-
-fn read_json(path: &Path) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
-    let rs = &manifest["integrators"]["rust"];
-    assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    SolveOptions {
-        alg: Alg::Erk,
-        // `Some`: the manifest NAMES both tolerances, and `SolveOptions` takes
-        // `Option<f64>` so that "the caller said nothing" stays distinguishable
-        // from "the caller asked for the default" (esm-spec §2.2.2).
-        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
-        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
-        ..Default::default()
-    }
-}
-
-fn close(a: f64, b: f64, rtol: f64, atol: f64) -> bool {
-    let diff = (a - b).abs();
-    diff <= atol || diff <= rtol * a.abs().max(b.abs())
-}
-
-/// Run one fixture through the official runner, gate it against its golden, and
-/// return its actuals keyed by `assertion_idx`.
-fn run_fixture(
-    dir: &Path,
-    manifest: &serde_json::Value,
-    fx: &serde_json::Value,
-) -> BTreeMap<usize, f64> {
-    let rtol = manifest["tolerances"]["assertion_rtol"]
-        .as_f64()
-        .expect("rtol");
-    let atol = manifest["tolerances"]["assertion_atol"]
-        .as_f64()
-        .expect("atol");
-    let opts = manifest_opts(manifest);
-
-    let esm_path = dir.join(fx["path"].as_str().expect("path"));
-    let golden = read_json(&dir.join(fx["golden"].as_str().expect("golden")));
-    assert_eq!(golden["reference_binding"].as_str(), Some("julia"));
-
-    let text = fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-    let file =
-        load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-    let results = run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir));
-
-    let expected = golden["assertions"].as_array().expect("golden assertions");
-    assert_eq!(results.len(), expected.len());
-
-    let mut actuals = BTreeMap::new();
-    for g in expected {
-        let test_id = g["test_id"].as_str().expect("test_id");
-        let idx = g["assertion_idx"].as_u64().expect("assertion_idx") as usize;
-        let r = results
-            .iter()
-            .find(|r| r.test_id == test_id && r.assertion_idx == idx)
-            .unwrap_or_else(|| panic!("missing assertion {test_id}#{idx}"));
-        assert!(r.passed, "{test_id}#{idx}: {}", r.message);
-        let actual = r
-            .actual
-            .unwrap_or_else(|| panic!("{test_id}#{idx}: no actual"));
-        let want = g["actual"].as_f64().expect("golden actual");
-        assert!(
-            close(actual, want, rtol, atol),
-            "{test_id}#{idx}: actual {actual} vs golden {want}"
-        );
-        actuals.insert(idx, actual);
-    }
-    actuals
-}
+use crate::common::tier::{GoldenCheck, Tier};
 
 #[test]
 fn elementwise_observed_gather_matches_golden() {
-    let dir = category_dir();
-    let manifest = read_json(&dir.join("manifest.json"));
-    assert_eq!(
-        manifest["category"].as_str(),
-        Some("elementwise_observed_gather")
-    );
-    assert_eq!(manifest["reference_binding"].as_str(), Some("julia"));
-    let required: Vec<&str> = manifest["bindings_required"]
-        .as_array()
-        .expect("bindings_required")
-        .iter()
-        .map(|v| v.as_str().expect("binding name"))
-        .collect();
-    for b in ["julia", "python", "rust"] {
-        assert!(required.contains(&b), "manifest must require {b}");
-    }
-
-    let rtol = manifest["tolerances"]["assertion_rtol"]
-        .as_f64()
-        .expect("rtol");
-    let atol = manifest["tolerances"]["assertion_atol"]
-        .as_f64()
-        .expect("atol");
-
+    let tier = Tier::open("elementwise_observed_gather");
+    let (rtol, atol) = (tier.rtol, tier.atol);
+    let check = GoldenCheck {
+        by_test_id: true,
+        ..Default::default()
+    };
     let mut by_id: BTreeMap<String, BTreeMap<usize, f64>> = BTreeMap::new();
-    for fx in manifest["fixtures"].as_array().expect("fixtures") {
+    for fx in tier.fixtures() {
         let id = fx["id"].as_str().expect("id").to_string();
-        by_id.insert(id, run_fixture(&dir, &manifest, fx));
+        by_id.insert(id, tier.check_fixture(fx, &check));
     }
 
     // The elementwise spelling under test and the explicit-gather control must
@@ -159,7 +61,7 @@ fn elementwise_observed_gather_matches_golden() {
     for (idx, value) in elementwise {
         let other = explicit[idx];
         assert!(
-            close(*value, other, rtol, atol),
+            common::close(*value, other, rtol, atol),
             "assertion {idx}: elementwise {value} vs explicit {other}"
         );
     }

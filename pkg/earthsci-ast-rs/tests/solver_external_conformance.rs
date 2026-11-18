@@ -13,27 +13,7 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    // <repo>/pkg/earthsci-ast-rs/tests/this_file.rs
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("the crate sits two levels under the repository root")
-        .to_path_buf()
-}
-
-fn suite_dir() -> PathBuf {
-    repo_root().join("tests/conformance/solver_external")
-}
-
-fn manifest() -> Value {
-    let p = suite_dir().join("manifest.json");
-    serde_json::from_str(
-        &std::fs::read_to_string(&p)
-            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
-    )
-    .expect("manifest.json is JSON")
-}
+use crate::common;
 
 fn fixtures(m: &Value, expect: &str) -> Vec<Value> {
     m["fixtures"]
@@ -85,7 +65,7 @@ fn expected_location(pin: &Value) -> Option<String> {
         return Some(v.to_string());
     }
     if let Some(rel) = pin.get("repo_path").and_then(Value::as_str) {
-        return Some(file_url(&repo_root().join(rel)));
+        return Some(file_url(&common::repo_root().join(rel)));
     }
     let rel = pin["cwd_path"]
         .as_str()
@@ -95,7 +75,7 @@ fn expected_location(pin: &Value) -> Option<String> {
 }
 
 fn load(f: &Value) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
-    let path = suite_dir().join(f["path"].as_str().expect("path"));
+    let path = common::category_dir("solver_external").join(f["path"].as_str().expect("path"));
     match f["load"].as_str().expect("load") {
         "path" => earthsci_ast::load_path(&path),
         "string" => {
@@ -108,7 +88,7 @@ fn load(f: &Value) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
 
 #[test]
 fn every_accepted_fixture_holds_resolves_and_emits_as_the_shared_manifest_says() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_external");
     let accepted = fixtures(&m, "accepted");
     assert!(!accepted.is_empty(), "the manifest pins accepted fixtures");
     for f in accepted {
@@ -123,7 +103,7 @@ fn every_accepted_fixture_holds_resolves_and_emits_as_the_shared_manifest_says()
         );
 
         let base = f["base"].get("repo_path").and_then(Value::as_str);
-        let base = base.map(|rel| repo_root().join(rel));
+        let base = base.map(|rel| common::repo_root().join(rel));
         let location = earthsci_ast::solver_external_location(&doc, base.as_deref())
             .unwrap_or_else(|e| panic!("{id}: the accessor must resolve: {e}"));
         assert_eq!(
@@ -141,7 +121,7 @@ fn every_accepted_fixture_holds_resolves_and_emits_as_the_shared_manifest_says()
 
 #[test]
 fn a_dollar_brace_reference_is_refused_with_the_registered_code_naming_it() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_external");
     let refused = fixtures(&m, "refused");
     assert!(!refused.is_empty(), "the manifest pins refused fixtures");
     for f in refused {
@@ -177,7 +157,7 @@ fn a_dollar_brace_reference_is_refused_with_the_registered_code_naming_it() {
 
 #[test]
 fn emitting_to_another_directory_keeps_the_authored_string_and_moves_the_location() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_external");
     let f = fixtures(&m, "accepted")
         .into_iter()
         .find(|f| f["id"] == "bare_relative")
@@ -208,10 +188,10 @@ fn emitting_to_another_directory_keeps_the_authored_string_and_moves_the_locatio
 
 #[test]
 fn flatten_is_identical_with_and_without_external() {
-    let m = manifest();
+    let m = common::tier_manifest("solver_external");
     let load_inv = |key: &str| {
         let rel = m["invariance"][key].as_str().expect("invariance path");
-        earthsci_ast::load_path(suite_dir().join(rel))
+        earthsci_ast::load_path(common::category_dir("solver_external").join(rel))
             .unwrap_or_else(|e| panic!("invariance.{key} must load: {e}"))
     };
     let with = load_inv("with");
@@ -277,8 +257,10 @@ fn the_version_gate_refuses_external_below_1_3_0_and_the_block_gate_runs_first()
 
 #[test]
 fn a_load_without_a_base_records_the_working_directory_at_load() {
-    let text = std::fs::read_to_string(suite_dir().join("fixtures/bare_relative.esm"))
-        .expect("fixture text");
+    let text = std::fs::read_to_string(
+        common::category_dir("solver_external").join("fixtures/bare_relative.esm"),
+    )
+    .expect("fixture text");
     let cwd = lexical(&std::env::current_dir().expect("working directory"));
     let from_string = earthsci_ast::load_string(&text).expect("loads");
     assert_eq!(from_string.document_base.as_deref(), Some(cwd.as_str()));
@@ -288,12 +270,15 @@ fn a_load_without_a_base_records_the_working_directory_at_load() {
     // The coupling-import anchor is still recorded only for an explicit base.
     assert_eq!(from_string.coupling_import_base, None);
 
-    let from_path =
-        earthsci_ast::load_path(suite_dir().join("fixtures/../fixtures/bare_relative.esm"))
-            .expect("loads");
+    let from_path = earthsci_ast::load_path(
+        common::category_dir("solver_external").join("fixtures/../fixtures/bare_relative.esm"),
+    )
+    .expect("loads");
     assert_eq!(
         from_path.document_base,
-        Some(lexical(&suite_dir().join("fixtures")))
+        Some(lexical(
+            &common::category_dir("solver_external").join("fixtures")
+        ))
     );
 }
 
@@ -340,8 +325,10 @@ fn a_drive_letter_path_is_absolute_for_external_and_for_the_base() {
         );
     }
 
-    let text = std::fs::read_to_string(suite_dir().join("fixtures/bare_relative.esm"))
-        .expect("fixture text");
+    let text = std::fs::read_to_string(
+        common::category_dir("solver_external").join("fixtures/bare_relative.esm"),
+    )
+    .expect("fixture text");
     let options = earthsci_ast::LoadOptions {
         base_path: Some(PathBuf::from(r"C:\proj\sub")),
         ..Default::default()
@@ -358,7 +345,10 @@ fn a_drive_letter_path_is_absolute_for_external_and_for_the_base() {
 
 fn env_var_document() -> Value {
     serde_json::from_str(
-        &std::fs::read_to_string(suite_dir().join("fixtures/env_var.esm")).expect("fixture text"),
+        &std::fs::read_to_string(
+            common::category_dir("solver_external").join("fixtures/env_var.esm"),
+        )
+        .expect("fixture text"),
     )
     .expect("JSON")
 }

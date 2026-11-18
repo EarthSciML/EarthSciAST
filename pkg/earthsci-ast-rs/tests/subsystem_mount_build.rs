@@ -18,21 +18,13 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
 use earthsci_ast::{
-    Compiler, PrepareError, PrepareProvider, ProblemOptions, esm_problem, load_string,
-    observed_field,
+    Compiler, DataProvider, ProblemOptions, esm_problem, load_string, observed_field,
 };
 
-struct MockConst(Vec<f64>);
-
-impl PrepareProvider for MockConst {
-    fn sample(&mut self) -> Result<ArrayD<f64>, PrepareError> {
-        Ok(ArrayD::from_shape_vec(IxDyn(&[self.0.len()]), self.0.clone()).unwrap())
-    }
-}
+use crate::common::MockConst;
 
 /// A leaf with one data-fed column `p` over `rows` and its sum `total`.
 /// `element_type`, when given, is declared on both.
@@ -103,12 +95,13 @@ fn build_and_read_all(
         ProblemOptions {
             compiler: Some(Compiler::Interpreter),
             model_name: Some(model.to_string()),
-            build_providers: providers
+            build_pipeline: true,
+            providers: providers
                 .iter()
                 .map(|(key, values)| {
                     (
                         (*key).to_string(),
-                        Box::new(MockConst(values.to_vec())) as Box<dyn PrepareProvider>,
+                        Box::new(MockConst(values.to_vec())) as Box<dyn DataProvider>,
                     )
                 })
                 .collect(),
@@ -444,31 +437,33 @@ fn a_disputed_subsystem_spelling_does_not_fall_back_to_a_bare_name() {
     assert_eq!(t.get("Leaf.x"), Some(Precision::Float32));
 }
 
-/// A nested component inference cannot read, declaring a precision other than
-/// the document's, is refused under its FULL path, so an assembly with
-/// several `Inner`s says which mount it means.
+/// A nested subsystem that does not decode as a model is refused when the
+/// document is read, never skipped: no later pass (precision inference among
+/// them) can meet a component it cannot read.
 #[test]
-fn an_unreadable_nested_subsystem_is_refused_under_its_full_path() {
-    let model: earthsci_ast::Model = serde_json::from_value(json!({
-        "variables": {},
-        "equations": [],
-        "subsystems": {"Leaf": {
+fn an_undecodable_nested_subsystem_is_refused_at_load() {
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": {"name": "undecodable_subsystem"},
+        "models": {"Host": {
             "variables": {},
             "equations": [],
-            "subsystems": {"Inner": {
-                "variables": {"x": {"type": "unknown", "units": "1", "element_type": "Float32"}},
-                "equations": "not a list of equations"
+            "subsystems": {"Leaf": {
+                "variables": {},
+                "equations": [],
+                "subsystems": {"Inner": {
+                    "variables": {"x": {"type": "unknown", "units": "1", "element_type": "Float32"}},
+                    "equations": "not a list of equations"
+                }}
             }}
         }}
-    }))
-    .unwrap();
-    let mut models = indexmap::IndexMap::new();
-    models.insert("Host".to_string(), model);
-    let e = earthsci_ast::precision_infer::annotate_models(
-        &mut models,
-        earthsci_ast::precision::Precision::Float64,
-    )
-    .expect_err("an unreadable binary32 component was annotated")
-    .to_string();
-    assert!(e.contains("Host.Leaf.Inner.x"), "{e}");
+    });
+    assert!(
+        serde_json::from_value::<earthsci_ast::Model>(doc["models"]["Host"].clone()).is_err(),
+        "the typed model refuses the component"
+    );
+    assert!(
+        load_string(&doc.to_string()).is_err(),
+        "the load refuses the document"
+    );
 }

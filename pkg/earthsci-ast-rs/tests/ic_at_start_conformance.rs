@@ -11,29 +11,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
+use earthsci_ast::provider::{DataProvider, ProviderError};
 use earthsci_ast::{
     Compiler, ProblemOptions, SolveOptions, esm_problem, initial_state, remake, solve,
 };
-use ndarray::{ArrayD, IxDyn};
+use ndarray::ArrayD;
 use serde_json::Value;
 
-fn suite_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/conformance/ic_at_start")
-        .canonicalize()
-        .expect("suite directory")
-}
-
-fn floats(v: &Value) -> Vec<f64> {
-    v.as_array()
-        .expect("an array")
-        .iter()
-        .map(|x| x.as_f64().expect("a number"))
-        .collect()
-}
+use crate::common;
+use crate::common::LinearProvider;
 
 fn numbers(v: &Value) -> HashMap<String, f64> {
     v.as_object()
@@ -45,74 +32,20 @@ fn numbers(v: &Value) -> HashMap<String, f64> {
         .unwrap_or_default()
 }
 
-/// One field, `base + slope * t` elementwise (the manifest's `provider`).
-struct Linear {
-    key: String,
-    times: Vec<f64>,
-    shape: Vec<usize>,
-    /// Row-major.
-    base: Vec<f64>,
-    slope: f64,
-}
-
-impl Linear {
-    fn from_manifest(p: &Value) -> Self {
-        fn flatten(v: &Value, out: &mut Vec<f64>) {
-            match v {
-                Value::Array(a) => a.iter().for_each(|x| flatten(x, out)),
-                x => out.push(x.as_f64().expect("a number")),
-            }
-        }
-        let mut base = Vec::new();
-        flatten(&p["base"], &mut base);
-        Linear {
-            key: p["key"].as_str().unwrap().to_string(),
-            times: floats(&p["refresh_times"]),
-            shape: p["shape"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|d| d.as_u64().unwrap() as usize)
-                .collect(),
-            base,
-            slope: p["slope"].as_f64().unwrap(),
-        }
-    }
-
-    fn at(&self, t: f64) -> HashMap<String, NativeField> {
-        let values = self.base.iter().map(|b| b + self.slope * t).collect();
-        let a = ArrayD::from_shape_vec(IxDyn(&self.shape), values).expect("field");
-        HashMap::from([(self.key.clone(), NativeField::new(a))])
-    }
-}
-
-impl CadenceProvider for Linear {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        assert!(self.slope == 0.0, "only a const provider is materialized");
-        Ok(self.at(0.0))
-    }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
-        Ok(Some(self.at(t)))
-    }
-    fn refresh_times(&self) -> Vec<f64> {
-        self.times.clone()
-    }
-}
-
 fn build(
     c: &Value,
     tspan: (f64, f64),
 ) -> Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError> {
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+    let providers: HashMap<String, Box<dyn DataProvider>> = c["providers"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| {
-            let p = Linear::from_manifest(p);
-            (p.key.clone(), Box::new(p) as Box<dyn CadenceProvider>)
+            let p = LinearProvider::from_manifest(p);
+            (p.key.clone(), Box::new(p) as Box<dyn DataProvider>)
         })
         .collect();
-    let path = suite_dir().join(c["fixture"].as_str().unwrap());
+    let path = common::category_dir("ic_at_start").join(c["fixture"].as_str().unwrap());
     esm_problem(
         path.as_path(),
         tspan,
@@ -126,14 +59,9 @@ fn build(
     )
 }
 
-fn manifest() -> Value {
-    serde_json::from_str(&std::fs::read_to_string(suite_dir().join("manifest.json")).unwrap())
-        .unwrap()
-}
-
 #[test]
 fn ic_at_start_conformance() {
-    let m = manifest();
+    let m = common::tier_manifest("ic_at_start");
     assert_eq!(m["category"].as_str(), Some("ic_at_start"));
     let rtol = m["tolerances"]["rtol"].as_f64().unwrap();
     let atol = m["tolerances"]["atol"].as_f64().unwrap();
@@ -141,7 +69,7 @@ fn ic_at_start_conformance() {
     assert!(cases.len() >= 10, "the manifest must not go vacuous");
     for c in cases {
         let id = c["id"].as_str().unwrap();
-        let tspan = floats(&c["tspan"]);
+        let tspan = common::floats(&c["tspan"]);
         let tspan = (tspan[0], tspan[1]);
         if let Some(code) = c["error_code"].as_str() {
             let err = match build(c, tspan).and_then(|p| initial_state(&p).map(|_| ())) {
@@ -203,7 +131,7 @@ fn ic_at_start_conformance() {
 /// new start (esm-libraries-spec §2.5.5).
 #[test]
 fn remake_to_a_new_start_reevaluates_the_ic() {
-    let m = manifest();
+    let m = common::tier_manifest("ic_at_start");
     let c = m["cases"]
         .as_array()
         .unwrap()
@@ -225,22 +153,22 @@ fn remake_to_a_new_start_reevaluates_the_ic() {
     assert_eq!(u0[a], 1.0, "a = 2*0 + 1 at the new start");
 }
 
-/// [`Linear`] as a stateful, record-based provider: the record in effect at
+/// [`LinearProvider`] as a stateful, record-based provider: the record in effect at
 /// `t` is the one at its latest refresh time at or before `t`, and it answers
 /// `None` ("record unchanged") when that is the record it last delivered, as
 /// an EarthSciIO provider does when its record anchor did not move. Counts
 /// every ask.
 struct Stateful {
-    inner: Linear,
+    inner: LinearProvider,
     anchor: Option<f64>,
     asks: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
-impl CadenceProvider for Stateful {
-    fn materialize(&mut self) -> Result<HashMap<String, NativeField>, ProviderError> {
-        self.inner.materialize()
+impl DataProvider for Stateful {
+    fn sample(&mut self) -> Result<ArrayD<f64>, ProviderError> {
+        self.inner.sample()
     }
-    fn refresh(&mut self, t: f64) -> Result<Option<HashMap<String, NativeField>>, ProviderError> {
+    fn refresh(&mut self, t: f64) -> Result<Option<ArrayD<f64>>, ProviderError> {
         self.asks.set(self.asks.get() + 1);
         let Some(a) = self
             .inner
@@ -265,7 +193,7 @@ impl CadenceProvider for Stateful {
 
 /// The case `id` of the manifest.
 fn case(id: &str) -> Value {
-    manifest()["cases"]
+    common::tier_manifest("ic_at_start")["cases"]
         .as_array()
         .unwrap()
         .iter()
@@ -286,12 +214,12 @@ fn build_stateful(
     HashMap<String, std::rc::Rc<std::cell::Cell<usize>>>,
 ) {
     let mut asks = HashMap::new();
-    let providers: HashMap<String, Box<dyn CadenceProvider>> = c["providers"]
+    let providers: HashMap<String, Box<dyn DataProvider>> = c["providers"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| {
-            let mut inner = Linear::from_manifest(p);
+            let mut inner = LinearProvider::from_manifest(p);
             // A record at the start of the run, so the record in effect there
             // is the manifest's value at `t0 = 5`.
             inner.times = vec![5.0, 8.0];
@@ -303,10 +231,10 @@ fn build_stateful(
                 anchor: None,
                 asks: count,
             };
-            (key, Box::new(p) as Box<dyn CadenceProvider>)
+            (key, Box::new(p) as Box<dyn DataProvider>)
         })
         .collect();
-    let path = suite_dir().join(c["fixture"].as_str().unwrap());
+    let path = common::category_dir("ic_at_start").join(c["fixture"].as_str().unwrap());
     let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     edit(&mut doc);
     let prob = esm_problem(
@@ -389,7 +317,7 @@ fn initial_state_samples_only_the_providers_an_ic_reads() {
 /// (esm-spec §6.3.1): an `ic` reading it is evaluated, not refused.
 #[test]
 fn an_ic_reads_an_algebraically_defined_unknown() {
-    let path = suite_dir().join("fixtures/ic_reads_t.esm");
+    let path = common::category_dir("ic_at_start").join("fixtures/ic_reads_t.esm");
     let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     for eq in doc["models"]["T"]["equations"].as_array_mut().unwrap() {
         if eq["lhs"] == "rate" {

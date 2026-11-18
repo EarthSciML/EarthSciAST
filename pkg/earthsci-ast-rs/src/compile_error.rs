@@ -126,6 +126,18 @@ pub enum CompileError {
         details: String,
     },
 
+    /// A build refusal that carries a diagnostic code, rendered exactly as
+    /// [`CompileError::InterpreterBuildError`] is: `details` spells the code
+    /// in its own text, and [`CompileError::code`] returns it.
+    #[error("Interpreter build failed: {details}")]
+    CodedBuildError {
+        /// The diagnostic code (a `crate::diagnostic::codes` value, or a
+        /// binding code such as `E_TREEWALK_JOIN_OVERLAP`).
+        code: &'static str,
+        /// Human-readable failure description.
+        details: String,
+    },
+
     /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
     /// optional sugar ops `grad` / `div` / `laplacian` / ...) survived the
     /// lowering fixpoint into an evaluation position (esm-spec §4.2 / §9.6.8).
@@ -153,7 +165,7 @@ pub enum CompileError {
     /// `minItems: 0`), so this is the gate that keeps a malformed-but-
     /// schema-valid node out of the evaluators, where it would otherwise either
     /// panic on an out-of-bounds index or — worse — be silently assigned two
-    /// different values by the per-cell oracle and the vectorized overlay.
+    /// different values by the per-cell oracle and the tape.
     /// See [`crate::op_registry`].
     #[error(
         "invalid_operator_arity: operator '{op}' takes {expected} argument(s), got {got} \
@@ -404,12 +416,218 @@ pub enum CompileError {
     Flatten(#[from] FlattenError),
 }
 
+/// `text` with every name under the namespace `ns` shown without it: the
+/// `M.` of `M.x`, `M.sub.x` and `'M.x'`, and the `M"."` or `italic("M")"."`
+/// of a printed expression's name, dropped wherever `M` begins a name (it follows no
+/// identifier character and no `.`, and an identifier follows).
+///
+/// A one-model document is built under its model's namespace like any other,
+/// and shown without it: what it reports names its variables as its author
+/// wrote them (`unqualified` on [`CompileError`] and
+/// [`crate::simulate::SimulateError`]).
+pub(crate) fn unqualify_text(text: &str, ns: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    if ns.is_empty() || !text.contains(ns) {
+        return text.to_string();
+    }
+    // A printed expression spells a multi-letter namespace `italic("M")`.
+    let italic = format!("italic(\"{ns}\")");
+    let mut out = String::with_capacity(text.len());
+    let mut prev: Option<char> = None;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let starts_name = !prev.is_some_and(|p| is_ident(p) || p == '.');
+        // `M.x` as written, or `M"."x` as a printed expression spells it.
+        if starts_name
+            && let Some(after) = rest
+                .strip_prefix(ns)
+                .and_then(|r| r.strip_prefix('.').or_else(|| r.strip_prefix("\".\"")))
+                .or_else(|| {
+                    rest.strip_prefix(italic.as_str())
+                        .and_then(|r| r.strip_prefix("\".\""))
+                })
+            && after.chars().next().is_some_and(is_ident)
+        {
+            rest = after;
+            prev = Some('.');
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
 impl CompileError {
+    /// This error with every name under the namespace `ns` shown without it
+    /// ([`unqualify_text`]).
+    pub(crate) fn unqualified(self, ns: &str) -> Self {
+        let u = |s: String| unqualify_text(&s, ns);
+        let uv = |v: Vec<String>| v.into_iter().map(|s| unqualify_text(&s, ns)).collect();
+        match self {
+            CompileError::UnsupportedConstruct {
+                construct,
+                evaluator,
+                detail,
+            } => CompileError::UnsupportedConstruct {
+                construct,
+                evaluator,
+                detail: u(detail),
+            },
+            CompileError::DoublyDefinedUnknown {
+                name,
+                differential,
+                algebraic,
+            } => CompileError::DoublyDefinedUnknown {
+                name: u(name),
+                differential: u(differential),
+                algebraic: u(algebraic),
+            },
+            CompileError::CompilerRefusedRule {
+                compiler,
+                kind,
+                rule,
+                tier,
+                reason,
+            } => CompileError::CompilerRefusedRule {
+                compiler,
+                kind,
+                rule: u(rule),
+                tier,
+                reason: u(reason),
+            },
+            CompileError::UnsupportedFeatureError { feature, message } => {
+                CompileError::UnsupportedFeatureError {
+                    feature,
+                    message: u(message),
+                }
+            }
+            CompileError::InterpreterBuildError { details } => {
+                CompileError::InterpreterBuildError {
+                    details: u(details),
+                }
+            }
+            CompileError::CodedBuildError { code, details } => CompileError::CodedBuildError {
+                code,
+                details: u(details),
+            },
+            CompileError::MakearrayRegionInvalid { reason } => {
+                CompileError::MakearrayRegionInvalid { reason: u(reason) }
+            }
+            CompileError::InvalidBroadcastFn { reason } => {
+                CompileError::InvalidBroadcastFn { reason: u(reason) }
+            }
+            CompileError::ValueInventionRefused { code, reason } => {
+                CompileError::ValueInventionRefused {
+                    code,
+                    reason: u(reason),
+                }
+            }
+            CompileError::Float32Unsupported { construct, reason } => {
+                CompileError::Float32Unsupported {
+                    construct: u(construct),
+                    reason: u(reason),
+                }
+            }
+            CompileError::ElementTypeUncarried { construct, reason } => {
+                CompileError::ElementTypeUncarried {
+                    construct: u(construct),
+                    reason: u(reason),
+                }
+            }
+            CompileError::MixedElementType {
+                op,
+                lhs_name,
+                lhs_type,
+                rhs_name,
+                rhs_type,
+            } => CompileError::MixedElementType {
+                op,
+                lhs_name: u(lhs_name),
+                lhs_type,
+                rhs_name: u(rhs_name),
+                rhs_type,
+            },
+            CompileError::UnalignableArrayShape {
+                operand,
+                axis,
+                result,
+                result_axes,
+            } => CompileError::UnalignableArrayShape {
+                operand: u(operand),
+                axis,
+                result: u(result),
+                result_axes,
+            },
+            CompileError::ObservedCycle { cycle } => {
+                CompileError::ObservedCycle { cycle: uv(cycle) }
+            }
+            CompileError::MissingData { parameter, detail } => CompileError::MissingData {
+                parameter: u(parameter),
+                detail: u(detail),
+            },
+            CompileError::MissingInitialValue { slot, detail } => {
+                CompileError::MissingInitialValue {
+                    slot: u(slot),
+                    detail: u(detail),
+                }
+            }
+            other @ (CompileError::UnsupportedDimensionalityError { .. }
+            | CompileError::UnloweredOperatorError { .. }
+            | CompileError::InvalidOperatorArity { .. }
+            | CompileError::UnevaluableOperatorError { .. }
+            | CompileError::UnsupportedElementType { .. }
+            | CompileError::Flatten(_)) => other,
+        }
+    }
+}
+
+impl CompileError {
+    /// The diagnostic code this refusal carries, or `None` for the uncoded
+    /// build failures ([`CompileError::InterpreterBuildError`] and the
+    /// unsupported-feature variants).
+    pub fn code(&self) -> Option<&'static str> {
+        use crate::diagnostic::codes;
+        Some(match self {
+            CompileError::UnsupportedConstruct { .. } => codes::UNSUPPORTED_CONSTRUCT,
+            CompileError::DoublyDefinedUnknown { .. } => codes::EQUATION_COUNT_MISMATCH,
+            CompileError::CompilerRefusedRule { .. } => codes::COMPILER_REFUSED_RULE,
+            CompileError::UnloweredOperatorError { .. } => codes::UNLOWERED_OPERATOR,
+            CompileError::InvalidOperatorArity { .. } => "invalid_operator_arity",
+            CompileError::MakearrayRegionInvalid { .. } => codes::MAKEARRAY_REGION_INVERTED,
+            CompileError::InvalidBroadcastFn { .. } => codes::INVALID_BROADCAST_FN,
+            CompileError::UnevaluableOperatorError { .. } => codes::UNEVALUABLE_OPERATOR,
+            CompileError::ValueInventionRefused { code, .. } => code,
+            CompileError::CodedBuildError { code, .. } => code,
+            CompileError::UnsupportedElementType { .. } => "unsupported_element_type",
+            CompileError::Float32Unsupported { .. } => "float32_unsupported",
+            CompileError::ElementTypeUncarried { .. } => codes::ELEMENT_TYPE_UNCARRIED,
+            CompileError::MixedElementType { .. } => "mixed_element_type",
+            CompileError::UnalignableArrayShape { .. } => codes::ARRAY_SHAPE_MISMATCH,
+            CompileError::ObservedCycle { .. } => codes::OBSERVED_CYCLE,
+            CompileError::MissingData { .. } => "E_TREEWALK_MISSING_DATA",
+            CompileError::MissingInitialValue { .. } => "E_TREEWALK_MISSING_INITIAL_VALUE",
+            CompileError::Flatten(e) => return e.code(),
+            CompileError::UnsupportedFeatureError { .. }
+            | CompileError::UnsupportedDimensionalityError { .. }
+            | CompileError::InterpreterBuildError { .. } => return None,
+        })
+    }
+
     /// Shorthand constructor for [`CompileError::InterpreterBuildError`], the
     /// catch-all build failure, whose `{ details: format!(…) }` spelling is
     /// otherwise repeated at every raise site.
     pub fn build_err(details: impl Into<String>) -> Self {
         CompileError::InterpreterBuildError {
+            details: details.into(),
+        }
+    }
+
+    /// Shorthand constructor for [`CompileError::CodedBuildError`].
+    pub fn coded_build_err(code: &'static str, details: impl Into<String>) -> Self {
+        CompileError::CodedBuildError {
+            code,
             details: details.into(),
         }
     }
@@ -482,21 +700,14 @@ pub fn discrete_event_refusal(evaluator: &'static str, name: Option<&str>) -> Co
 
 /// The first event `model` or any of its inline subsystems declares, a
 /// continuous one before a discrete one: its construct ([`CONTINUOUS_EVENT`] or
-/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). The subsystems
-/// are searched in their raw JSON: mounting keeps only their variables and
-/// equations, and `flatten` does not lift a subsystem's events into the
-/// flattened system, so no check on the flattened event lists can see one.
+/// [`DISCRETE_EVENT`]) and its name (`None` for an unnamed one). Mounting keeps
+/// only a subsystem's variables and equations, and `flatten` does not lift a
+/// subsystem's events into the flattened system, so no check on the flattened
+/// event lists can see one.
 pub(crate) fn first_event(model: &crate::types::Model) -> Option<(&'static str, Option<String>)> {
-    if let Some(event) = model.continuous_events.as_ref().and_then(|e| e.first()) {
-        return Some((CONTINUOUS_EVENT, event.name.clone()));
-    }
-    if let Some(event) = model.discrete_events.as_ref().and_then(|e| e.first()) {
-        return Some((DISCRETE_EVENT, event.name.clone()));
-    }
-    model
-        .subsystems
-        .as_ref()
-        .and_then(|subs| subs.values().find_map(first_event_in_json))
+    first_event_in_tree(model, |m| {
+        (m.continuous_events.as_deref(), m.discrete_events.as_deref())
+    })
 }
 
 /// [`first_event`] over every model and reaction system in `file`, subsystems
@@ -511,38 +722,37 @@ pub(crate) fn first_event_in_file(
     in_models.or_else(|| {
         file.reaction_systems.as_ref().and_then(|systems| {
             systems.values().find_map(|rs| {
-                if let Some(event) = rs.continuous_events.as_ref().and_then(|e| e.first()) {
-                    return Some((CONTINUOUS_EVENT, event.name.clone()));
-                }
-                if let Some(event) = rs.discrete_events.as_ref().and_then(|e| e.first()) {
-                    return Some((DISCRETE_EVENT, event.name.clone()));
-                }
-                rs.subsystems
-                    .as_ref()
-                    .and_then(|subs| subs.values().find_map(first_event_in_json))
+                first_event_in_tree(rs, |r| {
+                    (r.continuous_events.as_deref(), r.discrete_events.as_deref())
+                })
             })
         })
     })
 }
 
-fn first_event_in_json(value: &serde_json::Value) -> Option<(&'static str, Option<String>)> {
-    for (key, construct) in [
-        ("continuous_events", CONTINUOUS_EVENT),
-        ("discrete_events", DISCRETE_EVENT),
-    ] {
-        if let Some(event) = value
-            .get(key)
-            .and_then(|v| v.as_array())
-            .and_then(|events| events.first())
-        {
-            let name = event.get("name").and_then(|n| n.as_str());
-            return Some((construct, name.map(str::to_string)));
-        }
-    }
-    value
-        .get("subsystems")
-        .and_then(|s| s.as_object())
-        .and_then(|subs| subs.values().find_map(first_event_in_json))
+/// The first event of `root` or of any subsystem below it, depth first, read
+/// off each component by `events`.
+fn first_event_in_tree<C: crate::types::HasSubsystems>(
+    root: &C,
+    events: impl Fn(
+        &C,
+    ) -> (
+        Option<&[crate::types::ContinuousEvent]>,
+        Option<&[crate::types::DiscreteEvent]>,
+    ),
+) -> Option<(&'static str, Option<String>)> {
+    use crate::types::{TreeOrder, component_tree};
+    component_tree(root, "", "", TreeOrder::Declared)
+        .into_iter()
+        .find_map(|node| {
+            let (continuous, discrete) = events(node.component);
+            if let Some(event) = continuous.and_then(|e| e.first()) {
+                return Some((CONTINUOUS_EVENT, event.name.clone()));
+            }
+            discrete
+                .and_then(|e| e.first())
+                .map(|event| (DISCRETE_EVENT, event.name.clone()))
+        })
 }
 
 /// The first equation that constrains its operands only implicitly, including a
@@ -643,7 +853,12 @@ mod tests {
 
     #[test]
     fn unsupported_construct_carries_its_registered_code() {
-        let msg = discrete_event_refusal(ARRAY_EVALUATOR, Some("double")).to_string();
+        let e = discrete_event_refusal(ARRAY_EVALUATOR, Some("double"));
+        assert_eq!(
+            e.code(),
+            Some(crate::diagnostic::codes::UNSUPPORTED_CONSTRUCT)
+        );
+        let msg = e.to_string();
         assert!(
             msg.starts_with(&format!(
                 "{}:",
@@ -653,5 +868,25 @@ mod tests {
         );
         assert!(msg.contains("discrete event 'double'"), "{msg}");
         assert!(msg.contains(ARRAY_EVALUATOR), "{msg}");
+    }
+
+    /// A one-model document's names are shown without the model's name: as
+    /// written, quoted, nested and printed, and only where the name begins.
+    #[test]
+    fn unqualify_text_drops_the_namespace_where_a_name_begins() {
+        let u = |t: &str| unqualify_text(t, "M");
+        assert_eq!(
+            u("reads 'M.b', which reads M.sub.a"),
+            "reads 'b', which reads sub.a"
+        );
+        assert_eq!(u("(dif M\".\"x)/(dif t) = M\".\"k"), "(dif x)/(dif t) = k");
+        assert_eq!(
+            u("NM.x and Other.M.x and M. alone"),
+            "NM.x and Other.M.x and M. alone"
+        );
+        assert_eq!(
+            unqualify_text("sin(italic(\"Box\")\".\"u_i)", "Box"),
+            "sin(u_i)"
+        );
     }
 }

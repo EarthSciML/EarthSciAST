@@ -256,34 +256,22 @@ impl TapeBuilder<'_> {
                 }
             }
             Expr::Operator(n) if is_plain(n) => {
-                let op: &'static str = match n.op.as_str() {
-                    "+" => "+",
-                    "-" => "-",
-                    "*" => "*",
-                    "/" => "/",
-                    "and" => "and",
-                    "or" => "or",
-                    "==" => "==",
-                    "!=" => "!=",
-                    "<" => "<",
-                    "<=" => "<=",
-                    ">" => ">",
-                    ">=" => ">=",
-                    "index" => return self.ix_compile_index(n, syms),
-                    "floor" | "ceil" | "abs" | "sign" => {
-                        let op: &'static str = match n.op.as_str() {
-                            "floor" => "floor",
-                            "ceil" => "ceil",
-                            "abs" => "abs",
-                            _ => "sign",
-                        };
+                use crate::op_registry::{CoreOp, OtherOp as O, UnaryFn as F};
+                let core = n.core_op()?;
+                match core {
+                    CoreOp::Other(O::Index) => return self.ix_compile_index(n, syms),
+                    CoreOp::Unary(F::Floor | F::Ceil | F::Abs | F::Sign) => {
                         let [a] = &n.args[..] else {
                             return None;
                         };
-                        return Some(IxNode::Un(op, Box::new(self.ix_compile(a, syms)?)));
+                        return Some(IxNode::Un(core.name(), Box::new(self.ix_compile(a, syms)?)));
                     }
+                    CoreOp::Other(O::Add | O::Sub | O::Mul | O::Div | O::And | O::Or)
+                    | CoreOp::Compare(_) => {}
+                    // Not folded here.
                     _ => return None,
-                };
+                }
+                let op = core.name();
                 if n.args.is_empty() {
                     return None;
                 }
@@ -339,18 +327,20 @@ impl TapeBuilder<'_> {
     /// costs at least as much. Nothing is emitted before the tuple list is
     /// lowered, so a `None` needs no rollback; an `Err` comes from that
     /// lowering, after the charge, and the caller's rollback undoes both.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_equality_scatter(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
-        contract_dims: &[ContractDim],
-        reduce: ReduceKind,
-        filter: Option<&Expr>,
     ) -> LResult<Option<LV>> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            contract_dims,
+            reduce,
+            filter,
+        } = *c;
         let Some(filter) = filter else {
             return Ok(None);
         };
@@ -402,17 +392,7 @@ impl TapeBuilder<'_> {
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
             return Ok(None);
         };
-        if let Some(v) = self.lower_shift_scatter(
-            idx_names,
-            lo,
-            shape,
-            body,
-            contract_names,
-            &bounds,
-            reduce,
-            &parts,
-            &pins,
-        )? {
+        if let Some(v) = self.lower_shift_scatter(c, lo, shape, &bounds, &parts, &pins)? {
             return Ok(Some(v));
         }
         // A point's values: the output indices, then the contracted names
@@ -708,19 +688,22 @@ impl TapeBuilder<'_> {
     /// Only for `+` and `*`, whose one-term fold is the elementwise kernel
     /// itself; `max` / `min` keep the tuple list, whose fold step is the
     /// reduction's own.
-    #[allow(clippy::too_many_arguments)]
     fn lower_shift_scatter(
         &mut self,
-        idx_names: &[String],
+        c: &Contraction,
         lo: &DimI,
         shape: &DimU,
-        body: &Expr,
-        contract_names: &[String],
         bounds: &[DimBound],
-        reduce: ReduceKind,
         parts: &[&Expr],
         pins: &[Option<&Expr>],
     ) -> LResult<Option<LV>> {
+        let Contraction {
+            idx_names,
+            body,
+            contract_names,
+            reduce,
+            ..
+        } = *c;
         if !matches!(reduce, ReduceKind::Sum | ReduceKind::Product) || parts.len() != 1 {
             return Ok(None);
         }
@@ -795,15 +778,7 @@ impl TapeBuilder<'_> {
             _ => Some(and_of(keep)),
         };
         self.push_scope();
-        let bx = LBox {
-            syms: idx_names,
-            lo: lo.clone(),
-            shape: shape.clone(),
-            cnames: &[],
-            cvals: SmallVec::new(),
-            tuple: 0,
-            visit: SmallVec::new(),
-        };
+        let bx = LBox::new(idx_names, lo.clone(), shape.clone());
         let term = self.lower_filtered(&body, keep.as_ref(), &bx, LV::Lit(identity));
         self.pop_scope();
         self.held_exprs.push(body);
@@ -816,14 +791,7 @@ impl TapeBuilder<'_> {
                 Cadence::Const,
             )));
         };
-        if matches!(&term, LV::State(_)) && self.lv_box(&term).is_some() {
-            bail_tape!("scatter: term reduced to a bare whole-array view");
-        }
-        let term = match self.lv_box(&term) {
-            None => self.emit_fill(&term, shape, lo, Cadence::Const),
-            Some((s, o)) if s == *shape && o == *lo => term,
-            Some(_) => bail_tape!("scatter: term box does not match the output box"),
-        };
+        let term = self.fit_term(term, shape, lo, "scatter: term", "the output box")?;
         let combine_op = self.array_combine_op(reduce, "contracted")?;
         self.emit_bin(combine_op, LV::Lit(identity), term).map(Some)
     }

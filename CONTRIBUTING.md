@@ -333,7 +333,7 @@ cd pkg/earthsci-ast-rs
 cargo fmt
 # Every feature EXCEPT `xla` -- the same list CI lints with (see below).
 cargo clippy --all-targets --features \
-  conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+  conformance-adapters,wasm,benchmarks,esio \
   -- -D warnings
 cargo test
 # The bench target is gated behind the `benchmarks` feature, so a plain

@@ -26,8 +26,8 @@
 //! one dispatch), a lane program, an instruction with its own precision, and
 //! any instruction that would split but cannot run share by share.
 
-use super::interp::{Cx, exec_share, exec_straight, is_straight, shares};
-use super::resolve::rm_strides;
+use super::interp::{Cx, exec_share, exec_straight, shares};
+use super::resolve::Slab;
 use super::*;
 
 /// Estimated element-operations a phase must have before it forks: below
@@ -96,7 +96,7 @@ pub(in crate::simulate_array::tape) struct CallPlan {
 fn dy_written(prog: &TapeProgram, ins: &Instr, dy_home: &[usize]) -> Option<(usize, usize)> {
     match ins {
         Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
+            let w = &prog.tables.dy_writes[*write as usize];
             if dy_home[w.slot as usize] != usize::MAX {
                 return None;
             }
@@ -125,7 +125,7 @@ fn fused_out(prog: &TapeProgram, s: SlotId, dy_home: &[usize]) -> (bool, Option<
         Some(&UNSTORED) => (false, None),
         Some(&off) if off != usize::MAX => (
             false,
-            Some((off, off + prog.slots[s as usize].elems().max(1))),
+            Some((off, off + prog.tables.slots[s as usize].elems().max(1))),
         ),
         _ => (true, None),
     }
@@ -146,75 +146,22 @@ fn place(
     ways: usize,
     chains: &[super::chain::SegChain],
 ) -> Place {
-    if let Some(ch) = chains.iter().find(|c| c.start == pc && c.end <= end) {
+    let at = chains.partition_point(|c| c.start < pc);
+    if let Some(ch) = chains.get(at).filter(|c| c.start == pc && c.end <= end) {
         return Place::Loop(ch.end - pc);
     }
     let ins = &prog.instrs[pc];
-    match ins {
-        Instr::JmpIfZero {
-            n_true, n_false, ..
-        } => return Place::Loop(1 + (*n_true + *n_false) as usize),
-        Instr::Sweep { spec } => {
-            return Place::Loop(1 + prog.sweeps[*spec as usize].body_len as usize);
-        }
-        _ => {}
+    let region = ins.region_len(&prog.slot_tables());
+    if region > 0 {
+        return Place::Loop(1 + region);
     }
-    if !is_straight(ins) || prog.precision.get(pc).is_some() {
+    if !ins.may_run_on_worker() || prog.precision.get(pc).is_some() {
         return Place::Loop(1);
     }
-    let split = match ins {
-        Instr::Fused { spec } => super::par::split_ways(&prog.fused[*spec as usize], ways),
-        Instr::Assemble { out, .. } => {
-            let d = &prog.slots[*out as usize];
-            if d.shape.is_empty() {
-                1
-            } else {
-                super::par::ways_for(d.elems(), ways)
-            }
-        }
-        // A scan along the leading axis splits by its lanes.
-        Instr::Scan {
-            axis: 0, src_shape, ..
-        } => {
-            let lanes: usize = src_shape.iter().skip(1).product();
-            if src_shape.len() < 2 {
-                1
-            } else {
-                super::par::lane_split_ways(lanes, src_shape.iter().product(), ways)
-            }
-        }
-        Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
-            let d = &prog.slots[*out as usize];
-            if d.scalar {
-                1
-            } else {
-                super::par::ways_for(d.elems(), ways)
-            }
-        }
-        // A copy's split is fixed here, on the calling thread: a worker
-        // must not choose it again (a test's forced width is the calling
-        // thread's alone).
-        Instr::Copy { out, .. } => {
-            let d = &prog.slots[*out as usize];
-            if d.scalar {
-                1
-            } else {
-                super::par::copy_ways(ways, &rm_strides(&d.shape), &d.shape)
-            }
-        }
-        Instr::DyWrite { write } => {
-            let w = &prog.dy_writes[*write as usize];
-            if w.scatter.is_some() || w.scalar_flat.is_some() {
-                1
-            } else {
-                let sv = &prog.state_vars[w.var as usize];
-                let shape = &prog.slots[w.slot as usize].shape;
-                let st = dy_strides(prog, &sv.shape);
-                super::par::copy_ways(ways, &st, shape)
-            }
-        }
-        _ => 1,
-    };
+    // A copy's split is fixed here, on the calling thread: a worker must
+    // not choose it again (a test's forced width is the calling thread's
+    // alone).
+    let split = super::par::split_width(prog, ins, ways);
     if split <= 1 {
         Place::Task(0)
     } else if shares(prog, ins) {
@@ -226,7 +173,9 @@ fn place(
 
 /// The estimated cost of one task, for balancing whole tasks.
 fn task_cost(prog: &TapeProgram, ins: &Instr) -> usize {
-    let elems = ins.out().map_or(1, |o| prog.slots[o as usize].elems());
+    let elems = ins
+        .out()
+        .map_or(1, |o| prog.tables.slots[o as usize].elems());
     super::par::instr_work(prog, ins).max(elems).max(1)
 }
 
@@ -235,21 +184,20 @@ impl CallPlan {
     /// is too long to place or reads observeds published at run time.
     pub(super) fn build(
         prog: &TapeProgram,
+        prep: &Prepared,
         range: std::ops::Range<usize>,
         ways: usize,
-        chains: &[super::chain::SegChain],
-        dy_home: &[usize],
-        base_off: &[usize],
     ) -> Option<CallPlan> {
+        let (chains, dy_home) = (&prep.seg_chains[..], &prep.dy.home_quiet[..]);
         if ways < 2 || range.len() > MAX_PLANNED {
             return None;
         }
-        let tables = prog.tables();
+        let tables = prog.slot_tables();
         let n_store = prog.slab.storages.len();
         // Slots defined exactly once, inside the range: the ones the plan
         // may move to storage of their own.
-        let mut defs = vec![0u32; prog.slots.len()];
-        let mut def_in = vec![false; prog.slots.len()];
+        let mut defs = vec![0u32; prog.tables.slots.len()];
+        let mut def_in = vec![false; prog.tables.slots.len()];
         for (pc, ins) in prog.instrs.iter().enumerate() {
             ins.for_each_def(&tables, |s| {
                 defs[s as usize] += 1;
@@ -259,15 +207,15 @@ impl CallPlan {
         let movable = |s: SlotId| defs[s as usize] == 1 && def_in[s as usize];
         // Per slot, the storage the plan gives it (`u32::MAX`: the
         // program's); a moved slot's storage is numbered past the program's.
-        let mut moved = vec![u32::MAX; prog.slots.len()];
-        let mut slot_off = base_off.to_vec();
+        let mut moved = vec![u32::MAX; prog.tables.slots.len()];
+        let mut slot_off = prep.slot_off.clone();
         let mut slab_len = prog.slab.total_elems;
         let budget = prog.slab.total_elems;
         let mut n_moved = 0usize;
         let store_of = |moved: &[u32], s: SlotId| -> Option<u32> {
             match moved[s as usize] {
                 u32::MAX => {
-                    let st = prog.slots[s as usize].storage;
+                    let st = prog.tables.slots[s as usize].storage;
                     (st != u32::MAX).then_some(st)
                 }
                 m => Some(m),
@@ -356,7 +304,7 @@ impl CallPlan {
             let ins = &prog.instrs[pc];
             // A `DyWrite` whose group stored the slot into `dy` does nothing.
             if matches!(ins, Instr::DyWrite { write }
-                if dy_home[prog.dy_writes[*write as usize].slot as usize] != usize::MAX)
+                if dy_home[prog.tables.dy_writes[*write as usize].slot as usize] != usize::MAX)
             {
                 pc += 1;
                 continue;
@@ -402,7 +350,7 @@ impl CallPlan {
                     continue;
                 };
                 let wait = last_write[b as usize].max(last_read[b as usize]);
-                let elems = prog.slots[s as usize].elems().max(1);
+                let elems = prog.tables.slots[s as usize].elems().max(1);
                 if wait > phase
                     && movable(s)
                     && elems <= MOVE_MAX_ELEMS
@@ -526,24 +474,18 @@ pub(super) fn run_plan(plan: &CallPlan, env: &Env, exec: &mut TapeExec, dy: &mut
         let TapeExec {
             slab,
             slot_off,
-            plan_full,
-            asm_covered,
             idx_tables,
             simd,
-            dy_home_quiet,
             scratch,
             peers,
             ..
         } = exec;
         let cx = Cx {
             env,
-            slab_ptr: slab.as_mut_ptr(),
-            slot_off,
-            plan_full,
-            asm_covered,
+            slab: Slab::new(slab, slot_off, &prog.tables.slots),
             idx_tables,
             simd: *simd,
-            dy_home: dy_home_quiet,
+            dy_home: &env.prep.dy.home_quiet,
             dy: dy.as_mut_ptr(),
             dy_len: dy.len(),
         };

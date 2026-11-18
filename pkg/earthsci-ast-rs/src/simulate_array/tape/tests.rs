@@ -2,8 +2,7 @@
 //! executors — the slow reference executor ([`super::refexec`], which pins the
 //! LOWERING) and the production fast executor ([`super::exec`], Step 3b,
 //! reached through a taped scratch + `debug_eval_rhs_into`) — and assert
-//! **bitwise** equality of `dy` against `evaluate_rhs_with_scratch`, the full
-//! legacy production path (vectorized overlay + runtime CSE), at several
+//! **bitwise** equality of `dy` against the interpreter at several
 //! random-but-seeded states and times. The fast-executor arm reuses ONE warm
 //! scratch across every state/time, so slab recycling, CONST-section
 //! retention and the section re-run discipline are all exercised.
@@ -12,253 +11,10 @@ use super::super::{ArrayCompiled, DimU, RhsStats};
 use super::ir::*;
 use super::refexec::{RefVal, run_reference};
 use super::taped;
-use crate::types::EsmFile;
+use super::test_support::*;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-fn typed(doc: serde_json::Value) -> EsmFile {
-    // Through `load`, not `serde_json::from_value`: load activates the AST
-    // interner, so structurally identical subtrees share one `Arc` — the
-    // property the pointer-keyed value numbering exploits (exactly as the
-    // production `load_path_with_options` path does).
-    crate::parse::load_string(&doc.to_string()).expect("fixture document loads")
-}
-
-pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
-    ArrayCompiled::from_file(&typed(doc)).expect("fixture compiles")
-}
-
-/// The production superop configuration (env-independent for tests).
-fn default_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    }
-}
-
-/// Every superop enabled (the Bin3 A/B arm).
-fn all_superops_cfg() -> super::fuse::SuperopCfg {
-    super::fuse::SuperopCfg {
-        bin3: true,
-        ext_pairs: true,
-    }
-}
-
-/// Deterministic pseudo-random state in `[lo, hi)` (xorshift-style LCG).
-pub(super) fn seeded_state(n: usize, seed: u64, lo: f64, hi: f64) -> Vec<f64> {
-    let mut x = seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1);
-    (0..n)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            let u = (x >> 11) as f64 / (1u64 << 53) as f64;
-            lo + u * (hi - lo)
-        })
-        .collect()
-}
-
-/// The counterpart of [`ab_check`] for a document the tape cannot lower:
-/// BOTH builds (fused and unfused) must decline and leave no program, and a
-/// scratch asked for a tape must be refused, naming the declined rule — never
-/// handed back without a tape to run the legacy evaluator. Returns the fused
-/// build's decline.
-pub(super) fn declined_check(doc: serde_json::Value) -> DeclinedTape {
-    let compiled = compile(doc);
-    let (fused, report) = compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()));
-    let (unfused, _) = compiled.build_tape_opts(&HashSet::new(), None);
-    let Err(declined) = fused else {
-        panic!("the fixture must decline a rule:\n{report}");
-    };
-    assert!(unfused.is_err(), "the unfused build must decline too");
-    assert_refused(&compiled, &declined);
-    declined
-}
-
-/// A scratch asked of a model whose tape declined is refused with
-/// `compiler_refused_rule`, naming the first declined rule and its reason.
-fn assert_refused(compiled: &ArrayCompiled, declined: &DeclinedTape) {
-    let (rule, reason) = declined
-        .declined_rules()
-        .into_iter()
-        .next()
-        .expect("a declined tape names at least one rule");
-    match compiled.debug_new_scratch_taped() {
-        Ok(_) => panic!("a declined build must not hand back a scratch"),
-        Err(crate::simulate::SimulateError::Compile(
-            crate::compile_error::CompileError::CompilerRefusedRule {
-                rule: r,
-                reason: why,
-                ..
-            },
-        )) => {
-            assert_eq!(r, rule);
-            assert_eq!(why, reason);
-        }
-        Err(e) => panic!("expected compiler_refused_rule, got {e:?}"),
-    }
-}
-
-/// Build BOTH tapes (fused and unfused), each of which must lower every rule,
-/// and assert bitwise `dy` equality against the production interpreter over
-/// several seeded states and times — for BOTH executors on BOTH programs:
-/// the reference executor (fresh run per state) and the Step 3b fast
-/// executor (one warm taped scratch per program across all of them). Returns
-/// the FUSED program.
-pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram {
-    let compiled = compile(doc);
-    let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
-    let (prog_uf, _) = taped(compiled.build_tape_opts(&HashSet::new(), None));
-    assert!(
-        prog_uf.fused.is_empty() && prog_uf.fuse_stats.n_groups == 0,
-        "the unfused build must not fuse"
-    );
-    assert!(
-        prog.instrs.len() <= prog_uf.instrs.len(),
-        "fusion must not grow the program"
-    );
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast_scratch = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
-    // A second warm fast scratch carrying the UNFUSED program.
-    let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::sync::Arc::new(prog_uf));
-    let prog_uf = {
-        // Rebuild for the reference arm (the scratch consumed the first).
-        taped(compiled.build_tape_opts(&HashSet::new(), None)).0
-    };
-    // The fused program as lowered, without the state-layout alignment
-    // (`layout`), which `prog` may carry: both storage orders must agree.
-    let rm_build =
-        || taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0;
-    let prog_rm = rm_build();
-    assert!(!prog_rm.col_major);
-    let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_rm.install_tape(std::sync::Arc::new(rm_build()));
-    let mut fast_stats = RhsStats::default();
-    for seed in 0..4u64 {
-        let state = seeded_state(n, seed, lo, hi);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            for (label, p) in [
-                ("fused", &prog),
-                ("unfused", &prog_uf),
-                ("row-major fused", &prog_rm),
-            ] {
-                let mut dy = vec![0.0f64; n];
-                run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} tape-ref {a:?} \
-                         ({:016x}) vs interpreter {b:?} ({:016x})",
-                        a.to_bits(),
-                        b.to_bits()
-                    );
-                }
-            }
-            for (label, scratch) in [
-                ("fused", &mut fast_scratch),
-                ("unfused", &mut fast_uf),
-                ("row-major fused", &mut fast_rm),
-            ] {
-                let mut dy_fast = vec![0.0f64; n];
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy_fast,
-                    scratch,
-                    &mut fast_stats,
-                );
-                for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} FAST exec {a:?} \
-                         ({:016x}) vs interpreter {b:?} ({:016x})",
-                        a.to_bits(),
-                        b.to_bits()
-                    );
-                }
-            }
-            // Every instruction split three wide, whatever its size, is the
-            // serial executor bit for bit.
-            #[cfg(not(target_arch = "wasm32"))]
-            for (label, scratch) in [
-                ("fused split", &mut fast_scratch),
-                ("row-major fused split", &mut fast_rm),
-            ] {
-                let mut dy_split = vec![0.0f64; n];
-                super::exec::force_split(Some(3));
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy_split,
-                    scratch,
-                    &mut fast_stats,
-                );
-                super::exec::force_split(None);
-                for (k, (a, b)) in dy_split.iter().zip(dy_ref.iter()).enumerate() {
-                    assert_eq!(
-                        a.to_bits(),
-                        b.to_bits(),
-                        "seed {seed} t {t}: dy[{k}] diverged: {label} exec {a:?} vs \
-                         interpreter {b:?}"
-                    );
-                }
-            }
-        }
-    }
-    assert!(
-        fast_stats.taped_rules > 0,
-        "the fast executor must have run"
-    );
-    prog
-}
-
-/// The periodic-wrap index idiom the lat-lon discretization emits:
-/// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
-fn wrap(inner: serde_json::Value, lo: i64, hi: i64) -> serde_json::Value {
-    let p = hi - lo + 1;
-    json!({"op": "ifelse", "args": [
-        {"op": "<", "args": [inner, lo]},
-        {"op": "+", "args": [inner, p]},
-        {"op": "ifelse", "args": [
-            {"op": ">", "args": [inner, hi]},
-            {"op": "-", "args": [inner, p]},
-            inner
-        ]}
-    ]})
-}
-
-/// `D(u[i]) = rhs` over `i ∈ [1, n]` (the standard method-of-lines equation).
-fn d_eq(var: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
-    json!({
-        "lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i"]}], "wrt": "t"},
-                "ranges": {"i": [1, n]}},
-        "rhs": rhs
-    })
-}
-
-fn agg(n: i64, body: serde_json::Value) -> serde_json::Value {
-    json!({"op": "faq", "args": [], "output_idx": ["i"],
-           "ranges": {"i": [1, n]}, "expr": body})
-}
-
-fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
-    json!({"op": "index", "args": [var, e]})
-}
-
-/// Evaluate through the Step 3b FAST executor (warm taped scratch) and assert
-/// bitwise `dy` equality against `dy_ref`.
 /// A causal self-read of `var` at `pos` that the tape does NOT lower, so the
 /// recurrence around it is declined: the read sits inside an
 /// array-valued part of the cell body (`(j ↦ var[pos])[1]`, a one-element
@@ -267,31 +23,8 @@ fn idx(var: &str, e: serde_json::Value) -> serde_json::Value {
 fn untaped_self_read(var: &str, pos: serde_json::Value) -> serde_json::Value {
     json!({"op": "index", "args": [
         {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": [1, 1]},
-         "expr": idx(var, pos)},
+         "expr": ix(var, vec![pos])},
         1]})
-}
-
-fn assert_fast_matches(
-    compiled: &ArrayCompiled,
-    scratch: &mut super::super::RhsScratch,
-    param_vec: &[f64],
-    state: &[f64],
-    t: f64,
-    dy_ref: &[f64],
-    label: &str,
-) {
-    let mut dy = vec![0.0f64; dy_ref.len()];
-    let mut stats = RhsStats::default();
-    compiled.debug_eval_rhs_into(state, t, param_vec, &mut dy, scratch, &mut stats);
-    for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "{label}: dy[{k}] diverged: FAST exec {a:?} ({:016x}) vs interpreter {b:?} ({:016x})",
-            a.to_bits(),
-            b.to_bits()
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -304,14 +37,14 @@ fn assert_fast_matches(
 fn ab_multi_rule_stencil_wrap_and_ghost() {
     let n = 8;
     let lap_wrap = json!({"op": "+", "args": [
-        idx("u", wrap(json!({"op": "-", "args": ["i", 1]}), 1, n)),
-        {"op": "*", "args": [-2.0, idx("u", json!("i"))]},
-        idx("u", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
+        ix("u", vec![wrap(json!({"op": "-", "args": ["i", 1]}), 1, n)]),
+        {"op": "*", "args": [-2.0, ix("u", vec![json!("i")])]},
+        ix("u", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
     ]});
     let lap_ghost = json!({"op": "+", "args": [
-        idx("v", json!({"op": "-", "args": ["i", 1]})),
-        {"op": "*", "args": [-2.0, idx("v", json!("i"))]},
-        idx("v", json!({"op": "+", "args": ["i", 1]}))
+        ix("v", vec![json!({"op": "-", "args": ["i", 1]})]),
+        {"op": "*", "args": [-2.0, ix("v", vec![json!("i")])]},
+        ix("v", vec![json!({"op": "+", "args": ["i", 1]})])
     ]});
     let doc = json!({
         "esm": "2.0.0",
@@ -322,15 +55,16 @@ fn ab_multi_rule_stencil_wrap_and_ghost() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, lap_wrap)),
-                d_eq("v", n, agg(n, lap_ghost))
+                d_eq("u", n, lap_wrap),
+                d_eq("v", n, lap_ghost)
             ]
         }}
     });
     let prog = ab_check(doc, -3.0, 3.0);
     // The wrap must have become a Gather with a two-segment (rolled) axis.
     assert!(
-        prog.plans
+        prog.tables
+            .plans
             .iter()
             .any(|p| p.segs.iter().any(|s| s.len() == 2)),
         "expected a rolled (two-segment) gather axis for the periodic wrap"
@@ -344,8 +78,8 @@ fn ab_nested_aggregate() {
     let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["j", 1]})),
-        idx("u", json!("j"))
+        ix("u", vec![json!({"op": "+", "args": ["j", 1]})]),
+        ix("u", vec![json!("j")])
     ]}});
     let doc = json!({
         "esm": "2.0.0",
@@ -353,7 +87,7 @@ fn ab_nested_aggregate() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]}))
             ]
         }}
     });
@@ -377,8 +111,8 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
     let inner = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [1, n]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["i", 1]})),
-        idx("u", json!("i"))
+        ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+        ix("u", vec![json!("i")])
     ]}});
     let doc = json!({
         "esm": "2.0.0",
@@ -386,7 +120,7 @@ fn ab_nested_aggregate_shadowing_enclosing_index() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]}))
             ]
         }}
     });
@@ -412,8 +146,8 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         n - 1,
         json!({"op": "/", "args": [
             {"op": "-", "args": [
-                idx("u", json!({"op": "+", "args": ["i", 1]})),
-                idx("u", json!({"op": "-", "args": ["i", 1]}))
+                ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+                ix("u", vec![json!({"op": "-", "args": ["i", 1]})])
             ]},
             2.0
         ]}),
@@ -421,12 +155,12 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
     let left = region_agg(
         1,
         1,
-        json!({"op": "-", "args": [idx("u", json!(2)), idx("u", json!(1))]}),
+        json!({"op": "-", "args": [ix("u", vec![json!(2)]), ix("u", vec![json!(1)])]}),
     );
     let right = region_agg(
         n,
         n,
-        json!({"op": "-", "args": [idx("u", json!(n)), idx("u", json!(n - 1))]}),
+        json!({"op": "-", "args": [ix("u", vec![json!(n)]), ix("u", vec![json!(n - 1)])]}),
     );
     let ma = json!({"op": "makearray", "args": [],
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
@@ -437,12 +171,16 @@ fn ab_nested_aggregate_makearray_of_shadowed_aggregates() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [ma, "i"]}))
             ]
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
+    assert_eq!(
+        prog.tables.regions.len(),
+        3,
+        "three makearray regions lowered"
+    );
 }
 
 /// The soundness boundary of the shadow analysis: an enclosing symbol the
@@ -462,7 +200,7 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
     let n = 6;
     let inner = json!({"op": "faq", "args": [], "output_idx": ["j"],
     "ranges": {"j": [1, n]},
-    "expr": {"op": "*", "args": [idx("u", json!("j")), "i"]}});
+    "expr": {"op": "*", "args": [ix("u", vec![json!("j")]), "i"]}});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_nested_capture"},
@@ -472,8 +210,8 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [inner, "i"]}))),
-                d_eq("v", n, agg(n, json!({"op": "*", "args": [-0.5, idx("v", json!("i"))]})))
+                d_eq("u", n, json!({"op": "index", "args": [inner, "i"]})),
+                d_eq("v", n, json!({"op": "*", "args": [-0.5, ix("v", vec![json!("i")])]}))
             ]
         }}
     });
@@ -495,27 +233,31 @@ fn ab_nested_aggregate_capturing_enclosing_index_still_declines() {
 #[test]
 fn ab_makearray_regions() {
     let n = 8;
-    let d = json!({"op": "-", "args": [idx("u", json!("i")),
-                                       idx("u", json!({"op": "-", "args": ["i", 1]}))]});
+    let d = json!({"op": "-", "args": [ix("u", vec![json!("i")]),
+                                       ix("u", vec![json!({"op": "-", "args": ["i", 1]})])]});
     let interior = json!({"op": "+", "args": [
         {"op": "*", "args": [d, d]},
         {"op": "*", "args": ["i", d]}
     ]});
     let ma = json!({"op": "makearray", "args": [],
         "regions": [[[2, n - 1]], [[1, 1]], [[n, n]]],
-        "values": [interior, 0.5, {"op": "*", "args": [2.0, idx("u", json!("i"))]}]});
+        "values": [interior, 0.5, {"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_makearray"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "index", "args": [ma, "i"]})))
+                d_eq("u", n, json!({"op": "index", "args": [ma, "i"]}))
             ]
         }}
     });
     let prog = ab_check(doc, -2.0, 2.0);
-    assert_eq!(prog.regions.len(), 3, "three makearray regions lowered");
+    assert_eq!(
+        prog.tables.regions.len(),
+        3,
+        "three makearray regions lowered"
+    );
 }
 
 /// Static einsum contraction with the `ifelse(k==0,…)` weight idiom — the
@@ -529,13 +271,13 @@ fn ab_contraction_weights() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
                         25,
                         {"op": "ifelse", "args": [{"op": "==", "args": ["k", 0]}, -2, 1]},
-                        idx("u", json!({"op": "+", "args": ["i", "k"]}))
+                        ix("u", vec![json!({"op": "+", "args": ["i", "k"]})])
                     ]}}))
             ]
         }}
@@ -554,11 +296,11 @@ fn ab_contraction_with_filter_mask() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "filter": {"op": "<=", "args": ["j", {"op": "*", "args": [1, "i"]}]},
-                    "expr": idx("u", json!("j"))}))
+                    "expr": ix("u", vec![json!("j")])}))
             ]
         }}
     });
@@ -586,10 +328,10 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     // cond `p > 1000` is false for the default p = 2, so the TRUE branch
     // (the trapping division u[i]/(p-p) → ±inf) must never run.
     let trap = json!({"op": "/", "args": [
-        idx("u", json!("i")),
+        ix("u", vec![json!("i")]),
         {"op": "-", "args": ["p", "p"]}
     ]});
-    let safe = json!({"op": "*", "args": [3.0, idx("u", json!("i"))]});
+    let safe = json!({"op": "*", "args": [3.0, ix("u", vec![json!("i")])]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_shortcircuit"},
@@ -599,8 +341,8 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
                 "p": {"type": "parameter", "default": 2.0}
             },
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "ifelse", "args": [
-                    {"op": ">", "args": ["p", 1000.0]}, trap, safe]})))
+                d_eq("u", n, json!({"op": "ifelse", "args": [
+                    {"op": ">", "args": ["p", 1000.0]}, trap, safe]}))
             ]
         }}
     });
@@ -639,7 +381,7 @@ fn ab_scalar_ifelse_short_circuit_traps_untaken_branch() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(nstates, 7, 0.5, 2.0);
-    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut dy = vec![0.0f64; nstates];
     let run = run_reference(&prog, &compiled, &state, &param_vec, 0.0, &mut dy);
     for (a, b) in dy.iter().zip(dy_ref.iter()) {
@@ -678,10 +420,10 @@ fn ab_select_nan_semantics() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "ifelse", "args": [
-                    {"op": ">=", "args": [idx("u", json!("i")), 0.0]},
-                    {"op": "sqrt", "args": [idx("u", json!("i"))]},
-                    0.25]})))
+                d_eq("u", n, json!({"op": "ifelse", "args": [
+                    {"op": ">=", "args": [ix("u", vec![json!("i")]), 0.0]},
+                    {"op": "sqrt", "args": [ix("u", vec![json!("i")])]},
+                    0.25]}))
             ]
         }}
     });
@@ -699,7 +441,7 @@ fn ab_select_nan_semantics() {
     for seed in 0..4u64 {
         let state = seeded_state(nstates, seed, -2.0, 2.0);
         assert!(state.iter().any(|&x| x < 0.0), "fixture needs negatives");
-        let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+        let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let mut dy = vec![0.0f64; nstates];
         run_reference(&prog, &compiled, &state, &param_vec, 0.0, &mut dy);
         for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -730,10 +472,10 @@ fn ab_signed_zero() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "+", "args": [
-                    {"op": "*", "args": [-0.0, idx("u", json!("i"))]},
+                d_eq("u", n, json!({"op": "+", "args": [
+                    {"op": "*", "args": [-0.0, ix("u", vec![json!("i")])]},
                     {"op": "neg", "args": [0.0]}
-                ]})))
+                ]}))
             ]
         }}
     });
@@ -754,15 +496,15 @@ fn ab_nary_fold_order() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "+", "args": [
+                d_eq("u", n, json!({"op": "+", "args": [
                     0.1, 0.2, 0.3,
-                    idx("u", json!("i")),
+                    ix("u", vec![json!("i")]),
                     {"op": "min", "args": [
-                        idx("u", json!("i")),
-                        {"op": "*", "args": [0.1, idx("u", json!("i"))]},
+                        ix("u", vec![json!("i")]),
+                        {"op": "*", "args": [0.1, ix("u", vec![json!("i")])]},
                         0.7
                     ]}
-                ]})))
+                ]}))
             ]
         }}
     });
@@ -787,7 +529,7 @@ fn ab_subblock_dy_scatter() {
                             "ranges": {"i": [1, 7]}},
                     "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                             "ranges": {"i": [1, 7]},
-                            "expr": idx("u", json!("i"))}
+                            "expr": ix("u", vec![json!("i")])}
                 },
                 // The shifted LHS covers u[2..8]; u[1] needs its own
                 // (indexed-scalar) defining equation.
@@ -798,7 +540,8 @@ fn ab_subblock_dy_scatter() {
     });
     let prog = ab_check(doc, -2.0, 2.0);
     assert!(
-        prog.dy_writes
+        prog.tables
+            .dy_writes
             .iter()
             .any(|w| w.dest_lo.iter().any(|&d| d > 0)),
         "expected a shifted sub-block dy write"
@@ -852,13 +595,16 @@ fn ab_observed_chain_and_broadcast() {
         "const-tier observed lowered to CONST section"
     );
     assert!(
-        prog.plans.iter().any(|p| p.mapped.iter().any(|m| !m)),
+        prog.tables
+            .plans
+            .iter()
+            .any(|p| p.mapped.iter().any(|m| !m)),
         "expected a broadcast axis in the c[j] gather over the [i,j] box"
     );
     // `s` reads state, so it is CONTINUOUS; it is 0-d ⇒ in the samples cone ⇒
     // exported (along with its dependency cone).
     assert!(
-        prog.exports.iter().any(|(n, _)| n == "s"),
+        prog.exports.iter().any(|(n, _)| n == "M.s"),
         "scalar observed `s` must be exported for the samples pass: {:?}",
         prog.exports
     );
@@ -912,7 +658,7 @@ fn a_declined_rule_leaves_no_program() {
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(named, ["k", "a", "D(psi)"], "{report}");
+    assert_eq!(named, ["M.k", "M.a", "D(M.psi)"], "{report}");
     assert_eq!(declined.rules.len(), declined.reasons.len());
     assert_eq!(report.n_rules, declined.rules.len());
     assert_eq!(report.n_taped, declined.rules.len() - 3);
@@ -1177,12 +923,12 @@ fn coloring_invariants() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "k": [-1, 1]},
                     "expr": {"op": "*", "args": [
                         {"op": "ifelse", "args": [{"op": "==", "args": ["k", 0]}, -2, 1]},
-                        {"op": "sin", "args": [idx("u", json!({"op": "+", "args": ["i", "k"]}))]}
+                        {"op": "sin", "args": [ix("u", vec![json!({"op": "+", "args": ["i", "k"]})])]}
                     ]}}))
             ]
         }}
@@ -1195,23 +941,23 @@ fn coloring_invariants() {
     assert!(report.fallbacks.is_empty());
 
     // def / last-use per slot (linear order, re-defs count as uses).
-    let mut def = vec![usize::MAX; prog.slots.len()];
-    let mut last = vec![0usize; prog.slots.len()];
+    let mut def = vec![usize::MAX; prog.tables.slots.len()];
+    let mut last = vec![0usize; prog.tables.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
-        ins.for_each_def(&prog.tables(), |o| {
+        ins.for_each_def(&prog.slot_tables(), |o| {
             if def[o as usize] == usize::MAX {
                 def[o as usize] = i;
             } else {
                 last[o as usize] = last[o as usize].max(i);
             }
         });
-        ins.for_each_read(&prog.tables(), |s| {
+        ins.for_each_read(&prog.slot_tables(), |s| {
             last[s as usize] = last[s as usize].max(i);
         });
     }
     // Group slots by storage.
     let mut by_storage: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (s, d) in prog.slots.iter().enumerate() {
+    for (s, d) in prog.tables.slots.iter().enumerate() {
         if def[s] != usize::MAX {
             assert_ne!(d.storage, u32::MAX, "defined slot {s} must be colored");
             by_storage.entry(d.storage).or_default().push(s);
@@ -1254,15 +1000,15 @@ fn coloring_invariants() {
 fn value_numbering_scope_behaviour() {
     let n = 6;
     // d(u) repeated twice in one map body: lowered once.
-    let d = json!({"op": "-", "args": [idx("u", json!("i")),
-                                       idx("u", json!({"op": "-", "args": ["i", 1]}))]});
+    let d = json!({"op": "-", "args": [ix("u", vec![json!("i")]),
+                                       ix("u", vec![json!({"op": "-", "args": ["i", 1]})])]});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_vn"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [d, d]})))
+                d_eq("u", n, json!({"op": "*", "args": [d, d]}))
             ]
         }}
     });
@@ -1275,17 +1021,15 @@ fn value_numbering_scope_behaviour() {
     );
     // Exactly one subtraction of the two gathers (plus none duplicated): count
     // Bin(Sub) instructions (plain or fused) — 1 for d (shared), not 2.
-    let subs = prog
-        .instrs
+    let subs = count_where(
+        &prog,
+        |i| matches!(i, Instr::Bin { op, .. } if *op == super::super::BinCode::Sub),
+    ) + prog
+        .fused
         .iter()
-        .filter(|i| matches!(i, Instr::Bin { op, .. } if *op == super::super::BinCode::Sub))
-        .count()
-        + prog
-            .fused
-            .iter()
-            .flat_map(|fs| fs.micro.iter())
-            .filter(|m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub))
-            .count();
+        .flat_map(|fs| fs.micro.iter())
+        .filter(|m| matches!(m, MicroOp::Bin { op, .. } if *op == super::super::BinCode::Sub))
+        .count();
     assert_eq!(subs, 1, "repeated subtree must be lowered once");
 }
 
@@ -1300,15 +1044,15 @@ fn tape_build_is_side_effect_free() {
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
             "equations": [
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [2.0, idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}))
             ]
         }}
     });
     let compiled = compile(doc);
     let state = seeded_state(n as usize, 3, -1.0, 1.0);
-    let (before, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (before, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
     let _ = compiled.build_tape(&HashSet::new());
-    let (after, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+    let (after, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
     for (a, b) in before.iter().zip(after.iter()) {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -1342,11 +1086,15 @@ fn exports_materialize_as_observed_arrays() {
     let mut dy = vec![0.0f64];
     let run = run_reference(&prog, &compiled, &state, &param_vec, 0.0, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
-    let s = run.obs.get("s").expect("s exported");
+    let s = run.obs.get("M.s").expect("s exported");
     assert_eq!(s.ndim(), 0);
     assert_eq!(s[ndarray::IxDyn(&[])].to_bits(), 3.0f64.to_bits());
     // The slot value backing the export is the scalar 3.0.
-    let (_, slot) = prog.exports.iter().find(|(n, _)| n == "s").expect("export");
+    let (_, slot) = prog
+        .exports
+        .iter()
+        .find(|(n, _)| n == "M.s")
+        .expect("export");
     match &run.slots[*slot as usize] {
         Some(RefVal::Scalar(v)) => assert_eq!(v.to_bits(), 3.0f64.to_bits()),
         other => panic!("unexpected export slot value {other:?}"),
@@ -1575,8 +1323,14 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
     let n = 3000;
     for variant in ["from_bottom", "to_top", "shifted"] {
         let compiled = compile(makearray_scan_doc(n, 0, variant));
-        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
-        let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);
+        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg())));
+        let widest = prog
+            .tables
+            .slots
+            .iter()
+            .map(|s| s.elems())
+            .max()
+            .unwrap_or(0);
         assert!(
             widest <= n as usize + 1,
             "[{variant}] a slot of {widest} cells: the scan was lowered as a box"
@@ -1689,17 +1443,14 @@ fn a_reverse_window_that_is_not_a_scan_folds_from_the_top() {
                         "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
                         "filter": {"op": cmp, "args": ["m", "i"]},
                         "expr": body}},
-                    d_eq("u", n, agg(n, json!({"op": "neg", "args": [
-                        {"op": "index", "args": ["R", "i"]}]})))
+                    d_eq("u", n, json!({"op": "neg", "args": [
+                        {"op": "index", "args": ["R", "i"]}]}))
                 ]
             }}
         });
         let prog = ab_check(doc, -3.0, 3.0);
-        let reverse_reduces = prog
-            .instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Reduce { reverse: true, .. }))
-            .count();
+        let reverse_reduces =
+            count_where(&prog, |i| matches!(i, Instr::Reduce { reverse: true, .. }));
         assert!(reverse_reduces > 0, "{cmp} {body}");
     }
 }
@@ -1864,7 +1615,7 @@ fn ab_scan_fused_with_its_neighbours() {
     compiled.runtime_mode = super::super::RuntimeMode::Native;
     let (prog, _) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
-        prog.exports.iter().any(|(e, _)| e == "P"),
+        prog.exports.iter().any(|(e, _)| e == "M.P"),
         "fixture exports P"
     );
     assert!(
@@ -1875,7 +1626,7 @@ fn ab_scan_fused_with_its_neighbours() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(3 * n, 7, -2.0, 2.0);
-    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
+    let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     for publish in [false, true, false] {
         ctx.set_exports_active(publish);
@@ -1891,7 +1642,6 @@ fn ab_scan_fused_with_its_neighbours() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(&mut ctx, &call, &mut dy, &mut stats);
         for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
@@ -1899,7 +1649,7 @@ fn ab_scan_fused_with_its_neighbours() {
         }
         if publish {
             // P[k] = sum over m <= k of u[m] * w[m], folded from 0.0.
-            let p = ctx.exec.obs.get("P").expect("P published");
+            let p = ctx.exec.obs.get("M.P").expect("P published");
             let mut acc = 0.0f64;
             for k in 0..n {
                 let w = 1.0 + 0.5 * ((k + 1) as f64).sin();
@@ -2041,7 +1791,7 @@ fn ab_pre_reduction_absorbed_only_for_own_column_reads() {
         .join("../../tests/conformance/scaling/fixtures/column_sum/column_sum_N1000.esm");
     let file = crate::parse::load_path(&path).expect("scaling fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0;
+    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0;
     assert!(
         prog.fused.iter().any(|f| f.pre.is_some()),
         "column_sum: the column sum is absorbed"
@@ -2126,12 +1876,12 @@ fn ab_dense_contraction_folds_its_product() {
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "expr": {"op": "*", "args": [0.001, {"op": "+", "args": [1,
                         {"op": "sin", "args": [{"op": "*", "args": ["i", "j"]}]}]}]}}},
-                d_eq("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                d_eq_with_rhs("c", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                     "reduce": "+",
                     "ranges": {"i": [1, n], "j": [1, n]},
                     "expr": {"op": "*", "args": [
-                        {"op": "index", "args": ["K", "i", "j"]}, idx("e", json!("j"))]}})),
-                d_eq("e", n, json!({"op": "*", "args": [-0.1, idx("e", json!("i"))]}))
+                        {"op": "index", "args": ["K", "i", "j"]}, ix("e", vec![json!("j")])]}})),
+                d_eq_with_rhs("e", n, json!({"op": "*", "args": [-0.1, ix("e", vec![json!("i")])]}))
             ]
         }}
     });
@@ -2158,12 +1908,12 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
     let interior = json!({"op": "faq", "args": [], "output_idx": ["i"],
     "ranges": {"i": [2, n - 1]},
     "expr": {"op": "-", "args": [
-        idx("u", json!({"op": "+", "args": ["i", 1]})),
-        idx("u", json!({"op": "-", "args": ["i", 1]}))
+        ix("u", vec![json!({"op": "+", "args": ["i", 1]})]),
+        ix("u", vec![json!({"op": "-", "args": ["i", 1]})])
     ]}});
     let top = json!({"op": "faq", "args": [], "output_idx": ["i"],
         "ranges": {"i": [n, n]},
-        "expr": {"op": "*", "args": [2.0, idx("u", json!("i"))]}});
+        "expr": {"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}});
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_wholesale"},
@@ -2183,8 +1933,8 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
                           "values": [interior, 1.5, top]}},
                 {"lhs": "h", "rhs": {"op": "+", "args": [
                           {"op": "*", "args": [2.0, "u"]}, "g", "q"]}},
-                d_eq("u", n, agg(n, json!({"op": "neg", "args": [
-                    {"op": "index", "args": ["h", "i"]}]})))
+                d_eq("u", n, json!({"op": "neg", "args": [
+                    {"op": "index", "args": ["h", "i"]}]}))
             ]
         }}
     });
@@ -2238,7 +1988,7 @@ fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
         report
             .fallbacks
             .iter()
-            .any(|(name, reason)| name == "m" && reason.contains("computed subscripts")),
+            .any(|(name, reason)| name == "M.m" && reason.contains("computed subscripts")),
         "`m` must be the declined rule this test is about: {:?}",
         report.fallbacks
     );
@@ -2322,7 +2072,7 @@ fn ab_model_file_if_available() {
         let noise = seeded_state(n, seed, -0.01, 0.01);
         let state: Vec<f64> = u0.iter().zip(&noise).map(|(u, e)| u * (1.0 + e)).collect();
         for &t in &[0.0, 1234.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             let mut dy = vec![0.0f64; n];
             run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
             let mut diverged = 0usize;
@@ -2501,7 +2251,7 @@ fn output_only_observeds_leave_the_rhs() {
         "o's instructions leave the call: {:?}",
         prog.instrs
     );
-    let exported = prog.exports.iter().any(|(n, _)| n == "o");
+    let exported = prog.exports.iter().any(|(n, _)| n == "M.o");
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = vec![1.5f64];
@@ -2517,7 +2267,6 @@ fn output_only_observeds_leave_the_rhs() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
@@ -2530,7 +2279,7 @@ fn output_only_observeds_leave_the_rhs() {
     run_call(&mut ctx, &mut dy2);
     assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
     if exported {
-        let o = ctx.exec.obs.get("o").expect("o published");
+        let o = ctx.exec.obs.get("M.o").expect("o published");
         assert_eq!(
             o[ndarray::IxDyn(&[])].to_bits(),
             (1.5f64.sin() * 3.0).to_bits()
@@ -2559,7 +2308,7 @@ fn export_demotion_skips_unread_publishes() {
     let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert!(
-        prog.exports.iter().any(|(n, _)| n == "s"),
+        prog.exports.iter().any(|(n, _)| n == "M.s"),
         "fixture must export `s`"
     );
     let params = HashMap::new();
@@ -2578,7 +2327,6 @@ fn export_demotion_skips_unread_publishes() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
-            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
@@ -2590,7 +2338,7 @@ fn export_demotion_skips_unread_publishes() {
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
     assert!(
-        !ctx.exec.obs.contains_key("s"),
+        !ctx.exec.obs.contains_key("M.s"),
         "demoted export must not publish"
     );
 
@@ -2600,7 +2348,7 @@ fn export_demotion_skips_unread_publishes() {
     let mut dy2 = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy2);
     assert_eq!(dy2[0].to_bits(), dy[0].to_bits());
-    let s = ctx.exec.obs.get("s").expect("export array");
+    let s = ctx.exec.obs.get("M.s").expect("export array");
     assert_eq!(
         s[ndarray::IxDyn(&[])].to_bits(),
         3.0f64.to_bits(),
@@ -2608,18 +2356,17 @@ fn export_demotion_skips_unread_publishes() {
     );
 }
 
-/// Step 4b superop composition: arith three-op chains must merge into `Bin3`
-/// and the extended (mask / clamp) pairs into `Bin2`, with bitwise `dy`
-/// equality across fused/unfused programs on BOTH executors (the fixture
-/// A/B) — the superops apply the identical scalar kernels in the identical
-/// order, so no bit may move.
+/// Superop composition: arith chains and the extended (mask / clamp) pairs
+/// merge into `Bin2`, with bitwise `dy` equality across fused/unfused
+/// programs on BOTH executors (the fixture A/B) — a superop applies the
+/// identical scalar kernels in the identical order, so no bit may move.
 #[test]
-fn ab_superop_bin3_and_extended_pairs() {
+fn ab_superop_extended_pairs() {
     let n = 9;
-    let u = idx("u", json!("i"));
-    let v = idx("v", json!("i"));
+    let u = ix("u", vec![json!("i")]);
+    let v = ix("v", vec![json!("i")]);
     // ((u * 2.5 + v) * u - 1.5) / (v + 3.0): a four-op arith chain plus a
-    // divisor — long enough that a Bin3 must form.
+    // divisor.
     let chain = json!({"op": "/", "args": [
         {"op": "-", "args": [
             {"op": "*", "args": [
@@ -2646,19 +2393,14 @@ fn ab_superop_bin3_and_extended_pairs() {
                 "v": {"type": "unknown", "shape": ["i"]}
             },
             "equations": [
-                d_eq("u", n, agg(n, chain)),
-                d_eq("v", n, agg(n, limiter))
+                d_eq("u", n, chain),
+                d_eq("v", n, limiter)
             ]
         }}
     });
-    // Default configuration (ext pairs on, Bin3 off) through the standard
-    // fixture A/B: fused + unfused × reference + fast executors.
-    let prog = ab_check(doc.clone(), -3.0, 3.0);
-    let has_bin3 = |p: &TapeProgram| {
-        p.fused
-            .iter()
-            .any(|f| f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. })))
-    };
+    // Default configuration (ext pairs on) through the standard fixture
+    // A/B: fused + unfused × reference + fast executors.
+    let prog = ab_check(doc, -3.0, 3.0);
     let has_ext_bin2 = prog.fused.iter().any(|f| {
         f.micro.iter().any(|m| {
             matches!(m, MicroOp::Bin2 { op1, op2, .. }
@@ -2671,67 +2413,6 @@ fn ab_superop_bin3_and_extended_pairs() {
         has_ext_bin2,
         "expected an extended-pair Bin2 ((Mul,Gt) or (Min,Max)) in the fused program"
     );
-    assert!(
-        !has_bin3(&prog),
-        "Bin3 must stay off in the default configuration"
-    );
-
-    // The Bin3 arm (`all_superops_cfg`, the `ESS_TAPE_BIN3=1` threshold): the
-    // three-op chain must merge, splat registers must be provisioned, and
-    // BOTH executors must stay bitwise equal to the production interpreter.
-    let compiled = compile(doc);
-    let (prog3, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg())));
-    assert!(
-        has_bin3(&prog3),
-        "expected a Bin3 superop with bin3 enabled"
-    );
-    for f in &prog3.fused {
-        let has3 = f.micro.iter().any(|m| matches!(m, MicroOp::Bin3 { .. }));
-        if has3 {
-            assert_eq!(f.n_splat_regs as usize, f.scalars.len() + 1);
-        } else {
-            assert_eq!(f.n_splat_regs, 0);
-        }
-    }
-    let n_state = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(std::sync::Arc::new(
-        taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
-    ));
-    let mut stats = RhsStats::default();
-    for seed in 0..4u64 {
-        let state = seeded_state(n_state, seed, -3.0, 3.0);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
-            let mut dy = vec![0.0f64; n_state];
-            run_reference(&prog3, &compiled, &state, &param_vec, t, &mut dy);
-            for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 tape-ref vs interpreter"
-                );
-            }
-            let mut dy_fast = vec![0.0f64; n_state];
-            compiled.debug_eval_rhs_into(
-                &state,
-                t,
-                &param_vec,
-                &mut dy_fast,
-                &mut fast3,
-                &mut stats,
-            );
-            for (k, (a, b)) in dy_fast.iter().zip(dy_ref.iter()).enumerate() {
-                assert_eq!(
-                    a.to_bits(),
-                    b.to_bits(),
-                    "seed {seed} t {t}: dy[{k}] diverged: bin3 FAST exec vs interpreter"
-                );
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2740,8 +2421,8 @@ fn ab_superop_bin3_and_extended_pairs() {
 
 /// A method-of-lines model whose tendency is `rhs`, over an `[i]`-shaped state
 /// and an `[i]`-shaped observed `s = 0.5 * u` for `rhs` to consume. Array-shaped
-/// on purpose: a scalar model never engages the whole-array overlay, and the
-/// whole point of #101 is that the three evaluators disagreed.
+/// on purpose: a scalar model never exercises the whole-array broadcast path, and the
+/// array path is where the evaluators could disagree.
 fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
         "esm": "2.0.0",
@@ -2753,22 +2434,20 @@ fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
             },
             "equations": [
                 {"lhs": "s",
-                 "rhs": agg(n, json!({"op": "*", "args": [0.5, idx("u", json!("i"))]}))},
-                d_eq("u", n, agg(n, rhs))
+                 "rhs": agg(n, json!({"op": "*", "args": [0.5, ix("u", vec![json!("i")])]}))},
+                d_eq("u", n, rhs)
             ]
         }}
     })
 }
 
-/// `dy` from all three evaluation paths: the per-cell oracle (`force_scalar`),
-/// the whole-array vectorized overlay, and the tape (reference executor over
-/// the FUSED program). Returns them in that order.
-fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
+/// `dy` from both evaluation paths: the interpreter and the tape (reference
+/// executor over the FUSED program). Returns them in that order.
+fn dy_two_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 2] {
     let compiled = compile(doc);
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
-    let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
-    let (dy_vec, _) = compiled.debug_eval_rhs(state, 0.0, &params, false);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(state, 0.0, &params);
     let (prog, report) = taped(compiled.build_tape(&HashSet::new()));
     assert!(
         report.fallbacks.is_empty(),
@@ -2777,31 +2456,18 @@ fn dy_three_ways(doc: serde_json::Value, state: &[f64]) -> [Vec<f64>; 3] {
     );
     let mut dy_tape = vec![0.0f64; state.len()];
     run_reference(&prog, &compiled, state, &param_vec, 0.0, &mut dy_tape);
-    [dy_oracle, dy_vec, dy_tape]
-}
-
-fn assert_bits_eq(a: &[f64], b: &[f64], what: &str) {
-    assert_eq!(a.len(), b.len(), "{what}: length");
-    for (k, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-        assert_eq!(
-            x.to_bits(),
-            y.to_bits(),
-            "{what}: dy[{k}] diverged: {x:?} ({:016x}) vs {y:?} ({:016x})",
-            x.to_bits(),
-            y.to_bits()
-        );
-    }
+    [dy_oracle, dy_tape]
 }
 
 /// The regression itself. For each unary scalar operator `F`, the tendency
 /// `broadcast(fn = F, [s])` must be BIT-IDENTICAL to the bare `F(s)` — on the
-/// per-cell oracle, on the vectorized overlay, and on the tape.
+/// interpreter and on the tape.
 ///
-/// Before the fix all three folded `args` through the BINARY kernel table, so a
+/// Before the fix every path folded `args` through the BINARY kernel table, so a
 /// single-element fold degenerated to the identity and every one of these
 /// returned `s` unchanged (issue #101).
 #[test]
-fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
+fn unary_broadcast_matches_the_bare_node_on_both_paths() {
     let n = 6i64;
     // `s = 0.5 * u` and `u ∈ [0.25, 3)`, so every operand is inside the domain
     // of `log`/`sqrt` and no NaN can mask a divergence.
@@ -2811,24 +2477,22 @@ fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
     for f in [
         "-", "neg", "log", "exp", "sqrt", "sin", "cos", "tanh", "floor", "not",
     ] {
-        let operand = idx("s", json!("i"));
+        let operand = ix("s", vec![json!("i")]);
         let bare = json!({"op": f, "args": [operand]});
         let bcast = json!({"op": "broadcast", "fn": f, "args": [operand]});
 
-        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
-        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+        let [o_bare, t_bare] = dy_two_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, t_bc] = dy_two_ways(bcast_doc("bcast", n, bcast), &state);
 
         // Each path agrees with itself across the two spellings …
         assert_bits_eq(&o_bc, &o_bare, &format!("fn `{f}`: oracle"));
-        assert_bits_eq(&v_bc, &v_bare, &format!("fn `{f}`: vectorized overlay"));
         assert_bits_eq(&t_bc, &t_bare, &format!("fn `{f}`: tape"));
-        // … and the three paths agree with each other.
-        assert_bits_eq(&v_bc, &o_bc, &format!("fn `{f}`: overlay vs oracle"));
+        // … and the two paths agree with each other.
         assert_bits_eq(&t_bc, &o_bc, &format!("fn `{f}`: tape vs oracle"));
 
         // Guard against a vacuous pass: `F` must actually CHANGE the operand,
         // otherwise "broadcast == bare" would hold even with the bug present.
-        let [o_id, _, _] = dy_three_ways(bcast_doc("id", n, idx("s", json!("i"))), &state);
+        let [o_id, _] = dy_two_ways(bcast_doc("id", n, ix("s", vec![json!("i")])), &state);
         assert!(
             o_bare
                 .iter()
@@ -2847,7 +2511,7 @@ fn unary_broadcast_matches_the_bare_node_on_all_three_paths() {
 fn n_ary_broadcast_folds_are_unchanged() {
     let n = 6i64;
     let state = seeded_state(n as usize, 7, 0.25, 3.0);
-    let s = || idx("s", json!("i"));
+    let s = || ix("s", vec![json!("i")]);
     let cases: Vec<(&str, serde_json::Value, serde_json::Value)> = vec![
         // (label, broadcast spelling, equivalent bare spelling)
         (
@@ -2884,10 +2548,9 @@ fn n_ary_broadcast_folds_are_unchanged() {
         ),
     ];
     for (label, bcast, bare) in cases {
-        let [o_bare, v_bare, t_bare] = dy_three_ways(bcast_doc("bare", n, bare), &state);
-        let [o_bc, v_bc, t_bc] = dy_three_ways(bcast_doc("bcast", n, bcast), &state);
+        let [o_bare, t_bare] = dy_two_ways(bcast_doc("bare", n, bare), &state);
+        let [o_bc, t_bc] = dy_two_ways(bcast_doc("bcast", n, bcast), &state);
         assert_bits_eq(&o_bc, &o_bare, &format!("{label}: oracle"));
-        assert_bits_eq(&v_bc, &v_bare, &format!("{label}: vectorized overlay"));
         assert_bits_eq(&t_bc, &t_bare, &format!("{label}: tape"));
     }
 }
@@ -2899,8 +2562,8 @@ fn n_ary_broadcast_folds_are_unchanged() {
 fn unary_broadcast_minus_negates() {
     let n = 3i64;
     let state = vec![1.0, 2.0, 4.0];
-    let rhs = json!({"op": "broadcast", "fn": "-", "args": [idx("s", json!("i"))]});
-    for dy in dy_three_ways(bcast_doc("neg_check", n, rhs), &state) {
+    let rhs = json!({"op": "broadcast", "fn": "-", "args": [ix("s", vec![json!("i")])]});
+    for dy in dy_two_ways(bcast_doc("neg_check", n, rhs), &state) {
         assert_bits_eq(&dy, &[-0.5, -1.0, -2.0], "broadcast(fn=\"-\") must negate");
     }
 }
@@ -2909,11 +2572,6 @@ fn unary_broadcast_minus_negates() {
 // Phase 2 tape growth: `Instr::ConstArray`, `Instr::Reduce`, and the observed
 // shapes that let a reader of a per-cell-produced observed stay on the tape.
 // ---------------------------------------------------------------------------
-
-/// How many instructions of a given opcode the program carries.
-fn opcount(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
 
 /// Every fold of the program, as `(source box, folded leading axes, output
 /// slot)`: an `Instr::Reduce`, or one a fused group absorbed (which folds its
@@ -2973,10 +2631,10 @@ fn ab_const_array_observed() {
                                       "value": [0.25, -1.5, 2.0, 3.75]}},
                 {"lhs": "f", "rhs": {"op": "+", "args": [
                     1, {"op": "cos", "args": [{"op": "*", "args": [3.5, "zc"]}]}]}},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": [
-                    idx("f", json!("i")),
-                    idx("zc", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
-                ]})))
+                d_eq("u", n, json!({"op": "*", "args": [
+                    ix("f", vec![json!("i")]),
+                    ix("zc", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
+                ]}))
             ]
         }}
     });
@@ -2986,9 +2644,12 @@ fn ab_const_array_observed() {
         1,
         "the literal is stored once"
     );
-    assert_eq!(prog.const_data.len(), 1);
-    assert_eq!(&prog.const_data[0].shape[..], &[4]);
-    assert_eq!(&prog.const_data[0].values[..], &[0.25, -1.5, 2.0, 3.75]);
+    assert_eq!(prog.tables.const_data.len(), 1);
+    assert_eq!(&prog.tables.const_data[0].shape[..], &[4]);
+    assert_eq!(
+        &prog.tables.const_data[0].values[..],
+        &[0.25, -1.5, 2.0, 3.75]
+    );
     // CONST cadence: the literal is stored once per solve, not per RHS call.
     let store = prog
         .instrs
@@ -3007,7 +2668,7 @@ fn ab_rank0_scalar_reductions() {
     let red = |kind: &str| {
         json!({"op": "faq", "args": [], "output_idx": [], "reduce": kind,
                "ranges": {"j": [1, n]},
-               "expr": {"op": "*", "args": [idx("u", json!("j")), 1.5]}})
+               "expr": {"op": "*", "args": [ix("u", vec![json!("j")]), 1.5]}})
     };
     let doc = json!({
         "esm": "2.0.0",
@@ -3028,7 +2689,7 @@ fn ab_rank0_scalar_reductions() {
                 {"lhs": "lo", "rhs": red("min")},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"},
                  "rhs": {"op": "+", "args": ["tot", "prod", "hi", "lo"]}},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": ["tot", ix("u", vec![json!("i")])]}))
             ]
         }}
     });
@@ -3038,7 +2699,7 @@ fn ab_rank0_scalar_reductions() {
     for (src_shape, n_axes, out) in folds {
         assert_eq!(n_axes, 1, "the single contracted axis");
         assert_eq!(&src_shape[..], &[n as usize]);
-        assert!(prog.slots[out as usize].scalar, "rank-0 output");
+        assert!(prog.tables.slots[out as usize].scalar, "rank-0 output");
     }
 }
 
@@ -3063,9 +2724,9 @@ fn ab_rank0_reduction_two_contracted_axes() {
                     "ranges": {"j": [1, n], "k": [1, n]},
                     "expr": {"op": "*", "args": [
                         {"op": "^", "args": [10.0, "k"]},
-                        idx("u", json!("j"))]}}},
+                        ix("u", vec![json!("j")])]}}},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
-                d_eq("u", n, agg(n, json!({"op": "*", "args": ["tot", idx("u", json!("i"))]})))
+                d_eq("u", n, json!({"op": "*", "args": ["tot", ix("u", vec![json!("i")])]}))
             ]
         }}
     });
@@ -3095,9 +2756,9 @@ fn ab_rank0_reduction_with_a_filter() {
                 {"lhs": "tot", "rhs": {"op": "faq", "args": [], "output_idx": [],
                     "ranges": {"j": [1, n]},
                     "filter": {"op": "<=", "args": ["j", 2]},
-                    "expr": idx("u", json!("j"))}},
+                    "expr": ix("u", vec![json!("j")])}},
                 {"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": "tot"},
-                d_eq("u", n, agg(n, idx("u", json!("i"))))
+                d_eq("u", n, ix("u", vec![json!("i")]))
             ]
         }}
     });
@@ -3130,9 +2791,9 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
                     // zero (CONFORMANCE_SPEC §5.19.4).
                     "expr": {"op": "ifelse", "args": [
                         {"op": "<=", "args": ["i", 1]},
-                        idx("u", json!("i")),
+                        ix("u", vec![json!("i")]),
                         {"op": "+", "args": [
-                            idx("u", json!("i")),
+                            ix("u", vec![json!("i")]),
                             {"op": "*", "args": [
                                 0.5,
                                 untaped_self_read("r", json!({"op": "-", "args": ["i", 1]}))]}
@@ -3140,21 +2801,21 @@ fn a_reader_of_a_declined_observed_declines_at_the_read() {
                     ]}}},
                 // …read elementwise, and through a shifted gather.
                 {"lhs": "g", "rhs": {"op": "*", "args": [2.0, "r"]}},
-                d_eq("u", n, agg(n, json!({"op": "-", "args": [
-                    idx("g", json!("i")),
-                    idx("r", wrap(json!({"op": "+", "args": ["i", 1]}), 1, n))
-                ]})))
+                d_eq("u", n, json!({"op": "-", "args": [
+                    ix("g", vec![json!("i")]),
+                    ix("r", vec![wrap(json!({"op": "+", "args": ["i", 1]}), 1, n)])
+                ]}))
             ]
         }}
     });
     let declined = declined_check(doc);
     let rules = declined.declined_rules();
     let names: Vec<&str> = rules.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["r", "g", "D(u)"]);
+    assert_eq!(names, ["M.r", "M.g", "D(M.u)"]);
     for (name, reason) in &rules[1..] {
         assert!(
-            reason.contains("observed `r` is produced by a declined rule")
-                || reason.contains("observed `g` is produced by a declined rule"),
+            reason.contains("observed `M.r` is produced by a declined rule")
+                || reason.contains("observed `M.g` is produced by a declined rule"),
             "{name}: {reason}"
         );
     }
@@ -3170,7 +2831,7 @@ fn ab_elementwise_observed_gather_fixture() {
     );
     let file = crate::parse::load_path(&path).expect("corpus fixture loads");
     let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    for (label, fuse) in [("fused", Some(default_cfg())), ("unfused", None)] {
+    for (label, fuse) in [("fused", Some(superop_cfg())), ("unfused", None)] {
         let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), fuse));
         assert!(
             report.fallbacks.is_empty(),
@@ -3188,7 +2849,7 @@ fn ab_elementwise_observed_gather_fixture() {
         for seed in 0..3u64 {
             let state = seeded_state(n, seed, -2.0, 2.0);
             for &t in &[0.0, 1.0] {
-                let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+                let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
                 let mut dy = vec![0.0f64; n];
                 run_reference(&prog, &compiled, &state, &param_vec, t, &mut dy);
                 for (k, (a, b)) in dy.iter().zip(dy_ref.iter()).enumerate() {
@@ -3211,7 +2872,7 @@ fn ab_elementwise_observed_gather_fixture() {
     for seed in 0..3u64 {
         let state = seeded_state(n, seed, -2.0, 2.0);
         for &t in &[0.0, 1.0] {
-            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params, false);
+            let (dy_ref, _) = compiled.debug_eval_rhs(&state, t, &params);
             assert_fast_matches(
                 &compiled,
                 &mut fast,
@@ -3297,14 +2958,14 @@ fn ab_state_and_parameter_indices_past_u16() {
 fn ab_fused_box_past_u16_splits_into_groups() {
     let n = 8;
     let terms: Vec<serde_json::Value> = (1..=PAST_U16)
-        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, idx("u", json!("i"))]}))
+        .map(|j| json!({"op": "*", "args": [j as f64 * 0.5, ix("u", vec![json!("i")])]}))
         .collect();
     let doc = json!({
         "esm": "2.0.0",
         "metadata": {"name": "tape_wide_fused_box"},
         "models": {"M": {
             "variables": {"u": {"type": "unknown", "shape": ["i"]}},
-            "equations": [d_eq("u", n, agg(n, json!({"op": "+", "args": terms})))]
+            "equations": [d_eq("u", n, json!({"op": "+", "args": terms}))]
         }}
     });
     let prog = ab_check(doc, -1.0, 1.0);
@@ -3319,7 +2980,7 @@ fn ab_fused_box_past_u16_splits_into_groups() {
         "the fixture must put more scalar operands on the box than one group can index ({scalars})"
     );
     for f in &prog.fused {
-        let regs = f.n_regs as usize + f.n_load_regs as usize + f.n_splat_regs as usize;
+        let regs = f.n_regs as usize + f.n_load_regs as usize;
         assert!(
             f.micro.len() < GroupIx::MAX as usize
                 && f.scalars.len() < GroupIx::MAX as usize
@@ -3358,7 +3019,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
         }}
     });
     let prog = ab_check(doc.clone(), -2.0, 2.0);
-    let payloads: Vec<&ConstArrayData> = prog.const_data.iter().collect();
+    let payloads: Vec<&ConstArrayData> = prog.tables.const_data.iter().collect();
     // A column-major program stores the box axis-reversed (`layout`).
     let (shape, values): ([usize; 2], [f64; 6]) = if prog.col_major {
         ([2, 3], [0.5, 2.0, -0.75, -1.25, 3.5, 1e-3])
@@ -3371,13 +3032,13 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
             .any(|d| d.shape[..] == shape && d.values[..] == values),
         "the default's row-major data is a ConstArray payload: {payloads:?}"
     );
-    // And against the per-cell oracle, not only the overlay.
+    // And against the per-cell oracle.
     let compiled = compile(doc);
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(n, 7, -2.0, 2.0);
-    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+    let (dy_oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
     let mut scratch = compiled
         .debug_new_scratch_taped()
         .expect("the tape lowers every rule");
@@ -3420,21 +3081,21 @@ fn ab_index_gather_unstructured() {
                 {"lhs": "nbr", "rhs": {"op": "const", "args": [], "value": [
                     [2, 6, 3], [1, 3, 0], [2.5, 4, 7], [3, 5, -1], [2.49, 6, 1], [5, 1, 4]]}},
                 {"lhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                         "expr": {"op": "D", "args": [idx("u", json!("i"))], "wrt": "t"},
+                         "expr": {"op": "D", "args": [ix("u", vec![json!("i")])], "wrt": "t"},
                          "ranges": {"i": {"from": "cells"}}},
                  "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
                          "ranges": {"i": {"from": "cells"}, "k": {"from": "nb"}},
                          "expr": {"op": "*", "args": ["kappa", {"op": "-", "args": [
                              {"op": "index", "args": ["u",
                                  {"op": "index", "args": ["nbr", "i", "k"]}]},
-                             idx("u", json!("i"))]}]}}}
+                             ix("u", vec![json!("i")])]}]}}}
             ]
         }}
     });
     let prog = ab_check(doc, -1.0, 2.0);
     // Fusion folds the gather into the group that consumes it: a pre-loaded
     // input rather than a materialized [k, i] box.
-    assert_eq!(prog.index_gathers.len(), 1);
+    assert_eq!(prog.tables.index_gathers.len(), 1);
     assert_eq!(opcount(&prog, "IndexGather"), 0, "folded away");
     assert!(
         prog.fused.iter().any(|f| f
@@ -3443,7 +3104,7 @@ fn ab_index_gather_unstructured() {
             .any(|i| i.index.is_some_and(|fi| fi.n == n as usize))),
         "a fused group reads the source through the subscript"
     );
-    let spec = &prog.index_gathers[0];
+    let spec = &prog.tables.index_gathers[0];
     assert_eq!(spec.axes[..], [GatherAxis::Data]);
     assert_eq!(&spec.shape[..], &[3, n as usize], "the promoted (k, i) box");
 }
@@ -3502,7 +3163,7 @@ fn ab_float32_variables_beside_float64_neighbours() {
         .expect("the fixture declares element types");
     let _env = env.enter();
     let compiled = ArrayCompiled::from_file(&annotated).expect("fixture compiles");
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg())));
     assert!(report.fallbacks.is_empty(), "{:?}", report.fallbacks);
     assert_eq!(prog.precision.len(), prog.instrs.len());
     assert!(prog.precision.contains(&Precision::Float32));
@@ -3518,10 +3179,8 @@ fn ab_float32_variables_beside_float64_neighbours() {
     assert!(fast.has_tape());
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, -1.0, 1.0);
-        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-        let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
+        let (want, _) = compiled.debug_eval_rhs(&state, 0.0, &params);
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-        assert_eq!(bits(&want), bits(&oracle), "seed {seed}: overlay vs oracle");
         for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
             let mut dy = vec![0.0f64; n];
             run_reference(p, &compiled, &state, &param_vec, 0.0, &mut dy);
@@ -3612,7 +3271,7 @@ fn ab_recurrence_sweep() {
     assert!(opcount(&prog, "ScalarRead") > 0);
     // The body is lowered once: the program and the sweep's body do not grow
     // with the frame.
-    let body_len = |p: &TapeProgram| p.sweeps[0].body_len;
+    let body_len = |p: &TapeProgram| p.tables.sweeps[0].body_len;
     let small = taped(compile(recurrence_doc(6)).build_tape_opts(&HashSet::new(), None)).0;
     let large = taped(compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None)).0;
     assert_eq!(body_len(&small), body_len(&large));
@@ -3722,9 +3381,9 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let progs = [
-        taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-        taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+        taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0,
     ];
     assert!(
         progs[0]
@@ -3747,7 +3406,7 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
     let mut fired = [false; 2];
     for state in &states {
         crate::simulate_array::take_const_array_oob();
-        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
+        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params);
         let want = crate::simulate_array::take_const_array_oob();
         fired[usize::from(want.is_some())] = true;
         for (k, prog) in progs.iter().enumerate() {
@@ -3760,10 +3419,10 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
             scratch.install_tape(std::sync::Arc::new(match k {
-                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
                 1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
                 _ => {
-                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0
+                    taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0
                 }
             }));
             let mut dy_fast = vec![0.0f64; n];
@@ -3839,14 +3498,14 @@ fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
     let n = compiled.state_variable_names().len();
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
     let build = |k: usize| match k {
-        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(superop_cfg()))).0,
         1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(superop_cfg()), false)).0,
     };
     let state = seeded_state(n, 7, -1.0, 1.0);
     for &t in times {
         crate::simulate_array::take_const_array_oob();
-        compiled.debug_eval_rhs(&state, t, &HashMap::new(), true);
+        compiled.debug_eval_rhs(&state, t, &HashMap::new());
         let want = crate::simulate_array::take_const_array_oob();
         assert!(want.is_some(), "the oracle faults at t = {t}");
         for k in 0..3 {
@@ -3889,7 +3548,7 @@ fn a_branch_fault_keeps_the_fault_tables_parallel() {
         ),
         &[0.0],
     );
-    assert_eq!(prog.faults.len(), prog.fault_order.len());
+    assert_eq!(prog.tables.faults.len(), prog.tables.fault_order.len());
     assert!(
         prog.instrs
             .iter()
@@ -4029,7 +3688,7 @@ fn ab_an_all_negative_zero_sum_is_positive_zero() {
         let compiled = compile(doc);
         let n = compiled.state_variable_names().len();
         let state = seeded_state(n, 1, -2.0, 2.0);
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         for (k, v) in dy.iter().enumerate() {
             assert_eq!(v.to_bits(), 0, "[{variant}] dy[{k}] = {v:?}, not +0.0");
         }
@@ -4056,10 +3715,10 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
                     {"lhs": "P", "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
                         "ranges": {"i": [1, n], "j": [1, n]},
                         "expr": {"op": "*", "args": [term, "j"]}}},
-                    d_eq("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
+                    d_eq_with_rhs("u", n, json!({"op": "faq", "args": [], "output_idx": ["i"],
                         "ranges": {"i": [1, n], "j": [1, n]},
                         "expr": {"op": "+", "args": [
-                            {"op": "*", "args": [-0.1, idx("u", json!("i"))]},
+                            {"op": "*", "args": [-0.1, ix("u", vec![json!("i")])]},
                             {"op": "*", "args": [0.01,
                                 {"op": "index", "args": ["P", "i", "j"]}]}]}}))
                 ]
@@ -4073,7 +3732,7 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
             .iter()
             .filter(|i| match i {
                 Instr::Bin { out, .. } | Instr::Un { out, .. } => {
-                    prog.slots[*out as usize].shape.as_slice() == [n as usize]
+                    prog.tables.slots[*out as usize].shape.as_slice() == [n as usize]
                 }
                 _ => false,
             })
@@ -4081,10 +3740,11 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
     };
     let long = json!({"op": "-", "args": [
         {"op": "+", "args": [
-            {"op": "*", "args": [idx("u", json!("i")), idx("u", json!("i"))]},
-            {"op": "sin", "args": [idx("u", json!("i"))]}]},
-        {"op": "*", "args": [0.5, idx("u", json!("i"))]}]});
-    let short = json!({"op": "+", "args": [{"op": "*", "args": [2.0, idx("u", json!("i"))]}, 1.0]});
+            {"op": "*", "args": [ix("u", vec![json!("i")]), ix("u", vec![json!("i")])]},
+            {"op": "sin", "args": [ix("u", vec![json!("i")])]}]},
+        {"op": "*", "args": [0.5, ix("u", vec![json!("i")])]}]});
+    let short =
+        json!({"op": "+", "args": [{"op": "*", "args": [2.0, ix("u", vec![json!("i")])]}, 1.0]});
     ab_check(doc(long.clone()), -2.0, 2.0);
     ab_check(doc(short.clone()), -2.0, 2.0);
     assert!(sub_box_ops(doc(long)) >= 4, "the long term runs over [n]");
@@ -4093,4 +3753,58 @@ fn ab_sub_box_term_is_evaluated_once_per_axis_it_reads() {
         0,
         "the short term stays in the box"
     );
+}
+
+/// Over every corpus document the tape lowers, fused and unfused: the
+/// mutable read visitor visits exactly the slots, in exactly the order, of
+/// the read visitor.
+#[test]
+fn read_visitors_agree_across_the_corpus() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests");
+    let mut docs = Vec::new();
+    let mut stack = vec![root.join("conformance"), root.join("valid")];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).expect("the test corpus") {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "esm") {
+                docs.push(p);
+            }
+        }
+    }
+    docs.sort();
+    let mut checked = 0usize;
+    for path in &docs {
+        let build = |fuse: Option<super::fuse::SuperopCfg>| {
+            std::panic::catch_unwind(|| {
+                let file = crate::parse::load_path(path).ok()?;
+                let compiled = ArrayCompiled::from_file(&file).ok()?;
+                compiled.build_tape_opts(&HashSet::new(), fuse).0.ok()
+            })
+            .ok()
+            .flatten()
+        };
+        for fuse in [Some(superop_cfg()), None] {
+            let Some(mut prog) = build(fuse) else {
+                continue;
+            };
+            for pc in 0..prog.instrs.len() {
+                let mut reads = Vec::new();
+                prog.instrs[pc].for_each_read(&prog.slot_tables(), |s| reads.push(s));
+                let mut seen = Vec::new();
+                let (instrs, mut t) = prog.instrs_and_tables_mut();
+                instrs[pc].for_each_read_mut(&mut t, |s| seen.push(*s));
+                assert_eq!(
+                    reads,
+                    seen,
+                    "{}: instruction {pc} ({})",
+                    path.display(),
+                    prog.instrs[pc].opcode()
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "only {checked} programs built");
 }

@@ -40,7 +40,7 @@ Per-binding seam (all already exist):
 |---|---|---|
 | Python | `simulate(..., loader_provider=stub)` where `stub: (LoaderField, t) -> ndarray` (or a `provider_factory`) | ic-resolver reads the seeded `loader_arrays` registry at u0 build (seed already runs at t0) |
 | Julia | a stub object satisfying `provider_sample(p,t)` / `provider_is_const(p)` / `provider_refresh_times(p)` returning the manifest arrays | `_resolve_field_ic` reads the provider-seeded field instead of a raw `const_arrays` entry |
-| Rust | a `CadenceProvider` impl (`provider.rs`) returning the manifest arrays into the forcing buffer | new build-time channel: ic-resolver pulls the seeded field before `ArrayCompiled::simulate` |
+| Rust | a `DataProvider` impl (`provider.rs`) returning the manifest arrays into the forcing buffer | new build-time channel: ic-resolver pulls the seeded field before `ArrayCompiled::simulate` |
 
 **Requirement R1.** Every loaded field the model consumes arrives THROUGH THE
 PROVIDER SEAM, served by the stub provider from the manifest `inputs`. No field

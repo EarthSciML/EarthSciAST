@@ -8,155 +8,10 @@
 
 use super::super::{ArrayCompiled, RhsStats};
 use super::ir::*;
-use super::refexec::run_reference;
 use super::taped;
-use super::tests::seeded_state;
+use super::test_support::*;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-
-fn op(o: &str, args: Vec<Value>) -> Value {
-    json!({"op": o, "args": args})
-}
-
-fn ix(v: &str, subs: Vec<Value>) -> Value {
-    let mut args = vec![json!(v)];
-    args.extend(subs);
-    json!({"op": "index", "args": args})
-}
-
-fn faq(out: &[&str], ranges: Value, expr: Value) -> Value {
-    json!({"op": "faq", "args": [], "output_idx": out, "ranges": ranges, "expr": expr})
-}
-
-/// `D(var[out…]) = rhs` over `ranges`.
-fn d_eq(var: &str, out: &[&str], ranges: Value, rhs: Value) -> Value {
-    let subs = out.iter().map(|s| json!(s)).collect();
-    json!({
-        "lhs": faq(out, ranges.clone(),
-                   json!({"op": "D", "args": [ix(var, subs)], "wrt": "t"})),
-        "rhs": faq(out, ranges, rhs)
-    })
-}
-
-/// `ifelse(inner < lo, inner + P, ifelse(inner > hi, inner - P, inner))`.
-fn wrap(inner: Value, lo: i64, hi: i64) -> Value {
-    let p = hi - lo + 1;
-    op(
-        "ifelse",
-        vec![
-            op("<", vec![inner.clone(), json!(lo)]),
-            op("+", vec![inner.clone(), json!(p)]),
-            op(
-                "ifelse",
-                vec![
-                    op(">", vec![inner.clone(), json!(hi)]),
-                    op("-", vec![inner.clone(), json!(p)]),
-                    inner,
-                ],
-            ),
-        ],
-    )
-}
-
-fn doc(name: &str, variables: Value, equations: Vec<Value>, domain: Option<Value>) -> Value {
-    let mut d = json!({
-        "esm": "2.0.0",
-        "metadata": {"name": name},
-        "models": {"M": {"variables": variables, "equations": equations}}
-    });
-    if let Some(dom) = domain {
-        d["domain"] = dom;
-    }
-    d
-}
-
-/// Build `doc` under its own precision environment, require that the tape
-/// lowers every rule, and require that the reference executor and the fast
-/// executor, over the fused and the unfused program, write the per-cell
-/// oracle's `dy` bit for bit. Returns the fused program and the unfused one's
-/// length.
-pub(super) fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
-    let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
-    let env = crate::precision_infer::env_of_file(&file).expect("precision environment");
-    let file = crate::precision_infer::annotated(&file)
-        .expect("precision inference")
-        .unwrap_or(file);
-    let _env = env.enter();
-    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
-    let cfg = super::fuse::SuperopCfg {
-        bin3: false,
-        ext_pairs: true,
-    };
-    let (prog, report) = taped(compiled.build_tape_opts(&HashSet::new(), Some(cfg)));
-    let (prog_uf, report_uf) = taped(compiled.build_tape_opts(&HashSet::new(), None));
-    let unfused_len = prog_uf.instrs.len();
-    for rep in [&report, &report_uf] {
-        assert!(
-            rep.fallbacks.is_empty(),
-            "the tape must lower every rule: {:?}",
-            rep.fallbacks
-        );
-    }
-    let n = compiled.state_variable_names().len();
-    let params = HashMap::new();
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut fast = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::sync::Arc::new(
-        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
-    ));
-    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
-    for seed in 0..4u64 {
-        let state = seeded_state(n, seed, 0.25, 2.5);
-        for &t in &[0.0, 0.37, 2.5] {
-            let (oracle, _) = compiled.debug_eval_rhs(&state, t, &params, true);
-            for (label, p) in [("fused", &prog), ("unfused", &prog_uf)] {
-                let mut dy = vec![0.0f64; n];
-                run_reference(p, &compiled, &state, &param_vec, t, &mut dy);
-                assert_eq!(
-                    bits(&dy),
-                    bits(&oracle),
-                    "seed {seed} t {t}: {label} reference executor"
-                );
-            }
-            for (label, scratch) in [("fused", &mut fast), ("unfused", &mut fast_uf)] {
-                let mut dy = vec![0.0f64; n];
-                compiled.debug_eval_rhs_into(
-                    &state,
-                    t,
-                    &param_vec,
-                    &mut dy,
-                    scratch,
-                    &mut RhsStats::default(),
-                );
-                assert_eq!(
-                    bits(&dy),
-                    bits(&oracle),
-                    "seed {seed} t {t}: {label} fast executor"
-                );
-            }
-        }
-    }
-    (prog, unfused_len)
-}
-
-/// [`oracle_ab`] at two grid sizes, requiring the same lowered program length
-/// (the unfused one: fusion's grouping may differ with the box size).
-pub(super) fn flat_in_n(make: impl Fn(i64) -> Value, small: i64, large: i64) -> TapeProgram {
-    let (_, a) = oracle_ab(make(small));
-    let (b, b_len) = oracle_ab(make(large));
-    assert_eq!(
-        a, b_len,
-        "the program must not grow with the grid ({small} vs {large} cells)"
-    );
-    b
-}
-
-pub(super) fn count(prog: &TapeProgram, opcode: &str) -> usize {
-    prog.instrs.iter().filter(|i| i.opcode() == opcode).count()
-}
 
 /// More than four contracted indices: five at once, over a rank-1 output (the
 /// promoted box is rank 6) and in a rank-0 observed.
@@ -177,7 +32,7 @@ fn five_contracted_indices() {
                 op("*", vec![json!(7), json!("e")]),
             ],
         );
-        doc(
+        named_doc(
             "five_contracted",
             json!({
                 "u": {"type": "unknown", "shape": ["i"], "default": 1.0},
@@ -186,13 +41,13 @@ fn five_contracted_indices() {
                 "s": {"type": "unknown"}
             }),
             vec![
-                d_eq(
+                d_eq_over(
                     "w",
                     &["a", "b", "c", "d", "e"],
                     r5.clone(),
                     op("*", vec![json!(-0.05), w5.clone()]),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     r_out,
@@ -219,7 +74,7 @@ fn five_contracted_indices() {
     };
     let prog = flat_in_n(make, 3, 40);
     // Fusion absorbs a reduction into the group that computes its terms.
-    let folds = count(&prog, "Reduce") + prog.fused.iter().filter(|f| f.reduce.is_some()).count();
+    let folds = opcount(&prog, "Reduce") + prog.fused.iter().filter(|f| f.reduce.is_some()).count();
     assert!(
         folds >= 2,
         "both contractions fold on the tape, none unrolled"
@@ -236,7 +91,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
         let i = || json!("i");
         let plus = |k: i64| op("+", vec![json!("i"), json!(k)]);
         let table: Vec<f64> = (0..n).map(|k| 0.25 * k as f64 - 1.5).collect();
-        doc(
+        named_doc(
             "partial_wrap",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -246,7 +101,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
             }),
             vec![
                 json!({"lhs": "c", "rhs": {"op": "const", "args": [], "value": table}}),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [2, n - 1]}),
@@ -260,25 +115,25 @@ fn periodic_wraps_that_are_not_a_full_roll() {
                         ],
                     ),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, 1]}),
                     op("*", vec![json!(-0.2), ix("u", vec![i()])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [n, n]}),
                     op("*", vec![json!(-0.3), ix("u", vec![i()])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "v",
                     &["i"],
                     json!({"i": [1, n + 2]}),
                     op("*", vec![json!(-0.1), ix("v", vec![wrap(plus(2), 1, n)])]),
                 ),
-                d_eq(
+                d_eq_over(
                     "r",
                     &["i"],
                     json!({"i": [1, n - 2]}),
@@ -305,7 +160,7 @@ fn periodic_wraps_that_are_not_a_full_roll() {
 #[test]
 fn derivative_lhs_that_is_not_a_constant_shift() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "permuted_lhs",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -332,7 +187,8 @@ fn derivative_lhs_that_is_not_a_constant_shift() {
     };
     let prog = flat_in_n(make, 6, 40);
     assert_eq!(
-        prog.dy_writes
+        prog.tables
+            .dy_writes
             .iter()
             .filter(|w| w.scatter.is_some())
             .count(),
@@ -346,7 +202,7 @@ fn derivative_lhs_that_is_not_a_constant_shift() {
 #[test]
 fn array_observed_over_a_range_that_starts_past_one() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "offset_observed",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -358,7 +214,7 @@ fn array_observed_over_a_range_that_starts_past_one() {
                     "rhs": faq(&["i"], json!({"i": [3, n]}), op("*", vec![
                         op("+", vec![json!(1), json!("i")]), ix("u", vec![json!("i")])]))
                 }),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -384,7 +240,7 @@ fn array_observed_over_a_range_that_starts_past_one() {
 #[test]
 fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
     let make = |n: i64| {
-        doc(
+        named_doc(
             "boolean_reduction",
             json!({
                 "u": {"type": "unknown", "shape": ["x"], "default": 1.0},
@@ -400,7 +256,7 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
                     "filter": op("!=", vec![json!("k"), json!("m")]),
                     "expr": op(">", vec![op("-", vec![ix("u", vec![json!("k")]),
                         ix("u", vec![json!("m")])]), json!(0.5)])}}),
-                d_eq(
+                d_eq_over(
                     "u",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -418,7 +274,7 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
     };
     flat_in_n(make, 4, 40);
 
-    let array_valued = doc(
+    let array_valued = named_doc(
         "array_boolean_reduction",
         json!({"v": {"type": "unknown", "shape": ["x"], "default": 1.0}}),
         vec![json!({
@@ -447,8 +303,8 @@ fn scalar_boolean_reductions_lower_and_array_valued_ones_are_rejected() {
 #[test]
 fn shape_op_bases_under_loop_symbol_subscripts() {
     let make = |n: i64| {
-        let zero = |v: &str, out: &[&str], r: Value| d_eq(v, out, r, json!(0.0));
-        doc(
+        let zero = |v: &str, out: &[&str], r: Value| d_eq_over(v, out, r, json!(0.0));
+        named_doc(
             "shape_op_bases",
             json!({
                 "u": {"type": "unknown", "shape": ["x", "y"], "default": 1.0},
@@ -462,20 +318,20 @@ fn shape_op_bases_under_loop_symbol_subscripts() {
                 zero("u", &["i", "j"], json!({"i": [1, 2], "j": [1, n]})),
                 zero("a", &["i"], json!({"i": [1, n]})),
                 zero("b", &["i"], json!({"i": [1, 2]})),
-                d_eq(
+                d_eq_over(
                     "v",
                     &["i"],
                     json!({"i": [1, n]}),
                     json!({"op": "index", "args": [op("transpose", vec![json!("u")]), "i", 2]}),
                 ),
-                d_eq(
+                d_eq_over(
                     "w",
                     &["j"],
                     json!({"j": [1, n]}),
                     json!({"op": "index", "args": [
                         {"op": "reshape", "args": ["a"], "shape": [1, n]}, 1, "j"]}),
                 ),
-                d_eq(
+                d_eq_over(
                     "z",
                     &["i"],
                     json!({"i": [1, n]}),
@@ -507,7 +363,7 @@ fn indicator(cmp: Value) -> Value {
 /// `k`; `u[l]` is the query.
 fn count_doc(n: i64, body: Value) -> Value {
     let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
-    doc(
+    named_doc(
         "counted_bracket",
         json!({
             "u": {"type": "unknown", "shape": ["lev"], "default": 1.0},
@@ -525,7 +381,7 @@ fn count_doc(n: i64, body: Value) -> Value {
                 "op": "faq", "args": [], "output_idx": [], "ranges": {"k": [1, n]},
                 "expr": body
             }))}),
-            d_eq(
+            d_eq_over(
                 "u",
                 &["l"],
                 json!({"l": [1, n]}),
@@ -537,7 +393,7 @@ fn count_doc(n: i64, body: Value) -> Value {
                     ],
                 ),
             ),
-            d_eq(
+            d_eq_over(
                 "w",
                 &["l"],
                 json!({"l": [1, n]}),
@@ -554,17 +410,6 @@ fn axis_at(axis: &str) -> Value {
 
 fn query() -> Value {
     ix("u", vec![json!("l")])
-}
-
-/// The `Instr::Count`s of `prog`, as `(rel, sorted)`.
-pub(super) fn counts(prog: &TapeProgram) -> Vec<(CountRel, bool)> {
-    prog.instrs
-        .iter()
-        .filter_map(|i| match i {
-            Instr::Count { rel, sorted, .. } => Some((*rel, *sorted)),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Every comparison, with the axis on either side, over a literal axis
@@ -598,7 +443,7 @@ fn counted_bracket_every_relation_and_axis() {
                 vec![(rel, axis == "zc")],
                 "{axis} {cmp} (axis left: {axis_left})"
             );
-            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+            assert_eq!(opcount(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
     }
 }
@@ -626,7 +471,7 @@ fn counted_bracket_complement() {
             };
             let prog = flat_in_n(make, 5, 37);
             assert_eq!(counts(&prog), vec![(rel, axis == "zc")], "{axis} {cmp}");
-            assert_eq!(count(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
+            assert_eq!(opcount(&prog, "Reduce"), 0, "{axis} {cmp}: no fold is left");
         }
     }
     let nan = op(
@@ -678,7 +523,7 @@ fn counted_bracket_nan_query() {
 fn counted_bracket_standalone_scalar() {
     let make = |n: i64| {
         let zc: Vec<f64> = (0..n).map(|k| 3.0 * k as f64 / (n - 1) as f64).collect();
-        doc(
+        named_doc(
             "counted_scalar",
             json!({
                 "s": {"type": "unknown", "default": 1.0},
@@ -824,7 +669,7 @@ fn counted_bracket_unsorted_literal_axis() {
                     let c = counts(&prog);
                     assert_eq!(c.len(), 1, "{label}");
                     assert!(c[0].1, "{label}: the sorted copy is bisected");
-                    assert_eq!(count(&prog, "Reduce"), 0, "{label}: no fold is left");
+                    assert_eq!(opcount(&prog, "Reduce"), 0, "{label}: no fold is left");
                 }
             }
         }
@@ -1151,7 +996,7 @@ fn count_rewrite_is_a_build_option() {
     compiled.rewrites.count_fold = false;
     let off = tape(&compiled);
     assert!(counts(&off).is_empty(), "the general fold");
-    assert!(count(&off, "Reduce") > 0);
+    assert!(opcount(&off, "Reduce") > 0);
     compiled.rewrites.count_fold = true;
     assert!(
         std::sync::Arc::ptr_eq(&on, &tape(&compiled)),
@@ -1200,9 +1045,9 @@ fn const_gather_declined_bracket_leaves_no_trace() {
     d["models"]["M"]["equations"][2]["rhs"]["expr"] =
         ix("zc", vec![ix("assign", vec![json!("l")])]);
     let prog = oracle_ab(d).0;
-    assert_eq!(count(&prog, "TableGather"), 1);
+    assert_eq!(opcount(&prog, "TableGather"), 1);
     for op in ["Gather", "IndexGather", "DataGather", "Count", "FaultScan"] {
-        assert_eq!(count(&prog, op), 0, "{op}");
+        assert_eq!(opcount(&prog, op), 0, "{op}");
     }
     assert_eq!(faulting_gathers(&prog), 0);
 }
@@ -1219,7 +1064,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
     let table = json!({"op": "const", "args": [], "value": [1.5, 2.5, 4.0]});
     let sin_s = op("sin", vec![json!("s")]);
     let d = |rhs: Value| {
-        doc(
+        named_doc(
             "wholesale_sharing",
             json!({"s": {"type": "unknown", "default": 1.0}}),
             vec![json!({"lhs": {"op": "D", "args": ["s"], "wrt": "t"}, "rhs": rhs})],
@@ -1232,12 +1077,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
         let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0
     };
-    let un = |p: &TapeProgram| {
-        p.instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Un { .. }))
-            .count()
-    };
+    let un = |p: &TapeProgram| opcount(p, "Un");
     // Repeated outside any branch: once.
     let doc_ = d(op(
         "+",
@@ -1251,7 +1091,7 @@ fn wholesale_rule_shares_repeated_subtrees() {
     let prog = unfused(&doc_);
     assert_eq!(un(&prog), 1, "sin(s) is computed once");
     assert!(
-        count(&prog, "ConstArray") <= 1,
+        opcount(&prog, "ConstArray") <= 1,
         "the table is materialized at most once"
     );
     // In both arms of a run-time branch, and after it: once per arm and once
@@ -1311,19 +1151,14 @@ fn pointwise_gated_faq_numbers_its_box() {
                         "filter": op(">", vec![sin_u.clone(), json!(0.25)]),
                         "expr": op("*", vec![sin_u.clone(), sin_u.clone()])
                     }},
-                    d_eq("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
+                    d_eq_over("u", &["i", "j"], json!({"i": {"from": "s"}, "j": {"from": "g"}}),
                          op("-", vec![ix("w", vec![json!("i"), json!("j")]),
                                       ix("u", vec![json!("i"), json!("j")])]))
                 ]
             }}
         })
     };
-    let un = |p: &TapeProgram| {
-        p.instrs
-            .iter()
-            .filter(|i| matches!(i, Instr::Un { .. }))
-            .count()
-    };
+    let un = |p: &TapeProgram| opcount(p, "Un");
     for (label, bg) in [
         ("every pair admitted", json!([1.0, 1.0, 1.0, 1.0])),
         ("a partial gate", json!([1.0, 2.0, 1.0, 2.0])),

@@ -453,10 +453,12 @@ const _VERSION_GATES = (
         (1, 3, 0), ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
         "`solver.time_span` requires", (:root,), d -> _solver_field_offence(d, "time_span")
     ),
-    # §4.8.5 item 6: declared `units` on an expression node.
+    # §4.8.5 item 6: declared `units` on an expression node, in a template
+    # library's bodies as anywhere else.
     const_units = _VersionGate(
         (1, 2, 0), ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
-        "declared `units` on an expression node require", (:root, :mounted_leaf),
+        "declared `units` on an expression node require",
+        (:root, :mounted_leaf, :template_library),
         d -> _found(_find_units_bearing_node(d, ""))
     ),
     # §6.3.2: variable bounds. Only this file's inline models and subsystems;

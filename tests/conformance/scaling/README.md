@@ -51,9 +51,9 @@ python3 tests/conformance/scaling/generate.py --write-fixtures   # after changin
 # on; the Julia adapter does the same with one child per family):
 cd pkg/earthsci-ast-rs
 export RUSTFLAGS="-C llvm-args=-align-loops=64"   # for timings: see Timing builds below
-cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
     --index ../../tests/conformance/scaling/fixtures/index.json --output rust-serial.json
-cargo run --release --features conformance-adapters,parallel --bin earthsci-scaling-adapter-rust -- \
+cargo run --release --features conformance-adapters --bin earthsci-scaling-adapter-rust -- \
     --index "$BUILD/scaling/index.json" --output rust-threaded.json --threads 16
 
 # Gates:

@@ -1,20 +1,22 @@
 //! Compile path: model → [`ArrayCompiled`]. Array-op / spatial-model file
 //! detection, subsystem mounting (esm-spec §4.6), ragged keyed-factor scope
-//! resolution (RFC §5.4), the staged [`ArrayCompiled::from_model`] build, the
+//! resolution (RFC §5.4), the staged [`ArrayCompiled::from_model_with_arrays`] build, the
 //! build-time field evaluators, and the shape-inference / LHS-parsing
 //! lowering helpers.
 
+use super::normalize::{BuildInput, NormalizedModel, normalize};
+use super::shape_table::{BuiltVariables, ShapeTable};
 use super::*;
+use crate::binders::Binders;
+use crate::causal_self_read::{self, SelfReadDefect};
 use crate::faq::{effective_reduce_kind, is_faq_op, validate_oplus_spellings};
-use crate::flatten::{BuiltShapes, ConditionalShapes, FlattenedSystem};
+use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{
-    EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
-};
-use crate::value_invention::{ValueInventionResult, materialize_value_invention};
+use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::types::{TreeOrder, component_tree};
+use crate::value_invention::{Factors, ValueInventionResult, invent_values};
 use indexmap::IndexMap;
-use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 // ============================================================================
@@ -46,20 +48,15 @@ pub fn file_has_array_ops(file: &EsmFile) -> bool {
 
 /// Whether `pred` holds for `model` or for any component mounted beneath it
 /// through `subsystems` (esm-spec §4.6). A mounted component's equations and
-/// variables are part of the model [`mount_subsystems`] builds, so a routing
+/// variables are part of the model `flatten` builds, so a routing
 /// question about the model is a question about its whole mount tree: a
 /// document whose only array or derivative lives in a subsystem is otherwise
-/// routed as if it had none. An entry [`parse_subsystem_model`] cannot read
-/// contributes nothing here; the build reports it.
+/// routed as if it had none. An unresolved `{"ref": …}` contributes nothing
+/// here; the build reports it.
 pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bool {
-    if pred(model) {
-        return true;
-    }
-    model.subsystems.as_ref().is_some_and(|subs| {
-        subs.iter().any(|(name, value)| {
-            parse_subsystem_model(name, value).is_ok_and(|(sub, _)| model_tree_any(&sub, pred))
-        })
-    })
+    component_tree(model, "", "", TreeOrder::Declared)
+        .iter()
+        .any(|node| pred(node.component))
 }
 
 /// Return true if the file has spatial structure: any model with array-shaped
@@ -120,18 +117,12 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 /// Walk an expression and reject every operator node that may not reach an
 /// evaluator (esm-spec §4.2 / §9.6.8).
 ///
-/// This is the crate's single compile-time operator gate. It used to check only
-/// for unlowered *spatial* ops — which meant a malformed-but-schema-valid node
-/// (`atan2` with one argument, `min` with one, a ragged `makearray`, a typo'd
-/// `"expp"`) sailed straight into the evaluators. There it either **panicked**
-/// on an out-of-bounds `args[1]`, or, more insidiously, was quietly assigned two
-/// *different* values by the per-cell oracle and the vectorized overlay
-/// depending on whether the enclosing body happened to vectorize.
-///
-/// Delegating to [`crate::op_registry`] closes all of that at once: past this
-/// gate, every surviving node is an evaluable-core op with a legal arity, so the
-/// evaluators only ever have to agree on nodes that are *legal* — and for those
-/// they agree by construction.
+/// This is the crate's single compile-time operator gate, delegating to
+/// [`crate::op_registry`]: a malformed-but-schema-valid node (`atan2` with one
+/// argument, `min` with one, a ragged `makearray`, a typo'd `"expp"`) is
+/// refused here rather than reaching an evaluator. Past this gate every
+/// surviving node is an evaluable-core op with a legal arity, so the
+/// evaluators only ever have to agree on nodes that are *legal*.
 ///
 /// The walk uses `for_each_child`, so it descends into sidecar expression fields
 /// (`aggregate.expr`, `makearray.values`, `filter`, `key`, …), not just `args`.
@@ -159,63 +150,10 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 // Subsystem mounting (esm-spec §4.6 dot notation).
 // ============================================================================
 
-/// Coerce one resolved `subsystems` entry into a typed [`Model`] plus the
-/// document `index_sets` registry it ships (empty for a bare model fragment).
-/// The loader ([`crate::ref_loading::resolve_subsystem_refs_raw`]) inlines each
-/// `{ "ref": … }` as the referenced file's full JSON, so the common shape is a
-/// whole ESM document carrying exactly one model (the MPAS mesh contract:
-/// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
-/// fragment is also accepted. An unresolved `{ "ref": … }` — a document built
-/// programmatically without the loader — is a hard error, never a silent drop.
-pub(crate) fn parse_subsystem_model(
-    sub_name: &str,
-    value: &serde_json::Value,
-) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
-    let obj = value.as_object().ok_or_else(|| {
-        CompileError::build_err(format!("subsystem '{sub_name}' is not a JSON object"))
-    })?;
-    if obj.contains_key("models") {
-        let file: EsmFile = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::build_err(format!(
-                "subsystem '{sub_name}' does not parse as an ESM file: {e}"
-            ))
-        })?;
-        let models = file.models.unwrap_or_default();
-        if models.len() != 1 {
-            return Err(CompileError::build_err(format!(
-                "subsystem '{sub_name}' resolves to a file with {} models; exactly one is \
-                     required to mount it",
-                models.len()
-            )));
-        }
-        let model = models.into_values().next().expect("len checked above");
-        Ok((
-            model,
-            file.index_sets.unwrap_or_default().into_iter().collect(),
-        ))
-    } else if obj.contains_key("variables") || obj.contains_key("equations") {
-        let model: Model = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::build_err(format!(
-                "subsystem '{sub_name}' does not parse as a model: {e}"
-            ))
-        })?;
-        Ok((model, HashMap::new()))
-    } else if obj.contains_key("ref") {
-        Err(CompileError::build_err(format!(
-            "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
-                 through the official loader (crate::parse::load_path) so \
-                 resolve_subsystem_refs_raw inlines it first"
-        )))
-    } else {
-        Err(CompileError::build_err(format!(
-            "subsystem '{sub_name}' has neither 'models' nor 'variables'/'equations'"
-        )))
-    }
-}
-
 /// The flattened system as one synthetic [`Model`]: the typed variable maps
 /// re-merged into a single registry (each variable already carries its
-/// `var_type`) over the flattened equations, every name dot-namespaced.
+/// `var_type`) over the flattened equations and initialization equations,
+/// every name dot-namespaced.
 ///
 /// The maps are disjoint by construction (a variable has exactly one
 /// `var_type`), so no key collides. `parameters` is the WHOLE parameter set of
@@ -227,7 +165,7 @@ pub(crate) fn parse_subsystem_model(
 ///
 /// The model keeps each variable's DECLARED shape, as `flatten` does: the
 /// shape an unshaped mixed-rank `ifelse` is built at (esm-spec §4.3.4) is
-/// written by [`promote_conditional_shapes`], which the build runs on it.
+/// written by [`apply_shape_rewrites`], which the build runs on it.
 ///
 /// Shared by [`ArrayCompiled::from_flattened_with`] and the build pipeline's
 /// whole-document build (`crate::prepare`), so a document of several models
@@ -242,77 +180,25 @@ pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
     {
         variables.insert(name.clone(), var.clone());
     }
+    // The `faq`-valued initialization equations go back into the model's own
+    // block, so every later stage resolves their ranges and joins as it does
+    // an authored model's.
+    let initialization_equations = (!flat.initialization_faqs.is_empty()).then(|| {
+        flat.initialization_faqs
+            .iter()
+            .map(|(target, rhs)| crate::types::Equation {
+                lhs: Expr::Variable(target.clone()),
+                rhs: rhs.clone(),
+                comment: None,
+            })
+            .collect()
+    });
     Model {
         variables,
         equations: flat.equations.clone(),
+        initialization_equations,
         ..Default::default()
     }
-}
-
-/// Mount every subsystem of `model` into the model's own registries under
-/// dot-prefixed names (esm-spec §4.6): each subsystem variable `x` becomes
-/// `"<sub>.x"` (with sibling references inside its expression renamed to the
-/// mounted names), each subsystem equation is appended with its references
-/// renamed the same way, and the subsystem file's `index_sets` merge into the
-/// document registry (the parent's declaration wins on a name collision).
-/// Recursive, so a nested subsystem mounts as `"<sub>.<subsub>.x"`. This is the
-/// array-runtime analogue of the Julia flatten's subsystem namespacing — it is
-/// what makes the MPAS keyed-factor wiring contract (`nEdgesOnCell :=
-/// mesh.nEdgesOnCell`, a bare-name observed alias of a mounted const factor)
-/// resolvable. A model without subsystems is untouched (byte-identical build).
-pub(crate) fn mount_subsystems(
-    model: &mut Model,
-    index_sets: &mut HashMap<String, IndexSet>,
-) -> Result<(), CompileError> {
-    let Some(subs) = model.subsystems.take() else {
-        return Ok(());
-    };
-    let mut names: Vec<String> = subs.keys().cloned().collect();
-    names.sort();
-    for sub_name in names {
-        let (mut sub_model, mut sub_sets) = parse_subsystem_model(&sub_name, &subs[&sub_name])?;
-        // Grandchildren first, so their variables are already dot-prefixed
-        // within `sub_model` when this level's prefix is applied.
-        mount_subsystems(&mut sub_model, &mut sub_sets)?;
-        for (k, v) in sub_sets {
-            index_sets.entry(k).or_insert(v);
-        }
-        let siblings: Vec<String> = {
-            let mut s: Vec<String> = sub_model.variables.keys().cloned().collect();
-            s.sort();
-            s
-        };
-        let rename_all = |expr: &Expr| -> Expr {
-            let mut out = expr.clone();
-            for s in &siblings {
-                out = rename_free_symbol(&out, s, &format!("{sub_name}.{s}"));
-            }
-            out
-        };
-        for (vname, var) in &sub_model.variables {
-            let mounted = format!("{sub_name}.{vname}");
-            if model.variables.contains_key(&mounted) {
-                return Err(CompileError::build_err(format!(
-                    "mounting subsystem '{sub_name}' would overwrite existing variable \
-                         '{mounted}'"
-                )));
-            }
-            let mut var = var.clone();
-            // A parameter `update`'s Expressions are the only ones a variable
-            // still carries (esm 1.0.0); an unknown's definition is an equation,
-            // renamed with the rest below.
-            var.for_each_expression_mut(&mut |expr| *expr = rename_all(expr));
-            model.variables.insert(mounted, var);
-        }
-        for eq in &sub_model.equations {
-            model.equations.push(crate::types::Equation {
-                lhs: rename_all(&eq.lhs),
-                rhs: rename_all(&eq.rhs),
-                comment: eq.comment.clone(),
-            });
-        }
-    }
-    Ok(())
 }
 
 // ============================================================================
@@ -390,113 +276,75 @@ pub(super) fn apply_ragged_factor_scope(
     Ok(())
 }
 
-/// The rewrites `flatten` makes to a model's equations that a route reading
-/// the AUTHORED model — the array runtime's single-model route, and the build
-/// pipeline (`crate::prepare`) — must make itself, so every route answers one
-/// document with one number.
+/// The shape rewrites every build makes, from a flattened system or an
+/// authored model, and the [`ShapeTable`] they leave. In order:
 ///
-/// * esm-spec §4.2, the two halves of the right-hand-side `D` rule (`flatten`'s
-///   phase 5b′): each RHS structural `D` resolves into the tendency the model
-///   defines for it, and one that resolves to nothing is refused rather than
-///   answered with `0` (or, through a reference evaluator, `NaN`). The same two
-///   functions, in the same order, as [`ArrayCompiled::from_flattened`].
-/// * esm-spec §4.8.3 "Angles are the ONE exception" (phase 5g): see
-///   [`normalize_model_angle_arguments`]. Without it `sin(theta)` with `theta`
-///   declared `deg` evaluated `sin(90 radians)` = 0.894 where the scalar and
-///   coupled routes, and the other bindings, returned 1.
-/// * esm-spec §4.3.4, a variable with no declared `shape` whose value is an
-///   array on one arm of an `ifelse` and a scalar on the other takes the array
-///   arm's shape ([`promote_conditional_shapes`]). `flatten` does not record
-///   this shape in its output (esm-libraries-spec §4.7.5), so every build,
-///   from a flattened system or an authored model, gets it here. Returns the
-///   shapes it gave. `index_sets` is the registry the promoted shape must be
-///   sized by, and the index-set axes of every variable as built
-///   ([`refuse_faq_bare_array_operands`]).
-pub(crate) fn apply_flatten_rewrites(
+/// 1. each shape `inherited` (the table of the program a restricted system
+///    was cut from) records where no declaration does is declared, since the
+///    restricted system may no longer decide it — `RhsProgram::select` keeps
+///    a state a kept summand reads but drops its `D` equation, and an
+///    unshaped state with no `D` equation has no rank the inference can read;
+/// 2. an expression template applied elementwise over an array argument
+///    (esm-spec §9.6.11) is lifted to a per-cell `faq`
+///    ([`crate::elementwise_lift`]); a variable declared without a `shape`
+///    that the lift defines takes the lift's index sets;
+/// 3. a variable with no declared `shape` whose value is an array on one arm
+///    of an `ifelse` and a scalar on the other takes the array arm's shape
+///    (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`]),
+///    written into its declaration. `flatten` does not record this shape in
+///    its output (esm-libraries-spec §4.7.5), so every build gets it here. A
+///    variable whose shape only data can decide (its only arrays are
+///    unshaped data-fed parameters) is left undeclared, and the build records
+///    it on the variable's rule ([`AlgebraicRule::Scalar`]'s `data_shaped`);
+/// 4. the bare-array-operand check on the lifted equations
+///    ([`refuse_faq_bare_array_operands`]), whose declared-or-inferred axes
+///    of every variable the table records.
+pub(crate) fn apply_shape_rewrites(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
-) -> Result<(ConditionalShapes, VariableAxes), CompileError> {
-    let time_invariant: std::collections::HashSet<String> = model
-        .variables
-        .iter()
-        .filter(|(_, v)| v.var_type == crate::types::VariableType::Parameter)
-        .map(|(name, _)| name.clone())
-        .collect();
-    let carried =
-        crate::flatten::resolve_rhs_time_derivatives(&mut model.equations, &time_invariant);
-    if carried
-        && crate::flatten::first_unresolved_rhs_time_derivative_in(&model.equations).is_some()
-    {
-        return Err(CompileError::UnloweredOperatorError {
-            op: "D".to_string(),
-        });
+    inherited: Option<&ShapeTable>,
+) -> Result<ShapeTable, CompileError> {
+    if let Some(parent) = inherited {
+        set_declared_shapes(model, parent.built());
     }
-    normalize_model_angle_arguments(model);
-    // After the elementwise lift (inside `promote_conditional_shapes`,
-    // esm-spec §9.6.11): the check reads the lifted equations.
-    let promoted = promote_conditional_shapes(model, index_sets)?;
+    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
+        .map_err(CompileError::build_err)?;
+    let conditional = crate::flatten::conditional_shape_promotions(
+        &|n: &str| model.variables.get(n),
+        model.equations.iter(),
+        index_sets,
+    );
+    set_declared_shapes(
+        model,
+        conditional.built.iter().map(|(n, a)| (n, a.as_slice())),
+    );
     let axes = refuse_faq_bare_array_operands(model)?;
-    Ok((promoted, axes))
-}
-
-/// Every variable's index-set axes in the model a build compiles, keyed by
-/// the name the build gives it ([`crate::structural::promoted_var_shapes`]):
-/// the declared `shape`, else the shape its defining equation infers. A
-/// variable a pointwise lift evaluates over a grid (esm-spec §10.5) is here
-/// with the grid's index sets although its declaration has no `shape`
-/// (esm-libraries-spec §4.7.5). A scalar is absent or has no axes.
-pub(crate) type VariableAxes = HashMap<String, Vec<String>>;
-
-/// What a build knows of its variables by NAME, for a reader that addresses
-/// one after the build (the inline-test runner's §6.6 assertions): their axes,
-/// and the inputs a coupling substituted away.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct BuiltVariables {
-    /// [`VariableAxes`] of the model the build compiled, plus each of
-    /// [`Self::bound_inputs`] under the axes of the variable bound in its
-    /// place, so a reader that names an input (`Box.T` bound to `Col.T`) finds
-    /// the field it reads.
-    pub(crate) axes: VariableAxes,
-    /// [`crate::flatten::FlattenMetadata::bound_inputs`]: `to → (from,
-    /// factor)`. Empty for a build that applied no coupling.
-    pub(crate) bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
-}
-
-impl BuiltVariables {
-    /// `axes` and `bound_inputs`, each bound input given the axes of the
-    /// variable at the end of its chain of bindings.
-    pub(crate) fn new(
-        mut axes: VariableAxes,
-        bound_inputs: indexmap::IndexMap<String, (String, Option<f64>)>,
-    ) -> Self {
-        for to in bound_inputs.keys() {
-            let mut name = to.as_str();
-            for _ in 0..=bound_inputs.len() {
-                match bound_inputs.get(name) {
-                    Some((from, _)) => name = from,
-                    None => break,
-                }
-            }
-            if let Some(found) = axes.get(name).filter(|a| !a.is_empty()).cloned() {
-                axes.entry(to.clone()).or_insert(found);
-            }
-        }
-        BuiltVariables { axes, bound_inputs }
-    }
+    Ok(ShapeTable::assemble(
+        model,
+        axes,
+        conditional,
+        lifted,
+        inherited,
+    ))
 }
 
 /// Refuse a `faq` whose `expr` or `filter` reads a shaped variable by bare name
 /// (`faq_bare_array_operand`, esm-spec §4.3.1), on the model a build compiles:
-/// flattened or mounted, every template expanded, after
-/// [`promote_conditional_shapes`], against declared and inferred shapes
+/// flattened or mounted, every template expanded, after the shape rewrites
+/// ([`apply_shape_rewrites`]), against declared and inferred shapes
 /// ([`crate::structural::promoted_var_shapes`]). `validate` reports the rule on
 /// the authored document, where a template application is opaque; this is the
 /// check on what the application expanded into, on every input a build takes —
 /// a typed document, a flattened system, a subsystem, a cross-model read.
 ///
-/// Returns the shapes it checked against, which are the build's
-/// [`VariableAxes`].
-pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<VariableAxes, CompileError> {
+/// Returns the shapes it checked against: every variable's index-set axes,
+/// the declared `shape`, else the shape its defining equation infers. A
+/// variable a pointwise lift evaluates over a grid (esm-spec §10.5) is there
+/// with the grid's index sets although its declaration has no `shape`
+/// (esm-libraries-spec §4.7.5). A scalar is absent.
+pub(crate) fn refuse_faq_bare_array_operands(
+    model: &Model,
+) -> Result<HashMap<String, Vec<String>>, CompileError> {
     let shapes = crate::structural::promoted_var_shapes(model);
     if shapes.values().all(Vec::is_empty) {
         return Ok(shapes);
@@ -521,81 +369,44 @@ pub(crate) fn refuse_faq_bare_array_operands(model: &Model) -> Result<VariableAx
     Ok(shapes)
 }
 
-/// Give each unshaped mixed-rank-`ifelse` variable of `model` the shape it is
-/// built at (esm-spec §4.3.4, [`crate::flatten::conditional_shape_promotions`])
-/// and return what it gave. The one place a build writes that shape: every
-/// route that builds a model runs it, and the compiled model keeps the result
-/// (`ArrayCompiled::conditional_shapes`) for the readers downstream of the
-/// build, which must not infer it again from a system that may have lost what
-/// decided it (a restricted `RhsProgram` drops `D(w)` for a state it only
-/// reads).
-///
-/// First, an expression template applied elementwise over an array argument
-/// (esm-spec §9.6.11) is lifted to a per-cell `faq`
-/// ([`crate::elementwise_lift`]); a variable declared without a `shape` that
-/// the lift defines takes the lift's index sets, and is returned with the rest.
-///
-/// A variable whose shape only data can decide (its only arrays are unshaped
-/// data-fed parameters) is returned in [`ConditionalShapes::data_shaped`] and
-/// left undeclared here; the build records it on the variable's rule
-/// ([`AlgebraicRule::Scalar`]'s `data_shaped`).
-pub(crate) fn promote_conditional_shapes(
-    model: &mut Model,
-    index_sets: &HashMap<String, IndexSet>,
-) -> Result<ConditionalShapes, CompileError> {
-    let lifted = crate::elementwise_lift::lift_elementwise_applications(model)
-        .map_err(CompileError::build_err)?;
-    let mut promoted = crate::flatten::conditional_shape_promotions(
-        &|n: &str| model.variables.get(n),
-        model.equations.iter(),
-        index_sets,
-    );
-    set_declared_shapes(model, &promoted.built);
-    promoted.built.extend(lifted);
-    Ok(promoted)
-}
-
 /// Write `shapes` into `model`'s declarations, by name.
-fn set_declared_shapes(model: &mut Model, shapes: &BuiltShapes) {
+fn set_declared_shapes<'a>(
+    model: &mut Model,
+    shapes: impl Iterator<Item = (&'a String, &'a [String])>,
+) {
     for (name, axes) in shapes {
         if let Some(var) = model.variables.get_mut(name) {
-            var.shape = Some(axes.clone());
+            var.shape = Some(axes.to_vec());
         }
     }
 }
 
-/// Fold a declared angle's scale into every `sin`/`cos`/`tan` argument of
-/// `model`, so the argument reaches the evaluator in RADIANS (esm-spec §4.8.3,
-/// issue #409).
-///
-/// The array runtime's SINGLE-MODEL route deliberately never flattens
-/// (`ArrayCompiled::from_file`), and neither does the build pipeline
-/// (`crate::prepare`), so `flatten`'s phase 5g
-/// (`crate::flatten::normalize_angle_arguments`) never runs for either. This is
-/// that phase, against the authored model's own declarations, so every route
-/// answers one document with one number.
-fn normalize_model_angle_arguments(model: &mut Model) {
-    // A document that declares no angle at a scale other than 1 cannot be
-    // rewritten, so decide that from the DECLARATIONS (each distinct unit
-    // string once) and walk nothing.
-    let mut seen: HashSet<&str> = HashSet::new();
-    let declares_angle = model
-        .variables
-        .values()
-        .filter_map(|v| v.units.as_deref())
-        .filter(|u| seen.insert(u))
-        .any(|u| {
-            crate::units::parse_unit(u)
-                .is_ok_and(|unit| crate::units::angle_normalization_factor(&unit).is_some())
-        });
-    if !declares_angle {
-        return;
+/// The key of a document's only model, when the document is exactly that model
+/// ([`crate::simulate::whole_document_is_one_model`]).
+fn one_model_name(file: &EsmFile) -> Option<String> {
+    if !crate::simulate::whole_document_is_one_model(file) {
+        return None;
     }
-    let (env, _) = crate::units::build_unit_env(&model.variables);
-    for eq in &mut model.equations {
-        if let Some(next) = crate::units::normalize_angle_arguments(&eq.rhs, &env) {
-            eq.rhs = next;
-        }
+    file.models.as_ref()?.keys().next().cloned()
+}
+
+/// `file` reduced to its one model: `from_file` builds that model alone, so a
+/// reaction system and the coupling beside it are not part of the build.
+fn model_alone(mut file: EsmFile) -> EsmFile {
+    file.reaction_systems = None;
+    file.coupling = None;
+    file
+}
+
+/// Refuse a document that is not one model, which `from_file` documents as its
+/// input.
+fn require_one_model(file: &EsmFile) -> Result<(), CompileError> {
+    match file.models.as_ref().map(|m| m.len()) {
+        None | Some(0) => Err(CompileError::build_err("File has no models to simulate")),
+        Some(1) => Ok(()),
+        Some(_) => Err(CompileError::build_err(
+            "Array-op path currently only supports a single model file (no coupling)",
+        )),
     }
 }
 
@@ -605,127 +416,153 @@ fn normalize_model_angle_arguments(model: &mut Model) {
 
 impl ArrayCompiled {
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
-        Self::from_file_with(file, false)
+        Self::from_file_with(file, false, crate::Compiler::Native)
     }
 
     /// [`Self::from_file`], with `runtime_array_parameters` as
-    /// [`Self::from_flattened_with`] takes it.
+    /// [`Self::from_flattened_with`] takes it, serving `compiler`.
     pub(crate) fn from_file_with(
         file: &EsmFile,
         runtime_array_parameters: bool,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        let Some(models) = &file.models else {
-            return Err(CompileError::build_err("File has no models to simulate"));
-        };
-        if models.len() != 1 {
-            return Err(CompileError::build_err(
-                "Array-op path currently only supports a single model file (no coupling)",
-            ));
-        }
-        let (model_name, model) = models.iter().next().unwrap();
-        // v0.8.0: `index_sets` is document-scoped (one registry shared by all
-        // models), so source it from the file rather than the model.
-        let index_sets: HashMap<String, IndexSet> = file
-            .index_sets
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        // `from_model` clones the model internally anyway, so taking the clone
-        // here costs nothing extra — same shape as `from_file_owned` below,
-        // which owns its model outright. The model's name rides along so the
-        // pipeline can resolve self-qualified references once the subsystems
-        // are mounted.
-        let mut compiled = Self::compile_pipeline(
-            model.clone(),
-            &[],
-            &index_sets,
+        require_one_model(file)?;
+        let alone = model_alone(file.clone());
+        Self::from_document(
+            std::borrow::Cow::Owned(alone),
             None,
-            Some(model_name),
+            None,
             runtime_array_parameters,
-        )?;
-        // Record the model's namespace so overrides may be keyed `Model.param`
-        // (the scalar/flatten/Julia convention) as well as the raw `param` this
-        // single-model path builds (WS3 override-naming parity).
-        compiled.namespace = Some(model_name.clone());
-        compiled.qualify_data_fed(model_name);
-        Ok(compiled)
+            compiler,
+        )
     }
 
-    /// [`Self::from_file`], consuming the file. The peak-memory-lean build for
-    /// a large expanded discretization: the single model is MOVED out of the
-    /// file (nothing is cloned), the rest of the document is dropped here, and
-    /// [`Self::compile_pipeline`] then moves each observed body into its
-    /// compiled rule instead of deep-copying it. For `simpleclimate.esm` at
-    /// the production grid the borrowed `from_file` holds three ~1 GiB copies
-    /// live at once (the caller's file, the compile's private model clone, the
-    /// compiled rules); this path holds ~one. Same build stages, same result.
+    /// [`Self::from_file`], consuming the file, which is dropped as soon as it
+    /// is flattened. Both build the document's one model alone: a reaction
+    /// system and the coupling beside it are not part of the build.
     pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
-        let Some(models) = file.models else {
-            return Err(CompileError::build_err("File has no models to simulate"));
+        Self::from_file_owned_with(file, false, crate::Compiler::Native)
+    }
+
+    /// [`Self::from_file_owned`], with `runtime_array_parameters` as
+    /// [`Self::from_flattened_with`] takes it, serving `compiler`.
+    pub(crate) fn from_file_owned_with(
+        file: EsmFile,
+        runtime_array_parameters: bool,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
+        require_one_model(&file)?;
+        Self::from_document(
+            std::borrow::Cow::Owned(model_alone(file)),
+            None,
+            None,
+            runtime_array_parameters,
+            compiler,
+        )
+    }
+
+    /// The one build of a document into the array runtime: refuse an event
+    /// `flatten` would not carry, flatten the document (or take `flattened`,
+    /// its flattened system, when the caller holds it), drop the document, and
+    /// compile the flattened system ([`Self::from_flattened_with`]).
+    ///
+    /// Every name the build makes is the flattened, model-qualified one. A
+    /// document that is exactly one model ([`crate::simulate::whole_document_is_one_model`])
+    /// records that model as [`Self::namespace`], and an error the build
+    /// raises names its variables without it, as the document spells them.
+    ///
+    /// `invented` is the value invention a build already ran over this same
+    /// system ([`InventedSets`]); the compile then sizes the derived sets from
+    /// it rather than running value invention again.
+    pub(crate) fn from_document(
+        file: std::borrow::Cow<'_, EsmFile>,
+        flattened: Option<&FlattenedSystem>,
+        invented: Option<InventedSets<'_>>,
+        runtime_array_parameters: bool,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
+        let shown = one_model_name(&file);
+        let show = |e: CompileError| match &shown {
+            Some(ns) => e.unqualified(ns),
+            None => e,
         };
-        if models.len() != 1 {
-            return Err(CompileError::build_err(
-                "Array-op path currently only supports a single model file (no coupling)",
-            ));
+        // `flatten` lifts only the top-level components' events, so an event a
+        // subsystem owns is refused here, while the document still holds it.
+        if let Some((construct, name)) = crate::compile_error::first_event_in_file(&file) {
+            return Err(show(crate::compile_error::event_refusal(
+                construct,
+                crate::compile_error::ARRAY_EVALUATOR,
+                name.as_deref(),
+            )));
         }
-        let index_sets: HashMap<String, IndexSet> =
-            file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, model) = models.into_iter().next().unwrap();
+        let owned;
+        let flat = match flattened {
+            Some(flat) => flat,
+            None => {
+                owned = crate::flatten::flatten(&file)?;
+                &owned
+            }
+        };
+        drop(file);
+        let supplied = BuildTimeData {
+            vi_arrays: None,
+            invented,
+        };
         let mut compiled =
-            Self::compile_pipeline(model, &[], &index_sets, None, Some(&model_name), false)?;
-        compiled.qualify_data_fed(&model_name);
-        compiled.namespace = Some(model_name);
+            Self::compile_flattened(flat, runtime_array_parameters, None, supplied, compiler)
+                .map_err(show)?;
+        compiled.namespace = shown;
         Ok(compiled)
     }
 
-    /// Build from a [`FlattenedSystem`].
-    ///
-    /// [`crate::flatten::flatten`] already merges a coupled, multi-component
-    /// file into a single dot-namespaced system (coupling rules applied, every
-    /// variable reference namespaced). The array path historically only had
-    /// [`Self::from_file`], which rejects `models.len() != 1` outright because
-    /// it operates on a raw [`Model`] and has no coupling machinery of its own.
-    /// This constructor closes that seam: it consumes the already-coupled
-    /// flatten output directly, so a discretized **coupled** spatial model
-    /// compiles + evaluates through the vectorized array runtime, reusing
-    /// `flatten.rs`'s coupling verbatim (no new coupling logic here). The raw
-    /// single-model `from_file` guard is intentionally left intact — the real
-    /// pipeline flattens first and reaches the array runtime through here
-    /// (ess-14f.8).
-    ///
-    /// The flattened system splits variables into typed maps; [`Self::from_model`]
-    /// expects a single registry discriminated by [`ModelVariable::var_type`].
-    /// We merge them back into one synthetic [`Model`] (each variable already
-    /// carries its `var_type`) and delegate, so every downstream stage — shape
-    /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
-    /// with the single-model path.
+    /// Build from a [`FlattenedSystem`]: every build into the array runtime
+    /// compiles one. [`crate::flatten::flatten`] mounts every subsystem,
+    /// applies the coupling and qualifies every name with its component, and
+    /// the build compiles the system's variables, merged back into one
+    /// registry ([`model_from_flattened`]), under those names.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
-        Self::from_flattened_with(flat, false)
+        Self::from_flattened_with(flat, false, crate::Compiler::Native)
     }
 
     /// [`Self::from_flattened`], with every shaped parameter that has a value
     /// and no `update` left as a run-time input read from the forcing
     /// buffer (`runtime_array_parameters`, API_SPEC §5.8) rather than lowered
-    /// into build-time data.
+    /// into build-time data, serving `compiler`.
     pub(crate) fn from_flattened_with(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        Self::from_flattened_shaped(flat, runtime_array_parameters, None)
+        Self::from_flattened_shaped(flat, runtime_array_parameters, None, compiler)
     }
 
-    /// [`Self::from_flattened_with`], building each variable `inherited`
-    /// names at that shape: the shapes an unshaped mixed-rank `ifelse` took
-    /// when the system `flat` was cut from was built (esm-spec §4.3.4). A
-    /// restricted system can no longer decide them itself — `RhsProgram::
-    /// select` keeps a state a kept summand reads but drops its `D` equation,
-    /// and an unshaped state with no `D` equation has no rank the inference
-    /// can read — so the program it is cut from hands them down.
+    /// [`Self::from_flattened_with`], building each variable at the shape
+    /// `inherited`, the [`ShapeTable`] of the program the system `flat` was
+    /// cut from, built it at where no declaration records it (esm-spec
+    /// §4.3.4, [`apply_shape_rewrites`]).
     pub(crate) fn from_flattened_shaped(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
-        inherited: Option<&BuiltShapes>,
+        inherited: Option<&ShapeTable>,
+        compiler: crate::Compiler,
+    ) -> Result<Self, CompileError> {
+        Self::compile_flattened(
+            flat,
+            runtime_array_parameters,
+            inherited,
+            BuildTimeData::default(),
+            compiler,
+        )
+    }
+
+    /// [`Self::from_flattened_shaped`], with what the build supplies beyond
+    /// the system ([`BuildTimeData`]).
+    fn compile_flattened(
+        flat: &FlattenedSystem,
+        runtime_array_parameters: bool,
+        inherited: Option<&ShapeTable>,
+        supplied: BuildTimeData<'_>,
+        compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
         // (esm-spec §4.7 "Working precision crosses a mount", §11.3.1).
@@ -777,36 +614,22 @@ impl ArrayCompiled {
             ));
         }
 
-        let mut model = model_from_flattened(flat);
-        if let Some(shapes) = inherited {
-            set_declared_shapes(&mut model, shapes);
-        }
         // The document `index_sets` registry is carried through flatten
-        // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
-        // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and
-        // derived-set references exactly as the single-model `from_file` path
-        // does against `file.index_sets`. Empty for a file with no index sets, so
-        // dense `[lo, hi]`-range discretized stencils are unaffected.
+        // (`FlattenedSystem::index_sets`), with every mounted subsystem's sets,
+        // so `faq` `ranges` `{ "from": <set> }`, `join.on` gates and
+        // derived-set references resolve against it.
         let index_sets: HashMap<String, IndexSet> = flat
             .index_sets
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut compiled = Self::compile_pipeline(
-            model,
+        let normalized = normalize(BuildInput::Flattened { flat, inherited }, index_sets)?;
+        let mut compiled = Self::compile_normalized(
+            normalized,
             &flat.field_ics,
-            &index_sets,
-            None,
-            None,
+            supplied,
             runtime_array_parameters,
         )?;
-        // The pipeline recorded only what it inferred; the inherited shapes
-        // were already declared when it ran.
-        if let Some(shapes) = inherited {
-            compiled
-                .conditional_shapes
-                .extend(shapes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
         // synthetic model's stage-(0) walk never saw an initial-condition
         // right-hand side. Walk them here, before anything evaluates one
@@ -829,27 +652,17 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        compiled.built_variables = BuiltVariables::new(
-            std::mem::take(&mut compiled.built_variables.axes),
-            flat.metadata.bound_inputs.clone(),
-        );
+        compiled.built_variables.bound_inputs = flat.metadata.bound_inputs.clone();
+        compiled.runtime_mode = RuntimeMode::of(compiler);
         Ok(compiled)
     }
 
     /// Build from a single [`Model`] and the document-scoped `index_sets`
-    /// registry (RFC semiring-faq-unified-ir §5.2, v0.8.0). The registry lives
-    /// on the top-level document and is shared by all models, so it is passed in
-    /// explicitly; pass an empty map for a model with no `{ "from": <set> }`
-    /// range references.
-    pub fn from_model(
-        model: &Model,
-        index_sets: &HashMap<String, IndexSet>,
-    ) -> Result<Self, CompileError> {
-        Self::from_model_with_arrays(model, index_sets, None)
-    }
-
-    /// [`from_model`](Self::from_model) with a caller-supplied factor-array
-    /// channel for the build-time value-invention engine.
+    /// registry (RFC semiring-faq-unified-ir §5.2), with a caller-supplied
+    /// factor-array channel for the build-time value-invention engine. The
+    /// registry lives on the top-level document and is shared by all models,
+    /// so it is passed in explicitly; pass an empty map for a model with no
+    /// `{ "from": <set> }` range references.
     ///
     /// `vi_arrays` is overlaid on the `const`-literal factors the document
     /// carries (caller wins on a name collision — see `vi_factor_arrays`) and
@@ -860,196 +673,86 @@ impl ArrayCompiled {
     /// without this channel the gate has no envelopes to build and the producer
     /// invents nothing.
     ///
-    /// `None` is exactly [`from_model`](Self::from_model) — every existing
-    /// caller is unaffected.
+    /// `None` supplies no arrays beyond the document's own.
     pub fn from_model_with_arrays(
         model: &Model,
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        // The rewrite passes below need an owned model; clone so the caller's
-        // model — and its serialized form — is untouched. A caller that can
-        // give up its model avoids this copy via [`Self::compile_pipeline`]
-        // (reached through [`Self::from_file_owned`] / `compile_array`).
-        Self::from_model_owned_with_arrays(model.clone(), index_sets, vi_arrays)
-    }
-
-    /// [`Self::from_model_with_arrays`], consuming the model: the compile
-    /// pipeline's rewrite passes mutate it in place (no private clone), and
-    /// the observed bodies — the dominant allocation of a large expanded
-    /// discretization — are MOVED into the compiled rules rather than
-    /// deep-copied (`build_observed_rules` takes each `var.expression`).
-    /// Behaviourally identical to `from_model`: every stage runs in the same
-    /// order on the same values.
-    fn from_model_owned_with_arrays(
-        model_owned: Model,
-        index_sets: &HashMap<String, IndexSet>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-    ) -> Result<Self, CompileError> {
-        Self::compile_pipeline(model_owned, &[], index_sets, vi_arrays, None, false)
-    }
-
-    /// The compile pipeline itself; every public entry point above delegates
-    /// here. `model_name` names the document model being compiled on the
-    /// single-model route. With a name, every self-qualified reference (`M.x`,
-    /// `M.sub.x`) is resolved to its local spelling right after the subsystems
-    /// are mounted, so one authored inside a subsystem body resolves as well
-    /// as one in the parent's own equations.
-    fn compile_pipeline(
-        mut model_owned: Model,
-        // The flattened system's `ic` right-hand sides (`field_ics`), which
-        // flatten moved out of the model's equations; empty on the
-        // single-model route, whose `ic` equations are still in the model.
-        flat_ics: &[(String, Expr)],
-        index_sets: &HashMap<String, IndexSet>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-        model_name: Option<&str>,
-        runtime_array_parameters: bool,
-    ) -> Result<Self, CompileError> {
-        // Resolve `{ "from": <index set> }` range references (RFC
-        // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
-        // before any shape inference or rule building; every downstream
-        // consumer then sees only dense interval ranges.
-        //
-        // Mount subsystems under dot-prefixed names (esm-spec §4.6) and resolve
-        // each ragged index set's keyed factors against the resulting model
-        // scope (RFC §5.4; the Julia `_factor_scope` mirror). Both are no-ops —
-        // and the registry copy is byte-identical — for models without
-        // subsystems / ragged sets.
-        // An event, continuous or discrete, is refused before anything is
-        // built. This is the SINGLE-MODEL route's check: `from_flattened` checks
-        // the flattened event lists itself, because the synthetic model it hands
-        // down carries no events. Subsystems are searched too, since mounting
-        // keeps only their variables and equations.
-        if let Some((construct, name)) = crate::compile_error::first_event(&model_owned) {
-            return Err(crate::compile_error::event_refusal(
+        // The model is built as the one model of a document, under a name of
+        // its own, and shown without it.
+        const NAME: &str = "Model";
+        let mut sets: Vec<(&String, &IndexSet)> = index_sets.iter().collect();
+        sets.sort_by(|a, b| a.0.cmp(b.0));
+        let file = EsmFile {
+            index_sets: Some(
+                sets.into_iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+            models: Some(IndexMap::from([(NAME.to_string(), model.clone())])),
+            ..Default::default()
+        };
+        let show = |e: CompileError| e.unqualified(NAME);
+        if let Some((construct, name)) = crate::compile_error::first_event_in_file(&file) {
+            return Err(show(crate::compile_error::event_refusal(
                 construct,
                 crate::compile_error::ARRAY_EVALUATOR,
                 name.as_deref(),
-            ));
+            )));
         }
-        let mut index_sets_owned = index_sets.clone();
-        mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
-        if let Some(name) = model_name {
-            resolve_self_references(&mut model_owned, name);
-        }
-        // `flatten`'s rewrites, which this SINGLE-MODEL route never gets
-        // (see `from_file_owned`). Runs after mounting so a subsystem's
-        // equations and declarations are in scope under their mounted names.
-        let (
-            ConditionalShapes {
-                built: conditional_shapes,
-                data_shaped,
-            },
-            variable_axes,
-        ) = apply_flatten_rewrites(&mut model_owned, &index_sets_owned)?;
-        // esm-spec §4.3.1.2: each recurrence group becomes the single stacked
-        // recurrence every route below already sweeps (`recurrence_group`).
-        super::recurrence_group::lower_recurrence_groups(&mut model_owned, &mut index_sets_owned)?;
-        // Lower every SHAPED parameter whose value the document supplies —
-        // inline array data, or one scalar broadcast over the grid (esm-spec
-        // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
-        // already reads. Runs after mounting so a subsystem's shaped parameter
-        // is lowered under its namespaced name too; `vi_arrays` is passed so a
-        // caller-supplied factor array stays authoritative over a declared
-        // default.
-        let (inline_param_arrays, runtime_params) = lower_inline_array_parameters(
-            &mut model_owned,
-            &index_sets_owned,
-            vi_arrays,
+        let flat = crate::flatten::flatten(&file)?;
+        drop(file);
+        let vi_arrays: Option<HashMap<String, ArrayD<f64>>> = vi_arrays.map(|arrays| {
+            arrays
+                .iter()
+                .map(|(k, v)| (crate::problem::qualify(NAME, k), v.clone()))
+                .collect()
+        });
+        let supplied = BuildTimeData {
+            vi_arrays: vi_arrays.as_ref(),
+            invented: None,
+        };
+        let mut compiled =
+            Self::compile_flattened(&flat, false, None, supplied, crate::Compiler::Native)
+                .map_err(show)?;
+        compiled.namespace = Some(NAME.to_string());
+        Ok(compiled)
+    }
+
+    /// Compile a [`NormalizedModel`]. `flat_ics` are the flattened system's
+    /// `ic` right-hand sides (`field_ics`), which flatten moved out of the
+    /// model's equations.
+    fn compile_normalized(
+        normalized: NormalizedModel,
+        flat_ics: &[(String, Expr)],
+        supplied: BuildTimeData<'_>,
+        runtime_array_parameters: bool,
+    ) -> Result<Self, CompileError> {
+        let NormalizedModel {
+            model,
+            index_sets,
+            shapes,
+        } = normalized;
+        let ResolvedModel {
+            model: mut model_owned,
+            index_sets,
+            runtime_params,
+            const_scope,
+            any_index,
+        } = resolve_for_compile(
+            model,
+            index_sets,
+            &shapes,
+            supplied,
             runtime_array_parameters,
         )?;
-        apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
-        // Under `element_type: "Float32"`, reject an index set whose subscripts
-        // binary32 cannot address exactly. Index expressions share the value
-        // kernels — there is no integer type in the expression language — so
-        // `i + 1` above 2^24 would round, and a gather would silently read the
-        // wrong cell. A no-op under Float64, and for every realistic extent.
-        if crate::precision::is_f32() {
-            let mut names: Vec<&String> = index_sets_owned.keys().collect();
-            names.sort();
-            for name in names {
-                if let Some(size) = index_sets_owned[name].size {
-                    crate::precision::check_index_set_extent(name, size)?;
-                }
-            }
-        }
-        // Build-time value invention for every derived index set (a
-        // `distinct` producer, RFC §6.1): the producer's member count sizes a
-        // range over the set. Runs before `strip_value_invention` drops the
-        // producer. A producer that cannot run is recorded rather than raised, and
-        // is refused below only if a surviving expression ranges over its set.
-        let derived = materialize_derived_extents(&model_owned, &index_sets_owned, vi_arrays);
-        bind_member_factors(&mut model_owned, &derived.member_factors);
-        let index_sets = &index_sets_owned;
-        // Drop value-invention (relational) scaffolding — `distinct` producers
-        // and membership sets over `kind: "derived"` index sets — plus the
-        // `join.on` gates keyed on them, BEFORE join/range resolution. The
-        // extents counted above (and the fed-back member factors) are all that
-        // survive of such a set (see `strip_value_invention`). A no-op unless a
-        // `distinct` producer or a derived-set-shaped variable is present.
-        // A producer that could not run leaves its derived set with no
-        // members: a stage that then trips over the stripped producer (a
-        // surviving read of one of its outputs, an output shaped on its set)
-        // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
-        // rather than the operator or the axis it met.
-        strip_value_invention(&mut model_owned, index_sets)
-            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
-        // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
-        // `const`-literal factor variables — Fornberg weights, mesh
-        // connectivity, a geometry table — that [`collect_const_factor_arrays`]
-        // already identifies as the Rust analogue of the Julia reference's
-        // `const_arrays`. Captured HERE, before stage (6) MOVES each observed
-        // body out of the variable registry. A gather on one of these resolves
-        // an out-of-range index by its declared boundary policy instead of the
-        // state gather's zero ghost, which §5.5.5 says is never a const array's.
-        let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
-            observed_bodies(&model_owned)
-                .into_iter()
-                .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
-                .map(|(n, _)| n),
-        ));
-        // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
-        // aggregate range still carries its `{ "from": <index set> }` linkage so
-        // the join key columns' member values can be read. A join whose key
-        // columns resolve to the same loop symbol is the degenerate positional
-        // no-op (byte-identical to the no-join form); a join over two distinct
-        // loop symbols is the data-derived value-equality case and is lowered
-        // into a member-equality `filter` over the contraction; a join over a
-        // genuine (non-loop) data column is rejected rather than mis-combined.
-        crate::join::resolve_aggregate_joins(&mut model_owned, index_sets)?;
-        // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
-        // into a concrete `[lo, hi]` interval before shape inference / rule
-        // building, so every downstream consumer sees only dense intervals.
-        // The next three passes look only at nodes with `ranges` and at `faq`
-        // nodes, and shape inference only at `index` nodes; no pass from here
-        // to there adds any of them, so one walk says whether there are any.
-        let census = OpCensus::of(&model_owned);
-        if census.ranges {
-            crate::faq::resolve_aggregate_ranges_with_extents(
-                &mut model_owned,
-                index_sets,
-                &derived.extents,
-            )
-            .or_else(|e| derived.refuse_on_failure(index_sets).and(Err(e)))?;
-            // A range over a non-geometry derived set that value invention did
-            // not size would contract as empty and read 0 (esm-spec §9.6.6):
-            // refuse it.
-            refuse_unmaterialized_derived_ranges(&model_owned, index_sets, &derived)?;
-        }
-        // Reject any aggregate whose ⊕ is spelled outside the schema's closed
-        // `reduce` / `semiring` enums. The gate lives here, at the one funnel
-        // every array-runtime build passes through, because the seams that
-        // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
-        // return `Option` and so could only decline silently.
-        if census.faq {
-            validate_oplus_spellings(&model_owned)?;
-        }
+        let index_sets = &index_sets;
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
-        // this block, so stage (6) below can borrow the model mutably (it
-        // moves each observed body out of the variable registry).
-        let (
+        // them, so stage (6) below can borrow the model mutably (it moves each
+        // observed body out of the variable registry).
+        let Classified {
             observed_names,
             forcing_decls,
             declared_forcing_shapes,
@@ -1062,145 +765,7 @@ impl ArrayCompiled {
             unvalued_shaped_params,
             forcing_defaults,
             data_fed,
-        ) = {
-            let model = &model_owned;
-
-            // (0) Reject spatial differential operators anywhere in the model's
-            // equations or observed-variable expressions (esm-i7b).
-            reject_unlowered_spatial_ops(model)?;
-
-            // (0a) Reject an implicit equation: this runtime has no algebraic
-            // solve, and every stage below would skip the equation, leaving the
-            // unknown at its initial value.
-            if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
-                return Err(crate::compile_error::implicit_equation_refusal(
-                    crate::compile_error::ARRAY_EVALUATOR,
-                    eq,
-                ));
-            }
-
-            // (0a′) Reject an unknown carrying BOTH a derivative equation and a
-            // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
-            // more equation than it has unknowns and `validate` reports
-            // `equation_count_mismatch`; the build says the same rather than
-            // integrating a system free of the constraint the file declares.
-            // After mounting, so a pair inside a subsystem is seen under its
-            // mounted names, and ahead of `partition_states`, which would
-            // otherwise pick one of the two without saying so.
-            if let Some((name, diff, alg)) =
-                crate::compile_error::first_doubly_defined_unknown(&model.equations)
-            {
-                return Err(crate::compile_error::doubly_defined_unknown_refusal(
-                    &name, diff, alg,
-                ));
-            }
-
-            // (0b) Reject a reference to a variable bound in NONE of the model's
-            // binding categories — the same function `crate::prepare` calls on
-            // the build-pipeline route
-            // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
-            // path's evaluation scope is the model's own declarations). Without
-            // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
-            // arm, which now fails closed but only names the fault at the drain;
-            // catching it HERE names the variable before anything is built.
-            check_free_variables(model, index_sets, &[])?;
-
-            // (1) Collect state / parameter / observed variables.
-            let (state_vars, param_vars, observed_vars, data_fed) =
-                classify_variables(model, &runtime_params)?;
-
-            // (2)+(2b) Infer state shapes from every equation usage, seeding
-            // declared array shapes where the index-usage inference left an
-            // array state scalar.
-            let shape_map = infer_state_shapes(model, &state_vars, index_sets, census.index)?;
-
-            // (3) Partition state variables into integrated / eliminated /
-            // held-at-ic.
-            let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
-
-            // (4) Build flat offsets and scalar-slot names per state variable.
-            let slots = build_slot_tables(model, &final_states, &shape_map)?;
-
-            // (5) Build the param tables.
-            let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
-            // A SHAPED parameter that reached the scalar table with no value —
-            // no `default`, no `distribution`, no inline data, not refreshed
-            // from outside. The front door refuses these by name
-            // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
-            // caller reaches them as a solve-time missing parameter.
-            let unvalued_shaped_params: Vec<String> = param_vars
-                .iter()
-                .filter(|name| {
-                    model.variables.get(**name).is_some_and(|v| {
-                        v.shape.as_ref().is_some_and(|s| !s.is_empty())
-                            && v.default.is_none()
-                            && v.distribution.is_none()
-                    })
-                })
-                .map(|name| (*name).clone())
-                .collect();
-
-            // Stage (6) consumes the observed bodies by NAME (sorted order,
-            // exactly the order `classify_variables` produced them in).
-            let observed_names: Vec<String> =
-                observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
-            // The externally refreshed parameters ride in `observed_vars` with
-            // no defining rule (see `classify_variables`); these are the
-            // forcing buffer's names.
-            let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
-                .iter()
-                .filter(|(_, var)| var.var_type == VariableType::Parameter)
-                .map(|(name, var)| {
-                    let shape = match var.shape.as_deref() {
-                        None => Some(Vec::new()),
-                        // A declared shape the registry cannot size takes the
-                        // extents of the parameter's inline array data, when it
-                        // has some (its rank was checked against the
-                        // declaration by `lower_inline_array_parameters`), so
-                        // the default is never checked against a guessed shape.
-                        Some(decl) => resolve_declared_shape(decl, index_sets).or_else(|| {
-                            var.default
-                                .as_ref()
-                                .filter(|d| d.is_array())
-                                .and_then(|d| d.to_dense().ok())
-                                .map(|(shape, _)| shape)
-                                .filter(|shape| shape.len() == decl.len())
-                        }),
-                    };
-                    ((*name).clone(), shape)
-                })
-                .collect();
-            // The shapes as declared, before inference sizes the unsized
-            // ones from how the equations index them: what a provider's
-            // sample is checked against.
-            // A data-fed parameter declared without a shape takes the shape
-            // of its data (esm-spec §4.3.4), so a provider's sample of it is
-            // not checked against the one-value box its read defaults to.
-            let mut declared_forcing_shapes = forcing_decls.clone();
-            for (name, var) in &observed_vars {
-                if is_data_fed_unshaped(var)
-                    && let Some(decl) = declared_forcing_shapes.get_mut(*name)
-                {
-                    *decl = None;
-                }
-            }
-            infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
-            let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
-            (
-                observed_names,
-                forcing_decls,
-                declared_forcing_shapes,
-                eliminated,
-                held_at_ic,
-                slots,
-                param_names,
-                param_index,
-                param_defaults,
-                unvalued_shaped_params,
-                forcing_defaults,
-                data_fed,
-            )
-        };
+        } = classify_model(&model_owned, index_sets, &runtime_params, any_index)?;
 
         // (5c) The build-time array scope a field `ic` may read (esm-spec
         // §6.6.5) — captured before stage (6) moves the bodies out.
@@ -1220,7 +785,7 @@ impl ArrayCompiled {
             &observed_names,
             &eliminated,
             index_sets,
-            &data_shaped,
+            &shapes,
         )?;
 
         let model = &model_owned;
@@ -1252,30 +817,28 @@ impl ArrayCompiled {
             .collect();
 
         Ok(ArrayCompiled {
-            runtime_mode: crate::simulate_array::RuntimeMode::default(),
+            runtime_mode: crate::simulate_array::RuntimeMode::Native,
             rewrites: crate::problem::CompilerRewrites::default(),
             #[cfg(feature = "xla")]
             xla_rhs: std::cell::OnceCell::new(),
             var_shapes,
             state_names: std::cell::OnceCell::new(),
             qualified_state_names: std::cell::OnceCell::new(),
+            shown_param_names: std::cell::OnceCell::new(),
             state_defaults,
             param_names,
             param_index,
             param_defaults,
             observed_rules,
             rhs_rules,
-            rule_set: next_rule_set_id(),
             n_states,
             declared_names,
-            conditional_shapes,
             built_variables: BuiltVariables {
-                axes: variable_axes,
+                shapes: std::sync::Arc::new(shapes),
                 bound_inputs: Default::default(),
             },
             forcing: Rc::new(RefCell::new(HashMap::new())),
             data_fed,
-            forcing_generation: std::cell::Cell::new(0),
             field_ics,
             init_faqs,
             ic_scope,
@@ -1286,7 +849,6 @@ impl ArrayCompiled {
             merged_renames: HashMap::new(),
             #[cfg(feature = "solve")]
             field_ic_memo: RefCell::new(None),
-            inline_param_arrays,
             forcing_decls,
             declared_forcing_shapes,
             forcing_defaults,
@@ -1297,10 +859,320 @@ impl ArrayCompiled {
     }
 }
 
+/// A normalized model with everything a range or a gate reads resolved to
+/// concrete values: the stage between [`normalize`] and the staged build.
+struct ResolvedModel {
+    model: Model,
+    /// The registry with every ragged keyed factor scoped and every recurrence
+    /// group's index set in place.
+    index_sets: HashMap<String, IndexSet>,
+    /// Shaped parameters kept as run-time inputs.
+    runtime_params: HashSet<String>,
+    /// The const-array registry (CONFORMANCE_SPEC §5.5.5).
+    const_scope: std::sync::Arc<ConstArrayScope>,
+    /// Whether any `index` node survives, which is all shape inference needs
+    /// to know before it walks the equations.
+    any_index: bool,
+}
+
+/// Resolve a [`NormalizedModel`]'s data-dependent structure for the compile:
+/// inline array parameters lowered, ragged keyed factors scoped, derived
+/// index sets sized by value invention and its scaffolding stripped, `join.on`
+/// clauses lowered, and every `{ "from": <set> }` range made a concrete
+/// interval. The order is fixed here: the joins read the `from` linkage the
+/// range resolution erases, and value invention reads the producers the strip
+/// drops. `shapes` is the normalized model's table, whose declared axes the
+/// join lowering reads.
+fn resolve_for_compile(
+    mut model: Model,
+    mut index_sets: HashMap<String, IndexSet>,
+    shapes: &ShapeTable,
+    supplied: BuildTimeData<'_>,
+    runtime_array_parameters: bool,
+) -> Result<ResolvedModel, CompileError> {
+    // Lower every SHAPED parameter whose value the document supplies —
+    // inline array data, or one scalar broadcast over the grid (esm-spec
+    // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
+    // already reads. Runs after mounting so a subsystem's shaped parameter
+    // is lowered under its namespaced name too; `vi_arrays` is passed so a
+    // caller-supplied factor array stays authoritative over a declared
+    // default.
+    let runtime_params = lower_inline_array_parameters(
+        &mut model,
+        &index_sets,
+        supplied.vi_arrays,
+        runtime_array_parameters,
+    )?;
+    apply_ragged_factor_scope(&mut index_sets, &model.variables)?;
+    // Under `element_type: "Float32"`, reject an index set whose subscripts
+    // binary32 cannot address exactly. Index expressions share the value
+    // kernels — there is no integer type in the expression language — so
+    // `i + 1` above 2^24 would round, and a gather would silently read the
+    // wrong cell. A no-op under Float64, and for every realistic extent.
+    if crate::precision::is_f32() {
+        let mut names: Vec<&String> = index_sets.keys().collect();
+        names.sort();
+        for name in names {
+            if let Some(size) = index_sets[name].size {
+                crate::precision::check_index_set_extent(name, size)?;
+            }
+        }
+    }
+    // Build-time value invention for every derived index set (a
+    // `distinct` producer, RFC §6.1): the producer's member count sizes a
+    // range over the set. Runs before `strip_value_invention` drops the
+    // producer, unless the build already ran it over this system. A producer
+    // that cannot run is recorded rather than raised, and is refused below
+    // only if a surviving expression ranges over its set.
+    let derived = materialize_derived_extents(&model, &index_sets, supplied);
+    bind_member_factors(&mut model, &derived.member_factors);
+    // Drop value-invention (relational) scaffolding — `distinct` producers
+    // and membership sets over `kind: "derived"` index sets — plus the
+    // `join.on` gates keyed on them, BEFORE join/range resolution. The
+    // extents counted above (and the fed-back member factors) are all that
+    // survive of such a set (see `strip_value_invention`). A no-op unless a
+    // `distinct` producer or a derived-set-shaped variable is present.
+    // A producer that could not run leaves its derived set with no
+    // members: a stage that then trips over the stripped producer (a
+    // surviving read of one of its outputs, an output shaped on its set)
+    // names that set (`derived_index_set_unmaterialized`, esm-spec §4.2)
+    // rather than the operator or the axis it met.
+    strip_value_invention(&mut model, &index_sets)
+        .or_else(|e| derived.refuse_on_failure(&index_sets).and(Err(e)))?;
+    // The model's CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5): the
+    // `const`-literal factor variables — Fornberg weights, mesh
+    // connectivity, a geometry table — that [`collect_const_factor_arrays`]
+    // already identifies as the Rust analogue of the Julia reference's
+    // `const_arrays`. Captured HERE, before stage (6) MOVES each observed
+    // body out of the variable registry. A gather on one of these resolves
+    // an out-of-range index by its declared boundary policy instead of the
+    // state gather's zero ghost, which §5.5.5 says is never a const array's.
+    let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
+        observed_bodies(&model)
+            .into_iter()
+            .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
+            .map(|(n, _)| n),
+    ));
+    // Resolve `join.on` value-equality clauses (RFC §5.3) FIRST, while each
+    // aggregate range still carries its `{ "from": <index set> }` linkage so
+    // the join key columns' member values can be read. A join whose key
+    // columns resolve to the same loop symbol is the degenerate positional
+    // no-op (byte-identical to the no-join form); a join over two distinct
+    // loop symbols is the data-derived value-equality case and is lowered
+    // into a member-equality `filter` over the contraction; a join over a
+    // genuine (non-loop) data column is rejected rather than mis-combined.
+    crate::join::resolve_aggregate_joins(&mut model, &index_sets, |model| {
+        shapes.declared_map(|n| model.variables.contains_key(n))
+    })?;
+    // Then rewrite every `{ "from": <index set> }` range reference (§5.2)
+    // into a concrete `[lo, hi]` interval before shape inference / rule
+    // building, so every downstream consumer sees only dense intervals.
+    // The next three passes look only at nodes with `ranges` and at `faq`
+    // nodes, and shape inference only at `index` nodes; no pass from here
+    // to there adds any of them, so one walk says whether there are any.
+    let census = OpCensus::of(&model);
+    if census.ranges {
+        crate::faq::resolve_aggregate_ranges_with_extents(
+            &mut model,
+            &index_sets,
+            &derived.extents,
+        )
+        .or_else(|e| derived.refuse_on_failure(&index_sets).and(Err(e)))?;
+        // A range over a non-geometry derived set that value invention did
+        // not size would contract as empty and read 0 (esm-spec §9.6.6):
+        // refuse it.
+        refuse_unmaterialized_derived_ranges(&model, &index_sets, &derived)?;
+    }
+    // Reject any aggregate whose ⊕ is spelled outside the schema's closed
+    // `reduce` / `semiring` enums. The gate lives here, at the one funnel
+    // every array-runtime build passes through, because the seams that
+    // actually resolve ⊕ (`extract_derivative_faq`, `faq_spec`)
+    // return `Option` and so could only decline silently.
+    if census.faq {
+        validate_oplus_spellings(&model)?;
+    }
+
+    Ok(ResolvedModel {
+        model,
+        index_sets,
+        runtime_params,
+        const_scope,
+        any_index: census.index,
+    })
+}
+
+/// What stages (0)-(5) of the staged build decide about a resolved model,
+/// all owned, so stage (6) can then take the observed bodies out of it.
+struct Classified {
+    /// Observed names, in the order stage (6) consumes their bodies.
+    observed_names: Vec<String>,
+    /// The forcing buffer's parameters and their shapes, inferred where the
+    /// declaration leaves them unsized.
+    forcing_decls: IndexMap<String, Option<Vec<usize>>>,
+    /// The same parameters at their DECLARED shapes, which a provider's sample
+    /// is checked against.
+    declared_forcing_shapes: IndexMap<String, Option<Vec<usize>>>,
+    eliminated: HashSet<String>,
+    held_at_ic: HashSet<String>,
+    slots: SlotTables,
+    param_names: Vec<String>,
+    param_index: HashMap<String, usize>,
+    param_defaults: Vec<Option<f64>>,
+    /// Shaped parameters that reached the scalar table with no value.
+    unvalued_shaped_params: Vec<String>,
+    forcing_defaults: HashMap<String, Option<(Vec<usize>, Vec<f64>)>>,
+    data_fed: Vec<(String, String)>,
+}
+
+/// Stages (0)-(5): refuse what cannot be evaluated, classify the variables,
+/// infer state shapes, partition the states and lay out the state and
+/// parameter tables.
+fn classify_model(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    runtime_params: &HashSet<String>,
+    any_index: bool,
+) -> Result<Classified, CompileError> {
+    // (0) Reject spatial differential operators anywhere in the model's
+    // equations or observed-variable expressions (esm-i7b).
+    reject_unlowered_spatial_ops(model)?;
+
+    // (0a) Reject an implicit equation: this runtime has no algebraic
+    // solve, and every stage below would skip the equation, leaving the
+    // unknown at its initial value.
+    if let Some(eq) = crate::compile_error::first_implicit_equation(&model.equations) {
+        return Err(crate::compile_error::implicit_equation_refusal(
+            crate::compile_error::ARRAY_EVALUATOR,
+            eq,
+        ));
+    }
+
+    // (0a′) Reject an unknown carrying BOTH a derivative equation and a
+    // bare-LHS one. esm-spec §4.9.4 counts both, so the document has one
+    // more equation than it has unknowns and `validate` reports
+    // `equation_count_mismatch`; the build says the same rather than
+    // integrating a system free of the constraint the file declares.
+    // After mounting, so a pair inside a subsystem is seen under its
+    // mounted names, and ahead of `partition_states`, which would
+    // otherwise pick one of the two without saying so.
+    if let Some((name, diff, alg)) =
+        crate::compile_error::first_doubly_defined_unknown(&model.equations)
+    {
+        return Err(crate::compile_error::doubly_defined_unknown_refusal(
+            &name, diff, alg,
+        ));
+    }
+
+    // (0b) Reject a reference to a variable bound in NONE of the model's
+    // binding categories — the same function `crate::prepare` calls on
+    // the build-pipeline route
+    // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
+    // path's evaluation scope is the model's own declarations). Without
+    // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
+    // arm, which now fails closed but only names the fault at the drain;
+    // catching it HERE names the variable before anything is built.
+    check_free_variables(model, index_sets, &[])?;
+
+    // (1) Collect state / parameter / observed variables.
+    let (state_vars, param_vars, observed_vars, data_fed) =
+        classify_variables(model, runtime_params)?;
+
+    // (2)+(2b) Infer state shapes from every equation usage, seeding
+    // declared array shapes where the index-usage inference left an
+    // array state scalar.
+    let shape_map = infer_state_shapes(model, &state_vars, index_sets, any_index)?;
+
+    // (3) Partition state variables into integrated / eliminated /
+    // held-at-ic.
+    let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
+
+    // (4) Build flat offsets and scalar-slot names per state variable.
+    let slots = build_slot_tables(model, &final_states, &shape_map)?;
+
+    // (5) Build the param tables.
+    let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
+    // A SHAPED parameter that reached the scalar table with no value —
+    // no `default`, no `distribution`, no inline data, not refreshed
+    // from outside. The front door refuses these by name
+    // (`crate::problem::esm_problem`, esm-spec §10.10); a lower-level
+    // caller reaches them as a solve-time missing parameter.
+    let unvalued_shaped_params: Vec<String> = param_vars
+        .iter()
+        .filter(|name| {
+            model.variables.get(**name).is_some_and(|v| {
+                v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                    && v.default.is_none()
+                    && v.distribution.is_none()
+            })
+        })
+        .map(|name| (*name).clone())
+        .collect();
+
+    // Stage (6) consumes the observed bodies by NAME (sorted order,
+    // exactly the order `classify_variables` produced them in).
+    let observed_names: Vec<String> = observed_vars.iter().map(|(n, _)| (*n).clone()).collect();
+    // The externally refreshed parameters ride in `observed_vars` with
+    // no defining rule (see `classify_variables`); these are the
+    // forcing buffer's names.
+    let mut forcing_decls: IndexMap<String, Option<Vec<usize>>> = observed_vars
+        .iter()
+        .filter(|(_, var)| var.var_type == VariableType::Parameter)
+        .map(|(name, var)| {
+            let shape = match var.shape.as_deref() {
+                None => Some(Vec::new()),
+                // A declared shape the registry cannot size takes the
+                // extents of the parameter's inline array data, when it
+                // has some (its rank was checked against the
+                // declaration by `lower_inline_array_parameters`), so
+                // the default is never checked against a guessed shape.
+                Some(decl) => resolve_declared_shape(decl, index_sets).or_else(|| {
+                    var.default
+                        .as_ref()
+                        .filter(|d| d.is_array())
+                        .and_then(|d| d.to_dense().ok())
+                        .map(|(shape, _)| shape)
+                        .filter(|shape| shape.len() == decl.len())
+                }),
+            };
+            ((*name).clone(), shape)
+        })
+        .collect();
+    // The shapes as declared, before inference sizes the unsized
+    // ones from how the equations index them: what a provider's
+    // sample is checked against.
+    // A data-fed parameter declared without a shape takes the shape
+    // of its data (esm-spec §4.3.4), so a provider's sample of it is
+    // not checked against the one-value box its read defaults to.
+    let mut declared_forcing_shapes = forcing_decls.clone();
+    for (name, var) in &observed_vars {
+        if is_data_fed_unshaped(var)
+            && let Some(decl) = declared_forcing_shapes.get_mut(*name)
+        {
+            *decl = None;
+        }
+    }
+    infer_unsized_forcing_shapes(&mut forcing_decls, &model.equations);
+    let forcing_defaults = forcing_default_values(&observed_vars, &forcing_decls)?;
+    Ok(Classified {
+        observed_names,
+        forcing_decls,
+        declared_forcing_shapes,
+        eliminated,
+        held_at_ic,
+        slots,
+        param_names,
+        param_index,
+        param_defaults,
+        unvalued_shaped_params,
+        forcing_defaults,
+        data_fed,
+    })
+}
+
 // ============================================================================
 // `from_model` build stages. Each function is one numbered stage of the
 // compile pipeline (its number matches the stage comment in
-// [`ArrayCompiled::from_model`], which composes them in order); the bodies are
+// [`ArrayCompiled::from_model_with_arrays`], which composes them in order); the bodies are
 // extracted verbatim from the former inline implementation.
 // ============================================================================
 
@@ -1456,6 +1328,19 @@ pub(crate) fn check_free_variables(
     // columns. Widening the bound set can only ever prevent a false positive,
     // which is this gate's cardinal requirement; the compiled path passes none.
     declared.extend(extra_bound.iter().map(String::as_str));
+    // The components the model's own names are qualified under (`M` of a
+    // flattened `M.x`, `sub` of a mounted `sub.x`). A dotted name under one of
+    // them names this model's variable and must be declared; any other dotted
+    // name is a reference resolved outside this check.
+    let components: HashSet<&str, rustc_hash::FxBuildHasher> = model
+        .variables
+        .keys()
+        .filter_map(|n| n.split_once('.').map(|(head, _)| head))
+        .collect();
+    let checked = |name: &str| {
+        name.split_once('.')
+            .is_none_or(|(head, _)| components.contains(head))
+    };
     let mut bound: NameSet = NameSet::default();
     // Each checked equation's binders, collected in this pass over the
     // equations rather than in a second one.
@@ -1471,7 +1356,7 @@ pub(crate) fn check_free_variables(
         // doc note on `collect_dims_and_index_heads`.
         let mut binders = NameSet::default();
         if is_ic_lhs(&eq.lhs) {
-            collect_free_bare_symbols(&eq.rhs, &mut bound);
+            crate::binders::collect_symbols(&eq.rhs, &mut bound);
             collect_dims_and_index_heads(&eq.lhs, &mut bound);
             collect_dims_and_index_heads(&eq.rhs, &mut bound);
         } else {
@@ -1487,13 +1372,34 @@ pub(crate) fn check_free_variables(
     // ---- Check every equation (skipping `ic`) and observed expression. -------
     // Each check sees the shared bound set plus its own expression's binders,
     // added for the check and taken back out after it (see `with_binders`).
+    // `flatten` qualifies a loop symbol it does not see bound where it reads
+    // it (`M.k` of `index(M.u, k + 1)`), so a qualified name whose local part
+    // is a loop symbol the model binds is that symbol.
+    let mut loop_symbols: NameSet = NameSet::default();
+    for b in &eq_binders {
+        loop_symbols.extend(b.iter().cloned());
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| {
+            crate::binders::collect_binders(expr, Binders::ALL, &mut loop_symbols)
+        });
+    }
+    let is_loop_symbol = |name: &str| {
+        name.split_once('.')
+            .is_some_and(|(_, local)| loop_symbols.contains(local))
+    };
     let mut binders: NameSet = NameSet::default();
     for (eq, mut eq_binders) in model.equations.iter().zip(eq_binders) {
         if is_ic_lhs(&eq.lhs) {
             continue;
         }
         with_binders(&mut bound, &mut eq_binders, |scope| {
-            let is_bound = |name: &str| declared.contains(name) || scope.contains(name);
+            let is_bound = |name: &str| {
+                !checked(name)
+                    || declared.contains(name)
+                    || scope.contains(name)
+                    || is_loop_symbol(name)
+            };
             check_expr_free_vars(&eq.lhs, &is_bound)?;
             check_expr_free_vars(&eq.rhs, &is_bound)
         })?;
@@ -1504,10 +1410,13 @@ pub(crate) fn check_free_variables(
             if failure.is_some() {
                 return;
             }
-            collect_binders(expr, &mut binders);
+            crate::binders::collect_binders(expr, Binders::ALL, &mut binders);
             if let Err(e) = with_binders(&mut bound, &mut binders, |scope| {
                 check_expr_free_vars(expr, &|name: &str| {
-                    declared.contains(name) || scope.contains(name)
+                    !checked(name)
+                        || declared.contains(name)
+                        || scope.contains(name)
+                        || is_loop_symbol(name)
                 })
             }) {
                 failure = Some(e);
@@ -1549,62 +1458,13 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
     matches!(lhs, Expr::Operator(op) if op.op == "ic")
 }
 
-/// The index / integration symbols a single node BINDS for its body (mirrors
-/// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
-/// `integral` `int_var`, the BARE subscript positions of
-/// an `index(array, i…)` node, and `apply_expression_template` `bindings` keys.
-fn node_binders(node: &ExpressionNode, out: &mut NameSet) {
-    node_loop_binders(node, out);
-    if node.op == "index" {
-        // Only a BARE position (`index(u, i)`) is a binder; an index EXPRESSION
-        // (`index(u, i+1)`) is a USE of a symbol bound elsewhere and is checked.
-        for arg in node.args.iter().skip(1) {
-            if let Expr::Variable(name) = arg {
-                out.insert(name.clone());
-            }
+/// Insert every name `node` binds as one of `kinds` into `out`.
+fn insert_binders(node: &ExpressionNode, kinds: Binders, out: &mut NameSet) {
+    node.for_each_binder(kinds, |n| {
+        if !out.contains(n) {
+            out.insert(n.to_string());
         }
-    }
-}
-
-/// [`node_binders`] less the bare `index` subscripts: the names a node binds
-/// for its body and nothing else.
-fn node_loop_binders(node: &ExpressionNode, out: &mut NameSet) {
-    if let Some(idx) = &node.output_idx {
-        out.extend(idx.iter().cloned());
-    }
-    if let Some(ranges) = &node.ranges {
-        out.extend(ranges.keys().cloned());
-    }
-    if let Some(v) = &node.int_var {
-        out.insert(v.clone());
-    }
-    if let Some(bindings) = &node.bindings {
-        out.extend(bindings.keys().cloned());
-    }
-}
-
-/// Union every binder introduced anywhere in the subtree (whole-tree, like
-/// `structural.rs` `collect_bound_symbols`). Widening the bound set only ever
-/// prevents a false positive, which is the cardinal requirement here.
-fn collect_binders(expr: &Expr, out: &mut NameSet) {
-    if let Expr::Operator(node) = expr {
-        node_binders(node, out);
-        node.for_each_child(&mut |child| collect_binders(child, out));
-    }
-}
-
-/// Collect every free BARE (non-dotted, non-builtin) symbol in the subtree —
-/// used to credit an `ic` RHS's coordinate symbols into the bound set.
-fn collect_free_bare_symbols(expr: &Expr, out: &mut NameSet) {
-    match expr {
-        Expr::Variable(name) if !name.contains('.') && !is_builtin_function_name(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            node.for_each_child(&mut |child| collect_free_bare_symbols(child, out));
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Collect, in one walk of the subtree:
@@ -1615,7 +1475,7 @@ fn collect_free_bare_symbols(expr: &Expr, out: &mut NameSet) {
 ///   spatial-operator name list (the sugar ops carry no privileged status).
 ///   Defensive: the array path rejects unlowered spatial ops earlier, but a
 ///   coordinate an `ic` RHS shares with a node's `dim` stays creditable;
-/// - the bare name at the HEAD (first arg) of every `index(name, …)` op — an
+/// - the name at the HEAD (first arg) of every `index(name, …)` op — an
 ///   array-valued leaf (a declared state/observed, or a bare, undeclared,
 ///   loader-fed forcing FIELD read at runtime through the forcing buffer).
 ///   Crediting these keeps a legitimate bare forcing field in scope.
@@ -1626,7 +1486,6 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
         }
         if node.op == "index"
             && let Some(Expr::Variable(name)) = node.args.first()
-            && !name.contains('.')
         {
             out.insert(name.clone());
         }
@@ -1635,7 +1494,7 @@ fn collect_dims_and_index_heads(expr: &Expr, out: &mut NameSet) {
 }
 
 /// [`collect_dims_and_index_heads`] into `credited` and, in the same walk, the
-/// binders into `binders`: as [`collect_binders`] for a left-hand side
+/// binders into `binders`: every [`Binders::ALL`] binder for a left-hand side
 /// (`rhs: None`); for a right-hand side (`rhs: Some(enclosed)`), the same less
 /// one case: a bare `index(array, i)` subscript that no enclosing node binds
 /// and the left-hand side does not bind either. There it is a READ of `i` with
@@ -1658,22 +1517,18 @@ fn collect_dims_heads_and_binders(
     }
     if node.op == "index"
         && let Some(Expr::Variable(name)) = node.args.first()
-        && !name.contains('.')
     {
         credited.insert(name.clone());
     }
     let child_rhs = match rhs {
         None => {
-            node_binders(node, binders);
+            insert_binders(node, Binders::ALL, binders);
             None
         }
         Some(enclosed) => {
-            let carries = node.output_idx.is_some()
-                || node.ranges.is_some()
-                || node.int_var.is_some()
-                || node.bindings.is_some();
+            let carries = node.carries_binders(Binders::BODY);
             if enclosed || node.op != "index" {
-                node_binders(node, binders);
+                insert_binders(node, Binders::ALL, binders);
             }
             Some(enclosed || carries)
         }
@@ -1683,8 +1538,8 @@ fn collect_dims_heads_and_binders(
     });
 }
 
-/// Reject the first bare (non-dotted) variable reference bound in none of the
-/// categories in `scope`, as `Unknown variable '{name}' referenced in
+/// Reject the first variable reference bound in none of the categories in
+/// `scope`, as `Unknown variable '{name}' referenced in
 /// expression`. The full expression-bearing
 /// child set is descended via [`ExpressionNode::for_each_child`] (args plus the
 /// sidecar fields), so a reference hidden in an aggregate body, filter, integral
@@ -1694,9 +1549,9 @@ fn collect_dims_heads_and_binders(
 fn check_expr_free_vars(expr: &Expr, scope: &dyn Fn(&str) -> bool) -> Result<(), CompileError> {
     match expr {
         Expr::Variable(name) => {
-            // A dotted name is a qualified / forcing reference resolved at
-            // runtime; builtins and derivative markers are always valid.
-            if name.contains('.') || is_builtin_function_name(name) || name.starts_with("d(") {
+            // Builtins and derivative markers are always valid; `scope`
+            // decides every other name, dotted or not.
+            if is_builtin_function_name(name) || name.starts_with("d(") {
                 return Ok(());
             }
             if scope(name) {
@@ -1760,31 +1615,12 @@ pub(super) struct IcScope {
     pub(super) state_reads: Vec<(String, String)>,
 }
 
-/// The names `expr` reads FREE: every bare variable reference not bound by an
-/// enclosing node (a `faq`'s `output_idx` / `ranges` keys, an `integral`'s
-/// variable, …). A loop index is no read of the observed or state that
-/// happens to share its name.
-fn collect_free_names(expr: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) if !bound.contains(name) => {
-            out.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            let mut own = NameSet::default();
-            node_loop_binders(node, &mut own);
-            let depth = bound.len();
-            bound.extend(own);
-            node.for_each_child(&mut |child| collect_free_names(child, bound, out));
-            bound.truncate(depth);
-        }
-        _ => {}
-    }
-}
-
+/// The names `expr` reads FREE: every variable reference not bound by an
+/// enclosing node ([`Binders::BODY`]: a `faq`'s `output_idx` / `ranges` keys,
+/// an `integral`'s variable, a template application's parameters). A loop
+/// index is no read of the observed or state that happens to share its name.
 pub(super) fn free_names(expr: &Expr) -> HashSet<String> {
-    let mut out = HashSet::new();
-    collect_free_names(expr, &mut Vec::new(), &mut out);
-    out
+    crate::binders::free_names(expr, Binders::BODY)
 }
 
 /// Memoized walk over the observed definitions marking each one that reads
@@ -2091,9 +1927,8 @@ fn lower_inline_array_parameters(
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
     keep_at_runtime: bool,
-) -> Result<(HashMap<String, (Vec<usize>, Vec<f64>)>, HashSet<String>), CompileError> {
-    let mut lowered: Vec<(String, JsonValue)> = Vec::new();
-    let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
+) -> Result<HashSet<String>, CompileError> {
+    let mut lowered: Vec<(String, crate::ConstValue)> = Vec::new();
     let mut kept: HashSet<String> = HashSet::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
@@ -2148,8 +1983,7 @@ fn lower_inline_array_parameters(
             let values = vec![scalar; want.iter().copied().product::<usize>().max(1)];
             var.var_type = VariableType::Unknown;
             var.default = None;
-            lowered.push((name.clone(), dense_to_json(&want, &values)));
-            dense.insert(name.clone(), (want, values));
+            lowered.push((name.clone(), crate::ConstValue::from_dense(&want, values)));
             continue;
         }
         let (shape, values) = inline_array_default(name, var, default, index_sets)?;
@@ -2158,8 +1992,7 @@ fn lower_inline_array_parameters(
         }
         var.var_type = VariableType::Unknown;
         var.default = None;
-        lowered.push((name.clone(), dense_to_json(&shape, &values)));
-        dense.insert(name.clone(), (shape, values));
+        lowered.push((name.clone(), crate::ConstValue::from_dense(&shape, values)));
     }
     for (name, value) in lowered {
         // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
@@ -2176,7 +2009,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok((dense, kept))
+    Ok(kept)
 }
 
 /// Parameter `name`'s inline array `default` as a dense array, checked
@@ -2269,25 +2102,6 @@ pub(crate) fn inline_parameter_arrays(
         }
     }
     out
-}
-
-/// Re-nest a row-major dense buffer into the nested JSON array a `const` node
-/// carries. The inverse of [`crate::types::InlineValue::to_dense`].
-fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
-    fn build(shape: &[usize], values: &[f64]) -> JsonValue {
-        let Some((&axis, rest)) = shape.split_first() else {
-            return serde_json::Number::from_f64(values[0])
-                .map(JsonValue::Number)
-                .unwrap_or(JsonValue::Null);
-        };
-        let stride = rest.iter().product::<usize>().max(1);
-        JsonValue::Array(
-            (0..axis)
-                .map(|i| build(rest, &values[i * stride..(i + 1) * stride]))
-                .collect(),
-        )
-    }
-    build(shape, values)
 }
 
 /// (1) Collect state / parameter / observed variables (sorted by name for a
@@ -2631,19 +2445,7 @@ fn build_param_tables(
 // structural and costs a document that has no such read one walk of each
 // algebraic RHS at build time; everything below is skipped when
 // `collect_self_reads` finds nothing, which is the overwhelmingly common case.
-//
-// Rationale, alternatives, and the reason the lag is DERIVED rather than
-// declared: `docs/content/rfcs/causal-self-reference-recurrence.md`.
-
-/// One causal self-read found in a variable's own defining RHS.
-struct SelfRead {
-    /// The read's index arguments (`args[1..]` of the `index` node).
-    args: Vec<Expr>,
-    /// Bounds of every index symbol bound by an enclosing `faq` at the
-    /// point the read was found — the scope a symbol-valued lag is proved in.
-    /// Innermost binding wins, matching the evaluator's `loop_binds` shadowing.
-    env: HashMap<String, (i64, i64)>,
-}
+// The analysis itself is shared with the validator: `crate::causal_self_read`.
 
 /// A recurrence definition, lowered to the frame + per-cell body the sweep
 /// runs (see [`AlgebraicRule::Recurrence`]).
@@ -2656,224 +2458,65 @@ pub(super) struct RecurLowering {
     pub(super) lag_proven: bool,
 }
 
-fn recur_err(code: &str, detail: String) -> CompileError {
-    CompileError::InterpreterBuildError {
-        details: format!("{code}: {detail}"),
-    }
+fn recur_err(code: &'static str, detail: String) -> CompileError {
+    CompileError::coded_build_err(code, format!("{code}: {detail}"))
 }
 
-/// The affine form of an index expression with respect to the frame symbol
-/// `sym`: the coefficient of `sym`, plus the integer bounds of the symbol-free
-/// part — `None` when those bounds cannot be proved.
-///
-/// The two halves carry different weight. The **coefficient** must be provable:
-/// unless the expression carries `sym` exactly once with coefficient 1 it does
-/// not name a position relative to the cell being written, and there is nothing
-/// to interpret. The **constant part** need not be: an unprovable offset is a
-/// lag whose sign is unknown, which esm-spec §4.3.1.1 admits and leaves to the
-/// runtime's fail-closed read — a cell the sweep has not published cannot be
-/// read, so an unprovable lag cannot produce a wrong number, only a fault.
-///
-/// Treating an unresolvable symbol as fatal instead would make the VALIDATOR
-/// reject documents the evaluator accepts (it resolves ranges against the
-/// registry first and so proves more), which is the one disagreement between
-/// the two that is never defensible.
-struct Affine {
-    coef: i64,
-    konst: Option<(i64, i64)>,
-}
-
-fn affine_in_sym(e: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> Option<Affine> {
-    let konst = |lo: i64, hi: i64| {
-        Some(Affine {
-            coef: 0,
-            konst: Some((lo, hi)),
-        })
-    };
-    match e {
-        Expr::Integer(n) => konst(*n, *n),
-        Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
-            let n = *f as i64;
-            konst(n, n)
-        }
-        Expr::Variable(v) if v == sym => Some(Affine {
-            coef: 1,
-            konst: Some((0, 0)),
-        }),
-        Expr::Variable(v) => Some(Affine {
-            coef: 0,
-            konst: env.get(v).copied(),
-        }),
-        Expr::Operator(node) if node.args.len() == 2 => {
-            let a = affine_in_sym(&node.args[0], sym, env)?;
-            let b = affine_in_sym(&node.args[1], sym, env)?;
-            let both = a.konst.zip(b.konst);
-            match node.op.as_str() {
-                "+" => Some(Affine {
-                    coef: a.coef + b.coef,
-                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
-                }),
-                "-" => Some(Affine {
-                    coef: a.coef - b.coef,
-                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
-                }),
-                // Scaling only by a symbol-free integer whose value is PINNED
-                // (`lo == hi`): otherwise the product is not affine with a known
-                // coefficient, and the coefficient is the half that must be
-                // provable.
-                "*" => {
-                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
-                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
-                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
-                        _ => return None,
-                    };
-                    Some(Affine {
-                        coef: other.coef * k,
-                        konst: other.konst.map(|(lo, hi)| {
-                            let (p, q) = (lo * k, hi * k);
-                            (p.min(q), p.max(q))
-                        }),
-                    })
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// How one index argument of a causal self-read relates to the frame symbol at
-/// that axis. Written in terms of the LAG `sym - <index expression>`, so a
-/// positive lag is an earlier position.
-enum SelfIdx {
-    /// The lag is exactly zero: the read stays on this axis's own cell, so this
-    /// axis is not the one the recurrence folds along.
-    Identity,
-    /// A lag that is not provably zero-or-forward, so this axis IS the
-    /// recurrence axis. `proven` records whether every value of the lag was
-    /// shown `>= 1` statically; when it is false the read may name the cell
-    /// being written or a later one for some values of a contracted symbol, and
-    /// the runtime's fail-closed read is what rules those out (esm-spec
-    /// §4.3.1.1 point 5) — a cell that has not been published cannot be read,
-    /// whether the sweep will publish it later or never.
-    Offset { proven: bool, max_lag: i64 },
-    /// A lag that is provably `<= 0` for every value: a same-cell or forward
-    /// read, which no sweep order can satisfy.
-    Forward,
-    /// Not affine in the frame symbol at all.
-    Bad,
-}
-
-fn classify_self_index(arg: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> SelfIdx {
-    // lag = sym - arg. `arg` must carry `sym` with coefficient exactly 1, or
-    // "the previous position along this axis" is not what it names.
-    let Some(Affine { coef, konst }) = affine_in_sym(arg, sym, env) else {
-        return SelfIdx::Bad;
-    };
-    if coef != 1 {
-        return SelfIdx::Bad;
-    }
-    let Some((clo, chi)) = konst else {
-        // A lag whose sign could not be proved. Admitted as the recurrence
-        // axis: it is not provably wrong, and the cells where it would be
-        // ill-founded cannot be read (they are not published), so the runtime
-        // faults there instead of returning a number.
-        return SelfIdx::Offset {
-            proven: false,
-            max_lag: 0,
-        };
-    };
-    let (lag_lo, lag_hi) = (-chi, -clo);
-    if lag_lo == 0 && lag_hi == 0 {
-        return SelfIdx::Identity;
-    }
-    if lag_hi <= 0 {
-        return SelfIdx::Forward;
-    }
-    SelfIdx::Offset {
-        proven: lag_lo >= 1,
-        max_lag: lag_hi,
-    }
-}
-
-/// Bounds every `faq` range in `node` contributes to the symbol scope.
-fn aggregate_range_env(node: &ExpressionNode) -> Vec<(String, (i64, i64))> {
-    node.ranges
-        .as_ref()
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, spec)| spec.bounds().map(|b| (k.clone(), (b[0], b[1]))))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Walk `e` collecting every `index(var, …)` read, and note whether `var` is
-/// ever read BARE (which is never a causal read — esm-spec §4.3.1.1 rejection
-/// 4 — because the whole array does not exist during the sweep).
-fn collect_self_reads(
-    e: &Expr,
+/// The build error for a causal self-read that is not well founded.
+fn recurrence_defect_error(
     var: &str,
-    env: &mut Vec<(String, (i64, i64))>,
-    out: &mut Vec<SelfRead>,
-    bare: &mut bool,
-) {
-    match e {
-        Expr::Integer(_) | Expr::Number(_) => {}
-        Expr::Variable(v) => {
-            if v == var {
-                *bare = true;
-            }
+    idx_names: &[String],
+    defect: SelfReadDefect,
+) -> CompileError {
+    let detail = match defect {
+        SelfReadDefect::Arity { supplied, axes } => format!(
+            "a self-read of '{var}' supplies {supplied} indices but its frame has {axes} axes \
+             ({idx_names:?}). Every causal self-read indexes every axis (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::MemberSelect { hi, .. } => format!(
+            "a read of the stacked recurrence group '{var}' does not select a member with a \
+             constant in 1..{hi} (esm-spec §4.3.1.2)."
+        ),
+        SelfReadDefect::Forward { d } => format!(
+            "index {d} of a self-read of '{var}' names the cell being written, or a LATER one, \
+             on axis '{}'. A causal self-reference reads strictly EARLIER positions; no sweep \
+             order can satisfy a forward or same-cell read (esm-spec §4.3.1.1).",
+            idx_names[d]
+        ),
+        SelfReadDefect::MultiAxis { .. } => format!(
+            "a self-read of '{var}' is offset on more than one axis. A causal self-reference \
+             folds along exactly ONE axis; every other index must be the bare frame symbol \
+             (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::NotAffine { d } | SelfReadDefect::Coefficient { d, .. } => {
+            let sym = &idx_names[d];
+            format!(
+                "index {d} of a self-read of '{var}' is not an offset of the frame symbol \
+                 '{sym}'. A causal self-read names a position RELATIVE to the cell being \
+                 written — `{sym} - c`, `{sym} - a`, `{sym} - a - c` — so that which axis the \
+                 recurrence folds along, and in which direction, is decidable. An index that \
+                 does not carry '{sym}' with coefficient 1 (a bare constant, `2*{sym}`, another \
+                 axis's symbol) is rejected rather than guessed at (esm-spec §4.3.1.1). {}",
+                causal_self_read::data_lag_guidance(var, sym)
+            )
         }
-        Expr::Operator(node) => {
-            let pushed = if crate::faq::is_faq_op(&node.op) {
-                let add = aggregate_range_env(node);
-                let n = add.len();
-                env.extend(add);
-                n
-            } else {
-                0
-            };
-            let is_self_index = node.op == "index"
-                && matches!(node.args.first(), Some(Expr::Variable(v)) if v == var);
-            if is_self_index {
-                // Innermost binding wins: later entries overwrite earlier ones.
-                let mut snapshot: HashMap<String, (i64, i64)> = HashMap::new();
-                for (k, v) in env.iter() {
-                    snapshot.insert(k.clone(), *v);
-                }
-                out.push(SelfRead {
-                    args: node.args[1..].to_vec(),
-                    env: snapshot,
-                });
-            }
-            // `args[0]` of a self-read is the name itself, not a bare read of
-            // the array; every other operand is walked normally (an index
-            // expression may itself contain a self-read).
-            let skip = usize::from(is_self_index);
-            for a in node.args.iter().skip(skip) {
-                collect_self_reads(a, var, env, out, bare);
-            }
-            for side in [
-                node.expr.as_deref(),
-                node.filter.as_deref(),
-                node.key.as_deref(),
-                node.lower.as_deref(),
-                node.upper.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                collect_self_reads(side, var, env, out, bare);
-            }
-            if let Some(vs) = node.values.as_ref() {
-                for v in vs {
-                    collect_self_reads(v, var, env, out, bare);
-                }
-            }
-            env.truncate(env.len() - pushed);
-        }
-    }
+        SelfReadDefect::SameCell => format!(
+            "a self-read of '{var}' is at the SAME cell on every axis, so it defines '{var}' in \
+             terms of itself rather than of an earlier position. A causal self-reference must \
+             be strictly earlier along one axis (esm-spec §4.3.1.1)."
+        ),
+        SelfReadDefect::AxisDisagree { prev, d } => format!(
+            "the self-reads of '{var}' disagree on the recurrence axis: one folds along '{}' and \
+             another along '{}'. A definition folds along exactly one axis (esm-spec §4.3.1.1).",
+            idx_names[prev], idx_names[d]
+        ),
+        SelfReadDefect::PeerUnproven { target, d } => format!(
+            "the read of '{target}' in the definition of '{var}' is not provably strictly \
+             earlier on axis '{}' (esm-spec §4.3.1.2).",
+            idx_names[d]
+        ),
+    };
+    recur_err("recurrence_not_wellfounded", detail)
 }
 
 /// Is `e` an `index(var, sym…)` whose indices are exactly `idx_names` in order
@@ -2943,14 +2586,13 @@ pub(super) fn lower_recurrence(
     lhs: &Expr,
     rhs: &Expr,
 ) -> Result<Option<RecurLowering>, CompileError> {
-    let mut env: Vec<(String, (i64, i64))> = Vec::new();
-    let mut reads: Vec<SelfRead> = Vec::new();
-    let mut bare = false;
-    collect_self_reads(rhs, var, &mut env, &mut reads, &mut bare);
-    if reads.is_empty() {
+    let found = causal_self_read::collect_self_reads(rhs, &[var], &|spec| {
+        spec.bounds().map(|b| (b[0], b[1]))
+    });
+    if found.reads.is_empty() {
         return Ok(None);
     }
-    if bare {
+    if found.bare.is_some() {
         return Err(recur_err(
             "recurrence_not_wellfounded",
             format!(
@@ -3023,136 +2665,31 @@ pub(super) fn lower_recurrence(
         .cloned()
         .zip(ranges.iter().copied())
         .collect();
-    let mut axis: Option<usize> = None;
-    let mut max_lag: i64 = 0;
-    let mut lag_proven = true;
-    for read in &reads {
-        if read.args.len() != idx_names.len() {
-            return Err(recur_err(
-                "recurrence_not_wellfounded",
-                format!(
-                    "a self-read of '{var}' supplies {} indices but its frame has {} axes \
-                     ({idx_names:?}). Every causal self-read indexes every axis (esm-spec \
-                     §4.3.1.1).",
-                    read.args.len(),
-                    idx_names.len()
-                ),
-            ));
-        }
-        let mut env = frame_env.clone();
-        for (k, v) in &read.env {
-            env.insert(k.clone(), *v);
-        }
-        let mut lagged: Option<(usize, i64)> = None;
-        for (d, arg) in read.args.iter().enumerate() {
-            // The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
-            // `recurrence_group`): a read SELECTS a member with a constant, and
-            // this is the one axis where a non-identity index is admitted.
-            if idx_names[d] == super::recurrence_group::MEMBER_SYM {
-                let (_, hi) = ranges[d];
-                if matches!(arg, Expr::Integer(q) if (1..=hi).contains(q)) {
-                    continue;
-                }
-                return Err(recur_err(
-                    "recurrence_not_wellfounded",
-                    format!(
-                        "a read of the stacked recurrence group '{var}' does not select a member \
-                         with a constant in 1..{hi} (esm-spec §4.3.1.2)."
-                    ),
-                ));
-            }
-            match classify_self_index(arg, &idx_names[d], &env) {
-                SelfIdx::Identity => {}
-                SelfIdx::Forward => {
-                    return Err(recur_err(
-                        "recurrence_not_wellfounded",
-                        format!(
-                            "index {d} of a self-read of '{var}' names the cell being written, \
-                             or a LATER one, on axis '{}'. A causal self-reference reads \
-                             strictly EARLIER positions; no sweep order can satisfy a forward \
-                             or same-cell read (esm-spec §4.3.1.1).",
-                            idx_names[d]
-                        ),
-                    ));
-                }
-                SelfIdx::Offset {
-                    proven,
-                    max_lag: hi,
-                } => {
-                    lag_proven &= proven;
-                    if lagged.is_some() {
-                        return Err(recur_err(
-                            "recurrence_not_wellfounded",
-                            format!(
-                                "a self-read of '{var}' is offset on more than one axis. A \
-                                 causal self-reference folds along exactly ONE axis; every \
-                                 other index must be the bare frame symbol (esm-spec §4.3.1.1)."
-                            ),
-                        ));
-                    }
-                    lagged = Some((d, hi));
-                }
-                SelfIdx::Bad => {
-                    return Err(recur_err(
-                        "recurrence_not_wellfounded",
-                        format!(
-                            "index {d} of a self-read of '{var}' is not an offset of the frame \
-                             symbol '{}'. A causal self-read names a position RELATIVE to the \
-                             cell being written — `{} - c`, `{} - a`, `{} - a - c` — so that \
-                             which axis the recurrence folds along, and in which direction, is \
-                             decidable. An index that does not carry '{}' with coefficient 1 \
-                             (a bare constant, `2*{}`, another axis's symbol) is rejected \
-                             rather than guessed at (esm-spec §4.3.1.1). {}",
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            idx_names[d],
-                            crate::structural::data_lag_guidance(var, &idx_names[d])
-                        ),
-                    ));
-                }
-            }
-        }
-        let Some((d, hi)) = lagged else {
-            // A stacked group's same-cell read of an EARLIER member
-            // (esm-spec §4.3.1.2 rule 1): the frame cell, another member. The
-            // sweep publishes members in within-cell order, so the fail-closed
-            // read admits it exactly when that member precedes this one.
-            if idx_names
-                .iter()
-                .any(|n| n == super::recurrence_group::MEMBER_SYM)
-            {
-                continue;
-            }
-            return Err(recur_err(
-                "recurrence_not_wellfounded",
-                format!(
-                    "a self-read of '{var}' is at the SAME cell on every axis, so it defines \
-                     '{var}' in terms of itself rather than of an earlier position. A causal \
-                     self-reference must be strictly earlier along one axis (esm-spec §4.3.1.1)."
-                ),
-            ));
-        };
-        match axis {
-            None => axis = Some(d),
-            Some(prev) if prev == d => {}
-            Some(prev) => {
-                return Err(recur_err(
-                    "recurrence_not_wellfounded",
-                    format!(
-                        "the self-reads of '{var}' disagree on the recurrence axis: one folds \
-                         along '{}' and another along '{}'. A definition folds along exactly one \
-                         axis (esm-spec §4.3.1.1).",
-                        idx_names[prev], idx_names[d]
-                    ),
-                ));
-            }
-        }
-        max_lag = max_lag.max(hi);
-    }
-    let axis = axis.expect("at least one self-read, each of which set the axis");
+    let member_axis = idx_names
+        .iter()
+        .position(|n| n == super::recurrence_group::MEMBER_SYM)
+        .map(|d| (d, ranges[d].1));
+    let fold = causal_self_read::classify_self_reads(
+        &found.reads,
+        var,
+        &idx_names,
+        &frame_env,
+        member_axis,
+    )
+    .map_err(|defect| recurrence_defect_error(var, &idx_names, defect))?;
+    let Some(axis) = fold.axis else {
+        // Every read is a stacked group's same-cell read of an earlier member,
+        // which names no axis to fold along.
+        return Err(recur_err(
+            "recurrence_not_wellfounded",
+            format!(
+                "every self-read of '{var}' is at the SAME cell on every axis, so it defines \
+                 '{var}' in terms of itself rather than of an earlier position. A causal \
+                 self-reference must be strictly earlier along one axis (esm-spec §4.3.1.1)."
+            ),
+        ));
+    };
+    let (max_lag, lag_proven) = (fold.max_lag, fold.lag_proven);
 
     // ---- the per-cell body -------------------------------------------------
     let body = match rhs {
@@ -3213,7 +2750,7 @@ fn build_observed_rules(
     observed_names: &[String],
     eliminated: &HashSet<String>,
     index_sets: &HashMap<String, IndexSet>,
-    data_shaped: &HashMap<String, Vec<String>>,
+    shapes: &ShapeTable,
 ) -> Result<Vec<AlgebraicRule>, CompileError> {
     let mut observed_rules: Vec<AlgebraicRule> = Vec::new();
     let array_axes = declared_axis_names(model);
@@ -3239,8 +2776,8 @@ fn build_observed_rules(
     // WHICH rule form it lowers to is decided by the LHS, and both forms matter:
     //
     // * a `faq` LHS (`faq{expr: w[i]} ~ aggregate{…}`) is a PER-CELL
-    //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form the
-    //   whole-array overlay vectorizes. Lowering it as a wholesale body instead
+    //   definition and lowers to [`AlgebraicRule::ArrayLoop`], the form a
+    //   per-cell definition takes. Lowering it as a wholesale body instead
     //   silently drops a varying array observed onto the per-cell oracle — the
     //   dominant per-step cost for a coupled behaviour stack;
     // * a bare-variable LHS lowers WHOLESALE through [`lower_algebraic_body`]:
@@ -3248,11 +2785,7 @@ fn build_observed_rules(
     //   over them, so a readable intermediate decomposition runs as authored.
     // The variables whose shape their data-fed parameters' data decides:
     // see [`AlgebraicRule::Scalar`]'s `data_shaped`.
-    let data_shaped_of = |name: &str| {
-        data_shaped
-            .get(name)
-            .map(|fed| std::sync::Arc::from(fed.as_slice()))
-    };
+    let data_shaped_of = |name: &str| shapes.data_shaped(name).map(std::sync::Arc::from);
     let mut def_eq: HashMap<&str, &crate::types::Equation> = HashMap::new();
     for eq in &model.equations {
         if let crate::classification::LhsFormRef::Bare(name) =
@@ -3408,13 +2941,14 @@ fn check_bare_index_definition(
                 && !frame.iter().any(|b| names_binder(sub, b))
             {
                 let sym = v.strip_prefix(prefix).unwrap_or(v);
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!(
+                return Err(CompileError::coded_build_err(
+                    crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL,
+                    format!(
                         "{}: equation defining '{name}' subscripts its left-hand side with \
                          '{sym}', which no faq binds (esm-spec §6.3.1)",
                         crate::diagnostic::codes::UNBOUND_INDEX_SYMBOL
                     ),
-                });
+                ));
             }
         }
         gather = match g.args.first() {
@@ -3440,13 +2974,14 @@ fn check_bare_index_definition(
     if head_is_the_variable && binds_subscripts && rank_agrees {
         return Ok(());
     }
-    Err(CompileError::InterpreterBuildError {
-        details: format!(
+    Err(CompileError::coded_build_err(
+        crate::diagnostic::codes::INDEXED_DEFINITION_UNSUPPORTED_FORM,
+        format!(
             "indexed_definition_unsupported_form: '{name}' is defined by a bare-index LHS that \
              is not runnable; the RHS must be a `faq` whose `output_idx` names the LHS \
              subscripts in order (esm-spec §6.3.1)"
         ),
-    })
+    ))
 }
 
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of
@@ -3514,7 +3049,7 @@ fn lower_algebraic_body(
 /// classification — a single-model (`from_file`) build must fold
 /// coordinate-expression / broadcast-constant ics into `u0` exactly as the
 /// coupled path does. The RHS collected here has already been range-resolved
-/// against the document registry by [`ArrayCompiled::from_model`].
+/// against the document registry by [`ArrayCompiled::from_model_with_arrays`].
 fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
     let mut field_ics: Vec<(String, Expr)> = Vec::new();
     for eq in &model.equations {
@@ -3525,26 +3060,17 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
     field_ics
 }
 
-/// The `faq`-valued initialization equations (esm-spec §6.2, "equations that
-/// hold only at t=0"): `u ~ faq(…)` with a bare-variable left-hand side and an
-/// array-valued right-hand side, in document order. Each assigns the cells of
-/// its ranges at `u0` build time ([`ArrayCompiled::seed_initialization_faqs`]);
-/// the other spellings name no cells to assign and are not evaluated, as in
-/// the Julia reference's `_seed_faq_init_u0!`.
+/// The `faq`-valued initialization equations (esm-spec §6.2) of an authored
+/// model, in document order ([`crate::flatten::initialization_faq`]); a
+/// flattened system carries its own
+/// ([`FlattenedSystem::initialization_faqs`]).
 fn classify_initialization_faqs(model: &Model) -> Vec<(String, Expr)> {
     model
         .initialization_equations
         .iter()
         .flatten()
-        .filter_map(|eq| match (&eq.lhs, &eq.rhs) {
-            (Expr::Variable(target), Expr::Operator(node))
-                if is_faq_op(&node.op)
-                    && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
-            {
-                Some((target.clone(), eq.rhs.clone()))
-            }
-            _ => None,
-        })
+        .filter_map(crate::flatten::initialization_faq)
+        .map(|(target, rhs)| (target.to_string(), rhs.clone()))
         .collect()
 }
 
@@ -3896,19 +3422,13 @@ fn check_state_slots_covered(
     }
 }
 
-/// Evaluate a state-free build-time expression (grid geometry, §11.4.1
-/// coordinate-expression `ic` RHSs, §6.6.5 analytic `reference`s) through the
-/// official array evaluator.
-///
-/// **The reference evaluator, under every compiler.** No compiler tier has a
-/// form for initial-state assembly, so a field `ic` is evaluated here whatever
-/// the Problem names. What keeps that honest is that construction EXERCISES
-/// every such evaluation ([`ArrayCompiled::field_ic_records`]): one the
-/// whole-array overlay serves is reported as vectorized, and one that walks a
-/// `faq` per cell is refused by a strict compiler, naming the target
-/// (esm-libraries-spec §2.5.10). An inline test's analytic `reference` also
-/// comes here, and stays here under every compiler: it is the test's oracle,
-/// not the model (`crate::inline_tests::evaluate_cellwise`).
+/// Evaluate a state-free build-time expression (grid geometry, strip and
+/// expose's starting values, a value-invention factor) over whole arrays
+/// where it can be: the reference evaluator, and a standalone tape for a
+/// `faq` it would walk per cell
+/// ([`super::eval::StandaloneScope::eval_routed`], non-strict). A field `ic`,
+/// an initialization equation and an inline test's analytic `reference` take
+/// [`super::eval::eval_buildtime_field_routed`] with their own route.
 /// Array-producing `faq`/`makearray` nodes
 /// yield arrays; elementwise ops broadcast over them. Any `{ "from": <set> }`
 /// range references are resolved against `index_sets` first, so a raw
@@ -3939,15 +3459,29 @@ pub(crate) fn eval_buildtime_field_in_scope(
     params: &HashMap<String, f64>,
     scope: &HashMap<String, ArrayD<f64>>,
 ) -> Result<Value, CompileError> {
-    let mut resolved = expr.clone();
-    crate::faq::resolve_expr_ranges(&mut resolved, index_sets)?;
-    let param_names: Vec<String> = params.keys().cloned().collect();
-    let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
-    // The independent variable, where the scope binds it: the start of the
-    // run for an `ic` right-hand side (esm-spec §11.4.2). Nothing else binds
-    // it, and the evaluator reads `t` as its time argument, not as a name.
-    let t = params.get("t").copied().unwrap_or(0.0);
-    eval_expression(&resolved, scope, &param_vec, &param_names, t)
+    super::eval::eval_buildtime_field_routed(
+        None,
+        expr,
+        index_sets,
+        params,
+        scope,
+        super::eval::BuildEval::Fast { strict: false },
+    )
+    .map(super::eval::Routed::into_value)
+}
+
+/// One `ic` target's evaluation across its cells
+/// ([`resolve_field_ic_cell`]).
+pub(super) struct IcTargetMemo {
+    /// How a case-(3) expression is evaluated.
+    pub(super) mode: super::eval::BuildEval,
+    /// The case-(2) constant or the case-(3) whole-field evaluation (both
+    /// cell-independent), so the expression is evaluated once per target
+    /// rather than once per cell. `None` until the first cell fills it.
+    pub(super) field: Option<Value>,
+    /// The evaluator that served the case-(3) evaluation, or the tape's
+    /// refusal under a strict `mode` (the cell's value is then meaningless).
+    pub(super) route: Option<Result<super::eval::BuildRoute, String>>,
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -3963,7 +3497,7 @@ pub(crate) fn eval_buildtime_field_in_scope(
 ///    `faq`/`makearray` nodes (e.g. `cos(pi * x_coord)` where `x_coord`
 ///    is a grid-geometry aggregate expanded from a §9.7 template import),
 ///    evaluated through the official array evaluator
-///    ([`eval_buildtime_field_in_scope`]) in a state-free context, with the
+///    ([`super::eval::eval_buildtime_field_routed`]) in a state-free context, with the
 ///    build-time array scope (`forcing`) bound by name, and indexed at this
 ///    cell. A per-cell `faq` over the target's index sets, the form flatten
 ///    writes for an elementwise template application (esm-spec §9.6.11), is
@@ -3979,12 +3513,14 @@ pub(super) fn resolve_field_ic_cell(
     forcing: &HashMap<String, ArrayD<f64>>,
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
-    // Per-target memo of the case-(2) constant and the case-(3) whole-field
-    // evaluation (both cell-independent), so the expression is evaluated once
-    // per target rather than once per cell. `None` on entry for the first cell;
-    // filled on first use.
-    cached_field: &mut Option<Value>,
+    memo: &mut IcTargetMemo,
 ) -> Result<f64, SimulateError> {
+    let IcTargetMemo {
+        mode,
+        field: cached_field,
+        route,
+    } = memo;
+    let mode = *mode;
     // (1) Loaded field served through the provider forcing buffer.
     if let Expr::Variable(name) = rhs
         && let Some(arr) = forcing.get(name)
@@ -4033,8 +3569,18 @@ pub(super) fn resolve_field_ic_cell(
             // On a `CompileError` the memo stays empty and we fall through to
             // the case-(4) hard error below (byte-identical to the old
             // `match … { _ => {} }` arm, which likewise dropped the error).
-            if let Ok(v) = eval_buildtime_field_in_scope(rhs, index_sets, params, forcing) {
-                *cached_field = Some(v);
+            match super::eval::eval_buildtime_field_routed(
+                None, rhs, index_sets, params, forcing, mode,
+            ) {
+                Ok(super::eval::Routed::Value(v, r)) => {
+                    *cached_field = Some(v);
+                    *route = Some(Ok(r));
+                }
+                Ok(super::eval::Routed::Refused(why)) => {
+                    *route = Some(Err(why));
+                    return Ok(f64::NAN);
+                }
+                Err(_) => {}
             }
         }
         match cached_field.as_ref() {
@@ -4529,15 +4075,7 @@ fn collect_scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> Has
 /// variable (a whole-array assignment); the eliminated-state machinery then
 /// materializes it as an ordinary constant observed.
 fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
-    let value = JsonValue::Array(
-        buf.iter()
-            .map(|&v| {
-                serde_json::Number::from_f64(v)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
-            })
-            .collect(),
-    );
+    let value = crate::ConstValue::from_dense(&[buf.len()], buf.to_vec());
     let const_node = Expr::operator(ExpressionNode {
         op: "const".to_string(),
         value: Some(value),
@@ -4568,12 +4106,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// channel — the front door a Rust runner needs, and the one the in-tree build
 /// path (`materialize_derived_extents`) uses internally.
 ///
-/// [`materialize_value_invention`] itself takes a raw `serde_json::Value` and a
-/// finished array map, which leaves a caller holding a typed model with two
-/// chores it has no library support for: assembling the JSON view the engine
-/// expects (model + registry merged as a sibling), and gathering the factor
-/// arrays. This does both. Concretely it is what turns an ISRM document plus
-/// loaded `X`/`Y`/`W`/`S`/`E`/`N` into
+/// It is what turns an ISRM document plus loaded `X`/`Y`/`W`/`S`/`E`/`N` into
 /// [`ValueInventionResult::extents`](crate::ValueInventionResult::extents) — the
 /// map that then sizes every `emis_src_cells` axis through
 /// [`crate::faq::resolve_aggregate_ranges_with_extents`] and
@@ -4588,9 +4121,9 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 ///
 /// # Errors
 ///
-/// [`CompileError::InterpreterBuildError`] if the model or registry cannot be
-/// serialized to the engine's JSON view, or if the engine rejects the document
-/// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2).
+/// [`CompileError::InterpreterBuildError`] if the engine rejects the document
+/// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2), or
+/// [`CompileError::ValueInventionRefused`] for a NaN key.
 pub fn run_value_invention<S: std::hash::BuildHasher>(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
@@ -4608,26 +4141,25 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
     overrides: &HashMap<String, f64>,
 ) -> Result<ValueInventionResult, CompileError> {
-    let const_arrays = vi_factor_arrays(model, caller_arrays);
     let params = collect_scalar_params(model, overrides);
+    run_value_invention_in_scope(model, index_sets, caller_arrays, &params)
+}
 
-    // The engine walks the RAW `serde_json::Value` document (it preserves the
-    // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
-    // `index_sets` registry merged down as a sibling — mirroring the engine's own
-    // `model_json` fixture helper and `crate::cadence`.
-    let mut model_json = serde_json::to_value(model).map_err(|e| {
-        CompileError::build_err(format!("value-invention: could not serialize model: {e}"))
-    })?;
-    if let JsonValue::Object(m) = &mut model_json {
-        let is_json = serde_json::to_value(index_sets).map_err(|e| {
-            CompileError::build_err(format!(
-                "value-invention: could not serialize index_sets: {e}"
-            ))
-        })?;
-        m.insert("index_sets".to_string(), is_json);
-    }
-
-    materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
+/// [`run_value_invention`] with the scalar `params` already decided: the
+/// build pipeline's own scalar scope, so its value invention reads each
+/// parameter as its observeds do.
+pub(crate) fn run_value_invention_in_scope<S: std::hash::BuildHasher>(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
+    params: &HashMap<String, f64>,
+) -> Result<ValueInventionResult, CompileError> {
+    let own = collect_const_factor_arrays(model);
+    let factors = match caller_arrays {
+        Some(caller) => Factors::overlaid(&own, caller),
+        None => Factors::of(&own),
+    };
+    invent_values(model, index_sets, &factors, params, &HashMap::new()).map_err(|e| {
         // A NaN key or join column already names its column (esm-spec §9.6.6).
         match e.code {
             Some(code) => CompileError::ValueInventionRefused {
@@ -4642,6 +4174,28 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     })
 }
 
+/// A build's value-invention products, handed to the compile by a build that
+/// ran value invention over the same system (the build pipeline), so the
+/// compile sizes its derived index sets from them instead of running value
+/// invention, its build-time coordinates and its scalar scope again. Both are
+/// keyed by producer id (`from_faq`), which no build renames.
+#[derive(Clone, Copy)]
+pub(crate) struct InventedSets<'a> {
+    /// Producer id → member count.
+    pub(crate) extents: &'a HashMap<String, i64>,
+    /// Producer id → member ids ([`ValueInventionResult::member_ids`]).
+    pub(crate) members: &'a HashMap<String, Vec<i64>>,
+}
+
+/// What a build supplies to the compile beyond the system it compiles.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BuildTimeData<'a> {
+    /// Caller factor arrays ([`ArrayCompiled::from_model_with_arrays`]).
+    pub(crate) vi_arrays: Option<&'a HashMap<String, ArrayD<f64>>>,
+    /// Value invention the build already ran.
+    pub(crate) invented: Option<InventedSets<'a>>,
+}
+
 /// The build-time extents of a model's derived index sets, and why value
 /// invention failed when it did.
 pub(super) struct DerivedMaterialization {
@@ -4649,19 +4203,19 @@ pub(super) struct DerivedMaterialization {
     pub(super) extents: HashMap<String, i64>,
     /// The engine's error, if it could not run.
     failure: Option<CompileError>,
-    /// Each derived set's `member_factor` parameter with the member ids the
-    /// engine invented for it, in member order: the column the build pipeline
-    /// feeds back (`crate::prepare`'s `feed_member_factors`), so a read of the
-    /// factor over the set sees the same values on this route.
-    member_factors: Vec<(String, Vec<f64>)>,
+    /// Each derived set's `member_factor` column ([`member_factor_columns`]),
+    /// so a read of the factor over the set sees the same values as on the
+    /// build pipeline's route.
+    member_factors: Vec<MemberFactorColumn>,
 }
 
-/// Run value invention when the model has a derived index set. A model without
-/// one pays only the scan.
+/// Size the derived index sets when the model has one: from
+/// `supplied.invented` when the build ran value invention already, else by
+/// running it here. A model without one pays only the scan.
 fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
-    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    supplied: BuildTimeData<'_>,
 ) -> DerivedMaterialization {
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
@@ -4671,48 +4225,67 @@ fn materialize_derived_extents(
     let needs_value_invention = index_sets
         .values()
         .any(|is| is.kind == "derived" && is.from_faq.is_some());
-    if needs_value_invention {
-        let factors = value_invention_factors(model, index_sets, caller_arrays);
-        let lean = without_factor_literals(model, &factors);
-        match run_value_invention(&lean, index_sets, Some(&factors)) {
-            Ok(result) => {
-                out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
-                out.extents = result.extents;
+    if !needs_value_invention {
+        return out;
+    }
+    let caller_arrays = supplied.vi_arrays;
+    match supplied.invented {
+        Some(invented) => {
+            out.member_factors = member_factor_columns(index_sets, invented.members, caller_arrays);
+            out.extents = invented.extents.clone();
+        }
+        None => {
+            let factors = value_invention_factors(model, index_sets, caller_arrays);
+            match run_value_invention(model, index_sets, Some(&factors)) {
+                Ok(result) => {
+                    out.member_factors =
+                        member_factor_columns(index_sets, &result.member_ids(), caller_arrays);
+                    out.extents = result.extents;
+                }
+                Err(e) => out.failure = Some(e),
             }
-            Err(e) => out.failure = Some(e),
         }
     }
     out
 }
 
-/// The member ids each derived set with a `member_factor` feeds back, sorted by
-/// set name. A factor the caller supplies stays the caller's.
-fn member_factor_columns(
+/// One derived set's `member_factor` column: the member ids value invention
+/// gave the set, in member order.
+pub(crate) struct MemberFactorColumn {
+    /// The derived index set (the build pipeline's narration names it).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) set: String,
+    /// Its `member_factor`, as the registry spells it.
+    pub(crate) factor: String,
+    pub(crate) ids: Vec<f64>,
+}
+
+/// The member ids each derived set with a `member_factor` feeds back, sorted
+/// by set name, from `members` (producer id → ids). A factor in
+/// `caller_arrays` stays the caller's. The build pipeline publishes each
+/// column in its evaluation scope; the compile binds it onto the parameter
+/// ([`bind_member_factors`]).
+pub(crate) fn member_factor_columns(
     index_sets: &HashMap<String, IndexSet>,
-    result: &ValueInventionResult,
+    members: &HashMap<String, Vec<i64>>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Vec<(String, Vec<f64>)> {
+) -> Vec<MemberFactorColumn> {
     let mut sets: Vec<(&String, &IndexSet)> = index_sets
         .iter()
         .filter(|(_, is)| is.kind == "derived")
         .collect();
     sets.sort_by(|a, b| a.0.cmp(b.0));
     sets.into_iter()
-        .filter_map(|(_, is)| {
+        .filter_map(|(set, is)| {
             let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
             if caller_arrays.is_some_and(|a| a.contains_key(mf)) {
                 return None;
             }
-            let ids: Option<Vec<f64>> = result
-                .members
-                .get(faq)?
-                .iter()
-                .map(|k| match k {
-                    crate::relational::Key::Int(i) => Some(*i as f64),
-                    _ => None,
-                })
-                .collect();
-            Some((mf.clone(), ids?))
+            Some(MemberFactorColumn {
+                set: set.clone(),
+                factor: mf.clone(),
+                ids: members.get(faq)?.iter().map(|&i| i as f64).collect(),
+            })
         })
         .collect()
 }
@@ -4721,8 +4294,13 @@ fn member_factor_columns(
 /// data (an observed over the derived set, which [`strip_value_invention`]
 /// keeps). The parameter is found under its declared name, else under the one
 /// mounted name that ends in it; a factor no parameter declares is left alone.
-fn bind_member_factors(model: &mut Model, columns: &[(String, Vec<f64>)]) {
-    for (mf, values) in columns {
+fn bind_member_factors(model: &mut Model, columns: &[MemberFactorColumn]) {
+    for MemberFactorColumn {
+        factor: mf,
+        ids: values,
+        ..
+    } in columns
+    {
         let name = if model.variables.contains_key(mf) {
             Some(mf.clone())
         } else {
@@ -4767,22 +4345,6 @@ fn value_invention_factors(
         }
         node.for_each_child(&mut |c| index_targets(c, out));
     }
-    /// The names `e` reads that it does not bind itself.
-    fn free_names(e: &Expr, bound: &mut Vec<String>, out: &mut BTreeSet<String>) {
-        match e {
-            Expr::Variable(v) if !bound.contains(v) => {
-                out.insert(v.clone());
-            }
-            Expr::Operator(node) => {
-                let mark = bound.len();
-                bound.extend(node.output_idx.iter().flatten().cloned());
-                bound.extend(node.ranges.iter().flat_map(|r| r.keys().cloned()));
-                node.for_each_child(&mut |c| free_names(c, bound, out));
-                bound.truncate(mark);
-            }
-            _ => {}
-        }
-    }
     struct Cx<'a> {
         defs: BTreeMap<String, Expr>,
         index_sets: &'a HashMap<String, IndexSet>,
@@ -4799,7 +4361,9 @@ fn value_invention_factors(
             return false;
         };
         let mut free = BTreeSet::new();
-        free_names(&body, &mut Vec::new(), &mut free);
+        crate::binders::for_each_free_name(&body, Binders::LOOP, &mut |n| {
+            free.insert(n.to_string());
+        });
         for v in &free {
             if !cx.index_sets.contains_key(v) && !derive(cx, v, depth + 1) {
                 return false;
@@ -4846,26 +4410,6 @@ fn value_invention_factors(
         derive(&mut cx, t, 0);
     }
     cx.scope
-}
-
-/// `model` with the literal of every `const` equation whose variable is
-/// already one of `factors` replaced by a placeholder. Value invention reads
-/// factors from its array map, never from the document's literals, and the
-/// literals are most of what serializing the model for it would cost.
-fn without_factor_literals(model: &Model, factors: &HashMap<String, ArrayD<f64>>) -> Model {
-    let mut lean = model.clone();
-    for eq in &mut lean.equations {
-        let is_factor = matches!(&eq.rhs, Expr::Operator(n) if n.op == "const")
-            && equation_defined_var(&eq.lhs).is_some_and(|v| factors.contains_key(&v));
-        if is_factor {
-            eq.rhs = Expr::operator(ExpressionNode {
-                op: "const".into(),
-                value: Some(serde_json::Value::from(0)),
-                ..Default::default()
-            });
-        }
-    }
-    lean
 }
 
 /// The `from_faq` of the first range in `expr` over a derived set that
@@ -5104,250 +4648,13 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
     }
 }
 
-/// Resolve every self-qualified reference in `model` (`M.a` written inside
-/// model `M`) to its local name, as the single-model route does before it
-/// compiles — for the build pipeline, which reads the same authored model.
-/// Run it after [`mount_subsystems`], so a reference authored inside a
-/// subsystem body is resolved too.
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn resolve_model_self_references(model: &mut Model, model_name: &str) {
-    resolve_self_references(model, model_name);
-}
-
-fn resolve_self_references(model: &mut Model, model_name: &str) {
-    let hits = self_qualified_references(model, model_name);
-    if !hits.is_empty() {
-        resolve_self_qualified_references(model, &hits);
-    }
-}
-
-/// esm-spec §4.6: inside model `M`, `M.x` — and `M.sub.x` for a mounted
-/// subsystem `sub` — is the FULLY QUALIFIED spelling of the local `x`
-/// (`sub.x`): the same variable the bare / subsystem-relative form names. The
-/// single-model array build keeps the model's own unqualified names (the
-/// flattened multi-model build and the scalar path qualify everything, which is
-/// why the same reference resolves there), so a self-qualified reference has to
-/// be brought back to the local spelling before the build. This collects the
-/// `(qualified, local)` pairs to rewrite: every variable reference in the
-/// model's expressions that starts with `<model_name>.` and whose remainder is
-/// a declared variable or is rooted at a declared subsystem. Anything else is
-/// left alone for the usual unbound-name diagnostics. Empty — the common case,
-/// costing one read-only walk — means the model is used untouched.
-///
-/// Scope: every expression of the model as it stands. The callers run this
-/// after `mount_subsystems`, so a subsystem's equations are already the
-/// model's own under their mounted names, and a self-qualified reference
-/// authored inside a subsystem body (`M.Ocean.Surface.sst` in
-/// `M.Atmosphere`'s equation) is collected like one in the parent's.
-fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
-    let prefix = format!("{model_name}.");
-    let subsystems: HashSet<&str> = model
-        .subsystems
-        .as_ref()
-        .map(|s| s.keys().map(String::as_str).collect())
-        .unwrap_or_default();
-    // A `BTreeMap` both DEDUPES and orders, where the first cut rescanned a
-    // growing `Vec` per name; and the walk looks only at variable LEAVES rather
-    // than materializing `free_variables`' whole name set for every node.
-    let mut hits: BTreeMap<String, String> = BTreeMap::new();
-    fn collect(
-        expr: &Expr,
-        prefix: &str,
-        model: &Model,
-        subsystems: &HashSet<&str>,
-        hits: &mut BTreeMap<String, String>,
-    ) {
-        match expr {
-            Expr::Variable(name) => {
-                let Some(rest) = name.strip_prefix(prefix) else {
-                    return;
-                };
-                let local = model.variables.contains_key(rest)
-                    || rest
-                        .split_once('.')
-                        .is_some_and(|(head, _)| subsystems.contains(head));
-                if local && !hits.contains_key(name) {
-                    hits.insert(name.clone(), rest.to_string());
-                }
-            }
-            Expr::Operator(node) => {
-                node.for_each_child(&mut |c| collect(c, prefix, model, subsystems, hits));
-            }
-            Expr::Number(_) | Expr::Integer(_) => {}
-        }
-    }
-    {
-        // Scoped so the closure's `&mut hits` borrow ends before the map is
-        // consumed below.
-        let mut visit = |expr: &Expr| collect(expr, prefix.as_str(), model, &subsystems, &mut hits);
-        // The expression-bearing fields the array build compiles: every equation
-        // (both sides) and every variable's own expressions (a parameter
-        // `update`'s `when` / `expression`, esm 1.0.0).
-        for eq in &model.equations {
-            visit(&eq.lhs);
-            visit(&eq.rhs);
-        }
-        for var in model.variables.values() {
-            var.for_each_expression(&mut visit);
-        }
-    }
-    hits.into_iter().collect()
-}
-
-/// Apply the `(qualified, local)` rewrites of [`self_qualified_references`] to
-/// every expression of `model`, in ONE capture-aware pass.
-///
-/// Capture-aware in BOTH directions, which is why this is not a loop over
-/// [`rename_free_symbol`]. That helper shadows on the name it renames FROM,
-/// which for a `<model>.`-qualified source is never a loop symbol; the direction
-/// that matters here is the TARGET. A node that binds the LOCAL name — model
-/// variable `i` read as `M.i` inside `aggregate(i from x; …)` — would otherwise
-/// capture the rewritten reference and silently read the loop index instead of
-/// the variable. The rewrite is therefore dropped for that subtree and the
-/// qualified spelling survives into the build's ordinary unbound-name
-/// diagnostic: a named error, not a wrong number. One pass rather than one per
-/// hit also stops an H-hit model from being rebuilt H times.
-fn resolve_self_qualified_references(model: &mut Model, hits: &[(String, String)]) {
-    let map: HashMap<&str, &str> = hits.iter().map(|(q, l)| (q.as_str(), l.as_str())).collect();
-    let mut rewrite = |expr: &mut Expr| {
-        *expr = rewrite_self_qualified(expr, &map);
-    };
-    for eq in &mut model.equations {
-        rewrite(&mut eq.lhs);
-        rewrite(&mut eq.rhs);
-    }
-    for var in model.variables.values_mut() {
-        var.for_each_expression_mut(&mut rewrite);
-    }
-}
-
-/// One capture-aware substitution pass for [`resolve_self_qualified_references`]:
-/// every free `Variable(q)` with `hits[q] == l` becomes `Variable(l)`, and a
-/// node that BINDS either spelling — as an `output_idx` / `ranges` loop symbol
-/// or an `integral`'s `var` — drops that hit for its whole subtree.
-fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
-    if hits.is_empty() {
-        return expr.clone();
-    }
-    match expr {
-        Expr::Variable(v) => hits
-            .get(v.as_str())
-            .map_or_else(|| expr.clone(), |l| Expr::Variable((*l).to_string())),
-        Expr::Operator(node) => {
-            let binds = |s: &str| {
-                node.output_idx
-                    .as_ref()
-                    .is_some_and(|ix| ix.iter().any(|x| x == s))
-                    || node.ranges.as_ref().is_some_and(|r| r.contains_key(s))
-                    || node.int_var.as_deref() == Some(s)
-            };
-            // Only reallocate the map on the rare node that shadows something.
-            let narrowed: Option<HashMap<&str, &str>> =
-                hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
-                    hits.iter()
-                        .filter(|&(q, l)| !binds(q) && !binds(l))
-                        .map(|(q, l)| (*q, *l))
-                        .collect()
-                });
-            let sub = narrowed.as_ref().unwrap_or(hits);
-            let mut out = node.map_children(&mut |a| rewrite_self_qualified(a, sub));
-            // `map_children` preserves `join` verbatim, so the node's
-            // string-encoded variable references catch up with its child ones
-            // here — see [`rename_join_names`].
-            if let Some(join) = &out.join {
-                let mut renamed = join.clone();
-                for (q, l) in sub {
-                    renamed = rename_join_names(&renamed, q, l);
-                }
-                out.join = Some(renamed);
-            }
-            Expr::operator(out)
-        }
-        Expr::Number(_) | Expr::Integer(_) => expr.clone(),
-    }
-}
-
-/// Capture-aware rename of a free loop symbol: every free `Variable(from)`
-/// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
-/// or `ranges` declare it) shadows the outer symbol and is left untouched.
-///
-/// Renames the plain-string names a `join` clause carries as well — see
-/// [`rename_join_names`]. That is not an extra: `map_children` is an
-/// `Expr`-CHILD walker, and a `join.on` key column or an `overlap` envelope
-/// factor is a variable reference that happens to be encoded as a string on the
-/// node (CONFORMANCE_SPEC §5.5.6), so a walker that skipped them would rename
-/// half of what one node says about the same variable.
-pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
-    match expr {
-        Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
-        Expr::Operator(node) => {
-            let binds = node
-                .output_idx
-                .as_ref()
-                .map(|ix| ix.iter().any(|s| s == from))
-                .unwrap_or(false)
-                || node
-                    .ranges
-                    .as_ref()
-                    .map(|r| r.contains_key(from))
-                    .unwrap_or(false);
-            if binds {
-                return expr.clone();
-            }
-            let mut out = node.map_children(&mut |a| rename_free_symbol(a, from, to));
-            // `map_children` preserves `join` verbatim, so this is where the
-            // node's string-encoded references catch up with its child ones.
-            // The binder test above has already returned for a node that binds
-            // `from`, which is the shadowing rule an `on` key column needs: a
-            // column naming one of THIS node's own loop symbols resolves against
-            // its `ranges` (`join.rs::resolve_side`), never against the variable
-            // registry, so renaming it would make it resolve to nothing.
-            if let Some(join) = &out.join {
-                out.join = Some(rename_join_names(join, from, to));
-            }
-            Expr::operator(out)
-        }
-        _ => expr.clone(),
-    }
-}
-
-/// Rename `from` → `to` in every plain-string VARIABLE REFERENCE a node's
-/// `join` clauses carry (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
-/// `overlap` envelope factor, and the data-column names of an already-resolved
-/// `on_gate`. The array-runtime twin of `flatten.rs::rename_join_names`, which
-/// does the same job for a `variable_map` that removes a parameter.
-///
-/// A clause's LOOP SYMBOLS are left alone — `OverlapClause::sym_src` /
-/// `sym_tgt` and the `on_gate`'s two gated symbols are binders of the node, not
-/// references into the variable registry. (`map_column_names` renames the gate's
-/// COLUMNS only, for exactly that reason.)
-fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
-    let ren = |n: &String| -> String { if n == from { to.to_string() } else { n.clone() } };
-    join.iter()
-        .map(|c| JoinClause {
-            on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
-            // Binders of the node, not references — renaming leaves them alone.
-            syms: c.syms.clone(),
-            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                src_env: ov.src_env.iter().map(&ren).collect(),
-                tgt_env: ov.tgt_env.iter().map(&ren).collect(),
-                eps: ov.eps,
-                sym_src: ov.sym_src.clone(),
-                sym_tgt: ov.sym_tgt.clone(),
-            }),
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
-        })
-        .collect()
-}
-
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
 /// enclosing loop symbols: a region value that is a pointwise
 /// `faq` whose output ranges equal the region bounds exactly
 /// (no contraction, no filter) is replaced by its body with each output
 /// symbol renamed to the enclosing loop symbol. This turns the discretized
 /// `makearray([interior], [aggregate_i(stencil)])` form a §9.6.3 rewrite rule
-/// emits into the scalar-region-value form the vectorized whole-array kernel
-/// consumes directly (the build-time `index(faq, …)` collapse the Julia
+/// emits into the scalar-region-value form the tape lowers directly (the build-time `index(faq, …)` collapse the Julia
 /// reference performs). Values that do not match are left untouched.
 pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) -> ExpressionNode {
     let (Some(regions), Some(values)) = (&node.regions, &node.values) else {
@@ -5385,13 +4692,17 @@ pub(super) fn inline_region_aggregates(node: &ExpressionNode, loops: &[String]) 
                         _ => return value.clone(),
                     }
                 }
-                let mut inlined = body.as_ref().clone();
-                for (sym, loop_name) in idx.iter().zip(loops.iter()) {
-                    if sym != loop_name {
-                        inlined = rename_free_symbol(&inlined, sym, loop_name);
-                    }
-                }
-                inlined
+                // One pass, so an output symbol renamed onto a name another
+                // output symbol carries (`[i, j]` onto `[j, i]`) is not renamed
+                // again.
+                let renames: HashMap<&str, &str> = idx
+                    .iter()
+                    .zip(loops.iter())
+                    .map(|(sym, loop_name)| (sym.as_str(), loop_name.as_str()))
+                    .collect();
+                crate::binders::rename_free_names(body, Binders::LOOP, &|n| {
+                    renames.get(n).map(|l| (*l).to_string())
+                })
             })
             .collect(),
     );
@@ -6266,6 +5577,19 @@ mod subsystem_ragged_and_inspection_tests {
         serde_json::from_value(doc).expect("test model deserializes")
     }
 
+    /// `m` built alone as the build pipeline builds a model: flattened as the
+    /// one model `M`, its names shown model-locally.
+    fn mounted(m: Model) -> Model {
+        let doc = crate::EsmFile {
+            models: Some(indexmap::IndexMap::from([("M".to_string(), m)])),
+            ..Default::default()
+        };
+        let flat = crate::flatten::flatten(&doc).expect("flattens");
+        let mut out = model_from_flattened(&flat);
+        super::normalize::unqualify(&mut out, "M");
+        out
+    }
+
     /// The aggregate RHS of the mounted equation defining `lhs`.
     fn agg_defining<'a>(m: &'a Model, lhs: &str) -> &'a ExpressionNode {
         let eq = m
@@ -6317,9 +5641,10 @@ mod subsystem_ragged_and_inspection_tests {
     /// spells two ways must agree after the mount.
     #[test]
     fn mounting_carries_a_leafs_join_on_key_columns() {
-        let mut m = host_mounting_a_join_leaf(json!([["left_key", "right_key"]]));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        let m = mounted(host_mounting_a_join_leaf(json!([[
+            "left_key",
+            "right_key"
+        ]])));
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -6344,14 +5669,21 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn mounting_leaves_a_shadowed_loop_symbol_alone() {
         let mut m = host_mounting_a_join_leaf(json!([["l", "right_key"]]));
-        m.subsystems.as_mut().expect("subsystems")["Leaf"]["variables"]["l"] =
-            json!({ "type": "unknown", "shape": ["leaf_left"] });
-        m.subsystems.as_mut().expect("subsystems")["Leaf"]["equations"]
-            .as_array_mut()
-            .expect("equations")
-            .push(json!({ "lhs": "l", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } }));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        let leaf = m.subsystems.as_mut().expect("subsystems")["Leaf"]
+            .as_inline_mut()
+            .expect("an inline leaf");
+        leaf.variables.insert(
+            "l".to_string(),
+            serde_json::from_value(json!({ "type": "unknown", "shape": ["leaf_left"] }))
+                .expect("variable"),
+        );
+        leaf.equations.push(
+            serde_json::from_value(
+                json!({ "lhs": "l", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } }),
+            )
+            .expect("equation"),
+        );
+        let m = mounted(m);
 
         let node = agg_defining(&m, "Leaf.matched");
         let on = &node.join.as_ref().expect("join survives the mount")[0].on;
@@ -6369,7 +5701,7 @@ mod subsystem_ragged_and_inspection_tests {
     /// symbols the node binds and are left alone — they are not references.
     #[test]
     fn mounting_carries_overlap_envelope_factors() {
-        let mut m = model(json!({
+        let m = model(json!({
             "variables": { "out": { "type": "unknown" } },
             "equations": [ { "lhs": "out", "rhs": "Geo.hits" } ],
             "subsystems": { "Geo": {
@@ -6390,8 +5722,7 @@ mod subsystem_ragged_and_inspection_tests {
                 ]
             }}
         }));
-        let mut sets: HashMap<String, IndexSet> = HashMap::new();
-        mount_subsystems(&mut m, &mut sets).expect("mounts");
+        let m = mounted(m);
 
         let node = agg_defining(&m, "Geo.hits");
         let ov = node.join.as_ref().expect("join survives")[0]
@@ -6400,6 +5731,58 @@ mod subsystem_ragged_and_inspection_tests {
             .expect("overlap survives");
         assert_eq!(ov.src_env, vec!["Geo.X".to_string()]);
         assert_eq!(ov.tgt_env, vec!["Geo.W".to_string()]);
+    }
+
+    /// A nested subsystem that repeats its parent's name: inside `s`, the
+    /// local `b` and the nested `s.b` are two variables, and mounting `s`
+    /// must prefix each exactly once. Renaming one name at a time would turn
+    /// the local `b` into `s.b` and then rename it again with the nested one.
+    #[test]
+    fn mounting_a_nested_subsystem_that_repeats_its_parents_name() {
+        let m = model(json!({
+            "variables": { "out": { "type": "unknown" } },
+            "equations": [ { "lhs": "out", "rhs": "s.b" } ],
+            "subsystems": { "s": {
+                "variables": { "b": { "type": "unknown" } },
+                "equations": [ { "lhs": "b", "rhs": { "op": "*", "args": [3, "s.b"] } } ],
+                "subsystems": { "s": {
+                    "variables": { "b": { "type": "unknown" } },
+                    "equations": [ { "lhs": "b", "rhs": 2 } ]
+                }}
+            }}
+        }));
+        let m = mounted(m);
+
+        let eqs: Vec<serde_json::Value> =
+            m.equations.iter().map(|e| json!([e.lhs, e.rhs])).collect();
+        assert!(
+            eqs.contains(&json!(["s.b", { "op": "*", "args": [3, "s.s.b"] }])),
+            "the parent subsystem's own `b` is `s.b` and reads the nested `s.s.b`: {eqs:?}"
+        );
+        assert!(
+            eqs.contains(&json!(["s.s.b", 2])),
+            "the nested `b` is `s.s.b`: {eqs:?}"
+        );
+    }
+
+    /// Inlining a region value renames all of its output symbols at once, so
+    /// a symbol renamed onto a name another output symbol carries is not
+    /// renamed a second time.
+    #[test]
+    fn inlining_a_region_value_swaps_its_output_symbols() {
+        let node: ExpressionNode = serde_json::from_value(json!({
+            "op": "makearray", "args": [],
+            "regions": [[[1, 3], [1, 2]]],
+            "values": [{ "op": "faq", "args": [], "output_idx": ["i", "j"],
+                         "ranges": { "i": [1, 3], "j": [1, 2] },
+                         "expr": { "op": "index", "args": ["u", "i", "j"] } }]
+        }))
+        .expect("node parses");
+        let out = inline_region_aggregates(&node, &["j".to_string(), "i".to_string()]);
+        assert_eq!(
+            json!(out.values.expect("values")[0]),
+            json!({ "op": "index", "args": ["u", "j", "i"] })
+        );
     }
 
     fn erk_opts() -> SolveOptions {
@@ -6433,19 +5816,15 @@ mod subsystem_ragged_and_inspection_tests {
             },
             "models": {"M": {
                 "subsystems": {"mesh": {
-                    "esm": "2.0.0",
-                    "metadata": {"name": "mini_mesh"},
-                    "models": {"MiniMesh": {
-                        "variables": {
-                            "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
-                            "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
-                            "w": {"type": "unknown", "shape": ["edges"]}
-                        },
-                        "equations": [
+                    "variables": {
+                        "nEdgesOnCell": {"type": "unknown", "shape": ["cells"]},
+                        "edgesOnCell": {"type": "unknown", "shape": ["cells", "maxEdges"]},
+                        "w": {"type": "unknown", "shape": ["edges"]}
+                    },
+                    "equations": [
                 {"lhs": "nEdgesOnCell", "rhs": {"op": "const", "value": [2, 3], "args": []}},
                 {"lhs": "edgesOnCell", "rhs": {"op": "const", "value": [[1, 2, 0], [1, 2, 3]], "args": []}},
                 {"lhs": "w", "rhs": {"op": "const", "value": [10.0, 20.0, 30.0], "args": []}}]
-                    }}
                 }},
                 "variables": {
                     "u": {"type": "unknown", "units": "1", "shape": ["cells"]},
@@ -6490,25 +5869,25 @@ mod subsystem_ragged_and_inspection_tests {
         assert!((u1[0] - 30.0).abs() < 1e-8, "u[1](1) = {} != 30", u1[0]);
         assert!((u1[1] - 60.0).abs() < 1e-8, "u[2](1) = {} != 60", u1[1]);
         // The state-free rule output is captured EXACTLY at build.
-        let s = insp.setup_arrays.get("s").expect("s captured");
+        let s = insp.setup_arrays.get("M.s").expect("s captured");
         assert_eq!(s.shape(), [2]);
         assert_eq!(s[IxDyn(&[0])], 30.0);
         assert_eq!(s[IxDyn(&[1])], 60.0);
         // Mounted const factors and their aliases are captured too.
         for name in [
-            "mesh.nEdgesOnCell",
-            "mesh.edgesOnCell",
-            "mesh.w",
-            "nEdgesOnCell",
-            "edgesOnCell",
+            "M.mesh.nEdgesOnCell",
+            "M.mesh.edgesOnCell",
+            "M.mesh.w",
+            "M.nEdgesOnCell",
+            "M.edgesOnCell",
         ] {
             assert!(insp.setup_arrays.contains_key(name), "missing '{name}'");
         }
         assert_eq!(
-            insp.setup_arrays["nEdgesOnCell"],
-            insp.setup_arrays["mesh.nEdgesOnCell"]
+            insp.setup_arrays["M.nEdgesOnCell"],
+            insp.setup_arrays["M.mesh.nEdgesOnCell"]
         );
-        assert!(insp.observed_exprs.contains_key("s"));
+        assert!(insp.observed_exprs.contains_key("M.s"));
     }
 
     /// Filling the inspection never changes the run: the trajectory is
@@ -6687,14 +6066,14 @@ mod subsystem_ragged_and_inspection_tests {
         let prob = inspecting_problem(&file);
         crate::problem::solve(&prob, &erk_opts()).expect("solves");
         let insp = prob.take_inspection();
-        let a_ij = insp.setup_arrays.get("A_ij").expect("A_ij captured");
+        let a_ij = insp.setup_arrays.get("R.A_ij").expect("A_ij captured");
         assert_eq!(a_ij.shape(), [2, 1]);
         assert_eq!(a_ij[IxDyn(&[0, 0])], 1.0);
         assert_eq!(a_ij[IxDyn(&[1, 0])], 1.0);
-        let a_j = insp.setup_arrays.get("A_j").expect("A_j captured");
+        let a_j = insp.setup_arrays.get("R.A_j").expect("A_j captured");
         assert_eq!(a_j.shape(), [1]);
         assert_eq!(a_j[IxDyn(&[0])], 2.0);
-        let w_ij = insp.setup_arrays.get("W_ij").expect("W_ij captured");
+        let w_ij = insp.setup_arrays.get("R.W_ij").expect("W_ij captured");
         assert_eq!(w_ij.shape(), [2, 1]);
         assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
         assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
@@ -6724,10 +6103,7 @@ mod subsystem_ragged_and_inspection_tests {
                     "expr": {"op": "*", "args": ["M.i", "i"]}}}
             ]
         }));
-        let hits = self_qualified_references(&m, "M");
-        assert_eq!(hits, vec![("M.i".to_string(), "i".to_string())]);
-        let mut out = m.clone();
-        resolve_self_qualified_references(&mut out, &hits);
+        let out = mounted(m);
         assert!(matches!(&out.equations[0].rhs, Expr::Variable(v) if v == "i"));
         let Expr::Operator(node) = &out.equations[1].rhs else {
             panic!("expected the aggregate");
@@ -6792,7 +6168,7 @@ mod subsystem_ragged_and_inspection_tests {
         state[at("A.x")] = 1.0;
         state[at("A.C.z")] = 3.0;
         state[at("B.C.z")] = 5.0;
-        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new());
         assert_eq!(dy[at("A.x")], 10.0, "D(A.x) = k * B.C.z");
         assert_eq!(dy[at("A.C.z")], -1.0, "D(A.C.z) = -A.x");
         assert_eq!(dy[at("B.C.z")], 6.0, "D(B.C.z) = k * A.C.z");
@@ -6889,7 +6265,7 @@ mod updated_array_default_tests {
     }
 
     fn build_err(model: &Model, index_sets: &HashMap<String, IndexSet>) -> String {
-        match ArrayCompiled::from_model(model, index_sets) {
+        match ArrayCompiled::from_model_with_arrays(model, index_sets, None) {
             Ok(_) => panic!("the build must fail"),
             Err(e) => format!("{e:?}"),
         }
@@ -6928,9 +6304,12 @@ mod updated_array_default_tests {
             "type": "parameter", "shape": ["x"], "default": [1.0, 2.0, 3.0],
             "update": data_fed()
         }));
-        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
-        assert!(c.forcing_names().any(|n| n == "p"));
-        let d = c.forcing_default("p").flatten().expect("a default field");
+        let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
+        assert!(c.forcing_names().any(|n| n == "Model.p"));
+        let d = c
+            .forcing_default("Model.p")
+            .flatten()
+            .expect("a default field");
         assert_eq!(d.iter().copied().collect::<Vec<_>>(), vec![1.0, 2.0, 3.0]);
     }
 
@@ -6970,9 +6349,7 @@ mod updated_array_default_tests {
         )]
         .into_iter()
         .collect();
-        let (dense, _) =
-            lower_inline_array_parameters(&mut model, &sets, Some(&external), false).unwrap();
-        assert!(dense.is_empty());
+        lower_inline_array_parameters(&mut model, &sets, Some(&external), false).unwrap();
         assert_eq!(model.variables["p"].var_type, VariableType::Parameter);
         assert!(model.variables["p"].default.is_some());
         assert!(
@@ -6982,9 +6359,22 @@ mod updated_array_default_tests {
                 .any(|e| e.lhs == Expr::Variable("p".into()))
         );
 
-        // Without the caller's array the default is lowered.
-        let (dense, _) = lower_inline_array_parameters(&mut model, &sets, None, false).unwrap();
-        assert!(dense.contains_key("p"));
+        // Without the caller's array the default is lowered, its data held
+        // dense on the `const` node.
+        lower_inline_array_parameters(&mut model, &sets, None, false).unwrap();
+        let lowered = model
+            .equations
+            .iter()
+            .find(|e| e.lhs == Expr::Variable("p".into()))
+            .expect("p lowered to a const observed");
+        let Expr::Operator(node) = &lowered.rhs else {
+            panic!("expected a const node, got {:?}", lowered.rhs);
+        };
+        let dense = node.value.as_ref().and_then(crate::ConstValue::as_dense);
+        assert_eq!(
+            dense.expect("dense payload").as_slice(),
+            Some(&[1.0, 2.0, 3.0][..])
+        );
     }
 
     /// A data-fed array default on a parameter that declares no `shape` gets
@@ -7021,8 +6411,11 @@ mod updated_array_default_tests {
             "type": "parameter", "shape": ["z"], "default": [1.0, 2.0, 3.0, 4.0],
             "update": data_fed()
         }));
-        let c = ArrayCompiled::from_model(&model, &sets).expect("builds");
-        let d = c.forcing_default("p").flatten().expect("a default field");
+        let c = ArrayCompiled::from_model_with_arrays(&model, &sets, None).expect("builds");
+        let d = c
+            .forcing_default("Model.p")
+            .flatten()
+            .expect("a default field");
         assert_eq!(d.shape(), &[4]);
 
         model.variables.get_mut("p").unwrap().default =

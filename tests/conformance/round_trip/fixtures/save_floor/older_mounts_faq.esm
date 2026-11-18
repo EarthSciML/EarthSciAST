@@ -1,0 +1,23 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "save_floor_older_mounts_faq",
+    "description": "An esm 1.0.0 document that mounts faq_leaf.esm (esm 1.1.0). It is valid as authored, since each file is held to its own esm (esm-spec §4.7). Once the leaf is inlined the document contains a `faq` node, so it saves as esm 1.1.0 (esm-spec §4.7, \"Save-time version floors\").",
+    "authors": ["EarthSciAST"],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": ["version", "mount", "faq", "save-floor"]
+  },
+  "models": {
+    "Station": {
+      "variables": {
+        "total_reading": {"type": "unknown", "description": "The mounted leaf's total, read across the mount edge."}
+      },
+      "equations": [
+        {"lhs": "total_reading", "rhs": "Faq.total"}
+      ],
+      "subsystems": {
+        "Faq": {"ref": "./faq_leaf.esm"}
+      }
+    }
+  }
+}

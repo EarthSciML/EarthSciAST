@@ -37,8 +37,9 @@
 //! A thread-local, set by an RAII [`PrecisionGuard`] at each entry point that
 //! has a document (and re-armed from the compiled artifact at each run entry,
 //! so a compiled model carries its own precision). The kernels read it where
-//! they resolve an operator, which is once per AST node on the vectorized and
-//! taped paths and once per cell on the oracle — the same place the operator
+//! they resolve an operator, which is once per AST node on the taped path
+//! and on the oracle's whole-array walks, and once per cell on its per-cell
+//! walks — the same place the operator
 //! name is already being matched.
 //!
 //! # Per-variable overrides
@@ -342,8 +343,7 @@ pub fn subsystem_declarations(
         .unwrap_or_default()
 }
 
-/// [`subsystem_declarations`] over a typed `Model.subsystems` map, or any
-/// other `(name, component)` sequence.
+/// [`subsystem_declarations`] over a raw `(name, component)` sequence.
 #[must_use]
 pub fn subsystem_declarations_in<'a>(
     subsystems: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
@@ -359,7 +359,6 @@ pub fn subsystem_declarations_in<'a>(
             } else {
                 format!("{prefix}.{name}")
             };
-            let sub = subsystem_component(sub);
             if let Some(vars) = sub.get("variables").and_then(serde_json::Value::as_object) {
                 for (v, d) in vars {
                     out.push((
@@ -378,37 +377,6 @@ pub fn subsystem_declarations_in<'a>(
     let mut out = Vec::new();
     walk(subsystems, "", &mut out);
     out
-}
-
-/// The component a `subsystems.<k>` entry splices in: the entry itself in the
-/// inline model form, or the one model of a whole-file form (`{"models":
-/// {...}}`, which `crate::simulate_array::parse_subsystem_model` also mounts).
-#[must_use]
-pub fn subsystem_component(sub: &serde_json::Value) -> &serde_json::Value {
-    match sub
-        .get("models")
-        .and_then(serde_json::Value::as_object)
-        .filter(|m| m.len() == 1)
-    {
-        Some(models) => models.values().next().expect("len checked"),
-        None => sub,
-    }
-}
-
-/// [`subsystem_component`], mutably.
-pub fn subsystem_component_mut(sub: &mut serde_json::Value) -> &mut serde_json::Value {
-    let file_form = sub
-        .get("models")
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|m| m.len() == 1);
-    if file_form {
-        sub["models"]
-            .as_object_mut()
-            .and_then(|m| m.values_mut().next())
-            .expect("checked above")
-    } else {
-        sub
-    }
 }
 
 /// The precision the current thread is evaluating in.

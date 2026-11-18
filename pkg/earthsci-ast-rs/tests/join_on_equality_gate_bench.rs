@@ -118,7 +118,6 @@ fn time_arm(nl: usize, nr: usize, nkeys: usize, arm: Arm) -> (f64, Vec<f64>) {
         ProblemOptions {
             model_name: Some("J".into()),
             const_arrays: arrays,
-            build_providers: Vec::new(),
             ..Default::default()
         },
     )

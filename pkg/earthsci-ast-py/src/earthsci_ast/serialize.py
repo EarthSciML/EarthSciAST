@@ -1236,8 +1236,7 @@ def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
         JSON string representation of the ESM file
     """
     data = _serialize_esm_file(esm_file)
-    _raise_faq_esm_floor(data)
-    _raise_variable_bounds_esm_floor(data)
+    _raise_esm_floors(data)
     if indent:
         return json.dumps(data, indent=indent, ensure_ascii=False)
     # Compact: `json.dumps(indent=None)` still emits `", "` / `": "` separators,
@@ -1362,48 +1361,36 @@ def _contains_faq(node: object) -> bool:
     return False
 
 
-def _raise_variable_bounds_esm_floor(data: object) -> None:
-    """Raise an emitted document's declared ``esm`` to 2.1.0 when a model
-    variable carries ``lb`` / ``ub`` but the document declares less.
+def _raise_esm_floors(data: object) -> None:
+    """Raise an emitted document's declared ``esm`` to the lowest version that
+    admits every floored construct it contains (esm-spec §4.7, "Save-time
+    version floors"): a ``faq`` node 1.1.0, ``units`` on an expression node
+    1.2.0, ``lb`` / ``ub`` on a model variable 2.1.0. The highest that applies
+    wins and the declared version is never lowered.
 
-    A FLOOR like :func:`_raise_faq_esm_floor`, for the same reason: a 2.0.0
-    root that mounts a 2.1.0 leaf with bounds has the leaf inlined at load,
-    and emitting the result as 2.0.0 writes a document the
-    ``variable_bounds_version_too_old`` gate (esm-spec §6.3.2) refuses to read
-    back.
+    A document can come to contain one of these without ever spelling it: a
+    1.0.0 document that mounts a 1.2.0 leaf carrying a unit-bearing ``const``
+    has the leaf inlined at load, and emitting that as 1.0.0 writes a document
+    the ``const_units_version_too_old`` gate refuses to read back. The load
+    gates cannot catch it, since the mounting file's authored bytes are legal.
     """
     if not isinstance(data, dict):
         return
     from .solver import _declared_minor
+    from .units import first_op_with_units
     from .variable_bounds import _first_bound_pointer
 
-    version = _declared_minor(data)
-    if version is not None and version < (2, 1) and _first_bound_pointer(data) is not None:
-        data["esm"] = "2.1.0"
-
-
-def _raise_faq_esm_floor(data: object) -> None:
-    """Raise an emitted document's declared ``esm`` to 1.1.0 when it CONTAINS a
-    ``faq`` node but declares less.
-
-    Like the §9.6.4 rule-8 template stamp, this is a FLOOR — "a consumer needs
-    at least this" — so it only ever raises. It exists because a document can
-    come to contain ``faq`` without ever spelling it: a 1.0.0 parent that mounts
-    a subsystem whose child uses ``faq`` has the child inlined into it at load,
-    and emitting that as 1.0.0 writes a document the ``faq_version_too_old``
-    gate then refuses to read back. The load-time gate cannot catch it — the
-    parent's AUTHORED bytes are legal — so the stamp closes it here.
-    See ``docs/content/rfcs/faq-node-rename.md`` §5.5.
-    """
-    if not isinstance(data, dict):
+    declared = _declared_minor(data)
+    if declared is None:
         return
-    esm = data.get("esm")
-    if not isinstance(esm, str):
-        return
-    parts = esm.split(".")
-    try:
-        major, minor = int(parts[0]), int(parts[1])
-    except (IndexError, ValueError):
-        return
-    if (major, minor) < (1, 1) and _contains_faq(data):
-        data["esm"] = "1.1.0"
+    floors = (
+        ((1, 1), _contains_faq),
+        ((1, 2), lambda d: first_op_with_units(d) is not None),
+        ((2, 1), lambda d: _first_bound_pointer(d) is not None),
+    )
+    raised = max(
+        (floor for floor, present in floors if floor > declared and present(data)),
+        default=None,
+    )
+    if raised is not None:
+        data["esm"] = f"{raised[0]}.{raised[1]}.0"

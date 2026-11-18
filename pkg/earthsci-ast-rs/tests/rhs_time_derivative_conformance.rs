@@ -34,31 +34,18 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
-
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/rhs_time_derivative")
-}
-
-fn read_json(path: &PathBuf) -> serde_json::Value {
-    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
-fn manifest() -> serde_json::Value {
-    read_json(&category_dir().join("manifest.json"))
-}
 
 /// The manifest is the contract; a binding must not silently drop out of it,
 /// and neither half may be quietly dropped.
 #[test]
 fn manifest_requires_both_bindings_and_both_halves() {
-    let m = manifest();
+    let m = common::tier_manifest("rhs_time_derivative");
     assert_eq!(m["category"].as_str(), Some("rhs_time_derivative"));
     let required: Vec<&str> = m["bindings_required"]
         .as_array()
@@ -93,8 +80,8 @@ fn manifest_requires_both_bindings_and_both_halves() {
 
 #[test]
 fn rhs_time_derivative_outcomes_match_the_manifest() {
-    let dir = category_dir();
-    let m = manifest();
+    let dir = common::category_dir("rhs_time_derivative");
+    let m = common::tier_manifest("rhs_time_derivative");
     let rs = &m["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
     let opts = SolveOptions {
@@ -112,8 +99,15 @@ fn rhs_time_derivative_outcomes_match_the_manifest() {
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+        );
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(
@@ -182,7 +176,7 @@ fn rhs_time_derivative_outcomes_match_the_manifest() {
 /// cannot satisfy it.
 #[test]
 fn the_resolve_half_is_not_vacuous() {
-    let m = manifest();
+    let m = common::tier_manifest("rhs_time_derivative");
     let fx = m["fixtures"]
         .as_array()
         .expect("fixtures")
@@ -227,7 +221,7 @@ fn the_resolve_half_is_not_vacuous() {
 /// second does not return at all — so neither substitutes for the other.
 #[test]
 fn the_refusal_half_keeps_both_shapes() {
-    let m = manifest();
+    let m = common::tier_manifest("rhs_time_derivative");
     for id in ["d_of_unsupported", "d_of_cycle"] {
         let fx = fixture(&m, id);
         assert_eq!(

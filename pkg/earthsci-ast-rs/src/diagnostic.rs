@@ -37,10 +37,11 @@ pub(crate) fn err(code: &'static str, message: impl Into<String>) -> DiagnosticE
 /// declaration list: the [`codes`] module of per-code `pub const`s (the form
 /// raise sites reference — Rust-idiomatic, and checked at compile time) and
 /// the enumerable [`ERROR_CODES`] `(name, value)` table (the form tests and
-/// cross-binding vocabulary diffs iterate). One declaration per code means the
-/// two faces cannot drift apart.
+/// cross-binding vocabulary diffs iterate) — and the [`StructuralErrorCode`]
+/// enum, one variant per entry marked `=> Variant`. One declaration per code
+/// means the faces cannot drift apart.
 macro_rules! diagnostic_code_registry {
-    ($( $(#[$doc:meta])* $NAME:ident = $value:literal; )+) => {
+    ($( $(#[$doc:meta])* $NAME:ident = $value:literal $(=> $Variant:ident)?; )+) => {
         /// Central registry of the diagnostic code STRINGS this binding emits on a
         /// [`DiagnosticError`] (the load-time lowering passes: §9.6 expression
         /// templates, §9.7 template-library and coupling-library imports, §9.3 enum
@@ -101,6 +102,39 @@ macro_rules! diagnostic_code_registry {
         pub const ERROR_CODES: &[(&str, &str)] = &[
             $( (stringify!($NAME), codes::$NAME), )+
         ];
+
+        /// The codes a structural validation finding carries
+        /// ([`crate::validate::StructuralError::code`]): the registry entries
+        /// marked `=> Variant`, one variant each.
+        ///
+        /// Serialized in `snake_case`, which is each code's own value, so the
+        /// wasm-boundary JSON matches this type's [`std::fmt::Display`] output
+        /// and the cross-binding contract in `tests/invalid/expected_errors.json`
+        /// (e.g. `undefined_variable`, not the default PascalCase
+        /// `UndefinedVariable`).
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum StructuralErrorCode {
+            $( $(
+                #[doc = concat!("`", $value, "` ([`codes::", stringify!($NAME), "`]).")]
+                $Variant,
+            )? )+
+        }
+
+        impl StructuralErrorCode {
+            /// The code's registry value.
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $( $( Self::$Variant => codes::$NAME, )? )+
+                }
+            }
+        }
+
+        impl std::fmt::Display for StructuralErrorCode {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
     };
 }
 
@@ -306,12 +340,12 @@ diagnostic_code_registry! {
 
     /// A subsystem `{ "ref": ... }` that does not resolve: a missing file, a
     /// remote URL, a cycle, or an unreadable/unparseable document.
-    UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref";
+    UNRESOLVED_SUBSYSTEM_REF = "unresolved_subsystem_ref" => UnresolvedSubsystemRef;
     /// A subsystem ref that resolved to a file holding MORE (or fewer) than one
     /// top-level system; §4.7 requires exactly one, so which system to mount is
     /// ambiguous. Only the resolver can raise this — it is the only layer that
     /// reads the referenced file.
-    AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref";
+    AMBIGUOUS_SUBSYSTEM_REF = "ambiguous_subsystem_ref" => AmbiguousSubsystemRef;
     /// A top-level `models.<k>` mount edge that does not resolve. This binding
     /// raises `unresolved_subsystem_ref` there instead, as at the
     /// `reaction_systems.<k>` form; the code stays because the table is
@@ -337,7 +371,7 @@ diagnostic_code_registry! {
     /// `reaction_systems.<k>` (§4.7 "Two mount forms, one mechanism"), so this
     /// binding never raises it; the code stays because the table is
     /// cross-language uniform.
-    MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported";
+    MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported" => MountFormUnsupported;
     /// A declared working precision reaches a construct that cannot carry it
     /// (esm-spec §11.3.1, §4.7 "Working precision crosses a mount"): a mounted
     /// leaf's `domain.element_type` over a reaction system, whose species and
@@ -362,39 +396,39 @@ diagnostic_code_registry! {
     // (`validate.rs`), pinned by `tests/invalid/expected_errors.json`. ----
 
     /// A `ranges[*]`/expression reference to an undeclared array index set.
-    ARRAY_SHAPE_MISMATCH = "array_shape_mismatch";
+    ARRAY_SHAPE_MISMATCH = "array_shape_mismatch" => ArrayShapeMismatch;
     /// Inline ARRAY data as the `default` of a variable that declares no
     /// `shape` (esm-spec §6.3). Inline array data is a shaped variable's value,
     /// so with no shape there is nothing for the array to fill.
-    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape";
+    ARRAY_DEFAULT_WITHOUT_SHAPE = "array_default_without_shape" => ArrayDefaultWithoutShape;
     /// A variable bound (`lb` / `ub`) referring to the variable it bounds, or
     /// to an observed whose definition depends on it (esm-spec §6.3.2).
-    VARIABLE_BOUND_CIRCULAR = "variable_bound_circular";
+    VARIABLE_BOUND_CIRCULAR = "variable_bound_circular" => VariableBoundCircular;
     /// A variable bound referring to a variable whose declared shape is
     /// neither scalar nor the bounded variable's (esm-spec §6.3.2).
-    VARIABLE_BOUND_SHAPE_MISMATCH = "variable_bound_shape_mismatch";
+    VARIABLE_BOUND_SHAPE_MISMATCH = "variable_bound_shape_mismatch" => VariableBoundShapeMismatch;
     /// Numeric bounds with `lb > ub` (esm-spec §6.3.2).
-    VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted";
+    VARIABLE_BOUNDS_INVERTED = "variable_bounds_inverted" => VariableBoundsInverted;
     /// An equation graph that depends on itself.
-    CIRCULAR_DEPENDENCY = "circular_dependency";
+    CIRCULAR_DEPENDENCY = "circular_dependency" => CircularDependency;
     /// A parameter `update` naming no declared data source.
-    DATA_SOURCE_UNDEFINED = "data_source_undefined";
+    DATA_SOURCE_UNDEFINED = "data_source_undefined" => DataSourceUndefined;
     /// The deprecated `from.records_per_sample` on a rule that is not
     /// `data`, or a data-fed parameter's written `records_per_sample` (its
     /// own, else its source's `temporal.records_per_sample`) that disagrees
     /// with the number of records its record shape gives it (esm-spec §8.5.1).
-    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid";
+    RECORDS_PER_SAMPLE_INVALID = "records_per_sample_invalid" => RecordsPerSampleInvalid;
     /// An index set carrying `"records": true` whose `size` is not 2
     /// (esm-spec §8.5.1).
-    RECORD_AXIS_INVALID = "record_axis_invalid";
+    RECORD_AXIS_INVALID = "record_axis_invalid" => RecordAxisInvalid;
     /// A data-fed parameter's record shape names a record axis anywhere but
     /// first, or its several record shapes disagree about beginning with one
     /// (esm-spec §8.5.1).
-    RECORD_AXIS_MISPLACED = "record_axis_misplaced";
+    RECORD_AXIS_MISPLACED = "record_axis_misplaced" => RecordAxisMisplaced;
     /// A data-fed parameter's record shape begins with a record axis while its
     /// source declares no `temporal` block or no `temporal.start` (esm-spec
     /// §8.5.1).
-    RECORD_AXIS_TIME_INVARIANT_SOURCE = "record_axis_time_invariant_source";
+    RECORD_AXIS_TIME_INVARIANT_SOURCE = "record_axis_time_invariant_source" => RecordAxisTimeInvariantSource;
     /// A data-fed parameter (`update` of `kind: "data"`, esm-spec §5.4/§8.5)
     /// reached a build with NOTHING bound to it — no provider, no loaded
     /// array, no caller-supplied `p` value. Raised at CONSTRUCTION, before any
@@ -429,59 +463,59 @@ diagnostic_code_registry! {
     /// component (esm-spec §9.6.6). The message names the column.
     VALUE_INVENTION_KEY_OUT_OF_RANGE = "value_invention_key_out_of_range";
     /// A domain axis whose units disagree with the coordinate's.
-    DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
+    DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch" => DomainUnitMismatch;
     /// A model whose equation count cannot match its unknown count.
-    EQUATION_COUNT_MISMATCH = "equation_count_mismatch";
+    EQUATION_COUNT_MISMATCH = "equation_count_mismatch" => EquationCountMismatch;
     /// An equation whose left-hand side names a parameter — bare, indexed,
     /// inside a `faq`, or through a scoped reference into a subsystem
     /// (esm-spec §6.3.1). An equation defines unknowns only.
-    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter";
+    EQUATION_DEFINES_PARAMETER = "equation_defines_parameter" => EquationDefinesParameter;
     /// An event `affect` writing a parameter rather than an unknown.
-    EVENT_AFFECTS_PARAMETER = "event_affects_parameter";
+    EVENT_AFFECTS_PARAMETER = "event_affects_parameter" => EventAffectsParameter;
     /// An event referring to a variable the model does not declare.
-    EVENT_VAR_UNDECLARED = "event_var_undeclared";
+    EVENT_VAR_UNDECLARED = "event_var_undeclared" => EventVarUndeclared;
     /// A coupling `factor` carrying an expression transform.
-    FACTOR_WITH_EXPRESSION_TRANSFORM = "factor_with_expression_transform";
+    FACTOR_WITH_EXPRESSION_TRANSFORM = "factor_with_expression_transform" => FactorWithExpressionTransform;
     /// A `faq`'s `expr` or `filter` reads a variable declared with a non-empty
     /// `shape` by BARE name in an elementwise position (esm-spec §4.3.1
     /// "Shaped variables inside a `faq`"): the node names its axes by its
     /// range symbols, so the read must say which ones, `index(v, i, …)`.
-    FAQ_BARE_ARRAY_OPERAND = "faq_bare_array_operand";
+    FAQ_BARE_ARRAY_OPERAND = "faq_bare_array_operand" => FaqBareArrayOperand;
     /// An `ic` block inside a reaction system (§4.7).
-    IC_IN_REACTION_SYSTEM = "ic_in_reaction_system";
+    IC_IN_REACTION_SYSTEM = "ic_in_reaction_system" => IcInReactionSystem;
     /// A bare-index observed definition (`index(V, k…) ~ rhs`, esm-spec §6.3.1)
     /// outside the runnable form: the RHS is not a `faq` whose `output_idx`
     /// names the subscripts in order. Refused when the model is built.
     INDEXED_DEFINITION_UNSUPPORTED_FORM = "indexed_definition_unsupported_form";
     /// A `broadcast` node whose `fn` names no scalar operator.
-    INVALID_BROADCAST_FN = "invalid_broadcast_fn";
+    INVALID_BROADCAST_FN = "invalid_broadcast_fn" => InvalidBroadcastFn;
     /// A `join.on` key of a type the join cannot compare.
-    JOIN_KEY_INVALID_TYPE = "join_key_invalid_type";
+    JOIN_KEY_INVALID_TYPE = "join_key_invalid_type" => JoinKeyInvalidType;
     /// A `join.on` key whose range symbol the document does not determine —
     /// its index set is drawn by more than one of the node's ranges and the
     /// clause names no `syms` (CONFORMANCE_SPEC §5.5.8).
-    JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous";
+    JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous" => JoinSideAmbiguous;
     /// A `join.syms` entry that is not a range symbol of the node.
-    JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol";
+    JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol" => JoinSymsUnknownSymbol;
     /// A null entry in a reaction list.
-    NULL_REACTION = "null_reaction";
+    NULL_REACTION = "null_reaction" => NullReaction;
     /// A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6):
     /// `a` is defined in terms of `b`, `b` (transitively) in terms of `a`, so
     /// no evaluation order satisfies both definitions. The self-edge of a
     /// §4.3.1.1 recurrence CANDIDATE is not such an edge and is dropped.
-    OBSERVED_CYCLE = "observed_cycle";
+    OBSERVED_CYCLE = "observed_cycle" => ObservedCycle;
     /// An output name that matches no variable exactly and whose last dotted
     /// segment is shared by more than one variable: `derive_output_plan`'s
     /// `observed` request (CONFORMANCE_SPEC §5.17.4). A last-segment match is
     /// accepted only when it designates exactly one variable.
     AMBIGUOUS_OUTPUT_NAME = "ambiguous_output_name";
     /// An `operator` whose declared variable the model does not have.
-    OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
+    OPERATOR_VARIABLE_MISSING = "operator_variable_missing" => OperatorVariableMissing;
     /// A non-value-invention `faq` ranges over a `kind: "ragged"` index set
     /// but its body never reads that set's `values` array (esm-spec §4.3.1
     /// "Ragged ranges"): the range binds the POSITION k in 1..offsets[parent],
     /// so the body reads positions where the author meant members.
-    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered";
+    RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered" => RaggedValuesNotGathered;
     /// A tile's owned or storage box is malformed: an unknown index set, a
     /// face set not declared against a decomposed axis, a box outside
     /// `1..N`, or an owned box not inside its storage box (API_SPEC §5.8).
@@ -507,12 +541,12 @@ diagnostic_code_registry! {
     AFFECT_READS_POST_VALUE = "affect_reads_post_value";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
     /// along exactly one axis.
-    RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
+    RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded" => RecurrenceNotWellfounded;
     /// A causal self-read the runtime cannot restrict to one cell.
-    RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
+    RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form" => RecurrenceUnsupportedForm;
     /// The members of a recurrence group (esm-spec §4.3.1.2) do not share one
     /// cell frame and recurrence axis.
-    RECURRENCE_GROUP_AXIS_MISMATCH = "recurrence_group_axis_mismatch";
+    RECURRENCE_GROUP_AXIS_MISMATCH = "recurrence_group_axis_mismatch" => RecurrenceGroupAxisMismatch;
     /// A continuous or discrete event, or an implicit equation, reached an
     /// evaluator that cannot run it (esm-spec §9.6.6).
     UNSUPPORTED_CONSTRUCT = "unsupported_construct";
@@ -533,7 +567,7 @@ diagnostic_code_registry! {
     /// and the reason. A refusal, never a fallback.
     COMPILER_REFUSED_RULE = "compiler_refused_rule";
     /// A relational node in a continuous (ODE-position) expression.
-    RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
+    RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous" => RelationalNodeInContinuous;
     /// A `faq` binder (a `ranges` key or an `output_idx` entry) spelled
     /// with a globally-scoped name — the document's independent variable
     /// (esm-spec §11.3) or the §6.4 `_var` placeholder — which every consumer
@@ -546,38 +580,38 @@ diagnostic_code_registry! {
     /// Both are in scope in every component and are resolved by name ahead of
     /// the declaration maps, so the declaration is unreachable and every reader
     /// silently receives the implicit symbol instead (§4.9.1.1).
-    RESERVED_VARIABLE_NAME = "reserved_variable_name";
+    RESERVED_VARIABLE_NAME = "reserved_variable_name" => ReservedVariableName;
     /// An inline test's override key that matches no declared name (esm-spec §6.6.2).
-    UNKNOWN_OVERRIDE_KEY = "unknown_override_key";
+    UNKNOWN_OVERRIDE_KEY = "unknown_override_key" => UnknownOverrideKey;
     /// An assertion whose form does not match its target's declared rank (esm-spec §6.6.5).
-    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch";
+    ASSERTION_RANK_MISMATCH = "assertion_rank_mismatch" => AssertionRankMismatch;
     /// A provable dimensional inconsistency, promoted from a unit finding.
-    UNIT_INCONSISTENCY = "unit_inconsistency";
+    UNIT_INCONSISTENCY = "unit_inconsistency" => UnitInconsistency;
     /// A declared unit string that denotes no real unit, promoted from a
     /// unit finding.
-    UNIT_PARSE_ERROR = "unit_parse_error";
+    UNIT_PARSE_ERROR = "unit_parse_error" => UnitParseError;
     /// A reference to an index set the document does not declare.
-    UNDEFINED_INDEX_SET = "undefined_index_set";
+    UNDEFINED_INDEX_SET = "undefined_index_set" => UndefinedIndexSet;
     /// A reference to an operator the registry does not carry.
-    UNDEFINED_OPERATOR = "undefined_operator";
+    UNDEFINED_OPERATOR = "undefined_operator" => UndefinedOperator;
     /// A reference to a parameter the component does not declare.
-    UNDEFINED_PARAMETER = "undefined_parameter";
+    UNDEFINED_PARAMETER = "undefined_parameter" => UndefinedParameter;
     /// A reference to a species the reaction system does not declare.
-    UNDEFINED_SPECIES = "undefined_species";
+    UNDEFINED_SPECIES = "undefined_species" => UndefinedSpecies;
     /// A coupling endpoint naming no declared component.
-    UNDEFINED_SYSTEM = "undefined_system";
+    UNDEFINED_SYSTEM = "undefined_system" => UndefinedSystem;
     /// A reference to a variable the component does not declare.
-    UNDEFINED_VARIABLE = "undefined_variable";
+    UNDEFINED_VARIABLE = "undefined_variable" => UndefinedVariable;
     /// A string subscript of an `index` on an equation's left-hand side that
     /// no enclosing left-hand `faq` binds — nor, for the bare-index definition,
     /// the right-hand `faq`'s `output_idx` (esm-spec §6.3.1).
-    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol";
+    UNBOUND_INDEX_SYMBOL = "unbound_index_symbol" => UnboundIndexSymbol;
     /// An evaluable-core op (esm-spec §4.2) with no evaluation rule in the
     /// evaluator a model was built for (esm-spec §9.6.6). Carried by
     /// `CompileError::UnevaluableOperatorError`.
     UNEVALUABLE_OPERATOR = "unevaluable_operator";
     /// A scoped reference (`A.b`) that resolves to nothing.
-    UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref";
+    UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref" => UnresolvedScopedRef;
 
     // ---- unit FINDING kinds (`units.rs`): a second, smaller vocabulary
     // carried on `UnitWarning.code` rather than on a `StructuralError`. The

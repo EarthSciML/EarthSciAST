@@ -72,7 +72,6 @@ fn agree(text: &str) -> Vec<(bool, String)> {
                 compiler: Some(compiler),
                 ..Default::default()
             },
-            None,
         )
     };
     let oracle = run(Compiler::Interpreter);

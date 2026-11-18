@@ -7,12 +7,11 @@
 //! applies to equations ([`crate::flatten`], esm-libraries-spec §4.7.5).
 
 use crate::EsmFile;
-use crate::diagnostic::{DiagnosticError, codes, err};
 use crate::structural::{
     ObservedScope, document_observeds, for_each_model_node, referenced_names, resolve_observed_ref,
     resolve_scoped_ref,
 };
-use crate::types::VariableBound;
+use crate::types::{HasSubsystems, VariableBound};
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -47,35 +46,6 @@ pub(crate) fn first_bound_pointer(doc: &Value) -> Option<String> {
         .find_map(|(name, model)| in_component(model, &format!("/models/{name}")))
 }
 
-/// Reject `lb` / `ub` in a document declaring `esm` < 2.1.0 (esm-spec §6.3.2,
-/// "Version gate"), naming the first such field. `offending` yields that
-/// field's pointer in THIS file ([`first_bound_pointer`] over the authored
-/// tree) and is called only when the declared version is below 2.1.0.
-pub(crate) fn reject_variable_bounds_pre_v21(
-    view: &Value,
-    offending: impl FnOnce() -> Option<String>,
-) -> Result<(), DiagnosticError> {
-    let Some(esm) = view.get("esm").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
-        return Ok(());
-    };
-    if (major, minor) >= (2, 1) {
-        return Ok(());
-    }
-    match offending() {
-        None => Ok(()),
-        Some(path) => Err(err(
-            codes::VARIABLE_BOUNDS_VERSION_TOO_OLD,
-            format!(
-                "variable bounds (`lb` / `ub`) require esm >= 2.1.0; file declares {esm}. \
-                 Offending path: {path}"
-            ),
-        )),
-    }
-}
-
 /// A bounded variable's declared shape, for comparison: `None` is scalar
 /// (`shape` omitted, `null` or empty).
 fn declared_shape(shape: Option<&Vec<String>>) -> Option<&[String]> {
@@ -97,35 +67,14 @@ fn reaction_parameter_shape(file: &EsmFile, system: &str, member: &str) -> Optio
     let mut segments = system.split('.');
     let head = segments.next()?;
     let rest: Vec<&str> = segments.collect();
-    if rest.is_empty() {
-        return file
-            .reaction_systems
-            .as_ref()?
-            .get(head)?
-            .parameters
-            .get(member)?
-            .shape
-            .clone();
-    }
-    let subsystems = file
-        .reaction_systems
+    file.reaction_systems
         .as_ref()?
         .get(head)?
-        .subsystems
-        .as_ref()?;
-    let mut node = subsystems.get(rest[0])?;
-    for segment in &rest[1..] {
-        node = node.get("subsystems")?.get(*segment)?;
-    }
-    let shape = node
-        .get("parameters")?
+        .inline_subsystem_at(&rest)?
+        .parameters
         .get(member)?
-        .get("shape")?
-        .as_array()?;
-    shape
-        .iter()
-        .map(|axis| axis.as_str().map(str::to_string))
-        .collect()
+        .shape
+        .clone()
 }
 
 /// What a bound reference resolved to.

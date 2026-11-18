@@ -584,8 +584,18 @@ function backfillLeafBindings(
  * into the REFERENCED component's own template scope so a mounted
  * discretization-agnostic PDE leaf is lowered under the assembler-chosen
  * discretization. Returns `[]` when absent.
+ *
+ * The entries are written by the MOUNTING document, so a relative `ref` in one
+ * resolves against that document's directory, `mountingBase` (esm-spec §4.7: a
+ * relative path is "resolved relative to the directory of the referencing
+ * file"), never against the leaf's directory the entries are resolved in once
+ * injected. Each relative `ref` is therefore anchored here, on a copy of the
+ * entry; the caller's document is not changed.
  */
-function readEdgeInjectedImports(sub: { expression_template_imports?: unknown }): unknown[] {
+function readEdgeInjectedImports(
+  sub: { expression_template_imports?: unknown },
+  mountingBase: string,
+): unknown[] {
   const raw = sub.expression_template_imports
   if (raw === undefined || raw === null) return []
   if (!Array.isArray(raw)) {
@@ -594,7 +604,33 @@ function readEdgeInjectedImports(sub: { expression_template_imports?: unknown })
       'subsystem-ref `expression_template_imports` must be a list of §9.7.2 import entries (esm-spec §9.7.10)',
     )
   }
-  return raw
+  return raw.map((entry) => anchorInjectedImport(entry, mountingBase))
+}
+
+/**
+ * `entry` with its relative `ref` anchored at `mountingBase`: joined onto it
+ * (by URL joining for a URL-loaded document, as a sibling bundled file inside
+ * the standard library), and made absolute against the working directory when
+ * the base is itself relative, so the leaf's directory cannot re-anchor it.
+ * `${VAR}` tokens are expanded first, as every ref read does (esm-spec §4.7),
+ * so an expanded absolute path is not mistaken for a relative one. An entry
+ * whose `ref` is absolute, a URL or a standard-library ref is returned as is.
+ */
+function anchorInjectedImport(entry: unknown, mountingBase: string): unknown {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry
+  const authored = (entry as { ref?: unknown }).ref
+  if (typeof authored !== 'string' || authored.length === 0) return entry
+  const ref = expandRefEnv(authored)
+  if (ref.startsWith('/') || ref.startsWith('esm:') || isRemoteRef(ref)) return entry
+  let anchored = normalizeRef(ref, mountingBase)
+  if (!anchored.startsWith('/') && !anchored.startsWith('esm:') && !isRemoteRef(anchored)) {
+    const cwd =
+      typeof process !== 'undefined' && typeof process.cwd === 'function'
+        ? process.cwd().replace(/\\/g, '/')
+        : undefined
+    if (cwd !== undefined) anchored = canonicalizePath(joinPath(cwd, anchored))
+  }
+  return { ...(entry as Record<string, unknown>), ref: anchored }
 }
 
 /**
@@ -1205,7 +1241,7 @@ function resolveRefEdge(
       ref,
       refBasePath,
       readEdgeBindings(sub, `${mountFormBlock(mountForm)}.${subName}`),
-      readEdgeInjectedImports(sub),
+      readEdgeInjectedImports(sub, basePath),
       sub.index_set_rename,
       meta,
       mountForm,

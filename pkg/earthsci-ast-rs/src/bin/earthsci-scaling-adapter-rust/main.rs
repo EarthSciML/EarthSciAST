@@ -51,7 +51,6 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use earthsci_ast::simulate_array::RhsStats;
 use earthsci_ast::{CompileError, Compiler, ProblemOptions, Rhs, SimulateError, esm_problem};
 use hand_loops::HandLoop;
 use serde_json::{Map, Value, json};
@@ -731,12 +730,15 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let prob = prob.expect("at least one build ran");
     r.insert("build_s".into(), json!(build_s));
     r.insert("build_repeats".into(), json!(repeats));
-    let Some(compiled) = prob.debug_array_compiled() else {
-        return failed(r, "the problem has no right-hand side (static)".into());
+    // A model whose tape declined a rule has no program: refused, naming the
+    // rule, rather than timing another evaluator.
+    let mut rhs = match prob.debug_solve_rhs() {
+        Ok(rhs) => rhs,
+        Err(e) => return failed(r, format!("no taped right-hand side: {e}")),
     };
 
     // Code size: the tape the solve builds, over all three cadence sections.
-    let tape = compiled.debug_build_tape_report();
+    let tape = rhs.tape_report();
     r.insert(
         "code_size".into(),
         json!(tape.n_instr_const + tape.n_instr_segment + tape.n_instr_continuous),
@@ -760,7 +762,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
         Ok(d) => d,
         Err(msg) => return failed(r, format!("rereading the document: {msg}")),
     };
-    let names = compiled.state_variable_names().to_vec();
+    let names = rhs.state_variable_names().to_vec();
     let (perm, canon_state) = match canonical_vars(&family, &doc).and_then(|v| layout(&names, &v)) {
         Ok(x) => x,
         Err(msg) => return failed(r, format!("mapping the state layout: {msg}")),
@@ -768,32 +770,21 @@ fn measure_one(one: &One) -> Map<String, Value> {
     let n = names.len();
     r.insert("n_states".into(), json!(n));
     let state: Vec<f64> = perm.iter().map(|&k| canon_state[k]).collect();
-    let params = compiled.debug_resolve_params(prob.p());
     let mut dy = vec![0.0f64; n];
-    let mut stats = RhsStats::default();
-
-    // A model whose tape declined a rule has no program: refused, naming the
-    // rule, rather than timing another evaluator.
-    let mut scratch = match compiled.debug_new_scratch_taped() {
-        Ok(s) => s,
-        Err(e) => return failed(r, format!("the tape declined a rule: {e}")),
-    };
     let t = Instant::now();
-    compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+    rhs.eval_into(&state, 0.0, &mut dy);
     r.insert("first_call_s".into(), json!(t.elapsed().as_secs_f64()));
     let native_dy = dy.clone();
     r.insert(
         "dy_max_abs".into(),
         json!(native_dy.iter().fold(0.0f64, |m, v| m.max(v.abs()))),
     );
-    let steady = median_time(|| {
-        compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats)
-    });
+    let steady = median_time(|| rhs.eval_into(&state, 0.0, &mut dy));
     r.insert("steady_rhs_s".into(), json!(steady));
     BYTES.store(0, Ordering::SeqCst);
     MEASURING.store(true, Ordering::SeqCst);
     for _ in 0..ALLOC_CALLS {
-        compiled.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+        rhs.eval_into(&state, 0.0, &mut dy);
     }
     MEASURING.store(false, Ordering::SeqCst);
     r.insert(
@@ -806,7 +797,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
             "native's dy changed between calls at the same point".into(),
         );
     }
-    drop(scratch);
+    drop(rhs);
 
     // The hand loop, on the canonical order.
     match build_hand_loop(&family, &doc, &entry["shape"]) {
@@ -845,7 +836,7 @@ fn measure_one(one: &One) -> Map<String, Value> {
             .as_u64()
             .is_some_and(|c| c < SERIAL_NATIVE_MAX_CELLS)
     {
-        match serial_native(&one.doc, &names, &state, &params, &native_dy) {
+        match serial_native(&one.doc, &names, &state, &native_dy) {
             Ok(t) => {
                 r.insert("serial_steady_rhs_s".into(), json!(t));
             }
@@ -860,19 +851,22 @@ fn measure_one(one: &One) -> Map<String, Value> {
             (0.0, 1.0),
             options(Compiler::Interpreter),
         ) {
-            Ok(ip) => match ip.debug_array_compiled() {
-                Some(ic) if ic.state_variable_names() == names.as_slice() => {
-                    let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p(), true);
+            Ok(ip) => match ip.debug_solve_rhs() {
+                Ok(mut ic) if ic.state_variable_names() == names.as_slice() => {
+                    let idy = ic.eval(&state, 0.0);
                     r.insert(
                         "interpreter_max_abs_diff".into(),
                         json!(max_abs_diff(&idy, &native_dy)),
                     );
                 }
-                _ => {
+                Ok(_) => {
                     r.insert(
                         "interpreter_error".into(),
                         json!("the interpreter's state order differs from native's"),
                     );
+                }
+                Err(err) => {
+                    r.insert("interpreter_error".into(), json!(err.to_string()));
                 }
             },
             Err(err) => {
@@ -895,7 +889,6 @@ fn serial_native(
     doc: &Path,
     names: &[String],
     state: &[f64],
-    params: &[f64],
     threaded_dy: &[f64],
 ) -> Result<f64, String> {
     let pool = rayon::ThreadPoolBuilder::new()
@@ -905,21 +898,15 @@ fn serial_native(
     let (t, dy) = pool.install(|| -> Result<(f64, Vec<f64>), String> {
         let prob = esm_problem(doc, (0.0, 1.0), options(Compiler::Native))
             .map_err(|e| format!("native's serial build: {e}"))?;
-        let compiled = prob
-            .debug_array_compiled()
-            .ok_or("native's serial build has no right-hand side")?;
-        if compiled.state_variable_names() != names {
+        let mut rhs = prob
+            .debug_solve_rhs()
+            .map_err(|e| format!("native's serial build: no taped right-hand side: {e}"))?;
+        if rhs.state_variable_names() != names {
             return Err("native's serial build lays the state out differently".into());
         }
         let mut dy = vec![0.0f64; state.len()];
-        let mut stats = RhsStats::default();
-        let mut scratch = compiled
-            .debug_new_scratch_taped()
-            .map_err(|e| format!("the tape declined a rule: {e}"))?;
-        compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats);
-        let t = median_time(|| {
-            compiled.debug_eval_rhs_into(state, 0.0, params, &mut dy, &mut scratch, &mut stats)
-        });
+        rhs.eval_into(state, 0.0, &mut dy);
+        let t = median_time(|| rhs.eval_into(state, 0.0, &mut dy));
         Ok((t, dy))
     })?;
     if max_abs_diff(&dy, threaded_dy) != 0.0 {
@@ -943,15 +930,15 @@ fn check_hand_loop_against_interpreter(one: &One, family: &str, r: &mut Map<Stri
             options(Compiler::Interpreter),
         )
         .map_err(|e| format!("the interpreter: {e}"))?;
-        let ic = ip
-            .debug_array_compiled()
-            .ok_or("the interpreter built no right-hand side")?;
+        let mut ic = ip
+            .debug_solve_rhs()
+            .map_err(|e| format!("the interpreter built no right-hand side: {e}"))?;
         let text = std::fs::read_to_string(&one.doc).map_err(|e| e.to_string())?;
         let doc: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let names = ic.state_variable_names().to_vec();
         let (perm, canon_state) = layout(&names, &canonical_vars(family, &doc)?)?;
         let state: Vec<f64> = perm.iter().map(|&k| canon_state[k]).collect();
-        let (idy, _) = ic.debug_eval_rhs(&state, 0.0, ip.p(), true);
+        let idy = ic.eval(&state, 0.0);
         let mut interp_canon = vec![0.0f64; idy.len()];
         for (p, &k) in perm.iter().enumerate() {
             interp_canon[k] = idy[p];

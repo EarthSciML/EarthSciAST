@@ -14,17 +14,17 @@ use earthsci_ast::{
 };
 use serde_json::Value;
 
+use crate::common;
+
 fn suite_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("RANGE_RESTRICTED_RHS_DIR") {
         return PathBuf::from(dir);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/range_restricted_rhs")
+    common::repo_fixture("conformance/range_restricted_rhs")
 }
 
 fn manifest() -> Value {
-    let path = suite_dir().join("manifest.json");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    serde_json::from_str(&text).expect("manifest parses")
+    common::read_json(suite_dir().join("manifest.json"))
 }
 
 /// The manifest's state generator: `0.5 + h(v, k)`.

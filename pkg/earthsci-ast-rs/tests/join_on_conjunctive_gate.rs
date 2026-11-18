@@ -231,7 +231,6 @@ fn run(doc: &Value, consts: HashMap<String, ArrayD<f64>>, driver: bool) -> (Vec<
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             model_name: Some("J".into()),
             const_arrays: consts,
-            build_providers: Vec::new(),
             ..Default::default()
         },
     )

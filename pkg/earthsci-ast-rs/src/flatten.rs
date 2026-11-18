@@ -43,10 +43,12 @@
 //! (CONFORMANCE_SPEC §5.9). A consumer that needs a discretized system up front
 //! can demand one with [`reject_unlowered_operators`].
 
+use crate::binders::Binders;
+use crate::types::HasSubsystems;
 use crate::types::{
     AffectEquation, ContinuousEvent, CouplingEntry, DiscreteEvent, DiscreteEventTrigger, Domain,
     Equation, EsmFile, Expr, ExpressionNode, IndexSet, InlineValue, JoinClause, Model,
-    ModelVariable, OverlapClause, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
+    ModelVariable, RangeSpec, ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -294,23 +296,6 @@ pub enum FlattenError {
     )]
     CoupleMultiplicativeNoTendency { target: String },
 
-    /// A [`FlattenedSystem`]'s per-equation list
-    /// ([`FlattenedSystem::equation_contributions`] or
-    /// [`FlattenedSystem::equation_lifted`]) has a different number of entries
-    /// than [`FlattenedSystem::equations`]. The lists are paired by position, so
-    /// one out of step cannot say which equation an entry belongs to.
-    #[error(
-        "contributions_out_of_step: FlattenedSystem.{field} has {entries} entries but the system \
-         has {equations} equations (esm-libraries-spec §4.7.5). Add or remove the entry alongside \
-         its equation, or clear the list to treat every right-hand side as one contribution of \
-         unknown origin."
-    )]
-    ContributionsOutOfStep {
-        field: &'static str,
-        entries: usize,
-        equations: usize,
-    },
-
     /// An `operator_compose` entry merged NOTHING (esm-libraries-spec §4.7.1
     /// step 5).
     ///
@@ -387,21 +372,6 @@ pub enum FlattenError {
         target: String,
     },
 
-    /// A model subsystem that structurally declares itself a [`DataSource`](crate::DataSource) —
-    /// it carries the discriminating `kind` / `source` keys — failed to
-    /// deserialize as one. Distinguished from a nested model or a
-    /// `{ "ref": … }` reference, which are legitimately not loaders and are
-    /// left for the array runtime (esm-spec §4.6; RFC `pure-io-data-loaders`
-    /// §4.3).
-    #[error(
-        "Malformed data-loader subsystem '{subsystem}' in model '{system}': carries loader keys but did not deserialize as a DataSource: {reason}"
-    )]
-    MalformedLoaderSubsystem {
-        system: String,
-        subsystem: String,
-        reason: String,
-    },
-
     /// A SURVIVING `expression_templates` registry body names a variable a
     /// coupling rule rewrote out of the flattened equations (esm-spec §9.6.4,
     /// CONFORMANCE_SPEC §5.35).
@@ -426,6 +396,45 @@ pub enum FlattenError {
     /// The file contains no models or reaction systems to flatten.
     #[error("No models or reaction systems to flatten")]
     Empty,
+}
+
+impl FlattenError {
+    /// The diagnostic code this refusal carries, or `None` for an uncoded
+    /// one.
+    pub fn code(&self) -> Option<&'static str> {
+        use crate::diagnostic::codes;
+        Some(match self {
+            FlattenError::UnloweredOperator { .. } => codes::UNLOWERED_OPERATOR,
+            FlattenError::DomainUnitMismatch { .. } => codes::DOMAIN_UNIT_MISMATCH,
+            FlattenError::CouplingImport(d)
+            | FlattenError::ExpressionTemplate(d)
+            | FlattenError::RecordsPerSample(d) => d.code,
+            FlattenError::CoupleMultiplicativeNoTendency { .. } => {
+                "couple_multiplicative_no_tendency"
+            }
+            FlattenError::OperatorComposeNoMerge { .. } => "operator_compose_no_merge",
+            FlattenError::OperatorComposeRequireMatchUnmatched { .. } => {
+                "operator_compose_require_match_unmatched"
+            }
+            FlattenError::OperatorComposeAmbiguousBareName { .. } => {
+                "operator_compose_ambiguous_bare_name"
+            }
+            FlattenError::ConflictingDerivative { .. }
+            | FlattenError::DimensionPromotion { .. }
+            | FlattenError::UnmappedDomain { .. }
+            | FlattenError::UnsupportedMapping { .. }
+            | FlattenError::DomainExtentMismatch { .. }
+            | FlattenError::SliceOutOfDomain { .. }
+            | FlattenError::CyclicPromotion { .. }
+            | FlattenError::VariableMapFactorWithExpression { .. }
+            | FlattenError::VariableMapExpressionMissingFrom { .. }
+            | FlattenError::VariableMapUnresolvedEndpoint { .. }
+            | FlattenError::VariableMapShapeConflict { .. }
+            | FlattenError::Reaction(_)
+            | FlattenError::MalformedConnectorEquation { .. }
+            | FlattenError::Empty => return None,
+        })
+    }
 }
 
 // ============================================================================
@@ -611,6 +620,15 @@ pub struct FlattenedSystem {
     /// equations, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_ics: Vec<(String, Expr)>,
+    /// The `faq`-valued initialization equations (esm-spec §6.2, equations
+    /// that hold at t = 0) of every component and subsystem, as ordered,
+    /// namespaced `(target_state, faq)` pairs ([`initialization_faq`]). Each
+    /// assigns the cells of its ranges when the initial state is built. The
+    /// other spellings of an initialization equation name no cells and are
+    /// not carried. Empty (and omitted when serialized) for a system with
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initialization_faqs: Vec<(String, Expr)>,
     /// Flattened equations in processing order. Every variable reference is
     /// dot-namespaced.
     pub equations: Vec<Equation>,
@@ -1069,6 +1087,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         parameters,
         observed_variables,
         field_ics,
+        initialization_faqs,
         equations,
         continuous_events,
         discrete_events,
@@ -1100,6 +1119,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         brownian_parameters,
         discrete_parameters,
         field_ics,
+        initialization_faqs,
         equations,
         equation_contributions,
         equation_lifted,
@@ -1253,7 +1273,7 @@ fn shapes_model(parts: &AssembledParts) -> Model {
 /// why this half converts where the dimensionless-but-scaled half refuses.
 ///
 /// **Why here.** `flatten` is the single funnel every evaluator in this crate
-/// draws from — the array oracle, the vectorized overlay, the tape and the XLA
+/// draws from — the array oracle, the tape and the XLA
 /// emitter all consume a [`FlattenedSystem`] — so
 /// one phase here converts for all of them, and they cannot diverge. It is NOT
 /// on the validation path (`validate` never flattens), so the checker keeps
@@ -1341,15 +1361,12 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
     }
 }
 
-/// The shape each unshaped mixed-rank-`ifelse` variable is BUILT at
-/// (esm-spec §4.3.4), by variable name. See [`conditional_shape_promotions`].
-pub(crate) type BuiltShapes = HashMap<String, Vec<String>>;
-
 /// What [`conditional_shape_promotions`] decides.
 #[derive(Debug, Default)]
 pub(crate) struct ConditionalShapes {
-    /// The variables whose shape the declarations decide: their index sets.
-    pub(crate) built: BuiltShapes,
+    /// The variables whose shape the declarations decide: the index sets
+    /// each is BUILT at (esm-spec §4.3.4).
+    pub(crate) built: HashMap<String, Vec<String>>,
     /// The variables whose only arrays are unshaped data-fed parameters: the
     /// names of those parameters (sorted). Such a variable takes the one shape
     /// their data has, which the build reads where the data is bound
@@ -1368,9 +1385,9 @@ pub(crate) struct ConditionalShapes {
 /// slot can hold, and a gather `X[i]` that faults on one arm. Julia gives such
 /// a variable its array arm's shape in `promote_downstream_shapes`, when it
 /// builds from the flattened system. This is that step, run where Rust builds,
-/// in ONE place: `simulate_array::promote_conditional_shapes`, which every
+/// in ONE place: `simulate_array::apply_shape_rewrites`, which every
 /// build route calls on the model it builds and whose result the compiled
-/// model keeps (`ArrayCompiled::conditional_shapes`), so a later reader of a
+/// model keeps (`simulate_array::ShapeTable`), so a later reader of a
 /// variable's shape — a restricted `RhsProgram`, the tile layout, the static
 /// observeds — takes it from there rather than inferring it again from a
 /// system that may no longer decide it. It is NOT written into any document or
@@ -1588,7 +1605,7 @@ impl ShapeInference<'_, '_> {
                     && node
                         .value
                         .as_ref()
-                        .is_some_and(serde_json::Value::is_number))
+                        .is_some_and(crate::ConstValue::is_number))
                     || node.op == "true"
                     || node.op == "false" =>
             {
@@ -1902,25 +1919,13 @@ fn scope_template_body(
         }
         Expr::Operator(node) => {
             let mut child_bound = bound.clone();
-            if let Some(output_idx) = &node.output_idx {
-                child_bound.extend(output_idx.iter().cloned());
-            }
-            if let Some(ranges) = &node.ranges {
-                child_bound.extend(ranges.keys().cloned());
-            }
-            if let Some(int_var) = &node.int_var {
-                child_bound.insert(int_var.clone());
-            }
+            node.for_each_binder(Binders::SCOPE, |n| {
+                child_bound.insert(n.to_string());
+            });
             let mut out =
                 node.map_children(&mut |c| scope_template_body(c, prefix, locals, &child_bound));
             if let Some(join) = &node.join {
-                let mut binders: HashSet<&str> = HashSet::new();
-                if let Some(output_idx) = &node.output_idx {
-                    binders.extend(output_idx.iter().map(String::as_str));
-                }
-                if let Some(ranges) = &node.ranges {
-                    binders.extend(ranges.keys().map(String::as_str));
-                }
+                let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
                 if let Some(ns) = namespace_join_names(join, &binders, prefix, locals) {
                     out.join = Some(ns);
                 }
@@ -2043,7 +2048,7 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
 }
 
 /// The name a right-hand-side structural `D` differentiates, for the first such
-/// node in `flat` that [`resolve_rhs_time_derivatives`] left standing — or
+/// node in `flat` that [`resolve_rhs_time_derivatives_per_contribution`] left standing — or
 /// `None` when every one of them resolved.
 ///
 /// The companion gate to that phase, and the second half of esm-spec §4.2's
@@ -2454,12 +2459,13 @@ fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), Fl
 /// The [`FlattenedSystem`]-shaped accumulation produced by phase 5
 /// ([`assemble_output`]) and refined by the post-collection passes
 /// ([`apply_variable_map_removals`], [`maybe_apply_pointwise_lift`],
-/// [`resolve_rhs_time_derivatives`], [`extract_field_ics`]).
+/// [`resolve_rhs_time_derivatives_per_contribution`], [`extract_field_ics`]).
 struct AssembledParts {
     state_variables: IndexMap<String, ModelVariable>,
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
+    initialization_faqs: Vec<(String, Expr)>,
     equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -2477,6 +2483,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
         field_ics: Vec::new(),
+        initialization_faqs: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -2494,6 +2501,7 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
             parts.observed_variables.insert(name, var);
         }
         parts.equations.extend(block.equations);
+        parts.initialization_faqs.extend(block.initialization_faqs);
         parts.continuous_events.extend(block.continuous_events);
         parts.discrete_events.extend(block.discrete_events);
     }
@@ -2889,78 +2897,6 @@ fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
         && !crate::op_registry::is_rewrite_target_derivative(node)
 }
 
-/// Phase 5b′ of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
-/// derivative into the tendency the flattened system already defines for it.
-///
-/// `D` on an equation's LEFT-hand side is structural: it is what makes the
-/// equation differential, and system assembly consumes it. On a RIGHT-hand
-/// side there was no consumer at all, and the three evaluators each answered
-/// `D(anything) = 0` "for parity" with one another — a silent wrong answer
-/// rather than a missing feature, which is what made an observed written
-/// `dxdt ~ D(x, t)` (esm-spec §6.6.2, the instantaneous-derivative test shape)
-/// read as exactly `0` and grade its inline test against a configuration the
-/// model never computed.
-///
-/// The value is not a runner's to invent: everything it needs is already in
-/// this system. `D(x, t)` over a state is `x`'s own `D(x)/dt ~ f`; `D(y, t)`
-/// over an OBSERVED is the total derivative of `y`'s defining equation, which
-/// is that equation's right-hand side differentiated by the same rule, one
-/// level down. So the whole rule is one recursive walk, `deriv` below, and it
-/// runs HERE — the layer that qualifies names, applies coupling and lowers a
-/// reaction network to its mass-action ODEs — so no evaluator ever meets a
-/// right-hand-side `D` and every `FlattenedSystem` consumer answers alike by
-/// construction. It is what lets `D(Chem.O3, t)` in a sibling model resolve to
-/// the mechanism's tendency (esm-spec §7.4) with no runner learning anything
-/// about reactions.
-///
-/// What `deriv` covers, and nothing else:
-///
-/// * a STATE (a name carrying `D(x)/dt ~ f`) — its tendency, with any `D`
-///   inside that tendency resolved in turn, so a chained
-///   `D(lai)/dt ~ sla · D(biomass)/dt` terminates in states;
-/// * an OBSERVED (a name carrying `y ~ g`) — `deriv(g)`, the chain rule
-///   applied by substituting the definition and differentiating it;
-/// * a TIME-INVARIANT name (a parameter) and a literal — `0`;
-/// * `+`, binary and unary `-`, n-ary `*`, and binary `/` — distributed
-///   by the ordinary sum, product and quotient rules over the operands'
-///   derivatives. The deprecated `neg` (esm-spec §4.2) is read as unary `-`:
-///   the loader has already rewritten an authored one, so only a code-built
-///   node reaches here spelled that way.
-///
-/// Every other shape — `^`, a call, a reduction, a nested `D`, a name in no
-/// table — resolves to NOTHING and is left exactly as authored, as is any
-/// cyclic chain (`active` stops it). Those reach
-/// [`first_unresolved_rhs_time_derivative`] and are refused with
-/// `unlowered_operator`: §4.2 forbids inventing a value for them, in
-/// particular `0`. A SPATIAL `D` is untouched — it is a rewrite target for a
-/// discretization rule (§9.6.8) and that gate still owns it — and left-hand
-/// sides are never rewritten.
-///
-/// Returns whether any right-hand side carried a time derivative; when none
-/// did, nothing is rewritten and none is left.
-pub(crate) fn resolve_rhs_time_derivatives(
-    equations: &mut [Equation],
-    time_invariant: &HashSet<String>,
-) -> bool {
-    // An authored model carries no lifted equation: a per-cell tendency
-    // written in the document is not the pointwise lift's.
-    let Some((carriers, tables)) =
-        plan_time_derivative_resolution(equations.iter().map(|eq| (eq, false)), time_invariant)
-    else {
-        return false;
-    };
-    let Some(tables) = tables else {
-        return true;
-    };
-    for (eq, carries) in equations.iter_mut().zip(carriers) {
-        if carries {
-            let mut active = self_defined(&eq.lhs, false);
-            eq.rhs = tables.substitute(&eq.rhs, &mut active);
-        }
-    }
-    true
-}
-
 /// Which right-hand sides carry a structural time derivative, and the tables
 /// to resolve them against (`None` when the equations define nothing to
 /// resolve against). `None` overall when no right-hand side carries one: a
@@ -2980,8 +2916,9 @@ fn plan_time_derivative_resolution<'e, 'a>(
     Some((carriers, DerivTables::build(equations, time_invariant)))
 }
 
-/// [`resolve_rhs_time_derivatives`] over flatten's own equations: the resolved
-/// expression replaces the `D` node INSIDE the referencing contribution, which
+/// Resolve each right-hand-side `D` over flatten's own equations (esm-spec
+/// §4.2): the resolved expression replaces the `D` node INSIDE the referencing
+/// contribution, which
 /// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
 /// contributions are not spliced in.
 fn resolve_rhs_time_derivatives_per_contribution(
@@ -3054,7 +2991,7 @@ fn is_lifted_tendency(expr: &Expr) -> bool {
         if node.op == "faq" && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()))
 }
 
-/// The tendency and defining equations [`resolve_rhs_time_derivatives`] reads,
+/// The tendency and defining equations the right-hand-side `D` resolution reads,
 /// plus the names whose time derivative is `0`.
 struct DerivTables<'a> {
     /// `x` -> the right-hand side of its `D(x)/dt ~ …` equation.
@@ -3356,8 +3293,27 @@ struct SystemBlock {
     /// block an equation sits in is its slot owner (§4.7.1 step 4), not its
     /// provenance: a reattributed equation moves here with its list.
     equations: Vec<FlatEq>,
+    /// The component's `faq`-valued initialization equations, namespaced.
+    initialization_faqs: Vec<(String, Expr)>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
+}
+
+/// The `faq`-valued initialization equation `eq` as `(target, faq)` (esm-spec
+/// §6.2): `u ~ faq(…)` with a bare-variable left-hand side and an array-valued
+/// right-hand side. Each assigns the cells of its ranges when the initial
+/// state is built; the other spellings name no cells to assign and are not
+/// evaluated, as in the Julia reference's `_seed_faq_init_u0!`.
+pub(crate) fn initialization_faq(eq: &Equation) -> Option<(&str, &Expr)> {
+    match (&eq.lhs, &eq.rhs) {
+        (Expr::Variable(target), Expr::Operator(node))
+            if crate::faq::is_faq_op(&node.op)
+                && node.output_idx.as_ref().is_some_and(|o| !o.is_empty()) =>
+        {
+            Some((target.as_str(), &eq.rhs))
+        }
+        _ => None,
+    }
 }
 
 fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, FlattenError> {
@@ -3396,6 +3352,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // Which unknowns are ODE states and which are observed is DERIVED from
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
     let class = crate::classification::Classification::of(model);
+    let mut ns = Namespacer::new(system_name, &sub_keys, &locals);
 
     // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
     // component's variables in the order the component declares them. A
@@ -3407,14 +3364,10 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         // A parameter's `update` carries Expressions (trigger, value,
         // unit conversion) over the model's own symbols, so they namespace
         // exactly as the equations do.
-        cloned.for_each_expression_mut(&mut |expr| {
-            *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
-        });
+        cloned.for_each_expression_mut(&mut |expr| *expr = ns.expr(expr));
         // A reference `lb` / `ub` names a variable exactly as an equation does,
         // so it is namespaced by the same map (esm-libraries-spec §4.7.5).
-        cloned.map_bound_references(&mut |expr| {
-            namespace_expr(expr, system_name, &sub_keys, &locals)
-        });
+        cloned.map_bound_references(&mut |expr| ns.expr(expr));
         match var.var_type {
             // The two maps are NOT a partition (esm-libraries-spec §4.7.5
             // step 4). `observed_variables` is the §6.3.1 CLASSIFICATION —
@@ -3461,8 +3414,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|eq| {
             FlatEq::authored(
                 Equation {
-                    lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
-                    rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
+                    lhs: ns.expr(&eq.lhs),
+                    rhs: ns.rhs(&eq.lhs, &eq.rhs),
                     comment: eq.comment.clone(),
                 },
                 TermOrigin::Component {
@@ -3487,12 +3440,26 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
         .collect();
 
+    // The `faq`-valued initialization equations, namespaced in the same
+    // scope as the equations.
+    let initialization_faqs = model
+        .initialization_equations
+        .iter()
+        .flatten()
+        .filter(|eq| initialization_faq(eq).is_some())
+        .map(|eq| match ns.expr(&eq.lhs) {
+            Expr::Variable(target) => (target, ns.expr(&eq.rhs)),
+            _ => unreachable!("an initialization faq's left-hand side is a variable"),
+        })
+        .collect();
+
     let mut block = SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
         observed_vars,
         equations,
+        initialization_faqs,
         continuous_events,
         discrete_events,
     };
@@ -3514,20 +3481,18 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // only TOP-LEVEL components' events (parse.py's `EsmFile.events`), so a
     // subsystem-owned event is not part of the flattened system in any
     // binding. Folding them in here would make Rust the outlier.
-    if let Some(subs) = &model.subsystems {
-        for (sub_name, sub_value) in subs {
-            // A `{ "ref": … }` entry (or any non-model mount) is not a
-            // subsystem to lower: reference resolution runs before flattening,
-            // so anything still unresolved here contributes nothing.
-            let Ok(sub_model) = serde_json::from_value::<Model>(sub_value.clone()) else {
-                continue;
-            };
-            let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), &sub_model)?;
-            block.state_vars.extend(sub_block.state_vars);
-            block.parameters.extend(sub_block.parameters);
-            block.observed_vars.extend(sub_block.observed_vars);
-            block.equations.extend(sub_block.equations);
-        }
+    //
+    // A `{ "ref": … }` entry is not a subsystem to lower: reference resolution
+    // runs before flattening, so one still unresolved contributes nothing.
+    for (sub_name, sub_model) in model.inline_subsystems() {
+        let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), sub_model)?;
+        block.state_vars.extend(sub_block.state_vars);
+        block.parameters.extend(sub_block.parameters);
+        block.observed_vars.extend(sub_block.observed_vars);
+        block.equations.extend(sub_block.equations);
+        block
+            .initialization_faqs
+            .extend(sub_block.initialization_faqs);
     }
 
     Ok(block)
@@ -3643,6 +3608,7 @@ fn build_reaction_block(
         parameters,
         observed_vars: IndexMap::new(),
         equations,
+        initialization_faqs: Vec::new(),
         continuous_events,
         discrete_events,
     })
@@ -3682,7 +3648,170 @@ fn namespace_expr(
     subsys: &HashSet<String>,
     locals: &HashSet<String>,
 ) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys, locals)
+    Namespacer::new(system_name, subsys, locals).expr(expr)
+}
+
+/// One component's namespacing ([`namespace_expr`]), remembered per shared
+/// subtree. A loaded document shares structurally identical subtrees
+/// ([`crate::intern`]); the namespacer answers each shared node once per
+/// enclosing loop-symbol scope and hands every other occurrence the same
+/// result, so the flattened system shares exactly what the document shared.
+/// Without it each occurrence is rebuilt, and an expanded discretization that
+/// repeats one subtree in every cell holds one copy per cell.
+struct Namespacer<'a> {
+    system_name: &'a str,
+    subsys: &'a HashSet<String>,
+    locals: &'a HashSet<String>,
+    /// Each distinct set of enclosing loop symbols, by id; id 0 is the empty
+    /// set.
+    scopes: Vec<HashSet<String>>,
+    scope_ids: HashMap<Vec<String>, usize>,
+    /// (node address, scope id) → (the node, its namespaced form). The node
+    /// itself is held so its address cannot be reused while the memo lives.
+    memo: HashMap<(*const ExpressionNode, usize), (Expr, Expr)>,
+}
+
+impl<'a> Namespacer<'a> {
+    fn new(system_name: &'a str, subsys: &'a HashSet<String>, locals: &'a HashSet<String>) -> Self {
+        Namespacer {
+            system_name,
+            subsys,
+            locals,
+            scopes: vec![HashSet::new()],
+            scope_ids: HashMap::from([(Vec::new(), 0)]),
+            memo: HashMap::new(),
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) -> Expr {
+        self.scoped(expr, 0)
+    }
+
+    /// An equation's right-hand side `rhs`. A `faq` left-hand side (the
+    /// indexed form, `faq{expr: D(index(u, i))} ~ rhs`) binds its loop
+    /// symbols over the right-hand side too, so they stay unqualified there.
+    fn rhs(&mut self, lhs: &Expr, rhs: &Expr) -> Expr {
+        let scope = match lhs {
+            Expr::Operator(node) if crate::faq::is_faq_op(&node.op) => self.child_scope(0, node),
+            _ => 0,
+        };
+        self.scoped(rhs, scope)
+    }
+
+    /// The scope `parent` extended by the loop symbols `node` binds.
+    fn child_scope(&mut self, parent: usize, node: &ExpressionNode) -> usize {
+        let mut added: Vec<String> = Vec::new();
+        node.for_each_binder(Binders::SCOPE, |n| {
+            if !self.scopes[parent].contains(n) {
+                added.push(n.to_string());
+            }
+        });
+        if added.is_empty() {
+            return parent;
+        }
+        let mut key: Vec<String> = self.scopes[parent].iter().cloned().collect();
+        key.extend(added);
+        key.sort();
+        key.dedup();
+        if let Some(&id) = self.scope_ids.get(&key) {
+            return id;
+        }
+        let id = self.scopes.len();
+        self.scopes.push(key.iter().cloned().collect());
+        self.scope_ids.insert(key, id);
+        id
+    }
+
+    fn scoped(&mut self, expr: &Expr, scope: usize) -> Expr {
+        let Expr::Operator(node) = expr else {
+            return namespace_leaf(expr, self.system_name, &self.scopes[scope], self.subsys);
+        };
+        let key = (std::sync::Arc::as_ptr(node), scope);
+        if let Some((_, out)) = self.memo.get(&key) {
+            return out.clone();
+        }
+        let out = self.node(node, scope);
+        self.memo.insert(key, (expr.clone(), out.clone()));
+        out
+    }
+
+    fn node(&mut self, node: &ExpressionNode, scope: usize) -> Expr {
+        let system_name = self.system_name;
+        let locals = self.locals;
+        // The loop symbols this node introduces are bound in its body,
+        // filter and bound expressions: `ranges` keys cover both the output
+        // and contracted indices of an `faq`, and an `integral` binds its
+        // `int_var`.
+        let child = self.child_scope(scope, node);
+
+        // Every expression-bearing child, through the crate's one child
+        // walker (`ExpressionNode::map_children`), which clones the node first
+        // and so keeps every structural and metadata field.
+        let mut out = node.map_children(&mut |c| self.scoped(c, child));
+
+        // `wrt` is a differentiation-variable *string*, not a child `Expr`.
+        // A SPATIAL `wrt` names a document-scoped AXIS (esm-libraries-spec
+        // §4.7.6 harvests it as an independent variable), so it is prefixed
+        // only when it names one of this component's own locals — the same
+        // rule `namespace_join_names` applies to a plain string that may be a
+        // document-scoped index set.
+        let child_bound = &self.scopes[child];
+        out.wrt = node.wrt.as_ref().map(|w| {
+            if w.contains('.')
+                || w == "t"
+                || w == VAR_PLACEHOLDER
+                || child_bound.contains(w)
+                || !locals.contains(w)
+            {
+                w.clone()
+            } else {
+                format!("{system_name}.{w}")
+            }
+        });
+        // `join` carries variable references as plain strings (§5.5.6); the
+        // names inside it follow the registry they resolve against. The
+        // binder set is THIS node's own loop symbols, not the enclosing
+        // scope: a join column is resolved against this node's `ranges`, so
+        // its own binders are the exact shadowing set, and keeping the set
+        // node-local lets every binding implement the rule without threading
+        // a scope.
+        if let Some(join) = &node.join {
+            let binders: HashSet<&str> = node.binders(Binders::LOOP).into_iter().collect();
+            if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
+                out.join = Some(ns);
+            }
+        }
+        Expr::operator(out)
+    }
+}
+
+/// A leaf's namespaced form: `t` and the §6.4 `_var` placeholder are global,
+/// a bound loop symbol is left alone, a dotted reference is already
+/// qualified unless its head is a local subsystem, and any other name takes
+/// the component's prefix.
+fn namespace_leaf(
+    expr: &Expr,
+    system_name: &str,
+    bound: &HashSet<String>,
+    subsys: &HashSet<String>,
+) -> Expr {
+    match expr {
+        Expr::Variable(name) => {
+            if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name) {
+                Expr::Variable(name.clone())
+            } else if name.contains('.') {
+                let head = name.split('.').next().unwrap_or("");
+                if subsys.contains(head) {
+                    Expr::Variable(format!("{system_name}.{name}"))
+                } else {
+                    Expr::Variable(name.clone())
+                }
+            } else {
+                Expr::Variable(format!("{system_name}.{name}"))
+            }
+        }
+        other => other.clone(),
+    }
 }
 
 /// Dot-prefix the plain-string names carried by a node's `join` clauses
@@ -3726,140 +3855,12 @@ fn namespace_join_names(
             n.clone()
         }
     };
-    let out: Vec<JoinClause> = join
-        .iter()
-        .map(|c| JoinClause {
-            on: c.on.iter().map(|[l, r]| [ns(l), ns(r)]).collect(),
-            // Range symbols the node itself binds, not variable references —
-            // namespacing must leave them alone, exactly as for an overlap
-            // clause's `sym_src` / `sym_tgt`.
-            syms: c.syms.clone(),
-            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                src_env: ov.src_env.iter().map(&ns).collect(),
-                tgt_env: ov.tgt_env.iter().map(&ns).collect(),
-                eps: ov.eps,
-                // Range symbols the node itself binds, not variable references
-                // — namespacing must leave them alone.
-                sym_src: ov.sym_src.clone(),
-                sym_tgt: ov.sym_tgt.clone(),
-            }),
-            // A resolved `on` gate's DATA-COLUMN names are references too, and
-            // are namespaced by the same rule; its loop symbols are binders and
-            // are not. (Resolution runs after flattening, so this is normally
-            // `None` — it exists so the two orders agree.)
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ns)),
-        })
-        .collect();
+    // The clause's loop symbols are binders, not references, and are left
+    // alone. A resolved `on` gate's data columns are namespaced by the same
+    // rule (resolution runs after flattening, so the gate is normally `None` —
+    // it is covered so the two orders agree).
+    let out: Vec<JoinClause> = join.iter().map(|c| c.map_reference_names(ns)).collect();
     (out != join).then_some(out)
-}
-
-fn namespace_expr_scoped(
-    expr: &Expr,
-    system_name: &str,
-    bound: &HashSet<String>,
-    subsys: &HashSet<String>,
-    locals: &HashSet<String>,
-) -> Expr {
-    match expr {
-        Expr::Number(n) => Expr::Number(*n),
-        Expr::Integer(n) => Expr::Integer(*n),
-        Expr::Variable(name) => {
-            // `t` is the independent variable and `_var` the §6.4 operator
-            // placeholder; both are global symbols, neither is component-scoped.
-            if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name) {
-                Expr::Variable(name.clone())
-            } else if name.contains('.') {
-                // A dotted reference is already-namespaced UNLESS its head is a
-                // subsystem key, in which case it is a subsystem-local reference
-                // (`raw.k`) that must be lifted to `<system>.raw.k`.
-                let head = name.split('.').next().unwrap_or("");
-                if subsys.contains(head) {
-                    Expr::Variable(format!("{system_name}.{name}"))
-                } else {
-                    Expr::Variable(name.clone())
-                }
-            } else {
-                Expr::Variable(format!("{system_name}.{name}"))
-            }
-        }
-        Expr::Operator(node) => {
-            // Extend the bound-index set with the loop symbols this node
-            // introduces so its body / filter / bound expressions skip them.
-            // `ranges` keys cover both the output and contracted indices of an
-            // `faq`; `output_idx` is added defensively; an
-            // `integral` binds its `int_var`.
-            let mut child_bound = bound.clone();
-            if let Some(output_idx) = &node.output_idx {
-                child_bound.extend(output_idx.iter().cloned());
-            }
-            if let Some(ranges) = &node.ranges {
-                child_bound.extend(ranges.keys().cloned());
-            }
-            if let Some(int_var) = &node.int_var {
-                child_bound.insert(int_var.clone());
-            }
-
-            // Re-namespace every expression-bearing child through the crate's
-            // ONE canonical child-walker (`ExpressionNode::map_children`) rather
-            // than hand-listing fields. `map_children` clones the node first —
-            // preserving EVERY structural/metadata field verbatim, just like the
-            // old explicit clone — and covers the FULL child set, including the
-            // aggregate grouping `key` and template `bindings` that the previous
-            // hand-rolled enumeration silently omitted (leaving their variable
-            // references un-namespaced when flattening a coupled system).
-            let mut out = node.map_children(&mut |c| {
-                namespace_expr_scoped(c, system_name, &child_bound, subsys, locals)
-            });
-
-            // `wrt` is a differentiation-variable *string*, not a child `Expr`,
-            // so it is a node-local rewrite the child-walker does not (and must
-            // not) cover; apply it to the rebuilt node exactly as before.
-            // `wrt` is a differentiation-variable *string*, not a child `Expr`.
-            // A SPATIAL `wrt` names a document-scoped AXIS (esm-libraries-spec
-            // §4.7.6 harvests it as an independent variable), so it is prefixed
-            // only when it actually names one of this component's own locals —
-            // the same whitelist rule `namespace_join_names` applies to a plain
-            // string that may be a document-scoped index set. Prefixing it
-            // unconditionally produced axes like `m.x` in
-            // `independent_variables`; nothing observed that before, because an
-            // undiscretized spatial `D` could not reach a FlattenedSystem at all
-            // until flatten stopped refusing PDEs.
-            out.wrt = node.wrt.as_ref().map(|w| {
-                if w.contains('.')
-                    || w == "t"
-                    || w == VAR_PLACEHOLDER
-                    || child_bound.contains(w)
-                    || !locals.contains(w)
-                {
-                    w.clone()
-                } else {
-                    format!("{system_name}.{w}")
-                }
-            });
-            // `join` likewise carries variable references as plain strings
-            // (§5.5.6). The child-walker preserves the field verbatim; the
-            // names inside it must follow the registry they resolve against.
-            //
-            // The binder set is THIS node's own loop symbols, not `child_bound`
-            // (which also holds enclosing nodes'). A join column is resolved
-            // against this node's `ranges`, so its own binders are the exact
-            // shadowing set — and keeping the set node-local is what lets every
-            // binding implement the identical rule without threading a scope.
-            if let Some(join) = &node.join {
-                let mut binders: HashSet<&str> = HashSet::new();
-                if let Some(output_idx) = &node.output_idx {
-                    binders.extend(output_idx.iter().map(String::as_str));
-                }
-                if let Some(ranges) = &node.ranges {
-                    binders.extend(ranges.keys().map(String::as_str));
-                }
-                if let Some(ns) = namespace_join_names(join, &binders, system_name, locals) {
-                    out.join = Some(ns);
-                }
-            }
-            Expr::operator(out)
-        }
-    }
 }
 
 fn namespace_continuous_event(
@@ -3977,10 +3978,8 @@ pub(crate) fn namespaced_model_events(
             )),
         ));
     }
-    for (key, value) in model.subsystems.iter().flatten() {
-        if let Ok(sub) = serde_json::from_value::<Model>(value.clone()) {
-            namespaced_model_events(&format!("{path}.{key}"), &sub, out);
-        }
+    for (key, sub) in model.inline_subsystems() {
+        namespaced_model_events(&format!("{path}.{key}"), sub, out);
     }
 }
 
@@ -4027,10 +4026,8 @@ pub(crate) fn namespaced_reaction_events(
             )),
         ));
     }
-    for (key, value) in rs.subsystems.iter().flatten() {
-        if let Ok(sub) = serde_json::from_value::<ReactionSystem>(value.clone()) {
-            namespaced_reaction_events(&format!("{path}.{key}"), &sub, out);
-        }
+    for (key, sub) in rs.inline_subsystems() {
+        namespaced_reaction_events(&format!("{path}.{key}"), sub, out);
     }
 }
 
@@ -5163,6 +5160,7 @@ fn apply_couple(
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
             equations: new_equations,
+            initialization_faqs: Vec::new(),
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
         });
@@ -5488,25 +5486,7 @@ fn rename_join_names_in(expr: &Expr, renames: &IndexMap<String, String>) -> Expr
     let mut out = node.map_children(&mut |c| rename_join_names_in(c, renames));
     if let Some(join) = &node.join {
         let ren = |n: &String| -> String { renames.get(n).unwrap_or(n).clone() };
-        out.join = Some(
-            join.iter()
-                .map(|c| JoinClause {
-                    on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
-                    // Binders, not references — renaming leaves them alone.
-                    syms: c.syms.clone(),
-                    overlap: c.overlap.as_ref().map(|ov| OverlapClause {
-                        src_env: ov.src_env.iter().map(&ren).collect(),
-                        tgt_env: ov.tgt_env.iter().map(&ren).collect(),
-                        eps: ov.eps,
-                        // Range symbols the node itself binds, not variable
-                        // references — renaming must leave them alone.
-                        sym_src: ov.sym_src.clone(),
-                        sym_tgt: ov.sym_tgt.clone(),
-                    }),
-                    on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
-                })
-                .collect(),
-        );
+        out.join = Some(join.iter().map(|c| c.map_reference_names(ren)).collect());
     }
     Expr::operator(out)
 }
@@ -5640,11 +5620,9 @@ fn lookup_model_units(model: &Model, name: &str) -> Option<String> {
         return var.units.clone();
     }
     if let Some((head, rest)) = name.split_once('.')
-        && let Some(subs) = &model.subsystems
-        && let Some(sub_val) = subs.get(head)
-        && let Ok(sub_model) = serde_json::from_value::<Model>(sub_val.clone())
+        && let Some(sub_model) = model.inline_subsystem(head)
     {
-        return lookup_model_units(&sub_model, rest);
+        return lookup_model_units(sub_model, rest);
     }
     None
 }
@@ -5660,11 +5638,9 @@ fn lookup_rsys_units(rsys: &ReactionSystem, name: &str) -> Option<String> {
         return p.units.clone();
     }
     if let Some((head, rest)) = name.split_once('.')
-        && let Some(subs) = &rsys.subsystems
-        && let Some(sub_val) = subs.get(head)
-        && let Ok(sub_rsys) = serde_json::from_value::<ReactionSystem>(sub_val.clone())
+        && let Some(sub_rsys) = rsys.inline_subsystem(head)
     {
-        return lookup_rsys_units(&sub_rsys, rest);
+        return lookup_rsys_units(sub_rsys, rest);
     }
     None
 }
@@ -5675,7 +5651,7 @@ fn lookup_rsys_units(rsys: &ReactionSystem, name: &str) -> Option<String> {
 
 /// If `lhs` is `ic(target)` — an `ic` operator over a single variable argument —
 /// return the target state name, else `None`. `pub(crate)` so the single-model
-/// array-compile path ([`crate::simulate_array::ArrayCompiled::from_model`])
+/// array-compile path ([`crate::simulate_array::ArrayCompiled::from_model_with_arrays`])
 /// classifies `ic` equations identically to this flatten pass.
 pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
     let Expr::Operator(node) = lhs else {
@@ -6605,12 +6581,9 @@ fn fresh_lift_loops(exprs: &[&Expr], n: usize) -> Vec<String> {
             }
             Expr::Number(_) | Expr::Integer(_) => {}
             Expr::Operator(node) => {
-                if let Some(r) = &node.ranges {
-                    out.extend(r.keys().cloned());
-                }
-                if let Some(idx) = &node.output_idx {
-                    out.extend(idx.iter().cloned());
-                }
+                node.for_each_binder(Binders::LOOP, |n| {
+                    out.insert(n.to_string());
+                });
                 node.for_each_child(&mut |c| names(c, out));
             }
         }
@@ -6885,10 +6858,7 @@ mod tests {
             vec![ddt("x", Expr::Variable("gain".to_string()))],
         );
         let mut subsystems = IndexMap::new();
-        subsystems.insert(
-            "inner".to_string(),
-            serde_json::to_value(&inner).expect("model serializes"),
-        );
+        subsystems.insert("inner".to_string(), crate::types::Subsystem::inline(inner));
         let wrap = Model {
             subsystems: Some(subsystems),
             ..Default::default()
@@ -7486,12 +7456,12 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let built = crate::simulate_array::promote_conditional_shapes(&mut model, &index_sets)
+        let built = crate::simulate_array::apply_shape_rewrites(&mut model, &index_sets, None)
             .expect("promote");
         let cell = vec!["cell".to_string()];
-        assert_eq!(built.built.get("M.X"), Some(&cell));
-        assert_eq!(built.built.get("M.Y"), Some(&cell));
-        assert_eq!(built.built.get("M.S"), None);
+        assert_eq!(built.built_axes("M.X"), Some(cell.as_slice()));
+        assert_eq!(built.built_axes("M.Y"), Some(cell.as_slice()));
+        assert_eq!(built.built_axes("M.S"), None);
         assert_eq!(model.variables["M.X"].shape.as_ref(), Some(&cell));
         assert_eq!(model.variables["M.Y"].shape.as_ref(), Some(&cell));
         // The flattened system round-trips through JSON with no `shape` on X/Y.

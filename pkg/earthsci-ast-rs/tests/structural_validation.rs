@@ -4,6 +4,8 @@
 
 use earthsci_ast::*;
 
+use crate::common;
+
 /// Table-driven guard for invalid fixtures whose rejection is STRUCTURAL:
 /// the contract in tests/invalid/expected_errors.json pins `schema_errors: []`
 /// for each of them, so `load_string` must succeed and `validate()` must
@@ -300,27 +302,33 @@ fn test_unknown_without_equation() {
 
 /// Test unresolved scoped references.
 ///
-/// This binding rejects unresolvable coupling references at LOAD time (the
-/// load-time layer's `check_coupling_references`), so `load_string` itself
-/// fails and must name the missing system or variable.
+/// This binding rejects an unresolvable coupling `from` reference at LOAD time
+/// (after typing, with `validate`'s own finding), so `load_string` itself
+/// fails and must carry the pinned code at the pinned pointer.
 #[test]
 fn test_unresolved_scoped_reference() {
     assert_fixture_load_rejected(
         "unresolved_scoped_ref",
         include_str!("../../../tests/invalid/unresolved_scoped_ref.esm"),
-        &["coupling[0]/from", "undefined system 'NonExistentSystem'"],
+        &[
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'NonExistentSystem.T'",
+        ],
     );
     assert_fixture_load_rejected(
         "unresolved_scoped_ref_missing_system",
         include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_system.esm"),
-        &["coupling[0]/from", "undefined system 'NonExistentModel'"],
+        &[
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'NonExistentModel.MissingSubsystem.temperature'",
+        ],
     );
     assert_fixture_load_rejected(
         "unresolved_scoped_ref_missing_variable",
         include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_variable.esm"),
         &[
-            "coupling[0]/from",
-            "variable 'nonexistent_variable' not provided by 'ModelB'",
+            "[unresolved_scoped_ref] /coupling/0/from",
+            "'ModelB.nonexistent_variable'",
         ],
     );
     // A `data_sources` key is not a coupling endpoint or a scoped-name root
@@ -328,7 +336,7 @@ fn test_unresolved_scoped_reference() {
     assert_fixture_load_rejected(
         "variable_map_from_data_source",
         include_str!("../../../tests/invalid/variable_map_from_data_source.esm"),
-        &["coupling[0]/from", "undefined system 'Met'"],
+        &["[unresolved_scoped_ref] /coupling/0/from", "'Met.K'"],
     );
     // …and the validator recovers the pinned `(code, path)` record from it.
     let result = validate_text(
@@ -405,8 +413,7 @@ fn test_coupling_library_refs_resolve_against_roles_not_systems() {
 /// `lib_unknown_role_edge.esm` must be rejected naming its undeclared role.
 #[test]
 fn test_coupling_library_corpus_validates_standalone() {
-    let corpus =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/coupling_libraries");
+    let corpus = common::repo_fixture("coupling_libraries");
     // `full_surface_lib.esm` exercises every §10.10.2 occurrence site, so it is
     // what proves the shared walk raises no FALSE positive off `variable_map`.
     for name in ["rothermel_fuel.esm", "full_surface_lib.esm"] {
@@ -426,9 +433,9 @@ fn test_coupling_library_corpus_validates_standalone() {
 
 /// Test event variable undeclared errors.
 ///
-/// This binding rejects undeclared event variables at LOAD time (the
-/// load-time layer's `check_event_variable_references`), so `load_string`
-/// itself fails and must name the undeclared variable.
+/// This binding rejects undeclared event variables at LOAD time (after
+/// typing, with `validate`'s own finding), so `load_string` itself fails and
+/// must name the undeclared variable at the pinned pointer.
 ///
 /// `event_var_undeclared_condition.esm` is NOT here: expected_errors.json
 /// pins it as a SCHEMA-layer rejection (its `continuous_events/0` lacks the
@@ -440,16 +447,16 @@ fn test_event_variable_undeclared() {
         "event_var_undeclared",
         include_str!("../../../tests/invalid/event_var_undeclared.esm"),
         &[
-            "continuous_events[0]/affects[0]/lhs",
-            "undeclared variable 'undefined_velocity'",
+            "[event_var_undeclared] /models/TestModel/continuous_events/0/affects/0/lhs",
+            "'undefined_velocity'",
         ],
     );
     assert_fixture_load_rejected(
         "event_var_undeclared_affects",
         include_str!("../../../tests/invalid/event_var_undeclared_affects.esm"),
         &[
-            "discrete_events[0]/affects[0]/lhs",
-            "undeclared variable 'undefined_parameter'",
+            "[event_var_undeclared] /models/TestModel/discrete_events/0/affects/0/lhs",
+            "'undefined_parameter'",
         ],
     );
 }
@@ -711,13 +718,20 @@ fn test_circular_dependency_detection() {
             serde_json::json!(["ModelN.Sub.c", "ModelN.a", "ModelN.Sub.c"]),
         ),
     ] {
-        let msg = load_string(fixture)
+        let err = load_string(fixture)
             .err()
-            .unwrap_or_else(|| panic!("{name} must be refused at load"))
-            .to_string();
+            .unwrap_or_else(|| panic!("{name} must be refused at load"));
+        let msg = err.to_string();
         assert!(
-            msg.contains("cycle") && msg.contains(cycle[0].as_str().unwrap()),
+            msg.contains("[circular_dependency] /models")
+                && msg.contains(cycle[0].as_str().unwrap()),
             "{name}: the load refusal must name the cycle, got: {msg}"
+        );
+        let carried: Vec<_> = err.findings().iter().map(|f| f.details.clone()).collect();
+        assert_eq!(
+            carried,
+            vec![serde_json::json!({ "cycle": cycle })],
+            "{name}: the refusal carries the finding"
         );
 
         // The load gate refuses it, so read the typed document directly.
@@ -2078,7 +2092,10 @@ fn esm_problem_refuses_an_equation_defining_a_parameter() {
                 },
             ) {
                 Ok(_) => panic!("{compiler:?}/{rhs:?} built a parameter-defining equation"),
-                Err(e) => e.to_string(),
+                Err(e) => {
+                    assert_eq!(e.code(), Some("equation_defines_parameter"), "{e}");
+                    e.to_string()
+                }
             };
             assert!(
                 err.contains("equation_defines_parameter") && err.contains("Top.sub.L"),
@@ -2086,4 +2103,36 @@ fn esm_problem_refuses_an_equation_defining_a_parameter() {
             );
         }
     }
+}
+
+/// `esm_problem` refuses a left-hand-side subscript no `faq` binds with the
+/// code `code()` returns, not only in its message.
+#[test]
+fn esm_problem_refuses_an_unbound_index_symbol_with_its_code() {
+    // An observed defined at `index(y, j)` with `j` bound by nothing; the
+    // right-hand `faq` binds `i`.
+    let raw = serde_json::json!({
+        "esm": SCHEMA_VERSION,
+        "metadata": {"name": "unbound_lhs", "authors": ["t"]},
+        "index_sets": {"cells": {"kind": "interval", "size": 4}},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "shape": ["cells"], "default": 1.0},
+                "y": {"type": "unknown", "units": "1", "shape": ["cells"]}
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                 "rhs": {"op": "*", "args": [-1.0, "u"]}},
+                {"lhs": {"op": "index", "args": ["y", "j"]},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                         "ranges": {"i": {"from": "cells"}},
+                         "expr": {"op": "index", "args": ["u", "i"]}}}
+            ]
+        }}
+    });
+    let Err(err) = esm_problem(&raw, (0.0, 1.0), ProblemOptions::default()) else {
+        panic!("an unbound index symbol must be refused");
+    };
+    assert_eq!(err.code(), Some("unbound_index_symbol"), "{err}");
+    assert!(err.to_string().contains("unbound_index_symbol"), "{err}");
 }

@@ -260,7 +260,7 @@ fn canon_op(node: &ExpressionNode) -> Result<Expr, CanonicalizeError> {
     if work.op == "const" && work.units.as_deref() == Some("1") {
         // A dimensionless const drops its units (user ruling 2026-11-14): a
         // scalar becomes the bare literal, an array a unitless const.
-        match &work.value {
+        match work.value.as_ref().and_then(crate::ConstValue::as_json) {
             Some(serde_json::Value::Number(n)) if n.is_i64() => {
                 return Ok(Expr::Integer(n.as_i64().unwrap_or_default()));
             }
@@ -604,7 +604,7 @@ fn emit_node_json(n: &ExpressionNode) -> String {
         entries.push(("name".into(), json_string(s)));
     }
     if let Some(ref v) = n.value {
-        entries.push(("value".into(), emit_canonical_json_value(v)));
+        entries.push(("value".into(), emit_canonical_json_value(&v.to_json())));
     }
     if let Some(ref u) = n.units {
         entries.push(("units".into(), json_string(u)));

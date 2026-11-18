@@ -6,7 +6,8 @@ import {
   RefLoadError,
 } from './ref-loading.js'
 import type { EsmFile, Model, ReactionSystem } from './types.js'
-import { SCHEMA_VERSION, loadPath } from './parse.js'
+import { SCHEMA_VERSION, loadPath, loadString } from './parse.js'
+import { toJson } from './serialize.js'
 import { validate } from './validate.js'
 import { fixturesDir } from './test-helpers.js'
 import * as fs from 'node:fs/promises'
@@ -286,8 +287,45 @@ describe('a mounted leaf runs every version gate on its own esm', () => {
   it.each([
     ['version_gate_newer_mounts_older_const_units.esm', 'const_units_version_too_old'],
     ['version_gate_newer_mounts_older_solver.esm', 'solver_version_too_old'],
+    // A template library is a file held to its own version too (esm-spec §4.7,
+    // §4.8.5 item 6).
+    ['version_gate_library_older_const_units.esm', 'const_units_version_too_old'],
   ])('rejects %s with %s', async (name, code) => {
     expect(await codeOf(fixturesDir('invalid', name))).toBe(code)
+  })
+
+  it('emits an older root mounting a newer leaf at the version its content needs', async () => {
+    // The emitted bytes carry the leaf's unit-bearing const, so they declare
+    // 1.2.0 and read back.
+    const p = fixturesDir('valid', 'version_gate_older_mounts_newer.esm')
+    const file = loadPath(p)
+    await resolveSubsystemRefs(file, path.dirname(p))
+    const text = toJson(file)
+    expect(JSON.parse(text).esm).toBe('1.2.0')
+    expect(() => loadString(text)).not.toThrow()
+  })
+
+  it('emit raises a document built in code to cover a unit-bearing const', () => {
+    const doc = {
+      esm: '1.0.0',
+      metadata: { name: 'built' },
+      models: {
+        M: {
+          variables: { x: { type: 'unknown', units: 'Pa' } },
+          equations: [{ lhs: 'x', rhs: { op: 'const', args: [], value: 1.0, units: 'Pa' } }],
+        },
+      },
+    } as unknown as EsmFile
+    expect(JSON.parse(toJson(doc)).esm).toBe('1.2.0')
+    // The caller's object keeps its declared version.
+    expect((doc as unknown as { esm: string }).esm).toBe('1.0.0')
+    // The highest floor wins and a newer document is never lowered.
+    const both = JSON.parse(JSON.stringify(doc)) as {
+      models: { M: { variables: { x: Record<string, unknown> } } }
+    }
+    both.models.M.variables.x.lb = 0.0
+    expect(JSON.parse(toJson(both as unknown as EsmFile)).esm).toBe('2.1.0')
+    expect(JSON.parse(toJson({ ...doc, esm: '2.3.0' } as EsmFile)).esm).toBe('2.3.0')
   })
 
   it('accepts an older root mounting a newer leaf', async () => {

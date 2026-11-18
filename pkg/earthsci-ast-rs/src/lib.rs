@@ -54,13 +54,13 @@
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-/// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
-pub(crate) mod analysis;
+pub(crate) mod binders;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
 pub(crate) mod broad_phase;
 pub(crate) mod cadence;
 pub(crate) mod canonicalize;
+pub(crate) mod causal_self_read;
 pub(crate) mod classification;
 /// Core of the `compiled_rhs` conformance adapter. In the library, not in
 /// `src/bin/`, so the integration test drives the binary's exact code path
@@ -92,6 +92,7 @@ pub(crate) mod data_output;
 /// esm-spec §8.2.1: load-time resolution of a data source's
 /// `source.url_template` against the referencing document's own directory.
 pub(crate) mod data_source_urls;
+pub(crate) mod dependency;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 /// ESM documents as Markdown and Typst source text, ported from the Lean model
@@ -105,6 +106,7 @@ pub(crate) mod faq;
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
 // pinned symbol-by-symbol by api-surface.json) or a member of this module.
+mod data_binding;
 pub(crate) mod expression;
 pub mod extension;
 pub(crate) mod flatten;
@@ -128,6 +130,7 @@ pub mod precision_infer;
 pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
+pub(crate) mod ref_reader;
 pub(crate) mod reference_resolution;
 pub(crate) mod relational;
 pub(crate) mod serialize;
@@ -143,11 +146,10 @@ pub(crate) mod unit_conversion;
 pub(crate) mod units;
 pub(crate) mod validate;
 pub(crate) mod variable_bounds;
+pub(crate) mod version_gates;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
-
-pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
 // `faq` / `join` passes, so it cannot live inside the gated solver module.
@@ -211,7 +213,7 @@ pub(crate) mod problem;
 // Strip and expose (API_SPEC §5.8, RFC U6).
 pub(crate) mod strip;
 
-// OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
+// OPT-IN EarthSciIO bridge: a `DataProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
 // EarthSciIO — the two rigs stay decoupled, exactly as on the Python side
 // (`earthsci_ast.data_sources.esio_provider`), and a caller opts in.
@@ -278,7 +280,8 @@ pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
 pub use ref_loading::{
-    resolve_subsystem_refs, resolve_subsystem_refs_raw, resolve_subsystem_refs_with_metaparameters,
+    mount_edge_errors, resolve_subsystem_refs, resolve_subsystem_refs_raw,
+    resolve_subsystem_refs_with_metaparameters,
 };
 pub use reference_resolution::{
     EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,
@@ -321,16 +324,16 @@ pub use solver::{
     solver_external_location, time_origin, timestamp_to_seconds,
 };
 pub use types::{
-    AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
-    CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
+    AffectEquation, AutoRecords, ConstValue, ContinuousEvent, Coordinate, CouplingEntry,
+    CouplingRole, CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelAnalysis,
-    ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep, ParameterUpdate,
-    ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
-    RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species, StoichiometricEntry,
-    SweepDimension, SweepRange, TimePoint, TimeSpan, Tolerance, UnitConversion, UpdateValue,
-    VariableBound, VariableMapTransform, VariableType,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, HasSubsystems, InlineValue, Metadata, Model,
+    ModelAnalysis, ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep,
+    ParameterUpdate, ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction,
+    ReactionSystem, RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species,
+    StoichiometricEntry, Subsystem, SubsystemRef, SweepDimension, SweepRange, TimePoint, TimeSpan,
+    Tolerance, UnitConversion, UpdateValue, VariableBound, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
@@ -355,9 +358,10 @@ pub use pushdown_rewrite::{
 // — replaced by `esm_problem` / `EsmProblem` / `ProblemOptions`); what remains is
 // the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
-pub use prepare::{
-    AxisSel, PrepareError, PreparePhase, PrepareProgress, PrepareProgressFn, PrepareProvider,
-};
+pub use prepare::{PreparePhase, PrepareProgress, PrepareProgressFn};
+pub use provider::{AxisSel, BuildProviderFactory, DataProvider, ProviderError};
+// A document's `data_sources` bound to readers (esm-spec §8.9), for every host.
+pub use data_binding::{BoundDocument, bind_data_sources};
 
 pub use edit::{
     EditError, add_coupling, add_equation, add_model, add_reaction, add_reaction_system,
@@ -381,22 +385,16 @@ pub use compile_error::CompileError;
 
 #[cfg(feature = "solve")]
 pub use inline_tests::{
-    AssertionResult, BuildProviderFactory, InlineTestOptions, check_assertion,
-    ephemeral_injected_file, evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests,
-    run_inline_tests_filtered, run_inline_tests_paths, run_inline_tests_with_base_dir,
-    run_inline_tests_with_options, run_inline_tests_with_providers, state_cells,
+    AssertionResult, InlineTestOptions, check_assertion, ephemeral_injected_file,
+    evaluate_cellwise, field_reduce, resolve_tolerance, run_inline_tests, run_inline_tests_paths,
+    run_inline_tests_with_options, state_cells,
 };
-pub use performance::{CompactExpr, PerformanceError};
-#[cfg(feature = "parallel")]
-pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
     Alg, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ReturnCode, SimulateError,
     Solution, SolutionMetadata, SolveOptions, compile_array,
 };
 
 // The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
-#[allow(deprecated)]
-pub use problem::Compile;
 pub use problem::{
     CallbackFn, CallbackSet, Compiler, CompilerReport, CompilerRuleReport, EnsembleProblem,
     EsmProblem, ProblemInput, ProblemOptions, Remake, Rhs, callbacks, compose, esm_problem,
@@ -430,12 +428,6 @@ pub use units::{
     check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
     parse_unit, validate_equation_dimensions,
 };
-
-#[cfg(feature = "parallel")]
-pub use performance::ParallelEvaluator;
-
-#[cfg(feature = "custom_alloc")]
-pub use performance::ModelAllocator;
 
 /// This crate's OWN version — NOT the `.esm` format version, which is
 /// [`SCHEMA_VERSION`]. The two are unrelated numbers. Every binding exposes

@@ -209,7 +209,6 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: geom_arrays(&g),
-            build_providers: Vec::new(),
             ..opts
         },
     )
@@ -256,7 +255,6 @@ fn native_tapes_the_gated_aggregate_after_one_output_cell_of_the_walk() {
                 compiler: Some(compiler),
                 model_name: Some("Mirror".into()),
                 const_arrays: geom_arrays(&g),
-                build_providers: Vec::new(),
                 ..Default::default()
             },
         );
@@ -414,7 +412,6 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: arrays,
-            build_providers: Vec::new(),
             ..opts
         },
     )
@@ -560,7 +557,6 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
-            build_providers: Vec::new(),
             ..opts
         },
     )
@@ -626,7 +622,6 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
             // these semantics are checked on the reference evaluator.
             compiler: Some(earthsci_ast::Compiler::Interpreter),
             const_arrays: pir_arrays(),
-            build_providers: Vec::new(),
             ..opts
         },
     )

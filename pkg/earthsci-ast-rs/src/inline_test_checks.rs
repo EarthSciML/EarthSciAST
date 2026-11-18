@@ -52,9 +52,7 @@ impl DeclaredNames {
             out.namespaces.insert(name.clone());
             out.names
                 .extend(model.variables.keys().map(|v| format!("{name}.{v}")));
-            for (sub_name, sub) in model.subsystems.iter().flatten() {
-                out.add_raw(&format!("{name}.{sub_name}"), sub);
-            }
+            out.add_subsystems(name, model);
         }
         for (name, rs) in esm_file.reaction_systems.iter().flatten() {
             out.namespaces.insert(name.clone());
@@ -62,30 +60,28 @@ impl DeclaredNames {
                 .extend(rs.species.keys().map(|s| format!("{name}.{s}")));
             out.names
                 .extend(rs.parameters.keys().map(|p| format!("{name}.{p}")));
-            for (sub_name, sub) in rs.subsystems.iter().flatten() {
-                out.add_raw(&format!("{name}.{sub_name}"), sub);
-            }
+            out.add_subsystems(name, rs);
         }
         out
     }
 
-    fn add_raw(&mut self, prefix: &str, raw: &serde_json::Value) {
-        let Some(component) = raw.as_object().filter(|c| !c.contains_key("ref")) else {
-            self.complete = false;
-            return;
-        };
-        let last = prefix.rsplit('.').next().unwrap_or(prefix);
-        self.namespaces.insert(last.to_string());
-        for field in ["variables", "species", "parameters"] {
-            if let Some(decls) = component.get(field).and_then(|d| d.as_object()) {
-                self.names
-                    .extend(decls.keys().map(|n| format!("{prefix}.{n}")));
-            }
-        }
-        if let Some(subs) = component.get("subsystems").and_then(|s| s.as_object()) {
-            for (sub_name, sub) in subs {
-                self.add_raw(&format!("{prefix}.{sub_name}"), sub);
-            }
+    /// Every subsystem below `component` (at dotted path `prefix`), at any
+    /// depth: its key is a namespace and its members are names. An unresolved
+    /// `{ref}` leaves the set incomplete.
+    fn add_subsystems<C: crate::structural::MemberUnits>(&mut self, prefix: &str, component: &C) {
+        for (sub_name, sub) in component.subsystems().into_iter().flatten() {
+            let Some(sub) = sub.as_inline() else {
+                self.complete = false;
+                continue;
+            };
+            let path = format!("{prefix}.{sub_name}");
+            self.namespaces.insert(sub_name.clone());
+            self.names.extend(
+                sub.member_units()
+                    .into_iter()
+                    .map(|(n, _)| format!("{path}.{n}")),
+            );
+            self.add_subsystems(&path, sub);
         }
     }
 

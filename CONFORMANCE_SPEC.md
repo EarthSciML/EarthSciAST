@@ -59,7 +59,7 @@ tests/
 - **`tests/invalid/`**: ESM files that should fail validation with documented error codes
 - **`lib/*.esm`**: the SHIPPED standard subsystem library (`solar`, `calendar`, `interp`). These are **not** fixtures — they are real code that users mount via a §4.7 `ref` — but a conforming binding's validation sweep MUST include them and MUST hold them to exactly the `tests/valid/` standard.
 
-**`lib/*.esm` is part of the corpus, and this is a pin, not a nicety.** Nothing swept the standard library: the only fixtures that touched it (`tests/valid/lib_solar_subsystem_inclusion.esm`, `lib_calendar_subsystem_inclusion.esm`) mount it as a *subsystem*, and no binding dimension-checks an inlined subsystem body. So both files shipped to users with real defects that a direct validation would have caught immediately — `seconds_since_midnight` declared in seconds while its expression was a pure number, `true_solar_time` adding a dimensionless clock count to a time AND to an angle, and a `units: "d"` that is not in the §4.8.1 registry at all (audit 2026-07-14). A binding that validates `tests/valid/**` but not `lib/**` has a hole in exactly the place where a bug reaches users rather than a test report.
+**`lib/*.esm` is part of the corpus, and this is a pin, not a nicety.** Nothing swept the standard library: the only fixtures that touched it (`tests/valid/lib_solar_subsystem_inclusion.esm`, `lib_calendar_subsystem_inclusion.esm`) mount it as a *subsystem*, and the Rust, Python and Go validators do not dimension-check an inlined subsystem body (Julia checks every depth, TypeScript one level down; the spec does not say which). So both files shipped to users with real defects that a direct validation would have caught immediately — `seconds_since_midnight` declared in seconds while its expression was a pure number, `true_solar_time` adding a dimensionless clock count to a time AND to an angle, and a `units: "d"` that is not in the §4.8.1 registry at all (audit 2026-07-14). A binding that validates `tests/valid/**` but not `lib/**` has a hole in exactly the place where a bug reaches users rather than a test report.
 
 The `lib/` files are mirrored to `docs/static/lib/` so the documentation site can serve them. That mirror is enforced by `scripts/sync-lib.sh --check` in CI, the same way `scripts/sync-schema.sh --check` enforces the schema copies; before it existed the docs could have shipped a stale or broken standard library indefinitely with nothing to notice.
 
@@ -3141,7 +3141,7 @@ arithmetic. In the Rust binding the audit found **five** places that compute
 | `apply_binary` / `apply_unary`, `binary_kernel_of` / `unary_kernel_of` | the shared tables — precision-aware |
 | `vectorized::vec_combine`'s monomorphized arms | hand-copied f64 closures; **this is the one the witness document actually executed** |
 | `tape::exec::fused`'s `dispatch_bin_kernel!` / `dispatch_un_kernel!` | hand-copied f64 closures |
-| `tape::exec::fused`'s `MicroOp::Bin2` / `Bin3` compositions | hand-copied f64 closures |
+| `tape::exec::fused`'s `MicroOp::Bin2` compositions | hand-copied f64 closures |
 | `vectorized::eval_vec_contracted`'s sum-of-products fusion | hand-written `*o += x * s` |
 
 Each was there for a good reason (removing an indirect call from an element
@@ -4163,7 +4163,7 @@ went from 153.2 s / 156.9 s to 0.98 s / 0.97 s for the same rows.
 #### 5.25.5 Gate
 
 **Rust** — `pkg/earthsci-ast-rs/tests/inline_test_build_memo.rs`. The runner's
-`build_providers` factory is called exactly once per build, so a counting
+provider factory is called exactly once per build, so a counting
 factory reports the build count directly: the suite pins one build for three
 same-key tests, two for each keyed field varied in turn (a fifth case varies the
 imports and reads two different lowered right-hand sides), equal answers under a
@@ -7316,9 +7316,9 @@ follows and names each binding's test file.
    a dev-dependency). Julia: none (no such traits); its reentrancy is item 3.
 2. **Equivalence.** Every task of every suite case, and in Rust every fixture
    of `tests/conformance/compiled_rhs/` that builds natively, equals the
-   binding's existing single-threaded evaluation bitwise (Rust
-   `debug_eval_rhs_into` with a fresh `debug_new_scratch_taped` scratch whose
-   forcing holds the set's data; Julia `f!` of a Problem built with
+   binding's existing single-threaded evaluation bitwise (Rust: the solve's
+   taped right-hand side through a fresh `EsmProblem::debug_solve_rhs` handle
+   whose forcing holds the set's data; Julia `f!` of a Problem built with
    `param_arrays` holding the set's data).
 3. **Concurrency.** 16 threads (Julia: 16 tasks spawned with `Threads.@spawn`)
    × 1,000 calls, each thread with its own workspace, over seeded `(u, p, t,
@@ -7330,8 +7330,8 @@ follows and names each binding's test file.
    a seeded order, gives task 1 the same bits as a fresh workspace.
 5. **Stale forcing.** Replacing one buffer and calling again with the same `p`
    changes the result, and the new result equals the reference for the new set.
-   Negative control: the same sequence on the binding's old path (Rust:
-   `debug_new_scratch_taped`, forcing overwritten in place through
+   Negative control: the same sequence on the binding's old path (Rust: one
+   `debug_solve_rhs` handle, forcing overwritten in place through
    `forcing_handle()`; Julia: `f!` with `forcing_buffers(prob)` overwritten in
    place) reproduces the stale result bitwise, proving the test can fail. The manifest's `stale_control` says on which cases each binding runs
    the control.

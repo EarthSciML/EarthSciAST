@@ -478,7 +478,7 @@ jobs:
       # the two packages' features differ. Off the MSRV leg each step appends
       # $FEATURES_ESIO (see the test step for why not there).
       FEATURES: >-
-        earthsci-ast/conformance-adapters,earthsci-ast/wasm,earthsci-ast/parallel,earthsci-ast/simd,earthsci-ast/zero_copy,earthsci-ast/custom_alloc,earthsci-ast/benchmarks,earthsci-ast/performance
+        earthsci-ast/conformance-adapters,earthsci-ast/wasm,earthsci-ast/benchmarks
       FEATURES_ESIO: earthsci-ast/esio,earthsci-ast-cli/esio,earthsci-ast-cli/integrator
     defaults:
       run:
@@ -605,6 +605,18 @@ jobs:
             cargo test --verbose --workspace --features "$FEATURES,$FEATURES_ESIO"
           fi
 
+      # The narrative crate (pkg/earthsci-narrative) prints its equations with
+      # this library's document printers and runs its documents' tests with
+      # its inline-test runner, so a change here can break it. It is a
+      # workspace of its own, so it builds the library again under its own
+      # feature set; the shared target directory reuses the dependencies, and
+      # one leg is enough.
+      - name: Run narrative crate tests
+        if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/pkg/earthsci-ast-rs/target
+        run: cargo test --manifest-path ../earthsci-narrative/Cargo.toml
+
       # The scaling tier's gates at the PR sizes
       # (tests/conformance/scaling/README.md): each document builds, the tape
       # length is flat in N, a steady right-hand side allocates nothing, and
@@ -619,7 +631,7 @@ jobs:
         env:
           RUSTFLAGS: -C llvm-args=-align-loops=64
         run: |
-          cargo run --release --features conformance-adapters,parallel \
+          cargo run --release --features conformance-adapters \
             --bin earthsci-scaling-adapter-rust -- \
             --index ../../tests/conformance/scaling/fixtures/index.json --output scaling-rust.json
           python3 ../../tests/conformance/scaling/check.py scaling-rust.json \

@@ -497,19 +497,6 @@ pub struct SolutionMetadata {
     pub n_accepted_steps: usize,
     /// Number of rejected integrator steps (best-effort).
     pub n_rejected_steps: usize,
-    /// `(rule name, reason)` for every rule the array driver could NOT compile
-    /// onto the vectorized tape. Always empty: a model with any such rule has
-    /// no tape, and every routing that builds one — the strict compilers at
-    /// construction, the historical routing (`compile_array`) at the start of
-    /// the solve — refuses it with
-    /// [`crate::CompileError::CompilerRefusedRule`] naming the
-    /// rule and the reason, rather than running the whole model on another
-    /// evaluator. Kept so the metadata shape (and `metadata.tapeFallbacks`
-    /// over the wasm/JS boundary) is stable; `compiler_report` and the
-    /// `tape_report` example name the rules of a build without solving it.
-    /// See `esm-spec.md` §9.6.10 for the authoring patterns that keep rules
-    /// vectorizable.
-    pub tape_fallbacks: Vec<(String, String)>,
     /// Every state spelling an `operator_compose` renaming match DELETED,
     /// mapped onto the survivor it was folded into (issue #230; carried from
     /// `FlattenMetadata::merged_variable_renames`).

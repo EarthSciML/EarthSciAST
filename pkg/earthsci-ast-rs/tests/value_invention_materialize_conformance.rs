@@ -8,28 +8,16 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{
-    LoadOptions, SolveOptions, load_string_with_options, run_inline_tests_with_base_dir,
-};
+use earthsci_ast::{InlineTestOptions, run_inline_tests_with_options};
+use earthsci_ast::{LoadOptions, SolveOptions, load_string_with_options};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
 
 use crate::common;
 
-fn category_dir() -> PathBuf {
-    common::repo_fixture("conformance/value_invention_materialize")
-}
-
-fn manifest() -> serde_json::Value {
-    let path = category_dir().join("manifest.json");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
-}
-
 #[test]
 fn manifest_requires_rust_and_both_halves() {
-    let m = manifest();
+    let m = common::tier_manifest("value_invention_materialize");
     assert_eq!(m["category"].as_str(), Some("value_invention_materialize"));
     let required: Vec<&str> = m["bindings_required"]
         .as_array()
@@ -50,8 +38,8 @@ fn manifest_requires_rust_and_both_halves() {
 
 #[test]
 fn value_invention_materialize_outcomes_match_the_manifest() {
-    let dir = category_dir();
-    let m = manifest();
+    let dir = common::category_dir("value_invention_materialize");
+    let m = common::tier_manifest("value_invention_materialize");
     let opts = SolveOptions::default();
 
     for fx in m["fixtures"].as_array().expect("fixtures") {
@@ -68,8 +56,15 @@ fn value_invention_materialize_outcomes_match_the_manifest() {
         };
         let file = load_string_with_options(&text, &options)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-        let results =
-            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+        let results = run_inline_tests_with_options(
+            &file,
+            &InlineTestOptions {
+                model_name: fx["model"].as_str().map(str::to_string),
+                solve: opts.clone(),
+                base_dir: Some(dir.clone()),
+                ..Default::default()
+            },
+        );
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(results.len(), cases.len(), "{id}: assertion count");

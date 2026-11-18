@@ -341,11 +341,8 @@ pub struct Model {
     pub continuous_events: Option<Vec<ContinuousEvent>>,
 
     /// Named child models (subsystems), keyed by unique identifier
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::lower_expression_templates::serialize_subsystems_unmarked"
-    )]
-    pub subsystems: Option<IndexMap<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subsystems: Option<IndexMap<String, Subsystem<Model>>>,
 
     /// Brief description. NOT a schema key — see the type-level note.
     #[serde(skip_serializing_if = "Option::is_none")]

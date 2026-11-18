@@ -97,7 +97,7 @@ required-features = ["conformance-adapters"]
 [[bin]]
 name = "earthsci-scaling-adapter-rust"
 path = "src/bin/earthsci-scaling-adapter-rust/main.rs"
-required-features = ["conformance-adapters", "parallel"]
+required-features = ["conformance-adapters"]
 
 # Diagnostics for the XLA backend: which device the client picked, what the
 # `xla` crate reaches for multi-device work, and what a host round trip costs
@@ -165,14 +165,11 @@ wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true }
-# Performance dependencies
-rayon = { version = "1.8", optional = true }
-simd-json = { version = "0.19", optional = true }
 smallvec = { version = "1.11", features = ["serde"] }
 # Exact, arbitrary-precision rational exponents for the canonical unit
 # spelling (units.rs), so it agrees with Lean and the other bindings however
 # many digits an exponent has. Already in the tree through jsonschema.
-num-bigint = "0.4"
+num-bigint = "0.5"
 num-rational = "0.4"
 num-traits = "0.2"
 # ryu: the shortest round-tripping digits of a float, with a decimal tie
@@ -189,9 +186,6 @@ ryu = "1.0.23"
 # deps. Only lookup-by-key maps are switched (no order-dependent iteration), so
 # results are byte-identical.
 rustc-hash = "2"
-bumpalo = { version = "3.14", optional = true }
-wide = { version = "1.7", optional = true }
-bytemuck = { version = "1.14", optional = true }
 criterion = { version = "0.8", optional = true }
 # OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). Resolved
 # from crates.io, NOT by path: cargo resolves every dependency in the manifest at
@@ -297,9 +291,6 @@ required-features = ["benchmarks"]
 
 [features]
 default = ["solve"]
-# Kept so a manifest naming it still resolves. It used to pull in clap for the
-# `esm` binary, which now lives in the `earthsci-ast-cli` crate (`cli/`).
-cli = []
 # The cross-language conformance adapter binaries (phase-6 H-5). OFF by
 # default: `esm` is the only command-line tool this crate ships. The PDE
 # adapter integrates trajectories, so the feature pulls in `solve`.
@@ -330,13 +321,7 @@ esio = ["dep:earthsciio", "dep:time"]
 # leg of CI. `cargo check --all-targets` with default features neither links it
 # nor needs the extension.
 xla = ["dep:xla"]
-# Performance features
-parallel = ["rayon"]
-simd = ["wide", "bytemuck"]
-zero_copy = ["simd-json"]
-custom_alloc = ["bumpalo"]
 benchmarks = ["criterion"]
-performance = ["parallel", "simd", "zero_copy", "custom_alloc"]
 
 # WASM target configuration
 [package.metadata.wasm-pack.profile.release]

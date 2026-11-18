@@ -15,10 +15,12 @@
 //! per-cell oracle (the interpreter) at a state chosen so that a re-associated
 //! fold would show in the low bits.
 
-use earthsci_ast::load_string;
-use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
+use earthsci_ast::simulate_array::{ArrayCompiled, SolveRhs};
+use earthsci_ast::{Compiler, ProblemOptions, Rhs, esm_problem, load_string};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+
+use crate::common::rhs::ProblemRhs;
 
 /// A state whose elements span many orders of magnitude and both signs, so a
 /// sum folded in a different order differs in its low bits.
@@ -56,38 +58,38 @@ impl Checked {
 fn check(doc: &Value) -> Checked {
     let file = load_string(&doc.to_string()).expect("document loads");
     let compiled = ArrayCompiled::from_file(&file).expect("document compiles");
-    let report = compiled.debug_build_tape_report();
+    let report = SolveRhs::oracle(std::rc::Rc::new(compiled), &Default::default()).tape_report();
     assert!(
         report.fallbacks.is_empty(),
         "every rule must stay on the tape: {:?}",
         report.fallbacks
     );
-    let n = compiled.state_variable_names().len();
-    let state = probe_state(n);
-    let params: HashMap<String, f64> = HashMap::new();
-    let (oracle, _) = compiled.debug_eval_rhs(&state, 0.0, &params, true);
-
-    let param_vec = compiled.debug_resolve_params(&params);
-    let mut scratch = compiled
-        .debug_new_scratch_taped()
-        .expect("the tape lowers every rule");
-    let mut stats = RhsStats::default();
-    let mut taped = vec![0.0; n];
-    compiled.debug_eval_rhs_into(
-        &state,
-        0.0,
-        &param_vec,
-        &mut taped,
-        &mut scratch,
-        &mut stats,
-    );
-    assert!(stats.taped_rules > 0, "the tape must have run");
+    // The right-hand side through the public program: the strict native tape
+    // against the per-cell oracle.
+    let rhs_under = |compiler: Compiler| {
+        let prob = esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                rhs: Rhs::Always,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("the document does not build under {compiler}: {e}"));
+        let names = prob.state_variable_names();
+        let dy = ProblemRhs::new(&prob).eval(&probe_state(names.len()), 0.0);
+        (names, dy)
+    };
+    let (names, oracle) = rhs_under(Compiler::Interpreter);
+    let (native_names, taped) = rhs_under(Compiler::Native);
+    assert_eq!(names, native_names, "state order");
     for (k, (a, b)) in taped.iter().zip(oracle.iter()).enumerate() {
         assert_eq!(
             a.to_bits(),
             b.to_bits(),
             "{}: taped {a:e} vs oracle {b:e}",
-            compiled.state_variable_names()[k]
+            names[k]
         );
     }
     Checked {

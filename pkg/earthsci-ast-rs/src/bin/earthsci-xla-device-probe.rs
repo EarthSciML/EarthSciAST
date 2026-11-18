@@ -24,10 +24,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Instant;
 
 use earthsci_ast::load_string;
-use earthsci_ast::simulate_array::ArrayCompiled;
+use earthsci_ast::simulate_array::{ArrayCompiled, SolveRhs};
 use earthsci_ast::xla_runtime::{self, CompileRhsError, CompiledRhs};
 
 fn repo_root() -> PathBuf {
@@ -114,11 +115,13 @@ fn largest() -> Result<(), String> {
 }
 
 fn residency(fixture: &Path, iters: usize) -> Result<(), String> {
-    let compiled = build(fixture);
+    let compiled = Rc::new(build(fixture));
     let program = CompiledRhs::compile(&compiled).map_err(|e| e.to_string())?;
     let names = compiled.state_variable_names().to_vec();
     let params: HashMap<String, f64> = HashMap::new();
-    let pv = compiled.debug_resolve_params(&params);
+    let pv = SolveRhs::oracle(Rc::clone(&compiled), &params)
+        .params()
+        .to_vec();
     // A state that is not all-equal, so a lowering that dropped an index would
     // show up in the agreement check below rather than cancelling.
     let u: Vec<f64> = (0..program.n_states())
@@ -256,14 +259,16 @@ fn multidevice(fixture: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let compiled = build(fixture);
+    let compiled = Rc::new(build(fixture));
     let program = CompiledRhs::compile(&compiled).map_err(|e| e.to_string())?;
     let params: HashMap<String, f64> = HashMap::new();
     // `eval` and `on_device` pad this for you; placing the buffers by hand
     // here means doing it by hand, or the executable rejects argument 1 for a
     // shape mismatch and the device-0 CONTROL fails for a reason that has
     // nothing to do with devices.
-    let mut pv = compiled.debug_resolve_params(&params);
+    let mut pv = SolveRhs::oracle(Rc::clone(&compiled), &params)
+        .params()
+        .to_vec();
     pv.resize(program.params_len(), 0.0);
     let n = program.n_states();
     let u: Vec<f64> = (0..n).map(|i| 1.0 + 0.25 * i as f64).collect();

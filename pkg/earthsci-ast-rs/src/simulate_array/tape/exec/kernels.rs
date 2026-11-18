@@ -1,5 +1,5 @@
 //! The strided array kernels the unfused instructions execute: elementwise
-//! maps, the `vec_select` pick, block copy, fill, and the precompiled
+//! maps, the `Select` pick, block copy, fill, and the precompiled
 //! gather plans.
 //!
 //! Nothing here takes an `Env` or reads the program — the boundary keeps
@@ -345,7 +345,7 @@ unsafe fn zip_loop2(
     }
 }
 
-/// `dst[k] = cond[k] != 0 ? a[k] : b[k]` — the `vec_select` kernel.
+/// `dst[k] = cond[k] != 0 ? a[k] : b[k]` — the `Select` kernel.
 #[inline(never)]
 pub(super) unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv, b: &Rv) {
     // A scalar condition is the filter-gate broadcast: whole-array pick.
@@ -386,16 +386,19 @@ pub(super) unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv
     let tot = total(shape);
     if is_contig(cstr, shape) && is_contig(astr, shape) && is_contig(bstr, shape) {
         unsafe {
-            let d = std::slice::from_raw_parts_mut(dst, tot);
             let dc = dst as *const f64;
             let anyal = std::ptr::eq(cp, dc) || std::ptr::eq(ap, dc) || std::ptr::eq(bp, dc);
             if anyal {
+                // An operand is `dst` itself: every access stays a raw
+                // pointer, so no `&mut` slice over `dst` is live while the
+                // operands read the same memory.
                 for k in 0..tot {
                     let c = *cp.add(k);
                     let v = if c != 0.0 { *ap.add(k) } else { *bp.add(k) };
-                    *d.get_unchecked_mut(k) = v;
+                    *dst.add(k) = v;
                 }
             } else {
+                let d = std::slice::from_raw_parts_mut(dst, tot);
                 let c = std::slice::from_raw_parts(cp, tot);
                 let a = std::slice::from_raw_parts(ap, tot);
                 let b = std::slice::from_raw_parts(bp, tot);
@@ -537,8 +540,8 @@ fn seg_covers(plan: &GatherPlan, d: usize, p: usize) -> bool {
 }
 
 /// Zero the elements of `out` (contiguous row-major over the plan's box)
-/// that no segment block writes; with rows shorter than [`ROW_CALL_MIN`] the
-/// whole box, which the blocks then overwrite. The blocks are the Cartesian products
+/// that no segment block writes; unless `exact`, with rows shorter than
+/// [`ROW_CALL_MIN`] the whole box, which the blocks must then overwrite. The blocks are the Cartesian products
 /// of one segment per axis, so an element is covered iff every one of its
 /// coordinates lies in a segment of its axis: a row whose outer coordinates
 /// are not all covered is zeroed whole, any other row only in the gaps
@@ -546,7 +549,7 @@ fn seg_covers(plan: &GatherPlan, d: usize, p: usize) -> bool {
 ///
 /// # Safety
 /// `out` must hold the plan box's elements.
-unsafe fn zero_uncovered(plan: &GatherPlan, out: *mut f64) {
+unsafe fn zero_uncovered(plan: &GatherPlan, out: *mut f64, exact: bool) {
     let nd = plan.shape.len();
     let tot = total(&plan.shape);
     if nd == 0 || tot == 0 {
@@ -556,7 +559,7 @@ unsafe fn zero_uncovered(plan: &GatherPlan, out: *mut f64) {
         return;
     }
     let inner = plan.shape[nd - 1];
-    if inner < ROW_CALL_MIN {
+    if inner < ROW_CALL_MIN && !exact {
         // Short rows: one fill of the whole box is cheaper than the walk.
         unsafe { std::slice::from_raw_parts_mut(out, tot).fill(0.0) };
         return;
@@ -647,15 +650,62 @@ pub(super) unsafe fn fill_strided(dst: *mut f64, dstr: &[i64], shape: &[usize], 
 }
 
 /// Execute one precompiled gather plan into a contiguous row-major `out` —
-/// the raw-strides transliteration of `eval_vec_index`'s copy phase (and of
-/// the reference executor's `exec_gather`).
+/// the raw-strides transliteration of the reference executor's
+/// `exec_gather`.
+///
+/// # Safety
+/// `src` must address the plan's whole source box and `out` its whole
+/// output box.
 #[inline(never)]
 pub(super) unsafe fn exec_gather(
     plan: &GatherPlan,
     src: &SrcView,
     out: *mut f64,
     full_cover: bool,
-    ways: usize,
+) {
+    // SAFETY: the caller's contract; every segment copy lies in both boxes.
+    unsafe {
+        gather_with(
+            plan,
+            src,
+            out,
+            Zero::fill(!full_cover),
+            |dst, dstr, s, sstr, shape| copy_strided(dst, dstr, s, sstr, shape),
+        )
+    }
+}
+
+/// Which elements a gather zeroes before its segment copies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Zero {
+    /// None (the segments tile the box, or another share zeroes).
+    No,
+    /// The uncovered ones, possibly by filling the whole box first.
+    Fill,
+    /// Exactly the uncovered ones, which no segment copy writes: safe while
+    /// other threads copy segments.
+    Exact,
+}
+
+impl Zero {
+    fn fill(zero: bool) -> Self {
+        if zero { Zero::Fill } else { Zero::No }
+    }
+}
+
+/// [`exec_gather`] with each segment block moved by `copy(dst, dst
+/// strides, src, src strides, block shape)`, after zeroing as `zero` says.
+///
+/// # Safety
+/// As for [`exec_gather`], and `copy` must write only within the block it
+/// is handed.
+#[inline(always)]
+pub(super) unsafe fn gather_with(
+    plan: &GatherPlan,
+    src: &SrcView,
+    out: *mut f64,
+    zero: Zero,
+    copy: impl Fn(*mut f64, &[i64], *const f64, &[i64], &[usize]),
 ) {
     assert_eq!(
         &src.shape[..],
@@ -688,8 +738,9 @@ pub(super) unsafe fn exec_gather(
     // 3. Ghost fill: `+0.0` (ArrayD::zeros semantics) on every element the
     //    segment schedule leaves uncovered — skipped when it provably
     //    overwrites every element.
-    if !full_cover {
-        unsafe { zero_uncovered(plan, out) };
+    if zero != Zero::No {
+        // SAFETY: `out` addresses the output box.
+        unsafe { zero_uncovered(plan, out, zero == Zero::Exact) };
     }
     // 4. Segment-copy schedule (mixed-radix over per-axis segment picks,
     //    axis 0 fastest — disjoint blocks, so order is immaterial).
@@ -705,10 +756,10 @@ pub(super) unsafe fn exec_gather(
             sbase += eff[d] * s as i64;
             bshape[d] = l;
         }
-        // A large segment splits under the call's width (see `par`).
+        // SAFETY: the segment block lies in both boxes (the plan's
+        // segments are within its axes).
         unsafe {
-            super::copy_strided_maybe_split(
-                ways,
+            copy(
                 out.offset(dbase as isize),
                 &out_rm,
                 base.offset(sbase as isize),
@@ -1319,30 +1370,40 @@ mod tests {
     }
 
     /// `zero_uncovered` zeroes exactly the elements outside every segment
-    /// block and leaves the covered ones alone.
+    /// block and leaves the covered ones alone: on long rows always, on
+    /// short rows when asked to be exact (a split gather's other shares copy
+    /// meanwhile).
     #[test]
     fn zero_uncovered_zeroes_exactly_the_ghosts() {
-        let shape: DimU = SmallVec::from_slice(&[4, 3, 70]);
-        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::from_vec(vec![
-            SmallVec::from_slice(&[(1, 3, 0)]),
-            SmallVec::from_slice(&[(0, 1, 0), (2, 1, 0)]),
-            SmallVec::from_slice(&[(30, 35, 0), (0, 20, 0)]),
-        ]);
-        let plan = GatherPlan {
-            fixed_desc: SmallVec::new(),
-            perm: SmallVec::from_slice(&[0, 1, 2]),
-            mapped: SmallVec::from_slice(&[true, true, true]),
-            segs,
-            shape: shape.clone(),
-            origin: SmallVec::from_slice(&[1, 1, 1]),
-            src_shape: shape.clone(),
-            src_origin: SmallVec::from_slice(&[1, 1, 1]),
-        };
-        let mut out = vec![7.0f64; 4 * 3 * 70];
-        unsafe { zero_uncovered(&plan, out.as_mut_ptr()) };
-        for (k, c) in cells(&shape).iter().enumerate() {
-            let covered = (0..3).all(|d| seg_covers(&plan, d, c[d]));
-            assert_eq!(out[k], if covered { 7.0 } else { 0.0 }, "cell {c:?}");
+        for (inner, exact) in [(70, false), (10, true)] {
+            let shape: DimU = SmallVec::from_slice(&[4, 3, inner]);
+            let last: SmallVec<[(usize, usize, usize); 2]> = if inner == 70 {
+                SmallVec::from_slice(&[(30, 35, 0), (0, 20, 0)])
+            } else {
+                SmallVec::from_slice(&[(6, 3, 0), (0, 2, 0)])
+            };
+            let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> =
+                SmallVec::from_vec(vec![
+                    SmallVec::from_slice(&[(1, 3, 0)]),
+                    SmallVec::from_slice(&[(0, 1, 0), (2, 1, 0)]),
+                    last,
+                ]);
+            let plan = GatherPlan {
+                fixed_desc: SmallVec::new(),
+                perm: SmallVec::from_slice(&[0, 1, 2]),
+                mapped: SmallVec::from_slice(&[true, true, true]),
+                segs,
+                shape: shape.clone(),
+                origin: SmallVec::from_slice(&[1, 1, 1]),
+                src_shape: shape.clone(),
+                src_origin: SmallVec::from_slice(&[1, 1, 1]),
+            };
+            let mut out = vec![7.0f64; 4 * 3 * inner];
+            unsafe { zero_uncovered(&plan, out.as_mut_ptr(), exact) };
+            for (k, c) in cells(&shape).iter().enumerate() {
+                let covered = (0..3).all(|d| seg_covers(&plan, d, c[d]));
+                assert_eq!(out[k], if covered { 7.0 } else { 0.0 }, "cell {c:?}");
+            }
         }
     }
 
