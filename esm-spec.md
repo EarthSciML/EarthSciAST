@@ -5174,8 +5174,8 @@ special-case older versions to recover Option A matching. Motivation and measure
    This holds at a §4.7 mount edge too: a mounted leaf is lowered in its own file, its
    references survive the mount, and the registries of its components travel with the
    mounted components into the mounting document, materialized as rule 5 states, exactly as
-   a component's own registry does. (A binding whose own consumers expand, as rule 2
-   permits, keeps with each expansion the provenance §9.6.11 "Applications" requires.)
+   a component's own registry does. (A binding that still expands — rule 2 says it SHOULD NOT
+   — keeps with each expansion the provenance §9.6.11 "Applications" requires.)
    Template references survive
    load; downstream code MAY recognise them (that is the point), but MUST give them the
    semantics of rule 2.
