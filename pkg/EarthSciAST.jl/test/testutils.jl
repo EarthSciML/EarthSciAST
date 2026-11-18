@@ -389,4 +389,43 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
         return out
     end
 
+    # ---------------------------------------------------------------------------
+    # Workspace purity (API_SPEC §5.8): every object reachable from `f`.
+    # ---------------------------------------------------------------------------
+    function reachable_objects(f)
+        seen = IdDict{Any, Nothing}()
+        function walk(x)
+            isbits(x) && return
+            x isa Union{String, Symbol, Expr, Module, DataType, UnionAll, Core.TypeName, Method} &&
+                return
+            haskey(seen, x) && return
+            seen[x] = nothing
+            if x isa Array
+                isbitstype(eltype(x)) && return
+                foreach(i -> isassigned(x, i) && walk(x[i]), eachindex(x))
+                return
+            end
+            return foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
+        end
+        walk(f)
+        return seen
+    end
+
+    # Whether calls on two workspaces of `prog` leave every numeric array both
+    # instances reach as it was: a call writing an array the build did not
+    # register as scratch would give the two workspaces one buffer.
+    # `call(ws)` evaluates on workspace `ws`.
+    function workspace_shared_arrays_unchanged(prog, call)
+        w1, w2 = EarthSciAST.rhs_workspace(prog), EarthSciAST.rhs_workspace(prog)
+        o1, o2 = reachable_objects(w1.f!), reachable_objects(w2.f!)
+        shared = [
+            x for x in keys(o1)
+                if haskey(o2, x) && x isa Array && isbitstype(eltype(x)) && !isempty(x)
+        ]
+        snap = map(copy, shared)
+        call(w1)
+        call(w2)
+        return all(isequal.(shared, snap))
+    end
+
 end # ESM_TESTUTILS_LOADED guard

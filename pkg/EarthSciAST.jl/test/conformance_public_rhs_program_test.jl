@@ -9,6 +9,7 @@
 using Test
 using JSON3
 using EarthSciAST
+include("testutils.jl")
 
 const PRC = EarthSciAST
 
@@ -203,6 +204,12 @@ function _prc_case(c, M)
             run(w2, j)
         end
         @test _prc_bits(run(w2, 1)) == _prc_bits(run(PRC.rhs_workspace(prog), 1))
+    end
+
+    @testset "workspaces share no array a call writes" begin
+        @test workspace_shared_arrays_unchanged(
+            prog, w -> foreach(j -> run(w, j), eachindex(tasks))
+        )
     end
 
     nthreads = Int(M.concurrency.threads)
