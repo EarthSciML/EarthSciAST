@@ -13,8 +13,9 @@ gitignored repo-wide, so on a fresh checkout the package is developed from this
 checkout and the project instantiated; on a warm run this is a fast resolve
 check. A Manifest that cannot instantiate is a machine-local cache that has
 fallen behind its Project.toml, so it is deleted and rebuilt rather than failing
-the gate. `Pkg.develop` only writes the Manifest: the package is already in the
-project's `[deps]`, so the tracked Project.toml is not touched.
+the gate. On a fresh checkout `Pkg.develop` also rewrites the tracked
+Project.toml: it adds a machine-specific `[sources]` path for the package and
+drops the file's comments. Those edits are local and must not be committed.
 """
 function activate_adapter_env(env::AbstractString)
     manifest = joinpath(env, "Manifest.toml")
