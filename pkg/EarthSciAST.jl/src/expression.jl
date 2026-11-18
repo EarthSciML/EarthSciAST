@@ -176,6 +176,34 @@ _foreach_subexpr_children(f, ::VarExpr) = nothing
 end
 
 """
+    _any_subexpr(pred, e::ASTExpr) -> Bool
+    _any_subexpr_once(pred, e::ASTExpr) -> Bool
+
+True iff `pred` holds for `e` or a descendant in any expression-bearing field,
+stopping at the first hit (parent before children, the order of
+[`foreach_subexpr`](@ref)). The `_once` form tests each distinct `OpExpr` once,
+for expressions that share subtrees. Use these, not a hand-rolled walk over
+`args`, for "does any node …" scans.
+"""
+_any_subexpr(pred::P, e::ASTExpr) where {P} = pred(e)::Bool
+@eval function _any_subexpr(pred::P, e::OpExpr) where {P}
+    pred(e)::Bool && return true
+    $(_opexpr_child_stmts((x, _...) -> :(_any_subexpr(pred, $x) && return true))...)
+    return false
+end
+
+_any_subexpr_once(pred::P, e::ASTExpr) where {P} =
+    _any_subexpr_once(pred, e, IdDict{OpExpr, Nothing}())
+_any_subexpr_once(pred::P, e::ASTExpr, ::IdDict{OpExpr, Nothing}) where {P} = pred(e)::Bool
+@eval function _any_subexpr_once(pred::P, e::OpExpr, seen::IdDict{OpExpr, Nothing}) where {P}
+    haskey(seen, e) && return false
+    seen[e] = nothing
+    pred(e)::Bool && return true
+    $(_opexpr_child_stmts((x, _...) -> :(_any_subexpr_once(pred, $x, seen) && return true))...)
+    return false
+end
+
+"""
     foreach_subexpr_once(f, expr::ASTExpr) -> Nothing
 
 Identity-memoized [`foreach_subexpr`](@ref): each distinct `OpExpr` node
