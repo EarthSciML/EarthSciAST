@@ -189,7 +189,7 @@ Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 # `candidates` is the prebuilt `(pos_l, pos_r)` index, and it is an ENUMERATION
 # EXTENT: the gate that carries one can DRIVE enumeration instead of being
 # tested per tuple (`_overlap_drive_plan` / `_drivable_gate`, broad_phase.jl).
-# An OVERLAP gate's index is the Phase-3a broad-phase candidate set
+# An OVERLAP gate's index is the broad-phase candidate set
 # (`_overlap_candidate_set`), and for it the index IS also the admission test.
 # An `on` gate's index is the §5.5.8 match set (`_on_gate_match_pairs`), and
 # there it is purely an extent — `_join_admits` still tests the codes, so the
@@ -202,8 +202,7 @@ struct _JoinGate
     codes_r::Dict{Int, Int}
     candidates::Union{_OverlapIndex, Nothing}
 end
-# Bin-equality gate convenience ctor (candidates ≡ nothing) — keeps the historic
-# 4-arg construction and any external callers working unchanged.
+# Bin-equality gate convenience ctor (candidates ≡ nothing).
 _JoinGate(sym_l, sym_r, codes_l, codes_r) = _JoinGate(sym_l, sym_r, codes_l, codes_r, nothing)
 
 # A parsed value-equality (`on`) join clause: the `[left, right]` key-column
@@ -243,7 +242,7 @@ _clause_syms(::Any) = nothing
 _with_pairs(c::_OnJoinSpec, pairs) = _OnJoinSpec(pairs, c.syms)
 _with_pairs(::Any, pairs) = pairs
 
-# A parsed OVERLAP join clause (Phase 2a) — the spatial-index-backed broad-phase
+# A parsed OVERLAP join clause — the spatial-index-backed broad-phase
 # gate that replaces uniform-grid bin equality with envelope candidacy. It names
 # CONST-ARRAY FACTORS interpreted as per-position envelopes:
 #   4 names → rectangles [xmin, ymin, xmax, ymax] (e.g. ISRM cells [W,S,E,N]),
@@ -276,21 +275,11 @@ print a node carrying one in the escape form.
 """
 const EXPRESSION_NODE_ANNOTATIONS = ("id", "expect_cadence")
 
-# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
-# licence to mutate: the build path treats `OpExpr` as an immutable value and only
-# ever copies-with-changes through `reconstruct` (fields are never assigned after
-# construction). Mutability buys true POINTER-IDENTITY for the build-time
-# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
-# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
-# are STRUCTURAL — every memo probe would re-hash the `op` String and walk all ~35
-# fields. A mutable struct makes `objectid`/`===` (hence `IdDict` and the
-# `r !== args[i]` "did this subtree change" identity checks throughout the tree
-# walk) pointer-based, so the memos are O(1) identity caches. No custom
-# `==`/`hash` is defined: `OpExpr` is never a *value*-keyed `Dict`/`Set` key
-# anywhere (only ever an `IdDict` key), and structural `==` on trees would not
-# hold anyway — two distinct-but-equal `OpExpr`s hold `args` `Vector`s that differ
-# by identity.
+# `mutable struct` for POINTER IDENTITY, not to be mutated: fields are never
+# assigned after construction (copies go through `reconstruct`). Identity makes
+# `objectid`/`===` O(1), so the build's `IdDict{OpExpr,…}` memos and the
+# `r !== args[i]` "did this subtree change" checks do not hash ~35 fields. No
+# custom `==`/`hash`: an `OpExpr` is only ever an `IdDict` key.
 """
     OpExpr(op::String, args::Vector{ASTExpr}; kwargs...)
     OpExpr(op::String, args::AbstractVector; kwargs...)
@@ -382,8 +371,8 @@ mutable struct OpExpr <: ASTExpr
     # const (esm 1.2.0): the declared unit `value` is in (esm-spec §4.8.5).
     units::Union{String, Nothing}
 
-    # ── M2: value-equality joins + filter predicates on faq ──
-    # (RFC semiring-faq-unified-ir §5.3 / §7.2; schema bead ess-my4.2.1).
+    # ── value-equality joins + filter predicates on faq ──
+    # (RFC semiring-faq-unified-ir §5.3 / §7.2).
     #
     # `join`   — the parsed join clauses, an inner equi-join of factors by key
     #            columns. Each clause is a `Vector{Tuple{String,String}}` of
@@ -425,7 +414,7 @@ mutable struct OpExpr <: ASTExpr
     # `bindings` — for `apply_expression_template`, the parameter→argument-expression
     #              map (esm-spec §9.6). Templates are normally lowered before typed
     #              parsing, but the node is renderable directly so the pretty-printer
-    #              can emit `name⟨p=e, …⟩` byte-identically to the other bindings.
+    #              can emit `name⟨p=e, …⟩` as the other bindings do.
     bindings::Union{Dict{String, ASTExpr}, Nothing}
 
     # ── Author annotations: carried verbatim, never interpreted here ──
@@ -1402,17 +1391,15 @@ struct IndexSet
     # least one member is non-string (float / null / boolean / integer). Lets the
     # join-key validator (RFC §5.3) reject keys whose equality is not portable
     # across bindings — float and null members — which `members` (always coerced
-    # to `String`) can no longer distinguish. `nothing` for ordinary string-only
-    # sets, so they stay byte-identical to before.
+    # to `String`) cannot distinguish. `nothing` for ordinary string-only sets.
     members_raw::Union{Vector{Any}, Nothing}
-    # PROJECTION-PUSHDOWN Phase 2b (members-fed-back-as-const-factor). For a
+    # Projection pushdown, members fed back as a const factor. For a
     # `kind:"derived"` set, names a model `parameter` const factor that the build
     # fills with this set's materialised value-invention MEMBERS (the invented
     # 1-based full-grid ids, `vi.members[from_faq]`) — so an in-model gather
     # `index(W, index(<member_factor>, c))` can pull the full-grid rows the
     # compact derived axis selects. There is no `member(set,c)` IR op; this
-    # feedback IS the mechanism. `nothing` for every non-feedback set (byte-
-    # identical round-trip).
+    # feedback IS the mechanism. `nothing` for every non-feedback set.
     member_factor::Union{String, Nothing}
     # esm-spec §8.5.1: `true` makes an `interval` of size 2 a RECORD AXIS — a
     # data-fed parameter whose record shape begins with it receives two records
@@ -1454,9 +1441,9 @@ end
 Common supertype of the legal `Model.subsystems` values: a child `Model` or —
 only until references are resolved — a `SubsystemRef`. Exists so
 `Model.subsystems` can be concretely typed `Dict{String,SubsystemNode}` even
-though `SubsystemRef` is declared later in this file than `Model`. From esm
-1.0.0 a data source is an ingest registry entry, not a component, so it is not
-a `SubsystemNode`.
+though `SubsystemRef` is declared later in this file than `Model`. A data
+source is an ingest registry entry, not a component, so it is not a
+`SubsystemNode`.
 """
 abstract type SubsystemNode end
 

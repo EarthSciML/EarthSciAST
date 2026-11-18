@@ -6,13 +6,14 @@ This file scopes the workspace-level rule from `<workspace>/CLAUDE.md`
 ## Official ESS Julia simulation runners
 
 The Julia binding ships **two** official ESS simulation runners. Both
-consume the canonical-form AST emitted by `discretize` and walk it
+consume the canonical-form AST that rule application produces while the
+document loads (`lower_expression_templates`, esm-spec §9.6) and walk it
 generically. A binding is allowed to host more than one runner as long as
 each meets the workspace criteria.
 
 | Runner | Public API | Source | Use when |
 |---|---|---|---|
-| `tree_walk` | `esm_problem(input, tspan)` for the ODE right-hand side (`build_evaluator` is retired — API_SPEC §8 item 23), `evaluate_expr(expr, bindings)` for a single AST expression | `src/tree_walk.jl` | **Default** (`compiler = :native`). Very large discretized PDE systems whose scalar count exceeds MTK's `mtkcompile` / tearing / codegen ceiling. Build time is independent of system size; no symbolic simplification pass. `evaluate_expr` shares the runner's compile + walker pipeline, so per-expression callers (units fixture consumption, `simplify` constant folding) live on the same dispatch table — no shadow evaluator. |
+| `tree_walk` | `esm_problem(input, tspan)` for the ODE right-hand side (`build_evaluator` is retired — API_SPEC §8 item 23), `evaluate_expr(expr, bindings)` for a single AST expression | `src/tree_walk.jl` | **Default** (`compiler = :native`). Very large discretized PDE systems whose scalar count exceeds MTK's `mtkcompile` / tearing / codegen ceiling. No symbolic simplification pass. `evaluate_expr` shares the runner's compile + walker pipeline, so per-expression callers (units fixture consumption, `simplify` constant folding) live on the same dispatch table — no shadow evaluator. |
 | ModelingToolkit (MTK) | `esm_problem(input, tspan; compiler = :mtk)`, or `ModelingToolkit.System(model::Model)` for the symbolic system (`EarthSciASTMTKExt`) | `ext/EarthSciASTMTKExt.jl`, `ext/mtk_ext/` | A specialty compiler: the one runner that executes events and implicit equations, through structural simplification. ODE systems only. |
 
 The user-facing description (when to choose, performance characteristics,
@@ -25,14 +26,14 @@ update the docs page.
 Per the workspace rule, neither runner may:
 
 1. Shortcut to imperative compute. The runner walks the AST directly.
-2. Materialize rule output and bypass the AST. Rule application is
-   `discretize`'s job; the runner consumes the result.
+2. Materialize rule output and bypass the AST. Rule application happens at
+   load; the runner consumes the result.
 3. Branch on rule shape (e.g. `if rule.kind == "flux_1d_ppm" then ...`).
    Dispatch is on AST `op`, never on the rule that produced the op.
 
 If you find yourself adding a per-rule-shape branch inside `tree_walk.jl`
-or an MTK extension function, stop — file a bead against the rule engine
-or `discretize` instead. The simulation runner stays generic.
+or an MTK extension function, stop — file an issue against the rule engine
+instead. The simulation runner stays generic.
 
 ## Forbidden patterns (recognize and refuse)
 
@@ -46,8 +47,8 @@ or `discretize` instead. The simulation runner stays generic.
 
 ## When in doubt
 
-Ask: does the proposed code path go through (a) ESS rule application via
-`discretize` and (b) one of the documented official ESS Julia simulation
+Ask: does the proposed code path go through (a) ESS rule application at load
+and (b) one of the documented official ESS Julia simulation
 runners? If no to either, it is the anti-pattern. Reframe to use the
-canonical pipeline; if the canonical pipeline is missing capability, file a
-bead to extend it (the production path), not to write a side channel.
+canonical pipeline; if the canonical pipeline is missing capability, file an
+issue to extend it (the production path), not to write a side channel.

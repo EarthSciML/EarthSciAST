@@ -3,9 +3,8 @@
 # esm 1.0.0 declares TWO variable types, `unknown` and `parameter`, and nothing
 # else. Every finer category a solver needs is DERIVED from the equations and
 # from the parameters' `distribution` / `update`, never declared. This file is
-# the one place that derivation lives; every site that used to branch on
-# `variable.type == "state"` / `"observed"` / `"brownian"` / `"discrete"` calls
-# into it instead.
+# the one place that derivation lives; every site that needs a finer category
+# calls into it.
 #
 # The functions here are the cross-binding contract: all five bindings expose
 # the same set, spelled in their own idiom, and

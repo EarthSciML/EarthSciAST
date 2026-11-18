@@ -4,7 +4,7 @@
 
 The deprecated `records_per_sample` WRITTEN for a `data` rule (esm-spec
 §8.5.1): the binding's own `from.records_per_sample`, else the source's
-`temporal.records_per_sample`, else `nothing`. It no longer decides how many
+`temporal.records_per_sample`, else `nothing`. It does not decide how many
 records the parameter receives — its record shape does (see
 [`_record_axis_verdict`](@ref)) — and a written value that disagrees with the
 shape is `records_per_sample_invalid`.

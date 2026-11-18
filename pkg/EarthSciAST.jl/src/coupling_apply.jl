@@ -792,28 +792,10 @@ function _inverse_translate(
 end
 
 """
-    _rename_variable(expr, from, to) -> ASTExpr
-
-Every `VarExpr` named exactly `from` rewritten to `to`; everything else — other
-variables, operators, every non-expression field — untouched. This is §4.7.1
-step 4's dependent-variable rewrite, which is deliberately NOT a general
-substitution: B's parameters and observeds keep their own names.
-"""
-function _rename_variable(
-        expr::ASTExpr, from::AbstractString,
-        to::AbstractString
-    )::ASTExpr
-    return _rewrite_expr(
-        (x, _) -> (x isa VarExpr && x.name == from) ? VarExpr(String(to)) : x,
-        (n, _) -> n, expr
-    )
-end
-
-"""
     _rename_variables(expr, renames) -> ASTExpr
 
-[`_rename_variable`](@ref) over a whole map at once, applied to every `VarExpr`
-in ONE pass so a rename can never chain into another entry's target.
+Every `VarExpr` named by a key of `renames` rewritten to its value, in ONE pass
+so a rename can never chain into another entry's target.
 
 This is §4.7.1 step 4's document-wide retarget of the names an
 `operator_compose` merged away. Unlike the step-4 rewrite of B's own `rhs_B`,
@@ -835,28 +817,6 @@ function _rename_variables(
         (x, _) -> x isa VarExpr ? (t = get(renames, x.name, nothing); t === nothing ? x : VarExpr(t)) : x,
         (n, _) -> _rename_join_clauses(n, renames), expr
     )
-end
-
-"""
-    _rename_event_names!(events, renames) -> events
-
-Apply §4.7.1 step 4's merged-away rename to a collected event, in place.
-
-An affect's `lhs` is a plain variable NAME string, not an expression, so it is
-renamed here by name, beside the expressions. The `lhs` is precisely
-what a renaming merge deletes — an affect still writing `B.x` writes to an
-unknown the flattened system no longer declares, which the solver reports far
-downstream, if at all.
-"""
-function _rename_event_names!(
-        events::Vector{<:EventType}, renames::AbstractDict{String, String}
-    )
-    isempty(renames) && return events
-    mapped = _map_event_exprs(e -> _rename_variables(e, renames), events)
-    for (i, ev) in enumerate(mapped)
-        events[i] = _rename_affect_targets(n -> get(renames, n, n), ev)
-    end
-    return events
 end
 
 function _substitute_placeholder(
@@ -1133,7 +1093,7 @@ When `transform` is an `ASTExpr` (esm-spec §10.4 expression transform), the tar
 parameter instead becomes an observed defined by the transform expression —
 see the expression arm below.
 
-From esm 1.0.0 a data source is not a coupling endpoint (esm-spec §8), so there
+A data source is not a coupling endpoint (esm-spec §8), so there
 is no loader-producer arm here any more: a loaded field IS a parameter of the
 consuming model, declared with its own `shape` and its own `update`, and needs
 no shape transfer from a `param_to_var` edge.
@@ -1204,7 +1164,7 @@ function _apply_expression_transform!(
         )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
-    # unknown from esm 1.0.0 — the declaration carries no expression, so this
+    # unknown — the declaration carries no expression, so this
     # push is the whole definition rather than a duplicate of one. The coupling
     # entry wrote that expression, so it is the definition's only author.
     push!(pool, _FlatEq(Equation(VarExpr(to), transform), _authored(transform, _coupling_origin(index))))

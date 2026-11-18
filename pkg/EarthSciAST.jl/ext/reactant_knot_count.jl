@@ -51,14 +51,9 @@ _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 
 # count-locate: `Σ_k [cmp(knots[k], q)]`, WITHOUT a `stablehlo.reduce`.
 #
-# WHY NOT THE REDUCE. The obvious lowering — broadcast the knot row against the
-# query column, select 1.0/0.0, `reduce` along the knot axis — is five ops.
-# Locating elementwise instead is bit-exact against the reduce form and measured
-# faster on the one real chemistry mechanism it was compared on, for a small
-# increase in emitted ops. That is the whole case for it; it is not an argument
-# about fusion boundaries.
-#
-# So the count is computed elementwise instead, in one of three tiers. All three
+# The obvious lowering — broadcast the knot row against the query column, select
+# 1.0/0.0, `reduce` along the knot axis — is kept as the fallback; the count is
+# otherwise computed elementwise, in one of three tiers. All three
 # return the SAME Float64 lane value as the ladder in `tree_walk/knot_count.jl` — the
 # terms are 0.0/1.0 and `n ≪ 2^53`, so every association order is exact, and the
 # tiers below only ever ADD exact small integers.
@@ -104,7 +99,7 @@ _rx_knot_matrix(v::Vector{Float64}) = reshape(copy(v), 1, length(v))
 #     rounding can push `floor(t)` to `c+1` at the top of the cell. Subtracting
 #     a δ that is huge next to the ~1e-15 rounding error and tiny next to 1
 #     removes that side without introducing a second, and `floor(t)` lands on
-#     `c` or `c-1`. Real axes so far take δ = 1e-9 or 0.
+#     `c` or `c-1`.
 #
 #     None of this is assumed. The bound is VERIFIED on the host, exhaustively,
 #     at trace time: see `_rx_affine_ok`.

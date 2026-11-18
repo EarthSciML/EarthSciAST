@@ -252,12 +252,6 @@ end
 "Fallback record-axis name when the document declares no `independent_variable`."
 const DEFAULT_TIME_DIM = "time"
 
-const _EMPTY_OUTPUT_META = OutputMeta(
-    "", Dict{String, Int}(),
-    Dict{String, Vector{String}}(), Dict{String, Dict{String, Any}}(),
-    Dict{String, String}(), Dict{String, Any}(), DEFAULT_TIME_DIM
-)
-
 # Look `base` up in one of the `var_*` tables: exact first (bare or namespaced),
 # then the last dotted segment — so a nested namespace the exact keys do not
 # cover still resolves.
@@ -350,7 +344,7 @@ function derive_output_meta(file::EsmFile)
             v.units === nothing || (a["units"] = v.units)
             v.description === nothing || (a["description"] = v.description)
             # The kind recorded here is the DERIVED role, not the declared type
-            # (esm-spec §6.3.1). From esm 1.0.0 every solved-for quantity
+            # (esm-spec §6.3.1). Every solved-for quantity
             # declares `type: "unknown"`, so gating observed output on the
             # declared string would gate on a constant and write every observed
             # unconditionally. An unknown DEFINED by a bare-variable-LHS
@@ -466,9 +460,9 @@ for a set of [`VarGridding`](@ref)s: for each distinct spatial dim, if the regis
 has an entry KEYED BY THAT DIM NAME carrying inline `values`, emit a [`DimCoord`](@ref)
 (validating its length against the dim's grid length) with the entry's
 `standard_name`/`units`/`axis` attrs. Registry entries whose key is not a dim name
-(auxiliary coordinates) and `source`-backed entries are skipped in v1 (the
-dimension-coordinate path handles inline values); they are the documented next
-drop-in. Dims with no registry entry emit no coordinate (bare integer axis, as before).
+(auxiliary coordinates) and `source`-backed entries are skipped (only inline
+values are emitted). Dims with no registry entry emit no coordinate (a bare
+integer axis).
 """
 function plan_dimension_coordinates(gridding::AbstractVector{VarGridding}, meta::OutputMeta)
     dimlen = Dict{String, Int}()

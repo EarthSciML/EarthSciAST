@@ -189,8 +189,7 @@ function topological_order(g::ReferenceGraph)
     )
     emitted = String[]
     done = Set{String}()
-    # Round-based scan preserving the historical (cross-binding) emission
-    # order; vertices emitted in an earlier round are dropped from the scan
+    # Round-based scan in the cross-binding emission order; vertices emitted in an earlier round are dropped from the scan
     # list instead of being re-checked every subsequent round.
     remaining = sort(collect(keys(g.vertices)))
     while !isempty(remaining)

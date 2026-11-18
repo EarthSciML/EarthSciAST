@@ -3,7 +3,7 @@
 
 """
 Load-time rewrite pass for `expression_templates` (esm-spec §9.6,
-docs/rfcs/ast-expression-templates.md).
+docs/content/rfcs/ast-expression-templates.md).
 
 `expression_templates` is the single structural-substitution mechanism in the
 format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
@@ -16,7 +16,7 @@ format. Each entry is a rewrite rule with `params` (metavariables) and a `body`
   structurally matches a node. A param in an operand/`args` position binds to the
   matched sub-AST; a param in a scalar field (`dim`, `side`, …) binds to the
   matched literal. An optional `where` block (esm-spec §9.6.1,
-  docs/rfcs/match-pattern-scoping-constraints.md) adds STATIC scoping
+  docs/content/rfcs/match-pattern-scoping-constraints.md) adds STATIC scoping
   constraints on the captured params: `{"F": {"shape": ["edges"]}}` makes the
   rule eligible only where `F` bound to a bare variable reference whose
   declaration in the enclosing component carries exactly that `shape` (ordered
@@ -489,7 +489,7 @@ end
 
 # ---------------------------------------------------------------------------
 # Static match-scoping constraints (`where`, esm-spec §9.6.1;
-# docs/rfcs/match-pattern-scoping-constraints.md)
+# docs/content/rfcs/match-pattern-scoping-constraints.md)
 # ---------------------------------------------------------------------------
 
 """
@@ -927,7 +927,7 @@ widened `1.0`/`8.0` would reach the emitted golden, which spells `[1,8]`.
 
 Narrowing is scoped to `args` array elements (the Expression operand position),
 so scalar CONFIGURATION floats an authored `1.0`/`0.0` legitimately occupies
-(`variables.*.default`, a bare `expression` scalar, …) are left byte-identical;
+(`variables.*.default`, a bare `expression` scalar, …) are left as written;
 only arithmetic operand literals are touched. On the typed-load path this is a
 no-op-equivalent: `coerce_esm_file` reads operands via `expression_from_json`, which
 applies the identical narrowing, so pre-narrowing the tree here changes nothing

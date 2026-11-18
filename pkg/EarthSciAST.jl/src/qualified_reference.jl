@@ -113,7 +113,7 @@ end
 Find a top-level system by name in models or reaction_systems.
 Returns the system and its type, or (nothing, :none) if not found.
 
-`data_sources` is deliberately NOT searched: from esm 1.0.0 a data source is an
+`data_sources` is deliberately NOT searched: a data source is an
 ingest registry entry, not a component, so it can never be the root of a scoped
 reference (esm-spec §8).
 """
@@ -137,9 +137,8 @@ end
 Find a subsystem by name within a Model or ReactionSystem.
 Returns the subsystem or nothing if not found.
 
-From esm 1.0.0 a subsystem is always a component (a `Model` or a
-`ReactionSystem`): a data source is a registry entry and can no longer be
-declared as one.
+A subsystem is always a component (a `Model` or a `ReactionSystem`); a data
+source is a registry entry, never a subsystem.
 """
 function find_subsystem(system::Model, name::String)::Union{Model, ReactionSystem, Nothing}
     return get(system.subsystems, name, nothing)

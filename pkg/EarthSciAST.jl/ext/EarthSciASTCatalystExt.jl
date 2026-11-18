@@ -285,10 +285,8 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
             push!(species, Species(pname; default = default, constant = true))
         else
             # `Parameter.default` is optional (esm-schema.json's `Parameter`
-            # declares no `required` list), so absence travels as absence —
-            # the way it already did for `Species` just above. This used to
-            # invent a `1.0` for a parameter Catalyst gave no default,
-            # because the ESM struct could not represent the absence.
+            # declares no `required` list), so absence travels as absence, as
+            # for `Species` just above.
             push!(parameters, Parameter(pname, default))
         end
     end
@@ -327,7 +325,7 @@ end
 _catalyst_rate_to_esm(expr) = _symbolic_to_esm(expr; derivatives = false)
 
 # ========================================
-# MTK → ESM export for Catalyst.ReactionSystem (gt-dod2)
+# MTK → ESM export for Catalyst.ReactionSystem
 # ========================================
 
 """
@@ -342,8 +340,8 @@ Fields populated from the reactions:
 - `parameters` (from `Catalyst.parameters(rs)`)
 - `reactions` (id + substrates/products + rate expression)
 
-Placeholders filled in Phase 2: `description`, `version`, `reference`,
-`tests`, `analyses`, `metadata.tags`, `metadata.source_ref`.
+Left as placeholders for hand migration: `description`, `version`,
+`reference`, `tests`, `analyses`, `metadata.tags`, `metadata.source_ref`.
 """
 function mtk2esm(rs::Catalyst.ReactionSystem; metadata = (;))
     gaps = GapReport[]

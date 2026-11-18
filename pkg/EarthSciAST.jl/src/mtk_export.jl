@@ -1,5 +1,5 @@
 """
-MTK → ESM export scaffolder (Phase 1 migration tooling, gt-dod2).
+MTK → ESM export scaffolder (migration tooling).
 
 This file defines the public stubs for `mtk2esm`, the forward-direction
 serializer that walks a ModelingToolkit system and emits a schema-valid ESM
@@ -15,11 +15,13 @@ extensions.
 
 Structured record of schema-gap constructs encountered while exporting an
 MTK system to ESM. The migration tool uses these to attach `TODO_GAP`
-notes and to emit `@warn`s listing the gap IDs so callers know which
-downstream beads must land before their model can be migrated cleanly.
+notes and to emit `@warn`s listing the gaps, so callers know which constructs
+need hand migration.
 
 Each entry carries:
-- `bead_id`: the upstream bead tracking the gap (or `"unknown"`)
+- `bead_id`: the gap's category (`"pde_domain"`, `"sde_noise_eqs"`,
+  `"initialization_equations"`, `"unknown_operator"`, …; `"unknown"` for a
+  construct that failed to serialize)
 - `description`: human-readable one-liner (shown in warnings and JSON)
 - `location`: location hint (variable or equation index) for the user
 """

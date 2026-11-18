@@ -80,7 +80,7 @@ function _check_model_aggregates_here!(
         model::Model, path::String, registry::Set{String}
     )
     # The continuous-relational guard keys off the CONTINUOUS leaves, which
-    # from esm 1.0.0 are derived: the ODE states plus the algebraic unknowns
+    # are derived: the ODE states plus the algebraic unknowns
     # (CONFORMANCE_SPEC §5.7.2). Observed unknowns are deliberately excluded —
     # a state-free observed is not continuous, and the guard would otherwise
     # reject the const-folding geometry paths that rely on it.

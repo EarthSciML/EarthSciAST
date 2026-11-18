@@ -1,13 +1,13 @@
 # ========================================================================
-# pushdown_rewrite.jl — Phase 4: the AUTOMATIC projection-pushdown DESUGAR.
+# pushdown_rewrite.jl — the AUTOMATIC projection-pushdown DESUGAR.
 #
 # A pre-build model-transform pass that recognises the ISRM-shaped
 # `+`-semiring "apply a provider-backed full-domain array to a sparsely
 # supported binned factor" pattern in a CLEAN model, and AUTO-GENERATES the
-# four hand-authored Phase-2b constructs (derived IndexSet + `distinct`
-# producer + member_factor + gated_select) so the existing 2b pipeline then
-# runs unchanged. The author writes NO derived set, NO producer, and NO
-# gated_select — only the natural math.
+# four constructs an author could otherwise write by hand (derived IndexSet +
+# `distinct` producer + member_factor + gated_select), which the build then
+# runs like authored ones. The author writes NO derived set, NO producer, and
+# NO gated_select — only the natural math.
 #
 # This is a NARROW desugarer (a pattern recogniser), NOT a general optimizer.
 # It fires ONLY when the reduction's semiring is the additive `(+, 0)` monoid
@@ -24,7 +24,7 @@
     desugar_pushdown(esm::AbstractDict; model_name=nothing) -> AbstractDict
 
 Recognise the projection-pushdown pattern in `esm`'s named model and, when it
-matches, return a NEW document with the four Phase-2b constructs desugared in
+matches, return a NEW document with the four constructs desugared in
 (a `kind:"derived"` index set, a `distinct:true` overlap-gated producer
 aggregate, a `member_factor` const parameter, and an inspectable
 `gated_select` record) plus the reduction axis of the matched E / A / conc
@@ -48,7 +48,7 @@ function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # generated constructs (compact E over the derived set, cell-gather rect
     # observeds) would otherwise re-match the pattern and stack a second
     # `pd_support__pd_support__…` layer. This makes the pass safe to request
-    # from BOTH `prepare` (which must run it before flattening/provider
+    # from BOTH `esm_problem` (which runs it before flattening/provider
     # classification) and the `_build_evaluator` front door.
     _pushdown_record(esm) === nothing || return esm
     an = _pd_analyze(esm, model_name)
@@ -108,9 +108,8 @@ end
 
 The rewrite's provenance record `metadata.x_esd.pushdown` written by
 [`desugar_pushdown`](@ref) (see `_pd_apply`), or `nothing` when `doc` carries
-none. This is the record the engine reads BACK to derive provider gates —
-callers no longer hand-author gate dicts (`esm_problem(...; pushdown_rewrite=true)`
-+ `providers`)."""
+none. This is the record `esm_problem(...; pushdown_rewrite=true)` reads back
+to derive provider gates."""
 function _pushdown_record(doc::AbstractDict)
     md = get(doc, "metadata", nothing)
     md isa AbstractDict || return nothing
@@ -131,7 +130,7 @@ _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
 # Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
 # references: they ride to the build boundary where `_build_evaluator_impl`
 # expands them with site recording (see simulate.jl).
-# `prepare` therefore hands `desugar_pushdown` a document whose binning body may
+# `esm_problem` therefore hands `desugar_pushdown` a document whose binning body may
 # be a surviving reference rather than the containment `ifelse` the recogniser
 # looks for.
 #
@@ -183,12 +182,11 @@ end
 
 [`observed_definitions`](@ref) with every surviving `apply_expression_template`
 reference EXPANDED against `reg` — the `Expand(tree)` view the pattern matcher
-must see (§9.6.4 rule 2). From esm 1.0.0 an observed unknown's body is its
+must see (§9.6.4 rule 2). An observed unknown's body is its
 defining EQUATION's right-hand side, so this — not the variable table — is what
 the detector matches against; `_pd_detect` still reads `model.variables` for the
 shapes and types beside it. Returns the definition map UNCHANGED (no copy) when
-there is no registry or no reference to expand, so a template-free document
-takes the byte-identical pre-existing path.
+there is no registry or no reference to expand.
 
 Expansion is DETECTION-ONLY: the returned bodies are never emitted. A reference
 that fails to expand (an unresolvable template — `desugar_pushdown` is callable
@@ -495,7 +493,7 @@ end
 #
 # Returns `(c_sym, r_sym, C, R, out_is_cell, src_env, tgt_env)` or `nothing`.
 # `agg` is the observed unknown's DEFINING EQUATION RHS (esm-spec §6.3.1),
-# supplied by the caller from `observed_definitions`: from esm 1.0.0 a variable
+# supplied by the caller from `observed_definitions`: a variable
 # carries no expression of its own, so a non-observed variable simply has no
 # definition to pass and never reaches here.
 # The shape every pushdown read starts from: a `+`-semiring `faq` (0̄ = 0) with
@@ -548,11 +546,11 @@ function _pd_detect_binning(
     # `_pd_parse_containment` demands the record side yield two coordinates each
     # with a min AND a max cell bound, which the rect side cannot do. An
     # ENVELOPE-OVERLAP predicate is SYMMETRIC and parses BOTH ways, so the
-    # predicate alone no longer says which symbol is the cell. `out_is_cell`
+    # predicate alone does not say which symbol is the cell. `out_is_cell`
     # lets a caller that already knows say so: the forward arm's cell set comes
     # from the mat-vec array's first axis, and mirrors are collected only after
     # `C`/`R` are fixed. Left `nothing` (the point case, and the forward arm's
-    # unhinted call) the out-as-cell reading is preferred, as before.
+    # unhinted call) the out-as-cell reading is preferred.
     if out_is_cell !== false
         env = _pd_parse_containment(pred, out_sym, in_sym)
         env === nothing || return (
@@ -588,7 +586,7 @@ end
 # WARNING, not error, and deliberately so. `desugar_pushdown`'s contract — spelled
 # in CONFORMANCE_SPEC §5.5.7 and asserted by the conformance adapters — is that a
 # document it does not recognise comes back byte-identical; it is an OPTIMISATION
-# pass that `prepare` runs over whole documents it does not own. Promoting "I did
+# pass that `esm_problem` runs over whole documents it does not own. Promoting "I did
 # not recognise this" to a hard error would make an unrecognised-but-correct
 # document unrunnable, and the recogniser is narrow enough (2-D rectangles, one
 # cell set) that honest near-misses exist. The residue is a PERFORMANCE defect:
@@ -809,7 +807,7 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     sort!(diags; by = d -> (d["variable"], d["consumer"], d["array"]))
     unique!(d -> (d["variable"], d["consumer"], d["array"]), diags)
     isempty(conc_specs) && return (nothing, diags)
-    # Deterministic plan order (Phase 3, cross-language goldens): `vars` is a
+    # Deterministic plan order (cross-language goldens): `vars` is a
     # hash-ordered Dict, so the collection order of `A_names` above is a Julia
     # implementation detail. It leaks into the emitted document only through
     # `gated_select.applies_to` (everything else the plan orders is either
@@ -982,11 +980,9 @@ end
 Each name DEFINED by a bare-variable-LHS equation, mapped to that equation's
 position in `eqs`.
 
-esm 1.0.0 moved an observed unknown's defining right-hand side out of
-`variables[v]["expression"]` and into the model's `equations` (esm-spec §6.3.1),
-so the desugar reads and rewrites a definition through this index exactly where
-it used to reach into the declaration. The FIRST definition of a name wins,
-matching the classification.
+An observed unknown's defining right-hand side lives in the model's `equations`
+(esm-spec §6.3.1), so the desugar reads and rewrites a definition through this
+index. The FIRST definition of a name wins, matching the classification.
 """
 function _pd_definitions(eqs)
     idx = Dict{String, Int}()
@@ -1333,13 +1329,11 @@ function _pd_record!(d, plan::_PdPlan, names::_PdNames)
 end
 
 # ============================================================================
-# RECORD-DERIVED PROVIDER GATING (Phase 1, clean consolidation).
+# RECORD-DERIVED PROVIDER GATING.
 #
 # `desugar_pushdown` records `metadata.x_esd.pushdown.gated_select` — which
-# derived set gates which model arrays on which axis — but until Phase 1
-# NOTHING read that record back: callers hand-implemented `provider_gate_spec`
-# or hand-authored gate dicts. These helpers close the loop for `prepare`:
-# given the REWRITTEN (pre-flatten) document and the caller's public
+# derived set gates which model arrays on which axis. These helpers read it
+# back for `esm_problem`: given the REWRITTEN (pre-flatten) document and the caller's public
 # `providers` dict, derive the engine gate (`Dict("axes"=>…, "applies_to"=>…)`,
 # the `_fetch_gated_providers` format) for every provider that the document's
 # coupling identifies as feeding a rewritten array.
@@ -1353,8 +1347,7 @@ Provider-key ⇒ engine gate, derived from `doc`'s rewrite record
 
 A provider is GATED when its key names a PARAMETER that a `data` update binds to
 a source and whose local name is one of the record's `applies_to` model arrays.
-From esm 1.0.0 that is a direct match: a source is not a coupling endpoint, so a
-provider is keyed by the consuming parameter's own flattened name
+That is a direct match: a source is not a coupling endpoint, so a provider is keyed by the consuming parameter's own flattened name
 (`"<ModelPath>.<param>"`, see `providers_from_document`) and there is no
 `variable_map` indirection to follow. The gate's per-NATIVE-axis `axes` come
 from the bound SOURCE's `metadata.x_esd.gated_select.axes` template when it

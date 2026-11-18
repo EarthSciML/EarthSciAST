@@ -458,7 +458,7 @@ const _DESlotSrc = Union{Nothing, _DEVal}
 # shape (the negative control); `:always` gathers every multi-run read and lifts
 # the base budget (a measurement lever, not a recommendation);
 # `gather_max_pieces` overrides the cap. Pinned by
-# test/reactant_direct_emit_test.jl.
+# test/reactant/reactant_direct_emit_test.jl.
 const _DE_GATHER_MIN_PIECES = 8
 const _DE_RUN_WORTH = 4
 
@@ -500,8 +500,7 @@ end
 # which every cross-producer read is refused by construction, whatever the
 # program would have saved. The output assembly is the first casualty, because
 # it spans every producer there is. The budget is therefore a multiple of the
-# extended state, with the old absolute value kept as a FLOOR so a small model
-# still gets the headroom it had.
+# extended state, with an absolute FLOOR so a small model still gets headroom.
 const _DE_GATHER_BASE_FLOOR = 1 << 16
 const _DE_GATHER_BASE_FACTOR = 4
 

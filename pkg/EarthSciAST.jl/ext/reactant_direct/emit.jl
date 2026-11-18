@@ -428,7 +428,7 @@ end
 
 function _de_emit!(ctx::_DECtx, rhs)::_DEVal
     n_states = ctx.n_states
-    # ess-array-contraction: whole-array einsums are a SECTION of the in-place
+    # Whole-array einsums are a SECTION of the in-place
     # RHS that this walk has no arm for. Left alone their output slots would
     # just assemble to zero — a silent wrong answer, which is the one thing this
     # emitter does not do. The list is empty on every model whose reductions

@@ -441,7 +441,7 @@ function _build_index(
     arr = _esm_to_symbolic(expr.args[1], L)
     idx_args = expr.args[2:end]
 
-    # Stencil gather path (ess-c59): inside a stencil arrayop body, when this
+    # Stencil gather path: inside a stencil arrayop body, when this
     # read's indices are all affine in the output index vars, materialize a
     # numeric per-cell gather table instead of emitting a symbolic index. This
     # keeps boundary reads (e.g. u[i-1, j] at i=1 -> Dirichlet ghost 0) within
@@ -487,10 +487,8 @@ end
 # The broadcast vocabulary, DERIVED from the op registry: every ARITHMETIC or
 # ELEMENTARY row with a recorded scalar function — `+ - * / ^ pow neg` plus the
 # full unary/binary elementary set (`exp`/`log`/`sin`/…/`tan`/`floor`/`min`/
-# `max`/`atan2`). It used to be a hand-listed dozen, which made a perfectly
-# ordinary `broadcast(fn:"tan", …)` an exporter-only failure while the tree-walk
-# path evaluated it; deriving it keeps the two back ends speaking the same
-# `fn` vocabulary (esm-spec §4.3.4).
+# `max`/`atan2`). Deriving it keeps this back end and the tree walk speaking the
+# same `fn` vocabulary (esm-spec §4.3.4).
 #
 # Deliberately EXCLUDED, and still erroring: the comparison, logical, control
 # and niladic-constant rows. `Base.broadcasted(<, …)` yields a symbolic BOOLEAN,

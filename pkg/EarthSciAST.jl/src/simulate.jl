@@ -13,13 +13,7 @@
 # data-refresh callback, the output-sink callback and the checkpoint callback.
 # `solve` varies only the per-run knobs.
 #
-# The `simulate` / `prepare` pair this replaces conflated the two — and had
-# grown a second, `prepare`-shaped entry point next to `simulate` precisely
-# because callers needed the split. `EsmProblem` IS the `PreparedModel`
-# concept under the canonical name, with the run knobs it was missing.
-#
-# `[[library-exposes-rhs-not-solver]]`: EarthSciAST never depends on a solver.
-# Everything here — coerce → _build_evaluator → seed → compose callbacks — is
+# EarthSciAST never depends on a solver. Everything here — coerce → _build_evaluator → seed → compose callbacks — is
 # solver-free, so CONSTRUCTING an `EsmProblem` needs no SciMLBase and no
 # OrdinaryDiffEq (§2.5.9). The `ODEProblem` + `solve` live in a SciMLBase
 # package EXTENSION (EarthSciASTSimulateExt), which specializes
@@ -1068,7 +1062,7 @@ end
 
 # --------------------------------------------------------------------------- #
 # Loader-discovered extents (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5) — the
-# pre-pass `prepare` runs before ANY load, because a discovered extent closes a
+# pre-pass `esm_problem` runs before ANY load, because a discovered extent closes a
 # metaparameter and metaparameters are bound at the loader API.
 #
 # Returns `(metaparameters, discovered)`: the caller's bindings PLUS whatever
@@ -1390,7 +1384,7 @@ value rather than build-time data: it appears in
 ([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
 `:array_parameter` whose default buffer is that value, so a caller evaluates at
 another field without a rebuild. Off, those parameters are folded into the
-build as before. Either way, a shaped parameter the caller binds through
+build. Either way, a shaped parameter the caller binds through
 `param_arrays` is a live buffer, and a program's slot of kind `:array_parameter`
 unless the parameter is externally fed.
 
@@ -1618,11 +1612,9 @@ function _esm_problem(
     traits, metaparams, discovered = found.traits, found.metaparameters, found.discovered
 
     # ---- the projection-pushdown prepass, BEFORE flatten ----
-    # The desugar must see the AUTHORED (not yet flattened) model: the flattener
-    # rewrites coupling-fed references in equations but not in the variables'
-    # `expression` fields, so the pattern no longer matches post-flatten.
-    # Running it here also puts the provenance record in hand BEFORE the
-    # provider classification below needs it.
+    # The desugar matches the AUTHORED (not yet flattened) model, and running it
+    # here puts the provenance record in hand BEFORE the provider
+    # classification below needs it.
     pd_coupling = Pair{String, String}[]
     if req.pushdown_rewrite
         input, matched = _pushdown_input(input, req.model_name, metaparams, req.base_path)
@@ -2346,10 +2338,10 @@ right-hand side.
 * `tspan` — a new `(t0, t1)`. A new start `t0` evaluates the document's `ic`
   right-hand sides again at it, where they read the start (`t`, a data-fed
   parameter, an observed over those; esm-spec §11.4.2), with the caller's `u0`
-  overrides applied on top as before.
+  overrides applied on top.
 * `callback` — replace the problem's callback set (§2.5.4). Omit to keep it.
 
-Refusal behaviour is preserved from `remake_parameters`: a substitution the
+Refusal behaviour is that of `remake_parameters`: a substitution the
 problem cannot honour without a rebuild raises, naming the parameter AND the
 class that makes it un-substitutable (`:structural`, `:const_folded`,
 `:forcing`), rather than silently rebuilding or silently ignoring it.
