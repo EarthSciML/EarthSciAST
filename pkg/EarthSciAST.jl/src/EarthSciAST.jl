@@ -102,21 +102,6 @@ include("validation/events.jl")
 include("validation/equation_lhs.jl")
 include("validate_inline_tests.jl")
 include("recurrence.jl")
-# Flattening pipeline (reactions → equations, subsystem flattening, shapes).
-# flatten()'s stages live in sibling files: error taxonomy, namespacing +
-# per-system collection, coupling application, pointwise lift, orchestrator,
-# and the standalone array-shape-inference pass.
-include("reactions.jl")
-include("flatten_errors.jl")
-include("term_provenance.jl")
-include("expr_axes.jl")
-include("namespacing.jl")
-include("coupling_apply.jl")
-include("pointwise_lift.jl")
-include("flatten.jl")
-include("array_shape_inference.jl")
-include("shape_promotion.jl")
-include("elementwise_lift.jl")
 # Load-time lowering passes (enums, templates, imports) and their shared
 # raw-JSON traversal helpers
 include("json_walk.jl")
@@ -130,6 +115,21 @@ include("templates/imports.jl")
 include("templates/expand_typed.jl")
 include("templates/emit.jl")
 include("templates/flat_registry.jl")
+# Flattening pipeline (reactions → equations, subsystem flattening, shapes).
+# flatten()'s stages live in sibling files (listed in flatten.jl's header).
+# They load after the template files, whose types their signatures name.
+include("reactions.jl")
+include("flatten_errors.jl")
+include("term_provenance.jl")
+include("expr_axes.jl")
+include("namespacing.jl")
+include("coupling_apply.jl")
+include("cell_read.jl")
+include("pointwise_lift.jl")
+include("flatten.jl")
+include("array_shape_inference.jl")
+include("shape_promotion.jl")
+include("elementwise_lift.jl")
 # esm-spec §4.7 mount helpers (mount-declared metaparameters, data-source
 # `extent` check, mount-edge index-set rename).
 include("mounts.jl")

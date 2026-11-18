@@ -262,15 +262,31 @@ nothing global decides what a load reads.
 * `cache` holds each document by `_RefTarget.key` in its post-wire form
   (`_wire_document`: the carrier, op spellings settled once, so the
   `deprecated_op` warning fires once per file per load).
+* `pinned` holds the local paths a mounting document's injected import refs
+  were resolved to ([`_pin_injected_refs!`](@ref)): such a ref is the
+  assembler's and names that file wherever it is spliced, a remote leaf
+  included, where a relative or rooted spelling would join onto the leaf's URL.
 """
 struct _DocumentSource
     fetch::Function
     read_library::Union{Nothing, Function}
     cache::Dict{String, Any}
+    pinned::Set{String}
 end
 
 _DocumentSource(; fetch = _download_url_contents, read_library = nothing) =
-    _DocumentSource(fetch, read_library, Dict{String, Any}())
+    _DocumentSource(fetch, read_library, Dict{String, Any}(), Set{String}())
+
+"""
+    _resolve_ref(src, base, ref) -> _RefTarget
+
+[`_resolve_ref`](@ref) for a ref read during a load: a local path the load
+pinned (`src.pinned`) names itself, whatever `base` is.
+"""
+function _resolve_ref(src::_DocumentSource, base::_RefBase, ref::AbstractString)::_RefTarget
+    ref in src.pinned && return _RefTarget(String(ref), _DirBase(dirname(ref)), String(ref), String(ref))
+    return _resolve_ref(base, ref)
+end
 
 """
     _RefUnreadable(target, reason, cause)

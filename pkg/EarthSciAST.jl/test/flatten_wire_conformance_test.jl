@@ -198,6 +198,6 @@ end
         int_var = "_p0", lower = ESM.NumExpr(0.0), upper = ESM.NumExpr(1.0)
     )
     rhs = ESM.OpExpr("*", ESM.ASTExpr[ESM.VarExpr("rho"), area])
-    @test ESM._ew_fresh_loops(rhs, 2, nothing) == ["__p0", "__p1"]
-    @test ESM._ew_fresh_loops(ESM.VarExpr("rho"), 1, nothing) == ["_p0"]
+    @test ESM._fresh_loops(rhs, 2) == ["__p0", "__p1"]
+    @test ESM._fresh_loops(ESM.VarExpr("rho"), 1) == ["_p0"]
 end

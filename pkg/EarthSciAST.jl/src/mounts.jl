@@ -1040,7 +1040,7 @@ function _close_mounted_leaf(
     # against the MOUNTING document's base, not the leaf's.
     if edge.imports isa AbstractVector && !isempty(edge.imports)
         imports_native = _to_ordered(edge.imports)
-        _absolutize_nested_refs!(imports_native, base)
+        _absolutize_nested_refs!(imports_native, base; pin = ctx.source)
         injected_root = apply_scope_injections(comp, Any[e for e in imports_native])
         injected_root === nothing || (comp = injected_root)
     end
@@ -1400,22 +1400,28 @@ function _inline_toplevel_form!(
 end
 
 """
-    _absolutize_nested_refs!(node, base)
+    _absolutize_nested_refs!(node, base; pin = nothing)
 
 Rewrite every `{"ref": "..."}` under `node` to the canonical key it resolves to
 against `base`, so it still resolves once the node is spliced into a document
-with a different base.
+with a different base. With `pin` (the load's `_DocumentSource`), each local
+key is pinned there, so it still names that file when the node is spliced into
+a document read over http(s).
 """
-function _absolutize_nested_refs!(node, base::_RefBase)
+function _absolutize_nested_refs!(node, base::_RefBase; pin::Union{Nothing, _DocumentSource} = nothing)
     if node isa AbstractDict
         r = get(node, "ref", nothing)
-        r isa AbstractString && (node["ref"] = _resolve_ref(base, r).key)
+        if r isa AbstractString
+            t = _resolve_ref(base, r)
+            node["ref"] = t.key
+            (pin === nothing || _is_remote(t)) || push!(pin.pinned, t.key)
+        end
         for v in values(node)
-            _absolutize_nested_refs!(v, base)
+            _absolutize_nested_refs!(v, base; pin = pin)
         end
     elseif node isa AbstractVector
         for v in node
-            _absolutize_nested_refs!(v, base)
+            _absolutize_nested_refs!(v, base; pin = pin)
         end
     end
     return

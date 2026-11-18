@@ -1,35 +1,17 @@
 # Reproducer for the nested-expression-template memory blow-up in the Julia
 # binding (EarthSciAST.jl).
 #
-# A chain of match-less templates T0..T<depth> where each T_i body references
-# T_{i-1} twice is inlined at registration by `_compose_template_bodies!`
-# (src/template_imports.jl): every reference is expanded by pure substitution
-# with deep copies, so the composed body of T_d holds 2^d copies of the leaf.
-# The §9.6.3 call-site fixpoint then splices another full copy, and coercion
-# to the typed IR copies it again — a few-KB document within every documented
-# limit (chain depth <= MAX_TEMPLATE_EXPANSION_DEPTH = 32) expands to millions
-# of AST nodes and gigabytes of live memory.
+# A chain of match-less templates T0..T<depth> in which each T_i body
+# references T_{i-1} twice expands to 2^(depth+3) - 1 logical AST nodes: a
+# few-KB document within every documented limit (chain depth <=
+# MAX_TEMPLATE_EXPANSION_DEPTH = 32). The binding keeps expanded expressions as
+# structurally shared DAGs, so the distinct nodes it holds grow linearly in the
+# depth; this script loads one such document and reports the logical node
+# count, the distinct node count, the load time and the peak resident memory.
 #
 # Usage (one depth per process, so Sys.maxrss() is a clean per-depth peak):
 #
 #   julia --project=pkg/EarthSciAST.jl scripts/repro-nested-template-oom.jl <depth>
-#
-# Measured BEFORE structural sharing (Julia 1.12.6, x86_64 Linux; logical
-# expanded nodes = 2^(depth+3) - 1):
-#
-#   depth=14  file=3.3KB  nodes=131,071    load= 23s  maxrss=0.87GiB
-#   depth=16  file=3.7KB  nodes=524,287    load= 30s  maxrss=1.47GiB
-#   depth=18  file=4.0KB  nodes=2,097,151  load= 63s  maxrss=4.39GiB
-#   depth=19  file=4.2KB  nodes=4,194,303  load=124s  maxrss=7.95GiB
-#   depth=20  file=4.4KB  -> hard OutOfMemoryError() under a 10GiB cap
-#
-# AFTER (expanded ASTs stored as structurally-shared DAGs; identical
-# semantics, tree-equivalent logical size unchanged):
-#
-#   depth=19  nodes=4,194,303      unique_dag_nodes=26  load=12s  maxrss=0.68GiB
-#   depth=30  nodes=8,589,934,591  unique_dag_nodes=37  load=12s  maxrss=0.68GiB
-#
-# (~12s / 0.68GiB is the package-load baseline of this environment.)
 
 using JSON3
 using EarthSciAST

@@ -61,26 +61,26 @@ _declared_array_shapes(shapes) = Dict{String, Vector{String}}(
 # every expression site of the model, plus the element-wise axis check on the
 # right-hand side of every equation whose left-hand side writes a declared
 # whole array. Recurses into Model subsystems.
-function _check_model_broadcasts!(
+_check_model_broadcasts!(errors::Vector{StructuralError}, model::Model, path::String) =
+    (_foreach_component((m, p, _) -> _check_model_broadcasts_here!(errors, m, p), model, path); errors)
+
+function _check_model_broadcasts_here!(
         errors::Vector{StructuralError}, model::Model,
         path::String
     )
     var_shapes = _declared_array_shapes((n, v.shape) for (n, v) in model.variables)
     _check_site_broadcasts!(errors, model, path, var_shapes)
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_model_broadcasts!(errors, subsys, "$path/subsystems/$subsys_name")
-    end
     return errors
 end
 
-function _check_reaction_system_broadcasts!(
+_check_reaction_system_broadcasts!(errors::Vector{StructuralError}, rs::ReactionSystem, path::String) =
+    (_foreach_component((r, p, _) -> _check_reaction_system_broadcasts_here!(errors, r, p), rs, path); errors)
+
+function _check_reaction_system_broadcasts_here!(
         errors::Vector{StructuralError}, rs::ReactionSystem, path::String
     )
     var_shapes = _declared_array_shapes((p.name, p.shape) for p in rs.parameters)
     _check_site_broadcasts!(errors, rs, path, var_shapes)
-    for (sub_name, sub) in rs.subsystems
-        _check_reaction_system_broadcasts!(errors, sub, "$path/subsystems/$sub_name")
-    end
     return errors
 end
 

@@ -69,6 +69,16 @@ function _check_model_aggregates!(
         errors::Vector{StructuralError}, file::EsmFile,
         model::Model, path::String, registry::Set{String}
     )
+    _foreach_component(model, path) do m, p, _
+        _check_model_aggregates_here!(errors, file, m, p, registry)
+    end
+    return errors
+end
+
+function _check_model_aggregates_here!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        model::Model, path::String, registry::Set{String}
+    )
     # The continuous-relational guard keys off the CONTINUOUS leaves, which
     # from esm 1.0.0 are derived: the ODE states plus the algebraic unknowns
     # (CONFORMANCE_SPEC §5.7.2). Observed unknowns are deliberately excluded —
@@ -82,9 +92,6 @@ function _check_model_aggregates!(
             for (n, v) in model.variables if v.shape !== nothing
     )
     _check_site_aggregates!(errors, file, model, path, state_vars, registry, var_shapes)
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_model_aggregates!(errors, file, subsys, "$path/subsystems/$subsys_name", registry)
-    end
     return errors
 end
 
@@ -94,15 +101,22 @@ function _check_reaction_system_aggregates!(
         errors::Vector{StructuralError}, file::EsmFile,
         rs::ReactionSystem, path::String, registry::Set{String}
     )
+    _foreach_component(rs, path) do r, p, _
+        _check_reaction_system_aggregates_here!(errors, file, r, p, registry)
+    end
+    return errors
+end
+
+function _check_reaction_system_aggregates_here!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        rs::ReactionSystem, path::String, registry::Set{String}
+    )
     state_vars = Set{String}(sp.name for sp in rs.species)
     var_shapes = Dict{String, Vector{String}}(
         p.name => String[String(x) for x in p.shape]
             for p in rs.parameters if p.shape !== nothing
     )
     _check_site_aggregates!(errors, file, rs, path, state_vars, registry, var_shapes)
-    for (sub_name, sub) in rs.subsystems
-        _check_reaction_system_aggregates!(errors, file, sub, "$path/subsystems/$sub_name", registry)
-    end
     return errors
 end
 

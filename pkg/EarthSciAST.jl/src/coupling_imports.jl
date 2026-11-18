@@ -231,7 +231,7 @@ file and import it by local path.
 function _read_coupling_library(src::_DocumentSource, base::_RefBase, ref::AbstractString)
     # `${VAR}` expands BEFORE the URL classification, so a variable holding a
     # URL is recognised as the remote ref it expands to.
-    t = _resolve_ref(base, ref)
+    t = _resolve_ref(src, base, ref)
     _is_remote(t) && throw(
         ExpressionTemplateError(
             ERROR_CODES.COUPLING_IMPORT_UNRESOLVED,

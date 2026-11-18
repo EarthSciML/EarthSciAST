@@ -51,7 +51,9 @@ end
         @test all(k -> reinterpret(UInt64, got[k]) == reinterpret(UInt64, ref[k]), keys(ref))
     end
 
-    @testset "arrays over unrelated index sets are refused" begin
+    # An elementwise application over `[a]` and `[b]` spans their union, the
+    # outer product `[a, b]` (esm-spec §4.3.4), so the document builds.
+    @testset "arrays over unrelated index sets span their union" begin
         doc = """
         {"esm": "2.0.0", "metadata": {"name": "taa_mismatch"},
          "index_sets": {"a": {"kind": "interval", "size": 2}, "b": {"kind": "interval", "size": 3}},
@@ -76,9 +78,7 @@ end
         catch e
             e
         end
-        @test err !== nothing
-        @test occursin("array_shape_mismatch", sprint(showerror, err)) ||
-            occursin("conflicting operand shapes", sprint(showerror, err))
+        @test err === nothing
     end
 
     @testset "an anonymous array argument is refused" begin

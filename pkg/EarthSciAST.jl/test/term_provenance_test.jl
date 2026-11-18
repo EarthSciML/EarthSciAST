@@ -297,27 +297,22 @@ end
         # never to the bare one even though it comes later.
         f, g, m = VarExpr("f"), VarExpr("g"), VarExpr("m")
         A, C = TermOrigin(component = "A"), TermOrigin(coupling = 0)
-        eqs = Equation[
-            Equation(OpExpr("D", ASTExpr[VarExpr("x")], wrt = "t"), f),
-            Equation(VarExpr("x"), g),
-        ]
-        cs = Vector{Contribution}[
-            Contribution[Contribution(f, [A])],
-            Contribution[Contribution(g, [A])],
+        FE = EarthSciAST._FlatEq
+        pool = [
+            FE(Equation(OpExpr("D", ASTExpr[VarExpr("x")], wrt = "t"), f), Contribution[Contribution(f, [A])], "A"),
+            FE(Equation(VarExpr("x"), g), Contribution[Contribution(g, [A])], "A"),
         ]
         EarthSciAST._combine_tendency_term!(
-            eqs, cs, "x", m, "*", C;
-            owners = ["A", "A"], states = Dict("x" => nothing), components = ["A"]
+            pool, "x", m, "*", C; states = Dict("x" => nothing), components = ["A"]
         )
-        @test canonical_expr_json(eqs[1].rhs) == canonical_expr_json(OpExpr("*", ASTExpr[f, m]))
-        @test [_tp_origins(c) for c in cs[1]] == [[(:component, "A"), (:coupling, 0)]]
-        @test eqs[2].rhs === g
-        @test [_tp_origins(c) for c in cs[2]] == [[(:component, "A")]]
+        @test canonical_expr_json(pool[1].eq.rhs) == canonical_expr_json(OpExpr("*", ASTExpr[f, m]))
+        @test [_tp_origins(c) for c in pool[1].contribs] == [[(:component, "A"), (:coupling, 0)]]
+        @test pool[2].eq.rhs === g
+        @test [_tp_origins(c) for c in pool[2].contribs] == [[(:component, "A")]]
         # With only the bare definition there is no tendency to scale.
-        bare = Equation[Equation(VarExpr("x"), g)]
+        bare = [FE(Equation(VarExpr("x"), g), Contribution[Contribution(g, [A])], "A")]
         @test_throws ArgumentError EarthSciAST._combine_tendency_term!(
-            bare, Vector{Contribution}[Contribution[Contribution(g, [A])]], "x", m, "*", C;
-            owners = ["A"], states = Dict("x" => nothing), components = ["A"]
+            bare, "x", m, "*", C; states = Dict("x" => nothing), components = ["A"]
         )
     end
 
