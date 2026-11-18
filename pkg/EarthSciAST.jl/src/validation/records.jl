@@ -68,24 +68,18 @@ end
 """
     UnitWarning
 
-A single dimensional-analysis finding, in the STRUCTURED form the Python,
-TypeScript and Go bindings have always used and Julia did not: this field was
-a bare `Vector{String}`, so a caller could read the prose but could not filter
-or route findings by `code` without regex-ing the message — exactly the
-prose-parsing every binding's units documentation warns against.
-
-Fields and their JSON spellings match Go's `UnitWarning`
+A single dimensional-analysis finding, structured so a caller can filter or
+route findings by `code` without parsing the message. Fields and their JSON
+spellings match Go's `UnitWarning`
 (`pkg/earthsci-ast-go/pkg/esm/validate.go`) and the shape pinned by
 `CONFORMANCE_SPEC.md` §3.1:
 
 * `path` — RFC-6901 JSON Pointer to the offending equation / expression, the
   document root being `""` (the same addressing as `StructuralError.path`).
-* `code` — the finding kind, decided AT THE POINT the finding was raised and
-  never recovered from the prose, so rewording a message can never silently
-  reclassify it. This is the SECOND, smaller unit vocabulary, the one Go's
-  `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
-  `UnitWarning['code']` union share. This binding puts two of its codes on the
-  field: `dimensional_mismatch` (a PROVABLE inconsistency, promoted to a
+* `code` — the finding kind, set where the finding is raised (never recovered
+  from the prose), from the unit-finding vocabulary Go's `UnitFinding*`, Rust's
+  `UNIT_FINDING_*` and TypeScript's `UnitWarning['code']` share. This binding
+  uses two of its codes: `dimensional_mismatch` (a PROVABLE inconsistency, promoted to a
   `unit_inconsistency` structural error) and the warning
   `units_dimensionless_literal_mismatch`
   ([`UNIT_FINDING_DIMENSIONLESS_LITERAL`](@ref), esm-spec §4.8.6). An
@@ -93,17 +87,14 @@ Fields and their JSON spellings match Go's `UnitWarning`
   structural error, not here.
 * `message` — human-readable description (binding-local prose).
 * `lhs_units` / `rhs_units` — the inferred units of each side, `""` when the
-  raise site does not know them. Julia's units engine (`model_unit_findings`)
-  currently reports findings as prose and carries no separate unit pair, so
-  these are `""` today; `validate` reads them from the promoted
-  `StructuralError`'s `details` under those keys, so a raise site that starts
-  supplying them is picked up with no further change here.
+  raise site does not know them. `validate` reads them from the promoted
+  `StructuralError`'s `details` under those keys; `model_unit_findings`
+  supplies no unit pair, so they are `""`.
 
-Despite the name — kept for wire compatibility, it is the `unit_warnings`
-field of the spec's `ValidationResult` — a `UnitWarning` is not necessarily
-advisory: the codes that state a defect in the FILE are promoted to hard
-`unit_inconsistency` structural errors, and those are what invalidate the
-document.
+Despite the name (the `unit_warnings` field of the spec's `ValidationResult`),
+a `UnitWarning` is not necessarily advisory: the codes that state a defect in
+the file are promoted to `unit_inconsistency` structural errors, which
+invalidate the document.
 """
 struct UnitWarning
     path::String

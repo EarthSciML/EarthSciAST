@@ -3,42 +3,25 @@
 # ========================================================================
 #
 # The bridge between the direct StableHLO emitter (api.jl) and the Problem
-# surface of API_SPEC §5.8. src/compiler_xla.jl holds everything about this
-# that can be said without Reactant — the availability answer, the device
-# choice, the refusal vocabulary, the report row; here is the part that cannot:
-# `direct_rhs`, `Reactant.@compile` and the device inputs.
+# surface of API_SPEC §5.8; the Reactant-free part (availability, device choice,
+# refusals, report row) is in src/compiler_xla.jl.
 #
-# ONE COMPILE PER BUILD. `u`, `p` and `t` are program INPUTS, so a whole run —
-# every step, every stage, every save — is served by the single executable built
-# here. Nothing recompiles per call, and `remake(prob; p, u0, tspan)` reuses it
-# as it reuses a `:native` closure.
+# One compile per build: `u`, `p` and `t` are program inputs, so a whole run, and
+# `remake(prob; p, u0, tspan)`, reuses the one executable. `XlaProblemRHS` adapts
+# the out-of-place device program (`d(u, p, t) -> du`) to the Problem's in-place
+# host `f!`. Between calls:
 #
-# THE CALLING CONVENTION IS THE PROBLEM'S, NOT THE EMITTER'S. The emitted
-# program is out-of-place on device arrays (`d(u, p, t) -> du`); the Problem's
-# `f!` slot is in-place on host vectors. `XlaProblemRHS` is that adapter, and it
-# is where the two host copies live: `u` into the program's state input, the
-# result back into `du`.
+#   the state input   one `ConcreteRArray`, written with `copyto!` per call (an
+#                     argument array is a real XLA input, so the compiled
+#                     program sees the write);
+#   the parameters    rebuilt only when the `p` handed over is not the one on the
+#                     device, so `remake(prob; p = …)` takes effect on the next
+#                     call;
+#   the time          a fresh `ConcreteRNumber` per call (it has no in-place
+#                     write).
 #
-# WHAT IS REUSED BETWEEN CALLS, AND WHY EACH CHOICE.
-#
-#   the state input   ONE `ConcreteRArray`, written with `copyto!` per call. A
-#                     device array passed as an ARGUMENT is a real XLA input, so
-#                     writing it between calls is seen by the already-compiled
-#                     program — the same property `sync_forcing!` relies on —
-#                     and it keeps a per-step allocation off the hot path.
-#   the parameters    rebuilt only when the `p` the integrator hands over is not
-#                     the one already on the device. A solver passes the same
-#                     `p` on every call of a run, so this is once per run, while
-#                     `remake(prob; p = …)` — which swaps `p` and nothing else —
-#                     is picked up on the next call with no recompile.
-#   the time          a fresh `ConcreteRNumber` per call. It is one scalar, and
-#                     a `ConcreteRNumber` has no in-place write; the emitter's
-#                     own conformance adapter feeds a fresh one per probe for
-#                     the same reason.
-#
-# A SINGLE-TASK CONTRACT. The reused state input makes this wrapper stateful, so
-# two RUNS of the same Problem must not be in flight at once — which is already
-# the `:native` closure's contract (its prelude scratch is shared the same way).
+# The reused state input makes the wrapper stateful: two runs of one Problem
+# must not be in flight at once, the `:native` closure's contract too.
 
 """
     XlaProblemRHS

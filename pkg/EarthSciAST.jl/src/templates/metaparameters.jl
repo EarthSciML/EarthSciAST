@@ -49,16 +49,11 @@ end
 # ---------------------------------------------------------------------------
 # Canonical structural-field table
 # ---------------------------------------------------------------------------
-# The ONE registry of raw-JSON object keys whose VALUES are structural — never
-# ordinary expression positions — for the two load-time rewrite passes over
-# declarations (metaparameter substitution, esm-spec §9.7.6, in this file, and
-# the import-edge rename walk, esm-spec §9.7.7, in templates/imports.jl). The
-# skip/protect sets below are DERIVED from it; nothing else hand-maintains key
-# membership.
-#
-# NEW Expression structural fields MUST be registered here with the right
-# kind, or metaparameter substitution / import-edge renaming will rewrite
-# their string values as if they were variable references.
+# The registry of raw-JSON object keys whose values are structural, not
+# expression positions, for metaparameter substitution (esm-spec §9.7.6, this
+# file) and the import-edge rename walk (§9.7.7, templates/imports.jl). The
+# skip/protect sets below are derived from it. An unregistered structural field
+# has its string values rewritten as if they were variable references.
 #
 # Kinds:
 #   :protected  — opaque to metaparameter substitution AND copied verbatim by
@@ -75,20 +70,11 @@ end
 #                 walk maps it through `isetmap` only when the string names a
 #                 renamed index set, and it stays open to metaparameter
 #                 substitution and to `varmap` like any other expression.
-#   :node       — a NODE-HEADER field: it describes the Expression node itself
-#                 rather than parameterizing whatever op the node carries —
-#                 `op` (which operator this node IS), `id` (this node's
-#                 identity) and `expect_cadence` (an assertion about this
-#                 node). None is an expression position (esm-spec §9.7.6), so
-#                 like `:protected`/`:axis` these are opaque to metaparameter
-#                 substitution AND copied verbatim by the rename walk.
-#   :registry   — closed-registry id / literal enum PARAMETERIZING the node's
-#                 op (`reduce`, `semiring`, `fn`, `table`, …). Like `:node`
-#                 these are names rather than values, so they are opaque to
-#                 metaparameter substitution AND copied verbatim by the rename
-#                 walk; the kind is kept distinct from `:node` because the two
-#                 answer different questions about a node (what it IS vs how
-#                 its op is parameterized).
+#   :node       — a node-header field describing the node itself (`op`, `id`,
+#                 `expect_cadence`): opaque to metaparameter substitution and
+#                 copied verbatim by the rename walk.
+#   :registry   — a closed-registry id or enum parameterizing the node's op
+#                 (`reduce`, `semiring`, `fn`, `table`, …): treated as `:node`.
 #   :opaque     — a loop symbol, reference, id, enum, unit or free text that is
 #                 not an expression position but that the rename walk does not
 #                 protect: opaque to metaparameter substitution ONLY. (`of` and

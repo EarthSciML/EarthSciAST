@@ -991,35 +991,20 @@ dependency order, and return `base` augmented with those buffers.
 
 `base` is the array scope the producers are evaluated AGAINST as well as the map
 that is extended, and defaults to `insp.const_arrays` — the build-time answer.
-A §6.6.5 assertion passes the build's const arrays PLUS the trajectory sample
-(`_state_scope`), which is what lets a STATE-DEPENDENT target use this path at
-all: its producers read the solved state, so against `insp.const_arrays` alone
-every one of them fails to resolve and the whole chain re-executes per output
-cell of the consumer.
+A §6.6.5 assertion passes the build's const arrays plus the trajectory sample
+(`_state_scope`), so a state-dependent target's producers resolve against the
+solved state.
 
-Why this exists. `evaluate_cellwise` walks the expression once PER OUTPUT CELL, so
-an array observed inlined into its readers is re-executed at every cell of the
-consumer's field. The ISRM model composes `E_p[c]` — a spatial join, an aggregate
-over source cells x ALL emission records with rectangle-containment comparisons —
-into `conc_p[rcv] = Σ_s SR_p[s,rcv]·E_p[s]`, into `TotalPM25`, into `deathsK`. So
-evaluating `deathsK` re-ran the entire spatial join once per receptor cell:
-`5 · |ppl| · |records|` terms at each of 52,411 cells, ~1.7e13 evaluations at full
-scale. Materializing each producer once makes it O(1) in the consumer's cell count.
+`evaluate_cellwise` walks the expression once per output cell, so an array
+observed inlined into its readers would be re-executed at every cell of the
+consumer's field; materializing each producer once removes that factor. The
+right-hand side's factoring (`_collect_materialized_array_obs`) roots liveness
+at the `D`/`ic` equations and so does nothing for a model with no state; this
+path roots it at the requested observed.
 
-This is deliberately SEPARATE from the RHS-side factoring
-(`_collect_materialized_array_obs`), which roots liveness at the `D`/`ic` equations
-and so factors nothing at all for a pure-algebraic model — no state, every result
-an observed — which is exactly the shape that suffers most here. The root for the
-build-time path is the observed the caller asked for.
-
-Values are the same computation, to within float reassociation. A buffer holds
-what that observed's own published body computes at that index, and the reduction
-order WITHIN each aggregate is untouched. What can move is the order BETWEEN them:
-a consumer that would inline `a + b + c` and instead reads three buffers is summing
-the same three numbers, but the un-inlined and the fully substituted bodies are
-not always the same expression tree, and float addition does not associate, so
-a downstream field may move in its last bits. Nothing semantic changes, and
-nothing about WHICH terms are summed.
+Values are the same computation, but reading buffers instead of the inlined
+body can reassociate floating-point sums between producers, so a downstream
+field may differ in its last bits.
 
 Returns `base` ITSELF (by identity, which is how the caller detects the no-op)
 when there is nothing to materialize, so models whose observeds are scalar or

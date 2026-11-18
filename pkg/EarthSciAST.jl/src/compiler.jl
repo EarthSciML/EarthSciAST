@@ -2,19 +2,16 @@
 # Choosing the compiler (API_SPEC §5.8, esm-libraries-spec §2.5.10)
 # ============================================================
 #
-# `compiler` names the strategy that builds a problem's right-hand side. The
-# vocabulary is closed and identical in every binding; this file holds Julia's
-# side of it: the vocabulary, the per-tier PLAN each value expands to, the
-# per-build REPORT that says which tier every rule landed on, and the refusal
-# helper the strict `native` compiler raises through.
+# `compiler` names the strategy that builds a problem's right-hand side, from a
+# closed vocabulary shared by every binding. This file holds the vocabulary, the
+# per-tier plan each value expands to, the per-build report of which tier every
+# rule landed on, and the refusal helper the strict `native` compiler raises
+# through.
 #
-# The plan is the ONLY place a tier reads its own on/off state from. No
-# environment variable selects an evaluation strategy: the vocabulary value is
-# the whole answer, so an environment and an argument have nothing to disagree
-# about (esm-libraries-spec §2.5.10). What survives in `ENV` is the tuning
-# thresholds — a node budget, a function-size cap, a threading floor, an
-# admission floor — each of which is a REFUSAL BOUNDARY under `native` rather
-# than a fallback trigger, and two experimental tiers that ship off.
+# The plan is the only place a tier reads its on/off state from; no environment
+# variable selects an evaluation strategy (esm-libraries-spec §2.5.10). The
+# tuning thresholds left in `ENV` are refusal boundaries under `native`, not
+# fallback triggers.
 
 """
     COMPILER_VOCABULARY
@@ -30,18 +27,12 @@ const COMPILER_VOCABULARY = (:interpreter, :native, :xla, :mtk, :sympy)
 # The plan: one Bool per tier, derived from the vocabulary value
 # ---------------------------------------------------------------------------
 #
-# Every field is "this tier may run". `native` has them all true; `interpreter`
-# has them all false. A field exists here for a tier only when turning it off
-# changes which evaluator runs — a tuning threshold (a node budget, a cell
-# floor) is a different thing and stays where it is, and so is MEMOIZATION.
-#
-# MEMOIZATION IS NOT A TIER. The load-time expansion memo
-# (`_expand_expr_refs`) and the reference-preserving template image
-# (`lower_expression_templates`) make the same program out of the same
-# document; what they save is build wall time, not a tree walk per cell. So
-# `interpreter` keeps both: an oracle that re-derives the program it is about
-# to compare against would be a slower way to build the SAME answer, and on the
-# documents it exists to run it is the difference between minutes and hours.
+# Every field is "this tier may run": all true for `native`, all false for
+# `interpreter`. A field exists only for a tier whose switch changes which
+# evaluator runs. Tuning thresholds are not plan fields, and neither is
+# memoization (the load-time expansion memo, `_expand_expr_refs`, and the
+# reference-preserving template image, `lower_expression_templates`), which
+# changes build time and not the program, so `interpreter` keeps it.
 struct CompilerPlan
     name::Symbol          # the vocabulary value this plan implements
     strict::Bool          # refuse a rule this compiler cannot express
@@ -79,11 +70,9 @@ struct CompilerPlan
     geom_overlap_gate::Bool
 end
 
-# Threading is deliberately NOT a plan field. A chunked kernel is
-# value-identical to the serial one by construction — the chunks write disjoint
-# slots — so it is not a choice of evaluator; how much work is worth a thread
-# dispatch is a tuning threshold (`_Tuning.thread_min_work`), which each
-# section keeps from the build that made it.
+# Threading is not a plan field: a chunked kernel writes disjoint slots and is
+# value-identical to the serial one; its floor is the tuning threshold
+# `_Tuning.thread_min_work`.
 
 # A plan by keyword: every tier flag defaults to `compiled` (all on for a
 # compiling plan, all off for the interpreter's). Tests and bisections switch
@@ -155,29 +144,16 @@ function _check_compiler(compiler::Symbol)
     if compiler === :native || compiler === :interpreter
         return nothing
     elseif compiler === :xla
-        # The specialty compiler that needs a HEAVY EXTERNAL DEPENDENCY: the
-        # direct StableHLO emitter, which exists only with Reactant in the
-        # session. `_xla_extension` raises `compiler_unavailable` when it is
-        # not, which is the right failure for a value that IS in the
-        # vocabulary, and the device is resolved to a client here too — a
-        # mistyped `EARTHSCI_JULIA_XLA_DEVICE` is an `ArgumentError`, a GPU
-        # this process does not have is `compiler_unavailable` — so neither
-        # waits for a load, a flatten and a build. Everything else about the
-        # lane is in compiler_xla.jl.
+        # Needs Reactant (`compiler_unavailable` without it). The device is
+        # resolved here too, so a mistyped `EARTHSCI_JULIA_XLA_DEVICE`
+        # (`ArgumentError`) or a missing GPU (`compiler_unavailable`) is reported
+        # before any load. The lane itself is in compiler_xla.jl.
         _xla_extension()
         _xla_client(_xla_device())
         return nothing
     elseif compiler === :mtk
-        # VOCABULARY FIRST, AVAILABILITY SECOND. `:mtk` is a member of the
-        # closed vocabulary, so a session without ModelingToolkit hears
-        # `compiler_unavailable` naming what to load — never `compiler_unknown`,
-        # which would say the value does not exist.
-        #
-        # `:mtk` is a SPECIALTY compiler: it works only for some documents, and
-        # it is the one that runs EVENTS and IMPLICIT EQUATIONS (the constructs
-        # CONFORMANCE_SPEC §5.39 has every other evaluator refuse). `:native`
-        # remains the universally fast default with no heavy external
-        # dependency; `:interpreter` remains the simple oracle that checks them.
+        # A vocabulary value, so a session without ModelingToolkit hears
+        # `compiler_unavailable`, not `compiler_unknown`.
         Base.get_extension(EarthSciAST, :EarthSciASTMTKExt) === nothing &&
             throw(
             SimulateError(
@@ -224,16 +200,10 @@ _compiler_plan_now()::CompilerPlan =
 _with_compiler_plan(f, plan::CompilerPlan) =
     _with_build_ctx(f, _ctx_with(_build_ctx(); plan = plan))
 
-# The plan a `compiler` keyword produces. The keyword has no "unset" value: a
-# caller who names nothing gets the strict `:native` a caller who names it
-# gets, because a default that was quietly more permissive than the same value
-# spelled out is the second way of saying the same thing that §2.5.10 exists to
-# remove.
+# The plan a `compiler` keyword produces; naming nothing is the strict `:native`.
 _plan_for(compiler::Symbol) = _compiler_plan(compiler)
-# The internal build entry (`_build_evaluator_impl`) also takes a plan itself,
-# so a test can build with a tier plan no vocabulary value names (a non-strict
-# `native`, to reach the per-cell build a strict one refuses). The public
-# entries take only the vocabulary.
+# The internal build entry (`_build_evaluator_impl`) also takes a plan, so a test
+# can build with one no vocabulary value names (a non-strict `native`, say).
 _plan_for(plan::CompilerPlan) = plan
 
 # ---------------------------------------------------------------------------
