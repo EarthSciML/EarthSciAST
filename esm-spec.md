@@ -2,14 +2,15 @@
 
 **EarthSciML Abstract Syntax Tree Format — Version 2.3.0**
 
-> **Proposed for the next version (draft; the version number is not yet decided, and this
-> change is breaking).** No step of loading or flattening inlines a template body. A firing
+> **3.0.0 (proposed; breaking).** This change ships in 3.0.0 together with the removal of
+> `grad`, `div` and `laplacian` (the `retire-spatial-ops` change, which also bumps the schema
+> and the version line above). No step of loading or flattening inlines a template body. A firing
 > `match` rule writes a reference to itself instead of its body (§9.6.3 constraint 7); rules
 > apply inside template bodies once per template instance, replacing eager expansion
 > (§9.6.4 rule 3); mounted leaves keep their references (§9.6.4 rule 1); and the elementwise
 > lift keeps references, reading their bindings at the cell (§9.6.11). For a document in which
-> no match spans a template boundary, `Expand(load(f))` is the same tree as under 2.3.0. The
-> breaking differences are:
+> no match spans a template boundary, `Expand(load(f))` is the same tree as under 2.3.0. This
+> change's breaking differences are:
 >
 > 1. **A pattern no longer matches across a reference to a template whose body holds a
 >    rewrite-target op.** 2.3.0 expanded such a reference before the fixpoint, so a compound
