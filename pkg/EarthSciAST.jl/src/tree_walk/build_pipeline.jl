@@ -148,12 +148,10 @@ function _build_lower_and_classify(
     # not anything reads it: the output-time routes read the same buffer.
     union!(mat_array_vars, recur_vars)
 
-    return (;
-        equations, folded_array_obs,
-        geom_setup_vars = geo.setup_vars,
-        geom_defs = geo.defs, geom_inline_vars, array_inline_vars,
-        discrete_vars, const_obs_vars, const_obs_arrays, mat_array_vars,
-        gated_geom_vars,
+    return _VariableClasses(
+        equations, folded_array_obs, geo.setup_vars, geo.defs, geom_inline_vars,
+        array_inline_vars, discrete_vars, const_obs_vars, const_obs_arrays,
+        mat_array_vars, gated_geom_vars
     )
 end
 
@@ -186,7 +184,7 @@ end
 # join-gate resolution, index-set range resolution, value-invention drop,
 # discrete-cadence def extraction, and the `ic` fold.
 function _build_partition_and_materialize(
-        model::Model, cls;
+        model::Model, cls::_VariableClasses;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
         param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars, vi_extents::AbstractDict,
@@ -394,11 +392,10 @@ function _build_partition_and_materialize(
         (plan, _ic_evaluate(plan, ic_t0, ic_data)...)
     end
 
-    return (;
+    return _EquationPartition(
         param_names, observed_names, state_var_names, param_scope,
-        geom_setup_arrays, derived_extents,
-        equations, init_equations, discrete_defs, eq_ics, field_ics, ic_start,
-        ic_plan,
+        geom_setup_arrays, derived_extents, equations, init_equations,
+        discrete_defs, eq_ics, field_ics, ic_start, ic_plan
     )
 end
 
@@ -408,7 +405,7 @@ end
 # order), fold the deferred field ics now that cells are known (mutating
 # `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
 function _build_state_layout(
-        model::Model, cls, parts;
+        model::Model, cls::_VariableClasses, parts::_EquationPartition;
         initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars,
         # Build-time parameter-read sink (see `_record_param_read`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
@@ -572,11 +569,9 @@ function _build_state_layout(
     # locates it. (The public `param_map(p)` is this map keyed by NAME.)
     param_index = Dict{Symbol, Int}(s => i for (i, s) in enumerate(p_syms))
 
-    return (;
-        n_states = length(var_map), var_map, u0, p,
-        param_sym_set = param_index, array_var_info,
-        var_map_ext, array_var_info_ext, mat_dims,
-        n_total = length(var_map_ext), ic_reseed,
+    return _StatePlan(
+        u0, p, var_map, array_var_info, param_index, var_map_ext, array_var_info_ext,
+        mat_dims, ic_reseed
     )
 end
 
@@ -586,7 +581,7 @@ end
 # faq-valued initialization equations, the per-derivative compile + CSE,
 # and the final `f!` closure. Returns the full `_build_evaluator_impl` result.
 function _build_compile_evaluator(
-        model::Model, cls, parts, layout;
+        model::Model, cls::_VariableClasses, parts::_EquationPartition, layout::_StatePlan;
         index_sets::AbstractDict = Dict{String, Any}(), const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan, products, materialize_out,
@@ -596,8 +591,8 @@ function _build_compile_evaluator(
     )
     u0 = layout.u0
     p = layout.p
-    param_sym_set = layout.param_sym_set
-    n_states = layout.n_states
+    param_sym_set = layout.param_index
+    n_states = _n_states(layout)
     # The layout hands back TWO maps: the ODE-only one (`var_map` — the public
     # return, and the scope the setup-time seeding evaluates in, where the
     # observed buffers do not exist yet) and the EXTENDED one that also carries
@@ -605,18 +600,22 @@ function _build_compile_evaluator(
     # compiles against uses the extended pair.
     var_map = layout.var_map_ext
     array_var_info = layout.array_var_info_ext
-    n_total = layout.n_total
+    n_total = _n_total(layout)
     # The materialized set, narrowed to the observeds whose buffer extents
     # actually resolved (`mat_dims`); the rest stayed on the inline path.
     mat_vars = Set{String}(keys(layout.mat_dims))
 
     # ---- Observed substitution / derivative-equation split ----
-    derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
+    split = _split_observed_and_derivatives(
         parts.equations,
         parts.observed_names, cls.geom_setup_vars,
         cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
         Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape))
     )
+    derivative_eqs = split.derivatives
+    resolved_obs = split.resolved
+    raw_obs = split.raw
+    mat_defs = split.materialized
 
     # ---- Const-array registry (caller arrays + boundaries + setup geometry) ----
     const_registry = _register_const_arrays(
@@ -1650,7 +1649,7 @@ _pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float6
 # name.
 function _level_recurrence(
         name::String, form::Symbol, recur_names::Set{String},
-        mat_defs::Dict{String, ASTExpr}, layout, model::Model,
+        mat_defs::Dict{String, ASTExpr}, layout::_StatePlan, model::Model,
         resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope,
         products::Union{Nothing, BuildProducts}
     )

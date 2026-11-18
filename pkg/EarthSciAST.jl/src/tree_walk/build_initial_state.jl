@@ -71,12 +71,7 @@ end
 # `tspan` then has to evaluate the `ic` right-hand sides again.
 const _IC_T0_NAME = "__esm_ic_t0"
 
-struct _IcStart
-    t0::Float64
-    scalars::Dict{String, Float64}
-    arrays::Dict{String, Any}
-    reads_start::Bool
-end
+# `_IcStart`: build_records.jl.
 
 _ic_bind_start_time(e::ASTExpr) =
     _sub_preserving(e, Dict{String, ASTExpr}("t" => VarExpr(_IC_T0_NAME)))
@@ -107,30 +102,7 @@ function _ic_reads_state_error(target, chain::Vector{String}, state::String)
     )
 end
 
-# What evaluating the `ic` right-hand sides at a start of the run needs, and
-# nothing more of the build: worked out once, at construction, from the model
-# and the build's scopes, and kept by a Problem whose initial state moves with
-# its start (`_IcReseed`), so it holds the cone the `ic`s read rather than the
-# build environment it was taken from.
-struct _IcPlan
-    # The `ic` right-hand sides: scalar targets, and array ones with `t` bound
-    # to the start (`_ic_bind_start_time`).
-    scalar_ics::Vector{Tuple{String, ASTExpr}}
-    field_ics::Vector{Tuple{String, ASTExpr}}
-    # The scalar parameters, at their values for this build.
-    params::Dict{String, Float64}
-    # The build's arrays the cone reads, and the data-fed parameters it reads
-    # at their construction-time value (the ones `ic_data` does not replace).
-    arrays::Dict{String, Any}
-    live::Dict{String, Any}
-    scalar_live::Set{String}
-    # The observeds the cone reads, in dependency order: name, body with `t`
-    # bound, and its extents (`nothing` for a scalar one).
-    order::Vector{Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}}
-    # The unknowns a scalar `ic` right-hand side reads, for its diagnostic.
-    unknowns::Set{String}
-    reads_start::Bool
-end
+# `_IcPlan`: build_records.jl.
 
 function _ic_plan(
         model::Model, scalar_ics, field_ics;

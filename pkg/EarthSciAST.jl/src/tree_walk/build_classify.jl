@@ -804,8 +804,7 @@ end
 # geometry observed (F_tgt …) or a promoted array observed enters the
 # substitution map as a faq value; `index(obs, j)` in a reader
 # beta-reduces to its body via `_resolve_indices` (ess-14f.4 /
-# shape-promotion). Returns `(derivative_eqs, resolved_obs, raw_obs)`; the RAW
-# map preserves the author-declared observed-into-observed references so the
+# shape-promotion). Returns an `_ObservedSplit`; its `raw` map preserves the author-declared observed-into-observed references so the
 # scalar-slot plan (`_plan_observed_slots`) can compile each observed once as a
 # named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(
@@ -884,7 +883,9 @@ function _split_observed_and_derivatives(
     # and is refused here by name. A bare self-reference keeps the cycle
     # diagnosis it earns.
     _decline_unmaterialized_recurrences(observed_exprs, array_shaped_vars)
-    return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
+    return _ObservedSplit(
+        derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
+    )
 end
 
 # Fail closed on a recurrence definition that did not become a materialized

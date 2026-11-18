@@ -34,9 +34,9 @@
 # bound to the problem when `esm_problem` publishes it, and holding the
 # problem's programs as they are built.
 mutable struct _ObsProgramCtx
-    model::Any
-    cls::Any
-    parts::Any
+    model::Model
+    cls::_VariableClasses
+    parts::_EquationPartition
     index_sets::AbstractDict
     # The build's state-only scope: the ODE layout, its const arrays, live
     # buffers (discrete caches included) and parameter positions.
@@ -193,10 +193,13 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     # this program does not read included: a self-reference has no inlined form
     # (the right-hand side's build already materialized each of them).
     shaped_vars = Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape))
-    _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
+    split = _split_observed_and_derivatives(
         parts.equations, parts.observed_names, cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
         union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars
     )
+    resolved_obs = split.resolved
+    raw_obs = split.raw
+    mat_defs = split.materialized
     # The extended layout: the state, then one block per materialized observed.
     mat_dims = Dict{String, Vector{Int}}()
     for m in mat_vars
