@@ -238,13 +238,9 @@ function remove_equation(model::Model, index::Int)::Model
 end
 
 function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
-    # The first equation whose LHS is structurally equal to the pattern: the
-    # two serialize to the same wire form.
-    want = serialize_expression(lhs_pattern)
+    # The first equation whose LHS is structurally equal to the pattern.
     for (i, eq) in enumerate(model.equations)
-        if eq.lhs === lhs_pattern || serialize_expression(eq.lhs) == want
-            return remove_equation(model, i)
-        end
+        _expr_equal(eq.lhs, lhs_pattern) && return remove_equation(model, i)
     end
 
     throw(EditError("No equation found with LHS matching: $lhs_pattern"))

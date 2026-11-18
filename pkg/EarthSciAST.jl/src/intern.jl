@@ -74,34 +74,38 @@ _InternCtx() = _InternCtx(Dict{UInt, Vector{OpExpr}}(), IdDict{OpExpr, OpExpr}()
 # Fail-closed structural equality / hash for NON-child-slot payloads: the
 # `:scalar` / `:join` / `:internal` / `:ranges` field kinds — plain JSON data
 # (strings, ints, floats, bools, nested vectors), `ranges` dicts whose entries
-# may be `IndexSetRef`s or bound vectors mixing Ints with (already interned)
-# `ASTExpr`s, and any build-internal payload. Unrecognized types compare
-# `===`-only with an `objectid` hash — consistent, and fail-safe (no merge).
+# may be `IndexSetRef`s or bound vectors mixing Ints with `ASTExpr`s, and any
+# build-internal payload. Unrecognized types compare `===`-only with an
+# `objectid` hash — consistent, and fail-safe (no merge). An `ASTExpr` inside a
+# payload is compared by `ceq`: `===` for interning (children are already
+# interned, so identity is structure), `_expr_equal` for a deep comparison.
 # ------------------------------------------------------------------------
-_plain_eq(a, b) = a === b                       # unknown type: identity only
-_plain_eq(::Nothing, ::Nothing) = true
-_plain_eq(a::String, b::String) = a == b
-_plain_eq(a::Bool, b::Bool) = a === b
-_plain_eq(a::Int64, b::Int64) = a === b
-_plain_eq(a::Float64, b::Float64) = a === b     # bit-egal: -0.0 ≠ 0.0, NaN payloads distinct
-_plain_eq(a::ASTExpr, b::ASTExpr) = a === b     # children are interned ⇒ === is structural
-_plain_eq(a::IndexSetRef, b::IndexSetRef) = a.from == b.from && a.of == b.of
-function _plain_eq(a::AbstractVector, b::AbstractVector)
+_plain_eq(a, b, ceq::F = (===)) where {F} = a === b   # unknown type: identity only
+_plain_eq(::Nothing, ::Nothing, ceq::F = (===)) where {F} = true
+_plain_eq(a::String, b::String, ceq::F = (===)) where {F} = a == b
+_plain_eq(a::Bool, b::Bool, ceq::F = (===)) where {F} = a === b
+_plain_eq(a::Int64, b::Int64, ceq::F = (===)) where {F} = a === b
+# bit-egal: -0.0 ≠ 0.0, NaN payloads distinct
+_plain_eq(a::Float64, b::Float64, ceq::F = (===)) where {F} = a === b
+_plain_eq(a::ASTExpr, b::ASTExpr, ceq::F = (===)) where {F} = ceq(a, b)::Bool
+_plain_eq(a::IndexSetRef, b::IndexSetRef, ceq::F = (===)) where {F} =
+    a.from == b.from && a.of == b.of
+function _plain_eq(a::AbstractVector, b::AbstractVector, ceq::F = (===)) where {F}
     a === b && return true
     typeof(a) === typeof(b) || return false
     length(a) == length(b) || return false
     for i in eachindex(a)
-        _plain_eq(a[i], b[i]) || return false
+        _plain_eq(a[i], b[i], ceq) || return false
     end
     return true
 end
-function _plain_eq(a::AbstractDict, b::AbstractDict)
+function _plain_eq(a::AbstractDict, b::AbstractDict, ceq::F = (===)) where {F}
     a === b && return true
     typeof(a) === typeof(b) || return false
     length(a) == length(b) || return false
     for (k, v) in a
         haskey(b, k) || return false
-        _plain_eq(v, b[k]) || return false
+        _plain_eq(v, b[k], ceq) || return false
     end
     return true
 end
@@ -321,16 +325,25 @@ end
     return h
 end
 
-# (3) Shallow structural equality over ALL fields, for candidates in one hash
-# bucket. Child slots by `===` (interned ⇒ structural); everything else
-# `_plain_eq` (fail-closed).
-@eval function _intern_shallow_equal(a::OpExpr, b::OpExpr)::Bool
+# (3) Structural equality of two nodes field by field, children compared by
+# `ceq`. With `ceq = ===` it is the shallow comparison of candidates in one hash
+# bucket (interned children: identity is structure); with `_expr_equal` it is
+# the deep comparison. `internal` decides whether `:internal` (build-time,
+# never emitted) fields take part: they do for interning, which must never merge
+# two nodes the build tells apart, and they do not for document equality.
+@eval function _opexpr_equal(a::OpExpr, b::OpExpr, ceq::F, internal::Bool)::Bool where {F}
     a.op == b.op || return false
     $(
         (
             begin
                 if spec.kind === :expr
-                    :(a.$f === b.$f || return false)
+                    quote
+                        let xa = a.$f, xb = b.$f
+                            xa === xb || (
+                                xa !== nothing && xb !== nothing && ceq(xa, xb)::Bool
+                            ) || return false
+                        end
+                    end
                 elseif spec.kind === :expr_vec
                     quote
                         let va = a.$f, vb = b.$f
@@ -338,7 +351,7 @@ end
                                 (va === nothing || vb === nothing) && return false
                                 length(va) == length(vb) || return false
                                 for i in eachindex(va)
-                                    va[i] === vb[i] || return false
+                                    ceq(va[i], vb[i])::Bool || return false
                                 end
                             end
                         end
@@ -351,13 +364,16 @@ end
                                 length(ma) == length(mb) || return false
                                 for (k, v) in ma
                                     w = get(mb, k, nothing)
-                                    v === w || return false
+                                    w === nothing && return false
+                                    ceq(v, w)::Bool || return false
                                 end
                             end
                         end
                     end
-                else # :scalar / :join / :internal / :ranges
-                    :(_plain_eq(a.$f, b.$f) || return false)
+                elseif spec.kind === :internal
+                    :(!internal || _plain_eq(a.$f, b.$f, ceq) || return false)
+                else # :scalar / :join / :ranges
+                    :(_plain_eq(a.$f, b.$f, ceq) || return false)
                 end
             end
                 for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
@@ -366,6 +382,20 @@ end
     )
     return true
 end
+
+_intern_shallow_equal(a::OpExpr, b::OpExpr) = _opexpr_equal(a, b, ===, true)
+
+"""
+    _expr_equal(a::ASTExpr, b::ASTExpr) -> Bool
+
+Whether two expressions are the same document expression: the same node kinds
+with every emitted field equal, at every depth. Literals compare by value and
+type (`1` is not `1.0`, `0.0` is not `-0.0`); build-time fields are ignored.
+Identical objects are equal without a walk. Not `Base.==`: `OpExpr` keeps
+identity `==` so `IdDict` memos stay constant-time.
+"""
+_expr_equal(a::ASTExpr, b::ASTExpr) = a === b
+_expr_equal(a::OpExpr, b::OpExpr) = a === b || _opexpr_equal(a, b, _expr_equal, false)
 
 # Exhaustiveness pin: the walkers above dispatch on the field kinds known
 # today; a new kind must be classified here before it can ship.
