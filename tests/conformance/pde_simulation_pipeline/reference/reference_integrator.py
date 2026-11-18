@@ -25,7 +25,8 @@ Per cell (i,j), the 0-D O3-NOx mass-action reactions (k1=0.018, jNO2=0.005):
     D(NO2) = +r - p
 
 plus a per-species longitudinal advection contribution ``-u_wind[i,j] * grad_i``,
-where ``grad`` is the fixture's two-arg ``grad_lon_inflow`` stencil (makearray
+where ``grad`` is the fixture's ``grad_lon_inflow`` stencil, the lowering of a
+spatial ``D(f, inflow, wrt: lon)`` with one trailing boundary operand (makearray
 over 3 lon regions; dx=100). For a species field f with western inflow vector
 ``inflow`` (over lat):
 
@@ -33,7 +34,8 @@ over 3 lon regions; dx=100). For a species field f with western inflow vector
     interior    i=2,3 (region [[2,3],[1,2]]): (f[i+1,j] - f[i-1,j]) / (2*dx)
     east face   i=4  (region [[4,4],[1,2]]): (f[i,j]   - f[i-1,j]) / dx
 
-Sign convention: the model equations are ``D(sp) = (-u_wind) * grad(sp, inflow)``,
+Sign convention: the model equations are
+``D(sp) = (-u_wind) * D(sp, sp_inflow, wrt: lon)``,
 so the advective tendency added to each cell is ``-u_wind[i,j] * grad_i[i,j]``.
 
 --------------------------------------------------------------------------------

@@ -190,10 +190,17 @@
                     "args": [
                       "horizontal_diffusivity",
                       {
-                        "op": "laplacian",
+                        "op": "D",
                         "args": [
-                          "u"
-                        ]
+                          {
+                            "op": "D",
+                            "args": [
+                              "u"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
                       }
                     ]
                   }

@@ -23,17 +23,17 @@
     "required": true
   },
   {
-    "description": "Spatial gradient with dim field",
-    "operator": "grad",
-    "required_fields": ["dim"],
+    "description": "Spatial derivative: D with a spatial wrt, one D per axis (grad, div and laplacian were removed at esm 3.0.0)",
+    "operator": "D",
+    "required_fields": ["wrt"],
     "examples": [
       {
-        "input": {"op": "grad", "args": ["T"], "dim": "x"},
+        "input": {"op": "D", "args": ["T"], "wrt": "x"},
         "meaning": "∂T/∂x",
         "latex": "\\frac{\\partial T}{\\partial x}"
       },
       {
-        "input": {"op": "grad", "args": ["pressure"], "dim": "y"},
+        "input": {"op": "D", "args": ["pressure"], "wrt": "y"},
         "meaning": "∂pressure/∂y",
         "latex": "\\frac{\\partial \\mathrm{pressure}}{\\partial y}"
       }
@@ -41,27 +41,27 @@
     "required": true
   },
   {
-    "description": "Divergence operator",
-    "operator": "div",
-    "required_fields": [],
+    "description": "Divergence written as a sum of spatial D, one per component",
+    "operator": "D",
+    "required_fields": ["wrt"],
     "examples": [
       {
-        "input": {"op": "div", "args": ["velocity_field"]},
-        "meaning": "∇·velocity_field",
-        "latex": "\\nabla \\cdot \\mathrm{velocity\\_field}"
+        "input": {"op": "+", "args": [{"op": "D", "args": ["u"], "wrt": "x"}, {"op": "D", "args": ["v"], "wrt": "y"}]},
+        "meaning": "∂u/∂x + ∂v/∂y",
+        "latex": "\\frac{\\partial u}{\\partial x} + \\frac{\\partial v}{\\partial y}"
       }
     ],
     "required": true
   },
   {
-    "description": "Laplacian operator",
-    "operator": "laplacian",
-    "required_fields": [],
+    "description": "Laplacian written as a sum of nested spatial D, one pair per axis",
+    "operator": "D",
+    "required_fields": ["wrt"],
     "examples": [
       {
-        "input": {"op": "laplacian", "args": ["T"]},
-        "meaning": "∇²T",
-        "latex": "\\nabla^2 T"
+        "input": {"op": "+", "args": [{"op": "D", "args": [{"op": "D", "args": ["T"], "wrt": "x"}], "wrt": "x"}, {"op": "D", "args": [{"op": "D", "args": ["T"], "wrt": "y"}], "wrt": "y"}]},
+        "meaning": "∂²T/∂x² + ∂²T/∂y²",
+        "latex": "\\frac{\\partial^2 T}{\\partial x^2} + \\frac{\\partial^2 T}{\\partial y^2}"
       }
     ],
     "required": true
@@ -76,19 +76,10 @@
     }
   },
   {
-    "description": "Invalid: grad operator missing dim field",
-    "operator": "grad",
-    "invalid_example": {
-      "input": {"op": "grad", "args": ["T"]},
-      "expected_error": "missing_required_field",
-      "missing_field": "dim"
-    }
-  },
-  {
     "description": "Invalid: too many arguments for unary operator",
-    "operator": "div",
+    "operator": "exp",
     "invalid_example": {
-      "input": {"op": "div", "args": ["a", "b"]},
+      "input": {"op": "exp", "args": ["a", "b"]},
       "expected_error": "excess_arguments"
     }
   },

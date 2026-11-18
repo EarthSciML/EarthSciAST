@@ -17,7 +17,7 @@
   "models": {
     "AdvectionDiffusion": {
       "reference": {
-        "notes": "Tests spatial operators for atmospheric transport: grad, div, laplacian on finite difference grids"
+        "notes": "Tests spatial derivatives for atmospheric transport (advection and diffusion terms written with spatial D, one D per axis) on finite difference grids"
       },
       "variables": {
         "tracer": {
@@ -76,11 +76,11 @@
                         ]
                       },
                       {
-                        "op": "grad",
+                        "op": "D",
                         "args": [
                           "tracer"
                         ],
-                        "dim": "x"
+                        "wrt": "x"
                       }
                     ]
                   },
@@ -94,11 +94,11 @@
                         ]
                       },
                       {
-                        "op": "grad",
+                        "op": "D",
                         "args": [
                           "tracer"
                         ],
-                        "dim": "y"
+                        "wrt": "y"
                       }
                     ]
                   }
@@ -109,9 +109,34 @@
                 "args": [
                   "K_diff",
                   {
-                    "op": "laplacian",
+                    "op": "+",
                     "args": [
-                      "tracer"
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "tracer"
+                            ],
+                            "wrt": "x"
+                          }
+                        ],
+                        "wrt": "x"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "D",
+                            "args": [
+                              "tracer"
+                            ],
+                            "wrt": "y"
+                          }
+                        ],
+                        "wrt": "y"
+                      }
                     ]
                   }
                 ]
@@ -188,7 +213,7 @@
     },
     "DivergenceTest": {
       "reference": {
-        "notes": "Test divergence operator implementation: ∇ · (u*tracer) for mass flux conservation"
+        "notes": "Test the divergence of the mass flux, written with spatial D one component per axis: ∇ · (u*tracer) = ∂(u_field*tracer)/∂x + ∂(v_field*tracer)/∂y, for mass flux conservation"
       },
       "variables": {
         "tracer": {
@@ -220,44 +245,33 @@
             "op": "-",
             "args": [
               {
-                "op": "div",
+                "op": "+",
                 "args": [
                   {
-                    "op": "*",
+                    "op": "D",
                     "args": [
-                      "tracer",
                       {
-                        "op": "+",
+                        "op": "*",
                         "args": [
-                          {
-                            "op": "*",
-                            "args": [
-                              "u_field",
-                              {
-                                "op": "grad",
-                                "args": [
-                                  "x"
-                                ],
-                                "dim": "x"
-                              }
-                            ]
-                          },
-                          {
-                            "op": "*",
-                            "args": [
-                              "v_field",
-                              {
-                                "op": "grad",
-                                "args": [
-                                  "y"
-                                ],
-                                "dim": "y"
-                              }
-                            ]
-                          }
+                          "u_field",
+                          "tracer"
                         ]
                       }
-                    ]
+                    ],
+                    "wrt": "x"
+                  },
+                  {
+                    "op": "D",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "v_field",
+                          "tracer"
+                        ]
+                      }
+                    ],
+                    "wrt": "y"
                   }
                 ]
               }
@@ -366,9 +380,34 @@
         {
           "lhs": "numerical_laplacian",
           "rhs": {
-            "op": "laplacian",
+            "op": "+",
             "args": [
-              "analytical_field"
+              {
+                "op": "D",
+                "args": [
+                  {
+                    "op": "D",
+                    "args": [
+                      "analytical_field"
+                    ],
+                    "wrt": "x"
+                  }
+                ],
+                "wrt": "x"
+              },
+              {
+                "op": "D",
+                "args": [
+                  {
+                    "op": "D",
+                    "args": [
+                      "analytical_field"
+                    ],
+                    "wrt": "y"
+                  }
+                ],
+                "wrt": "y"
+              }
             ]
           }
         },

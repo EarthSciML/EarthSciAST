@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "UnitsGradientOperatorMismatch",
-    "description": "Invalid file. The single defect is the bad_sum observed variable, which adds 'm' to 'kg' (an ordinary §4.8.3 dimensional mismatch). The file ALSO applies grad over a coordinate 'x' declared without units — that is DELIBERATELY NOT an error: grad/div/laplacian are open-tier rewrite-target sugar with no dimensional rule (§4.8.3 'any other op'), so their dimension is undeterminable until lowered and a checker reports unknown and skips (§4.8.4). This fixture guards that despecialization — a binding must not re-add a bespoke gradient-units rule.",
+    "description": "Invalid file. The single defect is the bad_sum observed variable, which adds 'm' to 'kg' (an ordinary §4.8.3 dimensional mismatch). The file ALSO applies a user op, upwind_gradient, over a coordinate 'x' declared without units — that is DELIBERATELY NOT an error: a user op is an open-tier rewrite target with no dimensional rule (§4.8.3 'any other op'), so its dimension is undeterminable until lowered and a checker reports unknown and skips (§4.8.4). This fixture guards that — a binding must not invent a dimensional rule for an open-tier op (a coordinate-divided 'gradient' rule keyed on the op name or its dim field). It used the grad sugar until esm 3.0.0 removed grad/div/laplacian; the filename is kept.",
     "authors": [
       "Chris Tessum with Claude"
     ],
@@ -20,7 +20,7 @@
         "x": {
           "type": "parameter",
           "default": 0.0,
-          "description": "Spatial coordinate declared WITHOUT units. The grad over dim 'x' therefore has an undeterminable dimension (§4.8.3 'any other op' -> §4.8.4 unknown, skip); a checker MUST NOT flag it. Only the bad_sum addition is a real mismatch."
+          "description": "Spatial coordinate declared WITHOUT units. The upwind_gradient user op over dim 'x' therefore has an undeterminable dimension (§4.8.3 'any other op' -> §4.8.4 unknown, skip); a checker MUST NOT flag it. Only the bad_sum addition is a real mismatch."
         },
         "D_coef": {
           "type": "parameter",
@@ -60,7 +60,7 @@
             "args": [
               "D_coef",
               {
-                "op": "grad",
+                "op": "upwind_gradient",
                 "args": [
                   "c"
                 ],

@@ -1552,7 +1552,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   because "an undiscretized spatial operator never reaches step 4". That was one
   binding's stricter behaviour written up as though it were the format, and it
   contradicts §4.7.6, which normatively tells libraries to scan equations for
-  `grad` / `div` / `laplacian` / `D` with `wrt != "t"` and add each referenced
+  `D` with `wrt != "t"` and add each referenced
   spatial dimension. §4.7.6 governs: a model carrying undiscretized spatial
   operators is a PDE, `system_kind` has a `"pde"` value for exactly that case,
   and refusing to flatten it makes `PDESystem` construction unreachable.
@@ -1921,7 +1921,7 @@ Variables:       GEOSFP.T, GEOSFP.u, GEOSFP.v
 Equations:
   D(SimpleOzone.O3, t)  = -SimpleOzone.k_NO_O3 * SimpleOzone.O3 * SimpleOzone.NO
                           + SimpleOzone.jNO2 * SimpleOzone.NO2
-                          + (-GEOSFP.u * grad(SimpleOzone.O3, x) - GEOSFP.v * grad(SimpleOzone.O3, y))
+                          + (-GEOSFP.u * D(SimpleOzone.O3, x) - GEOSFP.v * D(SimpleOzone.O3, y))
 
   D(SimpleOzone.NO, t)  = [chemistry terms] + [advection terms]
   D(SimpleOzone.NO2, t) = [chemistry terms] + [advection terms]
@@ -1980,7 +1980,7 @@ A single `.esm` file may still combine systems living on different spatial dimen
 
 **Independent-variable computation.** After coupling, libraries compute the flattened system's `independent_variables` by:
 1. Starting with `[:t]`.
-2. Scanning every equation for spatial operators (`grad`, `div`, `laplacian`, or `D` with `wrt ≠ "t"`) and adding each referenced spatial dimension.
+2. Scanning every equation for spatial derivatives (`D` with `wrt ≠ "t"`) and adding each referenced spatial dimension.
 3. Scanning every `domains` entry in the file for spatial axes and adding them.
 
 The result is `[:t]` for purely 0D systems and `[:t, :x, :y, …]` for PDE systems. This is what tells a downstream constructor whether it has an ODE or a PDE.
@@ -2470,7 +2470,7 @@ interface ExprNode {
   op: string;
   args: Expr[];
   wrt?: string;  // for D
-  dim?: string;  // for grad
+  dim?: string;  // axis-naming field of an open-tier op
 }
 
 // Discriminated union for coupling
@@ -2507,13 +2507,13 @@ evaluateExpression({ op: '+', args: ['a', 2] }, new Map([['a', 1]]));   // 3
 
 // An operator outside the evaluable core is refused before anything runs.
 try {
-  evaluateExpression({ op: 'grad', args: ['u'], dim: 'x' }, new Map([['u', 1]]));
+  evaluateExpression({ op: 'D', args: ['u'], wrt: 'x' }, new Map([['u', 1]]));
 } catch (e) {
   e instanceof UnloweredOperatorError;   // true; e.code === 'unlowered_operator'
 }
 ```
 
-Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
+Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`.
 
 ---
 
@@ -2679,7 +2679,7 @@ file.models["SuperFast"]
 
 Rust provides a high-performance, memory-safe implementation suitable for CLI tools, WASM compilation (for web), and embedding in other systems.
 
-**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `grad`, `div`, `laplacian`, `D(_, x)`, etc.) for anything beyond that. This scope limit is a flatten-tier decision, not a simulation limit: the Rust array simulator does run discretized PDEs (`faq` systems — see §5.9 cross-language PDE-simulation conformance). The `slice`/`project`/`regrid` dimension-mapping rewrites are simply not yet implemented in Rust `flatten()`. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
+**Flattening scope (Core tier only).** The Rust implementation of `flatten()` targets the Core dimension-promotion tier: it supports `broadcast` and `identity` mappings per §4.7.6, and raises `FlattenError::UnsupportedMapping` with the specific type name (`slice`, `project`, `regrid`, or the spatial operator that was encountered — `D(_, x)`, `integral`, etc.) for anything beyond that. This scope limit is a flatten-tier decision, not a simulation limit: the Rust array simulator does run discretized PDEs (`faq` systems — see §5.9 cross-language PDE-simulation conformance). The `slice`/`project`/`regrid` dimension-mapping rewrites are simply not yet implemented in Rust `flatten()`. The full cross-language §4.7.6.10 error taxonomy (`ConflictingDerivative`, `DimensionPromotion`, `UnmappedDomain`, `UnsupportedMapping`, `DomainUnitMismatch`, `DomainExtent`, `SliceOutOfDomain`, `CyclicPromotion`) is defined on the Rust `FlattenError` enum for API parity even where a given variant is never raised by Core tier.
 
 #### 5.4.1 Dependencies
 
@@ -3048,7 +3048,7 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Stoichiometric matrix convention not stated | Section 4.6 | Must specify: species × reactions (rows × columns), net stoichiometry (products − substrates). |
 | Expression graph edge rules for reactions are ambiguous | Section 4.8.2 | The rule for which nodes get edges (self-loops, rate parameter edges) needs a precise algorithm, not just an example. |
 | Unit string parsing grammar undefined | Section 3.3 | Unit strings are free-form. A formal grammar or recognized-token list (including `molec`, `ppb`, `ppm`) would improve cross-language consistency. |
-| Python simulation with spatial operators | Section 5.3.5 | Coupling resolution with `operator_compose` involving spatial derivatives (grad, laplacian) is not meaningful for 0D simulation. The spec should clarify that Python simulation skips spatial terms or raises an error. |
+| Python simulation with spatial operators | Section 5.3.5 | Coupling resolution with `operator_compose` involving spatial derivatives (spatial `D`) is not meaningful for 0D simulation. The spec should clarify that Python simulation skips spatial terms or raises an error. |
 | Code generation templates underspecified | Section 5.2.2 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
 | Concurrency / thread safety | All libraries | Not addressed. Relevant for Julia (multi-threaded solvers) and Rust (Send/Sync bounds). |
 
