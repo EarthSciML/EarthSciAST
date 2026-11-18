@@ -2221,11 +2221,14 @@ function _compile_faq_percell!(
     finally
         cell_state.array_cell_depth -= 1
     end
-    if contraction_loop || _stencil_disabled()
-        # Loop cells evaluate through the plain scalar walker (`_eval_node`),
-        # bypassing the affine / acc-merge / access-kernel / oop-merge / codegen
-        # passes entirely (ess-runtime-contraction) — this IS the stencil-disabled
-        # reference path, so the result is the reference result.
+    if contraction_loop || _stencil_disabled() ||
+            _anyof(e -> _acc_scalar_only(e[2]), cell_entries)
+        # Loop cells, and cells holding another kind an access kernel has no
+        # form for (a state read at a slot computed per call), evaluate through
+        # the plain scalar walker (`_eval_node`), bypassing the affine /
+        # acc-merge / access-kernel / oop-merge / codegen passes entirely — this
+        # IS the stencil-disabled reference path, so the result is the
+        # reference result.
         append!(sc.percell_scalar, cell_entries)
     elseif sc.pooled_cells !== nothing
         # Cross-equation direct class emission: defer to the ONE
