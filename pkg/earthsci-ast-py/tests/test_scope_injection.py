@@ -17,10 +17,11 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast.esm_types import Model
-from earthsci_ast.lower_expression_templates import ExpressionTemplateError
-from earthsci_ast.parse import load_path
 from earthsci_ast.inline_tests import _ephemeral_injected_file
+from earthsci_ast.lower_expression_templates import ExpressionTemplateError
+from earthsci_ast.parse import _absolutize_injected_imports, load_path
 from earthsci_ast.serialize import _serialize_esm_file
+from earthsci_ast.stdlib import std_ref_path
 
 CONF = str(CONFORMANCE_DIR / "expression_templates")
 
@@ -197,3 +198,65 @@ def test_form_a_injected_import_ref_expands_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv(var, conf)
     f = load_path(str(doc))
     assert f.index_sets["lon"]["size"] == 288
+
+
+def test_form_a_injected_std_ref_is_not_anchored_at_the_mounting_directory():
+    # esm-spec §4.7 "Standard-library references": an `esm:` ref is never a
+    # relative path, so absolutizing the edge's injected imports maps it to
+    # the bundled file instead of joining it onto the mounting directory.
+    # Every other field of the entry is kept.
+    entry = {"ref": "esm:std/calendar.esm", "only": ["hour"], "as": {"hour": "hr"}}
+    (out,) = _absolutize_injected_imports([entry], "/nowhere/assembly")
+    assert out == {**entry, "ref": std_ref_path("esm:std/calendar.esm")}
+    assert os.path.isfile(out["ref"])
+    assert entry["ref"] == "esm:std/calendar.esm"
+
+
+def test_form_a_injected_std_ref_resolves_at_load(tmp_path):
+    # End to end: a leaf in leaves/ calls `hour`, which only the mounting
+    # edge's injected `esm:std/calendar.esm` import supplies.
+    (tmp_path / "leaves").mkdir()
+    leaf = {
+        "esm": "2.0.0",
+        "metadata": {"name": "clock_leaf"},
+        "models": {
+            "Clock": {
+                "variables": {"h": {"type": "unknown", "units": "1"}},
+                "equations": [
+                    {
+                        "lhs": "h",
+                        "rhs": {
+                            "op": "apply_expression_template",
+                            "args": [],
+                            "name": "hour",
+                            "bindings": {"t": "t"},
+                        },
+                    }
+                ],
+            }
+        },
+    }
+    (tmp_path / "leaves" / "leaf.esm").write_text(json.dumps(leaf))
+    root = {
+        "esm": "2.0.0",
+        "metadata": {"name": "clock_assembly"},
+        "models": {
+            "Assembly": {
+                "variables": {"h_reading": {"type": "unknown", "units": "1"}},
+                "equations": [{"lhs": "h_reading", "rhs": "Clock.h"}],
+                "subsystems": {
+                    "Clock": {
+                        "ref": "./leaves/leaf.esm",
+                        "expression_template_imports": [
+                            {"ref": "esm:std/calendar.esm", "only": ["hour"]}
+                        ],
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "root.esm").write_text(json.dumps(root))
+    f = load_path(str(tmp_path / "root.esm"))
+    clock = f.models["Assembly"].subsystems["Clock"]
+    assert isinstance(clock, Model)
+    assert clock.equations[0].rhs.op != "apply_expression_template"
