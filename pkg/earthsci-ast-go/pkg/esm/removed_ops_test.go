@@ -85,7 +85,9 @@ func TestSpatialCalculusOpsRemovedAt3AreRefusedAtLoad(t *testing.T) {
 }
 
 // Every shared fixture under tests/invalid/removed_ops/ is refused at load
-// with `removed_op`, naming the construct its file name carries.
+// with `removed_op`, naming the construct its file name carries. The three
+// 3.0.0 fixtures declare esm 2.3.0: the refusal does not depend on the
+// declared version.
 func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "..", "tests", "invalid", "removed_ops")
 	entries, err := os.ReadDir(dir)
@@ -106,8 +108,13 @@ func TestRemovedOpsFixturesAreRefusedAtLoad(t *testing.T) {
 		t.Run(e.Name(), func(t *testing.T) {
 			_, err := LoadPath(filepath.Join(dir, e.Name()))
 			var re *removedOpError
-			if !errors.As(err, &re) || re.Name != name {
-				t.Fatalf("err = %v, want a removed_op refusal naming %q", err, name)
+			if !errors.As(err, &re) {
+				t.Fatalf("err = %v, want a removed_op refusal", err)
+			}
+			// removed_op_table_lookup.esm also carries the `function_tables`
+			// block its lookup reads, which is reported first.
+			if re.Name != name && !(name == "table_lookup" && re.Name == removedFunctionTables) {
+				t.Errorf("removed_op refusal names %q, want %q", re.Name, name)
 			}
 		})
 	}
