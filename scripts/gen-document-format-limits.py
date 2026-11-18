@@ -38,10 +38,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "conformance" / "document_format" / "limits.json"
 HEADS = {
-    "markdown": '---\nesm: "2.3.0"\nname: "fixture"\n---\n\n::model[M]\n\n'
+    "markdown": '---\nesm: "3.0.0"\nname: "fixture"\n---\n\n::model[M]\n\n'
     ":param[$k$]{}\n\n:var[$y$]{}\n\n",
     "typst": '#import "@preview/esm:0.1.0": *\n'
-    '#show: esm-document.with(esm: "2.3.0", name: "fixture")\n\n'
+    '#show: esm-document.with(esm: "3.0.0", name: "fixture")\n\n'
     '#model("M")\n\n#param($k$)\n\n#var($y$)\n\n',
 }
 DEEP = 50_000
