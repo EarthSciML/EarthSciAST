@@ -233,23 +233,11 @@ function _apply_initial_conditions!(
         ics::AbstractDict
     )
     isempty(ics) && return u0
-    # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`),
-    # but every document front-door reaches the run through `flatten`, which
-    # renames each state after its owning component (`M.u`) — so an EXACT-key
-    # lookup missed the very spelling the spec tells authors to write, and a
-    # test's `initial_conditions: {"u": 9.0}` died with "unknown state element
-    # 'u'". Same defect as `parameter_overrides` had, on the state side; it
-    # merely failed loudly instead of silently. Resolve the caller's key onto
-    # the name the build uses with the SAME rules (build_caller_data.jl
-    # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
-    # dotted suffix is a state name, else a key that is itself a dotted suffix
-    # of exactly one state name (`u` — and equally `sub.u` — for `P.sub.u`) —
-    # an ambiguous suffix is rejected, never guessed at.
-    #
-    # Two name spaces are tried in order: the ELEMENT names (`M.u`, `M.f[1]`),
-    # then the array BASE names for the broadcast form (`M.f` sets every
-    # `M.f[...]` cell). `_parse_cell_key` (tree_walk.jl) is the single inverse
-    # of `_cell_key`'s "name[i,j]" element encoding.
+    # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`)
+    # while every name the build uses is flattened (`M.u`): each key is resolved
+    # onto a state by the one resolver every caller key goes through
+    # (`resolve_key`, src/name_table.jl), and an ambiguous suffix is refused, never
+    # guessed at.
     element_names = Set{String}(String(k) for k in keys(var_map))
     # Each array base name's cells as `(multi-index, slot)` pairs: the slot is
     # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
@@ -262,33 +250,44 @@ function _apply_initial_conditions!(
         push!(get!(cells_of, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
     end
     base_names = Set{String}(keys(cells_of))
-    element_alias = _suffix_alias_groups(element_names)
-    base_alias = _suffix_alias_groups(base_names)
-    # esm-spec §6.6.2 rule 2 validates a key's LEADING segments against the
-    # component / subsystem scope, so `Missing.u` is reported rather than
-    # silently re-pointed at the state `u` by its trailing segment. The scope is
-    # read off the build's own names (`M.u` ⇒ `M`), the only structure reachable
-    # here.
+    # Two name spaces, tried in order: the ELEMENT names (`M.u`, `M.f[1]`), then
+    # the array BASE names for the broadcast form (`M.f` sets every `M.f[...]`
+    # cell). Rule 2 validates a key's leading segments against the components
+    # the build's names carry (`M.u` ⇒ `M`), so `Missing.u` is reported rather
+    # than re-pointed at `u`.
     namespaces = _override_namespaces(union(element_names, base_names))
-    # Which NON-EXACT key claimed each resolved name. Two of them designating one
-    # state is a document authoring error, not a last-write-wins race: the caller
-    # wrote two initial conditions and only one can take effect (Decision: §6.6.2
-    # "two keys, one name"). An EXACT key wins outright and never collides.
+    spaces = (
+        (NameTable(element_names; namespaces = namespaces), :element),
+        (NameTable(base_names; namespaces = namespaces), :base),
+    )
+    function state_key(key)
+        for (table, space) in spaces
+            r = resolve_key(table, key)
+            r.how === :ambiguous && throw(
+                SimulateError(
+                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state")
+                )
+            )
+            r.name === nothing || return r, space
+        end
+        return nothing
+    end
+    # An exact key wins outright; two NON-EXACT keys designating one state is an
+    # authoring error (esm-spec §6.6.2 "two keys, one name"): the caller wrote
+    # two initial conditions and only one can take effect.
     claimed = Dict{String, Vector{String}}()
     exact_keys = Set{String}()
+    resolved_keys = Dict{String, Tuple{KeyResolution, Symbol}}()
     for (rawkey, _) in ics
         key = String(rawkey)
-        if key in element_names || key in base_names
-            push!(exact_keys, key)
-            continue
-        end
-        for (space, alias) in ((element_names, element_alias), (base_names, base_alias))
-            hit = _resolve_state_key(key, space, alias, namespaces)
-            if hit !== nothing
-                push!(get!(claimed, hit, String[]), key)
-                break
-            end
-        end
+        hit = state_key(key)
+        hit === nothing && throw(
+            SimulateError("simulate: initial_conditions names unknown state element '$key'")
+        )
+        resolved_keys[key] = hit
+        r = first(hit)
+        r.how === :exact ? push!(exact_keys, r.name) :
+            push!(get!(claimed, r.name, String[]), key)
     end
     for name in sort!(collect(keys(claimed)))
         (name in exact_keys || length(claimed[name]) < 2) && continue
@@ -302,8 +301,9 @@ function _apply_initial_conditions!(
     end
     for (rawkey, value) in ics
         key = String(rawkey)
-        resolved = _resolve_state_key(key, element_names, element_alias, namespaces)
-        if resolved !== nothing
+        r, space = resolved_keys[key]
+        resolved = r.name::String
+        if space === :element
             is_inline_array(value) && throw(
                 SimulateError(
                     "simulate: initial_conditions['$key'] carries inline array data for a " *
@@ -314,84 +314,27 @@ function _apply_initial_conditions!(
             u0[var_map[resolved]] = Float64(value)
             continue
         end
-        resolved = _resolve_state_key(key, base_names, base_alias, namespaces)
-        if resolved !== nothing
-            cells = cells_of[resolved]
-            if is_inline_array(value)
-                for (idxs, idx) in cells
-                    checkbounds(Bool, value, idxs...) || throw(
-                        SimulateError(
-                            "simulate: initial_conditions['$key'] has shape $(size(value)), " *
-                                "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
-                                "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
-                                "shape after metaparameter folding)"
-                        )
+        cells = cells_of[resolved]
+        if is_inline_array(value)
+            for (idxs, idx) in cells
+                checkbounds(Bool, value, idxs...) || throw(
+                    SimulateError(
+                        "simulate: initial_conditions['$key'] has shape $(size(value)), " *
+                            "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
+                            "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
+                            "shape after metaparameter folding)"
                     )
-                    u0[idx] = Float64(value[idxs...])
-                end
-            else
-                v = Float64(value)
-                for (_, idx) in cells
-                    u0[idx] = v
-                end
+                )
+                u0[idx] = Float64(value[idxs...])
             end
-            continue
+        else
+            v = Float64(value)
+            for (_, idx) in cells
+                u0[idx] = v
+            end
         end
-        throw(
-            SimulateError(
-                "simulate: initial_conditions names unknown " *
-                    "state element '$key'"
-            )
-        )
     end
     return u0
-end
-
-# `dotted suffix => every qualified name carrying it as one`, built once per
-# name space so key resolution below stays O(1) per key. esm-spec §6.6.2 rule 3
-# admits EVERY proper suffix of a build name, not only its trailing segment, so
-# a flattened `P.sub.u` is reachable as `sub.u` as well as `u`.
-function _suffix_alias_groups(names::AbstractSet{String})
-    groups = Dict{String, Vector{String}}()
-    for n in names
-        for s in _dotted_suffixes(n)
-            push!(get!(groups, s, String[]), n)
-        end
-    end
-    return groups
-end
-
-# Resolve ONE caller-spelled state key against a set of build-resolved names,
-# by the esm-spec §6.6.2 precedence shared with `parameter_overrides`. Returns
-# the resolved name, or `nothing` when the key designates none of them. An
-# AMBIGUOUS suffix (a local, or partially qualified, name two mounted
-# components' states both carry) raises its own diagnostic rather than being
-# lumped in with "unknown" — silently binding one of the candidates would be a
-# wrong answer, not a missing one.
-function _resolve_state_key(
-        key::AbstractString, names::AbstractSet{String},
-        alias::AbstractDict{String, Vector{String}},
-        namespaces::AbstractSet{String}
-    )
-    key in names && return String(key)
-    # Rule 2, leading segments validated (`_dotted_suffix_hit`): a dotted key
-    # resolves to the LONGEST of its dotted suffixes that is a state name, and
-    # only when every qualifier it drops names a real component or subsystem.
-    suffix = _dotted_suffix_hit(names, namespaces, key)
-    suffix === nothing || return suffix
-    # Rule 3, the other direction: the key is itself a dotted suffix of exactly
-    # one state name (`u` — and equally `sub.u` — for `P.sub.u`).
-    cands = get(alias, String(key), nothing)
-    cands === nothing && return nothing
-    length(cands) == 1 && return cands[1]
-    throw(
-        SimulateError(
-            "simulate: initial_conditions names the ambiguous local " *
-                "state '$key' — $(length(cands)) states carry it as a suffix " *
-                "($(join(sort(cands), ", "))). Qualify it further with its " *
-                "owning component (esm-spec §6.6.2)."
-        )
-    )
 end
 
 """
@@ -533,7 +476,7 @@ end
 # The build reads only the flattened name, so data written under any other
 # spelling was never read and the parameter silently kept its default. Keys are
 # resolved onto the flattened PARAMETERS by the resolver `parameter_overrides`
-# uses (`_canonicalize_override_keys`), so the two surfaces cannot disagree: an
+# uses (`canonicalize_keys`), so the two surfaces cannot disagree: an
 # exact key wins outright over a non-exact key for the same parameter, two
 # non-exact keys for one parameter collide, and a key two parameters carry is
 # ambiguous; the last two are errors.
@@ -554,17 +497,9 @@ function _provider_routing(flat_rec, keys_; model_name = nothing)
     params = Set{String}(keys(flat.parameters))
     asked = _routable_keys(flat_rec, keys_)
     isempty(asked) && return targets, shadowed
-    namespaces = _override_namespaces(params; model_name = model_name)
-    normalized, unknown, ambiguous, collisions =
-        _canonicalize_override_keys(Any, params, namespaces, asked)
-    if !isempty(ambiguous)
-        k, cands = first(sort!(collect(ambiguous), by = first))
-        throw(ArgumentError(_override_ambiguous_message("providers", k, cands)))
-    end
-    if !isempty(collisions)
-        name, ks = first(sort!(collect(collisions), by = first))
-        throw(ArgumentError(_override_collision_message("providers", "parameter", name, ks)))
-    end
+    table = NameTable(params; namespaces = _override_namespaces(params; model_name = model_name))
+    normalized, unknown, ambiguous, collisions = canonicalize_keys(Any, table, asked)
+    _raise_key_failures("providers", "parameter", unknown, ambiguous, collisions)
     for (name, k) in normalized
         targets[k::String] = name
     end
@@ -599,7 +534,7 @@ end
 # value, where writing the provider's would silently replace the caller's array
 # (or, for a live buffer, the very object the caller holds). A registry key is
 # resolved onto the parameters by the same resolver the provider keys went
-# through (`_canonicalize_override_keys`, via `_routable_keys`), so the two
+# through (`canonicalize_keys`, via `_routable_keys`), so the two
 # surfaces agree on what a key designates. A registry key carried by several
 # parameters, one of them provider-fed, is refused as ambiguous (esm-spec
 # §6.6.2); one that names a state, observed or loader field is not a
@@ -611,10 +546,10 @@ function _refuse_provider_registry_overlap(
     (isempty(targets) || flat_rec === nothing) && return nothing
     flat = flat_rec.flat::FlattenedSystem
     params = Set{String}(keys(flat.parameters))
-    namespaces = _override_namespaces(params; model_name = model_name)
+    table = NameTable(params; namespaces = _override_namespaces(params; model_name = model_name))
     fed = Dict{String, String}(name => pk for (pk, name) in targets)
     overlap(label, pk, rk, name) = throw(
-        ArgumentError(
+        SimulateError(
             "providers['$(pk)'] and $(label)['$(rk)'] both supply the parameter " *
                 "'$(name)'; pass one of them (esm-spec §6.6.2)"
         )
@@ -623,11 +558,10 @@ function _refuse_provider_registry_overlap(
         reg === nothing && continue
         asked = _routable_keys(flat_rec, keys(reg))
         isempty(asked) && continue
-        normalized, _, ambiguous, collisions =
-            _canonicalize_override_keys(Any, params, namespaces, asked)
+        normalized, _, ambiguous, collisions = canonicalize_keys(Any, table, asked)
         for (k, cands) in sort!(collect(ambiguous), by = first)
             any(c -> haskey(fed, c), cands) &&
-                throw(ArgumentError(_override_ambiguous_message(label, k, cands)))
+                throw(SimulateError(_override_ambiguous_message(label, k, cands)))
         end
         for (name, rk) in sort!(collect(normalized), by = first)
             haskey(fed, name) && overlap(label, fed[name], rk, name)
@@ -1133,22 +1067,30 @@ end
 # axis is an anonymous interval index set `<name>__data<k>` of the data's extent
 # on that axis. Data of one value leaves the parameter a scalar, and
 # `shape: []` declares a scalar whatever its data (the build refuses array data
-# for it, `_refuse_array_data_for_scalar`). A registry key names a parameter by
-# its exact flattened name or by a dotted suffix only that parameter carries
-# (esm-spec §6.6.2). Returns `flat` itself when nothing adopts a shape.
+# for it, `_refuse_array_data_for_scalar`). A registry key names a parameter as
+# any caller key does (`resolve_key`, esm-spec §6.6.2); one that several parameters
+# carry is refused. Returns `flat` itself when nothing adopts a shape.
+# Whether `flat` declares `name` (in any partition).
+_declares(flat::FlattenedSystem, name::AbstractString) =
+    haskey(flat.parameters, name) || haskey(flat.state_variables, name) ||
+    haskey(flat.observed_variables, name) || haskey(flat.discrete_parameters, name)
+
 function _adopt_data_shapes(flat::FlattenedSystem, registries...)
     cands = Set{String}(k for (k, v) in flat.parameters if v.shape === nothing)
     isempty(cands) && return flat
-    suffix_group = Dict{String, Vector{String}}()
-    for n in cands, s in _dotted_suffixes(n)
-        push!(get!(suffix_group, s, String[]), n)
-    end
+    table = NameTable(cands)
     adopted = Dict{String, Vector{Int}}()
     for reg in registries, (rawk, a) in reg
         a isa AbstractArray && length(a) != 1 || continue
         k = String(rawk)
-        group = get(suffix_group, k, String[])
-        name = k in cands ? k : length(group) == 1 ? group[1] : nothing
+        # A key naming another declaration exactly (a state, a loader field) is
+        # that declaration's.
+        k in cands || !_declares(flat, k) || continue
+        r = resolve_key(table, k)
+        r.how === :ambiguous && throw(
+            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates))
+        )
+        name = r.name
         name === nothing && continue
         # An exact key outranks a suffix spelling of the same parameter.
         haskey(adopted, name) && k != name && continue
@@ -2055,34 +1997,6 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
 end
 
 # The distinct components owning a prepared document's build-time observeds.
-# A component is everything before a flattened name's final segment
-# (`Sites.North` for `Sites.North.u`), and `""` for an unqualified one.
-# [`observed_field`](@ref) resolves a BARE name only when this set holds exactly
-# ONE (API_SPEC §5.8): with two mounted components a bare `u` designates
-# `Sites.North.u` and `Sites.South.u` equally, and answering with whichever the
-# variable iteration reached first is a wrong value rather than a missing one.
-function _field_components(model)
-    comps = Set{String}()
-    for k in observed_unknowns(model)
-        s = String(k)
-        push!(comps, occursin('.', s) ? String(rsplit(s, '.'; limit = 2)[1]) : "")
-    end
-    return comps
-end
-
-# Every flattened observed of `model` whose final segment is the bare name `v`,
-# sorted — the candidates a refused bare lookup must name so the author can
-# qualify it (esm-spec §6.6.2 requires the same of an ambiguous override key).
-function _bare_candidates(model, v::AbstractString)
-    return sort!(
-        String[
-            String(k) for k in observed_unknowns(model)
-                if occursin('.', String(k)) &&
-                String(rsplit(String(k), '.'; limit = 2)[2]) == v
-        ]
-    )
-end
-
 """
     observed_field(prob::EsmProblem, name; u = nothing, t = nothing) -> Vector{Float64}
 
@@ -2234,20 +2148,18 @@ function _observed_field_impl(
     # here can never shadow a live field.
     v = get(prob.merged_renames, String(name), String(name))
     model = file.models[mname]
-    comps = _field_components(model)
+    observeds = NameTable(observed_unknowns(model))
+    comps = _name_components(observeds)
     single = length(comps) == 1
     fld = field_of(v)
     if fld === nothing && !occursin('.', v)
-        # Bare spelling: resolve against the run model's observed tails, but
-        # only on a SINGLE-component document (API_SPEC §5.8). On a multi-
-        # component one the bare name is refused with every candidate named.
-        cands = _bare_candidates(model, v)
-        if single
-            for k in cands
-                fld = field_of(k)
-                fld === nothing || break
-            end
-        elseif !isempty(cands)
+        # Bare spelling: resolved only on a SINGLE-component document (API_SPEC
+        # §5.8). On a multi-component one the bare name is refused with every
+        # candidate named.
+        r = resolve_key(observeds, v; bare = :single_component)
+        if r.name !== nothing
+            fld = field_of(r.name)
+        elseif r.how === :ambiguous && !single
             throw(
                 SimulateError(
                     "observed_field: '$name' is a bare name and this problem has " *
@@ -2428,9 +2340,7 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     pm = param_map(prob.p)
     names = Set{String}(keys(classes))
     union!(names, keys(pm))
-    namespaces = _override_namespaces(names)
-    normalized, unknown, ambiguous, collisions =
-        _canonicalize_override_keys(Any, names, namespaces, overrides)
+    normalized, unknown, ambiguous, collisions = canonicalize_keys(Any, NameTable(names), overrides)
     isempty(collisions) || throw(
         SimulateError(
             _override_collision_message(

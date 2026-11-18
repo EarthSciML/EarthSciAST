@@ -128,7 +128,7 @@ end
     # nothing happens, and the run measures the configuration they thought they
     # had switched off while still reporting a verdict. Rust already raised
     # `InvalidParameter` here; Julia and Python now match it.
-    @test_throws ArgumentError solve(
+    @test_throws SimulateError solve(
         EarthSciAST.esm_problem(
             esm_path, (0.0, 1.0); compiler = :interpreter,
             p = Dict("not_a_param" => 7.0)

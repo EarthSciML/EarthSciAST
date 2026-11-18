@@ -582,9 +582,8 @@ end
 function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
     isempty(overrides) && return Dict{String, Any}()
     names = Set{String}(String(k) for k in keys(flat.parameters))
-    namespaces = EarthSciAST._override_namespaces(names)
     normalized, unknown, ambiguous, collisions =
-        EarthSciAST._canonicalize_override_keys(Any, names, namespaces, overrides)
+        EarthSciAST.canonicalize_keys(Any, EarthSciAST.NameTable(names), overrides)
     isempty(collisions) || throw(
         SimulateError(
             EarthSciAST._override_collision_message(
