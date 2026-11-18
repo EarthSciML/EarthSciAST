@@ -99,19 +99,9 @@ fn provider_forcing_conformance() {
         assert_eq!(bits(&du), bits(&du_want), "{id}: program du {du:?}");
 
         // The Problem's own right-hand side reads its forcing buffer.
-        let compiled = prob.debug_array_compiled().expect("array backend");
-        let pv = compiled.debug_resolve_params(&HashMap::new());
-        let mut scratch = compiled.debug_new_scratch_taped().expect("taped scratch");
+        let mut rhs = prob.debug_solve_rhs().expect("a taped right-hand side");
         let y = earthsci_ast::initial_state(&prob).expect("initial state");
-        let mut dy = vec![f64::NAN; compiled.n_states()];
-        compiled.debug_eval_rhs_into(
-            &y,
-            tspan.0,
-            &pv,
-            &mut dy,
-            &mut scratch,
-            &mut Default::default(),
-        );
+        let dy = rhs.eval(&y, tspan.0);
         assert_eq!(bits(&dy), bits(&du_want), "{id}: Problem du {dy:?}");
     }
 }

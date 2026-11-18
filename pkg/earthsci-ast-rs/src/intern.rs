@@ -225,9 +225,9 @@ fn const_eq(a: &crate::ConstValue, b: &crate::ConstValue) -> bool {
 /// Hash consistent with [`const_eq`].
 fn const_hash<H: Hasher>(v: &crate::ConstValue, h: &mut H) {
     match (v.dense_key(), v.as_json()) {
-        (Some((integers, shape, values)), _) => {
+        (Some((spelling, shape, values)), _) => {
             6u8.hash(h);
-            integers.hash(h);
+            spelling.hash(h);
             shape.hash(h);
             for x in values {
                 x.to_bits().hash(h);

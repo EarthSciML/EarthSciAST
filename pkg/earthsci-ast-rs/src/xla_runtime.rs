@@ -295,7 +295,7 @@ impl CompiledRhs {
     /// Evaluate `f(state, params, t)`.
     ///
     /// `params` is the POSITIONAL parameter vector, i.e. what
-    /// `ArrayCompiled::debug_resolve_params` returns — not a name map. A
+    /// `simulate_array::SolveRhs::params` returns — not a name map. A
     /// shorter slice is zero-extended and a longer one is an error, because
     /// silently ignoring a trailing parameter would evaluate a different
     /// model than the caller asked for.

@@ -1035,7 +1035,8 @@ mod expr_deserialize_token_mapping_tests {
             );
             // Memory keeps what was parsed: only the output is canonical.
             let Expr::Operator(node) = &e else { panic!() };
-            assert!(node.value.as_ref().unwrap().as_json().unwrap()[0][0].is_f64());
+            let held = node.value.as_ref().unwrap().to_json();
+            assert!(held[0][0].is_f64() && held[0][2].is_i64());
             // A dense payload (all floats, or all integers) writes the same.
             for (src, want) in [
                 ("[[100.0, 0.5], [-0.0, 1.0e300]]", "[[100,0.5],[0,1e+300]]"),

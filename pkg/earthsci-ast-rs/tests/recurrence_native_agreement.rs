@@ -388,9 +388,9 @@ fn the_program_is_the_same_length_at_every_frame_size() {
             )
             .expect("native builds it");
             let r = prob
-                .debug_array_compiled()
-                .expect("a right-hand side")
-                .debug_build_tape_report();
+                .debug_solve_rhs()
+                .expect("a taped right-hand side")
+                .tape_report();
             let instrs = r.n_instr_const + r.n_instr_segment + r.n_instr_continuous;
             (instrs, r.n_slots)
         })

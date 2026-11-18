@@ -3,7 +3,7 @@
 //! per thread, reading its forcing from an epoch-stamped forcing set.
 //!
 //! * the static thread-safety contract;
-//! * equivalence with the `debug_eval_rhs_into` seam on a taped scratch (and,
+//! * equivalence with the right-hand side the solve integrates (and,
 //!   under `interpreter`, with the per-cell oracle);
 //! * 16 threads x 1000 calls at seeded random inputs, bitwise equal to the
 //!   serial results;
@@ -240,17 +240,19 @@ fn bits(v: &[f64]) -> Vec<u64> {
 // Equivalence (RFC test 2).
 // ---------------------------------------------------------------------------
 
-/// `eval_into` on the Problem's own forcing equals `debug_eval_rhs_into` on a
-/// taped scratch of the Problem's compiled model, bit for bit; under
+/// `eval_into` on the Problem's own forcing equals the right-hand side the
+/// Problem's solve integrates (its taped scratch), bit for bit; under
 /// `interpreter` it equals the per-cell oracle.
 #[test]
-fn eval_into_equals_the_debug_seam() {
+fn eval_into_equals_the_solve_rhs() {
     for doc in [forced_1d(24), forced_2d(6, 5), weighted(9)] {
         for compiler in [Compiler::Native, Compiler::Interpreter] {
             let prob = problem(&doc, compiler, false);
             let prog = rhs_program(&prob).expect("program");
-            let c = prob.debug_array_compiled().expect("array backend");
-            assert_eq!(prog.n_states(), c.n_states());
+            assert_eq!(
+                prog.n_states(),
+                prob.debug_solve_rhs().expect("array backend").n_states()
+            );
             let mut rng = Rng(7);
             let fs = prog.default_forcing();
             for _ in 0..5 {
@@ -264,26 +266,11 @@ fn eval_into_equals_the_debug_seam() {
                     .zip(&p)
                     .map(|(s, v)| (s.name.rsplit('.').next().unwrap().to_string(), *v))
                     .collect();
-                let want = {
-                    let _env = c.debug_precision_env().enter();
-                    match compiler {
-                        Compiler::Native => {
-                            let pv = c.debug_resolve_params(&named);
-                            let mut scratch = c.debug_new_scratch_taped().expect("taped");
-                            let mut dy = vec![f64::NAN; c.n_states()];
-                            c.debug_eval_rhs_into(
-                                &u,
-                                t,
-                                &pv,
-                                &mut dy,
-                                &mut scratch,
-                                &mut Default::default(),
-                            );
-                            dy
-                        }
-                        _ => c.debug_eval_rhs(&u, t, &named).0,
-                    }
-                };
+                // A fresh handle per draw: the tape under `native`, the
+                // per-cell oracle under `interpreter`.
+                let mut solve = prob.debug_solve_rhs().expect("array backend");
+                solve.set_params(&named);
+                let want = solve.eval(&u, t);
                 assert_eq!(bits(&got), bits(&want), "{compiler}: {doc}");
             }
         }
@@ -502,15 +489,14 @@ fn a_new_forcing_set_is_never_served_stale() {
     assert_ne!(bits(&before), bits(&after), "the new buffer was not read");
     assert_eq!(bits(&after), bits(&eval(&prog, &u, &p, 0.0, &fs2)));
 
-    // The control: refresh the debug seam's forcing buffer in place.
-    let c = prob.debug_array_compiled().expect("array backend");
-    let pv = c.debug_resolve_params(&HashMap::new());
-    let mut scratch = c.debug_new_scratch_taped().expect("taped");
+    // The control: refresh the solve's forcing buffer in place.
+    let mut solve = prob.debug_solve_rhs().expect("array backend");
+    solve.set_params(&HashMap::new());
     let mut d1 = vec![0.0; 16];
     let mut d2 = vec![0.0; 16];
-    c.debug_eval_rhs_into(&u, 0.0, &pv, &mut d1, &mut scratch, &mut Default::default());
+    solve.eval_into(&u, 0.0, &mut d1);
     assert_eq!(bits(&d1), bits(&before));
-    let handle = c.forcing_handle();
+    let handle = solve.model().forcing_handle();
     let key = handle
         .borrow()
         .keys()
@@ -521,11 +507,11 @@ fn a_new_forcing_set_is_never_served_stale() {
         key,
         ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[16]), fresh.to_vec()).unwrap(),
     );
-    c.debug_eval_rhs_into(&u, 0.0, &pv, &mut d2, &mut scratch, &mut Default::default());
+    solve.eval_into(&u, 0.0, &mut d2);
     assert_eq!(
         bits(&d2),
         bits(&d1),
-        "the taped debug scratch served the stale forcing"
+        "the solve's taped scratch served the stale forcing"
     );
 }
 

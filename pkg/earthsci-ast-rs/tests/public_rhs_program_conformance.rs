@@ -1,7 +1,8 @@
 //! The `public_rhs_program` conformance suite (CONFORMANCE_SPEC §5.51,
 //! `tests/conformance/public_rhs_program/README.md`): every case of the
-//! manifest under `Compiler::Native`, checked bitwise against the taped debug
-//! seam and against the program's own serial results.
+//! manifest under `Compiler::Native`, checked bitwise against the right-hand
+//! side the Problem's solve integrates and against the program's own serial
+//! results.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -154,8 +155,8 @@ fn same_name(name: &str, rname: &str) -> bool {
     name == rname || name.ends_with(&format!(".{rname}"))
 }
 
-/// The reference: `debug_eval_rhs_into` on a fresh taped scratch of the
-/// Problem's compiled model, its forcing buffer holding `fs`'s data. The
+/// The reference: the right-hand side the Problem's solve integrates, on a
+/// fresh taped scratch, its forcing buffer holding `fs`'s data. The
 /// state is mapped between the two layouts by variable (each block is
 /// column-major in both).
 fn reference(
@@ -164,10 +165,9 @@ fn reference(
     x: &Draw,
     fs: &ForcingSet,
 ) -> Vec<f64> {
-    let c = prob.debug_array_compiled().expect("array backend");
-    let _env = c.debug_precision_env().enter();
+    let probe = prob.debug_solve_rhs().expect("array backend");
     {
-        let handle = c.forcing_handle();
+        let handle = probe.model().forcing_handle();
         let mut buf = handle.borrow_mut();
         for (k, s) in fs.slots().iter().enumerate() {
             let key = buf
@@ -180,14 +180,14 @@ fn reference(
             buf.insert(key, a.as_standard_layout().into_owned());
         }
     }
-    let names = c.state_variable_names().to_vec();
+    let names = probe.state_variable_names().to_vec();
     let start = |name: &str| -> usize {
         names
             .iter()
             .position(|n| same_name(name, var_of(n)))
             .unwrap_or_else(|| panic!("no reference state for {name}"))
     };
-    let mut y = vec![f64::NAN; c.n_states()];
+    let mut y = vec![f64::NAN; probe.n_states()];
     for b in prog.state_layout() {
         let len: usize = b.shape.iter().product::<usize>().max(1);
         let r = start(&b.name);
@@ -202,10 +202,11 @@ fn reference(
             [(s.name.clone(), *v), (bare, *v)]
         })
         .collect();
-    let pv = c.debug_resolve_params(&named);
-    let mut scratch = c.debug_new_scratch_taped().expect("taped scratch");
-    let mut dy = vec![f64::NAN; c.n_states()];
-    c.debug_eval_rhs_into(&y, x.t, &pv, &mut dy, &mut scratch, &mut Default::default());
+    // Taped after the buffer holds `fs`, as a solve tapes after its forcing
+    // is loaded.
+    let mut solve = prob.debug_solve_rhs().expect("array backend");
+    solve.set_params(&named);
+    let dy = solve.eval(&y, x.t);
     let mut out = vec![f64::NAN; prog.n_states()];
     for b in prog.state_layout() {
         let len: usize = b.shape.iter().product::<usize>().max(1);
@@ -466,10 +467,10 @@ fn stale_negative_control(
     b: &ForcingSet,
     r_a: &[f64],
 ) {
-    let c = prob.debug_array_compiled().expect("array backend");
-    let _env = c.debug_precision_env().enter();
+    let probe = prob.debug_solve_rhs().expect("array backend");
+    let forcing = probe.model().forcing_handle();
     let write = |fs: &ForcingSet| {
-        let handle = c.forcing_handle();
+        let handle = &forcing;
         let mut buf = handle.borrow_mut();
         for (k, s) in fs.slots().iter().enumerate() {
             let key = buf
@@ -482,8 +483,8 @@ fn stale_negative_control(
             buf.insert(key, arr.as_standard_layout().into_owned());
         }
     };
-    let names = c.state_variable_names().to_vec();
-    let mut y = vec![f64::NAN; c.n_states()];
+    let names = probe.state_variable_names().to_vec();
+    let mut y = vec![f64::NAN; probe.n_states()];
     let mut place = Vec::new();
     for blk in prog.state_layout() {
         let len: usize = blk.shape.iter().product::<usize>().max(1);
@@ -505,13 +506,12 @@ fn stale_negative_control(
             ]
         })
         .collect();
-    let pv = c.debug_resolve_params(&named);
     write(a);
-    let mut scratch = c.debug_new_scratch_taped().expect("taped scratch");
-    let mut dy = vec![f64::NAN; c.n_states()];
-    c.debug_eval_rhs_into(&y, x.t, &pv, &mut dy, &mut scratch, &mut Default::default());
+    let mut solve = prob.debug_solve_rhs().expect("array backend");
+    solve.set_params(&named);
+    let mut dy = solve.eval(&y, x.t);
     write(b);
-    c.debug_eval_rhs_into(&y, x.t, &pv, &mut dy, &mut scratch, &mut Default::default());
+    solve.eval_into(&y, x.t, &mut dy);
     let mut stale = vec![f64::NAN; prog.n_states()];
     for (o, r, len) in place {
         stale[o..o + len].copy_from_slice(&dy[r..r + len]);

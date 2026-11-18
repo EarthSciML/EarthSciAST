@@ -7,11 +7,9 @@ use std::hint::black_box;
 // ---------------------------------------------------------------------------
 
 /// One `native` right-hand side of a `bench/interp_bracket` document, ready to
-/// call: the compiled model, its scratch, parameters and a state.
+/// call: the right-hand side the solve integrates, and a state.
 struct BracketRhs {
-    prob: earthsci_ast::EsmProblem,
-    scratch: earthsci_ast::simulate_array::RhsScratch,
-    params: Vec<f64>,
+    rhs: earthsci_ast::simulate_array::SolveRhs,
     state: Vec<f64>,
 }
 
@@ -35,28 +33,13 @@ impl BracketRhs {
             },
         )
         .unwrap_or_else(|e| panic!("{doc}: {e}"));
-        let compiled = prob.debug_array_compiled().expect("a right-hand side");
-        let scratch = compiled.debug_new_scratch_taped().expect("taped");
-        let params = compiled.debug_resolve_params(prob.p());
-        let state = bracket_state(compiled.state_variable_names());
-        BracketRhs {
-            prob,
-            scratch,
-            params,
-            state,
-        }
+        let rhs = prob.debug_solve_rhs().expect("a taped right-hand side");
+        let state = bracket_state(rhs.state_variable_names());
+        BracketRhs { rhs, state }
     }
 
     fn call(&mut self, dy: &mut [f64]) {
-        let compiled = self.prob.debug_array_compiled().expect("a right-hand side");
-        compiled.debug_eval_rhs_into(
-            &self.state,
-            BRACKET_T,
-            &self.params,
-            dy,
-            &mut self.scratch,
-            &mut earthsci_ast::simulate_array::RhsStats::default(),
-        );
+        self.rhs.eval_into(&self.state, BRACKET_T, dy);
     }
 }
 
@@ -211,13 +194,7 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
             }
             built.push((label, rhs));
         }
-        let names = built[0]
-            .1
-            .prob
-            .debug_array_compiled()
-            .expect("a right-hand side")
-            .state_variable_names()
-            .to_vec();
+        let names = built[0].1.rhs.state_variable_names().to_vec();
         let hand = HandBracket::new(n, &names, 100.0);
         let state = built[0].1.state.clone();
         let mut dy = vec![0.0; state.len()];
@@ -252,10 +229,8 @@ fn benchmark_interp_bracket(c: &mut Criterion) {
 /// One right-hand side of a `bench/closed_templates/generate.py` document under `native`
 /// (or the per-cell oracle), with what it cost to get there.
 struct TemplateRhs {
-    prob: earthsci_ast::EsmProblem,
-    /// The taped scratch, or `None` for the per-cell oracle.
-    scratch: Option<earthsci_ast::simulate_array::RhsScratch>,
-    params: Vec<f64>,
+    /// The taped right-hand side the solve integrates, or the per-cell oracle.
+    rhs: earthsci_ast::simulate_array::SolveRhs,
     state: Vec<f64>,
     /// Problem construction plus tape installation, and the first call.
     build_s: f64,
@@ -278,12 +253,11 @@ impl TemplateRhs {
             },
         )
         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let compiled = prob.debug_array_compiled().expect("a right-hand side");
-        let scratch = (!oracle).then(|| compiled.debug_new_scratch_taped().expect("taped"));
-        let params = compiled.debug_resolve_params(prob.p());
+        let rhs = prob.debug_solve_rhs().expect("a taped right-hand side");
+        let rhs = if oracle { rhs.to_oracle() } else { rhs };
         // A state that differs from cell to cell, the same per name in every
         // spelling, so a regrid's derivative depends on every weight.
-        let names = compiled.state_variable_names();
+        let names = rhs.state_variable_names();
         let mut sorted: Vec<&String> = names.iter().collect();
         sorted.sort();
         let rank: HashMap<&String, usize> = sorted
@@ -297,9 +271,7 @@ impl TemplateRhs {
             .collect();
         let build_s = t0.elapsed().as_secs_f64();
         let mut rhs = TemplateRhs {
-            prob,
-            scratch,
-            params,
+            rhs,
             state,
             build_s,
             first_call_s: 0.0,
@@ -312,18 +284,7 @@ impl TemplateRhs {
     }
 
     fn call(&mut self, t: f64, dy: &mut [f64]) {
-        let compiled = self.prob.debug_array_compiled().expect("a right-hand side");
-        match &mut self.scratch {
-            Some(scratch) => compiled.debug_eval_rhs_into(
-                &self.state,
-                t,
-                &self.params,
-                dy,
-                scratch,
-                &mut earthsci_ast::simulate_array::RhsStats::default(),
-            ),
-            None => dy.copy_from_slice(&compiled.debug_eval_rhs(&self.state, t, self.prob.p()).0),
-        }
+        self.rhs.eval_into(&self.state, t, dy);
     }
 
     /// `dy` at a few times, as bits.

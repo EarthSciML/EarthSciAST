@@ -10,10 +10,10 @@ use serde_json::Value;
 /// The inline literal a `const` node carries (`ExpressionNode::value`).
 ///
 /// A rectangular array of numbers is held DENSE: a row-major `f64` array with
-/// its shape, plus whether the document spelled its numbers as integers or as
-/// floats. Every other literal — a number, a string, an object (a `bc` value),
-/// an empty, ragged or mixed-spelling array, or an integer `f64` cannot hold
-/// exactly — is held as the JSON it was written as.
+/// its shape, plus which of its numbers the document spelled as integers and
+/// which as floats ([`Spelling`]). Every other literal — a number, a string,
+/// an object (a `bc` value), an empty or ragged array, or an array with an
+/// integer `f64` cannot hold exactly — is held as the JSON it was written as.
 ///
 /// The payload is behind an [`Arc`], so cloning a node shares it, and it
 /// carries its own evaluation-ready array: the first evaluation under a given
@@ -39,11 +39,33 @@ enum Form {
     Json(Value),
     Dense {
         data: Arc<ArrayD<f64>>,
-        /// The document spelled every element as an integer (`[1, 2]`), not
-        /// as a float (`[1.0, 2.0]`). The canonical form keeps the two apart
-        /// (`canonical_json` writes `1` and `1.0`), and so does interning.
-        integers: bool,
+        spelling: Spelling,
     },
+}
+
+/// Which elements of a dense array the document spelled as integers (`1`)
+/// and which as floats (`1.0`). The canonical form keeps the two apart
+/// (`canonical_json` writes `1` and `1.0`), and so does interning.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum Spelling {
+    /// Every element a float: `[1.0, 2.5]`.
+    Floats,
+    /// Every element an integer: `[1, 2]`.
+    Integers,
+    /// Both: bit `k % 64` of word `k / 64` is set when row-major element
+    /// `k` is an integer (`[1, 2.5]`).
+    Mixed(Box<[u64]>),
+}
+
+impl Spelling {
+    /// Whether row-major element `k` is spelled as an integer.
+    fn is_integer(&self, k: usize) -> bool {
+        match self {
+            Spelling::Floats => false,
+            Spelling::Integers => true,
+            Spelling::Mixed(bits) => bits[k / 64] >> (k % 64) & 1 == 1,
+        }
+    }
 }
 
 /// The largest magnitude an integer element may have and still be held
@@ -60,13 +82,13 @@ impl ConstValue {
     }
 
     /// A literal from its JSON. A rectangular numeric array of rank one or
-    /// more, with no empty extent, whose elements are all floats or all
-    /// integers within ±2^53, is held dense; anything else as the JSON.
+    /// more, with no empty extent, whose integer elements are within ±2^53,
+    /// is held dense; anything else as the JSON.
     pub fn from_json(value: Value) -> Self {
         match dense_of(&value) {
-            Some((data, integers)) => ConstValue::new(Form::Dense {
+            Some((data, spelling)) => ConstValue::new(Form::Dense {
                 data: Arc::new(data),
-                integers,
+                spelling,
             }),
             None => ConstValue::new(Form::Json(value)),
         }
@@ -90,24 +112,25 @@ impl ConstValue {
             values.len()
         );
         if shape.is_empty() || shape.contains(&0) || values.iter().any(|v| !v.is_finite()) {
-            return ConstValue::new(Form::Json(nest(shape, &values, false)));
+            return ConstValue::new(Form::Json(nest(shape, &values, 0, &Spelling::Floats)));
         }
         let data = ArrayD::from_shape_vec(IxDyn(shape), values).expect("shape checked above");
         ConstValue::new(Form::Dense {
             data: Arc::new(data),
-            integers: false,
+            spelling: Spelling::Floats,
         })
     }
 
     /// The literal as JSON: borrowed for a JSON payload, built for a dense
-    /// one (integers or floats, as the document spelled them).
+    /// one (each element an integer or a float, as the document spelled it).
     pub fn to_json(&self) -> Cow<'_, Value> {
         match &self.0.form {
             Form::Json(v) => Cow::Borrowed(v),
-            Form::Dense { data, integers } => Cow::Owned(nest(
+            Form::Dense { data, spelling } => Cow::Owned(nest(
                 data.shape(),
                 data.as_slice().expect("dense payloads are standard layout"),
-                *integers,
+                0,
+                spelling,
             )),
         }
     }
@@ -180,10 +203,10 @@ impl ConstValue {
     /// Exact identity for hash-consing: the form, the spelling, the shape and
     /// every element's bit pattern. `None` for a JSON payload, which the
     /// caller keys by its JSON.
-    pub(crate) fn dense_key(&self) -> Option<(bool, &[usize], &[f64])> {
+    pub(crate) fn dense_key(&self) -> Option<(&Spelling, &[usize], &[f64])> {
         match &self.0.form {
-            Form::Dense { data, integers } => Some((
-                *integers,
+            Form::Dense { data, spelling } => Some((
+                spelling,
                 data.shape(),
                 data.as_slice().expect("dense payloads are standard layout"),
             )),
@@ -202,10 +225,10 @@ impl std::fmt::Debug for ConstValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0.form {
             Form::Json(v) => v.fmt(f),
-            Form::Dense { data, integers } => f
+            Form::Dense { data, spelling } => f
                 .debug_struct("Dense")
                 .field("shape", &data.shape())
-                .field("integers", integers)
+                .field("spelling", spelling)
                 .field("values", &data.as_slice())
                 .finish(),
         }
@@ -224,13 +247,13 @@ impl PartialEq for ConstValue {
             (
                 Form::Dense {
                     data: a,
-                    integers: ia,
+                    spelling: sa,
                 },
                 Form::Dense {
                     data: b,
-                    integers: ib,
+                    spelling: sb,
                 },
-            ) => ia == ib && a == b,
+            ) => sa == sb && a == b,
             _ => false,
         }
     }
@@ -282,23 +305,51 @@ impl Serialize for DenseRows<'_> {
 }
 
 /// The dense reading of a JSON literal, when it has one (see
-/// [`ConstValue::from_json`]): the array and whether its elements are
-/// integers.
-fn dense_of(v: &Value) -> Option<(ArrayD<f64>, bool)> {
+/// [`ConstValue::from_json`]): the array and how its elements are spelled.
+fn dense_of(v: &Value) -> Option<(ArrayD<f64>, Spelling)> {
     if !v.is_array() {
         return None;
     }
     let mut shape = Vec::new();
     let mut flat = Vec::new();
-    let mut integers = None;
-    walk_dense(v, 0, &mut shape, &mut flat, &mut integers)?;
+    let mut ints = IntBits::default();
+    walk_dense(v, 0, &mut shape, &mut flat, &mut ints)?;
     if shape.contains(&0) {
         return None;
     }
-    let integers = integers?;
+    let spelling = ints.spelling(flat.len());
     ArrayD::from_shape_vec(IxDyn(&shape), flat)
         .ok()
-        .map(|a| (a, integers))
+        .map(|a| (a, spelling))
+}
+
+/// The integer-spelled elements seen so far, one bit per element.
+#[derive(Default)]
+struct IntBits {
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl IntBits {
+    fn set(&mut self, k: usize) {
+        if self.bits.len() <= k / 64 {
+            self.bits.resize(k / 64 + 1, 0);
+        }
+        self.bits[k / 64] |= 1 << (k % 64);
+        self.count += 1;
+    }
+
+    fn spelling(self, n: usize) -> Spelling {
+        match self.count {
+            0 => Spelling::Floats,
+            c if c == n => Spelling::Integers,
+            _ => {
+                let mut bits = self.bits;
+                bits.resize(n.div_ceil(64), 0);
+                Spelling::Mixed(bits.into_boxed_slice())
+            }
+        }
+    }
 }
 
 fn walk_dense(
@@ -306,7 +357,7 @@ fn walk_dense(
     depth: usize,
     shape: &mut Vec<usize>,
     flat: &mut Vec<f64>,
-    integers: &mut Option<bool>,
+    ints: &mut IntBits,
 ) -> Option<()> {
     match v {
         Value::Array(items) => {
@@ -321,7 +372,7 @@ fn walk_dense(
                 return None;
             }
             for item in items {
-                walk_dense(item, depth + 1, shape, flat, integers)?;
+                walk_dense(item, depth + 1, shape, flat, ints)?;
             }
             Some(())
         }
@@ -337,8 +388,8 @@ fn walk_dense(
                 let u = n.as_u64()?;
                 (u <= EXACT_INT).then_some((u as f64, true))?
             };
-            if *integers.get_or_insert(int) != int {
-                return None;
+            if int {
+                ints.set(flat.len());
             }
             flat.push(x);
             Some(())
@@ -390,12 +441,13 @@ fn collect_json_array(
     }
 }
 
-/// Row-major `values` of `shape` as nested JSON: integers when `integers`,
-/// else floats (a non-finite one as `null`).
-fn nest(shape: &[usize], values: &[f64], integers: bool) -> Value {
+/// Row-major `values` of `shape`, the first of which is element `first` of
+/// the whole array, as nested JSON: each element an integer or a float as
+/// `spelling` has it (a non-finite float as `null`).
+fn nest(shape: &[usize], values: &[f64], first: usize, spelling: &Spelling) -> Value {
     let Some((&axis, rest)) = shape.split_first() else {
         let x = values[0];
-        return if integers {
+        return if spelling.is_integer(first) {
             Value::from(x as i64)
         } else {
             serde_json::Number::from_f64(x).map_or(Value::Null, Value::Number)
@@ -404,7 +456,14 @@ fn nest(shape: &[usize], values: &[f64], integers: bool) -> Value {
     let stride: usize = rest.iter().product();
     Value::Array(
         (0..axis)
-            .map(|i| nest(rest, &values[i * stride..(i + 1) * stride], integers))
+            .map(|i| {
+                nest(
+                    rest,
+                    &values[i * stride..(i + 1) * stride],
+                    first + i * stride,
+                    spelling,
+                )
+            })
             .collect(),
     )
 }
@@ -418,9 +477,9 @@ mod tests {
         serde_json::to_string(v).unwrap()
     }
 
-    /// A rectangular all-float or all-integer array is held dense; anything
-    /// else keeps its JSON. Either way it writes what was read, in
-    /// canonical-number form.
+    /// A rectangular numeric array is held dense, whatever mix of integer and
+    /// float spellings it has; anything else keeps its JSON. Either way it
+    /// writes what was read, in canonical-number form.
     #[test]
     fn dense_only_where_the_json_reads_back_exactly() {
         let dense = [
@@ -428,6 +487,8 @@ mod tests {
             (json!([[1, 2], [3, 4]]), "[[1,2],[3,4]]"),
             (json!([-0.0, 1e300]), "[0,1e+300]"),
             (json!([9_007_199_254_740_992_i64]), "[9007199254740992]"),
+            (json!([1, 2.5]), "[1,2.5]"),
+            (json!([[1, 2.0], [-0.0, 4]]), "[[1,2],[0,4]]"),
         ];
         for (src, want) in dense {
             let v = ConstValue::from_json(src.clone());
@@ -440,7 +501,6 @@ mod tests {
             json!("NO2"),
             json!([]),
             json!([[], []]),
-            json!([1, 2.5]),
             json!([[1.0, 2.0], [3.0]]),
             json!([1.0, [2.0]]),
             json!([9_007_199_254_740_993_i64]),
@@ -467,6 +527,37 @@ mod tests {
         assert!(nan.array().is_none());
         let empty = ConstValue::from_dense(&[0, 3], vec![]);
         assert_eq!(empty.as_json(), Some(&json!([])));
+    }
+
+    /// A mixed array keeps each element's spelling past the 64th element, and
+    /// two arrays with the same values spelled differently are different
+    /// literals.
+    #[test]
+    fn mixed_spelling_is_kept_per_element() {
+        let src = Value::Array(
+            (0..130)
+                .map(|k| {
+                    if k % 3 == 0 {
+                        json!(k)
+                    } else {
+                        json!(k as f64 + 0.5)
+                    }
+                })
+                .collect(),
+        );
+        let v = ConstValue::from_json(src.clone());
+        assert!(matches!(v.dense_key(), Some((Spelling::Mixed(_), _, _))));
+        assert_eq!(*v.to_json(), src);
+        assert_eq!(
+            written(&v),
+            serde_json::to_string(&super::super::expression::CanonicalJson(&src)).unwrap()
+        );
+        let floats = ConstValue::from_json(json!([1.0, 2.5]));
+        let mixed = ConstValue::from_json(json!([1, 2.5]));
+        assert_eq!(floats.as_dense(), mixed.as_dense());
+        assert_ne!(floats, mixed);
+        assert_ne!(mixed, ConstValue::from_json(json!([1.0, 2])));
+        assert_eq!(*mixed.to_json(), json!([1, 2.5]));
     }
 
     /// Clones share the payload, and with it the materialized array.

@@ -7314,9 +7314,9 @@ follows and names each binding's test file.
    a dev-dependency). Julia: none (no such traits); its reentrancy is item 3.
 2. **Equivalence.** Every task of every suite case, and in Rust every fixture
    of `tests/conformance/compiled_rhs/` that builds natively, equals the
-   binding's existing single-threaded evaluation bitwise (Rust
-   `debug_eval_rhs_into` with a fresh `debug_new_scratch_taped` scratch whose
-   forcing holds the set's data; Julia `f!` of a Problem built with
+   binding's existing single-threaded evaluation bitwise (Rust: the solve's
+   taped right-hand side through a fresh `EsmProblem::debug_solve_rhs` handle
+   whose forcing holds the set's data; Julia `f!` of a Problem built with
    `param_arrays` holding the set's data).
 3. **Concurrency.** 16 threads (Julia: 16 tasks spawned with `Threads.@spawn`)
    × 1,000 calls, each thread with its own workspace, over seeded `(u, p, t,
@@ -7328,8 +7328,8 @@ follows and names each binding's test file.
    a seeded order, gives task 1 the same bits as a fresh workspace.
 5. **Stale forcing.** Replacing one buffer and calling again with the same `p`
    changes the result, and the new result equals the reference for the new set.
-   Negative control: the same sequence on the binding's old path (Rust:
-   `debug_new_scratch_taped`, forcing overwritten in place through
+   Negative control: the same sequence on the binding's old path (Rust: one
+   `debug_solve_rhs` handle, forcing overwritten in place through
    `forcing_handle()`; Julia: `f!` with `forcing_buffers(prob)` overwritten in
    place) reproduces the stale result bitwise, proving the test can fail. The manifest's `stale_control` says on which cases each binding runs
    the control.
