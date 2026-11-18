@@ -103,19 +103,18 @@ end
 # esm-libraries-spec §8.1: a library MUST reject a document whose major version
 # it does not implement. Python and Rust refuse it at load; here it is refused at
 # the build, before a document of another major is run as if it were this one.
-# Majors 1 and 2 are implemented too: a 1.x or 2.x document that uses none of
-# the constructs 2.0.0 and 3.0.0 removed means the same thing under 3.0.0 (a
-# removed one is refused by name at load, `removed_op`), so the major version
-# alone never refuses it.
+# Major 1 is implemented too: a 1.x document that uses none of the constructs
+# 2.0.0 removed means the same thing under 2.0.0 (a removed one is refused by
+# name at load, `removed_op`), so the major version alone never refuses it.
 function _refuse_unsupported_major_version(version)
     parsed = _parse_esm_version(string(version))
     parsed === nothing && return nothing
     supported = _parse_esm_version(SCHEMA_VERSION)[1]
     major = parsed[1]
-    1 <= major <= supported || throw(
+    (major == supported || major == 1) || throw(
         ParseError(
             "Unsupported major version $major. This library supports major versions " *
-                join(1:supported, ", ") * "."
+                "1, $supported."
         )
     )
     return nothing

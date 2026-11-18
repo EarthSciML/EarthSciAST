@@ -72,7 +72,7 @@ end
         end
     end
 
-    @testset "grad, div and laplacian were removed at esm 3.0.0, whatever the declared version" begin
+    @testset "grad, div and laplacian were removed at esm 2.4.0, whatever the declared version" begin
         node(op) = Dict{String, Any}("op" => op, "args" => Any["x"], "dim" => "x")
         for op in ("grad", "div", "laplacian"), version in ("1.3.0", "2.3.0", EarthSciAST.SCHEMA_VERSION)
             doc = Dict{String, Any}(
@@ -101,7 +101,7 @@ end
                 @test err isa EarthSciAST.ParseError && err.code == "removed_op"
                 @test err isa EarthSciAST.ParseError && err.path == "/models/M/equations/0/rhs/args/1"
                 msg = err isa EarthSciAST.ParseError ? err.message : ""
-                @test occursin("`\"op\": \"$(op)\"`", msg) && occursin("esm 3.0.0", msg)
+                @test occursin("`\"op\": \"$(op)\"`", msg) && occursin("esm 2.4.0", msg)
                 @test occursin("spatial `D`", msg)
                 @test !occursin("earthsci_ast.migrate", msg)
             end

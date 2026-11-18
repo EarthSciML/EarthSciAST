@@ -108,7 +108,7 @@ const ESM = EarthSciAST
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
-    @testset "grad/div/laplacian were removed at esm 3.0.0 (§4.2)" begin
+    @testset "grad/div/laplacian were removed at esm 2.4.0 (§4.2)" begin
         # They are refused by name at load (`removed_op`), so they have no
         # registry row; spatial axes are harvested structurally from the
         # `dim`/`wrt` FIELDS (flatten.jl), not from an op-name set.

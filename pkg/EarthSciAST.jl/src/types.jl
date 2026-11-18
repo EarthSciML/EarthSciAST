@@ -66,7 +66,7 @@ bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
 test enforces. NOT the version of this PACKAGE — that is
 [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "3.0.0"
+const SCHEMA_VERSION = "2.4.0"
 
 """
     LIBRARY_VERSION
@@ -738,7 +738,7 @@ Binds a parameter to one file variable of a `data_sources` entry (esm-spec
 units are the parameter's own, declared once on the consumer.
 
 `records_per_sample` (1 or 2, `nothing` when not written) is DEPRECATED (esm-spec
-§8.5.1, removed in a later major version): the parameter's record shape says how many
+§8.5.1, removed at esm 3.0.0): the parameter's record shape says how many
 records it receives, and a written value must agree with it. It parses and
 round-trips as written; validation and `flatten` refuse a value that disagrees
 with the record shape (`records_per_sample_invalid`).
@@ -1831,7 +1831,7 @@ struct DataSourceTemporal
     frequency::Union{String, Nothing}
     records_per_file::Union{Int, String, Nothing}  # integer or "auto"
     time_variable::Union{String, Nothing}
-    # DEPRECATED (esm-spec §8.3/§8.5.1, removed in a later major version): the source-wide
+    # DEPRECATED (esm-spec §8.3/§8.5.1, removed at esm 3.0.0): the source-wide
     # default of each consumer's deprecated `from.records_per_sample`. Only
     # checked against each consumer's record shape, never obeyed. Distinct
     # from `records_per_file`, which counts records IN one file.

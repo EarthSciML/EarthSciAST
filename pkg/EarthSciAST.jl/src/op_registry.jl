@@ -383,7 +383,7 @@ const _OP_TABLE = _OpSpec[
     # ── Calculus / initial-condition markers (resolved or rejected at build
     #    time; never scalar-evaluated) ──
     #    The former spatial-calculus sugar `grad`/`div`/`laplacian` was
-    #    removed at esm 3.0.0 (refused by name at load, `removed_op`) and is
+    #    removed at esm 2.4.0 (refused by name at load, `removed_op`) and is
     #    not registered. An open-tier USER op is in the rewrite-target tier T
     #    (`_op_in_T`, templates/rewrite.jl) by having no registry entry: it is a
     #    non-hoistable CSE barrier and is rejected by the GENERIC

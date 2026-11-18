@@ -376,7 +376,7 @@ end
     deprecated_records_per_sample_sites(file::EsmFile) -> Vector{String}
 
 The JSON pointers at which the deprecated `records_per_sample` (esm-spec §8.3,
-§8.5.1; removed in a later major version) is written in a loaded document, sorted
+§8.5.1; removed at esm 3.0.0) is written in a loaded document, sorted
 (byte-order): `/data_sources/<S>/temporal/records_per_sample` and
 `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
 and `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
@@ -422,7 +422,7 @@ function _warn_deprecated_records_per_sample(file::EsmFile)
     isempty(sites) && return nothing
     @warn string(
         "deprecated_records_per_sample: `records_per_sample` is deprecated and is ",
-        "removed in a later major version; the number of records a data-fed parameter receives ",
+        "removed at esm 3.0.0; the number of records a data-fed parameter receives ",
         "is said by its record shape, two when its first axis is an interval index ",
         "set with \"records\": true (esm-spec §8.5.1). Written at: ",
         join(sites, ", "), "."

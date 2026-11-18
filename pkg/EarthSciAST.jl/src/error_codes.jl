@@ -384,7 +384,7 @@ const ERROR_CODES = (
     # (`arrayop` at 0.8.0; `fn`, `table_lookup`, `skolem`, `rank`,
     # `intersect_polygon`, `polygon_intersection_area`, `argmin`, `argmax`,
     # `aggregate` and the `function_tables` block at 2.0.0; `grad`, `div` and
-    # `laplacian` at 3.0.0), rejected by name at the wire
+    # `laplacian` at 2.4.0), rejected by name at the wire
     # boundary (CONFORMANCE_SPEC §7).
     REMOVED_OP = "removed_op",
     # A document spells `"op": "faq"` while declaring esm below 1.1.0, the

@@ -149,7 +149,7 @@ where Julia wrote `-rate` — and esm-libraries-spec §4.6.2 settled that (see "
 reaction-lowering cases" below). The case is compared in full.)
 * `equations` on `operator_compose_translate` — an oracle gap that is not about
   the composition this case exists to pin (the merge itself matches the corpus
-  exactly and is asserted locally below). (RESOLVED with esm 3.0.0:
+  exactly and is asserted locally below). (RESOLVED with esm 2.4.0:
   `independent_variables` used to diverge too, because the oracle harvested
   axes only from `dim` fields and missed the spatial `D`'s `wrt: z`; with the
   `grad`/`laplacian` sugar gone the corpus records `["t","z","x","y"]`, Julia's

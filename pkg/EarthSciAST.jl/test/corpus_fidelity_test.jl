@@ -334,7 +334,7 @@ include("testutils.jl")
         # source-level `select`, and `temporal.records_per_sample` (how many
         # records the source returns per QUERY TIME, as against
         # `records_per_file`, which counts records IN one file). The latter is
-        # deprecated (esm-spec §8.5.1, removed in a later major version) but still parses
+        # deprecated (esm-spec §8.5.1, removed at esm 3.0.0) but still parses
         # and round-trips as written until then, which is what this pins. The
         # 2 agrees with the consuming parameter's record shape ["rec", "cells"].
         rean = emit_of(
