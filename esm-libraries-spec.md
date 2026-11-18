@@ -1705,13 +1705,20 @@ rewrites their equations.
   - an `index` whose subscripts are all scalars is a scalar, and is undecided otherwise;
   - a `faq` with no output indices is a scalar; one whose every output index ranges
     `{"from": X}` has those index sets in `output_idx` order; any other is undecided;
+  - an `apply_expression_template` reference has the axes of its expansion (esm-spec §9.6.4
+    rule 2). A binding decides it on the template's body, once per instance (esm-spec §9.6.4
+    rule 3), reading each parameter as the axes of what it binds; it MUST NOT treat a
+    reference as undecided because it is a reference, since a firing discretization rule writes
+    one (esm-spec §9.6.3 constraint 7);
   - every other node is undecided.
 
   A definition is followed once and its answer remembered, so the answer does not depend on the
   order equations are visited in; a name reached again while its own definition is being read
   (a cycle) is undecided.
 - **Candidates.** A scalar state is a candidate when its merged equation's right-hand side
-  carries an operator `makearray` (the operator route; its grid follows "Pointwise lift: index
+  carries an operator `makearray`, read on the expanded tree as in "Pointwise lift: index sets"
+  below — a reference whose body holds the `makearray`, such as the reference a firing
+  discretization rule writes (esm-spec §9.6.3 constraint 7), carries it (the operator route; its grid follows "Pointwise lift: index
   sets" below), or when that right-hand side's value axes are decided and not empty (its grid is
   those index sets, each of which MUST declare a `size`).
 - **The whole component.** A component is a top-level `models` or `reaction_systems` entry with
