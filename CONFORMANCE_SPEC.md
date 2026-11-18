@@ -2839,7 +2839,7 @@ precedence directly on its own typed build path.
 The `streaming-output-sinks` RFC §7–§9 derivation turns a document plus the flat
 state's element names into the dimension-labeled, CF-annotated **output plan** a
 Zarr writer is handed. It exists in two bindings —
-`pkg/EarthSciAST.jl/src/data_output.jl` and
+`pkg/EarthSciAST.jl/src/output_plan.jl` and
 `pkg/earthsci-ast-rs/src/data_output.rs` — and the shared **offline** corpus lives
 in `tests/conformance/output_derivation/`.
 
