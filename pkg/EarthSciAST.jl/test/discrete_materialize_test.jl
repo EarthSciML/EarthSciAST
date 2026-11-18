@@ -499,11 +499,11 @@ using ForwardDiff
             rhs() = (du = zero(u0); f!(du, u0, p, 0.0); [du[vm["M.c[$j]"]] for j in 1:3])
             @test rhs() ≈ _dm_g([1.0, 1.0]) .+ _dm_k(1.0)
             src .= [2.0, 3.0]
-            _DM_ESS.notify_forcing_refresh!(src)                 # the buffer's builds
+            _DM_ESS.notify_forcing_refresh!(dm)                  # the build's materializer
             @test rhs() ≈ _dm_g([2.0, 3.0]) .+ _dm_k(1.0)
             @test dm.caches["M.g"] ≈ _dm_g([2.0, 3.0])
             src .= [5.0, 7.0]
-            _DM_ESS.notify_forcing_refresh!()                    # every build
+            _DM_ESS.notify_forcing_refresh!(dm)
             @test rhs() ≈ _dm_g([5.0, 7.0]) .+ _dm_k(1.0)
             # Refilled once per announcement, not on every call.
             g = copy(dm.caches["M.g"]); src .= [0.0, 0.0]
@@ -515,7 +515,7 @@ using ForwardDiff
             dm.refresh!()
             @test dm.epoch[] == e && dm.caches["M.g"] == g
             src .= [3.0, 1.0]
-            _DM_ESS.notify_forcing_refresh!(src)
+            _DM_ESS.notify_forcing_refresh!(dm)
             dm.refresh!()
             @test dm.caches["M.g"] ≈ _dm_g([3.0, 1.0])
             e = dm.epoch[]
@@ -536,7 +536,8 @@ using ForwardDiff
             f(x) = (du = zero(x); prob.f!(du, x, prob.p, 0.25); du)
             before = f(u)[cells]
             src .= [4.0, 9.0]
-            _DM_ESS.notify_forcing_refresh!(src)
+            _DM_ESS.notify_forcing_refresh!(prob, "src")
+            @test_throws ArgumentError _DM_ESS.notify_forcing_refresh!(prob, "nope")
             after = f(u)[cells]
             @test after ≈ before .+ (_dm_g([4.0, 9.0]) .- _dm_g([1.0, 2.0]))
             J = ForwardDiff.jacobian(f, u)
@@ -560,7 +561,7 @@ using ForwardDiff
         @test haskey(prob.dm.caches, "M.q")
         @test _DM_ESS.observed_field(prob, "M.q") == [0.0, 0.0, 0.0]
         G .= [1000 + 7a + 3i for a in 1:2, i in 1:3]
-        _DM_ESS.notify_forcing_refresh!(G)
+        _DM_ESS.notify_forcing_refresh!(prob)
         @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]
         @test _DM_ESS.observed_field(prob, "M.q") == [7.0, 7.0, 7.0]   # memo hit
         e = prob.dm.epoch[]

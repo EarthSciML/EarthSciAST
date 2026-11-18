@@ -694,10 +694,10 @@ function _build_compile_evaluator(
     pgather = _build_pgather(param_arrays)
     _ws_note_pgather!(pgather)
     # This build's forcing epoch: the problem's (its discrete sink carries it),
-    # bumped by a refresh of any buffer the build reads.
+    # bumped when a refresh of a buffer the build reads is announced to its owner.
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
         materialize_out.epoch
-    _register_forcing_buffers!(forcing_epoch, values(param_arrays))
+    products === nothing || (products.forcing_epoch = forcing_epoch)
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a

@@ -59,7 +59,7 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))]
         )
         buf = [2.0]                       # setup-time materialize for the first segment [0,1)
-        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             model;
             initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
@@ -71,6 +71,7 @@ struct _BareSource end
             )
         )
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("forcing" => prov),
             buffers = RefreshBuffers(Dict("forcing" => buf))
         )   # SAME buf object
@@ -106,7 +107,7 @@ struct _BareSource end
         ]
         model = ESM.Model(vars, eqs)
         buf = [2.0]
-        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             model;
             initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
@@ -118,6 +119,7 @@ struct _BareSource end
             )
         )
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("forcing" => prov),
             buffers = RefreshBuffers(Dict("forcing" => buf))
         )
@@ -135,7 +137,7 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _idx("forcing", _i(1)))]
         )
         buf = [4.0]
-        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             model;
             initial_conditions = Dict("M.y" => 0.0), param_arrays = Dict("forcing" => buf)
         )
@@ -143,6 +145,7 @@ struct _BareSource end
         const_prov = MockProvider(Float64[], Dict{Float64, Dict{String, Vector{Float64}}}())
         @test provider_is_const(const_prov)
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("forcing" => const_prov),
             buffers = RefreshBuffers(Dict("forcing" => buf))
         )
@@ -162,7 +165,7 @@ struct _BareSource end
             [ESM.Equation(_D("y"), _op("+", _idx("a", _i(1)), _idx("b", _i(1))))]
         )
         abuf = [1.0]; bbuf = [1.0]
-        f!, u0, p, _ts, vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, vm) = b = EarthSciAST.Internal.build(
             model;
             initial_conditions = Dict("M.y" => 0.0),
             param_arrays = Dict("a" => abuf, "b" => bbuf)
@@ -170,6 +173,7 @@ struct _BareSource end
 
         prov = MockProvider([1.0], Dict(1.0 => Dict("a" => [10.0], "b" => [100.0])))
         cb, tstops = build_refresh_callback(;
+            owner = b,
             providers = Dict("a" => prov, "b" => prov),          # SAME provider object
             buffers = RefreshBuffers(Dict("a" => abuf, "b" => bbuf))
         )
@@ -202,7 +206,7 @@ struct _BareSource end
         )
         buf = collect(1.0:Float64(N))
         ics = Dict("M.u[$k]" => 0.0 for k in 1:N)
-        f!, u0, p, _ts, _vm = EarthSciAST.Internal.build(
+        (f!, u0, p, _ts, _vm) = b = EarthSciAST.Internal.build(
             model;
             initial_conditions = ics, param_arrays = Dict("forcing" => buf)
         )
@@ -258,6 +262,7 @@ struct _BareSource end
         prov = MockProvider([1.0], Dict(1.0 => Dict("forcing" => [5.0])))
         err = try
             build_refresh_callback(;
+                owner = nothing,
                 providers = Dict("forcing" => prov),
                 buffers = RefreshBuffers(Dict("other" => [0.0]))
             )

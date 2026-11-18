@@ -184,7 +184,7 @@ const ESM = EarthSciAST
             ]
         )
         buf = [3.0, 7.0, 11.0]
-        f!, u0, p, _t, vm, rep = ESM.Internal.build(
+        (f!, u0, p, _t, vm, rep) = b = ESM.Internal.build(
             model;
             initial_conditions = Dict("M.y" => 0.0, "M.z" => 0.0),
             param_arrays = Dict("forcing" => buf)
@@ -202,10 +202,9 @@ const ESM = EarthSciAST
         # In-place refresh of the SAME buffer object → the CACHED expression tracks
         # it. Since B3 the state-free slot is TIME-cadence — memoized on (p, t,
         # forcing epoch) — so a refresh landing at an ALREADY-SEEN t is announced
-        # via the epoch (the in-tree refresh surfaces `_write_forcing!` /
-        # `materialize!` bump it themselves; this direct write is its raw form)…
+        # to the build, which moves its epoch…
         buf[2] = 42.0
-        ESM.notify_forcing_refresh!()
+        ESM.notify_forcing_refresh!(b)
         f!(du, u0, p, 0.0)
         @test du[vm["M.y"]] === sin(42.0 * a) + cos(42.0 * a)
         @test du[vm["M.z"]] === 42.0 * a

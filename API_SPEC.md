@@ -1338,8 +1338,9 @@ gather failed, or that were never gathered, are `NotGathered`. Build-time calls 
   `Threads.Atomic{UInt64}` in Julia), incremented for every set built; an epoch
   is never reused within a process. Two distinct sets never share an epoch,
   so a stale read is impossible by construction. A clone of a set is the same
-  set and keeps its epoch. Julia's process-global `_FORCING_EPOCH` is not
-  consulted on the `rhs!` path.
+  set and keeps its epoch. A Julia Problem's own in-place `f!` keeps a
+  separate epoch per build, which `notify_forcing_refresh!(prob)` moves; the
+  `rhs!` path never reads it.
 - **Refresh is a swap.** `replace_forcing(fs, slot, buf)` / `replace` returns a
   NEW set with a new epoch, sharing every other buffer; the old set is
   unchanged and stays valid for whoever still holds it. `slot` is 0-based in

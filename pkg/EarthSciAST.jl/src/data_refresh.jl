@@ -410,14 +410,55 @@ function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
         )
     )
     field isa Real ? (buffer[] = Float64(field)) : copyto!(buffer, field)
-    # The buffer just changed in place under the RHS's live gathers — invalidate the
-    # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
-    # callback fires AT its tstop, so the next RHS call may be at a `t` the t-tier
-    # stamp already holds; the epoch bump is what makes the refresh visible then.
-    # Only the builds that read this buffer are invalidated (cadence_stamp.jl).
-    _bump_buffer_epochs!(buffer)
     return buffer
 end
+
+"""
+    notify_forcing_refresh!(prob::EsmProblem)
+    notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
+    notify_forcing_refresh!(dm::DiscreteMaterializer)
+
+Announce that the contents of a live forcing buffer (a `param_arrays` buffer
+bound into the build) were mutated in place. The announcement goes to the
+buffer's owner: the Problem whose build reads it, or the
+[`DiscreteMaterializer`](@ref) that build filled (the same build's epoch). Two
+kinds of build product are derived from such a buffer, and both are brought up
+to the new contents by the owner's next in-place `f!` call (or
+[`observed_field`](@ref) read):
+
+* the memoized time-cadence prelude values that gather it, which `f!` refills
+  on the next call at a `t` it has already been called at (a later `t`
+  re-evaluates them anyway), and
+* every discrete-cadence cache ([`DiscreteMaterializer`](@ref)) of the build,
+  which `f!` refills on its next call at ANY `t`. Nothing but this
+  announcement (or a change of `p`) refills them, so a forcing write that is
+  not announced leaves `f!` reading derived fields built from the old forcing,
+  whatever `t` it is next called at.
+
+With `name`, the buffer must be one of `prob`'s live forcing buffers (a key of
+its `param_arrays` as the caller spelled it, or a discrete provider's
+variable); an unknown name raises `ArgumentError`. One build has one epoch, so
+both forms refill the same values. Builds of other Problems that alias the same
+array are not reached: announce the write to each owner.
+
+The problem's own refresh callback announces its writes itself, as does a
+[`build_refresh_callback`](@ref) given the problem as `owner`. Code that writes a
+forcing buffer *directly* — e.g. a hand-rolled callback doing `buf .= …` — calls
+this after every such write. A reader of the out-of-place build product's
+[`forcing_buffers`](@ref) gets no refill from `f!`; it calls the
+[`DiscreteMaterializer`](@ref)'s `refresh!()` after the announcement.
+
+A spurious call never gives a wrong number, but it is not free: the next `f!`
+re-runs its time-cadence slots and its whole discrete-cadence stack, which for a
+deep chain (a regrid feeding fire physics) is the cost of a data refresh.
+
+`f!` does the refill in place, inside the call, so the same rule applies as to
+the rest of `f!`: one build's `f!` must not be called from several threads at
+once.
+"""
+function notify_forcing_refresh! end
+
+notify_forcing_refresh!(dm::DiscreteMaterializer) = _bump_epoch!(dm.epoch)
 
 # --------------------------------------------------------------------------- #
 # RefreshBuffers — the live forcing buffers (the SAME objects as param_arrays)
@@ -476,7 +517,7 @@ Base.length(b::RefreshBuffers) = length(b.buffers)
 # --------------------------------------------------------------------------- #
 
 """
-    build_refresh_callback(; providers, buffers,
+    build_refresh_callback(; providers, buffers, owner,
                            post_refresh = () -> nothing)
         -> (cb, tstops::Vector{Float64})
 
@@ -493,7 +534,8 @@ forcing = Dict("wind" => zeros(nx, ny))
 prob = esm_problem(doc, tspan; param_arrays = forcing, …)
 cb, tstops = build_refresh_callback(;
     providers = Dict("wind" => wind_provider),   # var name => data Provider
-    buffers   = RefreshBuffers(forcing))         # same array objects as param_arrays
+    buffers   = RefreshBuffers(forcing),         # same array objects as param_arrays
+    owner     = prob)                            # the build that reads them
 sol = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 ```
 
@@ -517,8 +559,17 @@ in-model coupling expression the RHS evaluates, not a refresh-time transform.
   `const_arrays` at build time; they contribute no tstops and are
   absent from the callback.
 
+`owner` is the build that reads `buffers` — the Problem, or the
+[`DiscreteMaterializer`](@ref) its build filled — and the `affect!` announces
+each boundary's writes to it with [`notify_forcing_refresh!`](@ref), so the
+build's memoized time-cadence values and discrete caches refill. It is
+required: `owner = nothing` announces nothing, and then only the right-hand
+side's live reads of a buffer see the new values, while a value memoized from
+the old ones stays until `t` moves (time tier) or for good (discrete caches).
+
 `post_refresh` is a `() -> nothing` hook the `affect!` calls at each boundary
-AFTER the raw forcing buffers are refreshed and BEFORE `u_modified!` — the
+AFTER the raw forcing buffers are refreshed and announced, and BEFORE
+`u_modified!` — the
 discrete-cadence materialization seam (the middle phase of the `const ⊏ discrete
 ⊏ continuous` cadence partition). [`esm_problem`](@ref) wires it to the
 [`DiscreteMaterializer`](@ref)'s `materialize!` so a state-free derived field (a
@@ -572,7 +623,7 @@ prob = esm_problem(doc, tspan; param_arrays = forcing)
 host = forcing_buffers(prob)                # aliased host buffers, stable order
 dev  = map(Reactant.ConcreteRArray, host)   # the compiled program's inputs
 cb, tstops = build_refresh_callback(;
-    providers, buffers = RefreshBuffers(forcing),
+    providers, buffers = RefreshBuffers(forcing), owner = prob,
     post_refresh = () -> sync_forcing!(dev, host))
 ```
 

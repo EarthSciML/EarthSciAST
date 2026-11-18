@@ -2131,6 +2131,7 @@ function esm_problem(
         cb, ts = build_refresh_callback(;
             providers = discrete_providers,
             buffers = RefreshBuffers(merged_param),
+            owner = dm,
             post_refresh = dm.materialize!
         )   # recompute discrete caches per boundary
         push!(cbs, cb)
@@ -2607,6 +2608,18 @@ function _observed_field_impl(
     return fld[1]
 end
 
+notify_forcing_refresh!(prob::EsmProblem) = _bump_epoch!(prob.build.products.forcing_epoch)
+
+function notify_forcing_refresh!(prob::EsmProblem, name::AbstractString)
+    haskey(prob.param_buffers, name) || throw(
+        ArgumentError(
+            "notify_forcing_refresh!: '$name' is not a live forcing buffer of this " *
+                "problem; its buffers are " * join(sort!(collect(keys(prob.param_buffers))), ", ")
+        )
+    )
+    return notify_forcing_refresh!(prob)
+end
+
 # Re-seed the DISCRETE forcing buffers at the run's t0 and recompute the
 # discrete-materialized caches, so every run starts from freshly initialized
 # refresh state — a previous run's callback mutates the buffers in place, and a
@@ -2621,6 +2634,7 @@ function _prepare_run!(prob::EsmProblem, t0::Float64)
             buf = prob.param_buffers[k]::Array{Float64}
             _write_forcing!(buf, k, provider_sample(prov, t0))
         end
+        notify_forcing_refresh!(prob)
         prob.dm.materialize!()   # discrete caches must see the re-seeded buffers
         prob.buffer_time[] = t0
     end

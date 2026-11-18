@@ -168,6 +168,9 @@ and:
   prelude slots, scan folds, factored observeds); empty until the build ends.
 * `kernels` — the access kernels the right-hand side carries, after the class
   merge.
+* `forcing_epoch` — the build's forcing epoch (cadence_stamp.jl), the counter
+  [`notify_forcing_refresh!`](@ref) bumps; the `DiscreteMaterializer` the build
+  filled carries the same one.
 """
 mutable struct BuildProducts
     setup_arrays::Dict{String, Array{Float64}}
@@ -186,6 +189,7 @@ mutable struct BuildProducts
     observed_ctx::Any
     stats::NamedTuple
     kernels::AbstractVector
+    forcing_epoch::_ForcingEpoch
 end
 BuildProducts() = BuildProducts(
     Dict{String, Array{Float64}}(), Dict{String, Any}(), Dict{String, ASTExpr}(),
@@ -193,7 +197,7 @@ BuildProducts() = BuildProducts(
     CompilerReport(:native),
     Dict{String, ASTExpr}(), Dict{String, Int}(),
     NamedTuple(), Dict{String, Int}(),
-    Int[], nothing, nothing, NamedTuple(), Any[]
+    Int[], nothing, nothing, NamedTuple(), Any[], _new_forcing_epoch()
 )
 
 """
