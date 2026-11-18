@@ -32,19 +32,23 @@ blocks `flatten` does not carry.
 * `coupling_reads` — the names a `variable_map` coupling reads (its `from`
   endpoints), which flatten resolves away: a provider keyed by one keeps its
   own name (`_routable_keys`).
+* `file` — the loaded document `flat` was flattened from (`nothing` for a
+  `FlattenedSystem` input), which a compiler's file-level refusals read when
+  the run is reused (`_prepare_run(::PreparedRun)`).
 """
 struct PreparedRun
     flat::FlattenedSystem
     coordinates::Union{Nothing, Dict{String, Any}}
     solver::Union{Nothing, Solver}
     coupling_reads::Set{String}
+    file::Union{Nothing, EsmFile}
 end
 
-PreparedRun(flat::FlattenedSystem) = PreparedRun(flat, nothing, nothing, Set{String}())
+PreparedRun(flat::FlattenedSystem) = PreparedRun(flat, nothing, nothing, Set{String}(), nothing)
 
 # `prep` with its flattened system replaced.
 _with_flat(prep::PreparedRun, flat::FlattenedSystem) =
-    PreparedRun(flat, prep.coordinates, prep.solver, prep.coupling_reads)
+    PreparedRun(flat, prep.coordinates, prep.solver, prep.coupling_reads, prep.file)
 
 # The states an `operator_compose` renaming match DELETED, mapped onto the
 # survivors they were folded into (esm-libraries-spec §4.7.1 step 4).
@@ -81,7 +85,11 @@ _refuse_tree_walk_file(file::EsmFile, strip_taken) = _refuse_coupling_events(fil
                  refuse_file, refuse_flat) -> PreparedRun
 
 Load `input` (a path, a native `Dict`, an `EsmFile` or a `FlattenedSystem`),
-apply the document-level refusals, and flatten it.
+apply the document-level refusals, and flatten it. A `PreparedRun` input (one
+document prepared once for several runs, as `run_inline_tests` does) is not
+loaded or flattened again: only the compiler's own refusals (`refuse_file`,
+`refuse_flat`) run on it, and `metaparameters`, `base_path` and
+`supplied_names` must be the ones it was prepared with.
 
 `supplied_names` are the bare names the caller binds at construction (a
 `const_arrays`, `param_arrays` or `providers` key), which the
@@ -114,7 +122,10 @@ function _prepare_run(
             c.from for c in input.coupling if c isa CouplingVariableMap
         )
         flat = flatten(input)
-        prep = PreparedRun(flat, input.coordinates, input.solver, coupling_reads)
+        prep = PreparedRun(flat, input.coordinates, input.solver, coupling_reads, input)
+    elseif input isa PreparedRun
+        prep = input
+        prep.file === nothing || refuse_file(prep.file, strip_taken)
     elseif input isa FlattenedSystem
         prep = PreparedRun(input)
     else

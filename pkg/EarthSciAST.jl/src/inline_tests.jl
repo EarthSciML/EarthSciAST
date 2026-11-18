@@ -882,6 +882,9 @@ struct SimulateTestEngine
     # could not name one could only ever exercise the default, which is the
     # single compiler a compiler-agreement fixture has no need to re-check.
     compiler::Symbol
+    # `file` loaded, checked and flattened once for every test that runs
+    # against it (`_prepare_tests_document`), or why that failed.
+    prep::Union{PreparedRun, _EngineFailure}
 end
 
 # Per-test handle: the successful simulation plus the build-observability sink
@@ -1024,18 +1027,32 @@ function _scope_to_component(overrides, mname, scope)
     return out
 end
 
-function _test_name_scope(target::EsmFile)
-    flat = try
-        flatten(target)
+function _test_name_scope(target::Union{EsmFile, PreparedRun, _EngineFailure})
+    target isa _EngineFailure && return nothing
+    flat = target isa PreparedRun ? target.flat : try
+            flatten(target)
     catch err
-        err isa EarthSciASTError || rethrow()
-        return nothing
+            err isa EarthSciASTError || rethrow()
+            return nothing
     end
     known = union(
         Set{String}(String(n) for n in keys(flat.parameters)),
         Set{String}(String(n) for n in keys(flat.state_variables))
     )
     return (known, flat.metadata.merged_variable_renames)
+end
+
+# `file` loaded, checked and flattened once for all of its tests: the
+# document-level refusals and `flatten`, without a compiler's own refusals,
+# which each test's `esm_problem` applies to the prepared run. A failure is
+# every such test's failure, reported as its build would have reported it.
+function _prepare_tests_document(file::EsmFile)
+    return try
+        _prepare_run(file; refuse_file = (_, _) -> nothing, refuse_flat = _ -> nothing)
+    catch err
+        _is_resource_error(err) && rethrow()
+        _EngineFailure("simulation failed: ", err)
+    end
 end
 
 function _engine_setup(e::SimulateTestEngine, t)
@@ -1048,9 +1065,16 @@ function _engine_setup(e::SimulateTestEngine, t)
         u0 = _seeded_overrides(e.seed_u0, t.initial_conditions)
         # The target is flattened for the scope only when a key needs one.
         scope = (isempty(something(p, ())) && isempty(something(u0, ()))) ? nothing :
-            _test_name_scope(target)
+            _test_name_scope(target === e.file ? e.prep : target)
+        # A test with no injection runs against the document prepared once.
+        if target === e.file
+            e.prep isa _EngineFailure && return e.prep
+            input = e.prep
+        else
+            input = target
+        end
         prob = esm_problem(
-            target, (t.time_span.start, t.time_span.stop);
+            input, (t.time_span.start, t.time_span.stop);
             p = _overrides_or_empty(_scope_to_component(p, e.mname, scope)),
             u0 = _scope_to_component(u0, e.mname, scope),
             compiler = e.compiler
@@ -1411,11 +1435,12 @@ function _run_document_tests!(
     # made the failures of a document inconsistent with each other.
     source = document isa AbstractString ? String(document) : ""
     d_compiler = _opt_or(o, :compiler, compiler)
+    prep = _prepare_tests_document(file)
     for (mname, kind, component) in components
         engine = SimulateTestEngine(
             file, document, mname, resolved_base,
             d_alg, d_reltol, d_abstol, seed_p, seed_u0,
-            d_compiler
+            d_compiler, prep
         )
         _run_test_frame!(
             results, engine, source, kind, mname,
