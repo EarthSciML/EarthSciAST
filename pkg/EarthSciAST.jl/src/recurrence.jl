@@ -601,7 +601,7 @@ end
 # Build-time recognition — the seam between a recurrence and a CYCLE
 # ===========================================================================
 #
-# `_resolve_observed` (tree_walk/helpers.jl) collapses observed-into-observed
+# `_resolve_observed` (tree_walk/build_classify.jl) collapses observed-into-observed
 # references by SUBSTITUTION to a fixed point. Substituting a variable's body
 # into itself never terminates, so a self-reference of any kind hit its
 # iteration cap and came out as `E_TREEWALK_OBSERVED_CYCLE` — which is the

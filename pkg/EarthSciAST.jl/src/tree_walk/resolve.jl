@@ -2429,7 +2429,7 @@ function _resolve_indices_op(
         # gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
         # the gather from being hoisted itself, it does NOT keep the ref out of
         # `canonical_json`, which sees it as a child of every hoistable ancestor
-        # (ess-qic; see `_PGatherRef` / `_pgather_key_expr` in compile.jl).
+        # (ess-qic; see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
         if first_arg isa VarExpr && haskey(pgather, first_arg.name)
             pg = pgather[first_arg.name]::_PGatherArray
             idx_args_expr = expr.args[2:end]

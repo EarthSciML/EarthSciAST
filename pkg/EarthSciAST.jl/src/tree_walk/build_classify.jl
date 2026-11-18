@@ -448,7 +448,7 @@ function _state_time_observeds(
 end
 
 # STRUCTURAL-POSITION scan for ARRAY observeds — `_obs_structural_refs!`
-# (helpers.jl) with one exemption: that walker flags EVERYTHING under an
+# (build_classify.jl) with one exemption: that walker flags EVERYTHING under an
 # `index` gather, including the gather's own target, because a scalar
 # observed's value must be build-time-known there. For an ARRAY observed the
 # target IS the array being read, so a bare-name target that names a candidate
@@ -1051,7 +1051,7 @@ end
 # CONSUMERS after ess-obs-slots: the ARRAY paths (faq kernels, stencil /
 # affine builds, discrete-cadence fills) and the inline FALLBACK of the scalar
 # path still splice these fully-resolved bodies. The scalar path's primary
-# mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build.jl),
+# mechanism is now the NAMED PRELUDE SLOT (`_plan_observed_slots`, build_classify.jl),
 # which compiles each safe scalar observed's RAW body once and leaves its
 # references by-name — this resolved map then covers only the non-slot names.
 function _resolve_observed(obs::Dict{String, ASTExpr})
@@ -1095,8 +1095,8 @@ end
 #
 # A SCALAR observed compiles as a NAMED PRELUDE DEF (one `_NK_CACHED` slot,
 # evaluated once per RHS call in dependency order) instead of being spliced
-# into every reader — see `_plan_observed_slots` (build.jl) for the plan and
-# `_cse_compile_scalar` (compile.jl) for the compile. These two walkers are the
+# into every reader — see `_plan_observed_slots` (build_classify.jl) for the plan and
+# `_cse_compile_scalar` (scalar_cse.jl) for the compile. These two walkers are the
 # plan's safety analyses over the RAW (pre-`_resolve_indices`) trees.
 
 # (node, MODE)-memoized visited set for the two-mode structural scan below.
@@ -1210,7 +1210,7 @@ end
 # here (the demotion rule reasons about total/unconditional occurrence
 # counts), so this walk must NOT be collapsed to distinct-node visits. It is
 # instead computed by multiplicity propagation over the UNIQUE-node DAG,
-# mirroring `_cse_count!` (compile.jl): one reverse-postorder pass pushes each
+# mirroring `_cse_count!` (scalar_cse.jl): one reverse-postorder pass pushes each
 # node's (total, unconditional) path multiplicity down its `args` edges — a
 # conditional argument edge forwards no unconditional multiplicity — and each
 # unique node then contributes its multiplicities to its referenced names

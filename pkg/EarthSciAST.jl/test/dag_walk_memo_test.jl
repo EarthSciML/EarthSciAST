@@ -1,6 +1,6 @@
 # Regression test for the exponential-path DAG walk (ESS-1p5).
 #
-# `_resolve_observed` (tree_walk/helpers.jl) inlines observed-into-observed
+# `_resolve_observed` (tree_walk/build_classify.jl) inlines observed-into-observed
 # with IDENTITY-PRESERVING substitution (`_sub_preserving`), so resolved
 # bodies are compact DAGs: O(n) distinct nodes for a depth-n chain, but
 # exponentially many root-to-leaf PATHS when each level references its
@@ -465,7 +465,7 @@ end
     @test out2[1] == out2[2] && out2[1] !== out2[2]
 end
 
-# `_NodeIdMap` (compile.jl) files a `_Node` under its `children` vector and
+# `_NodeIdMap` (node.jl) files a `_Node` under its `children` vector and
 # chains the nodes that share one, telling them apart by `===`. Builders give
 # every node its own vector, so a chain is normally one long; these build the
 # shared case by hand.

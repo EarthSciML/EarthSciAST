@@ -80,7 +80,7 @@
 #
 # WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. Scalar
 # observeds now compile as NAMED PRELUDE DEFS in this same prelude
-# (`_plan_observed_slots` in build.jl; the `obs_defs` argument of
+# (`_plan_observed_slots` in build_classify.jl; the `obs_defs` argument of
 # `_cse_compile_scalar`), so what is left for the canonical-key machinery is exactly
 # the ANONYMOUS repeats — a subexpression written twice without a name.
 
@@ -465,7 +465,7 @@ mutable struct _CSEContext
     # Filled by `_cse_compile_scalar` as it compiles each observed def (in
     # dependency order, before any equation); a `VarExpr` reader whose name is
     # registered here lowers to `_NK_CACHED` on that slot instead of a spliced
-    # copy of the body (see `_plan_observed_slots`, build.jl).
+    # copy of the body (see `_plan_observed_slots`, build_classify.jl).
     obs_slot::Dict{String, Int}
 end
 

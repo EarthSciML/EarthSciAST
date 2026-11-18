@@ -57,7 +57,7 @@ _direct_class_emit_enabled() =
 #      species balances, per-band photolysis equations) always split into one
 #      kernel per equation and reached a class only through the post-hoc
 #      repair pass. Under this switch `_compile_derivative_equations`
-#      (build.jl) POOLS every per-cell equation's cell entries and calls
+#      (build_array_equation.jl) POOLS every per-cell equation's cell entries and calls
 #      `_acc_from_cell_entries` ONCE, above the equation loop — the same
 #      emitter, the same shape-keyed signature, one global grouping. Out-slot
 #      uniqueness across equations is guaranteed by `covered` (a duplicate
@@ -337,7 +337,7 @@ function _make_rhs(
         () -> vcat(_Node[nd for (_, nd) in rhs_list], cse_prelude)
     )
     function f!(du, u, p, t)
-        _reject_float32_state(u)   # loud, statically-folded (see compile.jl)
+        _reject_float32_state(u)   # loud, statically-folded (see rhs_seams.jl)
         T = _rhs_value_type(u, p, t)
         # CSE prelude (ess-r7h), in its THREE CADENCE TIERS (4qf + B3, const_tier.jl):
         # evaluate each distinct shared subexpression once into the scratch cache,
@@ -350,7 +350,7 @@ function _make_rhs(
         # runs, whether or not the guard above its occurrence would have fired. That
         # is safe only because `_cse_compile_scalar` refuses to hoist a key whose
         # every occurrence sits under a lazy `ifelse`/`and`/`or` arm (see the GUARDS
-        # note in compile.jl); a slot that exists always has an occurrence the walk
+        # note in scalar_cse.jl); a slot that exists always has an occurrence the walk
         # would have evaluated anyway.
         cache = _cse_buf(cse_cache, T)
 

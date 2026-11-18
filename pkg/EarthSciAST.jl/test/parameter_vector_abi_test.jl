@@ -35,7 +35,7 @@
 #   5. No allocation regression. The `f!` zero-allocation discipline holds for
 #      every container; measured, an index into a homogeneous vector is strictly
 #      better than the runtime-symbol `getfield` on a heterogeneous NamedTuple
-#      that build.jl warns about (~48 B/call when the union boxes).
+#      that build_pipeline.jl warns about (~48 B/call when the union boxes).
 
 using Test
 using EarthSciAST
@@ -230,7 +230,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
     end
 
     @testset "no allocation regression on the scalar parameter read" begin
-        # build.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
+        # build_pipeline.jl's JL-J0 feasibility note warns that a RUNTIME-SYMBOL `getfield`
         # on a heterogeneous NamedTuple boxes the union (~48 B/call). The scalar
         # `_NK_PARAM` path never had that problem (its symbol is on the node), and
         # an index into a homogeneous vector must not introduce one.

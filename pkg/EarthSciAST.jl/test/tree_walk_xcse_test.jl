@@ -170,7 +170,7 @@ end
         end
 
         # Composed with the kernel-CLASS merge (the DEFAULT build, since the
-        # merge hoisted before xcse in build.jl): ALL K same-structure band
+        # merge hoisted before xcse in build_pipeline.jl): ALL K same-structure band
         # kernels collapse to ONE class kernel whose per-band coefficients
         # ride a per-lane const table. They VARY across the class, so the
         # merged kernel's formerly invariant defs (query chain + rate) fold

@@ -436,7 +436,7 @@ function _apply_initial_conditions!(
     # test's `initial_conditions: {"u": 9.0}` died with "unknown state element
     # 'u'". Same defect as `parameter_overrides` had, on the state side; it
     # merely failed loudly instead of silently. Resolve the caller's key onto
-    # the name the build uses with the SAME rules (build.jl
+    # the name the build uses with the SAME rules (build_caller_data.jl
     # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
     # dotted suffix is a state name, else a key that is itself a dotted suffix
     # of exactly one state name (`u` — and equally `sub.u` — for `P.sub.u`) —

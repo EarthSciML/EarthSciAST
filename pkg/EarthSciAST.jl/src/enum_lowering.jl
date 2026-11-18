@@ -196,7 +196,7 @@ end
 # ONCE and the shared result respliced — keeping this pass linear in UNIQUE
 # nodes instead of exponential in paths, and preserving the sharing for
 # downstream consumers (the build-time `IdDict` memo caches in
-# tree_walk/compile.jl key on it).
+# tree_walk/compile.jl and its callers key on it).
 _lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr, ASTExpr}) = e
 
 function _lower_expr_enums(

@@ -96,7 +96,7 @@ _op(
 The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 
 - `:ws4_foldable`       → `_WS4_FOLDABLE_ELEMENTWISE_OPS` (tree_walk/build_helpers.jl)
-- `:cse_opaque`         → `_CSE_OPAQUE_OPS`               (tree_walk/compile.jl)
+- `:cse_opaque`         → `_CSE_OPAQUE_OPS`               (tree_walk/scalar_cse.jl)
 - `:stencil_elementwise`→ `_STENCIL_ELEMENTWISE_OPS`      (tree_walk/stencil.jl)
 - `:geo_eval`           → `_GEO_EVAL_OPS`                 (tree_walk/geometry_setup.jl)
 - `:mtk_known`          → `_KNOWN_OPS`                    (ext/mtk_ext/export.jl)
@@ -124,7 +124,7 @@ hand:
 - `_WS4_FOLDABLE_ELEMENTWISE_OPS` (src/tree_walk/build_helpers.jl) — elementwise
   ops the WS4 array-observed fold may inline; every member MUST have a scalar
   arm in `_eval_node_op` (see the invariant comment at its definition site).
-- `_CSE_OPAQUE_OPS` (src/tree_walk/compile.jl) — ops `_compile` handles
+- `_CSE_OPAQUE_OPS` (src/tree_walk/scalar_cse.jl) — ops `_compile` handles
   specially; CSE never hoists through them.
 - `_STENCIL_ELEMENTWISE_OPS` (src/tree_walk/stencil.jl) — pure-elementwise ops
   the symbolic stencil fast path whitelists.

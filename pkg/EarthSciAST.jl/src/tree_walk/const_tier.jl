@@ -17,7 +17,7 @@
 # So the prelude is now THREE tiers. `f!` refills the DYNAMIC slots every call, the
 # CONST slots only when `p` moved, and — the B3 tier this file grew — the TIME
 # slots only when `(p, t, forcing epoch)` moved. This file decides which is which;
-# the validity checks that decide "can have changed" live on `_CSECache` (compile.jl).
+# the validity checks that decide "can have changed" live on `_CSECache` (prelude_cache.jl).
 #
 # THE TIME TIER'S TARGET is the finite-difference Jacobian: a stiff solver's FD fill
 # makes N+1 RHS calls at the LITERALLY SAME `t` with a state perturbed one column at

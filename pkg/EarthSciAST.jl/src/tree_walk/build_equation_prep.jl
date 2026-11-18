@@ -482,7 +482,7 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 # MEMORY, not just time; ESS-0hh). Results are identical to `substitute` up
 # to sharing.
 #
-# NOT `_sub_preserving` (tree_walk/helpers.jl): that helper substitutes only
+# NOT `_sub_preserving` (expression.jl): that helper substitutes only
 # through args / expr_body / values / filter / ranges — the fields its
 # per-cell faq callers need — while the fold below rewrites arbitrary
 # READER equations, which may reference a folded name inside an integral
@@ -491,8 +491,6 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 # expression-bearing field exactly as `substitute` does (and inherits its
 # identity-preserving no-change fast path). Fresh memo per top-level call:
 # `bindings` is fixed within one call, so input identity → output is sound.
-# (Spelled `IdDict{OpExpr,ASTExpr}`, not the `_SubMemo` alias — helpers.jl,
-# which defines the alias, is included after this file.)
 function _substitute_shared(
         e::ASTExpr, bindings::Dict{String, ASTExpr},
         memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()

@@ -396,7 +396,7 @@ end
 # included), and the rest of the equation stays on the affine path.
 #
 # Evaluation reuses the wall2 Phase C compile-once machinery
-# (`_cellwise_compile_once_impl` + `_CellEval`, tree_walk/helpers.jl) — the
+# (`_cellwise_compile_once_impl` + `_CellEval`, tree_walk/cellwise.jl) — the
 # existing evaluator for "a scalar expression at a loop-index environment over
 # const arrays": the subtree is resolved+compiled ONCE with the loop indices
 # bound as Float64 parameters, and each cell only rebinds them. `_eval_node`

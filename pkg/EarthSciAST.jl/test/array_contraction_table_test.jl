@@ -1,5 +1,5 @@
 # The whole-array contraction nest's general form (array_contraction.jl,
-# `_ACTable`; build.jl `_try_compile_array_contraction`): the contractions that
+# `_ACTable`; build_array_equation.jl `_try_compile_array_contraction`): the contractions that
 # otherwise took the per-cell build — one resolve and compile per output cell.
 #
 #   * a JOIN-GATED contraction and a RAGGED (per-cell bound) one compile to ONE

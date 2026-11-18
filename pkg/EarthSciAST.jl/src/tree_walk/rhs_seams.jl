@@ -41,7 +41,7 @@
 # A CONTAINER SEAM: the one place the walkers turn "parameter named `sym`" into
 # a value, kept as named one-liners so a different `p` container adds a METHOD
 # instead of forking every walker. Every `_NK_PARAM` arm in the package goes
-# through it: `_eval_node` (compile.jl), `_eval_acc` (access_kernel.jl) and the
+# through it: `_eval_node` (scalar_walk.jl), `_eval_acc` (access_kernel.jl) and the
 # codegen tier (codegen_kernel.jl).
 #
 # TWO COORDINATES, ONE NODE. A `_NK_PARAM` node carries BOTH the parameter's
@@ -50,7 +50,7 @@
 # NamedTuple container wants the symbol, a vector container wants the index, and
 # handing the seam both is what lets one compiled IR serve either without a
 # rebuild. (`idx == 0` marks a node compiled outside the evaluator build — the
-# build-time constant folders in helpers.jl, which only ever evaluate against a
+# build-time constant folders in cellwise.jl and field_ic.jl, which only ever evaluate against a
 # NamedTuple. A vector `p` reaching such a node raises a BoundsError, which is the
 # right answer: loud, not a silently wrong parameter.)
 #

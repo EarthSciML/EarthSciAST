@@ -3,7 +3,7 @@
 # An array-shaped observed defined by a `faq`/`makearray` used to be
 # INLINED into every reader (`_collect_array_inline_vars`); it is now evaluated
 # ONCE PER RHS CALL into a dense buffer laid out above the ODE state, and readers
-# gather that buffer (build.jl §2b-f). `compiler=:interpreter` is the inlining
+# gather that buffer (obs_buffers.jl). `compiler=:interpreter` is the inlining
 # build — it splices every array observed into its readers — and it is the
 # oracle every case below compares against, bit-for-bit, not approximately.
 using Test
@@ -684,7 +684,7 @@ end
 
 # Capture-avoiding substitution when an array observed is INLINED.
 #
-# `_sub_preserving` (tree_walk/helpers.jl) used to substitute straight through a
+# `_sub_preserving` (expression.jl) used to substitute straight through a
 # nested aggregate's own binders, so an inlined column sum lost its loop variable
 # while `ranges` still declared it — the unroll then emitted `length(gk)`
 # IDENTICAL terms and the sum degenerated to `length(gk) · body[gk = outer_k]`.

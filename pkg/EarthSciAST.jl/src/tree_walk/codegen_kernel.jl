@@ -151,7 +151,7 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 # (primary and dual/f64 overflow) are only ever invoked from inside that
 # section, so every accepted read lands on a slot filled this call. Call sites
 # that cannot pin that ordering (the materialized-observed fill sections in
-# build.jl, hand-built test sections) pass `shared_cache = nothing` and keep
+# build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
 # Off, every such read is an unconditional `:foreign_scratch` decline.
@@ -229,7 +229,7 @@ mutable struct _CGCtx
     # rule its loop body folds each cell's term with — `(acc, a, b, op,
     # inclusive)`, the nest running ordinals `[a, b)` (one lane).
     scanmode::Any
-    # Two-buffer addressing (`_ObsSplitVec`, build.jl): the state length of the
+    # Two-buffer addressing (`_ObsSplitVec`, obs_buffers.jl): the state length of the
     # slot space the section runs on, or 0 for one plain vector. With `nst > 0`
     # each state read is emitted against the buffer its slots live in
     # (`_cg_side`); `olnext` holds the output-slot extent of every kernel whose

@@ -59,7 +59,7 @@ const _MaybeMemo = Union{Nothing, _BuildMemo}
 #     sorted `param_names` (and therefore in the `p` NamedTuple). Every
 #     `_NK_PARAM` node minted from it carries that position in `idx`, which is
 #     what lets a VECTOR `p` be read by index (`_read_param`).
-#   * `Set{Symbol}` — the build-time constant folders in helpers.jl, which mint
+#   * `Set{Symbol}` — the build-time constant folders in cellwise.jl and field_ic.jl, which mint
 #     their own ad-hoc parameter scope per call and evaluate it against a
 #     NamedTuple built in the same breath. There is no global order to record, so
 #     those nodes get `idx = 0` and are NamedTuple-only by construction.

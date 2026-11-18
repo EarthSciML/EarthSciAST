@@ -9,7 +9,7 @@
 # later "simplification" cannot quietly remove them:
 #
 #   * `_rhs_value_type(u, p, t)` derives the value type from ALL THREE inputs
-#     (compile.jl). Sized from `eltype(u)` alone, every scratch buffer would be
+#     (rhs_seams.jl). Sized from `eltype(u)` alone, every scratch buffer would be
 #     `Float64` and the first store of a `Dual` would throw.
 #   * `const_tier.jl` deliberately does NOT constant-fold parameter-only
 #     subexpressions at build time. Freezing them would return a ZERO derivative

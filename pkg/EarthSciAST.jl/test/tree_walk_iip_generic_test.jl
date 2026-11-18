@@ -1,7 +1,7 @@
 # The IN-PLACE RHS `f!(du, u, p, t)` under a non-Float64 value type
 # (src/tree_walk/acc_merge.jl `_make_rhs`, src/tree_walk/access_kernel.jl `_AccCSE`,
-# src/tree_walk/compile.jl
-# `_rhs_value_type` / `_CSECache`).
+# src/tree_walk/rhs_seams.jl `_rhs_value_type`, src/tree_walk/prelude_cache.jl
+# `_CSECache`).
 #
 # `f!` is the production evaluator: type-stable, zero-allocation, called every
 # Runge–Kutta stage. It used to be Float64-ONLY, not because it mutates — ForwardDiff

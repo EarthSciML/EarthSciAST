@@ -177,7 +177,7 @@ Identity-memoized [`foreach_subexpr`](@ref): each distinct `OpExpr` node
 expression DAG costs O(distinct nodes + edges) instead of once per PATH.
 `foreach_subexpr` on a DAG where a shared node is reachable through `k`
 parents re-walks its whole subtree `k` times — on the resolved observed
-map (`_resolve_observed`, tree_walk/helpers.jl), whose bodies are compact
+map (`_resolve_observed`, tree_walk/build_classify.jl), whose bodies are compact
 DAGs by construction (`_sub_preserving`'s identity memo), a depth-`n`
 chain that references its predecessor twice per level makes that 2^n.
 
@@ -546,7 +546,7 @@ end
 # recursing cannot capture them.
 #
 # THAT IS A PRECONDITION ON THE CALLER, not a property of the AST. The
-# tree-walk's `_sub_preserving` (tree_walk/helpers.jl) substitutes INDEX names —
+# tree-walk's `_sub_preserving` (below) substitutes INDEX names —
 # precisely the symbols binders bind — so it cannot assume this and does
 # capture-avoiding descent instead. Do not carry this paragraph over to a
 # binding map whose keys are loop variables.

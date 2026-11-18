@@ -168,7 +168,7 @@ end
 
 # ============================================================================
 # The `:inplace` side of the SAME pass. The class merge runs in the build's
-# last phase (build.jl, before the xcse gate and before the emitter branch), so
+# last phase (build_pipeline.jl, before the xcse gate and before the emitter branch), so
 # it applies to the production in-place `f!` too. The `:native` build must be BIT-IDENTICAL (`==`, never `isapprox`)
 # to `compiler=:interpreter` on the twin pointwise model, the twin stencil
 # (ghost boundary) model, and the live-forcing model incl. an in-place buffer
@@ -205,7 +205,7 @@ function _im_nkernels(f!)
     return length(getfield(ks, :kernels))
 end
 
-@testset ":inplace kernel-class merge ≡ interpreter (hoisted, build.jl)" begin
+@testset ":inplace kernel-class merge ≡ interpreter (hoisted, build_pipeline.jl)" begin
 
     @testset "pointwise twins: fires + bit-identical (N=$N)" for N in (8, 33)
         ics = _om_ics(N)

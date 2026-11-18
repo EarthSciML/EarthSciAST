@@ -1,6 +1,6 @@
 # ========================================================================
 # tree_walk/geometry_compile.jl — part of the tree-walk evaluator.
-# Included by src/tree_walk.jl AFTER compile.jl (the spec structs below carry
+# Included by src/tree_walk.jl AFTER node.jl (the spec structs below carry
 # `_Node` fields, so they need the IR type at include time). Section 2c:
 # the COMPILED setup-time geometry path.
 #
@@ -655,7 +655,7 @@ end
 # fields) are compared at their concrete types.
 _geo_slot_eq(a, b, i::Int, j::Int) = a[i] == b[j]
 
-# The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (compile.jl).
+# The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (scalar_walk.jl).
 # Only setup-time compiled trees carry these ops, so the RHS hot path never
 # reaches here; `::Float64` keeps the ladder's inferred union small.
 function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}

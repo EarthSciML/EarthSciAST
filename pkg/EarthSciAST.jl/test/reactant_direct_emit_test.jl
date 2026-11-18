@@ -1123,7 +1123,7 @@ end
     # A STAGGERED strict prefix reduction — `c[i] = ⊕_{j < i} u[j]` with `i` over
     # the n+1 NODES of an axis and `j` over its n CENTRES — is how a cumulative
     # flux is spelled on a staggered grid (ReSEACT's diagnosed vertical air-mass
-    # flux). `_scan_term_iters` (build.jl) admits it and, by design, leaves the
+    # flux). `_scan_term_iters` (build_array_equation.jl) admits it and, by design, leaves the
     # LAST node uncovered by the term build: the fold writes every node but only
     # ever reads a slot into an accumulator it then discards, so nothing the
     # uncovered slot holds can reach an output.
