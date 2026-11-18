@@ -71,9 +71,16 @@ _oop_mergeable_acc_kind(k) =
 # forcing), not exact kind: the clone tables every member of a family
 # identically, so an interior AFFINE cell and a boundary TBL_BOX cell of the
 # same equation share a class.
+#
+# An operator's `payload` is NOT free: the clone keeps the representative's. The
+# one payload an operator carries here is the constant table of a const-array
+# read at a computed subscript (`_ConstGatherArray`), so the operator token names
+# the table (`_const_table_id!`, acc_merge.jl: equal iff equal in content) —
+# kernels that differ only in which table they read are different classes.
+# `tables` is the merge round's, shared by every kernel signature it compares.
 function _oop_merge_sig!(
         io::IOBuffer, n::_Node, K::_AccKernel, parentsubs,
-        why::Base.RefValue{Symbol}
+        why::Base.RefValue{Symbol}, tables::_ConstTableIds
     )
     k = n.kind
     if k === _NK_ACCESS
@@ -97,7 +104,7 @@ function _oop_merge_sig!(
     elseif k === _NK_CONTRACTION
         print(io, "K", n.op, "s", n.literal, "(")
         for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
+            _oop_merge_sig!(io, c, K, parentsubs, why, tables)
         end
         print(io, ")")
     elseif k === _NK_SUBCALL
@@ -108,9 +115,11 @@ function _oop_merge_sig!(
         why[] = :reduce; print(io, "X")
     elseif k === _NK_OP
         print(io, "O", n.op)
+        tk = _const_table_id!(tables, n.payload)
+        tk == 0 || print(io, "@", tk)
         print(io, "(")
         for c in n.children
-            _oop_merge_sig!(io, c, K, parentsubs, why)
+            _oop_merge_sig!(io, c, K, parentsubs, why, tables)
         end
         print(io, ")")
     else
@@ -119,31 +128,36 @@ function _oop_merge_sig!(
     return io
 end
 
-function _oop_merge_trees_sig!(io::IOBuffer, K::_AccKernel, parentsubs, why)
+function _oop_merge_trees_sig!(
+        io::IOBuffer, K::_AccKernel, parentsubs, why, tables::_ConstTableIds
+    )
     print(io, "z", K.zerobar, "|")
-    _oop_merge_sig!(io, K.spine, K, parentsubs, why); print(io, "|I")
+    _oop_merge_sig!(io, K.spine, K, parentsubs, why, tables); print(io, "|I")
     for r in K.cse.inv_recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        _oop_merge_sig!(io, r, K, parentsubs, why, tables); print(io, ";")
     end
     print(io, "|R")
     for r in K.cse.recipes
-        _oop_merge_sig!(io, r, K, parentsubs, why); print(io, ";")
+        _oop_merge_sig!(io, r, K, parentsubs, why, tables); print(io, ";")
     end
     return io
 end
 
-_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan) =
-    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg))
-function _oop_merge_kernel_sig(K::_AccKernel, vectorizable::Bool, reduce::Bool)
+# Signatures are comparable only when written against the SAME `tables`.
+_oop_merge_kernel_sig(K::_AccKernel, plan::_OopAccPlan, tables::_ConstTableIds) =
+    _oop_merge_kernel_sig(K, plan.vectorizable, !isempty(plan.red_seg), tables)
+function _oop_merge_kernel_sig(
+        K::_AccKernel, vectorizable::Bool, reduce::Bool, tables::_ConstTableIds
+    )
     why = Ref(:ok)
     vectorizable || (why[] = :unvectorizable)
     reduce && (why[] = :reduce)
     io = IOBuffer()
-    _oop_merge_trees_sig!(io, K, K.subs, why)
+    _oop_merge_trees_sig!(io, K, K.subs, why, tables)
     for (si, S) in enumerate(K.subs)
         isempty(S.subs) || (why[] = :nested_sub_subs)
         print(io, "|SUB", si, ":")
-        _oop_merge_trees_sig!(io, S, K.subs, why)
+        _oop_merge_trees_sig!(io, S, K.subs, why, tables)
     end
     return why[] === :ok ? String(take!(io)) : nothing, why[]
 end
@@ -476,10 +490,11 @@ function _merge_oop_acc_kernels(
 
     groups = Dict{String, Vector{Int}}()
     passthrough = Int[]
+    tables = _ConstTableIds()
     for j in eachindex(kernels)
         s, _why = _oop_merge_kernel_sig(
             kernels[j], _plan_vecable(plans, j),
-            _plan_reduce(plans, j)
+            _plan_reduce(plans, j), tables
         )
         s === nothing ? push!(passthrough, j) : push!(get!(groups, s, Int[]), j)
     end
