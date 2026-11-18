@@ -91,6 +91,7 @@ function _E._xla_client(device::AbstractString)
     try
         return direct_client(device)
     catch err
+        _E._is_resource_error(err) && rethrow()
         throw(
             _E.SimulateError(
                 "compiler=:xla was asked to run on '$device' " *

@@ -402,7 +402,8 @@ function _linear_conversion_factor(from_units::String, to_units::String)::Union{
         from_exact, to_exact = _exact_scale(from_unit), _exact_scale(to_unit)
         from_exact == to_exact && return nothing
         return Float64(from_exact / to_exact)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing
     end
 end

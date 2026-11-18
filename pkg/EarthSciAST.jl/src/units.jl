@@ -788,7 +788,8 @@ function _exponent_rational(v)::Union{Rational{Int}, Nothing}
     isfinite(v) || return nothing
     try
         return isinteger(v) ? Rational{Int}(Int(v)) : rationalize(Int, float(v))
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing  # outside Int's range
     end
 end
@@ -1525,7 +1526,8 @@ function _power_rule(expr, var_units, findings)
     # cannot represent is unknown, not an inconsistency.
     try
         return isinteger(power) ? base_dim^Int(power) : base_dim^power
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return nothing
     end
 end
@@ -1539,7 +1541,8 @@ function _sqrt_rule(expr, var_units, findings)
     base_dim === nothing && return nothing
     try
         return base_dim^(1 // 2)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         # Unitful rejects a half-power that is not representable (odd exponent
         # on a base unit). Unknown, not an inconsistency — the AUTHOR may have a
         # non-SI convention we cannot model.
@@ -2067,7 +2070,8 @@ function _absolute_unit(u)
     u === nothing && return nothing
     try
         return Unitful.absoluteunit(u)
-    catch
+    catch err
+        _is_resource_error(err) && rethrow()
         return u
     end
 end

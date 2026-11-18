@@ -1175,7 +1175,8 @@ function _flatten_preflight(file::EsmFile; base_path, load_ref)
     n_components = (file.models === nothing ? 0 : length(file.models)) +
         (file.reaction_systems === nothing ? 0 : length(file.reaction_systems))
     n_components == 0 && throw(
-        ArgumentError(
+        FlattenRefusal(
+            ERROR_CODES.NOTHING_TO_FLATTEN,
             "nothing to flatten: '$(file.metadata.name)' declares no `models` and no " *
                 "`reaction_systems`. A file carrying only `expression_templates` is a " *
                 "template LIBRARY (esm-spec §9.7); import it from a document that " *

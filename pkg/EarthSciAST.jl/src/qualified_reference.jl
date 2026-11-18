@@ -2,19 +2,25 @@
 # (esm-spec §4.6).
 
 """
-    QualifiedReferenceError
+    QualifiedReferenceError(message, reference, path, code = "")
 
-Exception thrown when qualified reference resolution fails.
-Contains detailed error information.
+Exception thrown when qualified reference resolution fails. Fields: `code`
+(`invalid_reference_syntax`, `undefined_system` or `undefined_variable`),
+`message`, the `reference` as written, and `path`, the system names resolved
+before the failure.
 """
 struct QualifiedReferenceError <: EarthSciASTError
+    code::String
     message::String
     reference::String
     path::Vector{String}
+    QualifiedReferenceError(
+        message::AbstractString, reference::AbstractString, path::AbstractVector,
+        code::AbstractString = ""
+    ) = new(String(code), String(message), String(reference), Vector{String}(path))
 end
 
-Base.showerror(io::IO, e::QualifiedReferenceError) =
-    print(io, "QualifiedReferenceError: ", e.message, " (reference: '", e.reference, "')")
+error_message(e::QualifiedReferenceError) = string(e.message, " (reference: '", e.reference, "')")
 
 """
     ReferenceResolution
@@ -54,12 +60,12 @@ form a path through the subsystem hierarchy.
 """
 function resolve_qualified_reference(esm_file::EsmFile, reference::String)::ReferenceResolution
     if isempty(reference)
-        throw(QualifiedReferenceError("Empty reference string", reference, String[]))
+        throw(QualifiedReferenceError("Empty reference string", reference, String[], ERROR_CODES.INVALID_REFERENCE_SYNTAX))
     end
 
     segments = split(reference, ".")
     if length(segments) < 1
-        throw(QualifiedReferenceError("Invalid reference format", reference, String[]))
+        throw(QualifiedReferenceError("Invalid reference format", reference, String[], ERROR_CODES.INVALID_REFERENCE_SYNTAX))
     end
 
     # Extract variable name (last segment) and system path
@@ -68,7 +74,7 @@ function resolve_qualified_reference(esm_file::EsmFile, reference::String)::Refe
 
     # Handle bare references (no dot)
     if length(system_path) == 0
-        throw(QualifiedReferenceError("Bare references not supported without system context", reference, String[]))
+        throw(QualifiedReferenceError("Bare references not supported without system context", reference, String[], ERROR_CODES.INVALID_REFERENCE_SYNTAX))
     end
 
     # Resolve the system path
@@ -78,7 +84,7 @@ function resolve_qualified_reference(esm_file::EsmFile, reference::String)::Refe
     # Find top-level system
     system, system_type = find_top_level_system(esm_file, top_level_name)
     if system === nothing
-        throw(QualifiedReferenceError("Top-level system '$(top_level_name)' not found", reference, system_path[1:1]))
+        throw(QualifiedReferenceError("Top-level system '$(top_level_name)' not found", reference, system_path[1:1], ERROR_CODES.UNDEFINED_SYSTEM))
     end
 
     # Traverse subsystem hierarchy
@@ -89,13 +95,13 @@ function resolve_qualified_reference(esm_file::EsmFile, reference::String)::Refe
         push!(traversed_path, segment)
         current_system = find_subsystem(current_system, segment)
         if current_system === nothing
-            throw(QualifiedReferenceError("Subsystem '$(segment)' not found in path", reference, traversed_path))
+            throw(QualifiedReferenceError("Subsystem '$(segment)' not found in path", reference, traversed_path, ERROR_CODES.UNDEFINED_SYSTEM))
         end
     end
 
     # Validate that the variable exists in the final system
     if !variable_exists_in_system(current_system, variable_name)
-        throw(QualifiedReferenceError("Variable '$(variable_name)' not found in system", reference, system_path))
+        throw(QualifiedReferenceError("Variable '$(variable_name)' not found in system", reference, system_path, ERROR_CODES.UNDEFINED_VARIABLE))
     end
 
     return ReferenceResolution(variable_name, system_path, system_type, current_system)

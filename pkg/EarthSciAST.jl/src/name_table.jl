@@ -145,11 +145,11 @@ function _raise_key_failures(
     )
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
-        throw(SimulateError(_override_ambiguous_message(surface, k, cands; kind = kind)))
+        throw(SimulateError(_override_ambiguous_message(surface, k, cands; kind = kind), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS))
     end
     if !isempty(collisions)
         name, ks = first(sort!(collect(collisions), by = first))
-        throw(SimulateError(_override_collision_message(surface, kind, name, ks)))
+        throw(SimulateError(_override_collision_message(surface, kind, name, ks), ERROR_CODES.OVERRIDE_KEY_CONFLICT))
     end
     if unknown_message !== nothing && !isempty(unknown)
         throw(SimulateError(unknown_message(first(unknown)), ERROR_CODES.UNKNOWN_OVERRIDE_KEY))
