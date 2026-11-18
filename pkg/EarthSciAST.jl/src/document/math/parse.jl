@@ -37,7 +37,7 @@ const Toks = AbstractVector{<:Tok}
 """The token at `i` is the keyword `k`."""
 @inline kat(ts::Toks, i::Int, k::Kw) = iskw(tk(ts, i), k)
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Small pieces
 

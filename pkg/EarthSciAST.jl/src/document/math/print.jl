@@ -29,6 +29,7 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 import ..DNumber
+import ..DStrings
 using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
     keys_sorted, name_ok, pieces, seg_ok, split_dots, sub_parts, num_ok
 
@@ -47,7 +48,7 @@ function tc(parts...)
     return out
 end
 
-s_of(cs) = String(collect(Char, cs))
+const s_of = str_of
 
 # ## Text pieces
 
@@ -114,8 +115,8 @@ end
 digit)."""
 char_digit_nat(c::Char) = UInt64(max(Int64(UInt32(c)) - 48, 0))
 
-"""Lean's `Char.ofNat`: an invalid code point is `'\\0'`."""
-char_of_nat(n::Integer) = (n > 0x0010ffff || 0xd800 <= n <= 0xdfff) ? '\0' : Char(n)
+"""Lean's `Char.ofNat`: an invalid code point is `'\\0'` (`DStrings.char_of`)."""
+const char_of_nat = DStrings.char_of
 
 """`Math.unescK`: undo [`esc_k`](@ref)."""
 function unesc_k(cs)
