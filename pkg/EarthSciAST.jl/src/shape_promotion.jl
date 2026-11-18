@@ -35,229 +35,52 @@ _infer_expr_shape(
     _expr_axes(_ShapeEnv(shapes; unknown = String[], ctx = ctx), expr), String[]
 )
 
-# Op-class memberships for the array rewrites below and in pointwise_lift.jl,
-# derived from the registry flags (src/op_registry.jl); memberships are
-# pinned literal-for-literal by test/op_registry_test.jl.
-#
-# Nodes that PRODUCE an array (subject to `output_idx` emptiness for the
-# reductions — see `_is_array_producer`).
-const _ARRAY_PRODUCER_OPS = _ops_with(:array_producer)
-# Nodes that carry their own indexing (the array producers plus an `index`
-# gather): the leaf-indexing rewrites never descend into them.
-const _SELF_INDEXED_OPS = _ops_with(:self_indexed)
-
-"""
-    _AxisAlign
-
-Name-based broadcast alignment context for the leaf-indexing rewrites
-(esm-spec §4.3.4). `axes` are the RESULT's declared index-set names, positionally
-parallel to the rewrite's `loops`; `var_shapes` maps a variable name to its
-DECLARED index-set names.
-
-An operand leaf whose declared index sets are a SUBSET of `axes` is gathered at
-the loop bound to each of ITS OWN axis names — so a `[lat]` operand in a
-`[lon,lat,lev]` result replicates along `lon`/`lev`, and a `[lat,lon]` operand in
-a `[lon,lat]` result TRANSPOSES rather than being reinterpreted positionally. An
-operand naming an axis absent from `axes` is unalignable and raises
-`E_TREEWALK_ARRAY_SHAPE_MISMATCH` (the build-time twin of `validate()`'s
-`array_shape_mismatch`, esm-spec §4.3.4 "Broadcast compatibility").
-
-Alignment is NAME-based only where names exist. Nodes with an ANONYMOUS shape —
-an `index`-wrapped producer (`makearray`, a `faq` whose
-`output_idx` symbols are node-local, `reshape`/`transpose`/`concat`, a literal
-array) and any variable with no recorded declared shape — keep the historical
-POSITIONAL gather over all `loops`. `nothing` (or an unusable context, see
-[`_usable_align`](@ref)) disables name alignment entirely, restoring the
-pre-alignment behaviour exactly.
-"""
-struct _AxisAlign
-    axes::Vector{String}
-    var_shapes::Dict{String, Vector{String}}
+# The bare-left-hand-side definitions `x = rhs` of `equations`, in equation
+# order. A name defined twice is an unbalanced system the validator and the
+# build refuse; the first definition is the one read here.
+function _bare_definitions(equations)::OrderedDict{String, ASTExpr}
+    defs = OrderedDict{String, ASTExpr}()
+    for eq in equations
+        eq.lhs isa VarExpr && get!(defs, (eq.lhs::VarExpr).name, eq.rhs)
+    end
+    return defs
 end
 
-# An alignment context is USABLE only when its axis names are positionally
-# parallel to `loops` and mutually DISTINCT: a result that names the same index
-# set on two axes (`[x,x]`, a square operator field) has no unambiguous
-# name→axis map, so such a rewrite stays positional.
-function _usable_align(
-        align::Union{Nothing, _AxisAlign},
-        loops::Vector{String}
-    )::Union{Nothing, _AxisAlign}
-    align === nothing && return nothing
-    length(align.axes) == length(loops) || return nothing
-    allunique(align.axes) || return nothing
-    return align
-end
-
-# Shared typed bare-array-reference rewrite: wrap array references in
-# `index(ref, loops…)` gathers. A `VarExpr` leaf naming a variable in
-# `arrayvars` is wrapped; an `OpExpr` for which `wrap_node` is true is wrapped
-# WHOLE (checked before `stop_node`); an `OpExpr` for which `stop_node` is true
-# is returned untouched (it is self-contained / carries its own indexing);
-# every other `OpExpr` recurses into `args` only (elementwise position) and is
-# rebuilt field-preservingly. Its typed caller is `_index_array_leaves`
-# (below); the pointwise lift's `_lift_rhs_to_cell` (pointwise_lift.jl) is a
-# separate walk, because it aligns by name in every position rather than only
-# under element-wise operators.
-# IDENTITY-MEMOIZED (ESS-0hh): the rewrite is a pure function of the node —
-# `arrayvars`, `loops`, and both predicates are fixed within one call — so a
-# shared node rewrites to ONE shared output node. Without the memo the
-# per-path `reconstruct` re-inflated a structurally-shared input DAG (e.g. a
-# folded elementwise array-observed chain, whose sharing `_substitute_shared`
-# deliberately preserves) into an exponentially large output TREE. The memo
-# is fresh per top-level call; only `OpExpr` nodes are memoized (leaves are
-# immutable, childless, and O(1) to re-handle). The memo is SPLIT by alignment
-# state (`_WrapMemo`): the rewrite of a shared node differs between element-wise
-# position (name-aligned) and the interior of a non-element-wise op (positional),
-# so one memo would let the first visit's answer leak into the other context.
-struct _WrapMemo
-    aligned::IdDict{OpExpr, ASTExpr}
-    plain::IdDict{OpExpr, ASTExpr}
-end
-_WrapMemo() = _WrapMemo(IdDict{OpExpr, ASTExpr}(), IdDict{OpExpr, ASTExpr}())
-_wrap_memo(m::_WrapMemo, align) = align === nothing ? m.plain : m.aligned
-
-function _wrap_bare_array_refs(
-        expr::ASTExpr, arrayvars::Set{String},
-        loops::Vector{String};
-        wrap_node, stop_node,
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    return _wrap_bare_array_refs(
-        expr, arrayvars, loops, wrap_node, stop_node,
-        _WrapMemo(), _usable_align(align, loops)
+# Extend `shapes` to a fixed point (esm-spec §4.3.4, §9.6.11): each name `defs`
+# defines and `shapes` gives no array shape takes the shape its definition
+# infers, until no shape changes. A name in `declared_scalar` (an explicit
+# `shape: []`) whose definition infers an array is a conflict.
+function _infer_shapes!(
+        shapes::Dict{String, Vector{String}}, defs, ctx;
+        declared_scalar = Set{String}()
     )
-end
-function _wrap_bare_array_refs(
-        expr::ASTExpr, arrayvars::Set{String},
-        loops::Vector{String}, wrap_node, stop_node,
-        memo::_WrapMemo,
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    if expr isa VarExpr
-        expr.name in arrayvars || return expr
-        return _index_wrap_var(expr, loops, align)
-    elseif expr isa OpExpr
-        tbl = _wrap_memo(memo, align)
-        cached = get(tbl, expr, nothing)
-        cached === nothing || return cached
-        result = if wrap_node(expr)
-            _index_wrap(expr, loops)
-        elseif stop_node(expr)
-            expr
-        else
-            # Name-based alignment applies in ELEMENT-WISE position only: a
-            # scalar operator, or a `broadcast` of one, lifted over the grid.
-            # Any other op — an unlowered rewrite target (`div`/`grad`/a user
-            # op) — consumes WHOLE arrays under its own contract, not
-            # name-aligned cells, so its operands keep the positional gather.
-            inner = _is_elementwise_node(expr) ? align : nothing
-            new_args = ASTExpr[
-                _wrap_bare_array_refs(
-                    a, arrayvars, loops,
-                    wrap_node, stop_node, memo, inner
-                )
-                    for a in expr.args
-            ]
-            reconstruct(expr; args = new_args)
+    changed = true
+    while changed
+        changed = false
+        for (name, rhs) in defs
+            isempty(get(shapes, name, String[])) || continue
+            inferred = _infer_expr_shape(rhs, shapes, ctx)
+            isempty(inferred) && continue
+            name in declared_scalar &&
+                _throw_declared_scalar_conflict(name, inferred, "its defining expression")
+            shapes[name] = inferred
+            changed = true
         end
-        tbl[expr] = result
-        return result
     end
-    return expr
+    return shapes
 end
 
-# `index(node, loops…)`: gather `node`'s element at the current cell, positionally.
-_index_wrap(node::ASTExpr, loops::Vector{String})::OpExpr =
-    OpExpr("index", ASTExpr[node, (VarExpr(l) for l in loops)...])
-
-# Gather an array VARIABLE leaf at the current cell, aligning its DECLARED
-# index-set names against the result axes when a usable `_AxisAlign` is in scope
-# (esm-spec §4.3.4). Falls back to the positional whole-loop gather for a
-# variable with no declared shape, a shape identical to the result's, or a shape
-# that repeats an index set (no unambiguous name→axis map).
-function _index_wrap_var(
-        v::VarExpr, loops::Vector{String},
-        align::Union{Nothing, _AxisAlign}
-    )::OpExpr
-    align === nothing && return _index_wrap(v, loops)
-    vs = get(align.var_shapes, v.name, nothing)
-    (vs === nothing || isempty(vs) || vs == align.axes || !allunique(vs)) &&
-        return _index_wrap(v, loops)
-    subs = Vector{ASTExpr}(undef, length(vs) + 1)
-    subs[1] = v
-    for (d, ax) in enumerate(vs)
-        p = findfirst(isequal(ax), align.axes)
-        p === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_ARRAY_SHAPE_MISMATCH",
-                "Operand '$(v.name)' of an array-level expression is declared over " *
-                    "index set '$(ax)' (shape $(vs)), which the result shape " *
-                    "$(align.axes) is not shaped over (esm-spec §4.3.4)"
-            )
-        )
-        subs[d + 1] = VarExpr(loops[p])
-    end
-    return OpExpr("index", subs)
-end
-
-# Replace each VarExpr leaf naming a promoted ARRAY variable with `index(v, loops…)`,
-# leaving scalar leaves (params, constants, reductions' results) untouched. Does
-# not descend into nested faq bodies — those carry their own indexing.
-#
-# An ARRAY-PRODUCING node in elementwise position (a `makearray`, or an
-# `faq` with non-empty `output_idx`) gets the same broadcast
-# treatment as an array variable leaf: it is wrapped in `index(node, loops…)` so
-# the per-cell expansion gathers this cell's element. This is the whole-array
-# broadcast semantics of esm-spec §9.6.8 — a discretization rule lowers
-# `D(u, x)` to a `makearray`, and the surrounding equation (`rhs = -c * D(u,x)`)
-# multiplies that array elementwise. A genuine scalar reduction (empty
-# `output_idx`) and an `index` gather stay untouched — they are already scalar.
-#
-# `align` (optional) turns the array-VARIABLE gathers name-based (esm-spec
-# §4.3.4 / [`_AxisAlign`](@ref)); without it every leaf is gathered positionally
-# over all `loops`, the pre-alignment behaviour.
-function _index_array_leaves(
-        expr::ASTExpr,
-        arrayvars::Set{String}, loops::Vector{String};
-        align::Union{Nothing, _AxisAlign} = nothing
-    )::ASTExpr
-    return _wrap_bare_array_refs(
-        expr, arrayvars, loops;
-        wrap_node = _is_array_producer,
-        stop_node = e -> e.op in _SELF_INDEXED_OPS,
-        align = align
-    )
-end
-
-# True iff `expr` is an array-PRODUCING node: a `makearray`, or an
-# `faq` with a non-empty `output_idx` (a scalar reduction has an
-# empty `output_idx` and produces a scalar).
-function _is_array_producer(expr::ASTExpr)::Bool
-    expr isa OpExpr || return false
-    expr.op == "makearray" && return true
-    # The remaining producers (faq) are array-valued only with a
-    # non-empty `output_idx` — a scalar reduction has an empty one.
-    expr.op in _ARRAY_PRODUCER_OPS || return false
-    expr.output_idx === nothing && return false
-    return any(s -> s isa AbstractString, expr.output_idx)
-end
-
-# Wrap a (formerly scalar) defining expression in a faq producing `shape`.
-# Loop vars are fresh simple names following the shape-promotion synthetic-name
-# convention `_p<k>` (zero-based: `_p0`, `_p1`, …) — NOT the index-set names,
-# which may be dotted/namespaced. Each shape axis ranges over the index set it
-# names (`{from: …}`); dimension sizes are declared via `index_sets` since the
-# removal of the Domain.spatial spec, so the domain contributes none here.
+# Wrap a (formerly scalar) defining expression in the `faq` producing `shape`:
+# its array operands read at the cell (`_index_array_leaves`, aligned by
+# index-set name, esm-spec §4.3.4), each loop (`_fresh_loops`) ranging over the
+# index set its axis names.
 #
 # `bounds` replaces those index-set references with RESOLVED `[1, extent]`
 # literals, one per axis, for a caller lifting a body it is about to evaluate
 # rather than to store: the §6.6.5 assertion path
 # ([`_authored_observed_body`](@ref)) has the extents in hand and no index-set
-# registry at the evaluator. Everything else about the lift — the loop-name
-# convention, the §4.3.4 name alignment, the faq wrapper — MUST stay shared
-# with the build's own promotion, which is why this takes a keyword instead of
-# being copied.
+# registry at the evaluator. Everything else about the lift is the build's own
+# promotion, which is why this takes a keyword instead of being copied.
 function _lift_to_faq(
         expr::ASTExpr, shape::Vector{String},
         arrayvars::Set{String},
@@ -265,22 +88,14 @@ function _lift_to_faq(
             Dict{String, Vector{String}}();
         bounds::Union{Nothing, Vector{Int}} = nothing
     )::OpExpr
-    n = bounds === nothing ? length(shape) : length(bounds)
-    loops = String["_p$(i - 1)" for i in 1:n]
-    ranges = bounds === nothing ?
-        Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape)) :
+    loops = _fresh_loops(expr, bounds === nothing ? length(shape) : length(bounds))
+    ranges = bounds === nothing ? _cell_ranges(loops, shape) :
         Dict{String, Any}(loops[i] => Any[1, bounds[i]] for i in eachindex(bounds))
-    # `_AxisAlign` self-disables (`_usable_align`) when its axes are not
-    # positionally parallel to `loops`, so a shape/bounds length mismatch
-    # degrades to the historical positional gather rather than misaligning.
-    body = _index_array_leaves(
-        expr, arrayvars, loops;
-        align = _AxisAlign(shape, var_shapes)
-    )
-    return OpExpr(
-        "faq", ASTExpr[];
-        output_idx = Any[l for l in loops], ranges = ranges, expr_body = body
-    )
+    # `_AxisAlign` is unusable (`_usable_align`) when its axes are not
+    # positionally parallel to `loops`, so a shape/bounds length mismatch reads
+    # positionally rather than misaligning.
+    body = _index_array_leaves(expr, arrayvars, loops; align = _AxisAlign(shape, var_shapes))
+    return _cell_faq(body, loops, ranges)
 end
 
 """
@@ -381,13 +196,9 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
     # §9.6.11).
     ew = _ElementwiseContext(flat.template_registry)
 
-    # Index the ALGEBRAIC defining equations (bare `x = expr`). State equations
+    # The ALGEBRAIC defining equations (bare `x = expr`). State equations
     # (`D(x,t) = …`) don't define x's shape (x keeps its declared shape).
-    defs = Dict{String, ASTExpr}()
-    for eq in flat.equations
-        eq.lhs isa VarExpr || continue
-        defs[(eq.lhs::VarExpr).name] = eq.rhs
-    end
+    defs = _bare_definitions(flat.equations)
 
     # A variable defined by a `faq` whose output indices range over inline
     # intervals takes its shape from those ranges (esm-spec §6.3): each axis is
@@ -413,33 +224,19 @@ function promote_downstream_shapes(flat::FlattenedSystem)::FlattenedSystem
                 push!(names, sym)
             else
                 anon = string(name, "__", sym)
-                if !haskey(index_sets, anon)
-                    added || (index_sets = OrderedDict{String, IndexSet}(index_sets); added = true)
-                    index_sets[anon] = IndexSet("interval"; size = n)
-                end
+                added || (index_sets = OrderedDict{String, IndexSet}(index_sets); added = true)
+                _register_synthetic_index_set!(
+                    index_sets, anon, n, "shape promotion: '$(name)'", "output index '$(sym)'"
+                )
                 push!(names, anon)
             end
         end
         shapes[name] = names
     end
 
-    # Fixed-point shape inference: a scalar var whose defining expression infers
-    # an array shape is promoted. Repeat until stable (acyclic chain ⇒ converges).
-    changed = true
-    while changed
-        changed = false
-        for (name, rhs) in defs
-            cur = get(shapes, name, String[])
-            isempty(cur) || continue                     # already array — leave it
-            inferred = _infer_expr_shape(rhs, shapes, ew)
-            if !isempty(inferred)
-                name in declared_scalar &&
-                    _throw_declared_scalar_conflict(name, inferred, "its defining expression")
-                shapes[name] = inferred
-                changed = true
-            end
-        end
-    end
+    # A scalar variable whose defining expression infers an array shape is
+    # promoted.
+    _infer_shapes!(shapes, defs, ew; declared_scalar = declared_scalar)
 
     # The set of variables that are now array-shaped (for leaf indexing).
     arrayvars = Set{String}(k for (k, s) in shapes if !isempty(s))
@@ -635,14 +432,10 @@ function _index_promoted_in_scope(
         vs = get(var_shapes, expr.name, String[])
         isempty(vs) && return expr
         if allunique(vs)
-            loops = String[]
-            for ax in vs
-                l = get(env, ax, nothing)
-                l === nothing && (empty!(loops); break)
-                push!(loops, l)
-            end
-            (length(loops) == length(vs) && allunique(loops)) &&
-                return _index_wrap(expr, loops)
+            axes = String[ax for (ax, l) in env if l !== nothing]
+            r = _gather_by_name(expr, vs, axes, String[env[ax] for ax in axes])
+            (r isa OpExpr && allunique(String[(a::VarExpr).name for a in view(r.args, 2:length(r.args))])) &&
+                return r
         end
         (poslocal !== nothing && length(poslocal) == length(vs)) &&
             return _index_wrap(expr, poslocal)

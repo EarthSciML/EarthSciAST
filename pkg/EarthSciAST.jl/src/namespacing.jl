@@ -405,8 +405,12 @@ function _collect_model!(
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
-        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
     # Initialization equations (esm-spec §6.2) resolve in the same scope and
     # take the same renaming as the equations.
@@ -497,8 +501,12 @@ function _collect_reaction_system!(
         rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
-        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
 
     # A reaction system's events are collected on the same footing as a model's

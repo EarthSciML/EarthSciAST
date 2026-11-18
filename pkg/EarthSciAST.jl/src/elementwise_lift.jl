@@ -25,14 +25,6 @@
 # bindings, which expand every reference at load, run the same walk on their
 # marked expansions.
 
-# Expands the template references the lift meets, against the flattened
-# system's merged registry, each once.
-struct _ElementwiseContext
-    registry::Any
-    memo::_ExpandCache
-end
-
-_ElementwiseContext(registry) = _ElementwiseContext(registry, _ExpandCache())
 
 # The expansion of the application `e`, its root marked with the template's
 # name, or `nothing` when `ctx` has no registry to expand it against.
@@ -164,34 +156,38 @@ end
 # an expansion shares is rewritten once, and the rewrite shares it too, rather
 # than re-inflating the shared expansion into a tree exponential in the depth
 # of the template chain.
+#
+# `on_foreign(v, shape, axes, s)` answers a read naming an index set `s` the
+# cell's grid is not shaped over ([`_index_wrap_var`](@ref)).
 function _ew_at_cell(
         expr::ASTExpr, shapes::Dict{String, Vector{String}}, ctx,
-        loops::Vector{String}, align, bound::Set{String} = Set{String}(), inside::Bool = false,
+        loops::Vector{String}, align, on_foreign, bound::Set{String} = Set{String}(),
+        inside::Bool = false,
         memo::IdDict{OpExpr, Dict{Tuple{Bool, Set{String}}, ASTExpr}} = IdDict{OpExpr, Dict{Tuple{Bool, Set{String}}, ASTExpr}}()
     )::ASTExpr
     if expr isa VarExpr
         (expr.name in bound || isempty(get(shapes, expr.name, String[]))) && return expr
-        return _index_wrap_var(expr, loops, align)
+        return _index_wrap_var(expr, loops, align; on_foreign = on_foreign)
     end
     expr isa OpExpr || return expr
     done = get!(() -> Dict{Tuple{Bool, Set{String}}, ASTExpr}(), memo, expr)
     return get!(done, (inside, bound)) do
-        _ew_at_cell_op(expr, shapes, ctx, loops, align, bound, inside, memo)
+        _ew_at_cell_op(expr, shapes, ctx, loops, align, on_foreign, bound, inside, memo)
     end
 end
 
 function _ew_at_cell_op(
         expr::OpExpr, shapes::Dict{String, Vector{String}}, ctx,
-        loops::Vector{String}, align, bound::Set{String}, inside::Bool, memo
+        loops::Vector{String}, align, on_foreign, bound::Set{String}, inside::Bool, memo
     )::ASTExpr
     op = expr.op
     if op == "apply_expression_template"
         ex = _ew_expansion(expr, ctx)
         ex === nothing && return expr
-        return _ew_at_cell(ex, shapes, ctx, loops, align, bound, true, memo)
+        return _ew_at_cell(ex, shapes, ctx, loops, align, on_foreign, bound, true, memo)
     end
     inside = inside || expr.template_origin !== nothing
-    rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, b, i, memo)
+    rec(a, b = bound, i = inside) = _ew_at_cell(a, shapes, ctx, loops, align, on_foreign, b, i, memo)
     if op == "index"
         inside || return expr
         return reconstruct(
@@ -224,65 +220,15 @@ function _lift_elementwise_application(
                 "$(shape), which names one index set twice (esm-spec §9.6.11)"
         )
     )
-    loops = _ew_fresh_loops(rhs, length(shape), ctx)
-    ranges = Dict{String, Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
-    body = try
-        _ew_at_cell(rhs, shapes, ctx, loops, _AxisAlign(shape, shapes))
-    catch e
-        e isa TreeWalkError && e.code == "E_TREEWALK_ARRAY_SHAPE_MISMATCH" || rethrow()
-        throw(DimensionPromotionError("array_shape_mismatch: '$(lhs)': $(e.detail) (esm-spec §9.6.11)"))
-    end
-    return OpExpr(
-        "faq", ASTExpr[];
-        output_idx = Any[l for l in loops], ranges = ranges, expr_body = body
+    loops = _fresh_loops(rhs, length(shape); ctx = ctx)
+    foreign(v, vs, axes, s) = throw(
+        DimensionPromotionError(
+            "array_shape_mismatch: '$(lhs)': $(_array_shape_mismatch_text(v, vs, axes, s)) " *
+                "(esm-spec §9.6.11)"
+        )
     )
-end
-
-# Every name `e` reads or binds, its template references expanded: the names
-# a lift's loop symbols must not shadow. Every expression-bearing field
-# (`foreach_child`) and every name-bearing one: the symbols a node binds
-# (`_bound_symbols`: `int_var`, range keys, `output_idx`), a range's `of`
-# parents, `wrt`, `dim`, an argmin/argmax `arg`, and a `table_lookup`'s axis
-# names. An application contributes its expansion's names, through the same
-# memoized `_ew_expansion` the lift's `_ew_at_cell` reads, so each one is
-# expanded once. The Rust binding's `names_in`.
-function _ew_names!(out::Set{String}, e, ctx, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}())
-    if e isa VarExpr
-        push!(out, e.name)
-        return out
-    end
-    e isa OpExpr || return out
-    haskey(seen, e) && return out
-    seen[e] = nothing
-    if e.op == "apply_expression_template"
-        ex = _ew_expansion(e, ctx)
-        ex === nothing || return _ew_names!(out, ex, ctx, seen)
-    end
-    union!(out, _bound_symbols(e))
-    if e.ranges !== nothing
-        for r in values(e.ranges)
-            r isa IndexSetRef && union!(out, r.of)
-        end
-    end
-    for f in (e.wrt, e.dim)
-        f === nothing || push!(out, f)
-    end
-    foreach_child(c -> _ew_names!(out, c, ctx, seen), e)
-    return out
-end
-
-# The lift's loop symbols `_p0, _p1, …`, each prefixed with one more `_` until
-# none is a name `rhs` (expanded) reads or binds. The same choice as the Rust
-# binding's, so the two write the same lifted equation.
-function _ew_fresh_loops(rhs::ASTExpr, n::Integer, ctx)
-    used = _ew_names!(Set{String}(), rhs, ctx)
-    prefix = "_p"
-    loops = String["$(prefix)$(d)" for d in 0:(n - 1)]
-    while any(in(used), loops)
-        prefix = "_" * prefix
-        loops = String["$(prefix)$(d)" for d in 0:(n - 1)]
-    end
-    return loops
+    body = _ew_at_cell(rhs, shapes, ctx, loops, _AxisAlign(shape, shapes), foreign)
+    return _cell_faq(body, loops, _cell_ranges(loops, shape))
 end
 
 # Every array's index sets as the build sees them (esm-spec §4.3.1): a
@@ -309,13 +255,9 @@ function _flat_array_shapes(
             haskey(shapes, k) || (shapes[k] = String[string(x) for x in v.shape])
         end
     end
-    open = Tuple{String, ASTExpr}[]
-    for eq in equations
-        eq.lhs isa VarExpr || continue
-        n = (eq.lhs::VarExpr).name
-        (haskey(shapes, n) || n in declared_scalar) && continue
-        push!(open, (n, eq.rhs))
-    end
+    open = filter!(
+        ((n, _),) -> !(haskey(shapes, n) || n in declared_scalar), _bare_definitions(equations)
+    )
     if seed !== nothing
         kept = Dict{String, ASTExpr}(n => rhs for (n, rhs) in open if haskey(seed, n))
         dropped = Set{String}(stale)
@@ -333,18 +275,7 @@ function _flat_array_shapes(
             shapes[n] = seed[n]
         end
     end
-    changed = true
-    while changed
-        changed = false
-        for (n, rhs) in open
-            haskey(shapes, n) && continue
-            sh = _infer_expr_shape(rhs, shapes, ctx)
-            isempty(sh) && continue
-            shapes[n] = sh
-            changed = true
-        end
-    end
-    return shapes
+    return _infer_shapes!(shapes, open, ctx)
 end
 
 # Whether `e` holds a template application: a reference this binding kept, or
@@ -360,7 +291,7 @@ function _holds_application(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, No
 end
 
 """
-    _lift_elementwise_applications_flat!(equations, contribs, field_ics, states, params, observeds, registry; seed, stale)
+    _lift_elementwise_applications_flat!(pool, field_ics, states, params, observeds, registry; seed, stale)
 
 Flatten's last step (esm-spec §9.6.11, "A flattened system keeps its
 applications' meaning on the wire"): every equation `x = rhs`, and every field
@@ -381,10 +312,10 @@ pointwise lift's shapes (`_flat_array_shapes`). Returns the field initial
 conditions, lifted. The Rust binding's flatten writes the same equations.
 """
 function _lift_elementwise_applications_flat!(
-        equations::Vector{Equation}, contribs::Vector{Vector{Contribution}},
-        field_ics::Vector{Pair{String, ASTExpr}},
+        pool::Vector{_FlatEq}, field_ics::Vector{Pair{String, ASTExpr}},
         states, params, observeds, registry; seed = nothing, stale = ()
     )
+    equations = _pool_equations(pool)
     # An expansion is elementwise only because it came from an application.
     (
         any(eq -> _holds_application(eq.rhs), equations) ||
@@ -421,8 +352,7 @@ function _lift_elementwise_applications_flat!(
         return field_ics
     end
     for (n, rhs) in lifted
-        contribs[n] = Contribution[Contribution(rhs, _union_origins(contribs[n]))]
-        equations[n] = _equation_from(equations[n], contribs[n])
+        pool[n] = _with_contribs(pool[n], Contribution[Contribution(rhs, _union_origins(pool[n].contribs))])
     end
     isempty(lifted_ics) && return field_ics
     return Pair{String, ASTExpr}[

@@ -200,6 +200,37 @@ function _rewrite_contributions(
 end
 
 """
+    _FlatEq(eq, contribs, owner = "")
+
+One equation of the pool `flatten` works on: the equation, the contributions
+whose left-fold sum is its body, and the top-level component that authored it
+(`""` for one a coupling entry wrote), which an `operator_compose` merge reads
+to tell A's equations from B's (esm-libraries-spec §4.7.1 step 4). The three
+travel together, so an equation moved, dropped or inserted keeps its
+contributions and its owner.
+"""
+struct _FlatEq
+    eq::Equation
+    contribs::Vector{Contribution}
+    owner::String
+end
+_FlatEq(eq::Equation, contribs::Vector{Contribution}) = _FlatEq(eq, contribs, "")
+
+# `f` with its equation rebuilt from `contribs` (and `lhs`), its owner kept.
+_with_contribs(f::_FlatEq, contribs::Vector{Contribution}; lhs::ASTExpr = f.eq.lhs) =
+    _FlatEq(_equation_from(f.eq, contribs; lhs = lhs), contribs, f.owner)
+
+# `f` with the rewrite `rw` applied inside each contribution
+# ([`_rewrite_contributions`](@ref)), its owner kept.
+function _rewrite_flat_eq(rw, f::_FlatEq, lifted::Bool)::_FlatEq
+    eq, cs = _rewrite_contributions(rw, f.eq, f.contribs, lifted)
+    return (eq === f.eq && cs === f.contribs) ? f : _FlatEq(eq, cs, f.owner)
+end
+
+# The equations of a pool, in order.
+_pool_equations(pool::AbstractVector{_FlatEq}) = Equation[f.eq for f in pool]
+
+"""
 The list a caller-built equation set gets when it carries no provenance: one
 contribution per equation, its body, with EMPTY origins ("author unknown").
 """

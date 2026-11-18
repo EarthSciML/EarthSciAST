@@ -199,8 +199,7 @@ Fields:
   (esm-libraries-spec §4.7.5), parallel to `equations`. Entry `i` lists the
   [`Contribution`](@ref)s whose left-fold sum is equation `i`'s right-hand side
   (its `faq` body when the pointwise lift wrapped it), each with the
-  [`TermOrigin`](@ref)s that authored it. `eq_owners` inside `flatten` is the
-  slot owner a later merge reads, not this. Read it with
+  [`TermOrigin`](@ref)s that authored it. Read it with
   [`equation_contributions`](@ref).
 - `initialization_equations::Vector{Equation}`: every component's
   `initialization_equations` (esm-spec §6.2), named as `equations` are: each
@@ -501,7 +500,7 @@ function _rhs_derivative_target(e::ASTExpr)::Union{String, Nothing}
 end
 
 """
-    _resolve_rhs_time_derivatives!(equations, contribs, time_invariant, lifted_shapes)
+    _resolve_rhs_time_derivatives!(pool, time_invariant, lifted_shapes)
 
 Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
 into the tendency this system already defines for it (esm-spec §4.2).
@@ -551,14 +550,12 @@ Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
 `_resolve_rhs_time_derivatives` exactly.
 """
 function _resolve_rhs_time_derivatives!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}},
-        time_invariant::Set{String},
-        lifted_shapes::AbstractDict
+        pool::Vector{_FlatEq}, time_invariant::Set{String}, lifted_shapes::AbstractDict
     )
     tendency = Dict{String, ASTExpr}()
     definition = Dict{String, ASTExpr}()
-    for eq in equations
+    for fe in pool
+        eq = fe.eq
         t = _rhs_derivative_target(eq.lhs)
         t === nothing && (t = _lifted_target(eq, lifted_shapes))
         if t !== nothing
@@ -572,8 +569,9 @@ function _resolve_rhs_time_derivatives!(
             definition[(eq.lhs::VarExpr).name] = eq.rhs
         end
     end
-    (isempty(tendency) && isempty(definition)) && return equations
-    for (i, eq) in enumerate(equations)
+    (isempty(tendency) && isempty(definition)) && return pool
+    for (i, fe) in enumerate(pool)
+        eq = fe.eq
         _has_time_derivative(eq.rhs) || continue
         # The quantity this equation DEFINES is not available to substitute into
         # its own right-hand side; seeding `active` with it is what makes
@@ -589,13 +587,11 @@ function _resolve_rhs_time_derivatives!(
             e, tendency, definition,
             time_invariant, active
         )
-        resolved, contribs[i] = _rewrite_contributions(
-            resolve, eq, contribs[i],
-            _is_lifted(eq, lifted_shapes)
-        )
-        resolved === eq || (equations[i] = Equation(eq.lhs, resolved.rhs))
+        resolved = _rewrite_flat_eq(resolve, fe, _is_lifted(eq, lifted_shapes))
+        resolved === fe ||
+            (pool[i] = _FlatEq(Equation(eq.lhs, resolved.eq.rhs), resolved.contribs, fe.owner))
     end
-    return equations
+    return pool
 end
 
 """
@@ -884,7 +880,7 @@ function _in_document_order(
 end
 
 """
-    _extract_field_ics!(equations, contribs) -> Vector{Pair{String, ASTExpr}}
+    _extract_field_ics!(pool) -> Vector{Pair{String, ASTExpr}}
 
 Classify the deferred `ic` equations (esm-spec §11.4.1) OUT of `equations`,
 returning them as ordered `state => rhs` pairs.
@@ -900,19 +896,14 @@ Runs LAST, after the pointwise lift and the independent-variable derivation, so
 every intermediate pass still sees the equation list it always did and only the
 FINAL, observable `equations` differs.
 """
-function _extract_field_ics!(
-        equations::Vector{Equation},
-        contribs::Vector{Vector{Contribution}}
-    )
+function _extract_field_ics!(pool::Vector{_FlatEq})
     ics = Pair{String, ASTExpr}[]
-    remaining = Equation[]
-    remaining_contribs = Vector{Contribution}[]
-    for (eq, cs) in zip(equations, contribs)
-        lhs = eq.lhs
-        target = _ic_lhs_variable(lhs)
+    remaining = _FlatEq[]
+    for fe in pool
+        eq = fe.eq
+        target = _ic_lhs_variable(eq.lhs)
         if target === nothing
-            push!(remaining, eq)
-            push!(remaining_contribs, cs)
+            push!(remaining, fe)
         else
             # The entry leaves `equations` and its contributions together;
             # `field_ics` carries none.
@@ -935,12 +926,7 @@ function _extract_field_ics!(
                 "one and an operator's `ic(_var)` expanded onto it, or two such templates)"
         )
     )
-    if length(remaining) != length(equations)
-        empty!(equations)
-        append!(equations, remaining)
-        empty!(contribs)
-        append!(contribs, remaining_contribs)
-    end
+    length(remaining) == length(pool) || append!(empty!(pool), remaining)
     return ics
 end
 
@@ -1093,7 +1079,7 @@ function flatten(
     # so a reaction network's mass-action tendency (§7.4) is available to a
     # sibling model's scoped `D(Chem.O3, t)`.
     _resolve_rhs_time_derivatives!(
-        st.equations, st.contribs, Set{String}(keys(st.params)), st.lifted_shapes
+        st.equations, Set{String}(keys(st.params)), st.lifted_shapes
     )
     return _finish_flatten(st, pointwise)
 end
@@ -1102,11 +1088,9 @@ end
     FlattenState
 
 `flatten`'s working state between its stages: the document (coupling imports
-expanded) and the accumulators the stages read and write. `equations`,
-`contribs` and `owners` are parallel: an equation, the contributions whose sum
-is its right-hand side (esm-libraries-spec §4.7.5), and the top-level component
-that authored it (`""` for one a coupling entry wrote), which an
-`operator_compose` merge reads to tell A's equations from B's (§4.7.1 step 4).
+expanded) and the accumulators the stages read and write. `equations` is the
+equation pool, each equation with its contributions and its owner
+([`_FlatEq`](@ref)).
 """
 mutable struct FlattenState
     file::EsmFile
@@ -1114,9 +1098,7 @@ mutable struct FlattenState
     states::OrderedDict{String, ModelVariable}
     params::OrderedDict{String, ModelVariable}
     observeds::OrderedDict{String, ModelVariable}
-    equations::Vector{Equation}
-    contribs::Vector{Vector{Contribution}}
-    owners::Vector{String}
+    equations::Vector{_FlatEq}
     init_equations::Vector{Equation}
     field_ics::Vector{Pair{String, ASTExpr}}
     continuous_events::Vector{ContinuousEvent}
@@ -1134,7 +1116,7 @@ FlattenState(file::EsmFile, template_registry) = FlattenState(
     file, String[],
     OrderedDict{String, ModelVariable}(), OrderedDict{String, ModelVariable}(),
     OrderedDict{String, ModelVariable}(),
-    Equation[], Vector{Contribution}[], String[], Equation[],
+    _FlatEq[], Equation[],
     Pair{String, ASTExpr}[], ContinuousEvent[], DiscreteEvent[],
     # esm-spec §2: one document-scoped index-set registry, plain names.
     OrderedDict{String, IndexSet}(file.index_sets),
@@ -1157,11 +1139,8 @@ over the pool that keeps its own contribution rule (a coupling merge) leaves
 """
 function _map_flat_sites!(f::F, st::FlattenState; equations::Bool = false, targets = nothing) where {F}
     if equations
-        for i in eachindex(st.equations)
-            eq = st.equations[i]
-            st.equations[i], st.contribs[i] = _rewrite_contributions(
-                f, eq, st.contribs[i], _is_lifted(eq, st.lifted_shapes)
-            )
+        for (i, fe) in enumerate(st.equations)
+            st.equations[i] = _rewrite_flat_eq(f, fe, _is_lifted(fe.eq, st.lifted_shapes))
         end
     end
     st.init_equations = _map_equation_sides(f, st.init_equations)
@@ -1243,7 +1222,6 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
                     ct === nothing ? nothing : get(ct, "models.$(name)", nothing)
                 )
             )
-            _attribute_equations!(st.owners, st.equations, name)
         end
     end
     if file.reaction_systems !== nothing
@@ -1254,7 +1232,6 @@ function _collect_components(file::EsmFile, records::AbstractDict{String, Int})
                 templates = ct === nothing ? nothing :
                     get(ct, "reaction_systems.$(name)", nothing)
             )
-            _attribute_equations!(st.owners, st.equations, name)
         end
     end
     _check_variable_map_endpoints(file, st.states, st.params, st.observeds)
@@ -1286,13 +1263,11 @@ function _apply_coupling!(st::FlattenState)
 
     for entry in file.coupling
         entry isa CouplingOperatorCompose || continue
-        # An equation an earlier entry wrote belongs to no component.
-        _attribute_equations!(st.owners, st.equations, "")
         _compose_renames!(
             st.merged_renames,
             _apply_operator_compose!(
-                st.equations, st.contribs, entry, st.states, st.observeds,
-                st.owners; renames = st.merged_renames, components = st.components
+                st.equations, entry, st.states, st.observeds;
+                renames = st.merged_renames, components = st.components
             )
         )
     end
@@ -1308,12 +1283,11 @@ function _apply_coupling!(st::FlattenState)
 
     # A coupling entry's origin index is its 0-based position in the expanded
     # coupling sequence, whatever its kind.
-    _attribute_equations!(st.owners, st.equations, "")
     for (k, entry) in enumerate(file.coupling)
         entry isa CouplingCouple || continue
         _apply_couple!(
-            st.equations, st.contribs, _retarget_pending_entry(entry, st.merged_renames),
-            st.opaque_refs; index = k - 1, owners = st.owners, states = st.states,
+            st.equations, _retarget_pending_entry(entry, st.merged_renames),
+            st.opaque_refs; index = k - 1, states = st.states,
             components = st.components
         )
     end
@@ -1326,7 +1300,7 @@ function _apply_coupling!(st::FlattenState)
         entry isa CouplingVariableMap || continue
         resolved = _retarget_pending_entry(entry, st.merged_renames)
         _apply_variable_map!(
-            st.equations, st.contribs, st.params, resolved;
+            st.equations, st.params, resolved;
             observeds = st.observeds, index = k - 1, shapeless = shapeless
         )
         resolved.transform isa ASTExpr && continue
@@ -1348,7 +1322,7 @@ end
 # Step 3b: the §10.5 pointwise lift over the state's tables
 # (esm-libraries-spec §4.7.5).
 _apply_pointwise_lift!(st::FlattenState) = _apply_pointwise_lift!(
-    st.equations, st.contribs, st.states, st.params, st.observeds, st.index_sets,
+    st.equations, st.states, st.params, st.observeds, st.index_sets,
     st.file.coupling;
     template_registry = isempty(st.template_registry) ? nothing : st.template_registry,
     lifted_shapes = st.lifted_shapes
@@ -1358,7 +1332,7 @@ _apply_pointwise_lift!(st::FlattenState) = _apply_pointwise_lift!(
 # deferred `ic` equations, angle normalization and the elementwise template
 # lift; then the `FlattenedSystem`.
 function _finish_flatten(st::FlattenState, pointwise)
-    ivs = _compute_independent_variables(st.equations)
+    ivs = _compute_independent_variables(_pool_equations(st.equations))
     # Components in the order the file declares them (§4.7.5 step 4).
     metadata = FlattenMetadata(
         collect(st.components), st.coupling_rules_applied;
@@ -1369,19 +1343,21 @@ function _finish_flatten(st::FlattenState, pointwise)
     # The §6.3.1 subsets, every membership decided by the classification
     # accessors run over the flattened form (esm-spec §6.3.1: "the ONLY
     # sanctioned way to ask these questions"); the order is the parents'.
-    view = _classification_model(st.states, st.params, st.observeds, st.equations)
+    view = _classification_model(
+        st.states, st.params, st.observeds, _pool_equations(st.equations)
+    )
     algebraic = algebraic_unknowns(view)
     brownian = brownian_parameters(view)
     discrete = discrete_parameters(view)
     # The deferred `ic` equations leave `equations` (§4.7.5 step 4, normative);
     # last, so every pass above saw the list it always did.
-    st.field_ics = _extract_field_ics!(st.equations, st.contribs)
+    st.field_ics = _extract_field_ics!(st.equations)
     # A scaled angle argument of `sin`/`cos`/`tan` to radians (esm-spec §4.8.3).
     _normalize_angle_arguments!(st)
     # Each elementwise template application (esm-spec §9.6.11) as its per-cell
     # `faq`, reusing the shapes the pointwise lift inferred.
     st.field_ics = _lift_elementwise_applications_flat!(
-        st.equations, st.contribs, st.field_ics, st.states, st.params, st.observeds,
+        st.equations, st.field_ics, st.states, st.params, st.observeds,
         st.template_registry;
         seed = pointwise === nothing ? nothing : pointwise.shapes,
         stale = pointwise === nothing ? () : pointwise.stale
@@ -1389,14 +1365,14 @@ function _finish_flatten(st::FlattenState, pointwise)
     return FlattenedSystem(;
         independent_variables = ivs,
         state_variables = st.states, parameters = st.params,
-        observed_variables = st.observeds, equations = st.equations,
+        observed_variables = st.observeds, equations = _pool_equations(st.equations),
         continuous_events = st.continuous_events, discrete_events = st.discrete_events,
         domain = st.file.domain, metadata = metadata, index_sets = st.index_sets,
         template_registry = st.template_registry,
         algebraic_variables = algebraic, brownian_parameters = brownian,
         discrete_parameters = discrete, field_ics = st.field_ics,
         loader_fields = st.loader_fields, lifted_shapes = st.lifted_shapes,
-        equation_contributions = st.contribs,
+        equation_contributions = Vector{Contribution}[f.contribs for f in st.equations],
         initialization_equations = st.init_equations,
     )
 end

@@ -203,8 +203,7 @@ function _lift_2d(wrap, shapes::Vector{<:Pair})
         values = ESM.ASTExpr[_op("index", _v("C"), _v("i"), _v("j"))]
     )
     rhs = wrap(ma)
-    equations = ESM.Equation[ESM.Equation(_D("C"), rhs)]
-    contribs = [ESM.Contribution[ESM.Contribution(rhs, ESM.TermOrigin[])]]
+    pool = [ESM._FlatEq(ESM.Equation(_D("C"), rhs), ESM.Contribution[ESM.Contribution(rhs, ESM.TermOrigin[])])]
     states = OrderedDict{String, ESM.ModelVariable}(
         "C" => ESM.ModelVariable(ESM.UnknownVariable)
     )
@@ -216,11 +215,9 @@ function _lift_2d(wrap, shapes::Vector{<:Pair})
         "x" => _iset(2), "y" => _iset(3), "z" => _iset(4)
     )
     coupling = [ESM.CouplingOperatorCompose(["M", "Op"]; lifting = "pointwise")]
-    ESM._apply_pointwise_lift!(
-        equations, contribs, states, params, observeds, index_sets, coupling
-    )
+    ESM._apply_pointwise_lift!(pool, states, params, observeds, index_sets, coupling)
     @test states["C"].shape == ["x", "y"]
-    new_rhs = equations[1].rhs
+    new_rhs = pool[1].eq.rhs
     @test new_rhs isa ESM.OpExpr && new_rhs.op == "faq"
     return new_rhs.expr_body
 end
@@ -273,4 +270,28 @@ end
         @test occursin("'m'", msg)
         @test occursin("'reshape'", msg)
     end
+end
+
+# A template application in a lifted right-hand side counts as its expansion
+# (esm-spec §9.6.4 rule 4): an array bound to a parameter the body reads per
+# value is gathered at the cell, not left bare inside the lifted `faq`.
+@testset "a lifted template application reads its array argument per cell" begin
+    doc = """
+    {"esm": "2.3.0", "metadata": {"name": "lift_app"},
+     "index_sets": {"x": {"kind": "interval", "size": 3}},
+     "models": {"C": {
+       "expression_templates": {"twice": {"params": ["f"], "body": {"op": "*", "args": [2, "f"]}}},
+       "variables": {
+         "a": {"type": "unknown", "units": "1", "default": 0.0},
+         "b": {"type": "unknown", "units": "1", "default": 0.0},
+         "u": {"type": "parameter", "units": "1/s", "default": [1.0, 2.0, 3.0], "shape": ["x"]}},
+       "equations": [
+         {"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": "u"},
+         {"lhs": {"op": "D", "args": ["b"], "wrt": "t"},
+          "rhs": {"op": "apply_expression_template", "args": [], "name": "twice", "bindings": {"f": "u"}}}]}}}
+    """
+    prob = ESM.esm_problem(ESM.load_string(doc), (0.0, 1.0))
+    du = zeros(length(prob.u0))
+    prob.f!(du, prob.u0, prob.p, 0.0)
+    @test sort(du) == [1.0, 2.0, 2.0, 3.0, 4.0, 6.0]
 end

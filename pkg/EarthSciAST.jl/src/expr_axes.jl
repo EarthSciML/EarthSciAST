@@ -29,7 +29,7 @@ What [`_expr_axes`](@ref) knows about names:
 """
 struct _ShapeEnv{C}
     known::Dict{String, Vector{String}}
-    defs::Dict{String, ASTExpr}
+    defs::OrderedDict{String, ASTExpr}
     scalar::Set{String}
     names::Set{String}
     unknown::Union{Nothing, Vector{String}}
@@ -39,7 +39,7 @@ end
 
 _ShapeEnv(
     known::Dict{String, Vector{String}};
-    defs = Dict{String, ASTExpr}(), scalar = Set{String}(), names = Set{String}(),
+    defs = OrderedDict{String, ASTExpr}(), scalar = Set{String}(), names = Set{String}(),
     unknown = nothing, ctx = nothing
 ) = _ShapeEnv(
     known, defs, scalar, names, unknown, ctx, Dict{String, Union{Vector{String}, Nothing}}()

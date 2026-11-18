@@ -23,6 +23,11 @@ function _prefix_code(details::AbstractString, default::String)
     return m === nothing ? default : String(m.captures[1])
 end
 
+# A flatten diagnostic that does not stop the pass: logged at `Warn` level, the
+# message led by its code and the code also on the log record (`code`), so a
+# caller can filter on it.
+_flatten_warn(code::String, msg::String) = @warn "$(code): $(msg)" code = code
+
 # ========================================
 # Error Types (§4.7.5 / §4.7.6 taxonomy)
 # ========================================
