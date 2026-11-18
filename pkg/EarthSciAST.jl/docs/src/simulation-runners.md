@@ -25,12 +25,28 @@ under `:xla` when Reactant is loaded, and the ModelingToolkit system under
 `:mtk` when that package is loaded. Every Julia member of the vocabulary is
 reachable from the stable entry point.
 
-No environment variable selects an evaluation strategy. The `ESS_*` variables
-that remain are tuning thresholds — a node budget, a per-function size cap, a
-threading floor, a tier's admission floor — and under a strict `:native` each
-is a **refusal boundary**: crossing it produces `compiler_refused_rule` rather
-than a quiet demotion. Moving one off its default can therefore make `:native`
-refuse an in-scope document, which the conformance tiers report as a defect.
+No environment variable selects an evaluation strategy. The variables below
+are the complete list the package and its extensions read. Each is read at
+build (or emission) time; an unset or unparseable value keeps the default.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `ESS_CODEGEN_NODE_BUDGET` | 64000000 | Cumulative emitted-node budget of one `:native` build. A kernel past it is refused (`compiler_refused_rule`). |
+| `ESS_CODEGEN_FN_NODE_CAP` | 20000 | Emitted-node cap of one generated function; larger loop nests are split into sub-functions. `0` disables splitting. |
+| `ESS_CODEGEN_SPLIT_TRANSPORT` | unset | `value` or `definition` forces how split sub-functions are carried (by value, or as inner definitions); unset decides by size and Julia version. |
+| `ESS_THREADS_MIN_WORK` | 6000 | Least work (node evaluations) per thread chunk; a section with less than two chunks' worth runs serially. Does not change results. |
+| `ESS_CONTRACTION_LOOP_MIN` | 8 | Reduction length at and above which a scalar reduction loops at run time instead of being unrolled. |
+| `ESS_ARRAY_CONTRACTION_MIN` | 1024 | Reduction length at and above which the out-of-place build emits a whole-array contraction nest. |
+| `EARTHSCI_JULIA_XLA_DEVICE` | `cpu` | The XLA client `compiler = :xla` compiles on (`cpu` or `gpu`); see below. |
+| `ESM_DIRECT_EMIT_READ` | `gather` | The `:xla` direct emitter's read lowering (`gather`, `runs`, `always`). Changes the program's shape, not its values. |
+| `ESM_DIRECT_GATHER_INDEX_BITS` | 32 | Element width (32 or 64) of the `:xla` emitter's gather indices. |
+| `ESS_RX_LOCATE`, `ESS_RX_LOCATE_LADDER_MAX` | `auto`, 8 | The traced comparison-count lowering of the Reactant extension and its ladder/affine cut. All lowerings compute the same values. |
+| `ESM_TESTS_EXCLUDE` | unset | `run_esm_tests`: `;`- or `:`-separated substrings of document paths to skip. |
+
+Under a strict `:native` the node budget and the function cap are **refusal
+boundaries**: crossing one produces `compiler_refused_rule` rather than a quiet
+demotion. Moving one off its default can therefore make `:native` refuse an
+in-scope document, which the conformance tiers report as a defect.
 
 ModelingToolkit is reached BOTH ways: `compiler = :mtk` builds a problem
 through it, and the `ModelingToolkit.System` constructor remains

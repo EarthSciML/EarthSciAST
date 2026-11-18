@@ -252,12 +252,6 @@ end
 "Fallback record-axis name when the document declares no `independent_variable`."
 const DEFAULT_TIME_DIM = "time"
 
-const _EMPTY_OUTPUT_META = OutputMeta(
-    "", Dict{String, Int}(),
-    Dict{String, Vector{String}}(), Dict{String, Dict{String, Any}}(),
-    Dict{String, String}(), Dict{String, Any}(), DEFAULT_TIME_DIM
-)
-
 # Look `base` up in one of the `var_*` tables: exact first (bare or namespaced),
 # then the last dotted segment — so a nested namespace the exact keys do not
 # cover still resolves.
