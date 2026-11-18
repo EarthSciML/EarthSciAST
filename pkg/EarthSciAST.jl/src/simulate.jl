@@ -1577,13 +1577,9 @@ function _esm_problem(
         _inject_pushdown_aliases!(merged_param, file, pd_coupling)
     end
 
-    # Discrete-cadence materialization sink (the middle cadence phase), ALWAYS
-    # passed, so a state-free derived field over a live forcing buffer (a
-    # regrid→physics stack) is cut out of the per-step RHS into a cache filled once
-    # per refresh, not recomputed on every continuous step. Empty (no
-    # discrete-materialize var) ⇒ no effect. A caller-supplied `materialize_out` is
-    # reused (and thus inspectable), else fresh.
-    dm = req.materialize_out === nothing ? DiscreteMaterializer() : req.materialize_out
+    # The discrete-cadence materializer (`_problem_build_run`): the caller's,
+    # or a fresh one.
+    dm = _problem_materializer(req.materialize_out)
     # What the build produces besides the right-hand side; the Problem owns it.
     # A caller's `inspect` record is claimed now and pointed at it when the
     # build ends, refused or not.
@@ -1626,7 +1622,7 @@ function _esm_problem(
             f!, var_map = shared_program.f!, shared_program.internal
             _publish_program_slots!(products, shared_program, merged_param)
         else
-            f!, u0_built, p_built, _tspan, var_map = _build_run(
+            f!, u0_built, p_built, _tspan, var_map = _problem_build_run(
                 file;
                 compiler = compiler,
                 form = compiler === :xla ? :oop : :inplace,
@@ -1640,7 +1636,8 @@ function _esm_problem(
                 runtime_array_parameters = req.runtime_array_parameters,
                 gated_providers = gated_providers,
                 sample_time = t_sample,
-                ic_t0 = span[1], ic_data = ic_data, caller_u0 = u0
+                ic_t0 = span[1], ic_data = ic_data, caller_u0 = u0,
+                seed_ic! = req.seed_ic!
             )
         end
     finally
@@ -1661,7 +1658,10 @@ function _esm_problem(
     u0_run = _with_compiler_plan(_plan(compiler)) do
         _seed_u0(u0_built, var_map, u0, req.seed_ic!)
     end
-    _refuse_missing_initial_values(products.unvalued_slots, u0_built, var_map, u0, req.seed_ic!)
+    # `_problem_build_run` refused a state with no starting value; a program
+    # build is checked here.
+    req.program_build &&
+        _refuse_missing_initial_values(products.unvalued_slots, u0_built, var_map, u0, req.seed_ic!)
     # The same seeding at another start of the run, when the document's `ic`
     # right-hand sides read it: the build's re-seed with each discrete
     # provider sampled at the new start, then the caller's `u0` and hook.
@@ -1895,6 +1895,40 @@ function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
         )
         return StateSnapshot(t, state_snapshot(integrator), obs)
     end
+end
+
+# The discrete-cadence materialization sink a build always has: the caller's
+# (reused, so it stays inspectable) or a fresh one. With it, a state-free derived
+# field over a live forcing buffer (a regrid→physics stack) is cut out of the
+# per-step right-hand side into a cache filled once per refresh, and a
+# parameter-only array observed is filled once at setup; with no such field it
+# changes nothing.
+_problem_materializer(dm) = dm === nothing ? DiscreteMaterializer() : dm
+
+"""
+    _problem_build_run(file::EsmFile; products, materialize_out = nothing,
+                       param_classes = Dict(), caller_u0 = nothing, seed_ic! = nothing,
+                       kwargs...)
+
+The build `esm_problem` runs on its run file (`_run_file`), which
+`Internal.build` runs too, so the two compile the same thing: `_build_run` with
+a discrete-cadence materializer (`_problem_materializer`) and a parameter
+partition sink, then the refusal of an ODE state nothing gives a starting value
+(esm-spec §11.4; a caller `u0`, an `initial_conditions` entry or `seed_ic!`
+gives one). `kwargs` are the build's own.
+"""
+function _problem_build_run(
+        file::EsmFile; products::BuildProducts, materialize_out = nothing,
+        param_classes::AbstractDict = Dict{String, Symbol}(), caller_u0 = nothing,
+        seed_ic! = nothing, kwargs...
+    )
+    out = _build_run(
+        file; products = products, materialize_out = _problem_materializer(materialize_out),
+        param_classes = param_classes, caller_u0 = caller_u0, kwargs...
+    )
+    _, u0_built, _, _, var_map = out
+    _refuse_missing_initial_values(products.unvalued_slots, u0_built, var_map, caller_u0, seed_ic!)
+    return out
 end
 
 # The seeded initial state: the build's own `u0`, then the caller's `u0`

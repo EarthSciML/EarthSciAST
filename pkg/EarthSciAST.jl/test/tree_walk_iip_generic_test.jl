@@ -52,8 +52,9 @@ _gi_ao(e) = Dict{String, Any}(
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
     "args" => Any[], "expr" => e
 )
+# A state starts at 0 unless the caller gives a `default`.
 _gi_state(; kw...) = Dict{String, Any}(
-    "type" => "unknown",
+    "type" => "unknown", "default" => 0.0,
     (String(k) => v for (k, v) in kw)...
 )
 _gi_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)

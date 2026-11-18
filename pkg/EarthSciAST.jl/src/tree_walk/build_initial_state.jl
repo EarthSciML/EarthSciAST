@@ -644,11 +644,14 @@ end
 # Each `faq`-valued initialization equation (esm-spec §6.2) evaluated into the
 # cells of `u0` it sets, against the state-only scope `cs`. A cell an explicit
 # initial condition or the caller's `u0` names (`skip_slots`) keeps its value.
+# Returns the slots the equations set: each now has a starting value
+# (esm-spec §11.4).
 function _seed_faq_init_u0!(
         u0::Vector{Float64}, init_equations::Vector{Equation},
         initial_conditions::AbstractDict, cs::_CompileScope, p::Union{Nothing, NamedTuple};
         skip_slots::Set{Int} = Set{Int}()
     )
+    seeded = Set{Int}()
     var_map = cs.var_map
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
@@ -693,6 +696,7 @@ function _seed_faq_init_u0!(
             push!(todo, (idx_tuple, slot))
         end
         isempty(todo) && continue
+        union!(seeded, (slot for (_, slot) in todo))
         rule = "init($(var_name))"
         # The compiled fill (setup_fill.jl): the aggregate filled through the
         # right-hand-side cascade and emitted code, once, over its own ranges.
@@ -750,7 +754,7 @@ function _seed_faq_init_u0!(
             u0[slot] = percell(lic, idx_tuple)
         end
     end
-    return nothing
+    return seeded
 end
 
 # The compile-once form of an initialization equation: its body compiled once

@@ -87,7 +87,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
                 ("sum_product", 0.0), ("min_sum", Inf),
                 ("max_product", -Inf), ("max_sum", -Inf),
             )
-            vars = Dict("z" => ModelVariable(UnknownVariable))
+            vars = Dict("z" => ModelVariable(UnknownVariable; default = 0.0))
             # D(z) = aggregate_{k ∈ [1,0]} 1   (empty range ⇒ 0̄)
             rhs = OpExpr(
                 "faq", ESM.ASTExpr[];
@@ -107,9 +107,9 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     @testset "(a) non-empty min_sum / max_product reductions" begin
         # D(z) = min_{j ∈ 1:5} x[j];  D(w) = max_{j ∈ 1:5} x[j]
         vars = Dict(
-            "x" => ModelVariable(UnknownVariable),
-            "z" => ModelVariable(UnknownVariable),
-            "w" => ModelVariable(UnknownVariable)
+            "x" => ModelVariable(UnknownVariable; default = 0.0),
+            "z" => ModelVariable(UnknownVariable; default = 0.0),
+            "w" => ModelVariable(UnknownVariable; default = 0.0)
         )
         agg_min = OpExpr(
             "faq", ESM.ASTExpr[];
@@ -138,7 +138,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(b) aggregate alias ≡ faq" begin
         N = 4
-        vars = Dict("u" => ModelVariable(UnknownVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable; default = 0.0))
         ics = Dict("M.u[$i]" => Float64(i) for i in 1:N)
         mk(tag) = ESM.Model(
             vars, [
@@ -171,8 +171,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     @testset "(c) interval index set resolution" begin
         N = 5
         vars = Dict(
-            "u" => ModelVariable(UnknownVariable),
-            "total" => ModelVariable(UnknownVariable)
+            "u" => ModelVariable(UnknownVariable; default = 0.0),
+            "total" => ModelVariable(UnknownVariable; default = 0.0)
         )
         index_sets = Dict("cells" => ESM.IndexSet("interval"; size = N))
         eqs = [
@@ -217,7 +217,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     #         the categorical index is just a const_array (keyed factor, §5.4).
     # ------------------------------------------------------------------
     @testset "(c)+(d) categorical index set + keyed-factor table" begin
-        vars = Dict("total" => ModelVariable(UnknownVariable))
+        vars = Dict("total" => ModelVariable(UnknownVariable; default = 0.0))
         index_sets = Dict(
             "county" =>
                 ESM.IndexSet("categorical"; members = ["Champaign", "Cook", "Sangamon"])
@@ -254,7 +254,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             "cells_on_cell" => cells_on_cell, "coeff" => coeff,
             "n_edges_on_cell" => n_edges
         )
-        vars = Dict("u" => ModelVariable(UnknownVariable))
+        vars = Dict("u" => ModelVariable(UnknownVariable; default = 0.0))
         _c = _v("c"); _k = _v("k")
         body = _op(
             "*", _op("index", _v("coeff"), _c, _k),
@@ -313,8 +313,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
     # ------------------------------------------------------------------
     @testset "(c) undeclared index set errors" begin
         vars = Dict(
-            "u" => ModelVariable(UnknownVariable),
-            "total" => ModelVariable(UnknownVariable)
+            "u" => ModelVariable(UnknownVariable; default = 0.0),
+            "total" => ModelVariable(UnknownVariable; default = 0.0)
         )
         eq = ESM.Equation(
             _op("D", _v("total"); wrt = "t"),
@@ -381,7 +381,8 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
             "faq_semiring_indexset.esm"
         )
         if isfile(path)
-            ics = Dict("AggregateDemo.u[$i]" => Float64(i) for i in 1:5)
+            ics = Dict{String, Float64}("AggregateDemo.u[$i]" => Float64(i) for i in 1:5)
+            ics["AggregateDemo.total"] = 0.0   # the fixture declares no default
             f!, u0, p, _, vmap = EarthSciAST.Internal.build(path; initial_conditions = ics)
             du = similar(u0); f!(du, u0, p, 0.0)
             for i in 1:5

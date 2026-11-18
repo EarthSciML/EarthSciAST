@@ -83,8 +83,12 @@ end
 
         # (2) the build runs end-to-end: the derived-index-set throw is gone,
         #     only the geometric `area_eff` FAQ remains in the ODE.
+        # `area_eff` declares no default, so the build is given its start.
         f!, u0, p, _, vmap = EarthSciAST.Internal.build(
-            raw; const_arrays = Dict("EdgeEnumerationAreaEff.$k" => v for (k, v) in ca)
+            raw; const_arrays = Dict("EdgeEnumerationAreaEff.$k" => v for (k, v) in ca),
+            initial_conditions = Dict(
+                "EdgeEnumerationAreaEff.area_eff[$i]" => 0.0 for i in 1:2
+            )
         )
         @test sort(collect(keys(vmap))) ==
             ["EdgeEnumerationAreaEff.area_eff[1]", "EdgeEnumerationAreaEff.area_eff[2]"]

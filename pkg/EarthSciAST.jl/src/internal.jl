@@ -98,7 +98,12 @@ its own, and `model_name` and `index_sets` are refused.
 tiers switched off, `EarthSciAST._plan_with`). The remaining keywords are the
 build's own: `parameter_overrides`, `initial_conditions`, `const_arrays`,
 `param_arrays`, `const_array_boundaries`, `tspan`, `form` (`:inplace` or
-`:oop`), `materialize_out`. `pushdown_rewrite = true` rewrites the authored
+`:oop`), `materialize_out`. The compile is `esm_problem`'s own
+(`_problem_build_run`): a discrete-cadence materializer always (the caller's
+`materialize_out` or a fresh one), so a parameter-only array observed is filled
+once at setup as in a Problem, and an ODE state that neither the document nor
+`initial_conditions` gives a starting value is refused
+(`E_TREEWALK_MISSING_INITIAL_VALUE`, esm-spec §11.4). `pushdown_rewrite = true` rewrites the authored
 document before it is flattened, as `esm_problem` does; the provider gates
 `esm_problem` derives from the rewrite are not applied. `gated_providers`
 (provider key => a provider carrying its own [`provider_gate_spec`](@ref)) are
@@ -149,7 +154,7 @@ function build(
         gated = Dict{String, EarthSciAST._GatedProvider}(
             String(k) => _gated(String(k), v) for (k, v) in gated_providers
         )
-        out = EarthSciAST._build_run(
+        out = EarthSciAST._problem_build_run(
             file; compiler = compiler, products = products, gated_providers = gated,
             kwargs...
         )

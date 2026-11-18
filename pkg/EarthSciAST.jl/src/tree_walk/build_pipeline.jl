@@ -680,10 +680,13 @@ function _build_compile_evaluator(
     # The faq-valued initialization equations seed `u0`. A caller's `u0` is
     # part of the state they read, and a cell it names keeps its value.
     caller_slots = _apply_caller_u0!(u0, layout.var_map, parts.init_equations, caller_u0)
-    _seed_faq_init_u0!(
+    seeded = _seed_faq_init_u0!(
         u0, parts.init_equations, initial_conditions, state_scope, p;
         skip_slots = caller_slots
     )
+    # A cell an initialization equation set has a starting value.
+    products === nothing || isempty(seeded) ||
+        filter!(s -> !(s in seeded), products.unvalued_slots)
 
     # The scalar observeds compiled once as named prelude slots
     # (`_plan_observed_slots`), each resolved in dependency order through the
