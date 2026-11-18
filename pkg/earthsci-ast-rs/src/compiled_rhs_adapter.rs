@@ -12,9 +12,8 @@
 //! [`crate::adapter_support::adapter_main`] over this tier.
 //!
 //! Engines:
-//!   * `interpreter` — [`ArrayCompiled::debug_eval_rhs`] on the vectorized
-//!     evaluator, the same no-scalarization kernel the simulator uses. This is
-//!     the engine that runs today.
+//!   * `interpreter` — [`ArrayCompiled::debug_eval_rhs`], the per-cell
+//!     oracle every compiler is checked against. This is the default engine.
 //!   * `compiled` — the XlaBuilder emitter over the tape
 //!     (`simulate_array::tape::xla_emit`) run through PJRT
 //!     (`xla_runtime`). Behind the non-default `xla` feature: a

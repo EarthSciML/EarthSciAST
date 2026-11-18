@@ -636,8 +636,8 @@ fn lhs_scatter_positions(
 // Lowering-time values.
 // ---------------------------------------------------------------------------
 
-/// A lowering-time value: what the overlay's `VecValue` is at runtime, made
-/// symbolic. Scalar kinds are `Lit`/`Param`/`Time`/`Scalar` (a scalar slot)
+/// A lowering-time value: a scalar or a whole array the program will hold at
+/// run time, made symbolic. Scalar kinds are `Lit`/`Param`/`Time`/`Scalar` (a scalar slot)
 /// plus a 0-d `StateView`; array kinds carry a box (shape + origin).
 #[derive(Clone, Debug)]
 enum LV {
@@ -649,7 +649,7 @@ enum LV {
     /// An array slot (box in the slot desc).
     Arr(SlotId),
     /// Whole persistent state array `state_vars[ix]` (origin all-1s; 0-d ⇒
-    /// scalar semantics) — the zero-copy `VecValue::View` analogue.
+    /// scalar semantics), read in place without a copy.
     State(u32),
 }
 
@@ -2489,7 +2489,7 @@ impl<'m> TapeBuilder<'m> {
         self.fault.prefix = saved;
     }
 
-    // -- expression lowering (the eval_vec mirror) ---------------------------
+    // -- expression lowering ---------------------------------------------------
 
     fn lower_expr(&mut self, e: &Expr, bx: &LBox) -> LResult<LV> {
         match e {
@@ -2518,7 +2518,7 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// Mirror of `eval_vec_variable`, in ITS resolution order: `t`, bound
+    /// Resolve a variable over the box, in this order: `t`, bound
     /// contraction index, output box symbol (ramp), state, observed, param,
     /// bail (forcing / unknown loop bind).
     fn resolve_var(&mut self, name: &str, bx: &LBox) -> LResult<LV> {
@@ -2593,25 +2593,21 @@ impl<'m> TapeBuilder<'m> {
         bail_tape!("variable: unresolved symbol (forcing/loop-bind?): {name}")
     }
 
-    /// Mirror of `eval_vec_op`'s dispatch (via the SAME `vec_op_code`).
+    /// Lower an operator node, dispatching on its [`VecOp`] ([`vec_op_code`]).
     fn lower_op(&mut self, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         self.lower_op_code(vec_op_code(&node.op), node, bx)
     }
 
     /// [`Self::lower_op`] with the operator already resolved to a [`VecOp`], so
     /// the `Broadcast` arm can re-enter with the code of its `fn` against the
-    /// SAME node (mirroring `eval_vec_op_code` and the oracle's
-    /// `eval_op_named` — the tape's half of the issue-#101 fix).
+    /// SAME node, as the oracle's `eval_op_named` does.
     fn lower_op_code(&mut self, code: VecOp, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         match code {
-            // The precision-boundary marker (`crate::precision_infer`). The
-            // tape resolves its kernels at EXECUTION, from the thread-local
-            // precision, so a boundary cannot be honoured by a guard held only
-            // while lowering: the instruction it emitted would run later, in
-            // whatever precision was then in force. Bail to the vectorized
-            // overlay / per-cell oracle, both of which evaluate the marker
-            // where its guard is still standing. Reachable only in a document
-            // that declares a per-variable `element_type`.
+            // The precision-boundary marker (`crate::precision_infer`): the
+            // operand is lowered under the precision it names
+            // ([`Self::marker_operand`]), and every instruction emitted there
+            // records that precision for its kernels to run at. Reachable only
+            // in a document that declares a per-variable `element_type`.
             VecOp::Precision => {
                 let (arg, _precision) = self.marker_operand(node)?;
                 self.lower_expr(arg, bx)
@@ -2668,10 +2664,8 @@ impl<'m> TapeBuilder<'m> {
             }
             // esm-spec §4.3.4: apply the scalar operator named in `fn`
             // element-wise. Lower it as the bare `{"op": fn, "args": args}` node
-            // would be lowered, so the tape emits the same instructions the
-            // overlay and the oracle evaluate (issue #101 — this arm used to
-            // resolve `fn` through the BINARY table and left-fold, so a
-            // one-operand `broadcast` lowered to a bare copy of `args[0]`).
+            // would be lowered, so the tape computes what the oracle evaluates
+            // — a one-operand `broadcast` applies its unary `fn`.
             VecOp::Broadcast => {
                 let Some(fn_name) = node.broadcast_fn.as_deref() else {
                     bail_tape!("op: `broadcast` with no `fn`");
@@ -2687,7 +2681,7 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// `vec_combine` made symbolic: fold literals with the SAME kernel table,
+    /// An elementwise binary op: fold literals with the SAME kernel table,
     /// require array operands to share one box, broadcast scalars.
     fn emit_bin(&mut self, code: BinCode, a: LV, b: LV) -> LResult<LV> {
         if let (LV::Lit(x), LV::Lit(y)) = (&a, &b) {
@@ -2900,7 +2894,7 @@ impl<'m> TapeBuilder<'m> {
         }
         let cond = self.lower_expr(&node.args[0], bx)?;
         // Compile-time-known scalar condition: lower ONLY the taken branch —
-        // exactly what the overlay evaluates (the untaken branch is never
+        // exactly what the oracle evaluates (the untaken branch is never
         // visited, so an unsupported construct there must not bail the rule).
         if let LV::Lit(c) = &cond {
             let c = *c;
@@ -2917,7 +2911,7 @@ impl<'m> TapeBuilder<'m> {
                 s.lower_expr(e, bx)
             }),
             // ARRAY condition: evaluate BOTH branches and select elementwise
-            // (`vec_select`). The oracle, walking the box cell by cell, takes
+            // ([`Instr::Select`]). The oracle, walking the box cell by cell, takes
             // one arm per cell, so each arm is a lazily evaluated position.
             Some(_) => {
                 let lazy = !bx.syms.is_empty();
@@ -2953,7 +2947,7 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    /// `vec_select` made symbolic: `cond`'s box is the output box; `a`/`b` are
+    /// An elementwise select: `cond`'s box is the output box; `a`/`b` are
     /// scalars (broadcast) or arrays over the same box. A scalar `cond` is the
     /// filter-gate shape (whole-term keep/replace — elementwise identical).
     fn emit_select(&mut self, cond: LV, a: LV, b: LV) -> LResult<LV> {
@@ -3874,7 +3868,7 @@ impl<'m> TapeBuilder<'m> {
     /// symbols read from coordinate slots the sweep rewrites before each pass.
     /// The program's size does not depend on the frame's.
     ///
-    /// The body mirrors the per-cell oracle, not the overlay: every value in
+    /// The body mirrors the per-cell oracle: every value in
     /// it is one scalar, a runtime scalar `ifelse` or `filter` short-circuits
     /// (so a guarded self-read at the first cell is never evaluated), a
     /// contraction is folded term by term in the oracle's order

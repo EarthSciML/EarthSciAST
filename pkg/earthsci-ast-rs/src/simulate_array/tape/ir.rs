@@ -92,9 +92,8 @@
 //!   nothing ([`FaultScanSpec::first`]).
 //!
 //! Array operands within one instruction share one box (shape + 1-based
-//! origin), checked at lowering time — the same precondition `vec_combine`
-//! enforces at runtime (a mismatch there bails the rule to the oracle; here it
-//! declines the rule, and with it the whole program: see [`DeclinedTape`]).
+//! origin), checked at lowering time: a mismatch declines the rule, and with
+//! it the whole program (see [`DeclinedTape`]).
 
 // A few descriptor fields are read only by the test-gated reference executor
 // and the diagnostics, which the lib-only dead-code pass cannot see.
@@ -136,7 +135,7 @@ pub(crate) enum Operand {
     Time,
     /// The whole persistent array of state variable `state_vars[i]`, read from
     /// the current state vector (origin all-1s). A 0-d state variable reads as
-    /// a scalar — exactly `eval_vec_variable`'s state arm.
+    /// a scalar, as the oracle's `lookup_variable` reads it.
     State(u32),
 }
 
@@ -284,17 +283,17 @@ pub(crate) enum Instr {
     },
     /// `out[k] = kernel(op)(a[k])`.
     Un { op: UnCode, a: Operand, out: SlotId },
-    /// `out[k] = -a[k]` (`vec_negate`; distinct from `0 - x` on signed zero).
+    /// `out[k] = -a[k]` (the oracle's `negate`; distinct from `0 - x` on signed zero).
     Neg { a: Operand, out: SlotId },
     /// `out[k] = cond[k] != 0 ? a[k] : b[k]`; both `a` and `b` are already
-    /// evaluated (`vec_select` / array-`ifelse` / filter-gate semantics).
+    /// evaluated (array-`ifelse` / filter-gate semantics).
     Select {
         cond: Operand,
         a: Operand,
         b: Operand,
         out: SlotId,
     },
-    /// Precompiled `eval_vec_index`: gather `src` through `plans[plan]` into
+    /// Precompiled affine `index`: gather `src` through `plans[plan]` into
     /// `out` (ghost positions stay 0).
     Gather { src: SrcRef, plan: u32, out: SlotId },
     /// Read the single element at (0-based) `idx` of `src` into scalar `out`
@@ -1183,7 +1182,7 @@ pub(crate) enum MRef {
 
 /// One micro-op of a fused group. Element semantics are EXACTLY the scalar
 /// kernels of the corresponding [`Instr`] (`binary_kernel_of` /
-/// `unary_kernel_of` / `-x` / `vec_select`'s per-element pick / a plain move),
+/// `unary_kernel_of` / `-x` / `Select`'s per-element pick / a plain move),
 /// applied in program order per element. The single executable definition is
 /// `exec::eval_micro_op` (which the per-element interpreters share; the
 /// chunked executor's monomorphized loops are pinned bit-identical to it by
@@ -1942,17 +1941,16 @@ impl SlotDesc {
     }
 }
 
-/// A precompiled `eval_vec_index` plan. All classification (affine shifts,
+/// A precompiled affine-`index` gather plan. All classification (affine shifts,
 /// periodic wraps, fixed selects, broadcast axes) has been resolved at build
 /// time; execution is a pure segment-copy schedule.
 #[derive(Clone, Debug)]
 pub(crate) struct GatherPlan {
     /// Fixed source axes as `(src_axis, 0-based index)`, sorted DESCENDING by
-    /// axis so `index_axis` application keeps lower axis numbers valid —
-    /// exactly `eval_vec_index`'s `fixed_desc`.
+    /// axis so `index_axis` application keeps lower axis numbers valid.
     pub fixed_desc: SmallVec<[(usize, usize); 4]>,
     /// Permutation applied to the remaining (mapped) source axes so they land
-    /// in output-axis order (`eval_vec_index`'s `perm`).
+    /// in output-axis order.
     pub perm: SmallVec<[usize; 4]>,
     /// Per output axis: `true` if a source axis maps onto it, `false` if the
     /// source is broadcast (stride-0) along it.
@@ -3088,14 +3086,13 @@ pub(crate) struct DeclinedTape {
     /// Every rule of the model, in the order a program would have run them.
     pub rules: Vec<RuleInfo>,
     /// Parallel to `rules`: `None` for a rule that lowered, else the DEEPEST
-    /// decline reached while trying (the overlay's `note_bail` taxonomy). At
+    /// decline reached while trying. At
     /// least one entry is `Some`.
     pub reasons: Vec<Option<Bail>>,
 }
 
-/// Why a rule could not be lowered. Carries the DEEPEST bail site, mirroring
-/// the overlay's `note_bail` convention (the first log entry is the actual
-/// unsupported construct).
+/// Why a rule could not be lowered. Carries the DEEPEST bail site (the first
+/// log entry is the actual unsupported construct).
 #[derive(Clone, Debug)]
 pub(crate) struct Bail {
     /// The diagnostic code a decline that is a user-facing error carries (a

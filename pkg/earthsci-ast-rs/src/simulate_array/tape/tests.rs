@@ -3032,7 +3032,7 @@ fn a_shaped_parameter_default_is_taped_from_its_data() {
             .any(|d| d.shape[..] == shape && d.values[..] == values),
         "the default's row-major data is a ConstArray payload: {payloads:?}"
     );
-    // And against the per-cell oracle, not only the overlay.
+    // And against the per-cell oracle.
     let compiled = compile(doc);
     let n = compiled.state_variable_names().len();
     let params = HashMap::new();

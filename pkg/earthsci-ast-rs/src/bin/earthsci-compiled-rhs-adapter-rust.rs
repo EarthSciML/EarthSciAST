@@ -8,7 +8,7 @@
 //! Discovered by the runner via `$EARTHSCI_COMPILED_RHS_ADAPTER_RUST` or on
 //! PATH as `earthsci-compiled-rhs-adapter-rust`. `--engine` defaults to
 //! `interpreter`, which evaluates `f(u, p, t)` at every manifest probe through
-//! the vectorized faq evaluator (`ArrayCompiled::debug_eval_rhs`) and writes
+//! the per-cell oracle (`ArrayCompiled::debug_eval_rhs`) and writes
 //!
 //! ```text
 //! {"binding":"rust","engine":"interpreter",

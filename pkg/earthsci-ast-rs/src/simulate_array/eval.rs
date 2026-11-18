@@ -643,8 +643,7 @@ pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // `and`/`or` are the one family whose n-ary fold is not a repeated binary
     // apply: they return a strict 1.0/0.0 flag over ALL operands, whereas
     // left-folding `apply_binary` would compare a raw operand against a flag.
-    // `apply_binary` agrees with this for the legal arity (>= 2), which is what
-    // the equivalence test checks.
+    // `apply_binary` agrees with this for the legal arity (>= 2).
     //
     // **Precision.** The fold BODY is `apply_binary`, which is already
     // precision-aware — but two things in this function are not, and both are
@@ -786,34 +785,21 @@ pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
 /// [`apply_binary`]'s per-element arithmetic with the **op-name lookup lifted
 /// out**: resolve the name once, then call the returned kernel per element.
 ///
-/// The per-cell oracle calls `apply_binary(op, x, y)` once per cell, so the
-/// `match op` costs one string dispatch per element either way. The whole-array
-/// overlay ran the *same* call inside an N-element `ndarray::Zip`, so every
-/// element of every kernel node re-matched the operator name — `apply_binary`
-/// plus `__memcmp_evex` were 14% of a vectorized RHS profile, and the string
-/// compare also blocked the loop from vectorizing. Hoisting the lookup to once
-/// per AST node leaves an inlinable `f64`-only body in the loop.
-///
 /// The arms are the arms of [`apply_binary`], in the same order, evaluating the
 /// same expressions — `binary_kernels_match_apply_binary` pins the two to raw
 /// IEEE bit equality over every op name and a spread of operands (±0, ±inf,
 /// NaN, subnormals), so a divergence is a test failure, not a silent one.
-#[cfg(test)] // only the `*_of` code-based form is on the hot path now;
-// this `&str` wrapper survives solely for the bit-equality pinning test below.
+#[cfg(test)] // the code-based `binary_kernel_of` is the runtime form; this
+// `&str` wrapper exists for the bit-equality pinning test below.
 pub(crate) fn binary_kernel(op: &str) -> fn(f64, f64) -> f64 {
     binary_kernel_of(BinCode::of(op))
 }
 
 /// A binary/elementwise operator resolved to a compact code.
 ///
-/// The overlay used to carry the operator around as a `&str` and re-match the
-/// NAME at every dispatch point: once in `eval_vec_op`, again in `vec_combine`,
-/// and a third time inside [`binary_kernel`] — and the comparison arms matched a
-/// FOURTH time, per element, inside `scalar_compare`. A perf profile of the
-/// solve attributed ~2.5% to that (`__memcmp_evex_movbe` plus the inlined
-/// `str PartialEq::eq` chain under `eval_vec_op`). Resolving the name ONCE per
-/// AST node into this code and dispatching on the code afterwards removes every
-/// downstream string compare.
+/// Resolving the operator name ONCE per AST node into this code, and
+/// dispatching on the code afterwards, keeps string compares out of every
+/// per-element kernel loop (the tape's executors, the oracle's broadcasts).
 ///
 /// [`BinCode::Unknown`] is the "not a binary kernel" code; its kernel is the NaN
 /// sentinel, matching `apply_binary`'s catch-all arm.
@@ -894,7 +880,7 @@ impl BinCode {
     }
 }
 
-/// [`binary_kernel`] with the name already resolved to a [`BinCode`].
+/// `binary_kernel` with the name already resolved to a [`BinCode`].
 ///
 /// `binary_kernel` delegates here, so
 /// `binary_kernels_match_apply_binary` pins this table to `apply_binary` bit for
@@ -902,7 +888,7 @@ impl BinCode {
 ///
 /// Under [`crate::precision::Precision::Float32`] it returns the binary32
 /// table ([`binary_kernel_f32_of`]) instead. Resolution happens ONCE per AST
-/// node on the vectorized and taped paths (and once per cell on the oracle,
+/// node on the taped path (and once per cell on the oracle's per-cell walk,
 /// where the operator name is being matched anyway), so the mode read costs a
 /// thread-local load where a string compare already lived — and the Float64
 /// arms below are the identical closures they were before, so Float64 is
@@ -1106,8 +1092,7 @@ pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
 }
 
 /// [`apply_unary`]'s per-element map with the op-name lookup lifted out — the
-/// unary counterpart of [`binary_kernel`], for the same reason (the whole-array
-/// overlay applied it inside an N-element loop). Arms mirror [`apply_unary`]
+/// unary counterpart of `binary_kernel`. Arms mirror [`apply_unary`]
 /// exactly; `unary_kernels_match_apply_unary` pins them to bit equality.
 #[cfg(test)] // see `binary_kernel` above: test-only pinning wrapper.
 pub(crate) fn unary_kernel(op: &str) -> fn(f64) -> f64 {
@@ -1182,9 +1167,9 @@ impl UnCode {
     }
 }
 
-/// [`unary_kernel`] with the name already resolved to a [`UnCode`]. Arms mirror
+/// `unary_kernel` with the name already resolved to a [`UnCode`]. Arms mirror
 /// [`apply_unary`] exactly; `unary_kernels_match_apply_unary` pins them to bit
-/// equality through [`unary_kernel`], which delegates here.
+/// equality through `unary_kernel`, which delegates here.
 ///
 /// Under [`crate::precision::Precision::Float32`] it returns the binary32 table
 /// ([`unary_kernel_f32_of`]) — see [`binary_kernel_of`] for why the mode read
@@ -1407,7 +1392,7 @@ mod kernel_equivalence_tests {
                         same_bits(got, want),
                         "apply_binary(\"{op}\", {x:?}, {y:?}) = {got:?}, want f32 {want:?}"
                     );
-                    // The hoisted table the vectorized / taped paths resolve
+                    // The hoisted table the taped path resolves
                     // through must agree with the per-cell oracle.
                     let hoisted = binary_kernel_f32_of(BinCode::of(op))(x, y);
                     assert!(
@@ -5248,17 +5233,14 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         }
         // A region-aligned ARRAY value (e.g. a lowered stencil's interior
         // aggregate) must span the region box exactly; each region cell then
-        // reads its aligned element (mirrors the vectorized
-        // `eval_vec_makearray` region-assign and the Julia/Python region
-        // semantics).
+        // reads its aligned element (the tape's `Instr::Region` and the
+        // Julia/Python region semantics).
         //
-        // A shape MISMATCH used to `continue` — silently leaving the region as
-        // the `zeros` fill, so a region `[1, 3]` given a 2-element `const` value
-        // assembled to `[0.0, 0.0, 0.0]` and the caller had no way to tell that
-        // its value expression had been discarded. The vectorized twin refuses
-        // to assemble such a node at all (it bails to this oracle). Poison the
-        // result with the NaN sentinel instead: this interpreter has no error
-        // channel (`eval` returns a `Value`, and the solver reads `NaN` as a step
+        // A shape MISMATCH poisons the result with the NaN sentinel rather
+        // than leaving the region as the `zeros` fill, where a region `[1, 3]`
+        // given a 2-element `const` value would assemble to `[0.0, 0.0, 0.0]`
+        // with no sign that its value expression was discarded. This
+        // interpreter has no error channel (`eval` returns a `Value`, and the solver reads `NaN` as a step
         // failure), so a loud `NaN` is the strongest signal available — and it is
         // strictly better than a plausible-looking zero.
         if let Value::Array(a) = &v

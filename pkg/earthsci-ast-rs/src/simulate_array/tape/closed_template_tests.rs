@@ -270,8 +270,7 @@ fn mesh_face_sum_doc(observed_connectivity: bool, observed: bool) -> Value {
 }
 
 /// The per-cell oracle reads an array-producing nested `faq` under an
-/// elementwise operator at the current output cell, as the whole-array
-/// overlay and the tape do: it used to answer NaN for every face.
+/// elementwise operator at the current output cell, as the tape does.
 #[test]
 fn nested_face_sum_through_connectivity_matches_the_oracle() {
     for observed_connectivity in [true, false] {

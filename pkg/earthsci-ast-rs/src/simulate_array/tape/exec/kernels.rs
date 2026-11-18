@@ -1,5 +1,5 @@
 //! The strided array kernels the unfused instructions execute: elementwise
-//! maps, the `vec_select` pick, block copy, fill, and the precompiled
+//! maps, the `Select` pick, block copy, fill, and the precompiled
 //! gather plans.
 //!
 //! Nothing here takes an `Env` or reads the program — the boundary keeps
@@ -345,7 +345,7 @@ unsafe fn zip_loop2(
     }
 }
 
-/// `dst[k] = cond[k] != 0 ? a[k] : b[k]` — the `vec_select` kernel.
+/// `dst[k] = cond[k] != 0 ? a[k] : b[k]` — the `Select` kernel.
 #[inline(never)]
 pub(super) unsafe fn ew_select(dst: *mut f64, shape: &[usize], cond: &Rv, a: &Rv, b: &Rv) {
     // A scalar condition is the filter-gate broadcast: whole-array pick.
@@ -650,8 +650,8 @@ pub(super) unsafe fn fill_strided(dst: *mut f64, dstr: &[i64], shape: &[usize], 
 }
 
 /// Execute one precompiled gather plan into a contiguous row-major `out` —
-/// the raw-strides transliteration of `eval_vec_index`'s copy phase (and of
-/// the reference executor's `exec_gather`).
+/// the raw-strides transliteration of the reference executor's
+/// `exec_gather`.
 ///
 /// # Safety
 /// `src` must address the plan's whole source box and `out` its whole

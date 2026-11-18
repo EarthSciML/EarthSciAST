@@ -4,7 +4,7 @@
 //! in row-major order, then reads the subscripted element of the array it
 //! assembled, 1-based over the makearray's bounding box. Each case is
 //! compared bit for bit, with the fault the evaluation latches, against the
-//! per-cell oracle and the overlay ([`ab`]); a case the tape cannot match it
+//! per-cell oracle ([`ab`]); a case the tape cannot match it
 //! must refuse rather than answer differently.
 
 use super::super::ArrayCompiled;
@@ -77,7 +77,7 @@ fn refusals(compiled: &ArrayCompiled) -> Vec<(String, String)> {
     Vec::new()
 }
 
-/// Lowers, and agrees with the oracle and the overlay.
+/// Lowers, and agrees with the oracle.
 fn agrees(doc: Value) {
     let compiled = compile(doc);
     let refused = refusals(&compiled);
@@ -151,8 +151,7 @@ fn region_value_faulting_outside_its_pullback() {
 
 /// A same-rank makearray read at permuted and shifted subscripts: the region
 /// values read the box's symbols at the CELL, not at the makearray's
-/// coordinate. The overlay reads them at the coordinate, so only the tapes
-/// are compared, against the oracle.
+/// coordinate. The tapes are compared against the oracle.
 #[test]
 fn same_rank_permuted_and_shifted_subscripts() {
     let m = ma(

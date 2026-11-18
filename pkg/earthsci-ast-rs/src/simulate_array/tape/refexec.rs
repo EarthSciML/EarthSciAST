@@ -985,8 +985,9 @@ fn to_shape(v: &RefVal, shape: &[usize]) -> ArrayD<f64> {
     }
 }
 
-/// Execute one precompiled gather plan — a transliteration of
-/// `eval_vec_index`'s copy phase.
+/// Execute one precompiled gather plan: the fixed selects, the axis
+/// permutation and broadcast axes, then the per-axis segment copies over a
+/// zero ghost fill.
 fn exec_gather(plan: &GatherPlan, src: ArrayViewD<'_, f64>) -> ArrayD<f64> {
     assert_eq!(src.shape(), &plan.src_shape[..], "gather source shape");
     let out_ndim = plan.shape.len();

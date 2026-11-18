@@ -512,7 +512,7 @@ unsafe fn fch_scan_lanes(
     }
 }
 
-/// The `vec_select` pick over one chunk.
+/// The `Select` pick over one chunk.
 #[inline(always)]
 pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
     // A constant condition is the filter-gate broadcast: whole-chunk pick.
@@ -574,8 +574,8 @@ pub(super) unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MS
 /// for each hot op. Each closure body is the IDENTICAL expression to
 /// `binary_kernel_of`'s arm for that op, so this is a pure dispatch hoist —
 /// one indirect kernel call per node (unfused) or per chunk (fused) becomes
-/// an inlined, vectorizable element loop. The arms mirror `vec_combine`'s,
-/// plus the comparison relops feeding `Select` masks; any remaining op falls
+/// an inlined, vectorizable element loop. The arms cover the arithmetic
+/// kernels plus the comparison relops feeding `Select` masks; any remaining op falls
 /// through to the shared fn-pointer table itself, so semantics have a single
 /// source either way.
 macro_rules! dispatch_bin_kernel {
