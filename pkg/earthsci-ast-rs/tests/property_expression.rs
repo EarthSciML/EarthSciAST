@@ -107,11 +107,11 @@ fn op_derivative(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
         .boxed()
 }
 
-fn op_grad(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
+fn op_user_dim(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
     (child, var_name())
         .prop_map(|(a, d)| {
             Expr::operator(ExpressionNode {
-                op: "grad".into(),
+                op: "advect".into(),
                 args: vec![a],
                 dim: Some(d),
                 ..Default::default()
@@ -283,7 +283,7 @@ fn expr_strategy() -> BoxedStrategy<Expr> {
                 // control flow and scalar auxiliary-field ops
                 op_ifelse(inner.clone()),
                 op_derivative(inner.clone()),
-                op_grad(inner.clone()),
+                op_user_dim(inner.clone()),
                 // array-op extensions
                 op_reshape(inner.clone()),
                 op_transpose(inner.clone()),

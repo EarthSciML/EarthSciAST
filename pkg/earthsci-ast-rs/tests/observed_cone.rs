@@ -339,7 +339,7 @@ fn a_strict_compiler_refuses_only_a_rule_in_the_cone() {
 /// pipeline's cone empty, and the pipeline's evaluation is still the answer:
 /// the state-free route does not run again over the rewritten document. Here
 /// that route would flatten the whole document and stop at model `B`'s
-/// unlowered `grad`, which the build of model `M` never reads.
+/// unlowered spatial `D`, which the build of model `M` never reads.
 #[test]
 fn a_request_for_a_data_fed_parameter_alone_is_answered_by_the_pipeline() {
     use ndarray::{ArrayD, IxDyn};
@@ -363,7 +363,7 @@ fn a_request_for_a_data_fed_parameter_alone_is_answered_by_the_pipeline() {
                 "variables": {"u": {"type": "parameter", "units": "1", "default": 1.0},
                               "v": {"type": "unknown", "units": "1/m"}},
                 "equations": [{"lhs": "v",
-                    "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}],
+                    "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}],
             },
         },
     });

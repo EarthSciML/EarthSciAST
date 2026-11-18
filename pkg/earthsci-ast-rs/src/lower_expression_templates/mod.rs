@@ -354,17 +354,17 @@ mod tests {
     /// operand metavariable to the matched sub-AST. Non-matching siblings (the
     /// equation LHS) are left untouched.
     #[test]
-    fn match_rule_lowers_grad_operator() {
+    fn match_rule_lowers_spatial_derivative() {
         let mut v = json!({
           "esm": "2.0.0",
-          "metadata": {"name": "grad_lowering", "authors": ["t"]},
+          "metadata": {"name": "spatial_d_lowering", "authors": ["t"]},
           "models": {
             "Diff": {
               "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
-                "central_grad_x": {
+                "central_diff_x": {
                   "params": ["f"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {
                     "op": "-",
                     "args": [
@@ -376,7 +376,7 @@ mod tests {
               },
               "equations": [
                 {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
-                 "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}
+                 "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}
               ]
             }
           }
@@ -386,7 +386,7 @@ mod tests {
         let model = &v["models"]["Diff"];
         assert!(model.get("expression_templates").is_none());
         let rhs = &model["equations"][0]["rhs"];
-        // grad(u, dim=x) lowered to the finite-difference body, f -> "u".
+        // D(u, wrt=x) lowered to the finite-difference body, f -> "u".
         assert_eq!(rhs["op"], json!("-"));
         assert_eq!(rhs["args"][0]["op"], json!("index"));
         assert_eq!(rhs["args"][0]["args"][0], json!("u"));
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(model["equations"][0]["lhs"]["op"], json!("D"));
     }
 
-    /// A metavariable appearing in a scalar field (`dim`) binds the matched
+    /// A metavariable appearing in a scalar field (`wrt`) binds the matched
     /// literal, while one in `args` binds the matched sub-AST.
     #[test]
     fn match_rule_binds_scalar_field_metavariable() {
@@ -406,14 +406,14 @@ mod tests {
             "M": {
               "variables": {"u": {"type": "unknown"}},
               "expression_templates": {
-                "grad_to_deriv": {
+                "spatial_d_to_deriv": {
                   "params": ["f", "d"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "d"},
-                  "body": {"op": "deriv", "args": ["f"], "wrt": "d"}
+                  "match": {"op": "D", "args": ["f"], "wrt": "d"},
+                  "body": {"op": "deriv", "args": ["f"], "dim": "d"}
                 }
               },
               "equations": [
-                {"lhs": "u", "rhs": {"op": "grad", "args": ["u"], "dim": "y"}}
+                {"lhs": "u", "rhs": {"op": "D", "args": ["u"], "wrt": "y"}}
               ]
             }
           }
@@ -422,7 +422,7 @@ mod tests {
         let rhs = &v["models"]["M"]["equations"][0]["rhs"];
         assert_eq!(rhs["op"], json!("deriv"));
         assert_eq!(rhs["args"][0], json!("u")); // operand metavar f -> "u"
-        assert_eq!(rhs["wrt"], json!("y")); // scalar metavar d -> literal "y"
+        assert_eq!(rhs["dim"], json!("y")); // scalar metavar d -> literal "y"
     }
 
     /// A `match` rule whose `body` re-introduces its own pattern never reaches a
@@ -440,13 +440,13 @@ mod tests {
               "expression_templates": {
                 "loop_rule": {
                   "params": ["f"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {"op": "+", "args": [
-                    {"op": "grad", "args": ["f"], "dim": "x"}, 1]}
+                    {"op": "D", "args": ["f"], "wrt": "x"}, 1]}
                 }
               },
               "equations": [
-                {"lhs": "u", "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}
+                {"lhs": "u", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}
               ]
             }
           }
@@ -469,17 +469,17 @@ mod tests {
               "expression_templates": {
                 "z_rule": {
                   "params": ["f"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {"op": "winner", "args": ["f"]}
                 },
                 "a_rule": {
                   "params": ["f"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {"op": "loser", "args": ["f"]}
                 }
               },
               "equations": [
-                {"lhs": "u", "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}
+                {"lhs": "u", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}
               ]
             }
           }
@@ -503,18 +503,18 @@ mod tests {
               "expression_templates": {
                 "low": {
                   "params": ["f"],
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {"op": "loser", "args": ["f"]}
                 },
                 "high": {
                   "params": ["f"],
                   "priority": 100,
-                  "match": {"op": "grad", "args": ["f"], "dim": "x"},
+                  "match": {"op": "D", "args": ["f"], "wrt": "x"},
                   "body": {"op": "winner", "args": ["f"]}
                 }
               },
               "equations": [
-                {"lhs": "u", "rhs": {"op": "grad", "args": ["u"], "dim": "x"}}
+                {"lhs": "u", "rhs": {"op": "D", "args": ["u"], "wrt": "x"}}
               ]
             }
           }
@@ -527,7 +527,7 @@ mod tests {
     }
 
     /// The bounded fixpoint re-scans a freshly-produced body only in a SUBSEQUENT
-    /// pass (esm-spec §9.6.3): a sugar rule emits a nested op that a second rule
+    /// pass (esm-spec §9.6.3): a first rule emits a nested op that a second rule
     /// lowers on the next pass, converging to a fully-lowered tree.
     #[test]
     fn produced_body_is_rescanned_in_a_later_pass() {

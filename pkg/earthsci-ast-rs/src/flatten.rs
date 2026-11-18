@@ -20,9 +20,9 @@
 //! [`FlattenError::DimensionPromotion`] is raised by the pointwise spatial lift
 //! (esm-spec §10.5) when the grid loop variables cannot be determined (mirrors
 //! Julia / Python `DimensionPromotionError`).
-//! **Flattening does not refuse a PDE.** An undiscretized spatial operator (the
-//! sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
-//! `wrt != "t"`) flattens like any other, and the spatial axes it names are
+//! **Flattening does not refuse a PDE.** An undiscretized spatial operator (a
+//! spatial `D` with `wrt != "t"`, or a user op naming an axis in `dim`)
+//! flattens like any other, and the spatial axes it names are
 //! recorded in [`FlattenedSystem::independent_variables`] by §4.7.6's
 //! independent-variable derivation — which is precisely what decides whether a
 //! downstream constructor builds an `ODESystem` or a `PDESystem`, and what makes
@@ -121,8 +121,8 @@ pub enum FlattenError {
         reason: String,
     },
 
-    /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
-    /// optional sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`) survived
+    /// A rewrite-target operator (a spatial / right-hand-side `D`, `integral`,
+    /// or a user op) survived
     /// into a position that REQUIRES it to have been lowered to a stencil by a
     /// `match` rewrite rule (esm-spec §4.2 / §9.6.8).
     ///
@@ -1941,9 +1941,9 @@ fn scope_template_body(
 /// The spec's three steps:
 ///
 /// 1. **Start with `["t"]`.** Time is always an independent variable.
-/// 2. **Scan every equation for spatial operators** — `grad` / `div` /
-///    `laplacian` (and any other undiscretized differential), or a `D` whose
-///    `wrt` is not the time variable — and add each spatial dimension they
+/// 2. **Scan every equation for spatial operators** — a `D` whose `wrt` is
+///    not the time variable, or any other undiscretized differential (a user
+///    op naming its axis in `dim`) — and add each spatial dimension they
 ///    reference.
 /// 3. **Scan every `domains` entry for spatial axes** and add them. VACUOUS
 ///    since v0.8.0: `Domain.spatial` was removed, and the surviving `domain`
@@ -1954,7 +1954,7 @@ fn scope_template_body(
 ///
 /// Step 2's signal is harvested STRUCTURALLY, from the axis-naming `dim` scalar
 /// field (esm-spec §4.9.1) and from a spatial `wrt` — never from a hardcoded
-/// op-name list, so the sugar ops carry no spatial-detection privilege over a
+/// op-name list, so no op name carries a spatial-detection privilege over a
 /// custom rewrite-target op. A DISCRETIZED system has folded its spatial axes
 /// into array dimensions and carries no such node, so it yields nothing and
 /// stays a pure ODE with `["t"]`.
@@ -1985,8 +1985,7 @@ fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
 /// anywhere in `expr`. Helper of [`derive_independent_variables`].
 fn collect_spatial_dims(expr: &Expr, out: &mut Vec<String>) {
     let Expr::Operator(node) = expr else { return };
-    // The axis a `grad` / `div` / `laplacian` (or any custom differential)
-    // iterates over. Only an undiscretized differential carries it; no
+    // The axis a custom differential (a user op, `integral`) iterates over. Only an undiscretized differential carries it; no
     // evaluable-core op uses `dim`.
     if let Some(dim) = &node.dim
         && !out.iter().any(|d| d == dim)
@@ -4064,12 +4063,11 @@ fn namespace_affect_target(name: &str, system_name: &str, subsys: &HashSet<Strin
 /// The tier decision is delegated wholesale to [`crate::op_registry`], the
 /// single source of truth for the operator vocabulary — this gate keeps NO
 /// hand-maintained op-name list of its own. A node the registry classifies
-/// [`crate::op_registry::OpError::Unlowered`] is a rewrite target: the optional
-/// sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/`integral`), a SPATIAL `D` (a
-/// `D` whose `wrt` is a spatial axis rather than the time variable `"t"`), or
-/// ANY op not in the evaluable core — an unregistered user discretization op
-/// (`godunov_hamiltonian`) is treated exactly like the named sugar ops, with no
-/// privileged status. The structural equation-LHS `D(u, t)` stays
+/// [`crate::op_registry::OpError::Unlowered`] is a rewrite target: `integral`,
+/// a SPATIAL `D` (a `D` whose `wrt` is a spatial axis rather than the time
+/// variable `"t"`), or ANY op not in the evaluable core — an unregistered user
+/// discretization op (`godunov_hamiltonian`) included, with no privileged
+/// status. The structural equation-LHS `D(u, t)` stays
 /// evaluable-core and is untouched. A rewrite rule must lower these to a stencil
 /// before evaluation; this format ships no such rules (they live in
 /// EarthSciDiscretizations).
@@ -4090,7 +4088,7 @@ fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
             // sees operators hidden in EVERY expression-bearing sidecar field
             // (`aggregate.expr` bodies, `filter` predicates, integral `lower`/
             // `upper` bounds, `makearray.values`, `key`, `axes`, `bindings`) and
-            // not merely `args` — an `args`-only walk let a spatial/sugar op
+            // not merely `args` — an `args`-only walk let a spatial op
             // buried in a sidecar escape the gate entirely. The first offender's
             // `FlattenError::UnloweredOperator` diagnostic propagates unchanged.
             node.try_for_each_child(&mut |child| reject_spatial_operators(child))
@@ -4386,7 +4384,7 @@ fn qualify_translate_endpoint(name: &str, system: &str) -> String {
 /// expansion".
 ///
 /// An operator model writes ONE equation over the sentinel `_var`
-/// (`D(_var, t) = -u·grad(_var)`); composing it with A means CLONING that
+/// (`D(_var, t) = -u·D(_var, x)`); composing it with A means CLONING that
 /// equation once per variable A solves for, with `_var` substituted for that
 /// variable's namespaced name. `_var` is a GLOBAL sentinel and is never
 /// namespaced (see [`VAR_PLACEHOLDER`]), so the substitution is a plain
@@ -5674,7 +5672,7 @@ pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
 // ORDER (reactions → generic `D(sp)=Σ terms`, then `operator_compose` merges each
 // species' reaction ODE with the spatial operator's advection contribution). What
 // operator_compose does NOT do is array-ify the result: the merged
-// `D(sp) = <reaction in scalar sp> + <-u·makearray(grad(sp))>` still has a SCALAR
+// `D(sp) = <reaction in scalar sp> + <-u·makearray(D(sp, x))>` still has a SCALAR
 // `sp` while its advection `makearray` indexes `sp` per grid cell. This pass
 // performs the `lifting:"pointwise"` promotion — it wraps each such merged state
 // ODE in a `faq` over the grid, indexing the bare reaction species per cell
@@ -7322,30 +7320,31 @@ mod tests {
     }
 
     // Bug F regression: the unlowered-operator gate must descend into
-    // expression-bearing sidecar fields, not merely `args`. A spatial/sugar op
+    // expression-bearing sidecar fields, not merely `args`. A spatial op
     // buried in an `aggregate.expr` body — unreachable from `args` — previously
     // escaped `reject_spatial_operators` entirely. It must now be rejected with
     // the byte-identical `UnloweredOperator` diagnostic.
     #[test]
     fn test_reject_spatial_operator_hidden_in_aggregate_body() {
-        let grad = Expr::operator(ExpressionNode {
-            op: "grad".to_string(),
+        let d_y = Expr::operator(ExpressionNode {
+            op: "D".to_string(),
             args: vec![Expr::Variable("u".to_string())],
+            wrt: Some("y".to_string()),
             ..Default::default()
         });
         let aggregate = Expr::operator(ExpressionNode {
             op: "faq".to_string(),
             // Nothing reachable through `args`; the op lives only in `expr`.
             args: vec![],
-            expr: Some(Box::new(grad)),
+            expr: Some(Box::new(d_y)),
             output_idx: Some(vec!["i".to_string()]),
             reduce: Some("+".to_string()),
             ..Default::default()
         });
         let err = reject_spatial_operators(&aggregate).unwrap_err();
         assert!(
-            matches!(&err, FlattenError::UnloweredOperator { op } if op == "grad"),
-            "expected UnloweredOperator{{grad}}, got {err:?}"
+            matches!(&err, FlattenError::UnloweredOperator { op } if op == "D"),
+            "expected UnloweredOperator{{D}}, got {err:?}"
         );
 
         // A spatial `D` (wrt a spatial axis) hidden in a `filter` predicate is

@@ -140,15 +140,7 @@ fn a_structural_d_is_refused_by_name() {
 fn an_op_with_no_rule_is_refused_by_name() {
     // The open-tier rewrite targets, which a discretization rule must lower
     // first (esm-spec §4.2), plus any unregistered op.
-    for name in [
-        "grad",
-        "div",
-        "laplacian",
-        "curl",
-        "∇",
-        "integral",
-        "totally_made_up",
-    ] {
+    for name in ["curl", "∇", "integral", "totally_made_up"] {
         let err = evaluate(&op(name, vec![n(123.0)]), &HashMap::new())
             .expect_err("an op with no evaluation rule must not evaluate");
         let msg = err.join("; ");

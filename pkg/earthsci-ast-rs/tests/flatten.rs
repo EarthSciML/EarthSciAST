@@ -923,7 +923,7 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
 // system: `reject_unlowered_operators`, and the simulators' compile-time gate.
 // Both halves are asserted here so neither can be lost.
 #[test]
-fn flatten_derives_spatial_independent_variable_from_grad() {
+fn flatten_derives_spatial_independent_variable_from_a_user_op_dim() {
     let mut vars = IndexMap::new();
     vars.insert(
         "c".to_string(),
@@ -954,9 +954,10 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
             equations: vec![Equation {
                 comment: None,
                 lhs: ddt("c"),
-                // RHS contains grad(c, x) — not supported at Rust Core tier.
+                // RHS contains a user discretization op naming its axis in
+                // `dim` — an open-tier rewrite target with no evaluator.
                 rhs: Expr::operator(ExpressionNode {
-                    op: "grad".to_string(),
+                    op: "godunov_hamiltonian".to_string(),
                     args: vec![var("c")],
                     wrt: None,
                     dim: Some("x".to_string()),
@@ -981,23 +982,23 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
         models: Some(models),
         ..empty_file()
     };
-    // §4.7.6: flatten SUCCEEDS, and `grad`'s `dim` axis joins `t`.
+    // §4.7.6: flatten SUCCEEDS, and the op's `dim` axis joins `t`. (The
+    // §6.3.1 `"pde"` system_kind keys on a spatial `D` alone, which test (11)
+    // covers.)
     let flat = flatten(&file).expect("a PDE is a legitimate flattened system");
     assert_eq!(
         flat.independent_variables,
         vec!["t".to_string(), "x".to_string()],
-        "grad(c, dim=x) must contribute the spatial axis `x`"
+        "godunov_hamiltonian(c, dim=x) must contribute the spatial axis `x`"
     );
-    // ...and esm-spec §6.3.1 can therefore report the system as a PDE.
-    assert_eq!(flat.system_kind().as_str(), "pde");
 
     // The `unlowered_operator` refusal still exists, for a consumer that
     // requires a DISCRETIZED system and says so.
     let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
-        .expect_err("an undiscretized grad must be rejected on demand");
+        .expect_err("an undiscretized user op must be rejected on demand");
     let msg = format!("{err}");
     match err {
-        FlattenError::UnloweredOperator { op } => assert_eq!(op, "grad"),
+        FlattenError::UnloweredOperator { op } => assert_eq!(op, "godunov_hamiltonian"),
         other => panic!("expected UnloweredOperator, got {other:?}"),
     }
     assert!(
@@ -1068,7 +1069,7 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
         models: Some(models),
         ..empty_file()
     };
-    // §4.7.6 step 2 names `D` with `wrt != "t"` alongside grad/div/laplacian, so
+    // §4.7.6 step 2 names `D` with `wrt != "t"` as a spatial operator, so
     // the axis it differentiates by is an independent variable. `wrt` names a
     // document-scoped AXIS and is NOT namespaced: the axis is `x`, not `pde.x`.
     let flat = flatten(&file).expect("a PDE is a legitimate flattened system");

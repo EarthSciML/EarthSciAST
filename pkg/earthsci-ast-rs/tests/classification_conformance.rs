@@ -232,8 +232,9 @@ fn system_kind_order_is_first_match_wins() {
     assert_eq!(kind("SteadyState"), SystemKind::Pde);
     // Row 1 beats row 2: there is no SPDESystem constructor to select.
     assert_eq!(kind("StochasticSpatial"), SystemKind::Sde);
-    // A spatial `D` (wrt present and not "t") and the sugar ops are the same
-    // signal.
+    // A spatial `D` (wrt present and not "t") is the signal, alone or nested
+    // (the `SugarOps` model keeps its name from when it spelled the ops esm
+    // 3.0.0 removed).
     assert_eq!(kind("Transient"), SystemKind::Pde);
     assert_eq!(kind("SugarOps"), SystemKind::Pde);
 }
