@@ -100,9 +100,49 @@ _cross_eq_class_emit_enabled() =
 # materialised to a `String` exactly ONCE per top-level node (see the reusable
 # buffer in `_acc_from_cell_entries`). The earlier `string(…, join(…), …)` form
 # allocated an intermediate `String` at every interior node and re-copied every
-# descendant's bytes at each level up the tree — O(nodes × depth) garbage. The
-# emitted bytes are unchanged, so the grouping is identical.
-function _struct_sig!(io::IOBuffer, n::_Node)
+# descendant's bytes at each level up the tree — O(nodes × depth) garbage.
+#
+# WHICH CONSTANT TABLE. A const-array read at a computed subscript
+# (`_NK_CONST_GATHER`) carries its table in `payload`, and the merge keeps the
+# FIRST cell's payload for the whole group. Two cells that differ only in which
+# table they read must therefore not share a signature: the operator token
+# carries the table's id from `tables` (`_const_table_id!`).
+
+# Ids for the constant tables one grouping pass meets, equal iff the tables are
+# equal in CONTENT (values, strides, dims, boundary policy): exact comparison
+# through the `Dict`s, never a bare hash. Content and not identity, because a
+# const array that is not a dense `Float64` array is converted per gather node
+# (`_const_gather_node`), so the cells of one equation each hold their own copy
+# of the same table. A dense one is aliased by every gather into it, and
+# `flatid` answers for it by buffer identity, so its values are hashed once per
+# pass and not once per node. The registry name is not compared: it only words
+# an out-of-range error. One instance per pass — ids are only ever compared
+# within the pass that minted them, which is why no signature function makes
+# its own.
+struct _ConstTableIds
+    flatid::IdDict{Vector{Float64}, Int}     # value buffer (by identity) -> values id
+    flatcontent::Dict{Vector{Float64}, Int}  # value buffer (by content)  -> values id
+    byshape::Dict{Tuple{Int, Vector{Int}, Vector{Int}, Vector{Symbol}}, Int}
+end
+_ConstTableIds() = _ConstTableIds(
+    IdDict{Vector{Float64}, Int}(), Dict{Vector{Float64}, Int}(),
+    Dict{Tuple{Int, Vector{Int}, Vector{Int}, Vector{Symbol}}, Int}()
+)
+
+# 0 for a payload that is not a constant table (nothing is written for it).
+function _const_table_id!(ids::_ConstTableIds, payload)::Int
+    payload isa _ConstGatherArray || return 0
+    flat = payload.flat
+    fid = get(ids.flatid, flat, 0)
+    if fid == 0
+        fid = get!(ids.flatcontent, flat, length(ids.flatcontent) + 1)
+        ids.flatid[flat] = fid
+    end
+    key = (fid, payload.strides, payload.dims, payload.boundary)
+    return get!(ids.byshape, key, length(ids.byshape) + 1)
+end
+
+function _struct_sig!(io::IOBuffer, n::_Node, tables::_ConstTableIds)
     k = n.kind
     if k === _NK_STATE
         print(io, 'S')
@@ -120,7 +160,7 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         print(io, 'T')
     elseif k === _NK_CONTRACTION
         print(io, "C:", n.op, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, tables)
         print(io, ')')
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
@@ -133,21 +173,23 @@ function _struct_sig!(io::IOBuffer, n::_Node)
         # codegen emitter then declines it and the cell falls back to the
         # per-cell scalar walk.
         print(io, "CL:", objectid(n))
-    else  # _NK_OP
+    else  # _NK_OP, and a const gather (which the merge carries as an op)
         print(io, "O:", n.op)
+        tk = _const_table_id!(tables, n.payload)
+        tk == 0 || print(io, '@', tk)
         print(io, '(')
-        _sig_children!(io, n.children)
+        _sig_children!(io, n.children, tables)
         print(io, ')')
     end
     return io
 end
 
-function _sig_children!(io::IOBuffer, children)
+function _sig_children!(io::IOBuffer, children, tables::_ConstTableIds)
     first = true
     for ch in children
         first || print(io, ',')
         first = false
-        _struct_sig!(io, ch)
+        _struct_sig!(io, ch, tables)
     end
     return io
 end
@@ -225,8 +267,9 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
     order = String[]
     groups = Dict{String, Tuple{Vector{Int}, Vector{_Node}}}()
     sigbuf = IOBuffer()
+    tables = _ConstTableIds()
     for (slot, node) in entries
-        sig = String(take!(_struct_sig!(sigbuf, node)))
+        sig = String(take!(_struct_sig!(sigbuf, node, tables)))
         if !haskey(groups, sig)
             groups[sig] = (Int[], _Node[])
             push!(order, sig)
