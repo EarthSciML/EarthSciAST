@@ -1501,6 +1501,13 @@
           "source": "MeteoData",
           "file_variable": "v",
           "cadence": "const"
+        },
+        {
+          "name": "AtmosphericChemistry.T",
+          "owner": "AtmosphericChemistry",
+          "source": "MeteoData",
+          "file_variable": "T",
+          "cadence": "const"
         }
       ],
       "lifted_shapes": {}
@@ -3215,6 +3222,13 @@
           "source": "GEOSFP",
           "file_variable": "v",
           "cadence": "const"
+        },
+        {
+          "name": "SimpleOzone.T",
+          "owner": "SimpleOzone",
+          "source": "GEOSFP",
+          "file_variable": "T",
+          "cadence": "const"
         }
       ],
       "lifted_shapes": {}
@@ -3437,6 +3451,13 @@
           "owner": "AdvectionTransport",
           "source": "MeteorologicalData",
           "file_variable": "v",
+          "cadence": "const"
+        },
+        {
+          "name": "AtmosphericChemistry.T",
+          "owner": "AtmosphericChemistry",
+          "source": "MeteorologicalData",
+          "file_variable": "T",
           "cadence": "const"
         }
       ],
