@@ -387,7 +387,7 @@ function _vi_index(node::OpExpr, ctx::_ViCtx, bindings::AbstractDict)
     idxs = Tuple(Int(_vi_num(a, ctx, bindings)) for a in args[2:end])
     # A factor carrying a declared per-dimension boundary policy resolves an
     # out-of-range gather declaratively (periodic-wrap / edge-extend), exactly
-    # as the tree_walk const_array gather does (ess-gj4). Plain factors keep the
+    # as the tree_walk const_array gather does. Plain factors keep the
     # existing behavior, so genuine connectivity OOB still surfaces.
     if isa(arr, BoundedConstArray)
         ndims(arr) == length(idxs) ||
@@ -601,7 +601,7 @@ end
 # One resolved value-invention join gate (built ONCE per producer, not per
 # tuple). A bin-EQUALITY gate carries the two materialised column buffers
 # (`map_l`/`map_r`) and admits iff the buffer values are equal; an OVERLAP gate
-# (Phase 2a) carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
+# carries `candidates`, the prebuilt broad-phase `(pos_l,pos_r)` set,
 # and admits iff the binding's range positions are a member. A bin-equality
 # gate may carry `candidates` too: its key-equality match pairs
 # (`_vi_equality_candidates`), which only drive enumeration — admission still
@@ -699,7 +699,7 @@ function _vi_position_extent(spec, ctx::_ViCtx)
     return nothing
 end
 
-# True iff every resolved join gate admits this binding (§5.3 / Phase 2a): a
+# True iff every resolved join gate admits this binding (§5.3): a
 # bin-equality gate compares materialised buffer values; an overlap gate tests
 # membership of the `(pos_l,pos_r)` range positions in the broad-phase set.
 function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
@@ -714,7 +714,7 @@ function _vi_join_ok(gates::Vector{_ViJoinGate}, bindings::AbstractDict)
 end
 
 # Enumerate an aggregate's `ranges`, DRIVING from a gate's prebuilt candidate
-# pairs when one carries them (Wall #1 fix): an OVERLAP gate's broad-phase set,
+# pairs when one carries them: an OVERLAP gate's broad-phase set,
 # or a bin-equality gate's key-equality matches (`_vi_equality_candidates`).
 # Instead of walking the full product over every range and testing each tuple —
 # O(∏ranges), e.g. O(N_query·N_cell) — the walk visits the ranges in the SAME
@@ -924,7 +924,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     join = node.join
     # Resolve join gates ONCE (a `join.overlap` broad-phase candidate set is built
     # a single time here). An OVERLAP gate then DRIVES enumeration from its
-    # candidate pairs (`_vi_enumerate_join`, Wall #1) — O(|candidates|) rather than
+    # candidate pairs (`_vi_enumerate_join`) — O(|candidates|) rather than
     # O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
     # full product exactly as before.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
@@ -1215,7 +1215,7 @@ function _const_factor_aliases(model, bare::AbstractString)
     return keys_out
 end
 
-# ---- Phase 2b Hook 1 helper: members-fed-back-as-const-factor ----------------
+# ---- Members fed back as a const factor -------------------------------------
 # Scan the document index-set registry for `kind:"derived"` sets that name a
 # `member_factor`; for each, surface its value-invention MEMBERS (the invented,
 # sorted-distinct, 1-based full-grid ids in `vi_members[from_faq]`) as a dense

@@ -455,7 +455,7 @@ function _range_restrict_parts(
     for (k, v) in live
         param_arrays[k] = v
     end
-    return merge(parts, (equations = eqs,))
+    return _with_equations(parts, eqs)
 end
 
 """

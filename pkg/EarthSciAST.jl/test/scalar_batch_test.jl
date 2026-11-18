@@ -231,7 +231,7 @@ end
         @test isempty(sb.rest)
         # Its slots are that level's own scalar slots — the fill writes exactly
         # the columns the level declared.
-        @test sort(sb.groups[1].slots) == sort(first.(mat[lvl][1]))
+        @test sort(sb.groups[1].slots) == sort(first.(mat[lvl].scalars))
 
         # Kill switch leaves every level's fills on the per-column path.
         mn = getfield(_sb_ir(bld(false)), :mat_batches)

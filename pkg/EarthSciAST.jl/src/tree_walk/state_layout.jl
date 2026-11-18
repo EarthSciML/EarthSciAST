@@ -196,6 +196,38 @@ function _slot_key(L::StateLayout, slot::Int)
     return _cell_key(b.name, _block_cell(b, slot))
 end
 
+# ---- The cell-key codec ----
+#
+# `_cell_key(name, idx)` writes an array cell's key `name[i,j,…]`. Every decoder
+# reads exactly that spelling back: the name is everything before the LAST `[`
+# (an index list holds none) and is not empty, and each index is what
+# `string(::Int)` writes (an optional `-`, then digits with no leading zero).
+# `_cell_key_open` finds the list and `_cell_index_at` reads one index of it;
+# `_parse_cell_key`, `_cell_key_slot` and `_inline_ic_cell` are built on them.
+
+# The position of the `[` that opens `key`'s index list when `key` has the shape
+# `name[…]` with a nonempty name; 0 otherwise.
+function _cell_key_open(key::String)
+    n = ncodeunits(key)
+    (n >= 3 && codeunit(key, n) == UInt8(']')) || return 0
+    @inbounds for k in (n - 1):-1:1
+        codeunit(key, k) == UInt8('[') && return k > 1 ? k : 0
+    end
+    return 0
+end
+
+# The index starting at code unit `i` of a list that ends at `last`:
+# `(value, j, ok)`, `j` the position of the `,` after it (`last + 1` for the
+# final index).
+@inline function _cell_index_at(key::String, i::Int, last::Int)
+    j = i
+    @inbounds while j <= last && codeunit(key, j) != UInt8(',')
+        j += 1
+    end
+    v, ok = _parse_cell_int(key, i, j - 1)
+    return v, j, ok
+end
+
 # Parse one decimal index written by `string(::Int)`: an optional `-`, then
 # digits with no leading zero (and no `-0`). Returns `(value, ok)`.
 @inline function _parse_cell_int(s::String, i::Int, j::Int)
@@ -221,37 +253,21 @@ end
 # The slot `key` names if it is exactly `_cell_key(name, idx)` for a cell of
 # one of `L`'s blocks; 0 otherwise.
 function _cell_key_slot(L::StateLayout, key::String)
-    n = ncodeunits(key)
-    (n >= 3 && codeunit(key, n) == UInt8(']')) || return 0
     isempty(L.blocks) && return 0
-    # The name is everything before the LAST '[' (the index list holds none).
-    p = 0
-    @inbounds for k in (n - 1):-1:1
-        if codeunit(key, k) == UInt8('[')
-            p = k
-            break
-        end
-    end
-    p <= 1 && return 0
+    p = _cell_key_open(key)
+    p == 0 && return 0
     b = _layout_block(L, SubString(key, 1, prevind(key, p)))
     b === nothing && return 0
     rank = length(b.lo)
     slot = b.base
-    p + 1 == n && return rank == 0 ? slot : 0
+    last = ncodeunits(key) - 1
+    p == last && return rank == 0 ? slot : 0
     d = 0
     i = p + 1
-    last = n - 1
     @inbounds while true
-        # One index: [i, j]
-        j = i
-        while j <= last && codeunit(key, j) != UInt8(',')
-            j += 1
-        end
+        v, j, ok = _cell_index_at(key, i, last)
         d += 1
-        d > rank && return 0
-        v, ok = _parse_cell_int(key, i, j - 1)
-        ok || return 0
-        (b.lo[d] <= v <= b.hi[d]) || return 0
+        (ok && d <= rank && b.lo[d] <= v <= b.hi[d]) || return 0
         slot += (v - b.lo[d]) * b.strides[d]
         j > last && break
         i = j + 1
@@ -461,23 +477,14 @@ end
 # `(array position, CartesianIndex)` when `key` is exactly `_cell_key(name, I)`
 # for a cell `I` of one of the profiles; `nothing` otherwise.
 function _inline_ic_cell(array_of::Dict{String, Int}, arrays, key::AbstractString)
-    k = String(key)
-    n = ncodeunits(k)
-    (n >= 4 && codeunit(k, n) == UInt8(']')) || return nothing
-    p = something(findlast(==('['), k), 0)
-    p <= 1 && return nothing
-    i = get(array_of, SubString(k, 1, prevind(k, p)), 0)
+    parsed = _parse_cell_key(key)
+    parsed === nothing && return nothing
+    name, idx = parsed
+    i = get(array_of, name, 0)
     i == 0 && return nothing
     v = arrays[i][2]
-    parts = split(SubString(k, p + 1, n - 1), ',')
-    length(parts) == ndims(v) || return nothing
-    idx = Vector{Int}(undef, length(parts))
-    for d in eachindex(parts)
-        s = String(parts[d])
-        x, ok = _parse_cell_int(s, 1, ncodeunits(s))
-        (ok && 1 <= x <= size(v, d)) || return nothing
-        idx[d] = x
-    end
+    length(idx) == ndims(v) || return nothing
+    all(d -> 1 <= idx[d] <= size(v, d), eachindex(idx)) || return nothing
     return (i, CartesianIndex(Tuple(idx)))
 end
 
@@ -649,23 +656,27 @@ function _cell_key(var_name::String, indices)
     return "$(var_name)[$(join(indices, ","))]"
 end
 
-const _CELL_KEY_RE = r"^([^\[]+)\[([0-9]+(?:,[0-9]+)*)\]$"
-
 """
     _parse_cell_key(key) -> Union{Nothing, Tuple{String, Vector{Int}}}
 
-Inverse of [`_cell_key`](@ref): parse a flat array-cell key like `"u[3]"` or
-`"u[2,3]"` into `(name, indices)` — e.g. `("u", [3])` / `("u", [2, 3])`.
-Returns `nothing` when `key` is not a well-formed cell key (no bracket suffix,
-empty variable name, or non-integer indices), so callers can use it both to
-decode known-valid keys and to test whether a string IS a cell key. Accepts
-any `AbstractString`. Shared with simulate.jl / inline_tests.jl — keep the
-signature stable.
+Inverse of [`_cell_key`](@ref): `"u[2,3]"` → `("u", [2, 3])`, by the cell-key
+codec above (a negative index reads back; a leading zero, an empty name, an
+empty index list or a non-integer index is not a cell key). `nothing` when `key`
+is not a cell key, so a caller can also use it to test whether a string is one.
 """
 function _parse_cell_key(key::AbstractString)
-    m = match(_CELL_KEY_RE, key)
-    m === nothing && return nothing
-    name = String(m.captures[1])
-    indices = Int[parse(Int, s) for s in split(m.captures[2], ",")]
-    return (name, indices)
+    k = String(key)
+    p = _cell_key_open(k)
+    last = ncodeunits(k) - 1
+    (p == 0 || p == last) && return nothing
+    idx = Int[]
+    i = p + 1
+    while true
+        v, j, ok = _cell_index_at(k, i, last)
+        ok || return nothing
+        push!(idx, v)
+        j > last && break
+        i = j + 1
+    end
+    return (String(SubString(k, 1, prevind(k, p))), idx)
 end

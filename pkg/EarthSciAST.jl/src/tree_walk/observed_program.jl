@@ -34,18 +34,16 @@
 # bound to the problem when `esm_problem` publishes it, and holding the
 # problem's programs as they are built.
 mutable struct _ObsProgramCtx
-    model::Any
-    cls::Any
-    parts::Any
+    model::Model
+    cls::_VariableClasses
+    parts::_EquationPartition
     index_sets::AbstractDict
-    var_map::Any                         # the ODE layout (a `StateLayout`)
-    array_var_info::Any
+    # The build's state-only scope: the ODE layout, its const arrays, live
+    # buffers (discrete caches included) and parameter positions.
+    scope::_CompileScope
     n_states::Int
     p::Any                               # the parameter NamedTuple the build bound (the fallback)
-    param_sym_set::Any
-    const_registry::AbstractDict
-    pgather::AbstractDict
-    template_sites::Any
+    template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}}
     discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
@@ -195,10 +193,13 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     # this program does not read included: a self-reference has no inlined form
     # (the right-hand side's build already materialized each of them).
     shaped_vars = Set{String}(n for (n, vv) in model.variables if _is_array_shape(vv.shape))
-    _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
-        parts.equations, parts.observed_names, cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
+    split = _split_observed_and_derivatives(
+        parts.equations, parts.observed_names, cls,
         union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars
     )
+    resolved_obs = split.resolved
+    raw_obs = split.raw
+    mat_defs = split.materialized
     # The extended layout: the state, then one block per materialized observed.
     mat_dims = Dict{String, Vector{Int}}()
     for m in mat_vars
@@ -208,13 +209,12 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 ctx.index_sets, parts.derived_extents
             )
     end
-    avi = copy(ctx.array_var_info)
-    blocks = Pair{String, Tuple{Vector{Int}, Vector{Int}}}[]
-    for m in sort(mat_vars)
-        avi[m] = (ones(Int, length(mat_dims[m])), copy(mat_dims[m]))
-        push!(blocks, m => avi[m])
-    end
-    vm = _layout_extend(ctx.var_map, blocks)
+    cs = _extend_scope(
+        ctx.scope, Pair{String, Tuple{Vector{Int}, Vector{Int}}}[
+            m => (ones(Int, length(mat_dims[m])), copy(mat_dims[m])) for m in sort(mat_vars)
+        ]
+    )
+    vm = cs.var_map
     n_total = length(vm)
     # Whether the program reads the state or `t`: a property of every body it
     # evaluates, each with the non-materialized observeds substituted in.
@@ -235,15 +235,13 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         recurrence = m -> m in recur_names ? _with_open_rule_label(
                 () -> _compile_recurrence_sweep(
                     m, mat_defs[m], mat_dims[m],
-                    get(model.variables, m, nothing), resolved_obs, avi, vm,
-                    ctx.const_registry, ctx.pgather, ctx.param_sym_set
+                    get(model.variables, m, nothing), resolved_obs, cs
                 ), m
             ) : nothing
         fill = m -> _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
             lv = _compile_fill_level(
-                lvl, :dynamic, fill, recurrence, resolved_obs, avi, vm,
-                ctx.const_registry, ctx.pgather, ctx.param_sym_set, n_total;
+                lvl, :dynamic, fill, recurrence, resolved_obs, cs, n_total;
                 label_by_name = true, template_sites = ctx.template_sites
             )
             push!(
@@ -265,10 +263,7 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         body === nothing && return nothing
         s1, t1 = _def_state_time_refs(body, ctx.state_names)
         st |= s1; tm |= t1
-        scalar = _compile(
-            _resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
-            vm, ctx.param_sym_set
-        )
+        scalar = _compile_in(cs, _resolve_in(cs, body))
     end
     return _ObservedProgram(
         name, dims, cells, Tuple(levels), scalar, nothing,

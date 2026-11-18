@@ -303,7 +303,7 @@ end
             prob = esm_problem(_rs_dynamic(n), (0.0, 1.0); compiler = :native, inspect = insp)
             ctx = _RS._obs_ctx(prob)
             prog = _RS._observed_program!(ctx, "M.R")
-            sws = [sw for lv in prog.levels for sw in lv[5]]
+            sws = [sw for lv in prog.levels for sw in lv.sweeps]
             @test length(sws) == 1
             push!(gens, typeof(only(sws).gen))
         end

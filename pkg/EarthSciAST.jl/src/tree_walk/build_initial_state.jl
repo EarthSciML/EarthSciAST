@@ -71,12 +71,7 @@ end
 # `tspan` then has to evaluate the `ic` right-hand sides again.
 const _IC_T0_NAME = "__esm_ic_t0"
 
-struct _IcStart
-    t0::Float64
-    scalars::Dict{String, Float64}
-    arrays::Dict{String, Any}
-    reads_start::Bool
-end
+# `_IcStart`: build_records.jl.
 
 _ic_bind_start_time(e::ASTExpr) =
     _sub_preserving(e, Dict{String, ASTExpr}("t" => VarExpr(_IC_T0_NAME)))
@@ -107,36 +102,13 @@ function _ic_reads_state_error(target, chain::Vector{String}, state::String)
     )
 end
 
-# What evaluating the `ic` right-hand sides at a start of the run needs, and
-# nothing more of the build: worked out once, at construction, from the model
-# and the build's scopes, and kept by a Problem whose initial state moves with
-# its start (`_IcReseed`), so it holds the cone the `ic`s read rather than the
-# build environment it was taken from.
-struct _IcPlan
-    # The `ic` right-hand sides: scalar targets, and array ones with `t` bound
-    # to the start (`_ic_bind_start_time`).
-    scalar_ics::Vector{Tuple{String, ASTExpr}}
-    field_ics::Vector{Tuple{String, ASTExpr}}
-    # The scalar parameters, at their values for this build.
-    params::Dict{String, Float64}
-    # The build's arrays the cone reads, and the data-fed parameters it reads
-    # at their construction-time value (the ones `ic_data` does not replace).
-    arrays::Dict{String, Any}
-    live::Dict{String, Any}
-    scalar_live::Set{String}
-    # The observeds the cone reads, in dependency order: name, body with `t`
-    # bound, and its extents (`nothing` for a scalar one).
-    order::Vector{Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}}
-    # The unknowns a scalar `ic` right-hand side reads, for its diagnostic.
-    unknowns::Set{String}
-    reads_start::Bool
-end
+# `_IcPlan`: build_records.jl.
 
 function _ic_plan(
-        model::Model, scalar_ics, field_ics;
+        model::Model, scalar_ics::Vector{Tuple{String, ASTExpr}}, field_ics::Vector{Tuple{String, ASTExpr}};
         param_scope::AbstractDict, base_arrays::AbstractDict,
         param_arrays::AbstractDict, index_sets::AbstractDict,
-        derived_extents::AbstractDict, factor_scope::AbstractDict, vi_vars
+        derived_extents::AbstractDict, factor_scope::AbstractDict, vi_vars::Set{String}
     )
     params = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in param_scope)
     bound_fields = Tuple{String, ASTExpr}[(n, _ic_bind_start_time(r)) for (n, r) in field_ics]
@@ -302,7 +274,7 @@ end
 # Each scalar `ic` right-hand side evaluated in the start-of-run scope (see
 # `_ic_start_scope`, which has already refused a state read).
 function _fold_scalar_ics(
-        scalar_ics, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict
+        scalar_ics::Vector{Tuple{String, ASTExpr}}, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict
     )
     eq_ics = Dict{String, Float64}()
     isempty(scalar_ics) && return eq_ics
@@ -348,7 +320,7 @@ end
 function _enumerate_declared_array_cells!(
         array_cells, model::Model,
         index_sets::AbstractDict,
-        derived_extents::AbstractDict, vi_vars
+        derived_extents::AbstractDict, vi_vars::Set{String}
     )
     state_here = Set{String}(solver_unknowns(model))
     for (n, v) in model.variables
@@ -406,7 +378,7 @@ end
 # the seed path cannot evaluate, is a hard error — a missing/unsupported scoped
 # ic is never silently dropped.
 function _fold_field_ics!(
-        set, field_ics, array_cells, layout::StateLayout,
+        set, field_ics::Vector{Tuple{String, ASTExpr}}, array_cells, layout::StateLayout,
         param_scope::AbstractDict,
         const_arrays::AbstractDict
     )
@@ -545,11 +517,7 @@ function _build_u0(
     n_scalar = length(scalar_names)
     covered = isempty(deferred) ? nothing : falses(length(u0))
     mark = s -> (valued[s] = true; covered === nothing || (covered[s] = true); nothing)
-    fold_fields!((s, v) -> (s == 0 || (u0[s] = v; mark(s)); nothing))
-    _apply_ics_by_slot!(
-        (s, v) -> (s > n_scalar && (u0[s] = Float64(v); mark(s)); nothing),
-        layout, initial_conditions
-    )
+    _overlay_array_ics!((s, v) -> (u0[s] = v; mark(s); nothing), layout, initial_conditions, fold_fields!)
     for b in deferred
         idxs = Vector{Int}(undef, length(b.lo))
         for s in (b.base):(b.base + b.len - 1)
@@ -570,6 +538,20 @@ function _build_u0(
         end
     end
     return u0
+end
+
+# The array part of the initial-state precedence, over whatever the cells hold:
+# the field-`ic` values (`fold_fields!(set)` hands each to `set(slot, value)`),
+# then the caller's explicit array cells over them, each written through
+# `set!(slot, value)`. Construction (`_build_u0`) and a re-seed at another start
+# (`_IcReseed`) both apply it.
+function _overlay_array_ics!(set!, layout::StateLayout, initial_conditions::AbstractDict, fold_fields!)
+    fold_fields!((s, v) -> (s == 0 || set!(s, v); nothing))
+    n_scalar = length(_layout_scalar_names(layout))
+    _apply_ics_by_slot!(
+        (s, v) -> (s > n_scalar && set!(s, Float64(v)); nothing), layout, initial_conditions
+    )
+    return nothing
 end
 
 # Every explicit `initial_conditions` key must name a state element of the
@@ -597,15 +579,13 @@ end
 
 # The array variable whose block holds state slot `s` (a slot past the scalars).
 function _layout_block_name(layout::StateLayout, s::Int)
-    for b in _layout_blocks(layout)
-        b.base <= s < b.base + b.len && return b.name
-    end
-    return ""
+    i = _block_index_of_slot(layout, s)
+    return i == 0 ? "" : layout.blocks[i].name
 end
 
 # One array cell's default value: its parent variable's declared default, or 0
-# when the cell's key names no variable (`_parse_cell_key` reads no name out of
-# a negative index).
+# for a cell at a negative index (a ghost cell outside the declared grid) and
+# for a block that names no variable.
 function _cell_default(model::Model, name::String, idxs::Vector{Int})
     (any(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
     d = model.variables[name].default
@@ -661,14 +641,15 @@ function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations, cu)
     return slots
 end
 
+# Each `faq`-valued initialization equation (esm-spec §6.2) evaluated into the
+# cells of `u0` it sets, against the state-only scope `cs`. A cell an explicit
+# initial condition or the caller's `u0` names (`skip_slots`) keeps its value.
 function _seed_faq_init_u0!(
-        u0::Vector{Float64}, init_equations,
-        initial_conditions::AbstractDict,
-        var_map::AbstractDict{String, Int}, array_var_info,
-        const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set, p;
+        u0::Vector{Float64}, init_equations::Vector{Equation},
+        initial_conditions::AbstractDict, cs::_CompileScope, p::Union{Nothing, NamedTuple};
         skip_slots::Set{Int} = Set{Int}()
     )
+    var_map = cs.var_map
     pp = isnothing(p) ? NamedTuple() : p
     for eq in init_equations
         eq.lhs isa VarExpr || continue
@@ -716,10 +697,7 @@ function _seed_faq_init_u0!(
         # The compiled fill (setup_fill.jl): the aggregate filled through the
         # right-hand-side cascade and emitted code, once, over its own ranges.
         filled = _init_equation_fill(
-            rhs_op,
-            [_expand_int_range(ranges_dict[n]) for n in idx_names],
-            var_map, const_arrays,
-            pgather, param_sym_set, p;
+            rhs_op, [_expand_int_range(ranges_dict[n]) for n in idx_names], cs, p;
             u0 = u0, target = var_name
         )
         if filled !== nothing
@@ -742,9 +720,7 @@ function _seed_faq_init_u0!(
                     for d in 1:length(idx_names)
             )
             sub_body = _sub_preserving(body, idx_exprs)
-            body_r = _resolve_indices(sub_body, array_var_info, var_map, const_arrays, pgather)
-            node = _compile(body_r, var_map, param_sym_set)
-            _eval_node(node, u0, pp, 0.0)
+            _eval_node(_compile_in(cs, _resolve_in(cs, sub_body)), u0, pp, 0.0)
         end
         lic = _percell_license(
             rule,
@@ -762,10 +738,7 @@ function _seed_faq_init_u0!(
         # With the construction-time compile-once forms off the seed is the
         # per-cell reference, as the field-`ic` fast path is.
         once = _setup_compile_once_enabled() ?
-            _compile_init_once(
-                body, idx_names, array_var_info, var_map,
-                const_arrays, pgather, param_sym_set
-            ) :
+            _compile_init_once(body, idx_names, cs) :
             nothing
         if once !== nothing
             _record_rule!(rule, :equation, :setup_compiled)
@@ -795,19 +768,16 @@ end
 # `(refs, node)` — the output-index counters, in `idx_names` order, and the body
 # compiled once against them — or `nothing` when the body does not resolve or
 # compile with its indices symbolic.
-function _compile_init_once(
-        body::ASTExpr, idx_names::Vector{String}, array_var_info,
-        var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, param_sym_set
-    )
+function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, cs::_CompileScope)
     isempty(idx_names) && return nothing
     got = _resolve_array_contraction_term(
-        body, idx_names, String[], array_var_info, var_map, const_arrays, pgather
+        body, idx_names, String[], cs.array_var_info, cs.var_map, cs.const_registry,
+        cs.pgather
     )
     got isa _Decline && return nothing
     refs, _, resolved = got
     node = try
-        _compile(resolved, var_map, param_sym_set)
+        _compile_in(cs, resolved)
     catch err
         # Only a document-level refusal is a decline (see resolve.jl).
         err isa EarthSciASTError || rethrow()
@@ -818,9 +788,9 @@ end
 
 # The build's initial state at another start of the run (`remake` with a new
 # `tspan`, esm-spec §11.4.2): the `ic` right-hand sides evaluated there
-# (`_IcPlan`), written over the state construction seeded, with the caller's
-# initial conditions on top again, as `_build_u0` orders them. Holds what that
-# needs and no more of the build.
+# (`_IcPlan`), written over the state construction seeded, in the precedence
+# `_build_u0` applies (a scalar `ic` where no explicit value names the slot, then
+# `_overlay_array_ics!`). Holds what that needs and no more of the build.
 struct _IcReseed{L, I}
     plan::_IcPlan
     # The seeded state at construction; a slot no `ic` sets keeps its value.
@@ -861,14 +831,10 @@ function (r::_IcReseed)(t0::Float64, data::AbstractDict)
     for (name, slot) in r.scalar_slots
         u0[slot] = eqi[name]
     end
-    _fold_field_ics!(
-        (slot, v) -> (slot == 0 || (u0[slot] = v); nothing), fics, r.cells, r.layout,
-        s.scalars, _ic_field_arrays(r.const_arrays, s)
-    )
-    n_scalar = length(_layout_scalar_names(r.layout))
-    _apply_ics_by_slot!(
-        (slot, v) -> (slot > n_scalar && (u0[slot] = Float64(v)); nothing),
-        r.layout, r.initial_conditions
+    arrays = _ic_field_arrays(r.const_arrays, s)
+    _overlay_array_ics!(
+        (slot, v) -> (u0[slot] = v; nothing), r.layout, r.initial_conditions,
+        set -> _fold_field_ics!(set, fics, r.cells, r.layout, s.scalars, arrays)
     )
     return u0
 end

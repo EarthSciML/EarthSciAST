@@ -465,8 +465,10 @@ end
     err = try
         ESM._compile_derivative_equations(
             ESM.Equation[eq], Dict{String, ESM.ASTExpr}(),
-            Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}("y" => 1),
-            Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}(), 1
+            ESM._CompileScope(
+                Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}("y" => 1),
+                Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}()
+            ), 1
         )
         nothing
     catch e

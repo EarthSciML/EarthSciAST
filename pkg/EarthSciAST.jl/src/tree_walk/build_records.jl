@@ -1,5 +1,191 @@
 # tree_walk/build_records.jl — the records a build hands back: `BuildInspection`, `BuildProducts`,
-# `DiscreteMaterializer`, `RecurrenceInfo` and the per-Problem observed memo.
+# `DiscreteMaterializer`, `RecurrenceInfo` and the per-Problem observed memo; and
+# `_CompileScope`, what one build stage resolves and compiles against; and the
+# records the build phases hand one another.
+
+# The start-of-run scope the `ic` right-hand sides were evaluated in
+# (build_initial_state.jl): `t0`, the scalars and the arrays, and whether the
+# initial state depends on the start.
+struct _IcStart
+    t0::Float64
+    scalars::Dict{String, Float64}
+    arrays::Dict{String, Any}
+    reads_start::Bool
+end
+
+# What evaluating the `ic` right-hand sides at a start of the run needs, and
+# nothing more of the build: worked out once, at construction, from the model
+# and the build's scopes, and kept by a Problem whose initial state moves with
+# its start (`_IcReseed`), so it holds the cone the `ic`s read rather than the
+# build environment it was taken from.
+struct _IcPlan
+    # The `ic` right-hand sides: scalar targets, and array ones with `t` bound
+    # to the start (`_ic_bind_start_time`).
+    scalar_ics::Vector{Tuple{String, ASTExpr}}
+    field_ics::Vector{Tuple{String, ASTExpr}}
+    # The scalar parameters, at their values for this build.
+    params::Dict{String, Float64}
+    # The build's arrays the cone reads, and the data-fed parameters it reads
+    # at their construction-time value (the ones `ic_data` does not replace).
+    arrays::Dict{String, Any}
+    live::Dict{String, Any}
+    scalar_live::Set{String}
+    # The observeds the cone reads, in dependency order: name, body with `t`
+    # bound, and its extents (`nothing` for a scalar one).
+    order::Vector{Tuple{String, ASTExpr, Union{Nothing, Vector{Int}}}}
+    # The unknowns a scalar `ic` right-hand side reads, for its diagnostic.
+    unknowns::Set{String}
+    reads_start::Bool
+end
+
+
+# ---- The phase records ----
+#
+# What each build phase hands the next (build_pipeline.jl). Phase 1
+# (`_build_lower_and_classify`) classifies the variables, phase 2
+# (`_build_partition_and_materialize`) partitions them and rewrites the
+# equation stream, phase 3 (`_build_state_layout`) lays out the state, and
+# phase 4 compiles against all three.
+
+# Phase 1: the pre-lowered equations and which mechanism owns each array
+# observed that carries no ODE partition slot.
+struct _VariableClasses
+    equations::Vector{Equation}
+    # Elementwise array observeds folded into their readers.
+    folded_array_obs::Set{String}
+    # Build-once setup arrays, with their definitions.
+    geom_setup_vars::Set{String}
+    geom_defs::Dict{String, ASTExpr}
+    # Array observeds inlined into their readers: live-field geometry ones and
+    # promoted ones.
+    geom_inline_vars::Set{String}
+    array_inline_vars::Set{String}
+    # Array observeds filled into a cache once per forcing refresh.
+    discrete_vars::Set{String}
+    # Array observeds whose value is build-time data, with that data.
+    const_obs_vars::Set{String}
+    const_obs_arrays::Dict{String, Array{Float64}}
+    # The promoted array observeds filled into a buffer per right-hand-side
+    # call (a subset of `array_inline_vars`, recurrences included); phase 3
+    # narrows it to the ones whose extents resolve.
+    mat_array_vars::Set{String}
+    # Gated live-field geometry observeds moved onto the buffered path.
+    gated_geom_vars::Set{String}
+end
+
+# The mechanism that owns `name` when it carries no ODE partition slot, by the
+# order in which the build settles ownership; `nothing` for a variable the
+# partition places (a state, a scalar parameter or observed, or an array
+# parameter backed by data). `vi_vars` are the value-invention outputs, which
+# are materialized at setup before the build runs.
+function _partition_owner(cls::_VariableClasses, vi_vars::Set{String}, name::String)
+    name in vi_vars && return :value_invention
+    name in cls.geom_setup_vars && return :setup_array
+    name in cls.geom_inline_vars && return :inlined_geometry
+    name in cls.array_inline_vars && return :inlined_array
+    name in cls.discrete_vars && return :discrete_cache
+    name in cls.folded_array_obs && return :folded_observed
+    name in cls.const_obs_vars && return :const_data
+    return nothing
+end
+
+# Phase 2: the ODE partition, the parameter scope, the setup arrays and the
+# rewritten equation stream.
+struct _EquationPartition
+    param_names::Vector{String}
+    observed_names::Vector{String}
+    state_var_names::Set{String}
+    param_scope::Dict{String, Float64}
+    geom_setup_arrays::Dict{String, AbstractArray{Float64}}
+    derived_extents::Dict{String, Int}
+    equations::Vector{Equation}
+    init_equations::Vector{Equation}
+    discrete_defs::Dict{String, ASTExpr}
+    eq_ics::Dict{String, Float64}
+    field_ics::Vector{Tuple{String, ASTExpr}}
+    ic_start::_IcStart
+    ic_plan::_IcPlan
+end
+
+# Phase 3: the state layout, the initial state and the parameter tuple.
+struct _StatePlan{P, R}
+    u0::Vector{Float64}
+    p::P
+    # The ODE layout (the public `var_map`), each array state's cell bounds, and
+    # each scalar parameter's position in `p`.
+    var_map::StateLayout
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    param_index::Dict{Symbol, Int}
+    # The layout extended with one block per materialized array observed, and
+    # those observeds' extents.
+    var_map_ext::StateLayout
+    array_var_info_ext::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    mat_dims::Dict{String, Vector{Int}}
+    # The initial state at another start of the run (`_IcReseed`), or
+    # `nothing` when it does not depend on the start.
+    ic_reseed::R
+end
+_n_states(L::_StatePlan) = length(L.var_map)
+_n_total(L::_StatePlan) = length(L.var_map_ext)
+
+# `parts` with its equation stream replaced (a range-restricted program clips it).
+_with_equations(parts::_EquationPartition, equations::Vector{Equation}) =
+    _EquationPartition(
+    parts.param_names, parts.observed_names, parts.state_var_names, parts.param_scope,
+    parts.geom_setup_arrays, parts.derived_extents, equations, parts.init_equations,
+    parts.discrete_defs, parts.eq_ics, parts.field_ics, parts.ic_start, parts.ic_plan
+)
+
+# The observed substitution split (`_split_observed_and_derivatives`): the
+# derivative equations, each inlined observed's definition with every observed
+# it reads substituted (`resolved`) and as authored (`raw`), and the
+# definitions of the materialized array observeds (`materialized`).
+struct _ObservedSplit
+    derivatives::Vector{Equation}
+    resolved::Dict{String, ASTExpr}
+    raw::Dict{String, ASTExpr}
+    materialized::Dict{String, ASTExpr}
+end
+
+"""
+    _CompileScope
+
+What an expression resolves (`_resolve_in`) and compiles (`_compile_in`) against
+in one build stage: each array's cell bounds (`array_var_info`) and the slot
+layout (`var_map`), the build-time arrays (`const_registry`), the live forcing
+buffers and discrete caches (`pgather`, name => `_PGatherArray`), and each scalar
+parameter's position in `p` (`param_index`). A build makes two: the state-only
+scope, which construction-time fills and output-time reads use, and the
+right-hand side's, whose layout adds a block per materialized array observed
+(`_extend_scope`).
+"""
+struct _CompileScope{L <: AbstractDict{String, Int}, C <: AbstractDict, G <: AbstractDict}
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    var_map::L
+    const_registry::C
+    pgather::G
+    param_index::Dict{Symbol, Int}
+end
+
+# `e` with its index operations resolved to slot, const and buffer reads.
+_resolve_in(s::_CompileScope, e::ASTExpr, memo = nothing) =
+    _resolve_indices(e, s.array_var_info, s.var_map, s.const_registry, s.pgather, memo)
+
+# `e`, already resolved, compiled to a `_Node`.
+_compile_in(s::_CompileScope, e::ASTExpr, memo = nothing) =
+    _compile(e, s.var_map, s.param_index, memo)
+
+# `s` with one block per `name => (lo, hi)` of `blocks` laid out after its slots.
+function _extend_scope(s::_CompileScope, blocks::Vector{Pair{String, Tuple{Vector{Int}, Vector{Int}}}})
+    isempty(blocks) && return s
+    avi = copy(s.array_var_info)
+    for (name, box) in blocks
+        avi[name] = box
+    end
+    return _CompileScope(
+        avi, _layout_extend(s.var_map, blocks), s.const_registry, s.pgather, s.param_index
+    )
+end
 
 # One `observed_field` answer: the forcing epoch it was computed at
 # (`_epoch_value`, cadence_stamp.jl) and the field. The field is state-free, so it moves only

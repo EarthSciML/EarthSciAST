@@ -189,12 +189,29 @@ end
     return nothing
 end
 
+"""
+    _FillLevel
+
+One level of materialized-observed fills as the in-place right-hand side runs
+it (`_fill_obs_levels!`): the scalar entries `(slot, node)`, the kernel
+section, the prefix-scan post-passes, the whole-array contraction section and
+the ordered recurrence sweeps, run in that order. No observed of a level reads
+another of the same level. Parametric, so a tuple of levels specialises every
+call.
+"""
+struct _FillLevel{E, S, F, C, R}
+    scalars::E
+    section::S
+    scan_folds::F
+    contractions::C
+    sweeps::R
+end
+
 # Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
 # UNCHANGED when nothing is materialized, so every model without a factored array
 # observed keeps a byte-identical closure (and its zero-allocation property).
-# `levels` is a vector of
-# `(scalar_nodes, kernel_section, scan_folds, array_contractions,
-# recurrence_sweeps)` in dependency order. `const_levels` has the same shape and
+# `levels` is a tuple of `_FillLevel`s in dependency order. `const_levels` has
+# the same shape and
 # holds the const-cadence observeds (`_const_cadence_mat_obs`), which read no
 # `levels` entry; they run first, and only when the buffer's const stamp says
 # `p` moved or the buffer is new. `time_levels` holds the time-cadence ones,
@@ -247,25 +264,25 @@ end
 @inline _fill_obs_levels!(::Tuple{}, due, ue, p, t, ::Type{T}) where {T} = nothing
 @inline function _fill_obs_levels!(levels::Tuple, due, ue, p, t, ::Type{T}) where {T}
     lv = levels[1]
-    ents = lv[1]
+    ents = lv.scalars
     @inbounds for k in eachindex(ents)
         e = ents[k]
         due[e[1]] = _eval_node(e[2], ue, p, t, T)
     end
-    lv[2](due, ue, p, t, T)
+    lv.section(due, ue, p, t, T)
     # ess-scan: this level's forward prefix reductions accumulate in place over
     # the terms the kernel section just wrote — the same post-pass, in the same
     # position, that `_make_rhs` runs behind the state kernel section. Empty for
     # every level whose observeds carry no cumulative reduction.
-    sf = lv[3]
+    sf = lv.scan_folds
     isempty(sf) || _apply_scan_folds!(due, ue, p, t, sf)
     # ess-array-contraction: this level's whole-array contraction nests, in the
     # same position behind the kernel section that `_make_rhs` puts them in.
-    ac = lv[4]
+    ac = lv.contractions
     isempty(ac) || _apply_array_contractions!(due, ue, p, t, ac, T)
     # This level's causal self-references, each one ordered sweep over its own
     # buffer (recurrence_sweep.jl). Nothing else in the level reads them. A
     # sweep reads and writes only observed slots, which both views share.
-    _run_recurrence_sweeps!(lv[5], ue, p, t, T)
+    _run_recurrence_sweeps!(lv.sweeps, ue, p, t, T)
     return _fill_obs_levels!(Base.tail(levels), due, ue, p, t, T)
 end
