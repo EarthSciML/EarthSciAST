@@ -2424,29 +2424,16 @@ impl StandaloneScope<'_> {
                 Routed::Value(v, route)
             });
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        use super::tape::StandaloneError;
+        match eval_observed_taped(name, expr, self, fill_shape, false)
+            .expect("a non-recurrence always reaches the tape")
         {
-            use super::tape::StandaloneError;
-            match eval_observed_taped(name, expr, self, fill_shape, false)
-                .expect("a non-recurrence always reaches the tape")
-            {
-                Ok(a) => Ok(Routed::Value(value_of_taped(a), BuildRoute::Tape)),
-                Err(StandaloneError::Fault(details)) => {
-                    Err(CompileError::InterpreterBuildError { details })
-                }
-                Err(StandaloneError::Declined(why)) if strict => Ok(Routed::Refused(why)),
-                Err(StandaloneError::Declined(_)) => walked(self),
+            Ok(a) => Ok(Routed::Value(value_of_taped(a), BuildRoute::Tape)),
+            Err(StandaloneError::Fault(details)) => {
+                Err(CompileError::InterpreterBuildError { details })
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (name, fill_shape);
-            if strict {
-                return Ok(Routed::Refused(
-                    "this build has no tape to lower it on".to_string(),
-                ));
-            }
-            walked(self)
+            Err(StandaloneError::Declined(why)) if strict => Ok(Routed::Refused(why)),
+            Err(StandaloneError::Declined(_)) => walked(self),
         }
     }
 
@@ -2559,7 +2546,6 @@ pub(crate) enum BuildRoute {
     /// The reference evaluator over whole arrays, no `faq` walked per cell.
     Whole,
     /// A standalone tape program.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Tape,
     /// The reference evaluator, with a `faq` walked cell by cell.
     PerCell,
@@ -2587,7 +2573,6 @@ impl Routed {
 
 /// A standalone tape's value as the reference evaluator gives it: a 0-d array
 /// is a scalar.
-#[cfg(not(target_arch = "wasm32"))]
 fn value_of_taped(a: ArrayD<f64>) -> Value {
     if a.ndim() == 0 {
         Value::Scalar(a[IxDyn(&[])])
@@ -2612,7 +2597,6 @@ fn value_of_taped(a: ArrayD<f64>) -> Value {
 /// esm-spec §4.3.4's for an unshaped mixed-rank `ifelse`): a scalar value
 /// fills it, as the reference evaluator's does. With none, a scalar value
 /// comes back as a 0-d array.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,
