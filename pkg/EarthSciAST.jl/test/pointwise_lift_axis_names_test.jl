@@ -295,3 +295,21 @@ end
     prob.f!(du, prob.u0, prob.p, 0.0)
     @test sort(du) == [1.0, 2.0, 2.0, 3.0, 4.0, 6.0]
 end
+
+# The independent variable is a scalar to the lift's shape inference under the
+# name the document gives it (esm-spec §11.3), so `s * u` over `u :: [x]` is an
+# array and lifts its state.
+@testset "the lift reads a renamed independent variable as a scalar" begin
+    doc = """
+    {"esm": "2.3.0", "metadata": {"name": "lift_iv"},
+     "domain": {"independent_variable": "s"},
+     "index_sets": {"x": {"kind": "interval", "size": 2}},
+     "models": {"C": {
+       "variables": {
+         "a": {"type": "unknown", "units": "1", "default": 0.0},
+         "u": {"type": "parameter", "units": "1/s^2", "default": [1.0, 2.0], "shape": ["x"]}},
+       "equations": [{"lhs": {"op": "D", "args": ["a"], "wrt": "t"}, "rhs": {"op": "*", "args": ["s", "u"]}}]}}}
+    """
+    flat = ESM.flatten(ESM.load_string(doc))
+    @test flat.state_variables["C.a"].shape == ["x"]
+end

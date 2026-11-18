@@ -1325,7 +1325,7 @@ _apply_pointwise_lift!(st::FlattenState) = _apply_pointwise_lift!(
     st.equations, st.states, st.params, st.observeds, st.index_sets,
     st.file.coupling;
     template_registry = isempty(st.template_registry) ? nothing : st.template_registry,
-    lifted_shapes = st.lifted_shapes
+    lifted_shapes = st.lifted_shapes, iv = _indep_var(st.file)
 )
 
 # Steps 4 to 9: independent variables, metadata, the §6.3.1 subsets, the

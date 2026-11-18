@@ -272,13 +272,13 @@ _lift_is_scalar(v::ModelVariable)::Bool = v.shape === nothing || isempty(v.shape
 # variable, the bare definitions, the states already lifted at their grids, and
 # `masked` names read as scalars: the sources of the non-pointwise
 # `variable_map` entries into the component being decided.
-function _lift_shape_env(variables, defs, lifted, masked)
+function _lift_shape_env(variables, defs, lifted, masked, iv)
     known = Dict{String, Vector{String}}()
     for (k, v) in variables
         v.shape === nothing || (known[k] = String[string(x) for x in v.shape])
     end
     merge!(known, lifted)
-    return _ShapeEnv(known; defs = defs, scalar = masked, names = Set{String}(keys(variables)))
+    return _ShapeEnv(known; defs = defs, scalar = masked, names = Set{String}(keys(variables)), iv = iv)
 end
 
 # How one lifted state's equation is rewritten: the index set of each grid
@@ -292,7 +292,7 @@ struct _LiftPlan
 end
 
 """
-    _apply_pointwise_lift!(pool, states, params, observeds, index_sets, coupling;
+    _apply_pointwise_lift!(pool, states, params, observeds, index_sets, coupling; iv,
                            template_registry, lifted_shapes)
 
 Pointwise spatial lift (esm-spec §10.5; esm-libraries-spec §4.7.5, "Pointwise
@@ -324,7 +324,8 @@ function _apply_pointwise_lift!(
         index_sets::OrderedDict{String, IndexSet},
         coupling;
         template_registry = nothing,
-        lifted_shapes = nothing
+        lifted_shapes = nothing,
+        iv::AbstractString = "t"
     )
     no_operator_route = Set{String}()
     masks = Dict{String, Set{String}}()
@@ -428,7 +429,7 @@ function _apply_pointwise_lift!(
                 others = Dict{String, Vector{String}}(
                     s => a for (s, a) in lifted_axes if _component_root(s) != comp
                 )
-                _lift_shape_env(variables, defs, others, get(masks, comp, Set{String}()))
+                _lift_shape_env(variables, defs, others, get(masks, comp, Set{String}()), iv)
             end
             axes = _expr_axes(shapes, equations[n].rhs)
             (axes === nothing || isempty(axes)) && continue

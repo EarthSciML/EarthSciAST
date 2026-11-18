@@ -7,7 +7,7 @@
 # ============================================================================
 
 """
-    _ShapeEnv(known; defs, scalar, unknown, ctx)
+    _ShapeEnv(known; defs, scalar, names, unknown, ctx, iv)
 
 What [`_expr_axes`](@ref) knows about names:
 
@@ -22,6 +22,8 @@ What [`_expr_axes`](@ref) knows about names:
   scalar;
 - `unknown`: the answer for any other name (`nothing`, undecided, for the
   lift; `String[]` for shape promotion, which reads loop symbols too);
+- `iv`: the independent variable's name (`domain.independent_variable`,
+  esm-spec §11.3), a scalar unless a declaration says otherwise;
 - `ctx`: the template-application context (`_ElementwiseContext`), or
   `nothing`. With one, a template application is elementwise in the arrays its
   expansion reads in value positions (esm-spec §9.6.11); without, it is
@@ -33,6 +35,7 @@ struct _ShapeEnv{C}
     scalar::Set{String}
     names::Set{String}
     unknown::Union{Nothing, Vector{String}}
+    iv::String
     ctx::C
     memo::Dict{String, Union{Vector{String}, Nothing}}
 end
@@ -40,14 +43,15 @@ end
 _ShapeEnv(
     known::Dict{String, Vector{String}};
     defs = OrderedDict{String, ASTExpr}(), scalar = Set{String}(), names = Set{String}(),
-    unknown = nothing, ctx = nothing
+    unknown = nothing, ctx = nothing, iv::AbstractString = "t"
 ) = _ShapeEnv(
-    known, defs, scalar, names, unknown, ctx, Dict{String, Union{Vector{String}, Nothing}}()
+    known, defs, scalar, names, unknown, String(iv), ctx, Dict{String, Union{Vector{String}, Nothing}}()
 )
 
 function _name_axes(env::_ShapeEnv, name::String)::Union{Vector{String}, Nothing}
-    (name == "t" || name in env.scalar) && return String[]
+    name in env.scalar && return String[]
     haskey(env.known, name) && return copy(env.known[name])
+    name == env.iv && return String[]
     haskey(env.memo, name) && return env.memo[name]
     body = get(env.defs, name, nothing)
     if body === nothing
@@ -66,8 +70,8 @@ end
 The ordered index sets `e`'s value spans, `String[]` for a scalar, `nothing`
 when undecided:
 
-- a number, a `const` whose value is a number, `true`, `false` and `t` are
-  scalars;
+- a number, a `const` whose value is a number, `true`, `false` and the
+  independent variable are scalars;
 - a name is answered by `env` ([`_ShapeEnv`](@ref));
 - a structural `D(e)` (`wrt` `t` or absent) has the axes of `e`;
 - an elementwise operator (`_is_elementwise_node`: a scalar operator, or a
