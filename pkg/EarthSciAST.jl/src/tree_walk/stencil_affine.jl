@@ -525,11 +525,15 @@ function _oln_via_varmap(lhs_var, lhs_idx_args, idx_env, var_map)
     return slot
 end
 
-# Derive + VERIFY the affine map (loop indices → output slot): `oln = base +
-# Σ_d loop_d·strides[d]`. Strides come from unit steps off the range origin; the
-# map is then checked at every domain corner against var_map. A non-affine layout
-# (irregular / holey grid) fails here → whole-equation fallback.
+# The affine map loop indices → output slot, `oln = base + Σ_d loop_d·strides[d]`,
+# with stride 0 along a one-value range. Computed from the variable's layout
+# block when every LHS subscript is affine in one loop index and every corner
+# cell lies in the block (`_output_affine_from_block`); otherwise strides come
+# from unit steps off the range origin and the map is checked at every corner
+# against `var_map`, a non-affine layout declining the whole equation.
 function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    got = _output_affine_from_block(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    got === nothing || return got
     D = length(idx_names)
     env = Dict{String, Int}()
     rep = Int[first(ranges[d]) for d in 1:D]
@@ -550,6 +554,41 @@ function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map
         want = _box_oln(base, strides, cl, D)
         got = _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(env, idx_names, cl), var_map)
         want == got || _decline(:output_layout_not_affine, lhs_var)
+    end
+    return base, strides
+end
+
+# `_derive_output_affine`'s map from the block, or `nothing` when the block or
+# the subscript forms do not give it.
+function _output_affine_from_block(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    blk = _affine_block(var_map, lhs_var)
+    (blk !== nothing && length(blk.lo) == length(lhs_idx_args)) || return nothing
+    D = length(idx_names)
+    forms = Tuple{Int, Int, Int}[]
+    for a in lhs_idx_args
+        f = a isa ASTExpr ? _lhs_index_affine(a, idx_names) : nothing
+        f === nothing && return nothing
+        push!(forms, f)
+    end
+    cell = Vector{Int}(undef, length(forms))
+    for corner in Iterators.product(((first(ranges[d]), last(ranges[d])) for d in 1:D)...)
+        _lhs_affine_cell!(cell, forms, corner)
+        all(k -> blk.lo[k] <= cell[k] <= blk.hi[k], eachindex(cell)) || return nothing
+    end
+    full = zeros(Int, D)
+    base = blk.base
+    for (k, (pos, coef, c)) in enumerate(forms)
+        base += (c - blk.lo[k]) * blk.strides[k]
+        pos == 0 || (full[pos] += coef * blk.strides[k])
+    end
+    # A one-value range keeps stride 0, its contribution folded into `base`.
+    strides = zeros(Int, D)
+    for d in 1:D
+        if length(ranges[d]) >= 2
+            strides[d] = full[d]
+        else
+            base += first(ranges[d]) * full[d]
+        end
     end
     return base, strides
 end
