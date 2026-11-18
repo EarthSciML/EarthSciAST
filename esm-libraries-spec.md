@@ -1524,7 +1524,9 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
    - **The merged template registry** (from `esm: 0.9.0`; esm-spec §9.6.4 rule 7, §10.7) as a
      first-class field of the flattened representation: the union of the component registries
-     (post-step-2 scoping), with deep-equal same-name entries deduplicated at first occurrence
+     (post-step-2 scoping) — including the referenced `match` rules each component materializes
+     without their `match`, `where` and `priority`, and the `<name>.variant<k>` entries of
+     esm-spec §9.6.4 rule 3, which merge, deduplicate and collide like any other entry — with deep-equal same-name entries deduplicated at first occurrence
      and any non-deep-equal same-name collision resolved by deterministically renaming **both**
      entries to `<ComponentPath>.<name>` and rewriting their references in lockstep. A collision
      propagates along the reference DAG: an entry whose body references a colliding name is
