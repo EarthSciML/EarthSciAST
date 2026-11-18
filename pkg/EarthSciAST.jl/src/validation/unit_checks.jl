@@ -83,42 +83,81 @@ function _reaction_system_units_view(
 end
 
 """
-    validate_model_unit_consistency(model::Model, path::String; file=nothing, toplevel=nothing) -> Vector{StructuralError}
+    validate_model_unit_consistency(model::Model, path::String; file=nothing, toplevel=nothing, indep="t") -> Vector{StructuralError}
 
-Promote every units finding in `model` to a structural error under its own
-esm-spec §4.8.4 code — `unit_inconsistency` for a PROVABLE dimensional
-inconsistency, `unit_parse_error` for a unit string that names no real unit.
-Both are hard errors; a GENUINELY UNDETERMINABLE dimension is not a finding at
-all. The findings (and the "provable vs unknown" discipline that makes them
-trustworthy) come from [`model_unit_findings`](@ref) in units.jl; this function
-only attaches the model's JSON pointer and recurses into subsystems. `file`,
-the document holding `model`, lets a scoped reference into a top-level
-component be typed from its target's declaration (esm-spec §4.8.4); `toplevel`
-is that document-wide map already built (`_toplevel_scoped_units`), in place of
-`file`.
+Every unit error of `model` and its model subsystems, at its JSON pointer under
+`path`: [`model_unit_findings`](@ref) for each component, the subsystems at
+`path/subsystems/<name>`. `file`, the document holding `model`, lets a scoped
+reference into a top-level component be typed from its target's declaration
+(esm-spec §4.8.4); `toplevel` is that document-wide map already built.
 """
 function validate_model_unit_consistency(
-        model::Model, path::String;
-        file = nothing,
-        toplevel = nothing
+        model::Model, path::String; file = nothing, toplevel = nothing,
+        indep::AbstractString = "t"
     )::Vector{StructuralError}
-    errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
-
-    for f in model_unit_findings(model; toplevel = toplevel)
-        push!(errors, StructuralError("$path/$(f.subpath)", f.message, f.code))
+    errors = StructuralError[]
+    _foreach_unit_component(model, path) do c, p
+        c isa Model || return
+        for f in model_unit_findings(c; toplevel, indep)
+            push!(errors, StructuralError("$p/$(f.subpath)", f.message, f.code))
+        end
     end
+    return errors
+end
 
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(
-            errors, validate_model_unit_consistency(
-                subsys, "$path/subsystems/$subsys_name";
-                toplevel = toplevel
-            )
+# `f(component, pointer)` on `c` and on every inline subsystem at any depth, by
+# sorted name; a model's unresolved mount is skipped.
+function _foreach_unit_component(f, c::Union{Model, ReactionSystem}, pointer::String)
+    f(c, pointer)
+    for name in sort!(collect(keys(c.subsystems)))
+        sub = c.subsystems[name]
+        sub isa Union{Model, ReactionSystem} || continue
+        _foreach_unit_component(f, sub, "$pointer/subsystems/$(_ptr_escape(name))")
+    end
+    return nothing
+end
+
+"""
+    _unit_check!(units::_UnitsInputs) -> (; errors, warnings)
+
+The units checker of a `validate` pass, run once and kept on `units`: every
+component's unit findings (`_component_unit_findings!`), each top-level model
+and reaction system typed through its template-expanded view and its inline
+subsystems at any depth. `errors` are the structural errors;
+`warnings` the esm-spec §4.8.6 `(pointer, message)` pairs.
+"""
+function _unit_check!(units::_UnitsInputs)
+    cached = units.checked[]
+    cached === nothing || return cached
+    errors = StructuralError[]
+    warnings = Tuple{String, String}[]
+    errs = UnitFinding[]
+    warns = UnitFinding[]
+    visit = function (c, p)
+        empty!(errs)
+        empty!(warns)
+        env = _component_unit_env(c, units.toplevel; indep = units.indep)
+        _component_unit_findings!(errs, warns, c, p, env)
+        for f in errs
+            push!(errors, StructuralError("$p/$(f.subpath)", f.message, f.code))
+        end
+        for f in warns
+            push!(warnings, ("$p/$(f.subpath)", f.message))
+        end
+        return
+    end
+    for name in sort!(collect(keys(units.models)))
+        _foreach_unit_component(visit, units.models[name], "/models/$(_ptr_escape(name))")
+    end
+    for name in sort!(collect(keys(units.reaction_systems)))
+        _foreach_unit_component(
+            visit, units.reaction_systems[name], "/reaction_systems/$(_ptr_escape(name))"
         )
     end
-
-    return errors
+    result = (; errors, warnings)
+    units.checked[] = result
+    return result
 end
 
 """
@@ -145,23 +184,6 @@ function validate_reaction_rate_units(
     errors = StructuralError[]
     toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
     scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
-
-    # An unresolvable unit string on a species or parameter is a defect in the
-    # file (esm-spec §4.8.4), reported at its declaration as a model
-    # variable's is.
-    for (block, decls) in (("species", rs.species), ("parameters", rs.parameters))
-        for decl in decls, (field, str) in (("units", decl.units), ("default_units", decl.default_units))
-            (str === nothing || isempty(str) || parse_units(str) !== nothing) && continue
-            push!(
-                errors, StructuralError(
-                    "$path/$block/$(_ptr_escape(decl.name))",
-                    "Unit string '$str' is not a recognised unit " *
-                        "($(block == "species" ? "species" : "parameter") '$(decl.name)', field '$field')",
-                    ERROR_CODES.UNIT_PARSE_ERROR
-                )
-            )
-        end
-    end
 
     # Build name → unit-string map using ONLY explicitly declared units.
     # Mirrors Python's conservative scope: skip when any relevant unit is

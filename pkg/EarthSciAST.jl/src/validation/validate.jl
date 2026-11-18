@@ -16,12 +16,16 @@ validate_structural(file::EsmFile)::Vector{StructuralError} =
 
 # What the units checks of one validation pass share, built once: the
 # document-wide scoped-reference units (esm-spec §4.8.4; units.jl's
-# `_ScopedUnits`) and each top-level model's template-expanded view
-# (`_units_view`).
+# `_ScopedUnits`), each top-level model's and reaction system's
+# template-expanded view (`_units_view`), the independent variable, and the
+# units checker's result once it has run (`_unit_check!`).
 struct _UnitsInputs
     file::EsmFile
     toplevel::Dict{String, Union{String, Nothing}}
     models::Dict{String, Model}
+    reaction_systems::Dict{String, ReactionSystem}
+    indep::String
+    checked::Base.RefValue{Any}
 end
 
 function _UnitsInputs(file::EsmFile)
@@ -31,7 +35,15 @@ function _UnitsInputs(file::EsmFile)
             models[name] = _units_view(file, name, model)
         end
     end
-    return _UnitsInputs(file, _toplevel_scoped_units(file), models)
+    rss = Dict{String, ReactionSystem}()
+    if file.reaction_systems !== nothing
+        for (name, rs) in file.reaction_systems
+            rss[name] = _reaction_system_units_view(file, name, rs)
+        end
+    end
+    return _UnitsInputs(
+        file, _toplevel_scoped_units(file), models, rss, _indep_var(file), Ref{Any}(nothing)
+    )
 end
 
 function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{StructuralError}
@@ -179,16 +191,11 @@ function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{Struct
             )
             append!(errors, validate_physical_constant_units(model, "/models/$model_name"))
             append!(errors, validate_conversion_factor_consistency(model, "/models/$model_name"))
-            # Dimensional analysis over equations and variable definitions:
-            # the units engine's entry into the validation path.
-            append!(
-                errors, validate_model_unit_consistency(
-                    units.models[model_name], "/models/$model_name";
-                    toplevel = scoped_toplevel
-                )
-            )
         end
     end
+
+    # The units checker: every unit check site of every component, judged once.
+    append!(errors, _unit_check!(units).errors)
 
     # 5b. Coupling-cycle detection (§3.2). A dependency cycle among top-level
     # systems means no evaluation order exists.
