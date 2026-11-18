@@ -31,14 +31,18 @@ using OrderedCollections: OrderedDict
 # frame, so a chain of references doubling at every level stays linear.
 struct _RefFrame
     bind::Dict{String, Tuple{ASTExpr, Any}}   # parameter => (binding, its frame)
+    body::ASTExpr                            # the body this instance reads
 end
 
 struct _RefWalk
     reg::Any
     bodies::Dict{String, Any}           # template name => typed body, or `nothing`
+    # template name => its parameters that occur somewhere other than as a
+    # variable leaf (an `output_idx` entry, a `ranges` index set, `wrt`, …)
+    structural::Dict{String, Vector{String}}
     frames::Dict{Any, _RefFrame}
 end
-_RefWalk(reg) = _RefWalk(reg, Dict{String, Any}(), Dict{Any, _RefFrame}())
+_RefWalk(reg) = _RefWalk(reg, Dict{String, Any}(), Dict{String, Vector{String}}(), Dict{Any, _RefFrame}())
 
 # The typed body of template `name`, parsed once per walk; `nothing` with no
 # registry entry or a body that does not parse (the build reports both).
@@ -55,18 +59,91 @@ function _ref_body(w::_RefWalk, name)
     end
 end
 
+# How often the string `p` occurs in the raw body (every place expansion's
+# `_substitute` replaces it: never a reference's `name`), and how often as a
+# variable leaf of the typed body.
+function _raw_count(n, p::String)
+    n isa AbstractString && return String(n) == p ? 1 : 0
+    if _is_object(n)
+        c = 0
+        apply = _is_apply_node(n)
+        for (k, v) in pairs(n)
+            (apply && string(k) == "name") && continue
+            c += _raw_count(v, p)
+        end
+        return c
+    end
+    n isa AbstractVector && return sum(x -> _raw_count(x, p), n; init = 0)
+    return 0
+end
+function _leaf_count(e::ASTExpr, p::String)
+    e isa VarExpr && return e.name == p ? 1 : 0
+    e isa OpExpr || return 0
+    return sum(c -> _leaf_count(c, p), child_exprs(e); init = 0)
+end
+
+# The parameters of `name` that expansion substitutes somewhere other than a
+# variable leaf: the walk can read those only on the instance's own body.
+function _ref_structural(w::_RefWalk, name::String, body::ASTExpr)
+    return get!(w.structural, name) do
+        raw = _raw_get(w.reg[name], "body")
+        String[p for p in _TemplateDecl(w.reg[name]).params if _raw_count(raw, p) != _leaf_count(body, p)]
+    end
+end
+
 # The body a reference `e` (read in `frame`) denotes and the frame its
-# parameters read in, or `nothing`.
+# parameters read in, or `nothing` for a template the registry does not have.
+# A reference whose bindings do not cover the template's parameters exactly is
+# refused, as expansion refuses it. A parameter expansion would substitute in
+# a structural position (an `output_idx` entry, a `ranges` index set, `wrt`)
+# is substituted into the instance's body, once per instance, so the walk reads
+# exactly what the expanded tree has there; every other parameter is read
+# through the frame.
 function _ref_enter(w::_RefWalk, e::OpExpr, frame)
     body = _ref_body(w, e.name)
     body === nothing && return nothing
+    name = String(e.name)
+    params = _TemplateDecl(w.reg[name]).params
+    given = e.bindings === nothing ? Set{String}() : Set{String}(String(k) for k in keys(e.bindings))
+    for p in params
+        p in given || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "apply_expression_template '$name' missing binding for param '$p'"
+            )
+        )
+    end
+    for p in given
+        p in params || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "apply_expression_template '$name' supplies unknown param '$p'"
+            )
+        )
+    end
     binds = e.bindings === nothing ? Pair{String, ASTExpr}[] :
         sort!([String(k) => v for (k, v) in e.bindings]; by = first)
-    key = (String(e.name), objectid(frame), Tuple((k, objectid(v)) for (k, v) in binds))
-    f = get!(w.frames, key) do
-        _RefFrame(Dict{String, Tuple{ASTExpr, Any}}(k => (v, frame) for (k, v) in binds))
+    key = (name, objectid(frame), Tuple((k, objectid(v)) for (k, v) in binds))
+    f = get(w.frames, key, nothing)
+    if f === nothing
+        bind = Dict{String, Tuple{ASTExpr, Any}}(k => (v, frame) for (k, v) in binds)
+        structural = _ref_structural(w, name, body)
+        ibody = body
+        if !isempty(structural)
+            sub = Dict{String, Any}()
+            for p in structural
+                x, _ = _ref_leaf(bind[p][1], frame)
+                sub[p] = serialize_expression(x)
+            end
+            ibody = expression_from_json(_substitute(_raw_get(w.reg[name], "body"), sub))
+            for p in structural
+                delete!(bind, p)
+            end
+        end
+        f = _RefFrame(bind, ibody)
+        w.frames[key] = f
     end
-    return (body, f)
+    return (f.body, f)
 end
 
 # A leaf of the tree read in `frame`: a parameter reads as its binding (in the

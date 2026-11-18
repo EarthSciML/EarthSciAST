@@ -928,6 +928,18 @@ function _cg_free_ordered!(acc::Vector{Symbol}, seen::Set{Symbol}, ex, bound::Se
     return acc
 end
 
+# The names in `bound` in order of first appearance in `ex`.
+function _cg_bound_ordered!(acc::Vector{Symbol}, seen::Set{Symbol}, ex, bound::Set{Symbol})
+    if ex isa Symbol
+        (ex in bound && !(ex in seen)) && (push!(seen, ex); push!(acc, ex))
+    elseif ex isa Expr
+        for a in ex.args
+            _cg_bound_ordered!(acc, seen, a, bound)
+        end
+    end
+    return acc
+end
+
 _cg_rename_syms(ex::Symbol, m::Dict{Symbol, Symbol}) = get(m, ex, ex)
 _cg_rename_syms(ex::Expr, m::Dict{Symbol, Symbol}) =
     Expr(ex.head, Any[_cg_rename_syms(a, m) for a in ex.args]...)
@@ -940,12 +952,14 @@ function _cg_instance_call!(ctx::_CGFunction, body)
     free = _cg_free_ordered!(Symbol[], Set{Symbol}(), body, bound)
     # Locals the body binds are renamed too, so two uses whose bodies differ
     # only in the names the emitter minted for them read as the same text.
+    # Both in order of first appearance: the emitter's own counters would
+    # sort `_cgq10` before `_cgq9`.
     ren = Dict{Symbol, Symbol}()
     for (i, s) in enumerate(free)
         ren[s] = Symbol("_cga", i)
     end
-    for s in sort!(collect(bound); by = string)
-        haskey(ren, s) || (ren[s] = Symbol("_cgl", length(ren) + 1))
+    for (i, s) in enumerate(_cg_bound_ordered!(Symbol[], Set{Symbol}(), body, bound))
+        ren[s] = Symbol("_cgl", i)
     end
     canon = _cg_rename_syms(body, ren)
     key = string(canon)
@@ -959,18 +973,30 @@ function _cg_instance_call!(ctx::_CGFunction, body)
         end
     end
     ln = LineNumberNode(0, Symbol("ess-template-instance"))
-    stmts = Any[Expr(:meta, :no_constprop)]
+    # A small body is inlined where it is called: the call would cost more than
+    # the body, and a per-cell call keeps the loop from vectorizing. Inlining
+    # leaves one definition per instance; only LLVM sees the copies.
+    nodes = _cg_expr_size(canon)
+    _count_max!(:cg_instance_fn_max_nodes, nodes)
+    small = nodes <= _CG_INSTANCE_INLINE_MAX_NODES
+    small && _count!(:cg_instance_fn_inlined)
+    stmts = Any[Expr(:meta, small ? :inline : :no_constprop)]
     _cg_reads_sym(canon, :_cgT) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
     push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $canon)))
     name = _cg_name(ctx, "hi")
     params = Any[:u, :p, :t, (Symbol("_cga", i) for i in eachindex(free))...]
     fdef = Expr(:function, Expr(:call, name, params...), Expr(:block, stmts...))
-    def = Expr(:macrocall, Symbol("@noinline"), ln, fdef)
+    def = Expr(:macrocall, Symbol(small ? "@inline" : "@noinline"), ln, fdef)
     push!(ctx.helpers, def)
     ctx.instfns[key] = (name, length(ctx.helpers), def)
     _tally_cascade!(:cg_instance_fn)
     return Expr(:call, name, args...)
 end
+
+# Emitted-node size up to which an instance function is inlined at its calls.
+# Measured on a 6-tracer, 400-cell flux template (test fixture, by-value
+# section): out of line, the per-cell call made the right-hand side 4x slower.
+const _CG_INSTANCE_INLINE_MAX_NODES = 2000
 
 _cg_reads_sym(ex::Symbol, s::Symbol) = ex === s
 _cg_reads_sym(ex::Expr, s::Symbol) = any(a -> _cg_reads_sym(a, s), ex.args)
@@ -2256,7 +2282,8 @@ end
 # name(params…) … end`, every parameter a plain name — or `nothing`.
 function _cg_inner_def(s)
     s isa Expr || return nothing
-    if s.head === :macrocall && length(s.args) == 3 && s.args[1] === Symbol("@noinline")
+    if s.head === :macrocall && length(s.args) == 3 &&
+            (s.args[1] === Symbol("@noinline") || s.args[1] === Symbol("@inline"))
         s = s.args[3]
     end
     (s isa Expr && s.head === :function && length(s.args) == 2) || return nothing
@@ -2300,6 +2327,10 @@ end
 # `by_value` fixes the choice instead (a second generated function that shares
 # the first one's `tabs`, and so must take the transport the first one took).
 function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool} = nothing)
+    # A section under the size threshold inlines its template-instance
+    # functions: one definition per instance still, but no per-cell call that
+    # would keep a small kernel's loop from vectorizing.
+    _cg_section_small(ex) && (ex = _cg_inline_instances(ex))
     body = ex.args[2]::Expr
     defs = Tuple{Symbol, Vector{Symbol}, Any}[]
     rest = Any[]
@@ -2329,6 +2360,34 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
     _tally_cascade!(:cg_split_by_value)
     return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)
+end
+
+# Whether the generated function `ex` is under the by-value size threshold.
+function _cg_section_small(ex::Expr)
+    lim = _tuning_now().by_value_min_nodes
+    return _cg_expr_size_upto(ex, lim) <= lim
+end
+
+_cg_is_instance_fn(name::Symbol) = startswith(String(name), "_cghi")
+
+# `ex` with every template-instance function (`_cg_instance_call!`) made
+# inlinable: `@inline`, its `no_constprop` meta replaced by `inline` (which the
+# by-value generator keeps in place of `noinline`).
+function _cg_inline_instances(ex::Expr)
+    body = ex.args[2]::Expr
+    any(s -> (d = _cg_inner_def(s); d !== nothing && _cg_is_instance_fn(d[1])), body.args) || return ex
+    stmts = Any[]
+    for s in body.args
+        d = _cg_inner_def(s)
+        if d !== nothing && _cg_is_instance_fn(d[1])
+            fdef = s.args[3]
+            fb = fdef.args[2]
+            nb = Expr(:block, Expr(:meta, :inline), filter(x -> !(x isa Expr && x.head === :meta), fb.args)...)
+            s = Expr(:macrocall, Symbol("@inline"), s.args[2], Expr(:function, fdef.args[1], nb))
+        end
+        push!(stmts, s)
+    end
+    return Expr(ex.head, ex.args[1], Expr(:block, stmts...))
 end
 
 # A by-value sub-function: a callable whose call is a generated function of this
@@ -2453,12 +2512,15 @@ Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
     # A `meta` heading the definition's body (a template-instance function's
     # `no_constprop`, `_cg_instance_call!`) must head the method's body to
     # take effect, so it moves up with `noinline`.
-    metas = Any[Expr(:meta, :noinline)]
+    metas = Any[]
     if body isa Expr && body.head === :block && !isempty(body.args) &&
             body.args[1] isa Expr && (body.args[1]::Expr).head === :meta
         push!(metas, body.args[1])
         body = Expr(:block, body.args[2:end]...)
     end
+    # An inlinable instance function (`_cg_inline_instances`) carries
+    # `inline`; every other sub-function is compiled on its own.
+    any(m -> m.args == Any[:inline], metas) || pushfirst!(metas, Expr(:meta, :noinline))
     return Expr(
         :block,
         # Compiled on its own, as the inner definition it replaces would be.

@@ -768,6 +768,14 @@ function _count!(k::Symbol, n::Int = 1)
     return nothing
 end
 
+# Record `n` under `k` when it is larger than what `k` holds (a maximum, kept
+# in the same sink as the counts).
+function _count_max!(k::Symbol, n::Int)
+    c = _counts_sink()
+    c === nothing || (c[k] = max(get(c, k, 0), n))
+    return nothing
+end
+
 # `(f(), counts)`: the value and every count `f` produced on this task. A nested
 # call also adds its counts into the enclosing one.
 function _with_counts(f)
