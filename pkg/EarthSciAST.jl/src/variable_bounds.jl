@@ -61,25 +61,12 @@ function _first_raw_bound(model, at::String)
     return nothing
 end
 
-"""
-    _raise_variable_bounds_esm_floor!(doc)
-
-Raise an emitted document's declared `esm` to 2.1.0 when a model variable at
-any depth carries `lb` or `ub` but the document declares less. A 2.0.0 file
-that mounts a 2.1.0 leaf with bounds is legal as authored, but the resolved
-document carries the leaf's bounds inline, and emitting it as 2.0.0 writes a
-document [`reject_variable_bounds_pre_v21`](@ref) refuses to read back. Like
-[`_raise_faq_esm_floor!`](@ref) it only ever raises.
-"""
-function _raise_variable_bounds_esm_floor!(doc)
-    doc isa AbstractDict || return doc
-    version = _declared_minor(doc)
-    (version === nothing || version >= (2, 1)) && return doc
+# Does a model variable at any depth carry `lb` or `ub`? The 2.1.0 save floor
+# (`_raise_esm_floors!`) reads it.
+function _has_variable_bound(doc)::Bool
     models = _raw_get(doc, "models")
-    (models !== nothing && _is_object(models)) || return doc
-    any(m -> _first_raw_bound(m, "") !== nothing, values(models)) || return doc
-    doc["esm"] = "2.1.0"
-    return doc
+    (models !== nothing && _is_object(models)) || return false
+    return any(m -> _first_raw_bound(m, "") !== nothing, values(models))
 end
 
 # ============================================================================

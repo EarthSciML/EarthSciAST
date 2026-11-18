@@ -253,6 +253,14 @@ fn conformance_round_trip_manifest() {
             failures.push(format!("{id}: dropped preserved field(s) at {lost:?}"));
         }
 
+        // 2b. SAVED VERSION (esm-spec §4.7, "Save-time version floors").
+        if let Some(want) = fixture.get("saved_esm").and_then(|v| v.as_str()) {
+            let got = emitted.get("esm").and_then(|v| v.as_str());
+            if got != Some(want) {
+                failures.push(format!("{id}: saved esm {got:?}, want {want:?}"));
+            }
+        }
+
         // 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer
         //    alone. A ledger-excused fixture whose emit is not RE-LOADABLE (a
         //    drop that removed a schema-required field) is recorded as a known

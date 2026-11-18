@@ -75,6 +75,32 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         end
     end
 
+    @testset "form A — resolve_subsystem_refs! anchors the injected ref at the mounting directory" begin
+        # The typed walk behind the public `resolve_subsystem_refs!(file, base)`
+        # is the second mount route; it must anchor the edge's injected import
+        # ref at `base`, the mounting document's directory, as loading does.
+        # The edge is read from the shared fixture.
+        dir = conf("inject_mounting_directory")
+        raw = JSON3.read(read(joinpath(dir, "subsystem_form.esm"), String))
+        edge = raw.models.Assembly.subsystems.Runoff
+        typed_edge = EarthSciAST.SubsystemRef(
+            String(edge.ref), Dict{String, Int}(), Any[e for e in edge.expression_template_imports]
+        )
+        assembly = EarthSciAST.Model(
+            Dict{String, EarthSciAST.ModelVariable}(), EarthSciAST.Equation[];
+            subsystems = EarthSciAST.OrderedDict{String, EarthSciAST.SubsystemNode}("Runoff" => typed_edge)
+        )
+        file = EarthSciAST.EsmFile(
+            "1.1.0", EarthSciAST.Metadata("typed_mount");
+            models = Dict{String, EarthSciAST.Model}("Assembly" => assembly)
+        )
+        file = EarthSciAST.resolve_subsystem_refs!(file, dir)
+        runoff = file.models["Assembly"].subsystems["Runoff"]
+        @test runoff isa EarthSciAST.Model
+        @test EarthSciAST.expanded_file(file).models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op ==
+            "makearray"
+    end
+
     @testset "form B — coupling-entry injection (§10.8 / §9.7.10)" begin
         # Option B: pin the Option-A `expanded.esm` golden with `expanded_file`.
         f = EarthSciAST.expanded_file(

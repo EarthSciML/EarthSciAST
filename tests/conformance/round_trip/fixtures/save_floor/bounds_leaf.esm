@@ -1,0 +1,24 @@
+{
+  "esm": "2.1.0",
+  "metadata": {
+    "name": "save_floor_bounds_leaf",
+    "description": "A leaf that declares esm 2.1.0 and puts a lower bound on a variable (esm-spec §6.3.2). Mounted by older_mounts_all_floors.esm, which declares esm 1.0.0 (esm-spec §4.7, \"Save-time version floors\").",
+    "authors": ["EarthSciAST"],
+    "created": "2026-11-17T00:00:00Z",
+    "tags": ["version", "mount", "variable_bounds", "save-floor"]
+  },
+  "models": {
+    "BoundsLeaf": {
+      "variables": {
+        "c": {"type": "unknown", "units": "mol/m^3", "default": 0.5, "lb": 0, "description": "A decaying concentration, never negative."},
+        "k": {"type": "parameter", "units": "1/s", "default": 0.1, "description": "Decay rate."}
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "-", "args": ["k"]}, "c"]}
+        }
+      ]
+    }
+  }
+}
