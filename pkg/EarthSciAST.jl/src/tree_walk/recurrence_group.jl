@@ -41,27 +41,6 @@ end
 
 _group_refuse(msg) = throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE", msg))
 
-# The frame position a member's offset reads of the group fold along: the first
-# axis on which some read `index(g, …)` of a member `g` is offset by a constant
-# (`k - c`), or 0 when none is. Only the axis is decided here; whether each read
-# is well founded is `_recurrence_axis`'s question on the stacked recurrence.
-function _group_member_axis(body, members::Vector{String}, idx_names::Vector{String})
-    env = Dict{String, Tuple{Int, Int}}()
-    reads = Vector{ASTExpr}[]
-    for g in members
-        _collect_self_read_args!(reads, body, g)
-    end
-    for args in reads
-        length(args) == length(idx_names) || continue
-        for (d, arg) in enumerate(args)
-            aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
-            (aff === nothing || aff[1] != 1 || aff[2] === nothing) && continue
-            aff[2] == (0, 0) || return d
-        end
-    end
-    return 0
-end
-
 function _stack_one_group!(
         variables::OrderedDict{String, ModelVariable},
         equations::Vector{Equation},
@@ -86,6 +65,24 @@ function _stack_one_group!(
         "the recurrence group $(sort!(collect(group))) has a member with no defining " *
             "`faq` equation (esm-spec §4.3.1.2)"
     )
+    # Each member's causal reads and frame, decided as the validator decides
+    # them (`_recurrence_equation_frame`, recurrence.jl).
+    rframes = map(zip(members, eq_idx)) do (m, i)
+        eq = equations[i]
+        vars = String[m; sort!([g for g in members if g != m])]
+        r = _recurrence_equation_frame(eq, i, m, _recurrence_lhs_target(eq.lhs)[2], vars, isets)
+        r isa _RecurrenceProblem && throw(_recurrence_build_error(r, m))
+        r === nothing || return r
+        # A member none of whose causal reads the validator's walk reaches is
+        # held to the group's frame all the same.
+        fa = _recurrence_frame_faq(eq, _recurrence_lhs_target(eq.lhs)[2])
+        idx = (fa === nothing || fa.output_idx === nothing) ? String[] :
+            String[string(x) for x in fa.output_idx]
+        return _RecurrenceFrame(
+            m, i, idx, _recurrence_frame_sig(idx, fa === nothing ? nothing : fa.ranges, isets),
+            nothing, String[]
+        )
+    end
     frames = map(zip(members, eq_idx)) do (m, i)
         eq = equations[i]
         unsupported() = _group_refuse(
@@ -118,66 +115,37 @@ function _stack_one_group!(
             (idx, ranges, body)
         end
     end
-    # The order §4.3.1.2 fixes for the member axis: a member another reads at
-    # the cell being written comes before it (rule 1), ties in equation order.
-    idx0 = frames[1][1]
-    same_cell(i, j) = _reads_same_cell(frames[i][3], members[j], idx0)
-    n = length(members)
-    order = Int[]
-    while length(order) < n
-        nxt = findfirst(
-            i -> !(i in order) &&
-                all(j -> j == i || !same_cell(i, j) || j in order, 1:n), 1:n
-        )
-        nxt === nothing && throw(
+    # One frame and one recurrence axis for the whole group, then the order
+    # §4.3.1.2 fixes for the member axis: a member another reads at the cell
+    # being written comes before it (rule 1), ties in equation order.
+    v = _recurrence_group_verdict(rframes)
+    if v.mismatch !== nothing
+        f, r = rframes[v.mismatch], rframes[something(v.ref, 1)]
+        same_frame = f.idx_names == r.idx_names && f.ranges_sig == r.ranges_sig
+        throw(
             TreeWalkError(
-                ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                "the members of the recurrence group $(members) read one another at the cell " *
-                    "being written in a cycle (esm-spec §4.3.1.2 rule 1)"
+                ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
+                same_frame ?
+                    "'$(f.var)' and '$(r.var)' form a recurrence group but fold along different " *
+                    "axes ('$(f.idx_names[f.axis])' and '$(r.idx_names[r.axis])'; esm-spec §4.3.1.2)" :
+                    "'$(f.var)' and '$(r.var)' form a recurrence group but do not sweep the same " *
+                    "cell frame (esm-spec §4.3.1.2)"
             )
         )
-        push!(order, nxt)
     end
+    v.order === nothing && throw(
+        TreeWalkError(
+            ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+            "the members of the recurrence group $(members) read one another at the cell " *
+                "being written in a cycle (esm-spec §4.3.1.2 rule 1)"
+        )
+    )
+    order = v.order
     first_eq = minimum(eq_idx)
     members = members[order]
     eq_idx = eq_idx[order]
     frames = frames[order]
     idx_names, ranges, _ = frames[1]
-    # Each frame axis's range as the validator resolves it (recurrence.jl,
-    # `_recurrence_symbol_bounds`), so `{from: lev}` and `[1, 4]` over a 4-element
-    # `lev` are one frame here exactly as at validation.
-    frame_sig(idx, rng) = Any[_group_frame_range(get(rng, s, nothing), isets) for s in idx]
-    sig1 = frame_sig(idx_names, ranges)
-    for (m, (idx, rng, _)) in zip(members[2:end], frames[2:end])
-        (idx == idx_names && frame_sig(idx, rng) == sig1) ||
-            throw(
-            TreeWalkError(
-                ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
-                "'$m' and '$(members[1])' form a recurrence group but do not sweep the same " *
-                    "cell frame (esm-spec §4.3.1.2)"
-            )
-        )
-    end
-    # One recurrence axis for the whole group (esm-spec §4.3.1.2): a member
-    # whose offset reads fold along another axis is the validator's
-    # `recurrence_group_axis_mismatch`, here too, before the stacked recurrence
-    # would report it as a disagreement inside one definition.
-    axis1, axis1_of = 0, ""
-    for (m, (idx, _, body)) in zip(members, frames)
-        a = _group_member_axis(body, members, idx)
-        a == 0 && continue
-        if axis1 == 0
-            axis1, axis1_of = a, m
-        elseif a != axis1
-            throw(
-                TreeWalkError(
-                    ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
-                    "'$m' and '$axis1_of' form a recurrence group but fold along different " *
-                        "axes ('$(idx[a])' and '$(idx_names[axis1])'; esm-spec §4.3.1.2)"
-                )
-            )
-        end
-    end
     RECURRENCE_MEMBER_SYM in idx_names && _group_refuse(
         "'$RECURRENCE_MEMBER_SYM' is reserved for the member axis of a recurrence group"
     )
@@ -279,31 +247,4 @@ function _cell_restricted_body(rhs::OpExpr, idx::Vector{String})
         rhs.distinct === true
     (isempty(remaining) && !gated) && return rhs.expr_body::ASTExpr
     return reconstruct(rhs; output_idx = Any[], ranges = remaining)
-end
-
-# One frame axis's range for the group frame comparison: its bounds when an
-# interval or a dense index set proves them, the authored spec otherwise.
-function _group_frame_range(spec, isets::AbstractDict)
-    spec === nothing && return nothing
-    b = _recurrence_symbol_bounds(spec, isets)
-    return b === nothing ? repr(spec) : b
-end
-
-# Does `e` read member `peer` at the cell being written — `index(peer, k…)` with
-# every index the bare frame symbol of its axis?
-function _reads_same_cell(e::ASTExpr, peer::String, idx_names::Vector{String})::Bool
-    found = Ref(false)
-    foreach_subexpr_once(e) do x
-        found[] && return nothing
-        if x isa OpExpr && x.op == "index" && length(x.args) == length(idx_names) + 1 &&
-                x.args[1] isa VarExpr && (x.args[1]::VarExpr).name == peer &&
-                all(
-                d -> x.args[d + 1] isa VarExpr && (x.args[d + 1]::VarExpr).name == idx_names[d],
-                1:length(idx_names)
-            )
-            found[] = true
-        end
-        return nothing
-    end
-    return found[]
 end

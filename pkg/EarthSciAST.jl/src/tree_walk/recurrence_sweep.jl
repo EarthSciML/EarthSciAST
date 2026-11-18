@@ -114,18 +114,15 @@ function _collect_self_read_args!(out::Vector{Vector{ASTExpr}}, e::ASTExpr, name
 end
 
 # The recurrence axis of `name`'s definition `def` (a `faq` whose output indices
-# are `idx_names`): each self-read through the validator's own lag analysis
-# (`_recurrence_read_lag`, recurrence.jl), against the RESOLVED ranges the build
-# holds, which prove at least as much. A
-# document that skipped `validate()` still cannot reach the sweep with a
-# self-read that is not well founded: it is refused here with the validator's
-# code.
+# are `idx_names`): its self-reads decided by the validator's own rules
+# (`_recurrence_reads_verdict`, recurrence.jl), against the RESOLVED ranges the
+# build holds, which prove at least as much. A document that skipped
+# `validate()` still cannot reach the sweep with a self-read that is not well
+# founded: it is refused here with the validator's code.
 #
-# Returns `(axis, max_lag, lag_proven)`: the largest upper bound on the lag along
-# the axis over the reads whose lag HAS a static bound (a read with none adds
-# nothing, so the value bounds every read only when `lag_proven`), and whether
-# every read was proved strictly earlier. Both are reported, never used to
-# evaluate: an unproven read is ruled out at run time by the fail-closed
+# Returns `(axis, max_lag, lag_proven)` (see `_RecurrenceAxis`). The lag bound
+# and whether every read was proved strictly earlier are reported, never used
+# to evaluate: an unproven read is ruled out at run time by the fail-closed
 # self-read.
 function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     env = Dict{String, Tuple{Int, Int}}()
@@ -139,12 +136,6 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     body = def.expr_body
     body === nothing || _collect_self_read_args!(reads, body, name)
     def.filter === nothing || _collect_self_read_args!(reads, def.filter, name)
-    bad(msg) = throw(
-        TreeWalkError(
-            ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-            "'$name': $msg (esm-spec §4.3.1.1)"
-        )
-    )
     isempty(reads) && throw(
         TreeWalkError(
             ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
@@ -152,31 +143,32 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
                 "self-read must sit in the body a cell evaluates (esm-spec §4.3.1.1)"
         )
     )
-    axis = 0
-    max_lag = 0
-    lag_proven = true
-    for args in reads
-        lag = _recurrence_read_lag(
-            args, idx_names, env; member_sym = RECURRENCE_MEMBER_SYM
-        )
-        lag isa _LagDefect && throw(
-            TreeWalkError(ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED, _lag_defect_message(lag, name))
-        )
-        lag_proven &= lag.proven
-        max_lag = max(max_lag, lag.lag_hi)
-        # A stacked group's same-cell read of an EARLIER member (esm-spec
-        # §4.3.1.2 rule 1): published in within-cell order, so the fail-closed
-        # read admits it exactly when that member precedes this one.
-        lag.axis == 0 && RECURRENCE_MEMBER_SYM in idx_names && continue
-        lag.axis == 0 && bad("a causal self-read is at the same cell on every axis")
-        axis == 0 && (axis = lag.axis)
-        axis == lag.axis ||
-            bad(
-            "the causal self-reads disagree on the recurrence axis " *
-                "('$(idx_names[axis])' and '$(idx_names[lag.axis])')"
-        )
-    end
-    return axis, max_lag, lag_proven
+    noenv = Dict{String, Tuple{Int, Int}}()
+    v = _recurrence_reads_verdict(
+        (_RecurrenceSelfRead(args, noenv, false, name) for args in reads), name, idx_names, env;
+        member_sym = RECURRENCE_MEMBER_SYM
+    )
+    v isa _RecurrenceProblem && throw(_recurrence_build_error(v, name))
+    return v.axis, v.max_lag, v.lag_proven
+end
+
+# The build's error for problem `p` in the definition of `name`, with the
+# validator's code (`_recurrence_problem_code`) and, outside the two short
+# forms below, the validator's message.
+function _recurrence_build_error(p::_RecurrenceProblem, name::AbstractString)
+    k = p.kind
+    idx_names = p.idx_names
+    code = _recurrence_problem_code(p)
+    k === :lag && return TreeWalkError(code, _lag_defect_message(p.lag::_LagDefect, name))
+    k === :same_cell && return TreeWalkError(
+        code, "'$name': a causal self-read is at the same cell on every axis (esm-spec §4.3.1.1)"
+    )
+    k === :axes_disagree && return TreeWalkError(
+        code,
+        "'$name': the causal self-reads disagree on the recurrence axis " *
+            "('$(idx_names[p.axis])' and '$(idx_names[p.axis2])') (esm-spec §4.3.1.1)"
+    )
+    return TreeWalkError(code, first(_recurrence_problem_message(p, name)))
 end
 
 # What `BuildInspection.recurrences` reports for the recurrence `name`, read off
