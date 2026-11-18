@@ -5,7 +5,7 @@
 # against small thresholds.
 _sat_add(a::Int, b::Int) = a > typemax(Int) - b ? typemax(Int) : a + b
 
-# ---- Unique-node walks over a shared DAG (ESS-0hh) -----------------------------
+# ---- Unique-node walks over a shared DAG -----------------------------
 # The structural passes that count repeats — the scalar CSE count (`_cse_count!`),
 # the access-kernel value numbering (`_build_acc_cse`, access_kernel.jl) and the
 # emitters' repeated sub-trees (`_cg_share_groups`, array_contraction.jl) — walk

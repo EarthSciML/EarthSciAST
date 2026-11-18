@@ -1,5 +1,5 @@
 # ========================================================================
-# tree_walk/geometry_setup.jl — part of the tree-walk evaluator (gt-e8yw).
+# tree_walk/geometry_setup.jl — part of the tree-walk evaluator.
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 2 (build-time setup arrays): the setup-time
 # materializers of build-once array observeds (_GeoCtx; the body COMPILER lives
@@ -369,10 +369,9 @@ end
 #   * spelling:  here the projection kinds `"sum"`/`"prod"` are accepted
 #     (`_REDUCE_PROJECTION_KINDS`); the runtime resolver speaks only ⊕
 #     spellings (`+`, `*`, `max`, `min`, `or`).
-# Failure handling, however, now MATCHES the runtime: an unrecognized reduce
-# spelling or semiring name FAILS CLOSED with the same E_TREEWALK codes rather
-# than silently degrading to the additive fold (which previously also made a
-# non-additive semiring name such as `max_product` silently SUM).
+# Failure handling matches the runtime: an unrecognized reduce spelling or
+# semiring name fails with the same E_TREEWALK codes rather than degrading to
+# the additive fold.
 function _geo_reduce_fold(reduce_spec, semiring_spec)
     oplus = if reduce_spec !== nothing
         # `reduce` shorthand, plus the geometry-only projection spellings.
@@ -555,7 +554,7 @@ function _geo_overlap_index(clause::_OverlapJoinSpec, env::AbstractDict, cache)
 end
 
 # Resolve this aggregate's FIRST usable `overlap` clause against the sweep's
-# lexical scope. Declines (⇒ `nothing`, i.e. the historic ungated sweep) when
+# lexical scope. Declines (⇒ `nothing`, the ungated sweep) when
 # either env-factor list does not map to a loop var in scope, or when a named
 # envelope factor is not a materialized array in `env`; every compiler declines
 # alike, so the compilers agree there.
@@ -566,8 +565,8 @@ end
 # axis is always its position axis (`_overlap_env_rank`). The factor ranks are
 # checked below against `_overlap_env_rank`, the rule `_overlap_env_sym` in
 # tree_walk/join_gates.jl (the right-hand side's resolver) also checks. The two
-# differ in what a mismatch does: here it DECLINES to the ungated sweep, which
-# still gives the old values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
+# differ in what a mismatch does: here it declines to the ungated sweep, which
+# computes the same values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)
     faq.join === nothing && return nothing
     for clause in faq.join
@@ -1192,7 +1191,7 @@ function _materialize_setup_general_map(
     # Resolve+compile the MAP body ONCE with the output indices bound as
     # parameters, then walk the cells rebinding only those. Any decline (⇒
     # `nothing`) or ANY eval-time error keeps the untouched per-cell loop below,
-    # so both the values and the error behaviour stay exactly as before.
+    # so the values and the errors are the per-cell loop's.
     ce = _setup_map_compile_once(rhs, nd, ca, params)
     # The cell the compiled sweep failed at, if it failed: the one cell a strict
     # compiler checks against the per-cell reference before refusing.
@@ -1466,11 +1465,10 @@ end
 # Do NOT re-hand-roll the field list here. This walker feeds the setup-geometry
 # dependency closure, the live-taint pass, `_resolve_observed`'s inlining
 # trigger AND the cadence materialization split (`_discrete_materialize_split`),
-# where a MISSED reference is a silent wrong answer: a def whose only state read
-# sits in an aggregate `filter` used to classify as state-free and get frozen
-# into a discrete-cadence cache at `u = 0`. Routing through
-# `child_exprs` is what keeps this walker from drifting out of sync with the
-# rest of the IR again; `_build_discrete_materializer!` additionally CHECKS the
+# where a missed reference is a silent wrong answer (a def whose only state read
+# sits in an aggregate `filter` would be frozen into a discrete-cadence cache at
+# `u = 0`). Routing through `child_exprs` keeps this walker in step with the
+# IR; `_build_discrete_materializer!` additionally CHECKS the
 # result on the compiled fill nodes, so a future divergence fails loudly.
 #
 # IDENTITY-MEMOIZED (`foreach_subexpr_once`, expression.jl — the same generated
@@ -1478,7 +1476,7 @@ end
 # DAGs — `_resolve_observed` bodies keep sharing via `_sub_preserving`'s
 # identity memo, and this walker runs INSIDE that resolver's fixed-point loop —
 # so the plain path-walk (`foreach_subexpr`) was exponential on an observed
-# chain whose levels each reference their predecessor ≥2× (ESS-1p5). A name set
+# chain whose levels each reference their predecessor ≥2×. A name set
 # is dedup-insensitive, so the result is identical to the un-memoized walk.
 function _referenced_var_names(expr, acc::Set{String} = Set{String}())
     expr isa ASTExpr || return acc

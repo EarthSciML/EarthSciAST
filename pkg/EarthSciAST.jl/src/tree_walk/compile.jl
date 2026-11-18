@@ -242,12 +242,8 @@ function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
             ref = expr.value::_PGatherRef
             return _mknode(kind = _NK_PARAM_GATHER, idx = ref.lin, payload = ref.flat)
         end
-        # A const/provider-array read at a RUNTIME-computed offset.
-        # `_resolve_indices` (const-array branch) stashed a `_ConstGatherRef` in
-        # `value` and kept the subscripts as `args`; the generic `children` compile
-        # above already lowered each subscript (a constant → `_NK_LITERAL`, a bound
-        # output-index `VarExpr` → `_NK_PARAM`). Hand those subscript nodes to
-        # `_const_gather_node` (Phase B) so the offset is computed at eval time.
+        # A const or provider array read at an offset computed at eval time
+        # from the subscript children compiled above.
         if expr.value isa _ConstGatherRef
             ref = expr.value::_ConstGatherRef
             return _const_gather_node(ref.vals, children; name = ref.name)

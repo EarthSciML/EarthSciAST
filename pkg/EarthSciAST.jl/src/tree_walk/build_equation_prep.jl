@@ -21,7 +21,7 @@
 # their operand (`_index_through_shape_op`, shape_ops.jl); a bare one still meets
 # its `unevaluable_operator` rejection in `_compile_op`.
 #
-# DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).
+# DAG-SAFE, WITHOUT TAXING THE COMMON CASE.
 # `map_children` already declines to REBUILD an unchanged node, which keeps a
 # shared DAG shared on the way out — but the WALK itself was per-PATH, so a node
 # reachable by 2^d paths was re-entered 2^d times even when nothing changed and
@@ -112,7 +112,7 @@ _lower_broadcast_model(model::Model)::Model = map_expressions(_lower_broadcast, 
 # An ARRAY-shaped observed written with the indexed spelling therefore landed in
 # no bucket at all and fell through to `_partition_variables` as
 # `E_TREEWALK_UNSUPPORTED_SHAPE: <name>` — a loud refusal of a document Rust and
-# Python both run (issue #232). The scalar case never showed it, because a scalar
+# Python both run. The scalar case never showed it, because a scalar
 # observed has no `index` shell to write.
 #
 # Fix the SPELLING once, here, upstream of every classifier, rather than teaching
@@ -348,18 +348,13 @@ function _lift_wholearray_deriv_equations(
             lhs = lhs::OpExpr
             vname = (lhs.args[1]::VarExpr).name
             shape = var_shapes[vname]
-            # A3 (cross-equation variant memo): UNIFORM loop names (`_lp0`,
-            # `_lp1`, …) rather than the historical state-suffixed
-            # `_lp0_$(vname)`, so two lifted equations over the same shape index
-            # the same (interned) rhs producers with IDENTICAL index
-            # expressions — which is what lets the per-build `_XEqStore` share
-            # one compiled template body across D(m,t)/D(mq,t)/D(dev,t).
-            # Pure alpha-renaming: the generated names are engine-internal loop
-            # indices, never part of a cell key, branch key, or emitted value.
-            # Collision guard: if the rhs actually uses an `_lpN` name as a
-            # variable (or the state itself is so named), fall back to the
-            # historical suffixed names for THIS equation — the pre-A3 scheme,
-            # whose own collision exposure was the same one suffix over.
+            # Uniform loop names (`_lp0`, `_lp1`, …), so two lifted equations
+            # over the same shape index the same (interned) producers with
+            # identical index expressions and the per-build `_XEqStore` shares
+            # one compiled template body across them. The names are internal
+            # loop indices, never part of a cell key, branch key or value. If
+            # the rhs uses an `_lpN` name as a variable (or the state is so
+            # named), this equation takes state-suffixed names instead.
             loops = String["_lp$(i - 1)" for i in 1:length(shape)]
             clash = vname in loops
             clash || foreach_subexpr_once(eq.rhs) do x
@@ -406,9 +401,7 @@ end
 # `faq`), a `const` field, a gather/reshape (`index`, `reshape`, `transpose`,
 # `concat`, `broadcast`), a value-invention op (`distinct`), or a bare alias — is left to
 # its own dedicated handler (const_arrays, `_array_inline_vars`, geometry setup,
-# the bare-alias path). Restricting the fold to this allowlist keeps it provably
-# regression-free: an elementwise array observed was previously REJECTED
-# (`E_TREEWALK_UNSUPPORTED_SHAPE`), so no prior-passing build exercised one.
+# the bare-alias path).
 #
 # INVARIANT: every op here MUST have a scalar arm in `_eval_node_op` (and hence a
 # matching arm in `_eval_acc_op`) — the fold inlines the op into a state RHS,
@@ -425,7 +418,7 @@ const _WS4_FOLDABLE_ELEMENTWISE_OPS = _ops_with(:ws4_foldable)
 # DAG yields a DAG of the same shape instead of re-inflating it into an
 # exponentially larger TREE (plain `substitute` rebuilds every changed
 # ancestor once per PATH — on a doubling chain the output itself blows up in
-# MEMORY, not just time; ESS-0hh). Results are identical to `substitute` up
+# MEMORY, not just time). Results are identical to `substitute` up
 # to sharing.
 #
 # NOT `_sub_preserving` (expression.jl): that helper substitutes only
@@ -471,21 +464,20 @@ end
 #   * an ELEMENTWISE combination (`_is_scalar_op`) that is array-valued by this
 #     same rule at any depth.
 #
-# The last clause is the point. The two sites used to test only the IMMEDIATE
-# operands, so `index(1 + cos(pi*zc), j)` — the shape an elementwise-defined
+# The last clause matters: testing only the immediate operands would miss `index(1 + cos(pi*zc), j)` — the shape an elementwise-defined
 # array observed (`f = 1 + cos(pi*zc)`) takes once
 # `_fold_elementwise_array_observeds` inlines it into a reader that gathers it,
 # `index(f, j)` — matched nothing: `1` is a literal and `cos(pi*zc)` is neither a
 # producer node nor a variable, so no operand was wrapped, the gather was
 # dropped, and the array leaf `zc` survived bare into `_compile` as
-# `E_TREEWALK_UNBOUND_VARIABLE: zc` (issue #175). Recursing through elementwise
+# `E_TREEWALK_UNBOUND_VARIABLE: zc`. Recursing through elementwise
 # ops sees `zc` under the `cos`, wraps `cos(pi*zc)` whole, and the re-resolution
 # of `index(cos(pi*zc), j)` pushes the gather down the same way until it lands on
 # the leaf as `1 + cos(pi*index(zc, j))`. Distribution is exact for an
 # elementwise op, so this is the same value the explicit gather spelling would
 # have produced.
 #
-# IDENTITY-MEMOIZED over `OpExpr` (the ESS-0hh convention): the folded body is a
+# IDENTITY-MEMOIZED over `OpExpr`: the folded body is a
 # structurally-shared DAG, and `any` over a shared subtree would otherwise be
 # re-walked once per path. One memo per push-down decision — `is_array_leaf` is
 # fixed within it.
@@ -538,7 +530,7 @@ end
 # their own per-cell indexing and are inlined by the `_array_inline_vars` index
 # beta-reduction downstream. So the fold pulls only the elementwise combinators
 # into the state equation, whose whole-array lift then indexes the surviving
-# producer refs per cell — reproducing the hand-inlined RHS the leaf used to carry.
+# producer refs per cell, as a hand-inlined RHS would.
 #
 # This is the model-level counterpart of `inline_elementwise_array_observeds`
 # (shape_promotion.jl). Runs after observed-equation synthesis and before the

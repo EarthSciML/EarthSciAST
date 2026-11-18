@@ -16,10 +16,9 @@
 # recorded expansion roots from the tree by identity. Walk the old and new trees
 # in parallel (`child_exprs` yields the same expression slots in the same order
 # when only non-expression fields changed) and map each recorded root to its
-# rebuilt counterpart. Old keys are kept (harmless — they no longer appear in
-# any tree); a subtree whose expression-slot count changed is skipped, so its
+# rebuilt counterpart. Old keys are kept (they appear in no tree); a subtree whose expression-slot count changed is skipped, so its
 # sites degrade to the fused build — slower, never wrong.
-# Identity-deduped on the OLD node (ESS-0hh): the shape-preserving rewrites are
+# Identity-deduped on the OLD node: the shape-preserving rewrites are
 # identity-memoized, so a shared old node maps to exactly ONE new node — a
 # repeat (old, new) visit through another parent is redundant, and skipping it
 # keeps the lockstep walk O(distinct nodes) on a shared DAG (unchanged

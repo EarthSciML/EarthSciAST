@@ -14,7 +14,7 @@
 # IDENTITY-MEMOIZED (`foreach_subexpr_once`): a pure existence predicate is
 # path-multiplicity-insensitive, and the cadence-split def bodies scanned here
 # are DAGs after template lowering / `_sub_preserving` — the per-path walk
-# (`foreach_subexpr`) was exponential on a shared doubling chain (ESS-0hh).
+# (`foreach_subexpr`) was exponential on a shared doubling chain.
 function _has_param_indexed_gather(e::ASTExpr, scalar_params::Set{String})
     found = false
     foreach_subexpr_once(e) do n
@@ -113,7 +113,7 @@ function _discrete_fill_order(discrete_vars::Set{String}, discrete_defs)
     )
 end
 
-# ---- The discrete-cadence STATE-FREEDOM CHECK (ess-5d1) ----
+# ---- The discrete-cadence STATE-FREEDOM CHECK ----
 # `materialize!` evaluates every fill node with `u = zeros(n_states)` and `t = 0.0`,
 # and re-runs only on a data-refresh event — so a fill node that READS a continuous
 # state or `t` does not merely give a wrong number once, it FREEZES the field at

@@ -489,8 +489,7 @@ function _require_build_time_env(env_names::AbstractVector, arrays::AbstractDict
     return nothing
 end
 
-# Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3 /
-# Phase 2a). Operates on the node's ORIGINAL ranges (index-set `{from}` refs
+# Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3). Operates on the node's ORIGINAL ranges (index-set `{from}` refs
 # intact) so it can read categorical members from the document registry; a key
 # that names a value-invention map buffer gates on the materialised buffer values
 # instead. A `_OverlapJoinSpec` clause resolves to an OVERLAP gate: the broad-
@@ -561,7 +560,7 @@ function _resolve_join_gates_for(
             pick_l = csyms === nothing ? :left : csyms[1]
             pick_r = csyms === nothing ? :right : csyms[2]
             # Resolve EVERY pair of the clause first. Pairs over the same two
-            # loop symbols are ONE composite key (§5.5.8 / BEHAV-10-B-002), and
+            # loop symbols are ONE composite key (§5.5.8), and
             # it is that composite match set — not the first pair's, which is a
             # superset — that drives. Pairs over different symbol pairs stay
             # separate gates, all of them ANDed by `_join_admits`.

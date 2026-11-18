@@ -1136,7 +1136,7 @@ function _build_evaluator_impl_inner(
         parameter_overrides::AbstractDict = Dict{String, Float64}(),
         tspan::Union{Nothing, Tuple{<:Real, <:Real}} = nothing,
         const_arrays::AbstractDict = Dict{String, Vector{Float64}}(),
-        # Live forcing buffers bound BY REFERENCE (ess-14f.3, JL-J0).
+        # Live forcing buffers bound BY REFERENCE.
         # Each value MUST be a dense `Array{Float64}`; its `index(…)`
         # reads compile to live `_NK_PARAM_GATHER` nodes over an
         # aliased flat view, so a discrete-cadence
@@ -1146,7 +1146,7 @@ function _build_evaluator_impl_inner(
         # literal inlining). Disjoint from the scalar `p` NamedTuple
         # so existing scalar-param reads stay byte-identical + 0-alloc.
         param_arrays::AbstractDict = Dict{String, Any}(),
-        # Per-const-array boundary policy (ess-gj4): name → an
+        # Per-const-array boundary policy: name → an
         # iterable of per-dimension policy symbols (:periodic |
         # :clamp | :error). A const array named here is wrapped so
         # an out-of-range stencil gather resolves declaratively
@@ -1259,9 +1259,8 @@ function _build_evaluator_impl_inner(
     _refuse_doubly_defined_unknown(model.equations)
     # A DATA-FED parameter with nothing bound to it is refused here too, and for
     # the same reason (esm-spec §9.6.6 `data_source_unbound`, CONFORMANCE_SPEC
-    # §5.46): this build used to bind such a parameter from its `default` and
-    # integrate it, reporting a whole trajectory under the label of a rate the
-    # document says is read from a file. The three registries are every channel a
+    # §5.46): binding it from its `default` would report a trajectory under the
+    # label of a rate the document says is read from a file. The three registries are every channel a
     # value can have arrived through by now — the resolved `parameter_overrides`,
     # `const_arrays` (a CONST provider's materialized field, a gated provider's
     # fetched slab, and inline array data for a shaped parameter) and
@@ -1317,8 +1316,8 @@ function _build_evaluator_impl_inner(
     end
     # ---- esm-spec §4.3.1 `faq_bare_array_operand`, on the EXPANDED model ----
     # `validate` (and the front door's reference-integrity refusal) cannot see a
-    # bare shaped name a template binding delivers into a `faq` filter, the
-    # spelling issue #441 was found in; here every reference is expanded.
+    # bare shaped name a template binding delivers into a `faq` filter; here
+    # every reference is expanded.
     _refuse_faq_bare_array_operands(model)
     # ---- §9.6.3 constraint 6: walk every equation for an unlowered op ----
     # BEFORE any pass that drops a tree (the elementwise fold, dead-observed

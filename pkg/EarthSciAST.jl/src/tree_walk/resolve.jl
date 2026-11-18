@@ -275,11 +275,8 @@ end
 # build-time literal data — the same shape as a REGISTERED const-array
 # observed, only authored inline. Intern it (dedup by value) and gather it
 # through the shared const-array path so a constant index folds to the
-# element and a symbolic loop var lowers to a `_ConstGatherRef`. Without
-# this the literal survives untouched to `_compile` and hits the
-# `non-scalar const outside an array-consuming position` dead-end. A SCALAR
-# `const` (a `Real` value) is not an array target — it falls through to the
-# generic recurse and const-folds in `_compile` as before.
+# element and a symbolic loop var lowers to a `_ConstGatherRef`. A scalar
+# `const` is not an array target; it const-folds in `_compile`.
 function _resolve_index_of_inline_const(c::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveCtx)
     memo, const_arrays = rc.memo, rc.const_arrays
     vals, cname = memo === nothing ?

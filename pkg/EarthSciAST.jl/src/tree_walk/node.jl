@@ -26,12 +26,12 @@ const _NK_PARAM = UInt8(3)   # read p.<sym>
 const _NK_TIME = UInt8(4)   # return t
 const _NK_OP = UInt8(5)   # apply op to children
 const _NK_CONTRACTION = UInt8(6)   # runtime ⊕-reduction over children (seq. fold)
-const _NK_CACHED = UInt8(7)   # common-subexpression ref: read cache[idx] (ess-r7h)
-const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx] (ess-14f.3)
-const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset (wall2 Phase B)
-const _NK_LOOPVAR = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter (ess-runtime-contraction)
-const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
-const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
+const _NK_CACHED = UInt8(7)   # common-subexpression ref: read cache[idx]
+const _NK_PARAM_GATHER = UInt8(8)   # read a captured live forcing buffer: payload[idx]
+const _NK_CONST_GATHER = UInt8(9)   # read a captured const/provider array at an EVAL-TIME-computed offset
+const _NK_LOOPVAR = UInt8(10)  # read the current value of an enclosing runtime contraction loop counter
+const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration
+const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
 const _NK_RAGGED_LOOP = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an EVAL-TIME-computed offset (a loop-var subscript)
@@ -46,9 +46,9 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 # scripts/enzyme_aliasing/ for the measurement and what a payload-free lowering
 # would and would not buy:
 #   * `_NK_PARAM_GATHER` — the aliased flat `Vector{Float64}` of a live
-#     forcing buffer (`_PGatherArray.flat`, ess-14f.3); `idx` holds the
+#     forcing buffer (`_PGatherArray.flat`); `idx` holds the
 #     pre-linearized column-major offset.
-#   * `_NK_CONST_GATHER` — a `_ConstGatherArray` (wall2 Phase B): the flattened
+#   * `_NK_CONST_GATHER` — a `_ConstGatherArray`: the flattened
 #     const/provider array plus its column-major strides. The subscripts are the
 #     node's `children` (subscript `_Node`s) and the column-major offset is
 #     computed AT EVAL TIME from them, so a runtime-varying subscript (e.g. a
@@ -60,7 +60,7 @@ const _NK_LIVE_GATHER = UInt8(15)  # read a captured live forcing buffer at an E
 #     that call, like `_NK_PARAM_GATHER`. A kind of its own so that no pass that
 #     reads a `_NK_CONST_GATHER` as build-time data (a per-entry value column, a
 #     gate fixed while `p` is, the const tier) can take it for one.
-#   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`, ess-r7h); `idx` holds
+#   * `_NK_CACHED` — the shared CSE scratch (`_CSECache`); `idx` holds
 #     the value-number slot.
 #   * `_NK_CONTRACTION_LOOP` — `_ContractLoop`; `_NK_RAGGED_LOOP` — `_RaggedLoop`;
 #     `_NK_STATE_GATHER` — `_StateGather`; `_NK_RECUR_GATHER` — the recurrence's
@@ -121,85 +121,46 @@ function Base.iterate(m::_NodeMap, st...)
     return (k.n => v, s)
 end
 
-# Build-time side channel from `_resolve_indices` to `_compile` (ess-14f.3): a
-# RESOLVED live-forcing gather, carried in the `value` slot of a synthetic
-# argless `index` node. It exists only between the resolve and compile passes of
-# one build and never reaches the SERIALIZER — but it does reach `canonical_json`,
-# which is a different thing and was the bug (ess-qic): the `index` op being
-# CSE-opaque only stops the gather from being hoisted ITSELF; `_cse_key` still
-# canonicalizes every hoistable ANCESTOR of it, and a canonical node emits its
-# `value` field. A raw `_PGatherRef` there is not a JSON type, so `canonical_json`
-# threw `E_CANONICAL_BAD_CONST`, `_cse_key` caught it and declined — silently
-# switching CSE off for every expression built over a live forcing buffer. The
-# gather therefore carries a CANONICALIZABLE identity (`name`, below) alongside its
-# runtime payload; `_cse_key` swaps the ref for a stand-in node built from it.
-#
-# A dedicated wrapper type (not a raw `(Vector{Float64}, Int)` tuple) makes the
-# payload type-checkable and greppable at both ends of the channel.
+# Resolve's marker for a live forcing gather at a build-constant offset, carried
+# in the `value` of an argless `index` node between the resolve and compile
+# passes. The `index` op is CSE-opaque, but `_cse_key` still keys its ancestors,
+# whose canonical JSON would carry this value; it therefore has a canonicalizable
+# identity (`name`), which `_cse_key` swaps in (`_pgather_key_expr`).
 struct _PGatherRef
     flat::Vector{Float64}   # aliased flat view of the caller's live buffer
     lin::Int                # pre-linearized column-major offset into `flat`
-    # The buffer's registry name — its key in the build's `pgather` dict, which is
-    # what makes it the gather's CSE identity (see `_pgather_key_expr`). Distinct
-    # buffers necessarily have distinct names (they are Dict KEYS), so two gathers
-    # collide on `(name, lin)` iff they read the same offset of the same buffer.
-    # That distinctness is a Dict invariant rather than a hand-maintained counter,
-    # which matters: a collision here would not lose sharing, it would MERGE two
-    # different reads and produce silently wrong numbers.
+    # The buffer's `pgather` key, the gather's CSE identity: names are distinct
+    # dictionary keys, so two gathers share `(name, lin)` exactly when they read
+    # the same offset of the same buffer.
     name::String
 end
 
-# Build-time side channel from `_resolve_indices` to `_compile` (wall2 Phase C):
-# the const/provider-array analogue of `_PGatherRef`. A `_ConstGatherRef` is
-# emitted for a `index(const_array, subs…)` read whose subscripts are NOT all
-# build-time constants — at least one references a BOUND OUTPUT-INDEX symbol kept
-# SYMBOLIC through the aggregate unrolling (the compile-once `evaluate_cellwise`
-# fast path binds the output indices as parameters). It is carried in the `value`
-# slot of an `index` node whose `args` are the RESOLVED subscript expressions
-# (concrete `IntExpr` for constant dims, the bound `VarExpr` / arithmetic for the
-# runtime dim(s)); `_compile`'s `index` branch compiles each subscript arg as a
-# child and lowers the node to a `_NK_CONST_GATHER` via `_const_gather_node`, so
-# the column-major offset is recomputed AT EVAL TIME from the (now runtime) output
-# index — no per-cell re-resolve/re-compile.
-#
-# Unlike `_PGatherRef` (a LIVE buffer read at a FIXED offset) this reads a FROZEN
-# const array at a RUNTIME-computed offset. Like `_PGatherRef` it exists only
-# between the resolve and compile passes of one build. It is created for any
-# subscript that is not a build-time constant (`_subscript_is_runtime`): a bound
-# output index on the compile-once `evaluate_cellwise` path, and a parameter, a
-# state or `t` on the right-hand side, where it reaches the CSE keying, which
-# keys it by the array's identity (`_cse_value_key`).
+# Resolve's marker for a const or provider array read at a subscript that is
+# not a build constant (`_subscript_is_runtime`): a bound output index of a
+# symbolic resolve, or a parameter, a state or `t`. The `index` node's `args`
+# are the resolved subscripts, and `_compile` lowers it to a `_NK_CONST_GATHER`
+# (`_const_gather_node`). The CSE keyer keys it by the array's identity
+# (`_cse_value_key`).
 struct _ConstGatherRef
     vals::AbstractArray   # the frozen const/provider source array (read at eval time)
     name::String          # its `const_arrays` registry name — diagnostics / identity
 end
 
-# Build-time side channel from `_resolve_indices` to `_compile`: a live forcing
-# gather (`_PGatherArray`) whose subscripts are NOT all build-time constants — a
-# loop counter of a symbolic resolve (`F[i]` in a contraction's term) reaches
-# one. The `index` node's `args` are the resolved subscripts and `_compile`
-# lowers it to a `_NK_LIVE_GATHER` (`_live_gather_node`). Like `_ConstGatherRef`
-# it is made only under a non-empty `bound_syms`.
+# Resolve's marker for a live forcing gather whose subscripts are not all build
+# constants (a loop counter of a symbolic resolve): the `index` node's `args`
+# are the resolved subscripts, and `_compile` lowers it to a `_NK_LIVE_GATHER`
+# (`_live_gather_node`).
 struct _LiveGatherRef
     flat::Vector{Float64}   # the aliased flat buffer (`_PGatherArray.flat`), read at eval time
     dims::Vector{Int}       # its shape: each subscript is checked against its own axis
     name::String            # its `pgather` registry name, for `E_TREEWALK_PGATHER_OOB`
 end
 
-# ── Runtime contraction loop (ess-runtime-contraction) ──────────────────────
-# A uniform reduction Σ_{k∈lo:step:hi} body(k, u, …) COMPILED ONCE into a single
-# loop node instead of unrolled into `length(k)` scalar terms. The tree-walk
-# default UNROLLS a contracted (reduction) index at build time — O(N) IR nodes
-# per output cell, O(N²) for a 2-D contraction — which makes `prepare` blow up
-# quadratically in the reduction size. This node keeps the body as ONE compiled
-# subtree and iterates the range at EVALUATION time, so build IR size is O(1) in
-# the reduction length and the numeric result matches the unrolled fold (the
-# accumulation order is identical; see `_eval_contraction_loop`).
-#
-# `_ContractLoop` is the eval-time payload of an `_NK_CONTRACTION_LOOP` node.
-# `ref` is the shared loop counter — the SAME `Ref{Int}` object every
-# `_NK_LOOPVAR` leaf in the body reads (its per-iteration integer value). The
-# fold's ⊕ rides on the node's `op`, seeded from 0̄ on the node's `literal`.
+# Payload of an `_NK_CONTRACTION_LOOP` node: a uniform reduction over
+# `lo:step:hi` with one compiled body, iterated at evaluation time, so the build
+# is O(1) in the reduction length. `ref` is the counter every `_NK_LOOPVAR` leaf
+# of the body reads. The fold's ⊕ is the node's `op`, seeded from 0̄ in its
+# `literal`, in the unroll's order (`_eval_contraction_loop`).
 struct _ContractLoop
     ref::Base.RefValue{Int}
     lo::Int
@@ -225,20 +186,11 @@ struct _RaggedLoop
     reach::Int
 end
 
-# ── Runtime STATE gather in a contraction-loop body (ess-runtime-contraction) ──
-# The state-source case: a loop body reads STATE at a slot that depends on the
-# (symbolic) contracted index — `q[donor(i,k)]`, where `donor` may be plain
-# arithmetic in the loop var OR an indirect const-connectivity gather
-# `index(conn, i, k)`. The unroll bakes a distinct `_NK_STATE` per k; the loop
-# instead computes the slot AT EVAL TIME from the current loop counter and reads
-# `u` there. `_StateGather` is the eval-time payload of an `_NK_STATE_GATHER` node
-# (analogous to `_ConstGatherArray`, but the frozen table holds STATE SLOTS and
-# the final read hits `u`, so the value carries a derivative). `slot_flat[off+1]`
-# is the flat `u` index of the state cell whose per-dim subscript is
-# `lo[d] + local_d` (column-major `off`); a subscript outside `[lo,hi]` is a ghost
-# cell and yields 0̄ (the state-array ghost convention, matching the unroll's
-# out-of-bounds → `NumExpr(0.0)`). The subscript expressions are the node's
-# `children` (loop-var-dependent `_Node`s), evaluated and bounds-checked here.
+# Payload of an `_NK_STATE_GATHER` node: a state read at a slot computed at eval
+# time from the subscript `children` (a loop counter, or an indirect
+# `index(conn, i, k)`). `slot_flat[off + 1]` is the `u` slot of the cell at
+# column-major offset `off` from `lo`; a subscript outside `[lo, hi]` is a ghost
+# cell and reads 0, as the unroll's out-of-range read does.
 struct _StateGather
     slot_flat::Vector{Int}
     strides::Vector{Int}
@@ -291,14 +243,10 @@ function _mknode(;
     return _Node(kind, op, literal, idx, sym, payload, children)
 end
 
-# Payload of a `_NK_CONST_GATHER` node (wall2 Phase B). Unlike `_NK_PARAM_GATHER`
-# — which reads a live buffer at a FIXED offset baked at build time — this carries
-# the whole flattened source array plus its column-major strides, and the offset is
-# recomputed on every eval from the node's subscript `children`. That is what lets a
-# runtime-varying subscript (Phase C will bind output-index parameters here) select a
-# different element WITHOUT re-resolving/re-compiling the AST. All fields are concrete
-# so the eval arm stays monomorphic + allocation-free (mirroring how the
-# `_NK_PARAM_GATHER` arm asserts `payload::Vector{Float64}`).
+# Payload of a `_NK_CONST_GATHER` node: the source array flattened column-major
+# with its strides, so the offset is computed from the subscript `children` at
+# each evaluation. All fields are concrete, so the evaluator's arm allocates
+# nothing.
 struct _ConstGatherArray
     flat::Vector{Float64}   # column-major flattening of the source array (== vec(A))
     strides::Vector{Int}    # column-major strides: strides[d] = prod(size(A)[1:d-1])
@@ -310,12 +258,8 @@ struct _ConstGatherArray
 end
 _def_new_typed(_ConstGatherArray)
 
-# Build-time constructor for a `_NK_CONST_GATHER` node (wall2 Phase B). Flattens `A`
-# column-major into a fresh `Vector{Float64}`, derives its column-major strides from
-# `size(A)`, and captures them in a `_ConstGatherArray`; `subscript_nodes` become the
-# node's subscript `children` (one per dimension, in dimension order). Phase C calls
-# this to lower a `index(const_array, subs...)` gather whose subscripts are not all
-# build-time constants. `subscript_nodes` must have one entry per dimension of `A`.
+# A `_NK_CONST_GATHER` node reading `A` at `subscript_nodes`, one per dimension
+# of `A`, which become the node's children.
 function _const_gather_node(
         A::AbstractArray, subscript_nodes::Vector{_Node};
         name::AbstractString = ""
@@ -327,16 +271,10 @@ function _const_gather_node(
                 "$(length(sz))-D array, got $(length(subscript_nodes))"
         )
     )
-    # SHARE the source array's buffer rather than COPY it. A dense `Float64` array
-    # `vec`s to a `Vector{Float64}` ALIASING the same memory (no data copy), so every
-    # gather into the same const array references ONE buffer. A plain
-    # `Vector{Float64}(vec(A))` copies the WHOLE array on every call — and an unrolled
-    # contraction lowers one `_const_gather_node` PER reduced term, so that copy is
-    # O(N_terms · sizeof(A)): at model scale (1520 terms × a ~0.6 GiB SR slab ≈ 1 TiB)
-    # it OOMs the machine (wall2 Phase C regression). Const arrays are build-time
-    # read-only, so aliasing is safe (the same sharing `_NK_PARAM_GATHER` relies on
-    # for a live buffer). Non-dense / non-`Float64` inputs fall back to one
-    # convert-copy — bounded, since those are not the hot contraction path.
+    # Share the source array's buffer rather than copy it: an unrolled
+    # contraction lowers one gather per term, so a copy per call is
+    # O(terms · sizeof(A)). Const arrays are read-only at run time, so aliasing
+    # is safe; a non-dense or non-`Float64` input is converted once.
     flat = A isa Vector{Float64} ? A :
         A isa Array{Float64} ? vec(A)::Vector{Float64} :
         Vector{Float64}(vec(A))

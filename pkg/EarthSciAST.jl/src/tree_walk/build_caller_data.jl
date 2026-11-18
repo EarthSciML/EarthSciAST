@@ -162,7 +162,7 @@ end
 # without it here, `_partition_variables` reaches a shaped parameter backed by
 # neither `const_arrays` nor `param_arrays` and throws
 # `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
-# (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
+#. A LIVE forcing buffer (`param_arrays`) owns its
 # name, so broadcasting a DECLARED scalar never displaces one; an explicit
 # override is the caller speaking for this run and outranks both registries,
 # exactly as the array spelling of that override already does.
@@ -357,13 +357,9 @@ end
 # in all three executing bindings — see esm-spec §6.6.2 "Unrecognized override
 # keys" and CONFORMANCE_SPEC §5.15.
 #
-# Rules 4 and 5 used to leave the key verbatim, so an unmatched override was
-# INERT: the run silently used the declared default and still reported a
-# verdict. That is the same silent-wrong-answer shape this canonicalization was
-# introduced to fix, one level up — the author writes an override, nothing
-# happens, and the model quietly measures the configuration they thought they
-# had switched off. Rust already raised `InvalidParameter` here; Julia and
-# Python now match it.
+# An override that matches no parameter raises rather than being left inert:
+# an inert override would run the declared default and still report a verdict.
+# Rust, Python and Julia agree.
 function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
     isempty(overrides) && return overrides
     param_names = Set{String}(
@@ -612,7 +608,7 @@ function _with_param_reads(f, sink::Union{Nothing, Set{String}})
     end
 end
 
-# ---- Stage: the parameter partition (esm differentiability plan §3 Phase 5) ----
+# ---- Stage: the parameter partition  ----
 # Every DECLARED parameter (and the discrete variables that lower like one) gets
 # exactly one class:
 #
@@ -737,7 +733,7 @@ end
 # mesh reductions). 1D entries are stored as Vector{Float64}; higher-rank
 # entries as plain Array{Float64,N}. An array named in `const_array_boundaries`
 # is wrapped in a BoundedConstArray so OOB stencil gathers resolve per its
-# declared per-dimension policy (ess-gj4). Setup-materialized arrays (per-pair
+# declared per-dimension policy. Setup-materialized arrays (per-pair
 # areas, …) and const-op array observeds are registered on top.
 function _register_const_arrays(
         const_arrays::AbstractDict,
@@ -760,7 +756,7 @@ function _register_const_arrays(
     return registry
 end
 
-# ---- Stage: live forcing buffers (ess-14f.3, JL-J0 — the one engine touch) ----
+# ---- Stage: live forcing buffers ----
 #
 # FEASIBILITY GATE (declarative-or-fail). A refreshable forcing read CANNOT be
 # expressed over the existing runtime vocabulary the closure `f!(du,u,p,t)`

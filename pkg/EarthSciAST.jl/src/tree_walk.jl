@@ -1,4 +1,4 @@
-# Tree-walk evaluator for discretized `.esm` models (gt-e8yw).
+# Tree-walk evaluator for discretized `.esm` models.
 #
 # Compiles the canonical-form equations of a `Model` into a plain
 # `f!(du, u, p, t)` by walking the expression AST at every RHS call.

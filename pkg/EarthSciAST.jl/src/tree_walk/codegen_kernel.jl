@@ -2119,8 +2119,8 @@ function _cg_split_transport(ex::Expr, ngrp::Int; by_value::Union{Nothing, Bool}
     for s in rest
         push!(stmts, _cg_calls_by_value(s, idx, left))
     end
-    # The emitter only ever CALLS a sub-function; a bare reference would be left
-    # pointing at a definition the by-value form no longer has.
+    # The emitter only ever calls a sub-function; a bare reference would point
+    # at a definition the by-value form does not have.
     left[] == 0 || error("codegen: an emitted sub-function is referenced other than by a call")
     _tally_cascade!(:cg_split_by_value)
     return (Expr(:function, ex.args[1], Expr(:block, stmts...)), fns)

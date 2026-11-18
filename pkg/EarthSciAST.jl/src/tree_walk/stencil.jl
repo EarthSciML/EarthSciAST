@@ -82,7 +82,7 @@ _stencil_disabled() = !_compiler_plan_now().stencil
 # fallback path sees exactly the fused expanded tree it always saw. The ONLY
 # consumer of the recorded sites is this tier: when `_stencilize` reaches a node
 # that IS an expansion root, it compiles that subtree ONCE per (root structure,
-# loop-index set, region class) — per BUILD via the `_XEqStore` hoist (A3), so
+# loop-index set, region class) — per BUILD via the `_XEqStore` hoist, so
 # equations sharing a root reuse one `_SubVariant` — and splices a SUB-KERNEL
 # CALL sentinel into the
 # parent spine instead of re-walking the body per branch. The variant's lane
@@ -113,7 +113,7 @@ end
 const _SubCallSite = Tuple{_SubVariant, Int}   # (variant, lane base in enclosing recipes)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CROSS-EQUATION VARIANT MEMOIZATION (perf plan A3). A `_SubVariant` is a pure
+# CROSS-EQUATION VARIANT MEMOIZATION. A `_SubVariant` is a pure
 # function of (root STRUCTURE, loop-index-name set, region-class branch key)
 # plus BUILD-level context: `var_map` / `param_sym_set` /
 # `array_var_info` / `const_arrays` / `pgather` are the same objects for every
@@ -188,8 +188,7 @@ _idxset_key(idx_names::Vector{String}) = join(sort(idx_names), '\0')
 # equation's idxset); `bio` a scratch buffer for body branch keys. The compile
 # inputs (`var_map`, `param_sym_set`) ride along because variant
 # compilation happens mid-`_stencilize`, where they are out of scope; they are
-# build-level constants (see the A3 note above), which is what makes the
-# hoisted cache sound.
+# build-level constants, which is what makes the hoisted cache sound.
 struct _TemplateCtx
     sites::IdDict{OpExpr, OpExpr}
     variants::Dict{Tuple{UInt64, String, String}, _SubVariant}
@@ -264,7 +263,7 @@ struct _StencilCtx
     # §9.7.3 inlining has no `let` node, but the in-memory graph shares subtrees by
     # object identity), and `_stencilize` is a pure function of the input node plus
     # the structural ctx, so memoizing by node identity keeps the sentinel spine a
-    # DAG instead of re-inflating it to a tree (~2M nodes for a PPM operator). Reset
+    # DAG instead of re-inflating it to a tree. Reset
     # per `_build_branch_template` because it references that call's lane recipes.
     smemo::IdDict{OpExpr, ASTExpr}
     # Memoized per-node "refers to a loop index" flag for the guard
@@ -351,11 +350,9 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
     end
     # SUBTERM-GRANULAR fallback (subtree-table rescue): before declining the
     # WHOLE equation over this one construct, try to isolate it as a
-    # build-time-evaluable lane (see `_try_exprtbl_lane` below). CONSERVATIVE
-    # BY CONSTRUCTION: this call sits exactly where the walk THREW until now,
-    # so every currently-succeeding equation lowers byte-identically — the
-    # rescue can only run where the old code dropped the equation to the
-    # per-cell tier.
+    # build-time-evaluable lane (see `_try_exprtbl_lane` below). It runs only
+    # where the walk would otherwise throw, so it never changes how an equation
+    # the walk models lowers.
     lane = _try_exprtbl_lane(e, ctx)
     lane === nothing || return lane
     # A SHORT scalar contraction (an `faq` with no output index) in expression
@@ -483,9 +480,9 @@ function _exprtbl_evaluable(
 end
 
 # The rescue proper: emit a `LANE_EXPRTBL` recipe for a loop-var-dependent
-# subtree the stencil vocabulary cannot model, or `nothing` to throw exactly
-# as before. Array producers are excluded (this is a SCALAR position; an
-# array-valued subtree here is ill-formed and must keep today's error path).
+# subtree the stencil vocabulary cannot model, or `nothing` to throw. Array
+# producers are excluded (this is a scalar position; an array-valued subtree
+# here is ill-formed and keeps its error).
 # TALLY: one `:affine_subtree_tbl` increment PER RESCUED SUBTREE LANE PER
 # BRANCH TEMPLATE (bounded by structural groups — grid-independent; the smemo
 # in `_stencilize` dedupes a shared subtree within one walk), NOT per
@@ -558,8 +555,8 @@ function _stencilize_shared(
     _branch_key!(tctx.bio, node, ctx.idxset, ctx.idx_env, ctx.const_arrays, tctx.gmemo)
     bodykey = String(take!(tctx.bio))
     # (root identity ≡ structure after interning, loop-index-set key, region
-    # class): the full variant key — shared per BUILD when the A3 store is
-    # threaded in, per equation otherwise. See the _XEqStore purity note above.
+    # class): the full variant key — shared per build when the cross-equation
+    # store is threaded in, per equation otherwise. See the _XEqStore purity note above.
     vkey = (objectid(node), tctx.idxkey, bodykey)
     variant = get(tctx.variants, vkey, nothing)
     if variant === nothing
@@ -737,7 +734,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
         # `_index_pushdown_arrayish` (build_helpers.jl) is the resolver's operand
         # test, shared verbatim: it looks THROUGH nested elementwise ops, so a
         # folded elementwise array observed (`index(1 + cos(pi*zc), j)`) pushes
-        # down here too rather than declining to the per-cell tier (issue #175).
+        # down here too rather than declining to the per-cell tier.
         _leaf_is_array(n) = haskey(ctx.array_var_info, n) || haskey(ctx.pgather, n) ||
             (
             haskey(ctx.const_arrays, n) &&

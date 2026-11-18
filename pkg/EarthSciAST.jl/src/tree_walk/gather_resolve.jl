@@ -61,7 +61,7 @@ _subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
 # the scalar compiler refuses it; admitting it here would refuse a subscript the
 # unrolled fold evaluates.) The rounded quotient is the cell-to-row
 # reindex a flattened loader field takes (`F[floor((c - 1) / NX) + 1, c - NX *
-# floor((c - 1) / NX)]`, reseact's NEI emissions, issue #665).
+# floor((c - 1) / NX)]`).
 #
 # Every intermediate must be an integer, because the traced evaluator works in
 # integers while the walk evaluates the subscript in floating point and rounds

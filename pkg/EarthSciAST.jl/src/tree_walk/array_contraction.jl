@@ -1,4 +1,4 @@
-# Whole-array contraction nest (ess-array-contraction).
+# Whole-array contraction nest.
 #
 # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` is compiled to ONE
 # term node plus one flat slot vector, and emitted as a loop NEST: the output
@@ -1715,7 +1715,7 @@ end
 # reasoning `_fill_obs_levels!` states for its levels.
 #
 # The tail recursion stays static only while the tuple is short: past
-# inference's splat limit `Base.tail` of a long tuple is no longer inferred, so
+# inference's splat limit `Base.tail` of a long tuple is not inferred, so
 # every step allocates a fresh tuple and reaches the next generated function by
 # dynamic dispatch (a model with a table lookup per photolysis bin builds one
 # contraction per lookup, hundreds in all). A long section is therefore stored

@@ -28,8 +28,14 @@
 # and each invariant fixed-slot leaf (`_NK_STATE idx≥0`, `_NK_PARAM_GATHER`)
 # becomes a fixed-read descriptor. Because the spine's OP structure is the exact
 # `_compile` output (only leaves are swapped), the arithmetic — operand order,
-# associativity, n-ary grouping — is byte-for-byte the per-cell path's, which is
-# what makes the emitted kernel bit-identical.
+# associativity, n-ary grouping — is the per-cell path's, which is what makes
+# the emitted kernel bit-identical.
+#
+# The tier rests on two invariants: (1) within a box every cell selects the same
+# makearray regions, which the cuts guarantee (it is not verified per box, so a
+# missed region boundary is a wrong answer); (2) within a box every lane's
+# lowering holds at every cell, which per-box verification guarantees (at the
+# corners for a structurally affine subscript, at every cell otherwise).
 # ========================================================================
 
 # Per-lane lowering decision, computed by the box processor from the recipe
@@ -982,8 +988,9 @@ end
 # boundary rows, ghost gathers), so once this many cells in a row share a
 # signature we are safely past every boundary layer. 8 covers the widest operator
 # on the grid (monotone PPM's 7-cell support → ≤3-cell boundary layers) with
-# generous margin; a hypothetical wider layer that slipped past would only produce
-# a box that spans a cut, which per-box corner verification catches → fallback.
+# margin. A wider lane transition that slipped past would give a box spanning a
+# cut, which per-box verification catches; a region boundary is not verified per
+# box and is found by the harvest instead (`_region_cut_candidates`).
 const _AFFINE_STABLE_GUARD = 8
 
 # Strong-key cut cap, per dim. The lane-affine key (see `_cell_ckey!`) gives a
@@ -1386,10 +1393,9 @@ end
 # into the ALIASED live buffer. The forcing chains that observed
 # inlining splices into stencil lanes gather their raw buffers with clamped
 # subscripts (`max(k-1,1)` / `min(k,NLEV)` at the column walls); the clamp makes the flat index non-affine across a box,
-# and — pgather transitions being invisible to the per-cell cut signature —
-# the corner verification then threw the WHOLE equation onto the per-cell
-# fallback — which on a real multi-level transport equation is a large fraction
-# of the whole warm build. Lowering the lane
+# and, since forcing-gather transitions are invisible to the per-cell cut
+# signature, the corner verification would send the whole equation to the
+# per-cell fallback. Lowering the lane
 # to `_AccArrTblBox` instead mirrors `_materialize_state_tbl`: one
 # `_eval_recipe` per box cell — the SAME index resolution the per-cell
 # fallback would run — stored densely in box-local layout. The table holds
@@ -2342,7 +2348,7 @@ function _try_affine_stencil(
         const_arrays::AbstractDict, pgather::AbstractDict,
         param_sym_set, covered::_Covered;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
-        # A3: the per-BUILD cross-equation store (variant +
+        # The per-BUILD cross-equation store (variant +
         # bound-body caches, shared obs-inline memo).
         # `nothing` is the per-equation caches
         # (cross-equation variants off / storeless callers).
@@ -2381,11 +2387,11 @@ function _try_affine_stencil(
     body = rhs_body
     sites = template_sites
     if !isempty(resolved_obs)
-        # A3: with a store, the substitution memo is shared across every
+        # With a store, the substitution memo is shared across every
         # equation of the build (bindings — `resolved_obs` — are one fixed Dict
         # per build, `_xeq_obs_memo` pins that), so a root shared by two
         # equations rewrites to the SAME object and the cross-equation variant
-        # key can hit. Without a store: a fresh per-call memo, as before.
+        # key can hit. Without a store: a fresh per-call memo.
         memo = xeq === nothing ? _SubMemo() : _xeq_obs_memo(xeq, resolved_obs)
         body = _sub_preserving(rhs_body, resolved_obs, memo)
         if sites !== nothing

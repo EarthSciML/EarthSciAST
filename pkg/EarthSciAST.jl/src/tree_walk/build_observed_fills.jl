@@ -12,18 +12,8 @@
 #
 # THE RHS IS THE GATHER FORM `index(<def>, i…)`, not the bare producer — even
 # when `<def>` is a `faq` whose own `output_idx` matches. `index(<def>, i…)`
-# is EXACTLY the expression every reader of this observed used to present after
-# inlining, so the fill lowers through the identical, already-exercised path.
-#
-# HISTORICALLY this was also a correctness requirement, because the bare form
-# routed a contraction into the affine LANE derivation, whose const-lane fold
-# (`_derive_lane_repl`, stencil_affine.jl) then decided a lane was loop-invariant
-# by comparing its VALUES at the box CORNERS: a const gather agreeing at the
-# corners and differing inside — a regrid weight column `W[i, j]` reading
-# (0, 0.5, 0) — folded to a literal 0.0 and the interior cell silently computed
-# the wrong number. That hole is CLOSED: `_derive_lane_repl` no longer samples
-# values, deriving invariance structurally from the resolved linear index
-# instead. The gather form is now a lowering-path default, not a guard.
+# is the expression a reader of this observed presents after inlining, so the
+# fill lowers through the same path the readers do.
 #
 # EXCEPTION, applied downstream rather than here: a producer that CONTRACTS is
 # unwrapped back to the bare form by `_unwrap_identity_gather`. The gather form

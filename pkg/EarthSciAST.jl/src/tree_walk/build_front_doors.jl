@@ -528,7 +528,7 @@ function _front_door(
             )
     end
 
-    # ---- Phase 2b Hook 1: value-invention MEMBERS fed back as const factors ----
+    # ---- Value-invention members fed back as const factors ----
     # A `kind:"derived"` index set may name a `member_factor` — a model parameter
     # const factor the build fills HERE with the set's materialised member ids
     # (`vi.members[from_faq]`, 1-based full-grid ids). This is the ONLY path a
@@ -545,7 +545,7 @@ function _front_door(
         end
     end
 
-    # ---- Phase 2b Hook 1b: OVERLAP env factors on a DERIVED axis ----
+    # ---- Overlap envelope factors on a derived axis ----
     # §5.5.6 requires an `join.overlap` gate's envelope factors to be const-array
     # data — the broad phase runs ONCE at build time. The pushdown rewrite gates
     # each rewritten binning aggregate on the generated `pd_cell__*` gathers,
@@ -577,7 +577,7 @@ end
 # whole-model walk (the traversal descends `bindings` too, which is harmless
 # here — the apply node itself is what is being detected). Identity-memoized
 # (`foreach_subexpr_once`): an existence predicate is path-multiplicity-
-# insensitive, and equation trees can be compact DAGs (ESS-0hh).
+# insensitive, and equation trees can be compact DAGs.
 function _model_has_surviving_refs(model::Model)
     found = false
     check(e) = e === nothing || found ? nothing : foreach_subexpr_once(e) do x
@@ -661,7 +661,7 @@ function evaluate_expr(
 end
 
 
-# esm-spec §4.3.1 (issue #441): refuse a `faq` whose `expr` or `filter` reads a
+# esm-spec §4.3.1: refuse a `faq` whose `expr` or `filter` reads a
 # shaped variable by bare name, with the same code `validate` reports. Run on the
 # template-expanded model at the build entry, so the refusal does not depend on
 # whether the name was written inline or delivered by a template binding.

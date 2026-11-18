@@ -402,7 +402,7 @@ function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
     # Two `isa` ladders keep even the barrier call static: the first for a source
     # that already IS the dense ring stack (where `_geo_ring_value` is the
     # identity, so the match skips a dispatch and a call), the second for one that
-    # had to be resolved. Anything else takes the same generic call as before.
+    # had to be resolved. Anything else takes the generic call.
     src = r.src
     ix = r.idx
     if src isa Array{Float64, 3}
@@ -446,13 +446,13 @@ function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     # the payload as an ARGUMENT to a barrier method lands the one remaining
     # dispatch on a specialization where the source type, and hence `arr`'s, is
     # known, so the reads in `_geo_gather_from` are ordinary typed array indexing.
-    # Same order, same reads, same values; bounds stay CHECKED as before.
+    # Bounds stay checked.
     #
     # A concrete `isa` then narrows `pl` to the shapes a geometry sweep actually
     # reads — a dense `Array{Float64,1..3}`, which is what every const/materialized
     # `env` entry is — making the barrier call static. Anything else (a
     # bounded-const wrapper, a `_GeoRingRef`, a non-Float64 or
-    # higher-rank array) falls to the same generic call as before.
+    # higher-rank array) takes the generic call.
     pl = n.payload
     if pl isa Array{Float64, 1}
         return _geo_gather_from(pl, n.children, u, p, t, T)

@@ -87,7 +87,7 @@ end
 # rebuilds its whole reduction per output cell. The compile-once evaluator
 # (`_cell_evaluator`) resolves and compiles the body once with the output
 # indices bound as parameters (a const read carrying one lowers to a run-time
-# `_NK_CONST_GATHER`, everything else folds as before) and evaluates each cell
+# `_NK_CONST_GATHER`, everything else folds) and evaluates each cell
 # by rebinding them. The contracted indices unroll to the same values in the
 # same order, so every sum is the per-cell path's, bit for bit. Whatever it
 # cannot compile, it declines (`nothing`), and the caller evaluates per cell.
