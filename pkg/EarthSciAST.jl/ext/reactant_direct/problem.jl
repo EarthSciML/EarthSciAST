@@ -128,8 +128,8 @@ end
 # would reveal.
 _xla_params(::Nothing) = nothing
 _xla_params(p::NamedTuple) = p
-_xla_params(p) = _E._xla_refuse(
-    "the parameter carrier",
+_xla_params(p) = _E._refuse_rule(
+    _E._plan(:xla), "the parameter carrier",
     "compiler=:xla feeds parameters to the compiled program as Float64 device " *
         "scalars, and this build's `p` is a $(typeof(p)), which it will not " *
         "convert behind the author's back. Build with compiler=:native to run " *
@@ -162,8 +162,8 @@ end
 (w::XlaProblemRHS)(du, u, p, t) = _xla_wrong_eltype(eltype(du), eltype(u))
 
 _xla_wrong_eltype(::Type{TD}, ::Type{TU}) where {TD, TU} =
-    _E._xla_refuse(
-    "the right-hand side",
+    _E._refuse_rule(
+    _E._plan(:xla), "the right-hand side",
     "the compiled StableHLO program is Float64 throughout, and this call " *
         "carries du::$TD / u::$TU. A compiled device program cannot be " *
         "differentiated on the host. `solve` on the Problem already hands the " *

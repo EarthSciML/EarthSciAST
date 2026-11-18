@@ -100,8 +100,10 @@ build's own: `parameter_overrides`, `initial_conditions`, `const_arrays`,
 `param_arrays`, `const_array_boundaries`, `tspan`, `form` (`:inplace` or
 `:oop`), `materialize_out`. `pushdown_rewrite = true` rewrites the authored
 document before it is flattened, as `esm_problem` does; the provider gates
-`esm_problem` derives from the rewrite are not applied, so a document whose
-gated slabs come from providers is built with `esm_problem`.
+`esm_problem` derives from the rewrite are not applied. `gated_providers`
+(provider key => a provider carrying its own [`provider_gate_spec`](@ref)) are
+fetched pre-sliced after value invention, at `sample_time`, as `esm_problem`
+fetches them.
 
 A `const_arrays` / `param_arrays` key for a name the document reads but does
 not declare stays as the document spells it (`"W"`, not `"M.W"`): the
@@ -118,6 +120,7 @@ function build(
         metaparameters::AbstractDict = Dict{String, Int}(),
         base_path::AbstractString = pwd(),
         pushdown_rewrite::Bool = false,
+        gated_providers::AbstractDict = Dict{String, Any}(),
         kwargs...
     )
     products = BuildProducts()
@@ -143,8 +146,12 @@ function build(
             get(kwargs, :param_arrays, Dict{String, Any}())
         )
         file = EarthSciAST._run_file(prep)
+        gated = Dict{String, EarthSciAST._GatedProvider}(
+            String(k) => _gated(String(k), v) for (k, v) in gated_providers
+        )
         out = EarthSciAST._build_run(
-            file; compiler = compiler, products = products, kwargs...
+            file; compiler = compiler, products = products, gated_providers = gated,
+            kwargs...
         )
         (out, file)
     end
@@ -154,6 +161,17 @@ function build(
         products.stats, products.kernels, products, file
     )
     return Build(f!, u0, p, (Float64(tspan[1]), Float64(tspan[2])), var_map, report)
+end
+
+# A gated provider as the build takes it: described as `esm_problem` describes
+# it, which refuses one that carries no gate.
+_gated(::String, g::EarthSciAST._GatedProvider) = g
+function _gated(key::String, prov)
+    gate = EarthSciAST._provider_traits(prov, key).gate
+    gate === nothing && throw(
+        ArgumentError("Internal.build: gated provider '$key' reports no provider_gate_spec")
+    )
+    return EarthSciAST._GatedProvider(prov, gate)
 end
 
 # The document `build` prepares: a bare `Model` becomes the only model of one.

@@ -122,7 +122,9 @@ end
 
 # One-time threading verdict for one generated function's cell axes:
 # `state` is 0 unexamined, 1 chunked, -1 serial (too little work), -2 serial
-# (globally shared out-slots — permanent, decided at build).
+# (globally shared out-slots — permanent, decided at build), -3 serial (a
+# workspace's own copy of the section, which never dispatches to the pool:
+# `_SECT_SERIAL_WORKSPACE`, rhs_program.jl).
 # `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
 # at the first threaded call, so the partition is identical call to call.
 # `work` is what the work floor is held against: the section's node

@@ -635,18 +635,14 @@ end
 # substitute → resolve → compile, which a strict compiler refuses. The coord_<dim> const_array must be provided
 # by the caller. Explicit initial_conditions values take precedence (already
 # seeded in u0).
-# The caller's u0 override, visible to the build while `esm_problem` builds: an
-# initialization equation reads the state the caller set (the Rust and Python
-# front doors seed the same way).
-const _CALLER_U0_KEY = :esm_caller_u0
-_with_caller_u0(f, u0) = u0 === nothing ? f() : task_local_storage(f, _CALLER_U0_KEY, u0)
-
-# Write the caller's u0 into `u0` before the initialization equations run and
-# return the slots it names (they keep the caller's value). Nothing to do, and
-# an empty set, without a caller u0 or without an initialization equation.
-function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations)
+# Write the caller's u0 override `cu` (`esm_problem`'s `u0`, `BuildOptions`
+# `caller_u0`) into `u0` before the initialization equations run, and return the
+# slots it names (they keep the caller's value): an initialization equation
+# reads the state the caller set (the Rust and Python front doors seed the same
+# way). Nothing to do, and an empty set, without a caller u0 or without an
+# initialization equation.
+function _apply_caller_u0!(u0::Vector{Float64}, var_map, init_equations, cu)
     isempty(init_equations) && return Set{Int}()
-    cu = get(task_local_storage(), _CALLER_U0_KEY, nothing)
     cu === nothing && return Set{Int}()
     if cu isa AbstractVector
         length(cu) == length(u0) || return Set{Int}()

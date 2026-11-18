@@ -3,7 +3,7 @@
 #
 # The derivation turns (.esm document + flat state element names + a caller-named
 # observed subset) into the dimension-labeled, CF-annotated plan a Zarr writer is
-# handed. It lives in two languages — `src/data_output.jl` here and
+# handed. It lives in two languages — `src/output_plan.jl` here and
 # `pkg/earthsci-ast-rs/src/data_output.rs` there — and until this corpus there was
 # NO cross-language gate on it at any level: EarthSciIO's `conformance/write_spec.json`
 # is an ALREADY-DERIVED schema (`dims`/`time_dim`/`coords`/`vars`/`chunk_shape`/

@@ -1,9 +1,24 @@
-# A reentrant right-hand side (API_SPEC §5.8, "Public right-hand side";
-# issue #541): what a program shares, what a workspace owns, and forcing as an
-# argument.
+# Right-hand sides as program values (API_SPEC §5.8, "Public right-hand side"
+# and "Range-restricted right-hand sides").
 #
-# A program (`rhs_program`, `select`, `restrict`, `lanes`; range_restricted.jl)
-# is an ordinary native build whose `f!` is kept as a TEMPLATE: `rhs!` never
+# A Problem's right-hand side evaluates the whole model over the whole domain.
+# A program evaluates it, or one OPERATOR of it — the summands a provenance
+# selection keeps, writing only the operator's variables (`select`,
+# range/selection.jl) — over the whole domain, over a TILE of a horizontal
+# decomposition reading halo cells from a local extended array (`restrict`,
+# range/tile.jl, sized by the need-box analysis of range/need_analysis.jl), or
+# over LANES, a run-time list of cells or columns (`lanes`, range/lanes.jl).
+# Every program is the ordinary native build of a rewritten equation stream:
+# a tile builds the selected document under a range spec whose seams
+# (tree_walk/range_hooks.jl) clip the equation stream to the owned box and lay
+# each state out over the cells the tile stores, so the kernels, their offsets
+# and their ghost cuts come out rebased by construction.
+#
+# This file holds what every program shares: what a program shares between
+# callers, what a workspace owns, forcing as an argument, the layouts, and the
+# build and evaluation of a program.
+#
+# A program is an ordinary native build whose `f!` is kept as a TEMPLATE: `rhs!` never
 # calls it. The build also records what a workspace needs to make a private
 # instance of it (`_ws_factory`): which objects are per-call state (caches and
 # their CONST/TIME stamps, scratch, loop counters, threading verdicts), where
@@ -290,11 +305,103 @@ end
 # every other object shared by reference with the template and every other
 # workspace.
 
-# Per-call state: each workspace holds its own.
+# Per-call state: each workspace holds its own. A type is per-call state when
+# it has the three methods below: `_ws_children!` (what the factory walks from
+# it), `_ws_fresh` (a workspace's fresh copy of it, valid for no memoized tier
+# yet) and `_ws_invalidate!` (its stamps reset after a call that threw; the
+# identity for a type with none). A type of the first kind without them is
+# refused at program build, by name.
 const _WsState = Union{
     _CSECache, _ObsExtVec, _AccScratch, _ForcingEpoch, _SecTCache, _ACMask,
     Base.RefValue, Core.Box, AbstractDict,
 }
+
+# A memoizing cache: its buffer may also be read through a codegen table.
+const _WsCache = Union{_CSECache, _ObsExtVec}
+
+function _ws_children!(x::Union{_WsCache, _AccScratch}, w)
+    haskey(w.seen, x.f64) || (w.seen[x.f64] = nothing)
+    w.kinds[x.f64] = :scratch
+    x isa _WsCache && _ws_walk!(x.epoch, x, w)
+    return nothing
+end
+_ws_children!(x::_ACMask, w) = _ws_walk!(x.f, x, w)
+_ws_children!(x::Base.RefValue, w) = (isdefined(x, :x) && _ws_walk!(x[], x, w); nothing)
+_ws_children!(x::Core.Box, w) = (isdefined(x, :contents) && _ws_walk!(x.contents, x, w); nothing)
+function _ws_children!(x::AbstractDict, w)
+    for (k, v) in x
+        _ws_walk!(k, x, w)
+        _ws_walk!(v, x, w)
+    end
+    return nothing
+end
+_ws_children!(::Union{_ForcingEpoch, _SecTCache}, w) = nothing
+
+function _ws_fresh(x::_CSECache, c)
+    y = _CSECache(
+        _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
+        NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+        _inst(x.epoch, c)
+    )
+    push!(c.caches, y)
+    return c.memo[x] = y
+end
+function _ws_fresh(x::_ObsExtVec, c)
+    y = _ObsExtVec(
+        _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
+        NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+        _inst(x.epoch, c), nothing
+    )
+    push!(c.caches, y)
+    return c.memo[x] = y
+end
+_ws_fresh(x::_AccScratch, c) = c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
+function _ws_fresh(x::_ForcingEpoch, c)
+    # A workspace tracks its forcing set's epoch itself.
+    e = _ForcingEpoch(UInt64(0))
+    push!(c.epochs, e)
+    return c.memo[x] = e
+end
+# Serial: a workspace never dispatches to Polyester's pool. A negative verdict
+# is serial; this one is decided for every call, not measured.
+const _SECT_SERIAL_WORKSPACE = -3
+_ws_fresh(x::_SecTCache, c) = c.memo[x] = _SecTCache(
+    _SECT_SERIAL_WORKSPACE, x.ncells, x.disjoint, x.work, 1, nothing, nothing, x.rmw
+)
+function _ws_fresh(x::_ACMask, c)
+    y = typeof(x)(_inst(x.f, c), _CSE_INVALID, 0)
+    push!(c.caches, y)
+    return c.memo[x] = y
+end
+function _ws_fresh(x::Base.RefValue, c)
+    y = typeof(x)()
+    c.memo[x] = y
+    isdefined(x, :x) && (y[] = _inst(x[], c))
+    return y
+end
+function _ws_fresh(x::Core.Box, c)
+    y = Core.Box()
+    c.memo[x] = y
+    isdefined(x, :contents) && (y.contents = _inst(x.contents, c))
+    return y
+end
+function _ws_fresh(x::AbstractDict, c)
+    y = empty(x)
+    c.memo[x] = y
+    for (key, v) in x
+        y[_inst(key, c)] = _inst(v, c)
+    end
+    return y
+end
+
+function _ws_invalidate!(x::_WsCache)
+    x.stamp64 = _CSE_INVALID
+    x.stampalt = _CSE_INVALID
+    x.tp64 = _CSE_INVALID
+    x.tpalt = _CSE_INVALID
+    return nothing
+end
+_ws_invalidate!(x::_ACMask) = (x.stamp = _CSE_INVALID; nothing)
 
 # Mutable types a build constructs and never writes afterwards.
 const _WsReadOnly = Union{OpExpr}
@@ -394,22 +501,7 @@ function _ws_walk!(@nospecialize(x), @nospecialize(parent), w::_WsWalk)
     } && _ws_refuse("a $(typeof(x))")
     if x isa _WsState
         w.kinds[x] = :state
-        if x isa Union{_CSECache, _ObsExtVec, _AccScratch}
-            # Its buffer may also be read through a codegen table.
-            haskey(w.seen, x.f64) || (w.seen[x.f64] = nothing)
-            w.kinds[x.f64] = :scratch
-        end
-        x isa Union{_CSECache, _ObsExtVec} && _ws_walk!(x.epoch, x, w)
-        x isa _ACMask && _ws_walk!(x.f, x, w)
-        x isa Base.RefValue && isdefined(x, :x) && _ws_walk!(x[], x, w)
-        x isa Core.Box && isdefined(x, :contents) && _ws_walk!(x.contents, x, w)
-        if x isa AbstractDict
-            for (k, v) in x
-                _ws_walk!(k, x, w)
-                _ws_walk!(v, x, w)
-            end
-        end
-        return nothing
+        return _ws_children!(x, w)
     end
     if x isa Array
         @inbounds for i in eachindex(x)
@@ -517,58 +609,7 @@ function _inst_kind(@nospecialize(x), @nospecialize(k), c::_InstCtx)
         return c.memo[x] = copy(x)
     end
     # A fresh piece of per-call state: no tier it memoizes is valid yet.
-    if x isa _CSECache
-        y = _CSECache(
-            _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
-            NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
-            _inst(x.epoch, c)
-        )
-        push!(c.caches, y)
-        return c.memo[x] = y
-    elseif x isa _ObsExtVec
-        y = _ObsExtVec(
-            _inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
-            NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
-            _inst(x.epoch, c), nothing
-        )
-        push!(c.caches, y)
-        return c.memo[x] = y
-    elseif x isa _AccScratch
-        return c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
-    elseif x isa _ForcingEpoch
-        # A workspace tracks its forcing set's epoch itself.
-        e = _ForcingEpoch(UInt64(0))
-        push!(c.epochs, e)
-        return c.memo[x] = e
-    elseif x isa _SecTCache
-        # Serial: a workspace never dispatches to Polyester's pool.
-        return c.memo[x] = _SecTCache(
-            -3, x.ncells, x.disjoint, x.work, 1, nothing, nothing,
-            x.rmw
-        )
-    elseif x isa _ACMask
-        y = typeof(x)(_inst(x.f, c), _CSE_INVALID, 0)
-        push!(c.caches, y)
-        return c.memo[x] = y
-    elseif x isa Base.RefValue
-        y = typeof(x)()
-        c.memo[x] = y
-        isdefined(x, :x) && (y[] = _inst(x[], c))
-        return y
-    elseif x isa Core.Box
-        y = Core.Box()
-        c.memo[x] = y
-        isdefined(x, :contents) && (y.contents = _inst(x.contents, c))
-        return y
-    elseif x isa AbstractDict
-        y = empty(x)
-        c.memo[x] = y
-        for (key, v) in x
-            y[_inst(key, c)] = _inst(v, c)
-        end
-        return y
-    end
-    return _ws_refuse("a $(typeof(x))")
+    return _ws_fresh(x, c)
 end
 
 function _inst_spine(@nospecialize(x), c::_InstCtx)
@@ -668,16 +709,7 @@ end
 # values it held before, so no memoized value is trusted again until refilled,
 # and the next call reloads its forcing set.
 function _ws_invalidate!(ws::RhsWorkspace)
-    for x in ws.caches
-        if x isa Union{_CSECache, _ObsExtVec}
-            x.stamp64 = _CSE_INVALID
-            x.stampalt = _CSE_INVALID
-            x.tp64 = _CSE_INVALID
-            x.tpalt = _CSE_INVALID
-        elseif x isa _ACMask
-            x.stamp = _CSE_INVALID
-        end
-    end
+    foreach(_ws_invalidate!, ws.caches)
     _bump_workspace_epochs!(ws)
     ws.primed = UInt64(0)
     return nothing
@@ -728,4 +760,609 @@ function _prime!(ws::RhsWorkspace, fs::ForcingSet)
     _bump_workspace_epochs!(ws)
     ws.primed = fs.epoch
     return nothing
+end
+
+# ============================================================================
+# Layouts and programs
+# ============================================================================
+
+"""
+    TileBlock
+
+One variable's block in a program's `u`, `aux` or `du` buffer (API_SPEC §5.8,
+"Layouts"): `name`, its index `sets` in shape order, its `storage` and `owned`
+boxes per set (inclusive, global coordinates; `owned` is empty for an `aux`
+block), its 1-based `base` slot and its column-major `strides`. A 0-d state has
+no sets and one slot.
+"""
+struct TileBlock
+    name::String
+    sets::Vector{String}
+    storage::Vector{UnitRange{Int}}
+    owned::Vector{UnitRange{Int}}
+    base::Int
+    strides::Vector{Int}
+end
+
+"""
+    TileLayout
+
+The `u` and `aux` blocks of a program (whole-domain or tile), in flat-layout
+order (0-d states by sorted name, then arrays by sorted name), and the two
+buffer lengths. `du` has `u`'s layout.
+"""
+struct TileLayout
+    u::Vector{TileBlock}
+    aux::Vector{TileBlock}
+    n_u::Int
+    n_aux::Int
+end
+
+# The copy maps of one program call: `u`/`aux` buffer slot → internal slot,
+# and internal `du` slot → `du` buffer slot (the owned rows only).
+struct _CopyMaps
+    u_src::Vector{Int}
+    u_dst::Vector{Int}
+    aux_src::Vector{Int}
+    aux_dst::Vector{Int}
+    du_src::Vector{Int}
+    du_dst::Vector{Int}
+end
+
+"""
+    RhsProgram
+
+A right-hand side as a program value (API_SPEC §5.8): [`rhs_program`](@ref)
+returns the Problem's whole model, [`select`](@ref) one operator of it. Its
+`u` covers the written variables and its `aux` the other states the kept rules
+read. Evaluate it with [`rhs!`](@ref) on a [`rhs_workspace`](@ref) per
+concurrent caller; restrict it with [`halo`](@ref), [`restrict`](@ref) and
+[`lanes`](@ref). Immutable once built: one program serves every thread.
+"""
+struct RhsProgram{F}
+    seed::Any                       # the Problem's `_ProgramSeed`
+    compiler::Symbol
+    writes::Vector{String}          # W, flat-layout order
+    aux_names::Vector{String}       # R \ W, flat-layout order
+    flat::FlattenedSystem           # the selected flattened system
+    front::Any                      # (file, model_name, BuildOptions) the front door produced
+    f!::F
+    internal::StateLayout           # the slot space `f!` addresses
+    shapes::Dict{String, Vector{String}}  # array state → index sets per dim
+    layout::TileLayout
+    maps::_CopyMaps
+    shared::_RhsShared
+    memo::_ProgramMemo              # what its re-lowerings reuse from its build
+end
+
+"""
+    TileProgram
+
+An operator restricted to one tile of a [`Decomposition`](@ref)
+([`restrict`](@ref)). Evaluate it with [`rhs!`](@ref) on buffers in its
+[`tile_layout`](@ref).
+"""
+struct TileProgram{F}
+    op::RhsProgram
+    f!::F
+    internal::StateLayout
+    layout::TileLayout
+    maps::_CopyMaps
+    shared::_RhsShared
+end
+
+# ============================================================================
+# Errors
+# ============================================================================
+
+_range_error(code::String, msg::AbstractString) = SimulateError(String(msg), code)
+
+function _require_native(x, call::AbstractString)
+    c = x isa RhsProgram ? x.compiler : x.op.compiler
+    c === :native || throw(
+        _range_error(
+            ERROR_CODES.COMPILER_UNAVAILABLE,
+            "$call needs a program built with compiler = :native; this one was built " *
+                "with compiler = :$c, which has no range-restricted lowering (API_SPEC §5.8)"
+        )
+    )
+    return nothing
+end
+
+# ============================================================================
+# Building and evaluating a program
+# ============================================================================
+
+# A whole-domain program build: records the front door's product, so a
+# restriction re-lowers from it.
+struct _CaptureSpec <: _RangeSpec
+    front::Base.RefValue{Any}
+    memo::_ProgramMemo
+end
+_range_memo(s::_CaptureSpec) = s.memo
+_range_memo_records(::_CaptureSpec) = true
+function _range_front_door_done(s::_CaptureSpec, file, model_name, opts::BuildOptions)
+    s.front[] = (file, model_name, copy(opts))
+    return nothing
+end
+
+# Build the program of `file` (a run file of `seed`'s prepared run) the way
+# `esm_problem` built the Problem's, without its discrete-cadence cut,
+# recording what its workspaces need (`_WsCapture`).
+#
+# Every externally fed parameter is a live buffer of the program (a forcing
+# slot), whatever the Problem's own build made of it: the build registers each
+# one the Problem holds no buffer for, filled with its value, in the program's
+# own copy of the buffer registry (`pa`, returned).
+#
+# `products` and `param_classes` are the build's sinks, which a Problem built as
+# its program (`esm_problem(…; program_build = true)`) passes on; the build's
+# initial state `u0` is returned for that Problem too.
+function _program_build(
+        seed::_ProgramSeed, file::EsmFile; products = nothing, param_classes = nothing,
+        caller_u0 = nothing
+    )
+    front = Ref{Any}(nothing)
+    memo = _ProgramMemo()
+    pa = Dict{String, Any}(String(k) => v for (k, v) in seed.param_arrays)
+    cap = _WsCapture()
+    f!, u0, p, _ts, var_map = _with_ws_capture(cap) do
+        _with_range_spec(_CaptureSpec(front, memo)) do
+            _build_run(
+                file; compiler = seed.compiler, form = :inplace,
+                model_name = seed.model_name, parameter_overrides = seed.overrides,
+                const_arrays = seed.const_arrays, param_arrays = pa,
+                gated_providers = seed.gated_providers, sample_time = seed.sample_time,
+                runtime_array_parameters = seed.runtime_array_parameters,
+                live_fed_parameters = true,
+                ic_t0 = seed.ic_t0,
+                ic_data = seed.ic_data,
+                products = products, param_classes = param_classes,
+                caller_u0 = caller_u0
+            )
+        end
+    end
+    return f!, var_map, front[], u0, p, pa, cap, memo
+end
+
+# The parameter and forcing-slot signatures of a program built from `seed`
+# (API_SPEC §5.8, "States and parameters", "Forcing sets"), whose build
+# resolved the parameter NamedTuple `p` and the buffer registry `pa`, its
+# default forcing set (a copy of those buffers now), and the factory of the
+# workspaces of its template `f!` (`n` internal slots, build record `cap`).
+#
+# A slot's kind is the parameter's, whatever supplied its buffer: `:forcing`
+# for an externally fed parameter (or a buffer no parameter declares, a
+# provider's), `:array_parameter` for every other one: a shaped parameter made
+# live by `runtime_array_parameters`, or one whose buffer the caller handed
+# `esm_problem` as `param_arrays`.
+function _program_shared(seed::_ProgramSeed, p, pa, f!, n::Int, cap::_WsCapture)
+    decl = seed.prep.flat.parameters
+    function declared(n)
+        v = get(decl, n, nothing)
+        return (v !== nothing && v.default isa Real) ? Float64(v.default) : nothing
+    end
+    params = p === nothing ? ParamSlot[] :
+        ParamSlot[ParamSlot(String(k), declared(String(k))) for k in keys(p)]
+    sort!(params; by = s -> s.name)
+    function kind(n)
+        v = get(decl, n, nothing)
+        return (v === nothing || _externally_fed(v)) ? :forcing : :array_parameter
+    end
+    names = sort!(String[String(k) for k in keys(pa)])
+    slots = ForcingSlot[
+        ForcingSlot(
+            n, _is_scalar_slot(get(decl, n, nothing)) ? Int[] :
+                collect(Int, size(pa[n])), kind(n)
+        ) for n in names
+    ]
+    bufs = _slot_buffers(slots, pa)
+    default = ForcingSet(
+        slots, Vector{Float64}[vec(copy(a)) for a in bufs],
+        _next_set_epoch()
+    )
+    return _RhsShared(params, slots, default, _ws_factory(f!, n, cap, slots, bufs))
+end
+
+# A derived program's: its parent's signatures and default set, and a factory
+# of its own template.
+_derived_shared(
+    parent::_RhsShared, f!, n::Int, cap::_WsCapture, pa,
+    lane_bufs::Vector{Vector{Float64}} = Vector{Float64}[]
+) =
+    _RhsShared(
+    parent.params, parent.slots, parent.default,
+    _ws_factory(
+        f!, n, cap, parent.slots, _slot_buffers(parent.slots, pa),
+        lane_bufs
+    )
+)
+
+# Re-lower a program's recorded front-door product under `spec`.
+function _relower(prog::RhsProgram, spec::_RangeSpec)
+    file, model_name, recorded = prog.front
+    opts = _relower_options(recorded)
+    cap = _WsCapture()
+    f!, _u0, _p, _ts, var_map = _with_ws_capture(cap) do
+        _with_compiler_plan(_plan(prog.compiler)) do
+            _with_range_spec(spec) do
+                _build_selected(file, model_name, opts)
+            end
+        end
+    end
+    return f!, var_map, cap, opts.param_arrays
+end
+
+# Each array state's index sets, from the flattened declaration (or `dim<d>`
+# for a state whose declaration carries no shape).
+function _state_shapes(flat::FlattenedSystem, internal::StateLayout)
+    out = Dict{String, Vector{String}}()
+    for b in _layout_blocks(internal)
+        v = get(flat.state_variables, b.name, nothing)
+        sh = v === nothing ? nothing : v.shape
+        out[b.name] = (sh !== nothing && length(sh) == length(b.lo)) ?
+            String[string(s) for s in sh] : String["dim$d" for d in eachindex(b.lo)]
+    end
+    return out
+end
+
+# The flat-layout order of `names` over the internal layout: 0-d states by
+# sorted name, then arrays by sorted name.
+function _flat_order(internal::StateLayout, names)
+    sc = sort!([n for n in names if haskey(internal.scalars, n)])
+    ar = sort!([n for n in names if _layout_block(internal, n) !== nothing])
+    return vcat(sc, ar)
+end
+
+# Column-major strides over a box and its cell count: the build's own block
+# rule (`_ArrayBlock`).
+function _box_strides(box::Vector{UnitRange{Int}})
+    b = _ArrayBlock("", 1, Int[first(r) for r in box], Int[last(r) for r in box])
+    return b.strides, b.len
+end
+
+# Blocks over `names` with storage/owned boxes from `boxes(name)`.
+function _make_blocks(internal::StateLayout, shapes, names, boxes; owned::Bool)
+    blocks = TileBlock[]
+    base = 1
+    for n in names
+        if haskey(internal.scalars, n)
+            push!(blocks, TileBlock(n, String[], UnitRange{Int}[], UnitRange{Int}[], base, Int[]))
+            base += 1
+            continue
+        end
+        st, ow = boxes(n)
+        strides, len = _box_strides(st)
+        push!(blocks, TileBlock(n, shapes[n], st, owned ? ow : UnitRange{Int}[], base, strides))
+        base += len
+    end
+    return blocks, base - 1
+end
+
+# `slot` of global cell `g` in `b`, or 0 outside its storage box.
+@inline function _tile_slot(b::TileBlock, g)
+    s = b.base
+    @inbounds for d in eachindex(b.storage)
+        r = b.storage[d]
+        (first(r) <= g[d] <= last(r)) || return 0
+        s += (g[d] - first(r)) * b.strides[d]
+    end
+    return s
+end
+
+# The copy maps between a layout and the internal slot space. `to_internal(name,
+# d, g)` maps a storage coordinate to its internal (global) coordinate, or
+# `nothing` for a cell the program never reads (a dead halo cell); a cell
+# outside the variable's own block may lie in one of its `extra` blocks (the
+# pieces past a periodic seam).
+function _copy_maps(
+        layout::TileLayout, internal::StateLayout, to_internal,
+        extra::AbstractDict = Dict{String, Vector{String}}()
+    )
+    function fill_in!(src, dst, blocks)
+        for b in blocks
+            if isempty(b.sets) && isempty(b.storage)
+                push!(src, b.base)
+                push!(dst, internal.scalars[b.name])
+                continue
+            end
+            ib = _layout_block(internal, b.name)
+            g = Vector{Int}(undef, length(b.storage))
+            for c in CartesianIndices(Tuple(b.storage))
+                ok = true
+                for d in eachindex(g)
+                    x = to_internal(b.name, d, c[d])
+                    x === nothing && (ok = false; break)
+                    g[d] = x
+                end
+                ok || continue
+                s = _block_slot(ib, g)
+                for a in get(extra, b.name, ())
+                    s == 0 || break
+                    s = _block_slot(_layout_block(internal, a), g)
+                end
+                s == 0 && continue
+                push!(src, _tile_slot(b, Tuple(c)))
+                push!(dst, s)
+            end
+        end
+        return
+    end
+    u_src, u_dst, a_src, a_dst = Int[], Int[], Int[], Int[]
+    fill_in!(u_src, u_dst, layout.u)
+    fill_in!(a_src, a_dst, layout.aux)
+    du_src, du_dst = Int[], Int[]
+    for b in layout.u
+        if isempty(b.sets) && isempty(b.storage)
+            push!(du_src, internal.scalars[b.name])
+            push!(du_dst, b.base)
+            continue
+        end
+        ib = _layout_block(internal, b.name)
+        for c in CartesianIndices(Tuple(b.owned))
+            s = _block_slot(ib, Tuple(c))
+            s == 0 && error("owned cell $(Tuple(c)) of '$(b.name)' is not in the program's layout")
+            push!(du_src, s)
+            push!(du_dst, _tile_slot(b, Tuple(c)))
+        end
+    end
+    return _CopyMaps(u_src, u_dst, a_src, a_dst, du_src, du_dst)
+end
+
+_whole_program(
+    seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
+    parent = nothing
+) = first(_whole_program_built(seed, flat, W, R; parent = parent))
+
+# `_whole_program`, with the build's sinks `products` and `param_classes` filled
+# and its initial state and parameters: `(prog, u0, p)`.
+function _whole_program_built(
+        seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
+        parent = nothing, products = nothing, param_classes = nothing, caller_u0 = nothing
+    )
+    live = union(W, R)
+    init = _select_init(_faq_initialization(seed.prep.flat), live)
+    file = _run_file(seed.prep; flat = _scalar_slots_to_arrays(flat), init = init)
+    f!, internal, front, u0, p, pa, cap, memo = _program_build(
+        seed, file; products = products, param_classes = param_classes, caller_u0 = caller_u0
+    )
+    present = Set{String}(
+        vcat(
+            collect(_layout_scalar_names(internal)),
+            [b.name for b in _layout_blocks(internal)]
+        )
+    )
+    unames = _flat_order(internal, [n for n in W if n in present])
+    anames = _flat_order(internal, [n for n in R if n in present && !(n in W)])
+    shapes = _state_shapes(flat, internal)
+    gbox(n) = (
+        b = _layout_block(internal, n);
+        bx = UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]; (bx, bx)
+    )
+    ublocks, nu = _make_blocks(internal, shapes, unames, gbox; owned = true)
+    ablocks, na = _make_blocks(internal, shapes, anames, gbox; owned = false)
+    layout = TileLayout(ublocks, ablocks, nu, na)
+    maps = _copy_maps(layout, internal, (n, d, x) -> x)
+    prog = RhsProgram(
+        seed, seed.compiler, unames, anames, flat, front, f!,
+        internal, shapes, layout, maps,
+        parent === nothing ?
+            _program_shared(seed, p, pa, f!, length(internal), cap) :
+            _derived_shared(parent, f!, length(internal), cap, pa),
+        memo
+    )
+    return prog, u0, p
+end
+
+"""
+    rhs_program(prob::EsmProblem) -> RhsProgram
+
+The Problem's right-hand side as a program value (API_SPEC §5.8): the whole
+model over the whole domain, with `u` every state of the Problem (in the
+Problem's flat layout) and `aux` empty. [`select`](@ref) narrows it to one
+operator; [`halo`](@ref), [`restrict`](@ref) and [`lanes`](@ref) restrict it.
+
+Its inputs besides the state are a parameter vector ([`parameters`](@ref)) and
+a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): every externally fed
+parameter, and under `runtime_array_parameters` every shaped parameter with a
+value, is read from the set, never from build-time data.
+[`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
+"""
+function rhs_program(prob::EsmProblem)
+    b = prob.build
+    b.seed === nothing && throw(
+        _range_error(
+            ERROR_CODES.COMPILER_UNAVAILABLE,
+            "rhs_program needs a Problem built by esm_problem with compiler = :native " *
+                "(or :interpreter); this one was built with compiler = :$(compiler(prob)), " *
+                "which carries no program of its own (API_SPEC §5.8)"
+        )
+    )
+    # The model is lowered once per Problem: the first call builds the program
+    # (unless `esm_problem(…; program_build = true)` already did) and every call
+    # returns it with its default forcing set holding the Problem's forcing as
+    # it is now.
+    lock(b.program_lock) do
+        b.program[] === nothing && (b.program[] = first(_problem_program(b.seed)))
+    end
+    return _current_program(b, prob.param_buffers)
+end
+
+# The whole-model program of `seed` with the build's sinks `products` and
+# `param_classes` filled, and the build's initial state and parameters:
+# `(prog, u0, p)`. `rhs_program` builds it with no sinks; a Problem built with
+# `program_build = true` is built from it, with its own.
+function _problem_program(
+        seed::_ProgramSeed; products = nothing, param_classes = nothing, caller_u0 = nothing
+    )
+    flat, W, R = _select_flat(seed.prep.flat, :all, :all)
+    return _whole_program_built(
+        seed, flat, W, R; products = products, param_classes = param_classes,
+        caller_u0 = caller_u0
+    )
+end
+
+# The program the Problem build `b` holds, with its default forcing set copied
+# from the Problem's live buffers `live` when one of them has changed since the
+# set was taken (a discrete provider's refresh writes them in place). The
+# program then held is that one, so a later call with nothing changed returns
+# the same value. A slot the Problem holds no buffer for is one the program's
+# build registered itself, which nothing writes; its buffer is kept.
+function _current_program(b::_ProblemBuild, live::AbstractDict)
+    return lock(b.program_lock) do
+        prog = b.program[]::RhsProgram
+        sh = prog.shared
+        d = sh.default
+        stale(k, s) = (x = get(live, s.name, nothing); x !== nothing && !isequal(vec(x), d.bufs[k]))
+        any(((k, s),) -> stale(k, s), enumerate(sh.slots)) || return prog
+        bufs = Vector{Float64}[
+            haskey(live, s.name) ? vec(copy(live[s.name])) : d.bufs[k]
+                for (k, s) in enumerate(sh.slots)
+        ]
+        cur = RhsProgram(
+            prog.seed, prog.compiler, prog.writes, prog.aux_names, prog.flat,
+            prog.front, prog.f!, prog.internal, prog.shapes, prog.layout, prog.maps,
+            _RhsShared(sh.params, sh.slots, ForcingSet(sh.slots, bufs, _next_set_epoch()), sh.factory),
+            prog.memo
+        )
+        b.program[] = cur
+        return cur
+    end
+end
+
+"""
+    select(prog::RhsProgram; writes = :all, terms = :all) -> RhsProgram
+
+The program of one operator (API_SPEC §5.8, "Selection"): every flattened
+equation keeps the contributions whose #539 origins intersect `terms` (a
+vector of [`TermOrigin`](@ref), matched by equality; `:all` keeps every one),
+summed as a left fold in their original order; equations whose target is not
+in `writes` (a vector of flattened state names, or `:all`) are dropped, and a
+kept equation with no kept contribution writes `0`. The result's `u` covers
+`writes` and its `aux` the other states the kept rules read.
+
+A selection of a selection composes: its `terms` keep only the contributions
+both selections keep, and its `writes` (`:all` meaning `prog`'s own) must be
+variables `prog` writes.
+
+Raises `range_selection_writes_incomplete` when a variable outside `writes` has
+a kept contribution.
+"""
+function select(prog::RhsProgram; writes = :all, terms = :all)
+    t = _normalize_terms(terms)
+    # A selection of a selection selects from the program's own flattened
+    # system: its contributions are the ones the first selection kept, and its
+    # writable variables are the first selection's `writes`.
+    flat, W, R = _select_flat(prog.flat, writes, t, Set{String}(prog.writes))
+    return _whole_program(prog.seed, flat, W, R; parent = prog.shared)
+end
+
+"""
+    tile_layout(x) -> TileLayout
+
+The `u`/`aux` layout of a whole-domain program or a tile (API_SPEC §5.8,
+"Layouts").
+"""
+tile_layout(x::RhsProgram) = x.layout
+tile_layout(x::TileProgram) = x.layout
+
+"""
+    parameters(prog) -> Vector{ParamSlot}
+
+The entries of a vector `p` (API_SPEC §5.8): sorted flattened parameter names,
+the positional order the compiled program indexes, each with its default.
+Build a vector with [`parameter_vector`](@ref); `rhs!` also takes the Problem's
+NamedTuple `prob.p`.
+"""
+parameters(x::Union{RhsProgram, TileProgram}) = x.shared.params
+
+"""
+    n_states(prog) -> Int
+
+The length of `u` (API_SPEC §5.8, "States and parameters").
+"""
+n_states(x::Union{RhsProgram, TileProgram}) = x.layout.n_u
+
+"""
+    state_layout(prog) -> Vector{StateBlock}
+
+The `u` blocks in flat-layout order (0-d states by sorted name, then arrays by
+sorted name): name, 1-based offset, shape. Derived from
+[`tile_layout`](@ref)`(prog)`; a tile's shapes are its storage box's.
+"""
+state_layout(x::Union{RhsProgram, TileProgram}) = _state_blocks(x.layout.u)
+
+# Tile blocks as the name, offset and storage shape a caller indexes by.
+_state_blocks(blocks::Vector{TileBlock}) =
+    StateBlock[StateBlock(b.name, b.base, Int[length(r) for r in b.storage]) for b in blocks]
+
+"""
+    rhs_workspace(x) -> RhsWorkspace
+
+The mutable state of [`rhs!`](@ref) on `x` (a program, a tile or a lane
+program): a private instance of its compiled right-hand side — its own caches,
+scratch and forcing buffers; the generated code and every read-only table are
+the program's. One per concurrent caller; a workspace may move between threads
+but serves one call at a time.
+"""
+rhs_workspace(x::Union{RhsProgram, TileProgram}) = _instantiate(x.shared)
+
+"""
+    rhs!(du, x, ws, u, aux, p, t, fs::ForcingSet) -> du
+
+Evaluate the program or tile `x` (API_SPEC §5.8): `u` and `aux` in
+[`tile_layout`](@ref)`(x)`, `p` a vector in [`parameters`](@ref) order or the
+Problem's NamedTuple, `fs` a [`ForcingSet`](@ref) of `x`, `ws` a
+[`rhs_workspace`](@ref) of `x`. The result is a function of `(x, u, aux, p, t,
+fs)`'s contents alone: bitwise the same on every workspace and thread, whatever
+the workspace evaluated before. Writes only the owned rows of `du`; every other
+element is left untouched. Reentrant across distinct workspaces, never
+threaded internally, allocation-free in steady state. A buffer or a vector `p`
+of the wrong length is a `DimensionMismatch`; a workspace or set of another
+program an `ArgumentError`. A call that throws leaves the workspace usable: the
+next call recomputes everything the failed one may have half written.
+"""
+function rhs!(
+        du::AbstractVector, x::Union{RhsProgram, TileProgram}, ws::RhsWorkspace,
+        u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet
+    )
+    return _rhs_eval!(du, x.layout, x.maps, x.shared, ws, u, aux, p, t, fs)
+end
+
+function _rhs_eval!(
+        du::AbstractVector, L::TileLayout, m::_CopyMaps, shared::_RhsShared,
+        ws::RhsWorkspace, u::AbstractVector, aux::AbstractVector, p, t,
+        fs::ForcingSet
+    )
+    _check_workspace(shared, ws)
+    length(u) == L.n_u || throw(
+        DimensionMismatch(
+            "rhs!: `u` has $(length(u)) elements; the layout has $(L.n_u)"
+        )
+    )
+    length(aux) == L.n_aux || throw(
+        DimensionMismatch(
+            "rhs!: `aux` has $(length(aux)) elements; the layout has $(L.n_aux)"
+        )
+    )
+    length(du) == L.n_u || throw(
+        DimensionMismatch(
+            "rhs!: `du` has $(length(du)) elements; the layout has $(L.n_u)"
+        )
+    )
+    _check_parameters(shared, p, "rhs!")
+    _prime!(ws, fs)
+    U = ws.u
+    @inbounds for k in eachindex(m.u_src)
+        U[m.u_dst[k]] = u[m.u_src[k]]
+    end
+    @inbounds for k in eachindex(m.aux_src)
+        U[m.aux_dst[k]] = aux[m.aux_src[k]]
+    end
+    D = ws.du
+    _ws_eval!(ws, p, t)
+    @inbounds for k in eachindex(m.du_src)
+        du[m.du_dst[k]] = D[m.du_src[k]]
+    end
+    return du
 end

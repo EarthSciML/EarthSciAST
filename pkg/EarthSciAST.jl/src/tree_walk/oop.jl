@@ -48,7 +48,7 @@
 # `_build_evaluator(model; form = :oop)` returns the `_OopRHS` in the `f!` slot of
 # the usual `(f, u0, p, tspan, var_map)` tuple.
 
-# ---- Lane-batched scalar entries -----------------------------
+# ---- Lane-batched scalar entries ----------------------------------------------
 #
 # WHY. The per-CELL scalar surface of a build — `rhs_list` entries a state
 # equation lowers to when it declines the kernel path (a runtime contraction
@@ -434,7 +434,9 @@ end
 # Can the whole spine (plus CSE recipes) evaluate as lane vectors? A `_NK_CACHED`
 # must resolve to THIS kernel's scratch tiers. A ghost-bearing STATE_TBL_BOX
 # vectorizes as gather-then-select; a template sub-kernel is evaluated as its
-# own whole-array op over the parent lanes.
+# own whole-array op over the parent lanes. Every descriptor kind is named: a
+# kind this plan does not know is an error (`_oop_unknown_kind`), never a
+# vectorizable kernel with no data.
 function _oop_acc_vecable(n::_Node, K::_AccKernel)
     k = n.kind
     # An affine reduction's body is evaluated at lanes of (cell, contracted
@@ -451,7 +453,9 @@ function _oop_acc_vecable(n::_Node, K::_AccKernel)
             _allof(r -> _oop_acc_vecable(r, S), S.cse.recipes) &&
             _allof(r -> _oop_acc_vecable(r, S), S.cse.inv_recipes)
     end
-    if k === _NK_CACHED
+    if k === _NK_ACCESS
+        _oop_known_kind(K.acc[n.idx].kind) || _oop_unknown_kind(K.acc[n.idx].kind)
+    elseif k === _NK_CACHED
         (n.payload === K.cse.scratch || n.payload === K.cse.inv_scratch) || return false
     end
     return _allof(c -> _oop_acc_vecable(c, K), n.children)
@@ -499,11 +503,24 @@ function _build_oop_desc_vectors(
             forc[i] = Int[@inbounds a.conn[_oop_boxaddr(a, mis, l)] for l in 1:L]
         elseif k === _AK_LOOP_IDX
             consts[i] = Float64.(mis[a.dim])
+        elseif k === _AK_STATE_FIXED || k === _AK_ARR_FIXED
+            # Read directly by the walker.
+        else
+            _oop_unknown_kind(k)
         end
-        # STATE_FIXED / ARR_FIXED: read directly by the walker.
     end
     return gathers, consts, forc, ghost
 end
+
+_oop_known_kind(k::UInt8) = UInt8(1) <= k <= _AK_ARR_TBL_BOX
+
+_oop_unknown_kind(k::UInt8) = throw(
+    TreeWalkError(
+        "E_TREEWALK_INTERNAL",
+        "the out-of-place plan has no rule for access descriptor kind $(Int(k)); " *
+            "add one to `_oop_acc_vecable` and `_build_oop_desc_vectors`"
+    )
+)
 
 function _build_oop_acc_plan(K::_AccKernel)
     return _build_oop_acc_plan_inner(K)

@@ -243,7 +243,7 @@ end
 # that carries the buffer block.
 #
 # The block is the whole frame except in a range-restricted program
-# (range_restricted.jl), where it may cover only the cells the program needs.
+# (src/range/), where it may cover only the cells the program needs.
 # The sweep runs over the block: every self-read has lag 0 off the recurrence
 # axis, so off that axis a cell of the block reads only cells of the block, and
 # a block starting at position 1 of the recurrence axis (the whole axis, or a

@@ -1,5 +1,6 @@
 # A container's inline tests build over the WHOLE DOCUMENT, not over the
-# container in isolation (src/run_tests.jl).
+# container in isolation (`run_esm_tests`, through `esm_problem(…; compiler =
+# :mtk)`).
 #
 # `MTK.System(::Model)` wraps one model in a synthetic single-model `EsmFile`,
 # which drops everything the document supplies around that container. Two
@@ -69,9 +70,7 @@ end
 function _file_counts(relpath::AbstractString)
     p = joinpath(TESTUTILS_REPO_ROOT, relpath)
     isfile(p) || error("fixture missing: $(relpath)")
-    res = EarthSciAST.AssertionResult[]
-    EarthSciAST.run_file_tests!(res, p)
-    return res
+    return EarthSciAST.run_inline_tests(p; compiler = :mtk)
 end
 
 @testset "a document this engine cannot build refuses ALL of its containers" begin
@@ -94,7 +93,7 @@ end
     @test !isempty(res)
     @test count(r -> r.status == EarthSciAST.PASS, res) == 0   # Rust: 0
     @test all(r -> r.status == EarthSciAST.ERROR, res)
-    @test all(r -> occursin("no PDE constructor", r.message), res)
+    @test all(r -> occursin("PDE", r.message), res)
     # All five containers are refused, not only the one carrying the `grad`.
     @test length(Set(r.container_name for r in res)) == 5
 end

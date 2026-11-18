@@ -2,8 +2,8 @@
 #
 # Covers what needs no compiled system: discover_esm_files, the zero-file
 # warning, and the JUnit testcase-time arithmetic. The runs that compile a
-# fixture (PASS/FAIL/exit_code, the model-relative fallback in _resolve_handle
-# for spec §10.7 subsystem refs, and JUnit XML emission from a real run) go
+# fixture (PASS/FAIL/exit_code, spec §10.7 subsystem refs, and JUnit XML
+# emission from a real run) go
 # through ModelingToolkit, so they live in the ModelingToolkit suite as
 # test/mtk/run_esm_tests_mtk_test.jl.
 using Test
