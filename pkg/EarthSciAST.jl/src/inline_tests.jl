@@ -11,8 +11,7 @@
 # (or the one the document's stiffness picks), and reads every asserted value
 # off the solution through the problem's layout and its observed reader.
 #
-# Cross-binding pinned conventions (identical in the Julia / Python / Rust
-# bindings; the esm-spec leaves these open, so determinism requires pinning):
+# Conventions pinned across the Julia, Python and Rust bindings:
 #
 # 1. `coords` point-sampling — coords values are positions in INDEX space
 #    (1-based, fractional allowed) along the named interval index sets;
@@ -23,27 +22,11 @@
 #    in `1:size`. Mutually exclusive with `reduce`.
 # 2. `integral` reduce — the uniform-cell Riemann sum under a UNIT total
 #    domain measure per axis: `integral = Σ field / N_cells = mean(field)`.
-#    Authors of non-unit physical domains must scale the expectation until
-#    the spec grows a measure concept. This is exactly the measure convention
-#    under which the relative-L2 reduction is measure-free (the per-cell
-#    measure cancels between numerator and denominator).
 # 3. `from_file` references — `{type: "from_file", path, format?}`: `path`
 #    resolves relative to the .esm file's directory (`base_dir`, defaulting
 #    to the loaded path's directory, else the working directory); the default
-#    and only v1 `format` is "json" — a row-major nested JSON array exactly
-#    matching the field's shape (validated; mismatch is a clear error). The
-#    loaded array is used exactly like an evaluated inline reference in the
-#    error-norm reductions.
-#
-# Public surface:
-# - `field_reduce(kind, actual; reference=…)` — the §6.6.5 reduction semantics
-#   (relative L2, absolute Linf, integral/mean/max/min).
-# - `run_inline_tests(inputs; model_name, alg, reltol, abstol, base_dir,
-#   compiler, options_for)` — run every inline test of the selected
-#   component(s) of one or many documents; returns per-assertion results
-#   carrying the ACTUAL values (conformance runners record these).
-# - `InlineTestOptions` — the per-document override record a caller's
-#   `options_for` callback returns.
+#    and only `format` is "json": a row-major nested JSON array matching the
+#    field's shape (a mismatch is an error).
 #
 # The per-test frame (`_run_test_frame!`: the per-assertion loop, §6.6.4
 # tolerance resolution, §6.6.3 pass predicate, wall-time split,
@@ -1251,86 +1234,55 @@ _opt_dict(o::InlineTestOptions, field::Symbol) =
     (v = getfield(o, field); v === nothing ? Dict{String, Any}() : v)
 
 """
-    run_inline_tests(inputs; model_name=nothing, alg=nothing,
-                     reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
-                     base_dir=nothing, options_for=nothing)
+    run_inline_tests(inputs; model_name=nothing, alg=nothing, reltol=nothing,
+                     abstol=nothing, base_dir=nothing, compiler=:native,
+                     options_for=nothing)
         -> Vector{AssertionResult}
 
-Run every inline test (esm-spec §6.6, including the §6.6.5 PDE assertions) of
-the selected component(s) of `inputs` through the official tree-walk simulation
-pathway, and return one [`AssertionResult`](@ref) per assertion — carrying
-the ACTUAL reduction value alongside pass/fail, so conformance harnesses can
-record and cross-compare the numbers.
+Run every inline test (esm-spec §6.6, including the §6.6.5 field assertions) of
+the selected component(s) of `inputs` through [`esm_problem`](@ref) and `solve`,
+and return one [`AssertionResult`](@ref) per assertion, carrying the actual
+value alongside pass/fail.
 
-`inputs` is a path to a `.esm` file, a loaded [`EsmFile`](@ref), a DIRECTORY
+`inputs` is a path to a `.esm` file, a loaded [`EsmFile`](@ref), a directory
 (walked recursively for `*.esm`, sorted), or any iterable of those. Results are
-concatenated in input order.
+concatenated in input order; `models` run before `reaction_systems`.
 
-Both kinds of test-bearing component are run: `models` first, then
-`reaction_systems`, which the schema gives the same `tests` member.
+Per test: `solve(esm_problem(input, (time_span.start, time_span.stop); compiler),
+alg; reltol, abstol, saveat=<assertion times>)` with the test's
+`initial_conditions` / `parameter_overrides` applied. Each assertion then reads
+the asserted variable at its time: a scalar sample, a point sample per `coords`
+(1-based index space, nearest index, exact ties rounding down), or a reduction
+per `reduce` (error norms against a `reference`: an analytic expression,
+evaluated with [`evaluate_cellwise`](@ref), or a
+`{type: "from_file", path, format?}` JSON snapshot resolved against `base_dir`).
+`base_dir` defaults to the `.esm` file's directory, else the working directory.
 
-Per test: `solve(esm_problem(input, (time_span.start, time_span.stop)), alg;
-reltol, abstol, saveat=<assertion times>)` with the test's `initial_conditions`
-/ `parameter_overrides` applied; then per assertion the asserted variable's field
-is read at the assertion time and either point-sampled per its `coords`
-(positions in 1-based INDEX space; nearest grid index, exact ties rounding
-DOWN — the pinned cross-binding convention) or collapsed per its `reduce`
-(error norms evaluate the `reference` — an analytic expression cellwise via
-[`evaluate_cellwise`](@ref), or a `{type: "from_file", path, format?}` JSON
-snapshot resolved against `base_dir`). An assertion with neither `coords` nor
-`reduce` samples a scalar state. `base_dir` defaults to the .esm file's
-directory when the document came from a path, else the working directory.
+Assertion tolerances resolve per field over four levels (esm-spec §6.6.4:
+assertion > test > model > `rel=1e-6`), and the pass predicate, wall-time
+accounting and JUnit output ([`write_junit_xml`](@ref)) are those of
+[`run_esm_tests`](@ref) (both runners share `_run_test_frame!`).
 
-`options_for` is the seam for site-specific policy. It is called once per
-resolved document — with the document's path when it came from one, else the
-`EsmFile`, and BEFORE the document is loaded, so a basename-keyed callback is
-asked about an unreadable file too and wants a default rather than an indexing
-error — and returns an [`InlineTestOptions`](@ref) whose non-`nothing`
-fields override the keywords above for that document (or `nothing` to change
-nothing). It exists so that a corpus gate's basename-keyed tables — a
-stiff-solver map, an initial-condition seed — can stay in the gate instead of
-forcing it to re-implement §6.6 to get at them.
+Keywords:
+* `alg` — the ODE algorithm for every document. Left `nothing`, each document
+  gets `Rosenbrock23` when it declares `solver.stiffness: "high"` (esm-spec §2.2),
+  else `Tsit5`; that needs OrdinaryDiffEqRosenbrock or OrdinaryDiffEqTsit5
+  loaded, and a document with tests and no available solver raises an
+  `ArgumentError`.
+* `reltol` / `abstol` — integration tolerances (not the assertion tolerances
+  above). Each resolves most-specific first: an `options_for` override, this
+  keyword, the document's `solver.reltol` / `solver.abstol`, then
+  `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+* `compiler` — passed to `esm_problem` for every test.
+* `options_for` — called once per document, before it is loaded, with its path
+  (or the `EsmFile` when there is none); returns an [`InlineTestOptions`](@ref)
+  whose non-`nothing` fields override the keywords for that document, or
+  `nothing`.
 
-A document that fails to LOAD throws when `inputs` names a single document.
-In a BATCH — an iterable or a directory — it instead
-contributes one ERROR row naming the path, so one unreadable file cannot cost
-the run every other file's verdicts. Every OTHER row names its document too:
-`r.file` is the path the document was loaded from (and `""` only for a document
-handed over as an in-memory `EsmFile`, which has no path), so a corpus run's
-rows are attributable one by one rather than only in bulk.
-
-Tolerances resolve per esm-spec §6.6.4 — PER FIELD over four levels
-(assertion > test > model > the implementation default `rel=1e-6`), each of
-`rel` and `abs` taken from the innermost level that declares it; the pass
-predicate is the same `isapprox` check `run_esm_tests`
-uses, and the results are the same [`AssertionResult`](@ref) type the MTK
-runner produces — both runners are the SAME frame (`_run_test_frame!` in
-run_tests.jl) with different execution engines plugged in, so tolerance
-resolution, the pass predicate, per-test wall-time accounting, and JUnit
-emission ([`write_junit_xml`](@ref)) cannot drift apart. `alg` names the ODE algorithm (e.g. `Tsit5()` with
-OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension. It may
-be left `nothing`, and then each document gets the algorithm
-[`_pick_solver`](@ref) picks for it: the stiff `Rosenbrock23` when the document
-declares `solver.stiffness: "high"` (esm-spec §2.2), else the non-stiff
-`Tsit5`. That is what lets ONE corpus-wide call run a stiff document and a
-non-stiff one — a caller who passes an `alg` is naming it for every document in
-the batch, which a stiff member of that batch cannot survive. Leaving it unset
-does require one of those solver packages to be loaded: with neither available
-and no `alg` named, a document that HAS tests to run throws an `ArgumentError`
-saying so. A document with no tests never reaches the pick, so a corpus of
-mostly test-free documents costs nothing and cannot fail on this.
-`reltol`/`abstol` default to `nothing`, and that is load bearing rather than
-merely tidy: it is what keeps the DOCUMENT's own opinion expressible. Each
-resolves per esm-spec §2.2.2, most-specific first — an `options_for` override,
-then the keyword here, then this document's `solver.reltol` / `solver.abstol`
-(§2.2), then the shared inline-test defaults `DEFAULT_TEST_RELTOL` /
-`DEFAULT_TEST_ABSTOL`. The runner defaults sit at the BOTTOM of the chain
-because they are binding defaults, not a caller's opinion, so a document that
-declares its own integration accuracy gets it without every caller naming it.
-Passing a value explicitly overrides the document, which is why a concrete
-default here would silently have suppressed it. These are INTEGRATION
-tolerances and are a different quantity from the §6.6.4 assertion tolerance
-above.
+A document that fails to load throws when `inputs` names a single document; in
+a batch (an iterable or a directory) it contributes one error row naming the
+path instead. `r.file` is the path each row's document was loaded from (`""`
+for an in-memory `EsmFile`).
 """
 function run_inline_tests(
         inputs; model_name::Union{Nothing, AbstractString} = nothing,

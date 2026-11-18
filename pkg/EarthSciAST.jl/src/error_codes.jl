@@ -486,6 +486,10 @@ const ERROR_CODES = (
     PROVIDER_GATE_INVALID = "provider_gate_invalid",
     # A provider lacks a method of the provider protocol the run needs.
     PROVIDER_METHOD_MISSING = "provider_method_missing",
+    # A loader's data does not decode as its declaration says: a value not in
+    # the declared `codes` map, a text column with no `codes` map, or a `codes`
+    # map on a column that is not text (esm-spec §8.9.1).
+    PROVIDER_DATA_INVALID = "provider_data_invalid",
     # An invariant of this binding's own build does not hold; a bug to report.
     INTERNAL_ERROR = "internal_error",
 )

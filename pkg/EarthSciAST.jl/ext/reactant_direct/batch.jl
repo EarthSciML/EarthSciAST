@@ -2,48 +2,28 @@
 # ext/reactant_direct/batch.jl — the LANE-BATCHED scalar surface.
 # ========================================================================
 #
-# WHY THIS FILE EXISTS. A scalar surface — the `rhs_list` entries a state
-# equation lowers to when it declines the kernel path, and a materialized
-# observed level's per-column `scalars` — is a list of (slot, tree) entries that
-# are per-cell INSTANTIATIONS OF ONE EXPRESSION: same tree, same ops, same loop
-# ranges, differing only in the baked-in cell data (state slots, forcing
-# offsets, gather subscripts, inlined per-cell constants). Walking them one at a
-# time emits the tree once per cell, and every state leaf of every instance is
-# its own ONE-ELEMENT read.
+# A scalar surface (the `rhs_list` entries of an equation that declines the kernel
+# path, and a materialized observed level's per-column `scalars`) is a list of
+# (slot, tree) entries that are per-cell instances of one expression, differing
+# only in baked-in cell data. `_oop_batch_scalars` (src/tree_walk/oop.jl) groups
+# them by a structural signature that wildcards exactly the lane-varying leaves,
+# lowers each group once to a lane-batched tree (`_OopBatchNode`) and leaves the
+# ungroupable entries in `rest`. This file emits each group as whole-lane
+# operations landing through one scatter, so a varying state leaf is one gather
+# of L slots rather than L one-element slices (the read population the
+# post-differentiation `enzyme-hlo-opt` pass is quadratic in).
 #
-# The `:oop` build already groups them: `_oop_batch_scalars` (src/tree_walk/
-# oop.jl) buckets the entries by a canonical structural signature
-# that wildcards exactly the lane-varying leaves, lowers each bucket ONCE to a
-# lane-batched tree (`_OopBatchNode`) and leaves everything it could not group
-# in `rest`. This file emits each group as whole-lane operations over its lane
-# axis, landing through one scatter — so a state
-# leaf is ONE gather of L slots instead of L one-element slices, and the emitted
-# program is O(tree) per group rather than O(tree × cells).
+# BIT-IDENTITY. Every arm performs, per lane, the operations the scalar walk
+# performs for that lane's entry, in the same order: `_de_fold_terms` keeps the
+# seeded ⊕-fold and the ascending-k accumulate, a ghost state-gather reads the
+# same structural zero, a literal exponent stays a literal (the signature pins
+# it), and a subtree that is host data in every lane is folded per lane by the
+# same `_de_hostval` the scalar walk uses. With scalar batching off every entry
+# is in `rest` and this file emits nothing.
 #
-# WHAT IT BUYS, AND WHY IT IS THE SHAPE THAT MATTERS. The single-position slice
-# is the op the post-differentiation `enzyme-hlo-opt` pass is quadratic in: its
-# `cse_slice` pattern compares slices pairwise, Enzyme's reverse of a slice is a
-# pad-and-add, and the adjoint of a stencil transport half carries one for
-# every cell of every neighbour read. Every other lever against that population (the read cost
-# model, the gather base budget, emitter-side CSE, pass exclusion) works on
-# reads the emitter had already decided to SHATTER; this one removes the
-# shattering, because a group's varying state leaf is a lane VECTOR and a lane
-# vector is one gather. See reseact.esm's COMPILE_COST.md section 6.
-#
-# BIT-IDENTITY. Every arm below performs, per lane, the operations the scalar
-# walk performs for that lane's own entry, in the same order: `_de_fold_terms`
-# keeps the contraction's seeded ⊕-fold and the loop's ascending-k accumulate,
-# a ghost state-gather reads the same structural zero, a literal exponent stays
-# a literal (the signature pins it, so a group never blends the power rule), and
-# a subtree that is host data in every lane is folded on host by the SAME
-# `_de_hostval` the scalar walk uses — per lane, so the folded constant is the
-# scalar walk's constant. With scalar batching off every entry is in `rest` and
-# this file emits nothing at all.
-#
-# ORDER. `rest` first, then the groups, exactly as the grouping's own order
-# runs them. The reorder is sound for the reason stated at `_oop_batch_scalars`:
-# entries within one surface write DISJOINT slots and never read
-# each other, so it moves only writes.
+# ORDER. `rest` first, then the groups, as the grouping orders them. Entries of
+# one surface write disjoint slots and never read each other (see
+# `_oop_batch_scalars`), so the reorder moves only writes.
 
 # ---- the per-lane host fold --------------------------------------------------
 #

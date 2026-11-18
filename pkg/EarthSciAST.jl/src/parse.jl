@@ -347,7 +347,7 @@ function _coerce_overlap_clause(ov)
     (src_raw === nothing || tgt_raw === nothing) && throw(
         ParseError(
             "join `overlap` clause requires both `src_env` and `tgt_env` arrays of " *
-                "envelope factor names (Phase 2a spatial overlap gate)"
+                "envelope factor names"
         )
     )
     src_env = String[string(x) for x in src_raw]
@@ -383,7 +383,7 @@ function _coerce_join(data)
             ParseError(
                 "join clause requires an `on` array of [left, right] key-column " *
                     "pairs, or an `overlap` object with `src_env`/`tgt_env` envelope " *
-                    "factors (RFC semiring-faq-unified-ir §5.3 / Phase 2a)"
+                    "factors (RFC semiring-faq-unified-ir §5.3)"
             )
         )
         pairs_vec = Vector{Tuple{String, String}}()
@@ -605,7 +605,7 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
             ParseError(
                 "`operators` block is not valid in v0.3.0+ " *
                     "(removed by esm-spec §9 closure). Migrate per " *
-                    "`docs/rfcs/closed-function-registry.md` §6."
+                    "`docs/content/rfcs/closed-function-registry.md` §6."
             )
         )
     end

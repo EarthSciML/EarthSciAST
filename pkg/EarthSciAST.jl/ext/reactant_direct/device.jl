@@ -4,43 +4,26 @@
 # client, the sharding of the flat state.
 # ========================================================================
 #
-# WHY THIS IS A SEPARATE CONCERN FROM EMISSION. Nothing in the emitted
-# StableHLO names a device: the same module compiles on either platform, and the
-# platform is fixed by the CLIENT of the arrays fed to it. So device choice
-# lives here, on the wrapper, and reaches XLA only through the
-# `ConcreteRArray`/`ConcreteRNumber` constructors that `direct_state`,
-# `direct_params` and `direct_time` call.
+# Nothing in the emitted StableHLO names a device: the platform is fixed by the
+# client of the arrays fed to it, which `direct_state`, `direct_params` and
+# `direct_time` build.
 #
-# THE FLAT STATE IS A CONCATENATION OF PER-VARIABLE CELL BLOCKS. The tree-walk's
-# layout (src/tree_walk/state_layout.jl) is: state
-# variables in sorted-name order, each contributing a CONTIGUOUS BLOCK of its
-# own cells in column-major order; a scalar state is a block of one. One flat
-# slot is exactly one cell, so the flat axis IS a cell axis — it is the cell
-# axes of every state variable laid end to end. That is the axis this file
-# shards, and it is the ONLY shardable axis: `u` is rank 1, there is no separate
-# variable axis to cut.
+# The flat state (src/tree_walk/state_layout.jl) is the state variables in
+# sorted-name order, each a contiguous block of its own cells in column-major
+# order (a scalar is a block of one). One slot is one cell, so the flat axis is
+# the only shardable axis. `Sharding.NamedSharding` over a one-dimensional mesh
+# cuts it into `ndevices` equal contiguous slabs, and `direct_rhs` refuses
+# (`E_DIRECT_EMIT_UNSUPPORTED`) a cut that is not a clean cell shard:
 #
-# WHAT A SLAB SHARD MEANS, AND WHEN IT IS REFUSED. `Sharding.NamedSharding` over
-# a one-dimensional mesh cuts the flat axis into `ndevices` equal CONTIGUOUS
-# slabs. Such a cut is a clean cell shard only when it respects the block
-# structure, so `direct_rhs` refuses (with the ordinary
-# `E_DIRECT_EMIT_UNSUPPORTED` code) when it does not:
+#   * fewer than two devices;
+#   * `n_states` not divisible by the device count;
+#   * a slab that is neither wholly inside one variable's block nor exactly a
+#     union of whole blocks (the refusal names the variables it would straddle).
 #
-#   * fewer than two devices — there is nothing to shard, and asking for a
-#     one-device mesh silently means "no sharding";
-#   * `n_states` not divisible by the device count — the slabs would be ragged;
-#   * a slab that is neither wholly inside ONE variable's block nor exactly a
-#     union of WHOLE blocks. Such a slab holds a suffix of one variable's cells
-#     and a prefix of another's: it is neither a cell shard of a variable nor a
-#     variable shard, and the refusal names the variables it would straddle.
-#
-# The two accepted shapes are the two that mean something physically: a slab
-# inside one block is a contiguous CELL RANGE of that variable (the stencil
-# case — halos only at the two slab edges), and a slab of whole blocks is a
-# VARIABLE partition (each device owns entire fields). Correctness never depends
-# on this: GSPMD/Shardy would insert collectives for any cut. The refusal exists
-# so that a caller who asks for a cell shard is told when the layout cannot give
-# one, rather than silently getting an all-to-all.
+# The accepted shapes are a contiguous cell range of one variable and a
+# partition of whole variables. Correctness never depends on this (GSPMD would
+# insert collectives for any cut); the refusal tells a caller asking for a cell
+# shard when the layout cannot give one.
 
 # ---- the callable's supertype ------------------------------------------------
 
@@ -48,50 +31,29 @@
     DirectCallable{SHARDED} <: Function
 
 The supertype of [`DirectRHS`](@ref) and [`DirectRHSBuffers`](@ref), declared
-HERE, before api.jl, so that this file can dispatch on the wrapper. `_de_place`
-is the one hook api.jl supplies.
+before api.jl so this file can dispatch on the wrapper. `_de_place` is the one
+hook api.jl supplies.
 
 `SHARDED` is a `Bool`: whether the wrapper was built with a cell-axis shard. It
-is a TYPE parameter rather than a field or a runtime flag because the two cases
-have to be separate METHODS — of the device-input builders below and of the
-traced body's tail (`_de_constrain` in api.jl). See "one device is the static
-case" below.
+is a type parameter because the two cases are separate methods of the
+device-input builders below and of the traced body's tail (`_de_constrain` in
+api.jl).
 """
 abstract type DirectCallable{SHARDED} <: Function end
 
 function _de_place end
 
-# ---- WHY THE PLACEMENT IS NOT A FIELD OF THE CALLABLE ------------------------
+# ---- placement, held beside the callable -----------------------------------
 #
-# `Reactant.@compile d(u, p, t)` traces `d` ITSELF: the callable is an argument
-# like any other, so Reactant walks its type and its fields, and Julia infers
-# the whole traced call through them. Hanging the placement off `DirectRHS` as a
-# field — even one field of one concrete, un-parameterized struct — puts an XLA
-# client, and (under a shard) a `Sharding.Mesh` and two `AbstractSharding`s,
-# inside what is traced and inferred.
-#
-# This lane cannot afford that. Inferring a compile of the direct emitter already
-# trips Julia's stack-overflow guard several times (the "detected a stack
-# overflow" warnings are its ordinary output here), and when one of those unwinds
-# at the wrong point the process WEDGES: it stops accumulating CPU inside
-# `typeinf`, under Reactant's generated `call_llvm_generator`, and never returns
-# — no error, no progress, on the CPU client as readily as on a GPU one. Every
-# avoidable thing in the inferred path is therefore worth removing, and an XLA
-# client reachable from the traced argument is avoidable.
-#
-# So the traced object carries nothing about WHERE it runs. `DirectRHS` is
-# exactly the three fields the unsharded lane had (`f`, `names`, `stats`), and
-# the placement lives HERE, in a module-level table keyed by the callable's
-# identity. The accessors below read it, the input builders read it, and
-# `_de_run` reads the shard out of it AT TRACE TIME to attach the
-# `sharding_constraint` — a value looked up beside the trace, never a field
-# inside it.
-#
-# The table holds its keys WEAKLY, so a wrapper that goes out of scope takes its
-# placement with it. `DirectRHS` is mutable, so identity is its own; hashing and
-# equality on it are `objectid` / `===`, which is what makes the table an
-# identity table. `Base.WeakKeyDict` carries its own lock, so concurrent builds
-# are safe.
+# `Reactant.@compile d(u, p, t)` traces `d` itself, walking its type and fields,
+# so an XLA client or sharding stored on the callable would be inside what is
+# traced and inferred, and inferring a compile of this emitter is already close
+# to Julia's stack-overflow guard (past it, the compile can hang inside
+# `typeinf`). The placement therefore lives in a module-level table keyed weakly
+# by the callable's identity (`DirectRHS` is mutable), read by the accessors, the
+# input builders and, at trace time, by `_de_run` to attach the
+# `sharding_constraint`. `Base.WeakKeyDict` carries its own lock, so concurrent
+# builds are safe.
 const _DE_PLACES = Base.WeakKeyDict{Any, Any}()
 
 """
@@ -105,9 +67,8 @@ function _de_register_place!(d, place)
     return d
 end
 
-# The placement of `d`, or — for a wrapper built before any was recorded — the
-# default one: Reactant's own default backend, unsharded, which is what the
-# lane did before device choice existed.
+# The placement of `d`, or, for a wrapper with none recorded, Reactant's default
+# backend, unsharded.
 _de_lookup_place(d) =
     get(
     () -> DirectPlace(Reactant.XLA.default_backend(), nothing, DirectEmitOptions(ENV)),
@@ -117,40 +78,23 @@ _de_lookup_place(d) =
 # The emission options of `d`, read at trace time beside the trace (see below).
 _de_options(d) = _de_lookup_place(d).opts::DirectEmitOptions
 
-# `_de_run` reads the shard through this lookup WHILE TRACING, to attach the
-# `sharding_constraint` to `du`. Nothing inside it is a traced operation — it is
-# a host-side table read — so Reactant is told not to rewrite it, which keeps
-# `WeakKeyDict`'s lock and finalizer machinery out of the traced function's
-# inference. `Reactant.@skip_rewrite_func` is the documented way to say that;
-# per its docstring it is invoked both at global scope (so precompilation sees
-# it) and from the extension's `__init__` (so a loaded-from-cache session does).
-# THE WALK ITSELF IS SKIPPED TOO, and for a stronger reason than tidiness.
+# Calls Reactant's interpreter must not rewrite, marked with
+# `Reactant.@skip_rewrite_func` both at global scope (for precompilation) and from
+# the extension's `__init__` (for a cache-loaded session):
 #
-# Reactant's interpreter rewrites every type-unstable call in a traced body into
-# its generated `call_with_reactant`, and that generator runs a whole nested
-# GPUCompiler inference to produce the replacement code. `_de_emit!` is a
-# RECURSIVE walk over the tree-walk IR, whose `_Node.payload` is `Any`, so
-# without this every level of the IR was one more nested generator: the compile
-# wedged inside `typeinf`, or printed "detected a stack overflow" and took the
-# process down with SIGSEGV, at a depth that depends on the fixture and on what
-# inference happened to have cached. A BIGGER stack makes it worse, not better —
-# it lets the nesting run deeper before the guard fires, so the crash lands
-# further inside Reactant's own machinery. The default stack is the right one.
+#   * `_de_lookup_place` / `_de_options`: host-side table reads made while
+#     tracing; skipping keeps `WeakKeyDict`'s lock out of the traced inference.
+#   * `_de_emit!`: the recursive IR walk, whose `_Node.payload` is `Any`. Each
+#     type-unstable call in a rewritten body becomes a nested `call_with_reactant`
+#     generator, so a rewritten walk nests one generator per IR level and can
+#     overflow the stack or hang. The walk builds `stablehlo.*` ops directly on
+#     `mlir_data` and needs no overlay; a skipped call runs natively and nothing
+#     under it is rewritten, so one mark covers the recursion. A larger stack
+#     does not help: it only lets the nesting run deeper.
 #
-# The walk does not need the interpreter. It builds `stablehlo.*` operations
-# directly on the traced values' `mlir_data` and otherwise reads host data, so
-# there is no `@reactant_overlay` method for the interpreter to find. Marking
-# the entry is enough: a skipped call is left alone in the rewritten body and
-# runs NATIVELY, and nothing reachable from it is rewritten either, so one mark
-# covers the whole recursion rather than one mark per function on the cycle.
-# (`Reactant.should_rewrite_call` consults the skip set per FUNCTION, not per
-# method signature, and it is consulted only where a rewritten body calls out.)
-#
-# The two places under the walk that DO want Reactant's own semantics say so by
-# name instead: `Reactant.Ops.reduce` re-enters the interpreter itself when it
-# traces a reduction body, and closed.jl hands the comparison count back with
-# an explicit `Reactant.call_with_reactant`. Both are O(1) in the grid and neither
-# nests, so the generator depth under `@compile` is now a small constant.
+# The two places under the walk that want Reactant's semantics re-enter it by
+# name (`Reactant.Ops.reduce` for a reduction body; closed.jl's explicit
+# `Reactant.call_with_reactant` for the comparison count); neither nests.
 function _de_skip_rewrite!()
     Reactant.@skip_rewrite_func _de_lookup_place
     Reactant.@skip_rewrite_func _de_options

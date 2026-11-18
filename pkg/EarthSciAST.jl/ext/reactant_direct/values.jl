@@ -476,31 +476,15 @@ end
 # it, and the position of the zero — or `nothing` when the concatenate the base
 # needs would copy more elements than the emission's base budget allows.
 #
-# WHAT THE BASE COSTS IS THE COPY, AND ONLY ONCE. The base is cached on the
-# emission context keyed by the producer set, so its concatenate is emitted once
-# however many reads use it, and a base over ONE producer with no structural
-# zero is not a concatenate at all — `_de_concat` of a single piece is that
-# piece. The budget is therefore an absolute bound on the copy, charged only
-# when a copy happens.
-#
-# CHARGING IT TO ONE READ IS THE TRAP. A budget scaled to the size of the read
-# that asks for the base declines the stencil's own base, because the read that
-# needs it most is a short one out of two large producers — the extended state
-# beside a forcing buffer — and those producers are what the copy is, not the
-# read. A budget that big shatters exactly the reads whose slices the
-# reverse-mode program then multiplies by the tape.
-# `DirectEmitOptions.gather_base_max` overrides the budget, and is the other half of
-# the measurement lever: a small value reproduces the shape the per-read rule
-# produced, which is the negative control.
-#
-# THE BUDGET IS RELATIVE TO THE MODEL, and an absolute one is a grid cap wearing
-# a different name. What the base costs is one concatenate and one linear copy
-# of the producers, and the producers of a read that spans the whole extended
-# state ARE the extended state — so a fixed element count is a size of GRID past
-# which every cross-producer read is refused by construction, whatever the
-# program would have saved. The output assembly is the first casualty, because
-# it spans every producer there is. The budget is therefore a multiple of the
-# extended state, with an absolute FLOOR so a small model still gets headroom.
+# The base is cached on the emission context keyed by the producer set, so its
+# concatenate is emitted once however many reads use it, and a base over one
+# producer with no structural zero is that producer (no copy). The budget bounds
+# that copy, charged only when a copy happens, not per read: the read that most
+# needs a base is often short and drawn from two large producers. It is a
+# multiple of the extended state with an absolute floor, since a fixed element
+# count would refuse every cross-producer read past some grid size (the output
+# assembly, which spans every producer, first).
+# `DirectEmitOptions.gather_base_max` overrides it.
 const _DE_GATHER_BASE_FLOOR = 1 << 16
 const _DE_GATHER_BASE_FACTOR = 4
 

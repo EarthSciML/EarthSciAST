@@ -777,55 +777,11 @@ _solve_problem(prob, alg; kwargs...) = throw(
 )
 
 # --------------------------------------------------------------------------- #
-# EsmProblem — the run-ready artifact, built exactly once per document.
-#
-# Everything deterministic-per-document (load → flatten → shape transforms →
-# run file → build) plus the run wiring that belongs to the
-# document (the seeded initial state, the refresh / output / checkpoint
-# callbacks) is done HERE, once. `solve(prob, alg; …)` then only varies the
-# per-run knobs, and `remake(prob; p, u0, tspan)` substitutes without redoing
-# anything the substitution cannot have invalidated.
+# EsmProblem — the run-ready artifact, built once per document. `solve` varies
+# only the per-run settings, and `remake(prob; p, u0, tspan)` substitutes without
+# redoing what the substitution cannot have invalidated.
 # --------------------------------------------------------------------------- #
 
-"""
-    EsmProblem
-
-The ESM simulation problem: the right-hand side `f!` the chosen `compiler`
-built — the compiled tree walk under `:native` / `:interpreter`, the compiled
-StableHLO program under `:xla` — the seeded initial state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
-`var_map`, the live forcing buffers, the discrete-provider/refresh scaffolding,
-and the problem's own callback set — everything deterministic per document,
-built exactly once by [`esm_problem`](@ref).
-
-```julia
-using EarthSciAST, OrdinaryDiffEqTsit5
-prob = esm_problem("model.esm", (0.0, 1.0); p = Dict("M.k" => 2.5))
-sol  = solve(prob, Tsit5())
-sol.retcode                     # SciMLBase.ReturnCode.Success
-sol[Symbol("M.y")]              # that state element's trajectory, BY NAME
-prob2 = remake(prob; tspan = (0.0, 5.0))   # no re-load / re-flatten / re-build
-```
-
-Snapshot semantics: the input document is fully parsed and compiled at
-construction, so mutations to the input (e.g. editing the `Dict` you passed)
-afterwards are NOT seen. Forcing arrays (`const_arrays` / `param_arrays`) are
-the exception by design: they are captured BY REFERENCE (the live-buffer
-refresh contract), not copied.
-
-Repeated runs are independent: `u0` is copied per run, and discrete forcing
-buffers are re-seeded from their providers at each run's `t0` (with the
-[`DiscreteMaterializer`](@ref) caches recomputed) whenever a previous run may
-have refreshed them or the start time changed.
-
-Parameter overrides split by CLASS (see [`parameter_classes`](@ref)):
-`:numeric` ones may be passed to `remake(prob; p = …)` and are applied by
-swapping `p` (cheap, and AD-transparent — no rebuild). `:structural`,
-`:const_folded` and `:forcing` ones throw: their values were consumed at BUILD
-time (or never reach `p` at all), so call [`esm_problem`](@ref) again.
-
-Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
-and `output_meta` are the ones downstream code reads.
-"""
 # What a program of a Problem is built from (`rhs_program`, `compile_kernels`):
 # the prepared run the Problem's build compiled and the inputs that build took,
 # so a program is lowered from the same prepared document without loading it
@@ -866,6 +822,42 @@ _ProblemBuild(products::BuildProducts, seed = nothing, program = nothing) = _Pro
     Ref{Any}(program), ReentrantLock()
 )
 
+"""
+    EsmProblem
+
+The ESM simulation problem [`esm_problem`](@ref) builds once per document: the
+right-hand side `f!` the chosen `compiler` built, the seeded initial state `u0`,
+the integration interval `tspan`, the parameter carrier `p`, the `var_map`, the
+live forcing buffers, the discrete-provider refresh state and the problem's own
+callback set.
+
+```julia
+using EarthSciAST, OrdinaryDiffEqTsit5
+prob = esm_problem("model.esm", (0.0, 1.0); p = Dict("M.k" => 2.5))
+sol  = solve(prob, Tsit5())
+sol.retcode                     # SciMLBase.ReturnCode.Success
+sol[Symbol("M.y")]              # that state element's trajectory, BY NAME
+prob2 = remake(prob; tspan = (0.0, 5.0))   # no re-load / re-flatten / re-build
+```
+
+The input document is parsed and compiled at construction, so later mutations
+to it are not seen. Forcing arrays (`const_arrays` / `param_arrays`) are the
+exception: they are captured by reference, not copied.
+
+Repeated runs are independent: `u0` is copied per run, and discrete forcing
+buffers are re-seeded from their providers at each run's `t0` (with the
+[`DiscreteMaterializer`](@ref) caches recomputed) whenever a previous run may
+have refreshed them or the start time changed.
+
+Parameter overrides split by CLASS (see [`parameter_classes`](@ref)):
+`:numeric` ones may be passed to `remake(prob; p = …)` and are applied by
+swapping `p` (no rebuild). `:structural`, `:const_folded` and `:forcing` ones
+throw, since the build consumed them or they never reach `p`; call
+[`esm_problem`](@ref) again for those.
+
+Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
+and `output_meta` are the ones downstream code reads.
+"""
 struct EsmProblem
     f!::Function                          # the built RHS, in-place, whatever
     # `compiler` produced it
@@ -1201,226 +1193,107 @@ end
 """
     esm_problem(input, tspan; p=Dict(), u0=nothing, kwargs...) -> EsmProblem
 
-Build the ESM simulation problem for `input` over `tspan = (t0, t1)` — the one
-noun of esm-libraries-spec §2.5. Construction runs everything deterministic per
-document ONCE (coerce `input` to a runnable document: load → flatten → shape
-transforms; materialize provider fields; build the tree-walk evaluator; seed the
-initial state; compose the problem's callbacks) and returns an
-[`EsmProblem`](@ref) that `solve` integrates as often as you like.
+Build the simulation problem for `input` over `tspan = (t0, t1)`
+(esm-libraries-spec §2.5). Construction loads, flattens and shape-transforms the
+document, materializes provider fields, builds the evaluator, seeds the initial
+state and composes the callbacks once; `solve` then integrates the returned
+[`EsmProblem`](@ref) as often as you like.
 
-`input` may be a path to an `.esm` file, a native ESM `Dict`, a loaded
-[`EsmFile`](@ref), or a [`FlattenedSystem`](@ref). The first three are AUTHORED
-documents and are FLATTENED, so every name below (and every solution index) is
-the flattener's namespaced one — `"Chem.A"`, not `"A"`. Only a
-`FlattenedSystem` skips the flattener, that being the type whose whole meaning
-is "already flattened". **Snapshot semantics**: the document is fully parsed
-here, so mutating `input` afterwards does not affect the problem (forcing arrays
-are aliased by design; see [`EsmProblem`](@ref)).
+`input` is a path to an `.esm` file, a native ESM `Dict`, a loaded
+[`EsmFile`](@ref) or a [`FlattenedSystem`](@ref). All but a `FlattenedSystem` are
+flattened, so every name below and every solution index is namespaced
+(`"Chem.A"`, not `"A"`). The document is parsed here: mutating `input` afterwards
+does not affect the problem (forcing arrays are aliased; see [`EsmProblem`](@ref)).
+Two problems may be built at once on two tasks; one problem's `f!` is not to be
+called from several threads at once.
 
-Two problems may be built at once on two tasks: each build keeps its state to
-itself. One problem's `f!` is not to be called from several threads at once.
+Keywords (API_SPEC §5.8):
 
-Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
+* `p::AbstractDict` — parameter overrides, baked into the build, so every class
+  of parameter can be set here, including the `:structural` ones `remake` refuses
+  ([`parameter_classes`](@ref)). Keys may be local (`pert_amp`) or namespaced
+  (`Chem.pert_amp`). The values also bind build-time evaluation (esm-spec §6.6.5):
+  a coordinate-expression `ic` and an inline assertion `reference` see them.
+* `u0` — an `AbstractDict` of overrides applied on top of the document's initial
+  conditions (`"M.y"`, `"M.f[1,2]"`, or `"M.f"` broadcasting one value over every
+  cell), or an `AbstractVector` replacing the seeded state.
+* `providers::AbstractDict` — `<Loader>.<var> => data Provider`. Const providers
+  ([`provider_is_const`](@ref)) are materialized once into `const_arrays`;
+  discrete providers get a live buffer and a [`build_refresh_callback`](@ref). A
+  key naming a data-fed parameter may be local or namespaced (esm-spec §6.6.2).
+  A scalar parameter fed this way has no slot in `p`.
+* `model_name` — the model to build when the document holds several.
+* `metaparameters::AbstractDict` — binds open metaparameters, as
+  [`load_path`](@ref)`(path; metaparameters=…)` does (esm-spec §9.7.6).
+* `base_path::AbstractString = pwd()` — where a `Dict` input's relative `{ref}`s
+  resolve (a path input uses its own directory).
+* `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for the
+  build. An `ic` right-hand side reads data-fed parameters at `tspan[1]` whatever
+  `sample_time` is (esm-libraries-spec §2.5.2).
+* `compiler::Symbol = :native` — one of `:native`, `:interpreter`, `:xla`, `:mtk`,
+  `:sympy` (esm-libraries-spec §2.5.10); read back with [`compiler`](@ref) and
+  [`compiler_report`](@ref). `:native` is strict: where one of its compiled tiers
+  declines, the build raises `compiler_refused_rule` naming the rule and reason
+  instead of falling back to a slower path. It refuses events, implicit equations
+  and SDE noise with `unsupported_construct`. `:interpreter` is the reference tree
+  walk with no performance promise. `:mtk` needs `using ModelingToolkit`, runs
+  events and implicit equations, refuses loaded data, a continuous spatial
+  dimension, a geometry operator and a time derivative of an expression
+  (`compiler_refused_rule`), classifies every parameter `:structural`, and indexes
+  its solution by the compiled system's symbols (`prob.var_map` and
+  [`observed_field`](@ref) give the document names). `:xla` needs `using Reactant`.
+  A compiler this session cannot run raises `compiler_unavailable` (`:sympy`
+  always does in Julia); a value outside the vocabulary raises `compiler_unknown`.
+  Both are raised before the document is loaded. The Simulation Runners page has
+  the details.
+* `strip` — classes of construct to remove before the build (`"algebraic"`,
+  `"continuous_events"`, `"discrete_events"`, `"parameter_updates"`); the removed
+  constructs are on the problem ([`stripped`](@ref)) and `solve` refuses a problem
+  that lost any. `:native` and `:interpreter` only.
+* `program_build::Bool = false` — build the right-hand side as the whole-model
+  program [`rhs_program`](@ref) returns, so `rhs_program(prob)` does not lower the
+  model again. Evaluations are bitwise those of that program. A state-free field
+  over a live forcing buffer is recomputed on every call rather than per refresh,
+  and every externally fed parameter is read from a live buffer (classified
+  `:forcing`, absent from `prob.p`). Needs `:native` or `:interpreter`; refuses
+  `materialize_out`.
+* `runtime_array_parameters::Bool = false` — keep every shaped parameter with a
+  value as a live buffer ([`forcing_buffers`](@ref)) instead of folding it, so a
+  program of the problem takes it as a [`ForcingSlot`](@ref) of kind
+  `:array_parameter`. A shaped parameter bound through `param_arrays` is a live
+  buffer either way.
+* `pushdown_rewrite::Bool = false` — apply [`desugar_pushdown`](@ref) to the
+  authored document before flattening; a provider routed onto a rewritten array
+  is then fetched pre-sliced to its support set.
 
-* `p::AbstractDict` — parameter overrides. Baked into the build (they feed
-  build-time constant folding), which is why EVERY class of parameter can be set
-  here — including the `:structural` ones a `remake` must refuse (see
-  [`parameter_classes`](@ref)). A purely `:numeric` change need not rebuild:
-  pass it to `remake(prob; p = …)`, which swaps `p`. Keys may be spelled LOCALLY
-  (`pert_amp`, the form esm-spec §6.6 pins for a test's `parameter_overrides`)
-  or with the flattener's namespacing (`Chem.pert_amp`); both resolve to the
-  same parameter. The resolved values also bind the BUILD-TIME evaluation scope
-  (esm-spec §6.6.5): a coordinate-expression `ic` and an inline assertion
-  `reference` see the override, not the declared default.
-* `u0` — the initial state. Either an `AbstractDict` of per-element or broadcast
-  overrides applied on top of the document's own initial conditions (keys spelled
-  `"M.y"`, `"M.f[1,2]"`, or a bare array name `"M.f"` broadcasting one value over
-  every cell), or an `AbstractVector` replacing the seeded vector outright.
-* `providers::AbstractDict` — `<Loader>.<var> => data Provider`, the loaded-data
-  injection seam. CONST providers ([`provider_is_const`](@ref)) are materialized
-  once at build time into `const_arrays` under their loader variable name — so a
-  scoped-reference `ic(Sys.sp) ~ Model.param` folds the seeded field into `u0`
-  and a loader→consumer `variable_map` binding resolves the consumer gather from
-  it. DISCRETE providers get a live buffer plus a [`build_refresh_callback`](@ref)
-  on the problem, so their forcing refreshes in place at its cadence. A key
-  that names a data-fed parameter may spell it as a `parameter_overrides` key
-  may (esm-spec §6.6.2): `Fed.s` or `s` both feed the flattened `Fed.s`. A
-  scalar parameter given data this way has no slot in `p`; the right-hand side
-  reads the data (`parameter_classes(prob)` reports it `:const_folded` or
-  `:forcing`).
-* `model_name` — select one model when the document holds several.
-* `metaparameters::AbstractDict` — binds the document's open metaparameters at
-  the loader API (esm-spec §9.7.6 binding site 3), exactly as
-  [`load_path`](@ref)`(path; metaparameters=…)` does. Pass them HERE rather than
-  pre-`load`ing, so a loader that discovers its own extent can close one first
-  (below); a caller binding that CONTRADICTS a discovered extent is an error.
-* `base_path::AbstractString = pwd()` — the directory a native `Dict` input's
-  relative `{ref}`s resolve against (a path input anchors them at its own
-  directory).
-* `sample_time::Real = tspan[1]` — the `t` at which providers are sampled for
-  the build. A CONST provider is time-invariant by contract; DISCRETE buffers
-  seeded here are re-seeded at each run's `t0` anyway. An `ic` right-hand side
-  reads every data-fed parameter at `tspan[1]`, whatever `sample_time` is
-  (esm-libraries-spec §2.5.2): a discrete provider is sampled there too when
-  the two differ, for the initial state only.
-* `compiler::Symbol` — which strategy builds the right-hand side, over the
-  closed vocabulary `:interpreter`, `:native`, `:xla`, `:mtk`, `:sympy`
-  (esm-libraries-spec §2.5.10). Unnamed, it is `:native`. Read back with
-  [`compiler`](@ref)`(prob)` and [`compiler_report`](@ref)`(prob)`.
+Julia extension-seam keywords (allowed by §2.5.2; not stable API): `const_arrays`,
+`param_arrays` (forwarded to the build), `inspect` (a fresh
+[`BuildInspection`](@ref) the build fills; one record per call),
+`materialize_out` (a caller-owned [`DiscreteMaterializer`](@ref)), `seed_ic!` (an
+`(u0, var_map) -> nothing` hook run after `u0`; see
+[`seed_expression_ic!`](@ref)), and the streaming-output set `sinks`, `snapshot`,
+`pre_write`, `checkpoint_predicates`, `checkpoint_sinks`,
+`terminate_on_checkpoint`.
 
-  **`:native` (the default) is STRICT.** It is this package's compiled tiers —
-  the affine stencil build, the `RuntimeGeneratedFunctions` emitter and the
-  whole-array forms — for every document whatever its shape, and never a quiet
-  demotion to a slower path. It covers the whole evaluable core, and the only
-  documents it may refuse are those carrying a construct outside its scope,
-  each refused by name: events, implicit equations and SDE noise
-  (`unsupported_construct`; `:mtk` runs the first two) and a spatial operator
-  with no discretization rule (`unlowered_operator`, refused under every
-  compiler). Every compiler-driven conformance tier requires `:native` for
-  every fixture, so any other refusal is a defect in this package.
-
-  The strictness is enforced as a BUILD error, `compiler_refused_rule`, naming
-  the rule and the deepest decline reason, raised at exactly three points —
-  each one a compiled tier declining where it must not:
-
-  1. **An access kernel both codegen emissions declined.** Such a kernel runs
-     on `_run_acc_kernel!` — a tree walk once per output cell, on every
-     right-hand-side call. A decline by the PRIMARY emission alone is not a
-     refusal: the overflow emission retries under an unbounded node budget and
-     also serves Float64, so the budget reason cannot recur.
-  2. **An equation the whole-array contraction tier ACCEPTED.** On that tier
-     success is what leaves an interpreter in the right-hand side: its runner
-     evaluates the body once per output cell and no codegen tier ever sees the
-     section. This is compiler backlog, not a property of the document.
-  3. **A construction-time or output-time materialization that resolves and
-     compiles the expression once per cell** — the per-cell arms of the setup
-     MAP, of the whole-array setup materializer, of the coordinate-expression
-     initial-condition seed and of the faq initialization-equation seed, which
-     are reached only when the compiled fill (each filled through the
-     right-hand-side cascade and emitted code, once) and any compile-once form
-     decline, and the build-time observed evaluator's per-cell arm. §2.5.10
-     puts every evaluation a compiler performs for the problem under the same
-     rule, not the right-hand side alone.
-
-  What it does NOT refuse: a per-cell BUILD (an equation scalarized one output
-  cell at a time whose cell entries are then compiled — that costs build time
-  and nothing per step), a `_Decline` on its own (its landing is a
-  per-cell build), and a compile-once setup sweep that evaluates an already
-  compiled node per cell.
-
-  `:interpreter` is the reference and carries no performance promise: every
-  fast tier off, one tree walk per output cell. Pick it to check another
-  compiler. It keeps the build-time
-  MEMOS (the template expansion memo, the reference-preserving template image),
-  which change build wall time and not one evaluated bit.
-
-  **`:mtk` is the specialty compiler that works only for some documents**, and
-  it is the one that runs EVENTS and IMPLICIT EQUATIONS — the constructs
-  CONFORMANCE_SPEC §5.39 has every other evaluator refuse with
-  `unsupported_construct`. It needs `using ModelingToolkit` (without it, the
-  answer is `compiler_unavailable` naming that), and it builds
-  `ModelingToolkit.System(flatten(input))` → `mtkcompile` → `ODEProblem`, which
-  is what `solve` then integrates, so the compiled system's events, mass matrix
-  and observed equations are all in force. What it REFUSES by name
-  (`compiler_refused_rule`) is the document content it cannot express: a
-  parameter or field fed by LOADED DATA (a `providers` entry, a `const_arrays`
-  / `param_arrays` argument, `pushdown_rewrite = true`), a CONTINUOUS spatial
-  dimension (a PDE, which must be discretized first), a geometry operator, and a time derivative of an expression.
-  Two consequences a caller sees: every parameter classifies `:structural`
-  (the value is read where `mtkcompile` can see it and is baked into the
-  compiled problem, so `esm_problem(…; p = …)` sets it and `remake(prob; p = …)`
-  refuses), and a solution is indexed with the COMPILED SYSTEM's symbols rather
-  than the flattened ESM spelling — `prob.var_map` and
-  [`observed_field`](@ref) are the document-named surface there. See the
-  Simulation Runners page for the whole story.
-
-  `:xla` and `:sympy` raise `compiler_unavailable` from this entry point,
-  naming what to load or which binding has them; a value outside the vocabulary
-  raises `compiler_unknown`.
-
-  Naming `:native` is exactly the default: no environment variable selects an
-  evaluation strategy, so the keyword is the whole answer (esm-libraries-spec
-  §2.5.10). The `ESS_*` variables that remain are tuning thresholds — under a
-  strict `native` each is a refusal boundary: moving one off its default can
-  make `native` refuse an in-scope document, a defect, rather than run it
-  more slowly.
-
-Julia extension-seam keywords (§2.5.2 explicitly allows these; NOT stable API):
-`const_arrays`, `param_arrays` (forwarded to the build — the
-regridder source polygons and the live forcing buffers), `inspect` (a fresh
-[`BuildInspection`](@ref) the build fills; one record per call), `materialize_out` (a
-caller-owned [`DiscreteMaterializer`](@ref)), `pushdown_rewrite`, `seed_ic!`
-(an `(u0, var_map) -> nothing` hook for array ICs that need grid geometry; runs
-after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
-`sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
-`checkpoint_sinks` / `terminate_on_checkpoint`.
-
-`program_build::Bool = false` builds the Problem's right-hand side as its
-whole-model program ([`rhs_program`](@ref), API_SPEC §5.8): the model is lowered
-once, by the build `rhs_program` would otherwise run on its first call, and
-`rhs_program(prob)` returns that program instead of lowering the model a
-second time. The program is the one a later `rhs_program` call builds, so its
-evaluations are bitwise the same; the Problem's `f!` is the program's own
-evaluator over the Problem's state layout, eltype-generic as always. Each
-`rhs_program(prob)` call returns that program with its default forcing set
-holding the Problem's forcing as it is then, as a default-built Problem's
-`rhs_program` would. Two things differ from a Problem built the default way:
-- No discrete-cadence cut: a state-free field over a live forcing buffer is
-  computed on every call, not cached per refresh, which changes no value. So
-  `materialize_out`, which only that cut fills, is refused with
-  `program_build`.
-- Every externally fed parameter (one with a data `update`) is read from a live
-  buffer, as a program reads it. Such a parameter is not in `prob.p` and is
-  classified `:forcing` ([`parameter_classes`](@ref)), so `remake(prob; p = …)`
-  refuses it, where a default build may fold it or take it as `:numeric`.
-Observed fields read the same values either way. Needs `compiler = :native` or
-`:interpreter`.
-
-`runtime_array_parameters::Bool = false` makes every shaped parameter with a
-value (a declared `default`, a scalar broadcast over its grid, an inline
-override in `p`, or a caller's `const_arrays` entry) a live buffer holding that
-value rather than build-time data: it appears in
-[`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
-([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
-`:array_parameter` whose default buffer is that value, so a caller evaluates at
-another field without a rebuild. Off, those parameters are folded into the
-build. Either way, a shaped parameter the caller binds through
-`param_arrays` is a live buffer, and a program's slot of kind `:array_parameter`
-unless the parameter is externally fed.
-
-`pushdown_rewrite::Bool = false` opts in to the automatic projection-pushdown
-desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite runs
-on the authored document BEFORE flattening (the pattern is authored in the
-un-namespaced model), and the engine then derives every provider gate from the
-rewrite's own `metadata.x_esd.pushdown` record: a `providers` entry that the
-document's coupling routes onto a rewritten array is DEFERRED and fetched
-pre-sliced to the invented support set — the caller hand-authors no gate dict.
-
-**Callbacks** (§2.5.4). A discrete provider contributes a refresh callback, a
-non-empty `sinks` an output callback, and non-empty `checkpoint_predicates` a
-checkpoint callback; they are composed into ONE callback set on the problem.
-Read it back with [`callbacks`](@ref). A `callback` argument to `solve`
-REPLACES it entirely — it does not append, merge, or wrap:
+**Callbacks** (§2.5.4). Discrete providers, `sinks` and `checkpoint_predicates`
+contribute refresh, output and checkpoint callbacks, composed into one set read
+back with [`callbacks`](@ref). A `callback` passed to `solve` replaces that set:
 
 ```julia
-solve(prob, Tsit5(); callback = CallbackSet(callbacks(prob), my_extra))
+prob = esm_problem("model.esm", (0.0, 10.0); p = Dict("Chem.k" => 2.0))
+sol = solve(prob, Tsit5(); callback = CallbackSet(callbacks(prob), my_extra))
 ```
 
-**Loader-discovered extents** (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5). A
-provider reporting a [`provider_extent_metaparameter`](@ref) is sampled ONCE
-here, ahead of everything else, and the length of its delivered record axis
-binds that metaparameter for the load below — so `size: "N_REC"` is sized by the
-data itself. That array is REUSED when the provider is injected (never sampled
-twice); providers of one loader disagreeing on the count is an error naming
-both, and a `metaparameters` binding contradicting the discovered value is an
-error rather than a silent preference for either. Because the metaparameter must
-still be OPEN, `input` must be a path or a native `Dict` — an already-`load`ed
-`EsmFile` has closed it already, which is an error rather than a silent
-fallback.
+**Loader-discovered extents** (esm-spec §8.9.4). A provider reporting a
+[`provider_extent_metaparameter`](@ref) is sampled once, first, and its record
+count binds that metaparameter for the load; the sample is reused at injection.
+Providers of one loader disagreeing on the count, or a `metaparameters` binding
+contradicting it, is an error, and `input` must then be a path or a `Dict` (an
+`EsmFile` has its metaparameters closed already).
 
-Per-RUN knobs (`alg`, `abstol`, `reltol`, `saveat`, `callback`, `maxiters`)
-belong to `solve(prob, alg; …)`; §2.5.9 keeps the solver out of construction, so
-this call needs neither SciMLBase nor an OrdinaryDiffEq package.
+Per-run settings (`alg`, `abstol`, `reltol`, `saveat`, `callback`, `maxiters`)
+belong to `solve(prob, alg; …)`; this call needs neither SciMLBase nor an
+OrdinaryDiffEq package.
 """
 function esm_problem(
         input, tspan;

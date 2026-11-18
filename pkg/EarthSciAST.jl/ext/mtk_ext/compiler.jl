@@ -3,46 +3,27 @@
 # (API_SPEC §5.8, esm-libraries-spec §2.5.2 and §2.5.10)
 # ============================================================================
 #
-# WHERE THIS COMPILER SITS. `interpreter` is a deliberately simple oracle whose
-# only job is checking the other compilers. `native` is the universally fast
-# option with no heavy external dependency, which is why it is the default.
-# `sympy` and `mtk` are SPECIALTY compilers: they work only for SOME documents.
-# `xla` is the other kind of specialty — it needs a heavy external dependency to
-# exist at all.
-#
-# `:mtk`'s specialty is the one thing no other compiler in any binding runs:
-# EVENTS and IMPLICIT EQUATIONS, the three constructs CONFORMANCE_SPEC §5.39
-# has every other evaluator refuse with `unsupported_construct`. A continuous
-# event becomes a root-found callback, a discrete event a periodic / preset /
+# `:mtk` is a specialty compiler: it runs only some documents, but it is the one
+# that runs events and implicit equations (the constructs CONFORMANCE_SPEC §5.39
+# has every other evaluator refuse with `unsupported_construct`). A continuous
+# event becomes a root-found callback, a discrete event a periodic, preset or
 # condition callback, and an implicit equation an algebraic constraint that
-# `mtkcompile` either solves away into an observed or leaves as a residual for
-# a mass-matrix DAE solver.
+# `mtkcompile` solves away into an observed or leaves for a mass-matrix DAE
+# solver. There is no provider seam, live forcing buffer, const-array channel or
+# pushdown rewrite on this path, so a document fed by data is refused by name
+# (`compiler_refused_rule`), as §2.5.10 requires.
 #
-# What it gives up for that is everything the run document can carry BESIDES
-# equations. There is no provider seam, no live forcing buffer, no const-array
-# channel and no projection-pushdown rewrite on this path: a loaded field never
-# reaches the ModelingToolkit system, so a document fed by data is REFUSED BY
-# NAME (`compiler_refused_rule`) rather than built without it. That is the
-# §2.5.10 contract — a compiler either runs the whole document or names what it
-# refused — and it is why this one is called a specialty.
-#
-# THE SHAPE OF THE BUILD. `esm_problem(file; compiler = :mtk)` runs
+# The build is
 #
 #     load → flatten → ModelingToolkit.System → mtkcompile → ODEProblem
 #
-# and wraps the result in the SAME `EsmProblem` every other compiler returns,
-# so `solve`, `remake`, `callbacks`, `observed_field`, `compiler_report` and
-# name-indexed solution access are the ordinary ones. The compiled system's
-# `ODEProblem` — with its events, its mass matrix and its observed equations —
-# is what `solve` integrates: it rides on the problem's right-hand side through
-# the `_compiler_backend` seam (src/simulate.jl), because rebuilding one out of
-# the right-hand side alone would drop all three.
-#
-# The document is prepared by the same `_prepare_run` every compiler uses, with
-# this compiler's own refusals in place of the tree-walk build's (it runs the
-# events that build refuses), and without the tree-walk shape transforms
-# (`algebraic_states_to_observeds`, `promote_downstream_shapes`), whose job
-# `mtkcompile` does here.
+# wrapped in the same `EsmProblem` every compiler returns. The compiled
+# `ODEProblem`, with its events, mass matrix and observed equations, rides on the
+# problem's right-hand side through the `_compiler_backend` seam
+# (src/simulate.jl) and is what `solve` integrates. The document is prepared by
+# the shared `_prepare_run` with this compiler's own refusals and without the
+# tree-walk shape transforms (`algebraic_states_to_observeds`,
+# `promote_downstream_shapes`), whose job `mtkcompile` does here.
 
 const _MTK_SII = ModelingToolkit.SciMLBase.SymbolicIndexingInterface
 
@@ -77,9 +58,8 @@ with that system's symbols (`sol[sym]` for a `sym` out of `handles`, or the
 sanitized `Symbol("Chem_A")`) — not with the flattened ESM spelling every other
 compiler's `SymbolCache` answers. The ESM spelling reaches a caller through
 `prob.var_map` (name → state-vector slot, which is what indexes `sol.u[i]`) and
-through `observed_field`. Swapping the index provider for a translating one was
-tried and does not work: ModelingToolkit's own initialization reads
-`prob.f.sys` back as a `System` and fails on anything else.
+through `observed_field`. The index provider stays the `System` because
+ModelingToolkit's initialization reads `prob.f.sys` back as one.
 """
 struct MTKCompiler{S, P} <: Function
     system::S

@@ -172,12 +172,10 @@ Fields:
 - `domain::Union{Domain, Nothing}`: the target domain after any dimension
   promotion (§4.7.6), or `nothing` for purely 0D systems.
 - `metadata::FlattenMetadata`: provenance.
-- `index_sets::OrderedDict{String, IndexSet}`: the merged document-scoped
-  index-set registry (RFC semiring-faq-unified-ir §5.2), collected from every
-  source model and namespaced per-component (`<prefix>.<setname>`) so the value-
-  invention geometry of sibling components — e.g. five conservative regridders
-  each declaring `src_cells` / `candidate_pairs` / `clip_ring` — does not
-  collide after flattening. Empty when no source model declares any.
+- `index_sets::OrderedDict{String, IndexSet}`: the merged index-set registry,
+  collected from every source model and namespaced per component
+  (`<prefix>.<setname>`) so sibling components' sets do not collide. Empty when
+  no source model declares any.
 - `template_registry::OrderedDict{String, Any}`: the merged expression-template
   registry (esm-spec §9.6.4 rule 7 / §10.7).
 - `algebraic_variables::OrderedDict{String, ModelVariable}`: unknowns constrained
@@ -185,10 +183,8 @@ Fields:
   `state_variables`, not a sibling bucket — a DAE solves for them, so they occupy
   a slot of the `u` vector.
 - `brownian_parameters::OrderedDict{String, ModelVariable}`: `update.kind ==
-  "wiener"`. A **subset** of `parameters`. This bucket is what makes the flattened
-  form self-describing: §6.3.1's `system_kind` derivation tests it FIRST, so a
-  `FlattenedSystem` that dropped it could not report `"sde"` and a consumer would
-  integrate a stochastic system as a deterministic one.
+  "wiener"`. A **subset** of `parameters`; §6.3.1's `system_kind` derivation
+  reads it to report `"sde"`.
 - `discrete_parameters::OrderedDict{String, ModelVariable}`: any other `update`.
   A **subset** of `parameters`.
 - `field_ics::Vector{Pair{String, ASTExpr}}`: deferred `ic` equations (esm-spec
@@ -220,12 +216,10 @@ as a list of names) or copy one with changes, `FlattenedSystem(flat; kwargs...)`
 ORDERING (esm-libraries-spec §4.7.5 step 4, normative): every ordered map and
 list above is in DOCUMENT ORDER — components in the order the file declares them,
 variables in the order their component declares them, coupling-merged entries
-keeping the position of their first occurrence. Ordering is observable, because a
-parameter vector is positional; lexicographic sorting or a host map's iteration
-order is non-conforming. The order therefore has to be preserved at the SOURCE:
-`EsmFile.models` / `.reaction_systems` / `.index_sets` and
-`Model.variables` / `.subsystems` are `OrderedDict`s populated by the parser in
-document order, so the accumulators here inherit it.
+keeping the position of their first occurrence. A parameter vector is
+positional, so the order is observable. It is inherited from the parser:
+`EsmFile.models` / `.reaction_systems` / `.index_sets` and `Model.variables` /
+`.subsystems` are `OrderedDict`s in document order.
 """
 struct FlattenedSystem
     independent_variables::Vector{Symbol}

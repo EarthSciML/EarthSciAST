@@ -440,7 +440,7 @@ function _de_emit!(ctx::_DECtx, rhs)::_DEVal
             _de_refuse(
             ctx,
             "$nac whole-array contraction(s)",
-            "the array-contraction tier (ess-array-contraction) is a " *
+            "the array-contraction tier is a " *
                 "section of the in-place RHS with no arm in this walk. " *
                 "Emitting the rest would leave its output slots zero, so the " *
                 "emission stops here."
