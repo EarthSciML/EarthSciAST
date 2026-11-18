@@ -265,6 +265,16 @@ impl<R> Tm<R> {
             templates: s.templates.clone(),
         }
     }
+    /// `Tm.mscope`: the symbol table a rule's `match` pattern is read under: its
+    /// body's, with no templates. A pattern never applies a template (spec
+    /// §9.7.3), so an operator in it named like a template in scope (a rule is
+    /// in scope under its own name) reads as that operator, in the call form.
+    pub fn mscope(&self, s: &Sym) -> Sym {
+        Sym {
+            names: self.scope(s).names,
+            templates: vec![],
+        }
+    }
 }
 
 /// `Source.rootTs`.

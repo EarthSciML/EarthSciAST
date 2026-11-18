@@ -43,11 +43,14 @@ import {
   faqJson,
   formulaRaw,
   insKv,
-  isCoreOp,
+  mkJson,
   mkNode,
   node,
   simpleTok,
+  tnameOk,
   tparams,
+  BMAT_MAX_COLS,
+  callFormNode,
   unescK,
   unescT,
   type Ctx,
@@ -714,6 +717,38 @@ export function withOut(f: FaqForm, outs: Json[], ors: readonly Kv[]): FaqForm {
   return { ...f, out: outs, ranges: sortKv([...ors, ...f.ranges]) }
 }
 
+/**
+ * `Math.pSup`: the superscript set of a reduction or of an output form, if there
+ * is one: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`. No set reads as the empty one.
+ */
+export function pSup(sf: Sf, ts: Toks, i: number): P<string[]> {
+  const open: Kw = sf === 'latex' ? 'Lb' : 'Lpg'
+  const closeK: Kw = sf === 'latex' ? 'Rb' : 'Rp'
+  if (!(isKwTok(ts[i], 'Caret') && isKwTok(ts[i + 1], open) && isKwTok(ts[i + 2], 'Lset')))
+    return [[], i]
+  const r = pNames(sf, ts, i + 3)
+  return r !== undefined && isKwTok(ts[r[1]], 'Rset') && isKwTok(ts[r[1] + 1], closeK)
+    ? [r[0], r[1] + 2]
+    : undefined
+}
+
+/** A row of a `makearray` table: the value and the region it fills. */
+type MkRow = readonly [Json, (readonly [Json, Json])[]]
+
+/**
+ * `Math.mkTail`: the `makearray` node of a table read back, with its subscript
+ * of output indices if one follows.
+ */
+export function mkTail(sf: Sf, rows: readonly MkRow[], ts: Toks, i: number): P<Json> {
+  const nodeOf = (out: readonly string[]): Json =>
+    mkJson({ out, regions: rows.map((r) => r[1]), values: rows.map((r) => r[0]) })
+  const open: Kw = sf === 'latex' ? 'Lb' : 'Lpg'
+  const closeK: Kw = sf === 'latex' ? 'Rb' : 'Rp'
+  if (!(isKwTok(ts[i], 'Us') && isKwTok(ts[i + 1], open))) return [nodeOf([]), i]
+  const r = pNames(sf, ts, i + 2)
+  return r !== undefined && isKwTok(ts[r[1]], closeK) ? [nodeOf(r[0]), r[1] + 1] : undefined
+}
+
 // ## The level parsers
 
 /** `Math.pOr`: level 1, an `or` chain. */
@@ -1064,7 +1099,10 @@ export function pOpn(c: Ctx, f: number, n: string, ts: Toks, i: number): P<Json>
   if (f === 0) return undefined
   f -= 1
   const t0 = ts[i]
-  if (t0 === undefined) return undefined
+  // A bare `\operatorname{n}` (not followed by `(` or `_`): a template with no
+  // bindings, except one in scope with no parameters, which prints `n()`.
+  const bare: P<Json> = tnameOk(n) && tparams(c.s, n)?.length !== 0 ? [tNode(n, []), i] : undefined
+  if (t0 === undefined) return bare
   if (isLp(t0)) {
     const r = pCallArgs(c, f, ts, i + 1)
     if (r === undefined) return undefined
@@ -1099,17 +1137,20 @@ export function pOpn(c: Ctx, f: number, n: string, ts: Toks, i: number): P<Json>
       return undefined
     }
     if (k === 'Semi') {
-      if (REMOVED_OPS.includes(n) || isCoreOp(n) || tparams(c.s, n) !== undefined) return undefined
+      if (REMOVED_OPS.includes(n)) return undefined
       const vs = allPos(args)
       const fs = pFields(c, f, ts, j + 1)
-      if (vs !== undefined && fs !== undefined && isKwTok(ts[fs[1]], 'Rp'))
-        return [mkNode(n, vs, fs[0]), fs[1] + 1]
-      return undefined
+      if (vs === undefined || fs === undefined || !isKwTok(ts[fs[1]], 'Rp')) return undefined
+      // Each field once, and never the node's own `op` or `args`.
+      if (!nodupKeys(fs[0]) || fs[0].some((kv) => kv[0] === 'op' || kv[0] === 'args'))
+        return undefined
+      const e = mkNode(n, vs, fs[0])
+      return e.t === 'obj' && callFormNode(c, n, fs[0], e.kvs) ? [e, fs[1] + 1] : undefined
     }
     return undefined
   }
   if (isKwTok(t0, 'Us')) return n === 'D' ? pDCall(c, f, ts, i + 1) : undefined
-  return undefined
+  return bare
 }
 
 /** `Math.pDCall`: `\operatorname{D}_{x}(u, a, b)` after the `_`. */
@@ -1178,7 +1219,8 @@ export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     switch (k) {
       case 'Bmat': {
         const g = pGrid('Amp', 'Nl', 'Emat', ts, i + 1)
-        return g && constTail(gridJson(g[0]), ts, g[1])
+        if (g === undefined || g[0].some((r) => r.length > BMAT_MAX_COLS)) return undefined
+        return constTail(gridJson(g[0]), ts, g[1])
       }
       case 'Vec':
         if (t1 !== undefined) {
@@ -1189,6 +1231,10 @@ export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
         }
         break
       case 'Mat':
+        if (matHeadAt(ts, i)) {
+          const r = pMkRows(c, f, 'Comma', 'Semi', 'Rp', ts, i + MAT_HEAD_LEN)
+          return r && mkTail(c.sf, r[0], ts, r[1])
+        }
         if (t1 !== undefined) {
           if (!isLp(t1)) return undefined
           const g = pGrid('Comma', 'Semi', 'Rp', ts, i + 2)
@@ -1251,10 +1297,28 @@ export function pPrim(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
           return 2 <= l[0].length ? [node(k === 'Min' ? 'min' : 'max', l[0]), l[1] + 1] : undefined
         }
         break
+      case 'Lbkg':
+        if (t1?.t === 'acols') {
+          const g = pGrid('Amp', 'Nl', 'Earr', ts, i + 2)
+          if (
+            g === undefined ||
+            t1.n <= BMAT_MAX_COLS ||
+            !g[0].every((r) => r.length === t1.n) ||
+            !isKwTok(ts[g[1]], 'Rbkg')
+          )
+            return undefined
+          return constTail(jarr(g[0].map((r) => jarr(r.map(jnum)))), ts, g[1] + 1)
+        }
+        if (isKwTok(t1, 'Barr')) {
+          const r = pMkRows(c, f, 'Amp', 'Nl', 'Earr', ts, i + 2)
+          return r !== undefined && isKwTok(ts[r[1]], 'Rbkg')
+            ? mkTail(c.sf, r[0], ts, r[1] + 1)
+            : undefined
+        }
+        return pRed(c, f, ts, i)
       case 'Sum':
       case 'Prod':
       case 'Limits':
-      case 'Lbkg':
         return pRed(c, f, ts, i)
       case 'Lr':
         if (isKwTok(t1, 'Lp') && isKwTok(ts[i + 2], 'Lbk')) return pRed(c, f, ts, i)
@@ -1445,11 +1509,15 @@ export function pRedBody(
         isKwTok(ts[r[1] + 1], 'Caret') &&
         isKwTok(ts[r[1] + 2], 'Lb')
       ) {
-        const b = pOr(c, f, ts, r[1] + 3)
-        rows =
-          b !== undefined && isKwTok(ts[b[1]], 'Rb')
-            ? [[{ k: 'rng', key: le[0], v: jarr([le[1], b[0]]) }], b[1] + 1]
-            : undefined
+        // `_{k = a}^{\{…\}}`: a filter followed by a superscript set.
+        if (isKwTok(ts[r[1] + 3], 'Lset')) rows = [[r[0]], r[1] + 1]
+        else {
+          const b = pOr(c, f, ts, r[1] + 3)
+          rows =
+            b !== undefined && isKwTok(ts[b[1]], 'Rb')
+              ? [[{ k: 'rng', key: le[0], v: jarr([le[1], b[0]]) }], b[1] + 1]
+              : undefined
+        }
       } else if (r !== undefined && isKwTok(ts[r[1]], 'Rb')) {
         rows = [[r[0]], r[1] + 1]
       } else rows = undefined
@@ -1459,9 +1527,16 @@ export function pRedBody(
   } else rows = [[], i]
   if (rows === undefined) return undefined
   const parts = rowParts(rows[0])
-  const body = pMul(c, f, ts, rows[1])
-  if (parts === undefined || body === undefined) return undefined
-  return [{ red, marked, out: [], ranges: parts[0], expr: body[0], filter: parts[1] }, body[1]]
+  const sup = pSup(c.sf, ts, rows[1])
+  if (parts === undefined || sup === undefined) return undefined
+  // A marked head lists `args` itself; the printer writes no set after it.
+  if (marked && sup[0].length > 0) return undefined
+  const body = pMul(c, f, ts, sup[1])
+  if (body === undefined) return undefined
+  return [
+    { red, marked, out: [], ranges: parts[0], expr: body[0], filter: parts[1], set: sup[0] },
+    body[1],
+  ]
 }
 
 /** The tokens `tail` occur in `ts` at `i`. */
@@ -1474,8 +1549,8 @@ function stripPrefix(tail: readonly Tok[], ts: Toks, i: number): number | undefi
 }
 
 const KW = (k: Kw): Tok => ({ t: 'kw', k })
-const TAIL_L: readonly Tok[] = [KW('Rbkg'), KW('Us'), KW('Lb')]
-const TAIL_T: readonly Tok[] = [KW('Rbk'), KW('Rp'), KW('Us'), KW('Lpg')]
+const TAIL_L: readonly Tok[] = [KW('Rbkg')]
+const TAIL_T: readonly Tok[] = [KW('Rbk'), KW('Rp')]
 
 /** `Math.pRed`: a rank-0 reduction, or a reduction wrapped with its output entries. */
 export function pRed(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
@@ -1486,12 +1561,19 @@ export function pRed(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     if (h === undefined) return undefined
     const b = pRedBody(c, f, h[0], h[1], ts, h[2])
     if (b === undefined) return undefined
-    const r3 = stripPrefix(tail, ts, b[1])
-    if (r3 === undefined) return undefined
-    const es = pRows(c, f, 'Comma', closeK, ts, r3)
+    const r1 = stripPrefix(tail, ts, b[1])
+    if (r1 === undefined) return undefined
+    // The set of a wrapped reduction is written on the bracket only.
+    if (b[0].set.length > 0) return undefined
+    const sup = pSup(c.sf, ts, r1)
+    const open: Kw = c.sf === 'latex' ? 'Lb' : 'Lpg'
+    if (sup === undefined || !isKwTok(ts[sup[1]], 'Us') || !isKwTok(ts[sup[1] + 1], open))
+      return undefined
+    if (b[0].marked && sup[0].length > 0) return undefined
+    const es = pRows(c, f, 'Comma', closeK, ts, sup[1] + 2)
     if (es === undefined) return undefined
     const ep = entryParts(es[0])
-    return ep && [faqJson(withOut(b[0], ep[0], ep[1])), es[1]]
+    return ep && [faqJson({ ...withOut(b[0], ep[0], ep[1]), set: sup[0] }), es[1]]
   }
   if (isKwTok(ts[i], 'Lbkg')) return wrapped(i + 1, TAIL_L, 'Rb')
   if (isKwTok(ts[i], 'Lr') && isKwTok(ts[i + 1], 'Lp') && isKwTok(ts[i + 2], 'Lbk'))
@@ -1646,6 +1728,94 @@ function pCasesIn(c: Ctx, f: number, ts: Toks, i: number): P<Json> {
     return e && [node('ifelse', [cnd[0], v, e[0]]), e[1]]
   }
   return undefined
+}
+
+/** `Math.pPair`: a bound pair after its `[`: `a, b]`. */
+export function pPair(c: Ctx, f: number, ts: Toks, i: number): P<[Json, Json]> {
+  if (f === 0) return undefined
+  f -= 1
+  const a = pOr(c, f, ts, i)
+  if (a === undefined || !isKwTok(ts[a[1]], 'Comma')) return undefined
+  const b = pOr(c, f, ts, a[1] + 1)
+  return b !== undefined && isKwTok(ts[b[1]], 'Rbk') ? [[a[0], b[0]], b[1] + 1] : undefined
+}
+
+/** `Math.pRegTail`: the further bound pairs of a region, each after `\times` then `[`. */
+export function pRegTail(c: Ctx, f: number, ts: Toks, i: number): P<[Json, Json][]> {
+  const out: [Json, Json][] = []
+  for (;;) {
+    if (f === 0) return undefined
+    f -= 1
+    if (!(isKwTok(ts[i], 'Times') && isKwTok(ts[i + 1], 'Lbk'))) return [out, i]
+    const p = pPair(c, f, ts, i + 2)
+    if (p === undefined) return undefined
+    out.push(p[0])
+    i = p[1]
+  }
+}
+
+/**
+ * `Math.pMkRows`: the rows of a `makearray` table: a value, the cell separator
+ * `csep`, a region; rows separated by `rsep`, up to `closeK` (consumed).
+ */
+export function pMkRows(
+  c: Ctx,
+  f: number,
+  csep: Kw,
+  rsep: Kw,
+  closeK: Kw,
+  ts: Toks,
+  i: number,
+): P<MkRow[]> {
+  const out: MkRow[] = []
+  for (;;) {
+    if (f === 0) return undefined
+    f -= 1
+    const v = pOr(c, f, ts, i)
+    if (v === undefined || !isKwTok(ts[v[1]], csep) || !isKwTok(ts[v[1] + 1], 'Lbk'))
+      return undefined
+    const p = pPair(c, f, ts, v[1] + 2)
+    if (p === undefined) return undefined
+    const ps = pRegTail(c, f, ts, p[1])
+    if (ps === undefined) return undefined
+    out.push([v[0], [p[0], ...ps[0]]])
+    const k = kwAt(ts, ps[1])
+    if (k === rsep) i = ps[1] + 1
+    else if (k === closeK) return [out, ps[1] + 1]
+    else return undefined
+  }
+}
+
+/** The tokens of the Typst table head `mat(delim: "[", augment: #1,` (`Math.matHead`). */
+const MAT_HEAD_LEN = 10
+
+/**
+ * The Typst table head `mat(delim: "[", augment: #1,` is at `i`. `delim` and
+ * `augment` are ordinary words, named arguments only at this position.
+ */
+function matHeadAt(ts: Toks, i: number): boolean {
+  const t2 = ts[i + 2]
+  const t4 = ts[i + 4]
+  const t6 = ts[i + 6]
+  const t8 = ts[i + 8]
+  return (
+    isKwTok(ts[i], 'Mat') &&
+    isKwTok(ts[i + 1], 'Lp') &&
+    t2?.t === 'word' &&
+    t2.s === 'delim' &&
+    isKwTok(ts[i + 3], 'Colon') &&
+    t4?.t === 'txt' &&
+    t4.s === '[' &&
+    isKwTok(ts[i + 5], 'Comma') &&
+    t6?.t === 'word' &&
+    t6.s === 'augment' &&
+    isKwTok(ts[i + 7], 'Colon') &&
+    t8?.t === 'code' &&
+    t8.j.t === 'num' &&
+    t8.j.n.k === 'int' &&
+    t8.j.n.v === 1n &&
+    isKwTok(ts[i + 9], 'Comma')
+  )
 }
 
 /** `Math.pEscArgs`: Typst escape arguments: `, a` repeated, then `)`. */

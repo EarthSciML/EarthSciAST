@@ -53,7 +53,7 @@ const KW_CHARS = Dict{Kw, String}(
     KMin => "min", KMax => "max", KAbs => "abs", KFloor => "floor", KCeil => "ceil",
     KPdiff => "partial", KDif => "dif", KCases => "cases", KEsmnode => "esm.node",
     KVec => "vec", KMat => "mat", KSum => "sum", KProd => "product", KInn => "in",
-    KLimits => "limits", KLr => "lr", KNl => "\\",
+    KLimits => "limits", KLr => "lr", KNl => "\\", KLset => "{", KRset => "}",
 )
 
 """`Typst.kwChars`."""
@@ -268,7 +268,8 @@ end
 const PUNCT = Dict{Char, Kw}(
     '+' => KPlus, '-' => KMinus, '=' => KEq, '<' => KLt, '>' => KGt, '/' => KSlash,
     '^' => KCaret, '_' => KUs, ')' => KRp, '[' => KLbk, ']' => KRbk, ',' => KComma,
-    ';' => KSemi, ':' => KColon, '&' => KAmp, '.' => KSdot, '\\' => KNl,
+    ';' => KSemi, ':' => KColon, '&' => KAmp, '.' => KSdot, '\\' => KNl, '{' => KLset,
+    '}' => KRset,
 )
 
 """`Typst.punct`."""

@@ -11,20 +11,56 @@ namespace Esm.Document.Math.Latex
 
 open Esm.Document Esm.Document.Math
 
-def AllOK (ts : List Tok) : Prop := ∀ t ∈ ts, tokOK t
+/-- Every `\times` is followed by a bracket, within the list: the printer writes `\times`
+only between the bound pairs of a region. -/
+def TL : List Tok → Prop
+  | [] => True
+  | t :: r => (t = .kw .times → ∃ r', r = .kw .lbk :: r') ∧ TL r
 
-theorem allOK_nil : AllOK [] := fun _ h => by cases h
+/-- What the printer writes: LaTeX tokens, and `\times` before a bracket. -/
+def AllOK (ts : List Tok) : Prop := (∀ t ∈ ts, tokOK t ∨ t = .kw .times) ∧ TL ts
 
-theorem allOK_append {a b : List Tok} : AllOK (a ++ b) ↔ AllOK a ∧ AllOK b := by
-  simp only [AllOK, List.mem_append]
-  constructor
-  · intro h; exact ⟨fun t ht => h t (Or.inl ht), fun t ht => h t (Or.inr ht)⟩
-  · rintro ⟨h1, h2⟩ t (ht | ht)
-    · exact h1 t ht
-    · exact h2 t ht
+theorem allOK_nil : AllOK [] := ⟨fun _ h => (by cases h), trivial⟩
 
-theorem allOK_cons {t : Tok} {r : List Tok} : AllOK (t :: r) ↔ tokOK t ∧ AllOK r := by
-  simp [AllOK]
+theorem TL_append : ∀ {a b : List Tok}, TL a → TL b → TL (a ++ b)
+  | [], _, _, hb => hb
+  | t :: a, b, ha, hb => by
+    refine ⟨fun e => ?_, TL_append ha.2 hb⟩
+    obtain ⟨r', rfl⟩ := ha.1 e
+    exact ⟨r' ++ b, rfl⟩
+
+theorem TL_TN : ∀ (ts : List Tok), TL ts → TN ts
+  | [], _ => trivial
+  | [_], _ => trivial
+  | t :: u :: r, h => by
+    refine ⟨fun e => ?_, TL_TN (u :: r) h.2⟩
+    obtain ⟨r', hr⟩ := h.1 e
+    simp only [List.cons.injEq] at hr
+    exact Or.inl hr.1
+
+theorem tok_ne_times {t : Tok} (h : tokOK t) : t ≠ .kw .times := by
+  rintro rfl; have h' : kwOK .times = true := h; exact absurd h' (by decide)
+
+theorem allOK_app {a b : List Tok} (ha : AllOK a) (hb : AllOK b) : AllOK (a ++ b) :=
+  ⟨fun t ht => (List.mem_append.1 ht).elim (ha.1 t) (hb.1 t), TL_append ha.2 hb.2⟩
+
+theorem allOK_append2 {a b : List Tok} (h : AllOK a ∧ AllOK b) : AllOK (a ++ b) := allOK_app h.1 h.2
+
+theorem allOK_cons' {t : Tok} {r : List Tok} (ht : tokOK t) (hr : AllOK r) : AllOK (t :: r) :=
+  ⟨fun u hu => by
+    simp only [List.mem_cons] at hu
+    rcases hu with rfl | hu
+    · exact Or.inl ht
+    · exact hr.1 u hu, ⟨fun e => absurd e (tok_ne_times ht), hr.2⟩⟩
+
+theorem allOK_cons2 {t : Tok} {r : List Tok} (h : tokOK t ∧ AllOK r) : AllOK (t :: r) := allOK_cons' h.1 h.2
+
+theorem allOK_times {r : List Tok} (hr : AllOK (.kw .lbk :: r)) : AllOK (.kw .times :: .kw .lbk :: r) :=
+  ⟨fun u hu => by
+    simp only [List.mem_cons] at hu
+    rcases hu with rfl | hu
+    · exact Or.inr rfl
+    · exact hr.1 u (by simp only [List.mem_cons]; exact hu), ⟨fun _ => ⟨r, rfl⟩, hr.2⟩⟩
 
 theorem allOK_sepBy (sep : List Tok) (hs : AllOK sep) :
     ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) → AllOK (sepBy sep xs)
@@ -32,7 +68,7 @@ theorem allOK_sepBy (sep : List Tok) (hs : AllOK sep) :
   | [x], h => h x (by simp)
   | x :: y :: ys, h => by
     rw [sepBy_cons2]
-    exact allOK_append.2 ⟨allOK_append.2 ⟨h x (by simp), hs⟩,
+    exact allOK_append2 ⟨allOK_append2 ⟨h x (by simp), hs⟩,
       allOK_sepBy sep hs (y :: ys) (fun z hz => h z (by simp [hz]))⟩
 
 theorem allOK_flatMap {α : Type} (f : α → List Tok) :
@@ -40,7 +76,7 @@ theorem allOK_flatMap {α : Type} (f : α → List Tok) :
   | [], _ => allOK_nil
   | x :: xs, h => by
     rw [List.flatMap_cons]
-    exact allOK_append.2 ⟨h x (by simp), allOK_flatMap f xs (fun z hz => h z (by simp [hz]))⟩
+    exact allOK_append2 ⟨h x (by simp), allOK_flatMap f xs (fun z hz => h z (by simp [hz]))⟩
 
 theorem allOK_map {α : Type} (f : α → List Tok) (xs : List α) (h : ∀ x ∈ xs, AllOK (f x)) :
     ∀ y ∈ xs.map f, AllOK y := by
@@ -53,10 +89,20 @@ theorem tokOK_num10 : tokOK (.num (.int 10)) := by
 
 /-- Close a goal `AllOK [fixed tokens and pieces]` from the pieces in the context. -/
 macro "aok" : tactic => `(tactic| (
-  try simp only [allOK_append, allOK_cons, List.cons_append, List.nil_append, List.append_assoc,
-    and_true, true_and]
-  repeat' constructor
-  all_goals first | assumption | rfl | exact allOK_nil | exact tokOK_num0 | exact tokOK_num10 | decide))
+  try simp only [List.cons_append, List.nil_append, List.append_assoc, List.append_nil]
+  repeat' (first
+    | assumption
+    | exact allOK_nil
+    | apply allOK_times
+    | apply allOK_app
+    | apply allOK_cons'
+    | exact tokOK_num0
+    | exact tokOK_num10
+    | exact ⟨rfl, by decide⟩
+    | exact ⟨by decide, by decide⟩
+    | exact True.intro
+    | rfl
+    | decide)))
 
 theorem allOK_grp {sf : Sf} (h : sf = .latex) {ts : List Tok} (ht : AllOK ts) : AllOK (grp sf ts) := by
   subst h; simp only [grp, ↓reduceIte]; aok
@@ -145,7 +191,7 @@ theorem tokOK_baseTok (b : List Char) (hb : isSingle b = true) : tokOK (baseTok 
 theorem allOK_segToks (g : List Char) : AllOK (segToks .latex g) := by
   unfold segToks
   split
-  · rename_i hs; exact allOK_cons.2 ⟨tokOK_baseTok g hs, allOK_nil⟩
+  · rename_i hs; exact allOK_cons2 ⟨tokOK_baseTok g hs, allOK_nil⟩
   · split
     · rename_i b r hsp
       have hb := (subParts_spec hsp).2.1
@@ -160,15 +206,15 @@ theorem allOK_segToks (g : List Char) : AllOK (segToks .latex g) := by
         have hr : tokOK (.rm (String.ofList (formulaRaw g))) := by
           show balOK (String.ofList (formulaRaw g)).toList = true
           rw [String.toList_ofList]; exact balOK_formula g hf
-        exact allOK_cons.2 ⟨hr, allOK_nil⟩
-      · exact allOK_cons.2 ⟨trivial, allOK_nil⟩
+        exact allOK_cons2 ⟨hr, allOK_nil⟩
+      · exact allOK_cons2 ⟨trivial, allOK_nil⟩
 
 theorem allOK_nameToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (nameToks c s) := by
   unfold nameToks
   split
-  · exact allOK_cons.2 ⟨trivial, allOK_nil⟩
+  · exact allOK_cons2 ⟨trivial, allOK_nil⟩
   · rw [hc]
-    have hs : AllOK [.kw .sdot] := allOK_cons.2 ⟨(rfl : kwOK .sdot = true), allOK_nil⟩
+    have hs : AllOK [.kw .sdot] := allOK_cons2 ⟨(rfl : kwOK .sdot = true), allOK_nil⟩
     exact allOK_sepBy _ hs _ (allOK_map _ _ (fun g _ => allOK_segToks g))
 
 /-! ## JSON -/
@@ -176,15 +222,15 @@ theorem allOK_nameToks (c : Ctx) (hc : c.sf = .latex) (s : String) : AllOK (name
 mutual
 theorem allOK_json : ∀ v : Json, jwf v = true → AllOK (jsonToks v)
   | .null, _ => by
-    simp only [jsonToks]; exact allOK_cons.2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "null")), allOK_nil⟩
+    simp only [jsonToks]; exact allOK_cons2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "null")), allOK_nil⟩
   | .bool true, _ => by
-    simp only [jsonToks]; exact allOK_cons.2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "true")), allOK_nil⟩
+    simp only [jsonToks]; exact allOK_cons2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "true")), allOK_nil⟩
   | .bool false, _ => by
-    simp only [jsonToks]; exact allOK_cons.2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "false")), allOK_nil⟩
+    simp only [jsonToks]; exact allOK_cons2 ⟨(⟨rfl, by decide⟩ : tokOK (.word "false")), allOK_nil⟩
   | .num n, h => by
-    simp only [jsonToks]; exact allOK_cons.2 ⟨((numOK_iff n).1 h : tokOK (.num n)), allOK_nil⟩
+    simp only [jsonToks]; exact allOK_cons2 ⟨((numOK_iff n).1 h : tokOK (.num n)), allOK_nil⟩
   | .str s, _ => by
-    simp only [jsonToks]; exact allOK_cons.2 ⟨(trivial : tokOK (.jstr s)), allOK_nil⟩
+    simp only [jsonToks]; exact allOK_cons2 ⟨(trivial : tokOK (.jstr s)), allOK_nil⟩
   | .arr xs, h => by
     have := allOK_items xs h
     simp only [jsonToks]; aok
@@ -210,7 +256,7 @@ theorem allOK_entries : ∀ kvs : List (String × Json), jwfObj kvs = true → A
     simp only [jwfObj, Bool.and_eq_true] at h
     have h1 := allOK_json v h.1
     simp only [jsonEntries]
-    exact allOK_cons.2 ⟨(trivial : tokOK (.jstr k)), allOK_cons.2 ⟨(rfl : kwOK .colon = true), h1⟩⟩
+    exact allOK_cons2 ⟨(trivial : tokOK (.jstr k)), allOK_cons2 ⟨(rfl : kwOK .colon = true), h1⟩⟩
   | (k, v) :: e :: es, h => by
     simp only [jwfObj, Bool.and_eq_true] at h
     have h1 := allOK_json v h.1
@@ -226,15 +272,15 @@ theorem allOK_mulToks : ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) → 
   | [], _ => allOK_nil
   | x :: xs, h => by
     simp only [mulToks]
-    refine allOK_append.2 ⟨h x (by simp), allOK_flatMap _ xs (fun y hy => ?_)⟩
+    refine allOK_append2 ⟨h x (by simp), allOK_flatMap _ xs (fun y hy => ?_)⟩
     have hy' := h y (by simp [hy])
     split
-    · exact allOK_cons.2 ⟨(rfl : kwOK .cdot = true), hy'⟩
+    · exact allOK_cons2 ⟨(rfl : kwOK .cdot = true), hy'⟩
     · exact hy'
 
 theorem allOK_callToks (head : List Tok) (hh : AllOK head) (args : List (List Tok))
     (ha : ∀ x ∈ args, AllOK x) : AllOK (callToks .latex head args) := by
-  have hs := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) args ha
+  have hs := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) args ha
   simp only [callToks, lpC]; aok
 
 theorem allOK_unToks (o : String) (k : Kw) (hk : unKw.lookup o = some k) (t : List Tok)
@@ -263,21 +309,32 @@ theorem allOK_lookup (bs : List (String × Json)) (F : Json → List Tok)
 theorem allOK_numToks (ns : List JNum) (h : ∀ n ∈ ns, numOK n = true) : ∀ x ∈ numToks ns, AllOK x := by
   intro x hx
   obtain ⟨n, hn, rfl⟩ := List.mem_map.1 hx
-  exact allOK_cons.2 ⟨((numOK_iff n).1 (h n hn) : tokOK (.num n)), allOK_nil⟩
+  exact allOK_cons2 ⟨((numOK_iff n).1 (h n hn) : tokOK (.num n)), allOK_nil⟩
 
 theorem allOK_arr (af : AForm) (h : AOK af) : AllOK (arrToks .latex af) := by
   cases af with
   | col ns =>
-    have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
+    have hS := allOK_sepBy [.kw .nl] (allOK_cons2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
       (allOK_numToks ns h.2)
     simp only [arrToks]; aok
   | mat rs =>
-    have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
-      (allOK_map _ rs (fun r hr => allOK_sepBy [.kw .amp] (allOK_cons.2 ⟨(rfl : kwOK .amp = true), allOK_nil⟩) _
-        (allOK_numToks r (h.2.2 r hr))))
-    simp only [arrToks]; aok
+    have hS := allOK_sepBy [.kw .nl] (allOK_cons2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _
+      (allOK_map _ rs (fun r hr => allOK_sepBy [.kw .amp] (allOK_cons2 ⟨(rfl : kwOK .amp = true), allOK_nil⟩) _
+        (allOK_numToks r (h.2.2.1 r hr))))
+    simp only [arrToks]
+    split
+    · rename_i hw
+      have hb : tokOK (.kw (.barrC (rs.headD []).length)) := by
+        show decide (0 < (rs.headD []).length) = true
+        exact decide_eq_true (by unfold bmatCols at hw; omega)
+      aok
+    · aok
 
 /-! ## Reductions -/
+
+theorem subToks_split (c : Ctx) (P : Json → Out) (F : FaqForm) :
+    subToks c P F = (if c.sf = .latex then subToksL c P F else subToksT c P F) := by
+  unfold subToks; cases c.sf <;> rfl
 
 theorem tokOK_num1 : tokOK (.num (.int 1)) := by
   show JNum.InInt64 1; unfold JNum.InInt64; decide
@@ -307,7 +364,7 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
     · rename_i s ps _
       have hN := allOK_nameToks c hc kv.1
       have hS := allOK_nameToks c hc s
-      have hL := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+      have hL := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
         (allOK_map (fun (p : Json) => match p with | .str q => nameToks c q | _ => []) ps (fun p _ => by
           split
           · exact allOK_nameToks c hc _
@@ -318,7 +375,7 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
     have hk : tokOK (.kw F.red.kw) := by cases F.red <;> rfl
     simp only [headToks]; split <;> aok
   have hSub : AllOK (subToks c P F) := by
-    rw [subToks_eq, iteT hc]; unfold subToksL
+    rw [subToks_split, iteT hc]; unfold subToksL
     have hRows : ∀ x ∈ subRows c P F, AllOK x := by
       intro x hx
       unfold subRows at hx
@@ -331,7 +388,7 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
           rw [hc]; exact hAt y (by simp [faqSubs, hy]) 1
         · cases hx
     split
-    · rename_i k a b hr _
+    · rename_i k a b hr _ _
       have hm : (k, Json.arr [a, b]) ∈ F.ranges := redRanges_mem (by rw [hr]; simp)
       obtain ⟨ha, hb⟩ := faqSubs_rng hm rfl
       have hA := hAt a ha 4; have hB := hAt b hb 1
@@ -340,7 +397,7 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
     · split
       · exact allOK_nil
       · rename_i r hr; have := hRows r (by rw [hr]; simp); aok
-      · have hS := allOK_sepBy [.kw .nl] (allOK_cons.2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _ hRows
+      · have hS := allOK_sepBy [.kw .nl] (allOK_cons2 ⟨(rfl : kwOK .nl = true), allOK_nil⟩) _ hRows
         aok
   have hBody := hAt F.expr (by simp [faqSubs]) 5
   have hEnt : ∀ x ∈ F.out.map (entryToks c P F), AllOK x := by
@@ -350,11 +407,68 @@ theorem allOK_faqOut (c : Ctx) (hc : c.sf = .latex) (F : FaqForm) (P : Json → 
     · split
       · rename_i v hv; exact hRow _ (look_mem hv)
       · exact allOK_nameToks c hc _
-    · exact allOK_cons.2 ⟨tokOK_num1, allOK_nil⟩
-  have hE := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _ hEnt
+    · exact allOK_cons2 ⟨tokOK_num1, allOK_nil⟩
+  have hE := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _ hEnt
+  have hSup : AllOK (supT c F) := by
+    unfold supT; split
+    · exact allOK_nil
+    · have hL := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map _ F.sup (fun n _ => allOK_nameToks c hc n))
+      unfold supToks; rw [hc]; aok
+  have hIf : AllOK (if F.out = [] then supT c F else []) := by
+    split
+    · exact hSup
+    · exact allOK_nil
   unfold faqOut redToks
   rw [hc]
   split <;> (simp only [mkOut]; constructor <;> aok)
+
+/-! ## Block assembly -/
+
+theorem mem_mkSubs_value {M : MkForm} {v : Json} (h : v ∈ M.values) : v ∈ mkSubs M := by
+  simp [mkSubs, h]
+
+theorem mem_mkSubs_bound {M : MkForm} {r : List (Json × Json)} (hr : r ∈ M.regions) {p : Json × Json}
+    (hp : p ∈ r) : p.1 ∈ mkSubs M ∧ p.2 ∈ mkSubs M := by
+  constructor <;>
+  · simp only [mkSubs, List.mem_append, List.mem_flatMap]
+    right; exact ⟨r, hr, p, hp, by simp⟩
+
+theorem allOK_mkOutT (c : Ctx) (hc : c.sf = .latex) (M : MkForm) (P : Json → Out)
+    (hQ : ∀ x ∈ mkSubs M, AllOK (P x).toks) :
+    AllOK (mkOutT c P M).toks ∧ AllOK (mkOutT c P M).crow := by
+  have hAt : ∀ x ∈ mkSubs M, ∀ L, AllOK ((P x).at c.sf L) := fun x hx L => by
+    rw [hc]; exact allOK_at rfl _ (hQ x hx) L
+  have hPair : ∀ r ∈ M.regions, ∀ p ∈ r, AllOK (pairToks c P p) := by
+    intro r hr p hp
+    obtain ⟨h1, h2⟩ := mem_mkSubs_bound hr hp
+    have hA := hAt _ h1 1; have hB := hAt _ h2 1
+    simp only [pairToks]; aok
+  have hReg : ∀ r ∈ M.regions, AllOK (regToks c P r) := by
+    intro r hr
+    cases r with
+    | nil => exact allOK_nil
+    | cons p ps =>
+      have hp := hPair _ hr p (by simp)
+      have hps := allOK_flatMap (fun q => .kw .times :: .kw .lbk :: pairToks c P q ++ [.kw .rbk]) ps (fun q hq => by
+        have := hPair _ hr q (by simp [hq]); aok)
+      simp only [regToks]; aok
+  have hRows : ∀ x ∈ (M.values.zip M.regions).map (mkRow c P), AllOK x := by
+    refine allOK_map _ _ (fun vr hvr => ?_)
+    have hv := hAt vr.1 (mem_mkSubs_value (List.of_mem_zip hvr).1) 1
+    have hr := hReg vr.2 (List.of_mem_zip hvr).2
+    simp only [mkRow]; rw [show cellSep c.sf = .amp by rw [hc]; rfl]; aok
+  have hS := allOK_sepBy [.kw (rowSep c.sf)] (allOK_cons2 ⟨(by rw [hc]; rfl : kwOK (rowSep c.sf) = true),
+    allOK_nil⟩) _ hRows
+  have hSub : AllOK (mkSub c M.out) := by
+    unfold mkSub; split
+    · exact allOK_nil
+    · have hL := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+        (allOK_map _ M.out (fun n _ => allOK_nameToks c hc n))
+      rw [hc]; aok
+  unfold mkOutT
+  rw [hc] at hS ⊢
+  simp only [mkOut]; constructor <;> aok
 
 /-! ## The induction -/
 
@@ -375,7 +489,7 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       fun x hx hxe => POK_all c hc n x (by omega) hxe
     have hsep : ∀ (k : Kw), kwOK k = true → ∀ (xs : List (List Tok)), (∀ x ∈ xs, AllOK x) →
         AllOK (sepBy [.kw k] xs) :=
-      fun k hk xs hx => allOK_sepBy [Tok.kw k] (allOK_cons.2 ⟨(show tokOK (Tok.kw k) from hk), allOK_nil⟩) xs hx
+      fun k hk xs hx => allOK_sepBy [Tok.kw k] (allOK_cons2 ⟨(show tokOK (Tok.kw k) from hk), allOK_nil⟩) xs hx
     unfold POK
     cases view c e he with
     | num k hk =>
@@ -429,13 +543,13 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
     | idxSub o b is ho hne hsub hsp hi hpr =>
       simp only [hc] at hpr
       have hN := allOK_nameToks c hc b
-      have hS := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+      have hS := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
         (allOK_map _ is (fun x hx => POK_toks (IH x (sizeOf_node_lt (List.mem_cons_of_mem _ hx)) (hi x hx)) 1))
       rw [hpr]; simp only [mkOut, subList]; constructor <;> aok
     | idxBr o base is ho hne hb hi hpr =>
       simp only [hc] at hpr
       have hB := POK_toks (IH base (sizeOf_node_lt (by simp)) hb) 10
-      have hS := allOK_sepBy [.kw .comma] (allOK_cons.2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
+      have hS := allOK_sepBy [.kw .comma] (allOK_cons2 ⟨(rfl : kwOK .comma = true), allOK_nil⟩) _
         (allOK_map _ is (fun x hx => POK_toks (IH x (sizeOf_node_lt (List.mem_cons_of_mem _ hx)) (hi x hx)) 1))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
     | cmp o k a b ho ha hb hpr =>
@@ -467,12 +581,12 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       simp only [hc] at hpr
       have hk : tokOK (.kw k) := by
         rcases kindOf_mm ho with ⟨-, rfl⟩ | ⟨-, rfl⟩ <;> rfl
-      have hS := allOK_callToks [.kw k] (allOK_cons.2 ⟨hk, allOK_nil⟩) _
+      have hS := allOK_callToks [.kw k] (allOK_cons2 ⟨hk, allOK_nil⟩) _
         (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 1))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
     | call o xs ho hx hpr =>
       simp only [hc] at hpr
-      have hS := allOK_callToks [.opn o] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+      have hS := allOK_callToks [.opn o] (allOK_cons2 ⟨trivial, allOK_nil⟩) _
         (allOK_map _ xs (fun x hm => POK_toks (IH x (sizeOf_node_lt hm) (hx x hm)) 4))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
     | dTime a ha hpr =>
@@ -498,9 +612,9 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       simp only [hc] at hpr
       have hb := tokOK_units u (by rw [← hc]; exact hu)
       have hn : tokOK (.num k) := hk
-      have h2 : AllOK [.num k, .units (factorsOf u)] := allOK_cons.2 ⟨hn, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
+      have h2 : AllOK [.num k, .units (factorsOf u)] := allOK_cons2 ⟨hn, allOK_cons2 ⟨hb, allOK_nil⟩⟩
       rw [hpr]; simp only [mkOut, qtyToks]
-      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
+      exact ⟨h2, allOK_append2 ⟨h2, allOK_cons2 ⟨rfl, allOK_cons2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
     | arr xs af haf hpr =>
       simp only [hc] at hpr
       have hA := allOK_arr af (arrForm_spec haf).2
@@ -510,38 +624,45 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hA := allOK_arr af (arrForm_spec haf).2
       have hb := tokOK_units u (by rw [← hc]; exact hu)
       have h2 : AllOK (arrToks .latex af ++ [.units (factorsOf u)]) :=
-        allOK_append.2 ⟨hA, allOK_cons.2 ⟨hb, allOK_nil⟩⟩
+        allOK_append2 ⟨hA, allOK_cons2 ⟨hb, allOK_nil⟩⟩
       rw [hpr]; simp only [mkOut, unitToks]
-      exact ⟨h2, allOK_append.2 ⟨h2, allOK_cons.2 ⟨rfl, allOK_cons.2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
+      exact ⟨h2, allOK_append2 ⟨h2, allOK_cons2 ⟨rfl, allOK_cons2 ⟨⟨rfl, by decide⟩, allOK_nil⟩⟩⟩⟩
     | faq kvs F hF hok P hP hpr =>
       rw [hpr]
       exact allOK_faqOut c hc F P (fun x hx => by
         rw [hP x hx]; exact (IH x (faqSubs_lt hF hx) (faqSubs_isE hok x hx)).1)
+    | mk kvs M hM hok P hP hpr =>
+      rw [hpr]
+      exact allOK_mkOutT c hc M P (fun x hx => by
+        rw [hP x hx]; exact (IH x (mkSubs_lt hM hx) (Math.mkSubs_isE hok x hx)).1)
+    | tbare m hm _ hpr =>
+      have ho : tokOK (.opn m) := trivial
+      rw [hpr]; simp only [mkOut]; constructor <;> aok
     | tpos m bs ps hm hsb hb hps hpr =>
       simp only [hc] at hpr
-      have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+      have hS := allOK_callToks [.opn m] (allOK_cons2 ⟨trivial, allOK_nil⟩) _
         (allOK_map _ ps (fun p _ => allOK_lookup bs (fun v => (pr c v).at .latex 4)
           (fun kv hkv => POK_toks (IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) 4) p))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
     | tnamed m bs hm _ hb hps hne hk hkn hpr =>
       simp only [hc] at hpr
-      have hS := allOK_callToks [.opn m] (allOK_cons.2 ⟨trivial, allOK_nil⟩) _
+      have hS := allOK_callToks [.opn m] (allOK_cons2 ⟨trivial, allOK_nil⟩) _
         (allOK_map (fun kv => nameToks c kv.1 ++ .kw .eq :: (pr c kv.2).at .latex 4) bs (fun kv hkv => by
           have hN := allOK_nameToks c hc kv.1
           have hV := POK_toks (IH kv.2 (sizeOf_tNode_lt hkv) (hb kv hkv)) 4
           aok))
       rw [hpr]; simp only [mkOut]; constructor <;> aok
-    | openop kvs o as hop hargs hsk hx hf hcore hopn htp hkey hsz hszf hpr =>
+    | openop kvs o as hop hargs hsk hx hf hcore hopn htp _ hkey hsz hszf hpr =>
       simp only [hc] at hpr
       have hA := hsep .comma rfl _ (allOK_map _ as (fun x hm => POK_toks (IH x (hsz x hm) (hx x hm)) 4))
       have hF := hsep .comma rfl _ (allOK_map (fun kv => keyToks .latex kv.1 ++ .kw .eq ::
-          (if isE kv.2 then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2)) (fieldsOf kvs) (fun kv hkv => by
+          (if mathField o kv then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2)) (fieldsOf kvs) (fun kv hkv => by
           have hK : tokOK (.rm (String.ofList (escK kv.1.toList))) := by
             show balOK (String.ofList (escK kv.1.toList)).toList = true
             rw [String.toList_ofList]; exact balOK_escK _
-          have hV : AllOK (if isE kv.2 = true then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2) := by
+          have hV : AllOK (if mathField o kv = true then (pr c kv.2).at .latex 4 else jsonVal .latex kv.2) := by
             split
-            · rename_i hv; exact POK_toks (IH kv.2 (hszf kv hkv) hv) 4
+            · rename_i hv; exact POK_toks (IH kv.2 (hszf kv hkv) (mathField_isE hv)) 4
             · exact allOK_json kv.2 (hf kv hkv)
           simp only [keyToks]; aok))
       rw [hpr]; simp only [mkOut, openToks, lpC]
@@ -553,9 +674,14 @@ theorem POK_all (c : Ctx) (hc : c.sf = .latex) : ∀ n e, sizeOf e < n → isE e
       have hE : tokOK (.esc o) := trivial
       rw [hpr]; simp only [mkOut, escToks, jsonToks]; constructor <;> aok
 
-/-- Every token the LaTeX printer writes for a well-formed expression is a LaTeX token. -/
-theorem print_tokOK (S : Sym) (e : Json) (he : isE e = true) : ∀ t ∈ print .latex S e, tokOK t := by
+/-- The LaTeX printer writes LaTeX tokens, and `\times` only before a bracket. -/
+theorem print_allOK (S : Sym) (e : Json) (he : isE e = true) : AllOK (print .latex S e) := by
   have h := POK_all ⟨.latex, S⟩ rfl _ e (Nat.lt_succ_self _) he
   exact POK_toks h 1
+
+/-- Every token the LaTeX printer writes for a well-formed expression is a LaTeX token or a
+`\times` the lexer lemma allows. -/
+theorem print_tokL (S : Sym) (e : Json) (he : isE e = true) : TokL (print .latex S e) :=
+  ⟨(print_allOK S e he).1, TL_TN _ (print_allOK S e he).2⟩
 
 end Esm.Document.Math.Latex

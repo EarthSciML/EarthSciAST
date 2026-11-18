@@ -217,7 +217,7 @@ func (capsMd) plot(a Obj) bool {
 func (capsMd) tm(lim *Lim, s *Sym, t *Tm[Json]) bool {
 	rt := Tm[string]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Body: mathPrintLatex(s, t.Body), Attrs: t.Attrs}
 	if t.HasLhs {
-		rt.Lhs = mathPrintLatex(s, t.Lhs)
+		rt.Lhs = mathPrintLatex(&Sym{Names: s.Names}, t.Lhs)
 	}
 	if !mdItemOk(lim, &RItem{K: RITm, Tm: rt}) {
 		return false

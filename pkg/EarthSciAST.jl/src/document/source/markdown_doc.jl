@@ -168,7 +168,9 @@ rxn(::CapsMd, s::Sym, x::Rxn) =
 plot(::CapsMd, a) = all(attr_ok, a) && all(kv -> dq_ok(kv.second), a)
 
 function tm(::CapsMd, s::Sym, t::Tm)
-    lhs = t.lhs === nothing ? nothing : DMath.print_latex(s, t.lhs)
+    # A rule's match pattern is printed with no templates in the table.
+    ms = Sym(s.names, Tuple{String, Vector{String}}[])
+    lhs = t.lhs === nothing ? nothing : DMath.print_latex(ms, t.lhs)
     r = Tm(t.name, t.params, lhs, DMath.print_latex(s, t.body), t.attrs)
     return item_ok(RTm(r)) && all(kv -> dq_ok(kv.second), t.attrs)
 end

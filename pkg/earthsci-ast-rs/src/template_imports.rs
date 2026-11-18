@@ -110,8 +110,10 @@ const RENAME_AXIS_KEYS: [&str; 3] = ["wrt", "dim", "var"];
 /// that happens to share a name with an operator — `max`, say — must not rewrite
 /// `{"op": "max", …}` into `{"op": 3, …}`, which then dies in the typed load
 /// with a raw "cannot unmarshal number into `op`" rather than a diagnostic.
-/// Opaque to substitution AND copied verbatim by the rename walk.
-const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
+/// Opaque to substitution AND copied verbatim by the rename walk. The document
+/// math printer sends a call-form node carrying `id` or `expect_cadence` to the
+/// escape form by this list.
+pub(crate) const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 
 /// Closed-registry ids / literal enums PARAMETERIZING the node's op. Like
 /// [`NODE_HEADER_KEYS`] these are names rather than values, so they are opaque

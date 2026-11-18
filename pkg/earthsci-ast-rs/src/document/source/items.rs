@@ -293,7 +293,7 @@ pub fn pr_mx(
             Mx::Tm(Tm {
                 name: t.name.clone(),
                 params: t.params.clone(),
-                lhs: t.lhs.as_ref().map(|l| pr_r(&sc, l)),
+                lhs: t.lhs.as_ref().map(|l| pr_r(&t.mscope(s), l)),
                 body: pr_r(&sc, &t.body),
                 attrs: t.attrs.clone(),
             })
@@ -324,7 +324,7 @@ pub fn ck_mx(
             let sc = t.scope(s);
             let lhs = match &t.lhs {
                 None => None,
-                Some(l) => Some(ck_r(&sc, l)?),
+                Some(l) => Some(ck_r(&t.mscope(s), l)?),
             };
             let body = ck_r(&sc, &t.body)?;
             Some(vec![Mx::Tm(Tm {

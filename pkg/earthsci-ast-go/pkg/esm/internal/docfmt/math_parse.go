@@ -750,6 +750,56 @@ func psWithOut(f FaqForm, outs []Json, ors Obj) FaqForm {
 	return f
 }
 
+// psWithSup is `Math.withSup`: the superscript set read after the output
+// entries is the reduction's set (the wrapped reduction carries none).
+func psWithSup(f FaqForm, st []string) FaqForm {
+	f.set = st
+	return f
+}
+
+// psPSup is `Math.pSup`: the superscript set of a reduction or of an output
+// form, if there is one: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`. ok is false
+// when the set starts but does not read.
+func psPSup(sf Sf, r []Tok) ([]string, []Tok, bool) {
+	open, closeK := KwLb, KwRb
+	if sf == SfTypst {
+		open, closeK = KwLpg, KwRp
+	}
+	if !atKws(r, KwCaret, open, KwLset) {
+		return nil, r, true
+	}
+	ns, r2, ok := psPNames(sf, r[3:])
+	if !ok || !atKws(r2, KwRset, closeK) {
+		return nil, nil, false
+	}
+	return ns, r2[2:], true
+}
+
+// psMkTail is `Math.mkTail`: the `makearray` node of a table read back, with
+// its subscript of output indices if one follows.
+func psMkTail(sf Sf, rows []mkRow, r []Tok) (Json, []Tok, bool) {
+	nodeOf := func(out []string) Json {
+		m := MkForm{out: out, regions: make([][]Pair, len(rows)), values: make([]Json, len(rows))}
+		for i, row := range rows {
+			m.values[i] = row.v
+			m.regions[i] = row.reg
+		}
+		return prMkJson(m)
+	}
+	open, closeK := KwLb, KwRb
+	if sf == SfTypst {
+		open, closeK = KwLpg, KwRp
+	}
+	if !atKws(r, KwUs, open) {
+		return nodeOf(nil), r, true
+	}
+	ns, r2, ok := psPNames(sf, r[2:])
+	if !ok || !at(r2, 0, closeK) {
+		return nil, nil, false
+	}
+	return nodeOf(ns), r2[1:], true
+}
+
 // ## The level parsers
 
 // psPOr is `Math.pOr`: level 1, an `or` chain.
@@ -1295,7 +1345,13 @@ func psNodupKeys(xs Obj) bool {
 
 // psPOpn is `Math.pOpn`: `\operatorname{n}(…)`.
 func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
-	if f == 0 || len(ts) == 0 {
+	if f == 0 {
+		return nil, nil, false
+	}
+	if len(ts) == 0 {
+		if psBareTnameOk(c.s, n) {
+			return psTNode(n, Obj{}), ts, true
+		}
 		return nil, nil, false
 	}
 	f--
@@ -1353,24 +1409,57 @@ func psPOpn(c Ctx, f int, n string, ts []Tok) (Json, []Tok, bool) {
 			}
 			return nil, nil, false
 		case at(r1, 0, KwSemi):
-			if slices.Contains(exprRemovedOps, n) || prCoreOps[n] {
-				return nil, nil, false
-			}
-			if _, ok := prTparams(c.s, n); ok {
+			if slices.Contains(exprRemovedOps, n) {
 				return nil, nil, false
 			}
 			vs, ok1 := psAllPos(args)
 			fs, r2, ok2 := psPFields(c, f, r1[1:])
-			if ok1 && ok2 && at(r2, 0, KwRp) {
+			if ok1 && ok2 && at(r2, 0, KwRp) && psPrintsCallForm(c, n, vs, fs) {
 				return prMkNode(n, vs, fs), r2[1:], true
 			}
 		}
 		return nil, nil, false
 	}
-	if t0.isKw(KwUs) && n == "D" {
-		return psPDCall(c, f, r)
+	if t0.isKw(KwUs) {
+		if n == "D" {
+			return psPDCall(c, f, r)
+		}
+		return nil, nil, false
+	}
+	if psBareTnameOk(c.s, n) {
+		return psTNode(n, Obj{}), ts, true
 	}
 	return nil, nil, false
+}
+
+// psPrintsCallForm is whether the node `\operatorname{n}(vs; fs)` reads as
+// is one the printer writes in that form: the fields fs are distinct and
+// none is `op` or `args`, its call-form test holds (prOpnCallOk: an
+// annotation field refuses a core operator only) and its dispatch gives it
+// no native spelling (a `faq`, `makearray` or `const` that prints natively).
+// A field key that is not an identifier is still read (the printer escapes
+// it).
+func psPrintsCallForm(c Ctx, n string, vs []Json, fs Obj) bool {
+	if !psNodupKeys(fs) || !prOpnCallOk(c.s, n, fs) {
+		return false
+	}
+	for _, kv := range fs {
+		if kv.K == "op" || kv.K == "args" {
+			return false
+		}
+	}
+	_, native := prNative(c, prMkNode(n, vs, fs).(Obj))
+	return !native
+}
+
+// psBareTnameOk is whether a bare `\operatorname{n}` reads as a template
+// applied with no bindings: the printer writes that node bare unless a
+// template n with no parameters is in scope, which it writes `n()`.
+func psBareTnameOk(s *Sym, n string) bool {
+	if ps, ok := prTparams(s, n); ok && len(ps) == 0 {
+		return false
+	}
+	return prTnameOk(n)
 }
 
 // psPDCall is `Math.pDCall`: `\operatorname{D}_{x}(u, a, b)` after the `_`.
@@ -1472,7 +1561,26 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return fail()
 		}
+		// a matrix wider than a bmatrix holds prints as an array
+		for _, row := range rows {
+			if len(row) > prBmatMaxCols {
+				return fail()
+			}
+		}
 		return psConstTail(psGridJson(rows), r2)
+	}
+	if t0.isKw(KwLbkg) && len(r) > 0 && r[0].K == TArrC {
+		n := r[0].Cols
+		rows, r2, ok := psPGrid(KwAmp, KwNl, KwEarr, r[1:])
+		if !ok || n <= prBmatMaxCols || !at(r2, 0, KwRbkg) {
+			return fail()
+		}
+		for _, row := range rows {
+			if len(row) != n {
+				return fail()
+			}
+		}
+		return psConstTail(psGridJson(rows), r2[1:])
 	}
 	if t0.isKw(KwVec) && len(r) >= 1 {
 		if !psIsLp(r[0]) {
@@ -1483,6 +1591,13 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 			return psConstTail(psNumsJson(ns), r2[1:])
 		}
 		return fail()
+	}
+	if t0.isKw(KwMat) && psMatHead(r) {
+		rows, r2, ok := psPMkRows(c, f, KwComma, KwSemi, KwRp, r[len(prMatHead())-1:])
+		if !ok {
+			return fail()
+		}
+		return psMkTail(c.sf, rows, r2)
 	}
 	if t0.isKw(KwMat) && len(r) >= 1 {
 		if !psIsLp(r[0]) {
@@ -1576,6 +1691,13 @@ func psPPrim(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 			return prNode(o, xs), r2[1:], true
 		}
 		return fail()
+	}
+	if t0.isKw(KwLbkg) && at(r, 0, KwBarr) {
+		rows, r2, ok := psPMkRows(c, f, KwAmp, KwNl, KwEarr, r[1:])
+		if !ok || !at(r2, 0, KwRbkg) {
+			return fail()
+		}
+		return psMkTail(c.sf, rows, r2[1:])
 	}
 	if t0.isKw(KwSum) || t0.isKw(KwProd) || t0.isKw(KwLimits) || t0.isKw(KwLbkg) {
 		return psPRed(c, f, ts)
@@ -1787,6 +1909,9 @@ func psPRedBody(c Ctx, f int, red RedK, marked bool, ts []Tok) (FaqForm, []Tok, 
 			}
 			k, a, isEq := psLoneEq(row)
 			switch {
+			case isEq && atKws(r1, KwRb, KwCaret, KwLb, KwLset):
+				// a lone equality filter, then a superscript set
+				rs, r = []Row{row}, r1[1:]
 			case isEq && atKws(r1, KwRb, KwCaret, KwLb):
 				b, r3, ok := psPOr(c, f, r1[3:])
 				if !ok || !at(r3, 0, KwRb) {
@@ -1813,11 +1938,17 @@ func psPRedBody(c Ctx, f int, red RedK, marked bool, ts []Tok) (FaqForm, []Tok, 
 		}
 	}
 	rg, fl, hasFl, ok1 := psRowParts(rs)
-	body, r2, ok2 := psPMul(c, f, r)
-	if !ok1 || !ok2 {
+	st, r1, ok2 := psPSup(c.sf, r)
+	// a marked head lists the body's arrays as `args`, so a set there has no
+	// meaning: refused rather than dropped
+	if !ok1 || !ok2 || (marked && len(st) > 0) {
 		return FaqForm{}, nil, false
 	}
-	return FaqForm{red: red, marked: marked, out: []Json{}, ranges: rg, expr: body, filter: fl, hasFlt: hasFl}, r2, true
+	body, r2, ok := psPMul(c, f, r1)
+	if !ok {
+		return FaqForm{}, nil, false
+	}
+	return FaqForm{red: red, marked: marked, out: []Json{}, ranges: rg, expr: body, filter: fl, hasFlt: hasFl, set: st}, r2, true
 }
 
 // psLoneEq is the `.obj [("args", .arr [.str k, a]), ("op", .str "==")]`
@@ -1849,16 +1980,22 @@ func psPRed(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return nil, nil, false
 	}
 	f--
-	wrapped := func(r []Tok, tail []Kw, closeK Kw) (Json, []Tok, bool) {
+	wrapped := func(r []Tok, bracket []Kw, open, closeK Kw) (Json, []Tok, bool) {
 		red, marked, r1, ok := psPRedHead(c.sf, r)
 		if !ok {
 			return nil, nil, false
 		}
 		form, r2, ok := psPRedBody(c, f, red, marked, r1)
-		if !ok || !atKws(r2, tail...) {
+		// the printer writes an output form's set on the bracket, never on the
+		// reduction inside it
+		if !ok || len(form.set) > 0 || !atKws(r2, bracket...) {
 			return nil, nil, false
 		}
-		es, r4, ok := psPRows(c, f, KwComma, closeK, r2[len(tail):])
+		st, r3, ok := psPSup(c.sf, r2[len(bracket):])
+		if !ok || (marked && len(st) > 0) || !atKws(r3, KwUs, open) {
+			return nil, nil, false
+		}
+		es, r4, ok := psPRows(c, f, KwComma, closeK, r3[2:])
 		if !ok {
 			return nil, nil, false
 		}
@@ -1866,13 +2003,13 @@ func psPRed(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		if !ok {
 			return nil, nil, false
 		}
-		return prFaqJson(psWithOut(form, outs, ors)), r4, true
+		return prFaqJson(psWithSup(psWithOut(form, outs, ors), st)), r4, true
 	}
 	if at(ts, 0, KwLbkg) {
-		return wrapped(ts[1:], []Kw{KwRbkg, KwUs, KwLb}, KwRb)
+		return wrapped(ts[1:], []Kw{KwRbkg}, KwLb, KwRb)
 	}
 	if atKws(ts, KwLr, KwLp, KwLbk) {
-		return wrapped(ts[3:], []Kw{KwRbk, KwRp, KwUs, KwLpg}, KwRp)
+		return wrapped(ts[3:], []Kw{KwRbk, KwRp}, KwLpg, KwRp)
 	}
 	red, marked, r1, ok := psPRedHead(c.sf, ts)
 	if !ok {
@@ -2030,6 +2167,103 @@ func psPCases(c Ctx, f int, ts []Tok) (Json, []Tok, bool) {
 		return prNode("ifelse", []Json{cnd, v, e}), r3, true
 	}
 	return nil, nil, false
+}
+
+// psMatHead reports whether r, after `mat`, is the rest of the Typst table
+// head `(delim: "[", augment: #1,` (prMatHead).
+func psMatHead(r []Tok) bool {
+	h := prMatHead()[1:]
+	if len(r) < len(h) {
+		return false
+	}
+	for i, t := range h {
+		if t.K == TCode {
+			if n, ok := r[i].J.(JNum); r[i].K != TCode || !ok || !n.IsInt(1) {
+				return false
+			}
+		} else if !r[i].Equal(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// mkRow is a row of a `makearray` table read back: the value and its region.
+type mkRow struct {
+	v   Json
+	reg []Pair
+}
+
+// psPPair is `Math.pPair`: a bound pair after its `[`: `a, b]`.
+func psPPair(c Ctx, f int, ts []Tok) (Pair, []Tok, bool) {
+	if f == 0 {
+		return Pair{}, nil, false
+	}
+	f--
+	a, r, ok := psPOr(c, f, ts)
+	if !ok || !at(r, 0, KwComma) {
+		return Pair{}, nil, false
+	}
+	b, r2, ok := psPOr(c, f, r[1:])
+	if !ok || !at(r2, 0, KwRbk) {
+		return Pair{}, nil, false
+	}
+	return Pair{a, b}, r2[1:], true
+}
+
+// psPRegTail is `Math.pRegTail`: the further bound pairs of a region, each
+// after `\times` `[`.
+func psPRegTail(c Ctx, f int, ts []Tok) ([]Pair, []Tok, bool) {
+	var out []Pair
+	for {
+		if f == 0 {
+			return nil, nil, false
+		}
+		f--
+		if !atKws(ts, KwTimes, KwLbk) {
+			return out, ts, true
+		}
+		p, r, ok := psPPair(c, f, ts[2:])
+		if !ok {
+			return nil, nil, false
+		}
+		out = append(out, p)
+		ts = r
+	}
+}
+
+// psPMkRows is `Math.pMkRows`: the rows of a `makearray` table: a value, the
+// cell separator csep, a region; rows separated by rsep, up to closeK
+// (consumed).
+func psPMkRows(c Ctx, f int, csep, rsep, closeK Kw, ts []Tok) ([]mkRow, []Tok, bool) {
+	var out []mkRow
+	for {
+		if f == 0 {
+			return nil, nil, false
+		}
+		f--
+		v, r, ok := psPOr(c, f, ts)
+		if !ok || !atKws(r, csep, KwLbk) {
+			return nil, nil, false
+		}
+		p, r1, ok := psPPair(c, f, r[2:])
+		if !ok {
+			return nil, nil, false
+		}
+		ps, r2, ok := psPRegTail(c, f, r1)
+		if !ok || len(r2) == 0 || r2[0].K != TKw {
+			return nil, nil, false
+		}
+		out = append(out, mkRow{v: v, reg: append([]Pair{p}, ps...)})
+		switch r2[0].W {
+		case rsep:
+			ts = r2[1:]
+		case closeK:
+			return out, r2[1:], true
+		default:
+			return nil, nil, false
+		}
+	}
 }
 
 // psPEscArgs is `Math.pEscArgs`: Typst escape arguments: `, a` repeated, then

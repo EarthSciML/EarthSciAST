@@ -12,7 +12,8 @@ using ..DJson
 using ..MUnits: Factor
 
 export Kw, Tok, Sf, SF_LATEX, SF_TYPST,
-    iskw, TNum, TLetter, TGreek, TWord, TIt, TRm, TUps, TOpn, TTxt, TJstr, TEsc, TCode, TUnits, TKw
+    iskw, TNum, TLetter, TGreek, TWord, TIt, TRm, TUps, TOpn, TTxt, TJstr, TEsc, TCode, TUnits, TKw,
+    TArrCols
 
 """`Math.Kw`: keywords and punctuation. `KLp`/`KRp` are call parentheses,
 `KLpg`/`KRpg` grouping parentheses; `KLimitsL` is the LaTeX marker `\\limits`."""
@@ -97,6 +98,13 @@ export Kw, Tok, Sf, SF_LATEX, SF_TYPST,
     KRbkg
     KLr
     KLimitsL
+    # makearray: LaTeX `\begin{array}{l|l}` `\end{array}` (the closer also ends
+    # a wide constant matrix, `TArrCols`)
+    KBarr
+    KEarr
+    # a set of names, LaTeX `\{` `\}`, Typst `{` `}` (the `args` of a `faq`)
+    KLset
+    KRset
 end
 for k in instances(Kw)
     @eval export $(Symbol(k))
@@ -152,6 +160,11 @@ struct TUnits <: Tok
 end
 struct TKw <: Tok
     k::Kw
+end
+"""LaTeX `\\begin{array}{c…c}`, one `c` per column: the opener of a constant
+matrix too wide for `bmatrix` (more than 10 columns)."""
+struct TArrCols <: Tok
+    n::Int
 end
 
 Base.:(==)(a::T, b::T) where {T <: Tok} = fieldeq(a, b)

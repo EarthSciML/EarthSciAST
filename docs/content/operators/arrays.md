@@ -69,8 +69,16 @@ must match the region's shape.
 **Later regions overwrite earlier ones.** That is what makes the
 interior/boundary idiom work — fill the interior with a stencil, then overwrite
 the faces with the boundary condition. There is no boundary-condition block
-anywhere in the format; this is where a BC lives:
+anywhere in the format; this is where a BC lives. Document math writes it as a
+table, each row a value and the region it fills, in order (Typst
+`mat(delim: "[", augment: #1, k C_i, [2, 9]; 0, [1, 1]; 0, [10, 10])`); a region of
+several dimensions joins its bound pairs with `\times`, `[1, 1] \times [2, N]`, and a
+lifted `makearray` carrying `output_idx` takes those indices as the bracket's subscript:
 
+**LaTeX**
+```latex
+\left[\begin{array}{l|l} k C_{i} & [2, 9] \\ 0 & [1, 1] \\ 0 & [10, 10] \end{array}\right]
+```
 **JSON**
 ```json
 {
@@ -107,6 +115,11 @@ dimension names.
 ```json
 { "op": "reshape", "args": ["v"], "shape": ["lon", "lat"] }
 ```
+
+Document math has no notation of its own for the shape operators `reshape`,
+`transpose` and `concat`: a document writes them in the call form with their
+fields as named arguments, JSON-valued fields as JSON,
+`\operatorname{reshape}(v; \mathrm{shape} = [\text{"lon"}, \text{"lat"}])`.
 
 ## `transpose`
 
@@ -152,7 +165,9 @@ non-pointwise op, and `args` must satisfy that operator's arity. There is no
 default: an absent or invalid `fn` is rejected with `invalid_broadcast_fn`.
 
 Document math has no notation of its own for `broadcast`: a document writes it
-in the generic `\esm{broadcast}{…}{…}` form, its fields as JSON.
+in the call form with `fn` as a named argument,
+`\operatorname{broadcast}(A, B; \mathrm{fn} = \text{"*"})` (Typst
+`op("broadcast")(A, B; upright("fn") = #"*")`).
 
 Most of the time you do not need it: ordinary elementwise operators already
 broadcast over array operands by index-set alignment. Reach for it when the

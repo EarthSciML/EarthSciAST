@@ -21,6 +21,7 @@ import { charDigitNat, charOfNat, dig3, escT, keySpecial, rawB, unescT } from '.
 import { dropP, isBin, lexSigned, sciSplit } from './surface.js'
 import {
   kw,
+  tAcols,
   tEsc,
   tGreek,
   tIt,
@@ -227,6 +228,10 @@ const KW_CHARS: Record<Kw, string> = {
   LimitsL: '\\limits',
   Lbkg: '\\left[',
   Rbkg: '\\right]',
+  Barr: '\\begin{array}{l|l}',
+  Earr: '\\end{array}',
+  Lset: '\\{',
+  Rset: '\\}',
   Abs: '',
   Floor: '',
   Ceil: '',
@@ -271,6 +276,8 @@ export function tokChars(t: Tok): string {
       return `\\,\\mathrm{${latexBody(t.l)}}`
     case 'kw':
       return kwChars(t.k)
+    case 'acols':
+      return `\\begin{array}{${'c'.repeat(t.n)}}`
     case 'ups':
     case 'code':
       return ''
@@ -332,6 +339,7 @@ export function atomEnd(t: Tok): boolean {
   switch (t.t) {
     case 'opn':
     case 'esc':
+    case 'acols':
       return false
     case 'kw':
       return ATOM_END_KW.has(t.k)
@@ -350,7 +358,9 @@ export function pretty(p: Tok | undefined, t1: Tok, t2: Tok): boolean {
     isKwIn(t1, 'Comma', 'Colon', 'Semi') ||
     (isKwIn(t2, 'Minus') && atomEnd(t1)) ||
     (isKwIn(t1, 'Minus') && p !== undefined && atomEnd(p)) ||
-    (atomEnd(t1) && atomStart(t2) && !isKwIn(t2, 'Lp', 'Lbk'))
+    (atomEnd(t1) && atomStart(t2) && !isKwIn(t2, 'Lp', 'Lbk')) ||
+    isKwIn(t1, 'Barr') ||
+    isKwIn(t2, 'Earr')
   )
 }
 
@@ -414,6 +424,18 @@ export const CTRL_KW: readonly (readonly [string, Kw])[] = [
 ]
 const CTRL_KW_MAP: ReadonlyMap<string, Kw> = new Map(CTRL_KW)
 
+/**
+ * `Latex.arrCols`: after `\begin`: `{array}{` then one or more `c` then `}`, the
+ * opener of a wide constant matrix, with its column count.
+ */
+export function arrCols(cs: Chars, i: number): Read<Tok> {
+  const r = dropP('{array}{', cs, i)
+  if (r === undefined) return undefined
+  let j = r
+  while (cs[j] === 'c') j++
+  return j > r && cs[j] === '}' ? [tAcols(j - r), j + 1] : undefined
+}
+
 /** `Latex.ctrlTok`: after a control word `w` (the input continues at `i`): its token. */
 export function ctrlTok(w: string, cs: Chars, i: number): Read<Tok> {
   if (w === 'mathit' || w === 'mathrm' || w === 'operatorname' || w === 'text' || w === 'esm') {
@@ -452,7 +474,10 @@ export function ctrlTok(w: string, cs: Chars, i: number): Read<Tok> {
     const r = dropP('{cases}', cs, i)
     if (r !== undefined) return [kw(w === 'begin' ? 'Bcases' : 'Ecases'), r]
     const r2 = dropP('{bmatrix}', cs, i)
-    return r2 === undefined ? undefined : [kw(w === 'begin' ? 'Bmat' : 'Emat'), r2]
+    if (r2 !== undefined) return [kw(w === 'begin' ? 'Bmat' : 'Emat'), r2]
+    const r3 = dropP(w === 'begin' ? '{array}{l|l}' : '{array}', cs, i)
+    if (r3 !== undefined) return [kw(w === 'begin' ? 'Barr' : 'Earr'), r3]
+    return w === 'begin' ? arrCols(cs, i) : undefined
   }
   if (isGreek(w)) return [tGreek(w), i]
   const k = CTRL_KW_MAP.get(w)
@@ -543,6 +568,8 @@ export function lexOne(cs: Chars, i: number): Read<Tok> {
       return u && [tUnits(u[0]), u[1]]
     }
     if (d === '\\') return [kw('Nl'), i + 2]
+    if (d === '{') return [kw('Lset'), i + 2]
+    if (d === '}') return [kw('Rset'), i + 2]
     return undefined
   }
   if (c === '"') {

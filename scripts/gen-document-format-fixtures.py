@@ -197,6 +197,10 @@ def tmpl(name, **bindings):
 
 NAMES = ("a", "b", "k", "x", "T", "N")
 
+ARRHENIUS = {
+    "arrhenius": {"params": ["A_pre", "Ea"], "body": op("*", "A_pre", op("exp", op("-", "Ea")))}
+}
+
 
 def used(e, pool=NAMES):
     """The names of `pool` an expression mentions, so a document declares only those."""
@@ -616,11 +620,87 @@ def operators(g):
         ),
     )
     E(
-        "faq_escape",
-        "A faq with a semiring other than sum_product prints in the escape form.",
+        "faq_call_semiring",
+        "A faq with a semiring other than sum_product prints in the call form, its fields "
+        "as named arguments.",
         faq(op("true"), {"i": {"from": "S"}}, output_idx=["i"], semiring="bool_and_or"),
         names=("w",),
         index_sets=SETS,
+    )
+    E(
+        "faq_call_join",
+        "A faq with join prints in the call form: its args positional, its fields named, "
+        "JSON-valued fields as JSON.",
+        faq(
+            "a",
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i", "j"],
+            args=["src", "tgt"],
+            join=[{"overlap": {"src_env": ["src"], "tgt_env": ["tgt"], "eps": 1e-09}}],
+        ),
+        names=("a", "src", "tgt"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_limits",
+        "args listing exactly the arrays the body indexes: the \\limits marker (Typst limits(sum)).",
+        faq(idx("w", "i"), {"i": {"from": "S"}}, args=["w"]),
+        names=("w",),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_dense",
+        "Other args names: a superscript set on the operator; a lone dense range then "
+        "uses the one-row subscript.",
+        faq(idx("w", "i"), {"i": [1, op("-", "N", 1)]}, args=["f"]),
+        names=("w", "f", "N"),
+    )
+    E(
+        "faq_args_set_from",
+        "A superscript set of two names after a one-row set range.",
+        faq(op("*", idx("w", "i"), "x"), {"i": {"from": "S"}}, args=["f", "g"]),
+        names=("w", "f", "g", "x"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_substack",
+        "A superscript set after a stacked subscript (two ranges and a filter).",
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            filter=op(">", idx("w", "i", "j"), 0),
+            args=["f"],
+        ),
+        names=("w", "f"),
+        index_sets=SETS,
+    )
+    E(
+        "faq_args_set_filter_eq",
+        "A superscript set after a lone equality filter, which never reads as a dense range.",
+        op("faq", "f", expr=idx("w", "k"), output_idx=[], filter=op("==", "k", 1)),
+        names=("w", "f", "k"),
+    )
+    E(
+        "faq_args_set_nosub",
+        "A superscript set on an operator with no subscript.",
+        op("faq", "f", expr=idx("w", "i"), output_idx=[]),
+        names=("w", "f", "i"),
+    )
+    E(
+        "faq_args_set_output",
+        "With output indices the superscript set goes on the bracket, before its subscript; "
+        "a power of it is parenthesized.",
+        op(
+            "^",
+            faq(
+                op("-", idx("f", op("+", "i", 1)), idx("f", "i")),
+                {"i": [2, op("-", "N", 1)]},
+                output_idx=["i"],
+                args=["f", "g"],
+            ),
+            2,
+        ),
+        names=("f", "g", "N"),
     )
 
     # index.
@@ -636,8 +716,29 @@ def operators(g):
     E("const_matrix_units", "A constant matrix with units.", const([[1, 2], [3, 4]], "m"))
     E(
         "const_large",
-        "An array of more than 16 entries prints in the escape form.",
+        "An array of any size prints natively: a column of 17 entries.",
         const(list(range(17))),
+    )
+    E(
+        "const_large_matrix",
+        "A matrix of more than 16 entries prints natively.",
+        const([[i * 5 + j for j in range(5)] for i in range(4)], "m"),
+    )
+    E(
+        "const_wide_matrix",
+        "A matrix of more than 10 columns: LaTeX \\left[\\begin{array}{c…c} … \\right], one c per "
+        "column (bmatrix holds at most 10); Typst mat(…) as for any matrix.",
+        const([[i * 11 + j for j in range(11)] for i in range(2)]),
+    )
+    E(
+        "const_ten_columns",
+        "A matrix of exactly 10 columns keeps the bmatrix.",
+        const([[i * 10 + j for j in range(10)] for i in range(2)]),
+    )
+    E(
+        "const_rank3",
+        "A rank-3 array prints in the call form, its value as JSON.",
+        const([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]),
     )
 
     # Function-call templates.
@@ -664,9 +765,37 @@ def operators(g):
         "A template whose parameter list is not in the document: named arguments.",
         tmpl("scale", f="x", n=2),
     )
+    E(
+        "template_bare",
+        "A template applied with no bindings and no known parameter list: its bare name.",
+        op("+", tmpl("duo_tile_map"), "x"),
+    )
+    g.printed(
+        a,
+        "template_zero_params",
+        "A template in scope with no parameters, applied with no bindings: its call with empty "
+        "parentheses (the bare name is refused there).",
+        expr_doc(tmpl("unit_tile"), (), templates={"unit_tile": {"params": [], "body": 1}}),
+    )
+    g.printed(
+        a,
+        "template_bare_in_scope",
+        "A template in scope with parameters, applied with no bindings: its bare name.",
+        expr_doc(tmpl("arrhenius"), (), templates=ARRHENIUS),
+    )
+    E(
+        "template_bare_product",
+        "A bare template is parenthesized as a factor of a product and as an index base.",
+        op("*", "k", tmpl("dlon"), idx(tmpl("dlon"), 1)),
+    )
 
     # Open operators.
     E("open_op", "An open (rewrite-target) operator prints in the call form.", op("grad", "x"))
+    E(
+        "open_op_no_operands",
+        "An open operator with no operands keeps its parentheses, apart from a bare template.",
+        op("+", op("noise"), "x"),
+    )
     E(
         "open_op_fields",
         "Node fields of an open operator are named arguments after a semicolon.",
@@ -678,21 +807,70 @@ def operators(g):
         op("myop", "k", s="a{b}_c"),
     )
 
-    # The escape form.
+    # makearray.
     E(
-        "escape_broadcast",
-        "broadcast prints in the escape form; its arguments are ordinary math.",
+        "makearray_1d",
+        "makearray: a bracketed table of value and region, rows in order; region bounds "
+        "are ordinary math.",
+        op(
+            "makearray",
+            regions=[[[2, op("-", "N", 1)]], [[1, 1]], [["N", "N"]]],
+            values=[tmpl("interior", u="x"), op("*", 2, "a"), 0],
+        ),
+    )
+    E(
+        "makearray_2d",
+        "A two-dimensional region is its bound pairs joined by \\times.",
+        op(
+            "makearray",
+            regions=[[[1, "N"], [1, "N"]], [[1, 1], [2, op("-", "N", 1)]]],
+            values=["a", idx("x", 1)],
+        ),
+    )
+    E(
+        "makearray_lifted",
+        "A lifted makearray carries its output indices as the bracket's subscript.",
+        op(
+            "makearray",
+            output_idx=["i"],
+            regions=[[[1, 4]]],
+            values=[faq(op("*", "k", idx("x", "i")), {"i": [1, 4]}, output_idx=["i"])],
+        ),
+    )
+    E(
+        "makearray_call",
+        "A makearray with no native shape (operands, no values) prints in the call form.",
+        op("makearray", "a", "x", regions=[[[1, 1]], [[2, 2]]], output_idx=["i"]),
+    )
+
+    # The shape operators: the call form with named fields.
+    E(
+        "call_broadcast",
+        "broadcast prints in the call form; fn is a named JSON field.",
         op("broadcast", "a", "x", fn="+"),
     )
     E(
-        "escape_makearray",
-        "makearray in the escape form.",
-        op("makearray", "a", "x", regions=[[[1, 1]], [[2, 2]]], output_idx=["i"]),
+        "call_reshape",
+        "reshape in the call form, its shape a JSON list.",
+        op("reshape", "a", shape=[2, 3]),
     )
+    E("call_transpose", "transpose in the call form, with no fields.", op("transpose", "a"))
+    E(
+        "call_concat",
+        "concat in the call form; a field that is not expression-valued prints as JSON.",
+        op("concat", "a", "x", axis=1),
+    )
+
+    # The escape form.
     E(
         "escape_annotated",
         "A node carrying id prints in its notation wrapped in the escape form.",
         op("*", "a", idx("x", 1), id="tagged"),
+    )
+    E(
+        "escape_annotated_reshape",
+        "A shape operator carrying id keeps the escape form.",
+        op("reshape", "a", shape=[2, 3], id="tagged"),
     )
     return a
 
@@ -1132,6 +1310,59 @@ def variants(g):
             ("y = \\begin{cases}", "\\begin{aligned}y &= \\begin{cases}"),
             ("\\end{cases}", "\\end{cases}\\end{aligned}"),
         ],
+    )
+    # The Typst table head's named arguments are words, not keywords.
+    dw = expr_doc(op("+", "delim", op("*", 2, "augment")), ("delim", "augment"))
+    V(
+        "typst_delim_augment_names",
+        "Variables named delim and augment are bare words in Typst like any other declared name.",
+        dw,
+        typ,
+        [('y = italic("delim") + 2 italic("augment")', "y = delim + 2 augment")],
+    )
+    dwa = expr_doc(op("*", "k", "augment"), ("k",), lhs=op("D", "augment", wrt="t"))
+    V(
+        "typst_augment_derivative",
+        "A variable named augment as a bare word inside a derivative.",
+        dwa,
+        typ,
+        [
+            (
+                '(dif italic("augment"))/(dif t) = k italic("augment")',
+                "(dif augment)/(dif t) = k augment",
+            )
+        ],
+    )
+    # \times then a bracket: a region's next bound pair inside makearray, a product outside.
+    mk2 = expr_doc(op("makearray", regions=[[[1, "N"], [1, "N"]]], values=["a"]), ("a", "N"))
+    V(
+        "makearray_region_tight",
+        "A region's bound pairs joined by \\times with no spaces.",
+        mk2,
+        md,
+        [(r"[1, N] \times [1, N]", r"[1, N]\times[1, N]")],
+    )
+    V(
+        "makearray_region_tight_typst",
+        "A region's bound pairs joined by times with no space before the bracket.",
+        mk2,
+        typ,
+        [("[1, N] times [1, N]", "[1, N] times[1, N]")],
+    )
+    ab = expr_doc(op("*", "a", "b"), ("a", "b"))
+    V(
+        "times_bracket_product",
+        "Outside a makearray region, a \\times before a bracket is a product, the bracket a group.",
+        ab,
+        md,
+        [("y = a b", r"y = a \times [b]")],
+    )
+    V(
+        "times_bracket_product_typst",
+        "Outside a makearray region, times before a bracket is a product.",
+        ab,
+        typ,
+        [("y = a b", "y = a times [b]")],
     )
     return a
 
@@ -1822,14 +2053,14 @@ def refusals(g):
         "removed_op",
         [('op("sign")(x)', 'op("aggregate")(x)')],
     )
-    bc = expr_doc(op("broadcast", "a", "x", fn="+"), ("a", "x"))
+    bc = expr_doc(op("reshape", "a", shape=[2, 3], id="tagged"), ("a",))
     R(
         "removed_escape_latex",
         "A removed operator in the LaTeX escape form.",
         bc,
         md,
         "removed_op",
-        [(r"\esm{broadcast}", r"\esm{arrayop}")],
+        [(r"\esm{reshape}", r"\esm{arrayop}")],
     )
     R(
         "removed_escape_typst",
@@ -1837,7 +2068,7 @@ def refusals(g):
         bc,
         typ,
         "removed_op",
-        [('esm.node("broadcast"', 'esm.node("rank"')],
+        [('esm.node("reshape"', 'esm.node("rank"')],
     )
     # Malformed input. esm-lean reports every refusal the same way (exit status 1); the code a
     # binding reports for each is in README.md.
@@ -2002,6 +2233,201 @@ def refusals(g):
         typ,
         "parse_error",
         [("#param($k$)", "#param($k$")],
+    )
+    # The array notation accepts only what the printer writes.
+    lim = expr_doc(faq(idx("w", "i"), {"i": {"from": "S"}}, args=["w"]), ("w",), index_sets=SETS)
+    R(
+        "limits_with_set",
+        "A \\limits operator (args are the arrays the body indexes) takes no superscript set.",
+        lim,
+        md,
+        "parse_error",
+        [(r"\sum\limits_{i \in S} w_{i}", r"\sum\limits_{i \in S}^{\{f\}} w_{i}")],
+    )
+    R(
+        "limits_with_set_typst",
+        "limits(sum) takes no superscript set.",
+        lim,
+        typ,
+        "parse_error",
+        [("limits(sum)_(i in S) w_i", "limits(sum)_(i in S)^({f}) w_i")],
+    )
+    bset = expr_doc(
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i"],
+            args=["f"],
+        ),
+        ("w", "f"),
+        index_sets=SETS,
+    )
+    R(
+        "bracket_inner_set",
+        "With output indices the set goes on the bracket only: a set on the reduction inside "
+        "the bracket is refused, the bracket's own set beside it or not.",
+        bset,
+        md,
+        "parse_error",
+        [
+            (
+                r"\sum_{j \in C} w_{i, j}\right]^{\{f\}}",
+                r"\sum_{j \in C}^{\{f\}} w_{i, j}\right]^{\{f\}}",
+            )
+        ],
+    )
+    R(
+        "bracket_inner_set_only",
+        "A set on the reduction inside the bracket, none on the bracket: refused.",
+        bset,
+        md,
+        "parse_error",
+        [(r"\sum_{j \in C} w_{i, j}\right]^{\{f\}}", r"\sum_{j \in C}^{\{f\}} w_{i, j}\right]")],
+    )
+    R(
+        "bracket_inner_set_typst",
+        "A set on the reduction inside lr([…]) is refused.",
+        bset,
+        typ,
+        "parse_error",
+        [("[sum_(j in C) w_(i, j)])^({f})", "[sum_(j in C)^({f}) w_(i, j)])^({f})")],
+    )
+    R(
+        "bracket_inner_set_only_typst",
+        "A set on the reduction inside lr([…]), none on the bracket: refused.",
+        bset,
+        typ,
+        "parse_error",
+        [("[sum_(j in C) w_(i, j)])^({f})", "[sum_(j in C)^({f}) w_(i, j)])")],
+    )
+    limo = expr_doc(
+        faq(
+            idx("w", "i", "j"),
+            {"i": {"from": "S"}, "j": {"from": "C"}},
+            output_idx=["i"],
+            args=["w"],
+        ),
+        ("w",),
+        index_sets=SETS,
+    )
+    R(
+        "bracket_set_limits",
+        "A \\limits operator inside the bracket: no set on the bracket either.",
+        limo,
+        md,
+        "parse_error",
+        [(r"\right]_{i \in S}", r"\right]^{\{w\}}_{i \in S}")],
+    )
+    R(
+        "bracket_set_limits_typst",
+        "limits(sum) inside lr([…]): no set on the bracket either.",
+        limo,
+        typ,
+        "parse_error",
+        [("])_(i in S)", "])^({w})_(i in S)")],
+    )
+    rs = expr_doc(op("reshape", "a", shape=[2, 3]), ("a",))
+    R(
+        "call_form_annotation",
+        "The call form of a core operator carries no annotation field (id, expect_cadence): "
+        "the printer writes that node in the escape form.",
+        rs,
+        md,
+        "parse_error",
+        [(r"(a; \mathrm{shape}", r"(a; \mathrm{id} = \text{\"r\"}, \mathrm{shape}")],
+    )
+    R(
+        "call_form_annotation_typst",
+        "The call form of a core operator carries no annotation field.",
+        rs,
+        typ,
+        "parse_error",
+        [
+            (
+                'op("reshape")(a; upright("shape")',
+                'op("reshape")(a; upright("id") = #"r", upright("shape")',
+            )
+        ],
+    )
+    R(
+        "call_form_native",
+        "A node with a native spelling is refused in the call form: a constant vector.",
+        rs,
+        md,
+        "parse_error",
+        [
+            (
+                r"\operatorname{reshape}(a; \mathrm{shape} = [2, 3])",
+                r"\operatorname{const}(; \mathrm{value} = [1, 2, 3])",
+            )
+        ],
+    )
+    of = expr_doc(op("myop", "x", dim="x"), ("x",))
+    R(
+        "call_form_repeated_key",
+        "A field key named twice in the call form.",
+        of,
+        md,
+        "parse_error",
+        [(r"\mathrm{dim} = x)", r"\mathrm{dim} = x, \mathrm{dim} = x)")],
+    )
+    R(
+        "call_form_args_key",
+        "A field named args in the call form.",
+        of,
+        md,
+        "parse_error",
+        [(r"\mathrm{dim} = x)", r"\mathrm{args} = x)")],
+    )
+    tz = expr_doc(tmpl("unit_tile"), (), templates={"unit_tile": {"params": [], "body": 1}})
+    R(
+        "bare_template_zero_params",
+        "A bare \\operatorname{n} where a template n with no parameters is in scope: the printer "
+        "writes \\operatorname{n}().",
+        tz,
+        md,
+        "parse_error",
+        [(r"y = \operatorname{unit\_tile}()", r"y = \operatorname{unit\_tile}")],
+    )
+    R(
+        "bare_template_zero_params_typst",
+        'A bare op("n") where a template n with no parameters is in scope.',
+        tz,
+        typ,
+        "parse_error",
+        [('y = op("unit_tile")()', 'y = op("unit_tile")')],
+    )
+    wide = expr_doc(const([[i * 11 + j for j in range(11)] for i in range(2)]), ())
+    R(
+        "bmatrix_eleven_columns",
+        "A bmatrix of more than 10 columns is refused: the printer writes the array form.",
+        wide,
+        md,
+        "parse_error",
+        [
+            (r"\left[\begin{array}{ccccccccccc}", r"\begin{bmatrix}"),
+            (r" \end{array}\right]", r"\end{bmatrix}"),
+        ],
+    )
+    R(
+        "array_column_count",
+        "The array form's column count must be every row's length.",
+        wide,
+        md,
+        "parse_error",
+        [(r"\begin{array}{ccccccccccc}", r"\begin{array}{cccccccccccc}")],
+    )
+    narrow = expr_doc(const([[1, 2], [3, 4]]), ())
+    R(
+        "array_narrow",
+        "The array form is for more than 10 columns; a narrower matrix is a bmatrix.",
+        narrow,
+        md,
+        "parse_error",
+        [
+            (r"\begin{bmatrix}", r"\left[\begin{array}{cc}"),
+            (r"\end{bmatrix}", r" \end{array}\right]"),
+        ],
     )
     return a
 

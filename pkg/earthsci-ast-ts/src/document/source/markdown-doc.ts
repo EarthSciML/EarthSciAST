@@ -139,7 +139,7 @@ const CAPS_MD: Caps = {
       i: 'tm',
       t: {
         ...t,
-        lhs: t.lhs === undefined ? undefined : printLatex(s, t.lhs),
+        lhs: t.lhs === undefined ? undefined : printLatex({ names: s.names, templates: [] }, t.lhs),
         body: printLatex(s, t.body),
       },
     }) && t.attrs.every((kv) => dqOk(kv[1])),

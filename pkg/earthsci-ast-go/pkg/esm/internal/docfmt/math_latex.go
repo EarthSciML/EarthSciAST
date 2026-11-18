@@ -8,7 +8,10 @@ package docfmt
 // tokens where the reader needs one (needSpace) and where it reads better
 // (pretty); latexLex reads it back, skipping spaces and the spacing commands.
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // ## Spelling
 
@@ -156,6 +159,8 @@ var latexKwTable = map[Kw]string{
 	KwBcases: "\\begin{cases}", KwEcases: "\\end{cases}", KwBmat: "\\begin{bmatrix}",
 	KwEmat: "\\end{bmatrix}", KwSum: "\\sum", KwProd: "\\prod", KwInn: "\\in",
 	KwSubstack: "\\substack", KwLimitsL: "\\limits", KwLbkg: "\\left[", KwRbkg: "\\right]",
+	KwBarr: "\\begin{array}{l|l}", KwEarr: "\\end{array}",
+	KwLset: "\\{", KwRset: "\\}",
 }
 
 // latexKwChars is `Latex.kwChars` (empty for the Typst-only keywords).
@@ -194,6 +199,8 @@ func latexTokChars(t Tok) []rune {
 		return wrap("\\,\\mathrm{", unitsLatexBody(t.U))
 	case TKw:
 		return []rune(latexKwChars(t.W))
+	case TArrC:
+		return []rune("\\begin{array}{" + strings.Repeat("c", t.Cols) + "}")
 	}
 	return nil
 }
@@ -204,7 +211,7 @@ func latexFirstChar(t Tok) (rune, bool) {
 	switch t.K {
 	case TLetter:
 		return t.C, true
-	case TGreek, TIt, TRm, TOpn, TTxt, TJstr, TEsc, TUnits:
+	case TGreek, TIt, TRm, TOpn, TTxt, TJstr, TEsc, TUnits, TArrC:
 		return '\\', true
 	case TWord:
 		for _, c := range t.S {
@@ -275,7 +282,8 @@ func latexPretty(p *Tok, t1, t2 Tok) bool {
 		t1.isKw(KwComma) || t1.isKw(KwColon) || t1.isKw(KwSemi) ||
 		(t2.isKw(KwMinus) && latexAtomEnd(t1)) ||
 		(t1.isKw(KwMinus) && p != nil && latexAtomEnd(*p)) ||
-		(latexAtomEnd(t1) && psAtomStart(t2) && !t2.isKw(KwLp) && !t2.isKw(KwLbk))
+		(latexAtomEnd(t1) && psAtomStart(t2) && !t2.isKw(KwLp) && !t2.isKw(KwLbk)) ||
+		t1.isKw(KwBarr) || t2.isKw(KwEarr)
 }
 
 // latexSp is `Latex.sp`.
@@ -380,6 +388,18 @@ func latexCtrlTok(w string, r []rune) (Tok, []rune, bool) {
 		if r2, ok := surfDropP("{bmatrix}", r); ok {
 			return tKw(KwBmat), r2, true
 		}
+		if r2, ok := surfDropP("{array}{l|l}", r); ok {
+			return tKw(KwBarr), r2, true
+		}
+		if r2, ok := surfDropP("{array}{", r); ok {
+			n := 0
+			for n < len(r2) && r2[n] == 'c' {
+				n++
+			}
+			if n > 0 && n < len(r2) && r2[n] == '}' {
+				return tArrC(n), r2[n+1:], true
+			}
+		}
 		return Tok{}, nil, false
 	case "end":
 		if r2, ok := surfDropP("{cases}", r); ok {
@@ -387,6 +407,9 @@ func latexCtrlTok(w string, r []rune) (Tok, []rune, bool) {
 		}
 		if r2, ok := surfDropP("{bmatrix}", r); ok {
 			return tKw(KwEmat), r2, true
+		}
+		if r2, ok := surfDropP("{array}", r); ok {
+			return tKw(KwEarr), r2, true
 		}
 		return Tok{}, nil, false
 	}
@@ -534,6 +557,10 @@ func latexLexOne(cs []rune) (Tok, []rune, bool) {
 			return tUnits(l), r2, true
 		case d == '\\':
 			return tKw(KwNl), r, true
+		case d == '{':
+			return tKw(KwLset), r, true
+		case d == '}':
+			return tKw(KwRset), r, true
 		}
 		return Tok{}, nil, false
 	}

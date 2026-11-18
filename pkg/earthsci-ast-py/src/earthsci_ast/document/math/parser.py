@@ -21,16 +21,20 @@ from . import token as K
 from . import units as U
 from .expr import DEPRECATED_OPS, REMOVED_SET, is_formula, is_greek, is_letter, op_ok, pieces
 from .printer import (
+    BMAT_MAX_COLS,
     CALL_OPS,
-    CORE_OPS,
     Ctx,
     FaqForm,
+    MkForm,
     faq_json,
     formula_raw,
     ins_kv,
+    mk_json,
     mk_node,
     node,
+    prints_call_form,
     simple_tok,
+    tname_ok,
     tparams,
     unesc_k,
     unesc_t,
@@ -971,7 +975,7 @@ def _p_opn(c: Ctx, f: int, n: str, ts: list, i: int):
     f -= 1
     t0 = _at(ts, i)
     if t0 is None:
-        return None
+        return (t_node(n, []), i) if _bare_ok(c, n) else None
     if is_lp(t0):
         r = _p_call_args(c, f, ts, i + 1)
         if r is None:
@@ -1004,17 +1008,34 @@ def _p_opn(c: Ctx, f: int, n: str, ts: list, i: int):
                 return mk_node(n, vs, []), j
             return None
         if tj == K.SEMI:
-            if n in REMOVED_SET or n in CORE_OPS or tparams(c.s, n) is not None:
+            if n in REMOVED_SET:
                 return None
             vs = _all_pos(args)
             fr = _p_fields(c, f, ts, j + 1)
-            if vs is not None and fr is not None and _at(ts, fr[1]) == K.RP:
-                return mk_node(n, vs, fr[0]), fr[1] + 1
-            return None
+            if vs is None or fr is None or _at(ts, fr[1]) != K.RP:
+                return None
+            ks = [k for k, _ in fr[0]]
+            if "op" in ks or "args" in ks or not _nodup_keys(fr[0]):
+                return None
+            x = mk_node(n, vs, fr[0])
+            # canonical only: the node the printer writes in this call form
+            return (x, fr[1] + 1) if prints_call_form(c, x) else None
         return None
     if t0 == K.US:
         return _p_d_call(c, f, ts, i + 1) if n == "D" else None
+    if _bare_ok(c, n):
+        return t_node(n, []), i
     return None
+
+
+def _bare_ok(c: Ctx, n: str) -> bool:
+    """A bare ``\\operatorname{n}``: the template application with no bindings,
+    which prints bare unless a template ``n`` with no parameters is in scope (that
+    one prints ``\\operatorname{n}()``)."""
+    if not tname_ok(n):
+        return False
+    ps = tparams(c.s, n)
+    return ps is None or len(ps) > 0
 
 
 def _p_d_call(c: Ctx, f: int, ts: list, i: int):
@@ -1111,7 +1132,18 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
     t1 = _at(ts, i + 1)
     if t == K.BMAT:
         r = _p_grid(K.AMP, K.NL, K.EMAT, ts, i + 1)
-        return None if r is None else _const_tail(_grid_json(r[0]), ts, r[1])
+        if r is None or any(len(q) > BMAT_MAX_COLS for q in r[0]):
+            return None
+        return _const_tail(_grid_json(r[0]), ts, r[1])
+    if t == K.LBKG and _tag(t1) == "arrc":
+        # a matrix wider than ``bmatrix`` allows: one ``c`` per column
+        r = _p_grid(K.AMP, K.NL, K.EARR, ts, i + 2)
+        n = t1[1]
+        if r is None or _at(ts, r[1]) != K.RBKG or n <= BMAT_MAX_COLS:
+            return None
+        if any(len(q) != n for q in r[0]):
+            return None
+        return _const_tail([list(q) for q in r[0]], ts, r[1] + 1)
     if t == K.VEC and t1 is not None:
         if not is_lp(t1):
             return None
@@ -1119,6 +1151,9 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
         if r is None or _at(ts, r[1]) != K.RP:
             return None
         return _const_tail(list(r[0]), ts, r[1] + 1)
+    if t == K.MAT and t1 == K.LP and _mat_head(ts, i + 2):
+        r = _p_mk_rows(c, f, K.COMMA, K.SEMI, K.RP, ts, i + 10)
+        return None if r is None else _mk_tail(c.sf, r[0], ts, r[1])
     if t == K.MAT and t1 is not None:
         if not is_lp(t1):
             return None
@@ -1187,6 +1222,11 @@ def p_prim(c: Ctx, f: int, ts: list, i: int):
                 return None
             return None
         return _p_red(c, f, ts, i)
+    if t == K.LBKG and t1 == K.BARR:
+        r = _p_mk_rows(c, f, K.AMP, K.NL, K.EARR, ts, i + 2)
+        if r is None or _at(ts, r[1]) != K.RBKG:
+            return None
+        return _mk_tail(c.sf, r[0], ts, r[1] + 1)
     if t in (K.SUM, K.PROD, K.LIMITS, K.LBKG):
         return _p_red(c, f, ts, i)
     if t == K.LR and t1 == K.LP and _at(ts, i + 2) == K.LBK:
@@ -1370,9 +1410,13 @@ def _p_red_body(c: Ctx, f: int, red: str, marked: bool, ts: list, i: int):
                         and _at(ts, j + 1) == K.CARET
                         and _at(ts, j + 2) == K.LB
                     ):
-                        r2 = p_or(c, f, ts, j + 3)
-                        if r2 is not None and _at(ts, r2[1]) == K.RB:
-                            rows = ([("rng", le[0], [le[1], r2[0]])], r2[1] + 1)
+                        if _at(ts, j + 3) == K.LSET:
+                            # a superscript set follows: the row is a filter
+                            rows = ([row], j + 1)
+                        else:
+                            r2 = p_or(c, f, ts, j + 3)
+                            if r2 is not None and _at(ts, r2[1]) == K.RB:
+                                rows = ([("rng", le[0], [le[1], r2[0]])], r2[1] + 1)
                     elif _at(ts, j) == K.RB:
                         rows = ([row], j + 1)
         else:
@@ -1384,18 +1428,39 @@ def _p_red_body(c: Ctx, f: int, red: str, marked: bool, ts: list, i: int):
     if rows is None:
         return None
     rp = _row_parts(rows[0])
-    body = p_mul(c, f, ts, rows[1])
-    if rp is None or body is None:
+    sp = _p_sup(c.sf, ts, rows[1])
+    if rp is None or sp is None:
+        return None
+    if marked and sp[0]:
+        # a marked head's ``args`` are the body's arrays: no set is printed with it
+        return None
+    body = p_mul(c, f, ts, sp[1])
+    if body is None:
         return None
     rg, fl = rp
     from ..value import MISSING
 
-    return FaqForm(red, marked, [], rg, body[0], MISSING if fl is _NOFILTER else fl), body[1]
+    form = FaqForm(red, marked, [], rg, body[0], MISSING if fl is _NOFILTER else fl, sp[0])
+    return form, body[1]
 
 
 def _with_out(form: FaqForm, outs: list, ors: list) -> FaqForm:
     """``Math.withOut``."""
-    return FaqForm(form.red, form.marked, outs, sort_kv(ors + form.ranges), form.expr, form.filter)
+    return FaqForm(
+        form.red,
+        form.marked,
+        outs,
+        sort_kv(ors + form.ranges),
+        form.expr,
+        form.filter,
+        form.set,
+    )
+
+
+def _with_sup(form: FaqForm, st: list) -> FaqForm:
+    """``Math.withSup``: the superscript set read on the bracket of the output
+    form (the inner reduction carries none)."""
+    return FaqForm(form.red, form.marked, form.out, form.ranges, form.expr, form.filter, st)
 
 
 def _p_red(c: Ctx, f: int, ts: list, i: int):
@@ -1405,7 +1470,7 @@ def _p_red(c: Ctx, f: int, ts: list, i: int):
         return None
     f -= 1
 
-    def wrapped(j: int, tail: tuple, close_k: str):
+    def wrapped(j: int, rbr: tuple, sub: tuple, close_k: str):
         h = _p_red_head(c.sf, ts, j)
         if h is None:
             return None
@@ -1414,22 +1479,34 @@ def _p_red(c: Ctx, f: int, ts: list, i: int):
         if b is None:
             return None
         form, j2 = b
-        for k, tk in enumerate(tail):
+        if form.set:
+            # the set of an output form is written on the bracket only
+            return None
+        for k, tk in enumerate(rbr):
             if _at(ts, j2 + k) != tk:
                 return None
-        r = _p_rows(c, f, K.COMMA, close_k, ts, j2 + len(tail))
+        sp = _p_sup(c.sf, ts, j2 + len(rbr))
+        if sp is None:
+            return None
+        st, j3 = sp
+        if marked and st:
+            return None
+        for k, tk in enumerate(sub):
+            if _at(ts, j3 + k) != tk:
+                return None
+        r = _p_rows(c, f, K.COMMA, close_k, ts, j3 + len(sub))
         if r is None:
             return None
         ep = _entry_parts(r[0])
         if ep is None:
             return None
-        return faq_json(_with_out(form, ep[0], ep[1])), r[1]
+        return faq_json(_with_sup(_with_out(form, ep[0], ep[1]), st)), r[1]
 
     t = _at(ts, i)
     if t == K.LBKG:
-        return wrapped(i + 1, (K.RBKG, K.US, K.LB), K.RB)
+        return wrapped(i + 1, (K.RBKG,), (K.US, K.LB), K.RB)
     if t == K.LR and _at(ts, i + 1) == K.LP and _at(ts, i + 2) == K.LBK:
-        return wrapped(i + 3, (K.RBK, K.RP, K.US, K.LPG), K.RP)
+        return wrapped(i + 3, (K.RBK, K.RP), (K.US, K.LPG), K.RP)
     h = _p_red_head(c.sf, ts, i)
     if h is None:
         return None
@@ -1596,6 +1673,114 @@ def _p_cases(c: Ctx, f: int, ts: list, i: int):
         return None
     finally:
         limits.leave()
+
+
+def _mat_head(ts: list, i: int) -> bool:
+    """The rest of the Typst table head after ``mat(``:
+    ``delim: "[", augment: #1,``. ``delim`` and ``augment`` are ordinary words,
+    named arguments only at this position."""
+    if [_at(ts, i + k) for k in (0, 1, 2, 3, 4, 5, 7)] != [
+        ("word", "delim"), K.COLON, ("txt", "["), K.COMMA, ("word", "augment"), K.COLON, K.COMMA
+    ]:  # fmt: skip
+        return False
+    t = _at(ts, i + 6)
+    return _tag(t) == "code" and type(t[1]) is int and t[1] == 1
+
+
+def _p_names_tail(sf: str, close_k: str, ts: list, i: int):
+    """Names separated by commas, then ``close_k``: ``(names, position after it)``."""
+    r = _p_names(sf, ts, i)
+    if r is None or _at(ts, r[1]) != close_k:
+        return None
+    return r[0], r[1] + 1
+
+
+def _p_sup(sf: str, ts: list, i: int):
+    """``Math.pSup``: the superscript set of a reduction or of an output form, if
+    there is one: LaTeX ``^{\\{f, g\\}}``, Typst ``^({f, g})``."""
+    grp_k, close_k = (K.LB, K.RB) if sf == K.LATEX else (K.LPG, K.RP)
+    if _at(ts, i) == K.CARET and _at(ts, i + 1) == grp_k and _at(ts, i + 2) == K.LSET:
+        r = _p_names_tail(sf, K.RSET, ts, i + 3)
+        if r is None or _at(ts, r[1]) != close_k:
+            return None
+        return r[0], r[1] + 1
+    return [], i
+
+
+def _mk_tail(sf: str, rows: list, ts: list, i: int):
+    """``Math.mkTail``: the ``makearray`` node of a table read back, with its
+    subscript of output indices if one follows."""
+
+    def node_of(out: list) -> Obj:
+        return mk_json(MkForm(out, [r for _, r in rows], [v for v, _ in rows]))
+
+    grp_k, close_k = (K.LB, K.RB) if sf == K.LATEX else (K.LPG, K.RP)
+    if _at(ts, i) == K.US and _at(ts, i + 1) == grp_k:
+        r = _p_names_tail(sf, close_k, ts, i + 2)
+        return None if r is None else (node_of(r[0]), r[1])
+    return node_of([]), i
+
+
+def _p_pair(c: Ctx, f: int, ts: list, i: int):
+    """``Math.pPair``: a bound pair after its ``[``: ``a, b]``."""
+    if f == 0:
+        return None
+    f -= 1
+    r = p_or(c, f, ts, i)
+    if r is None or _at(ts, r[1]) != K.COMMA:
+        return None
+    r2 = p_or(c, f, ts, r[1] + 1)
+    if r2 is None or _at(ts, r2[1]) != K.RBK:
+        return None
+    return (r[0], r2[0]), r2[1] + 1
+
+
+def _p_reg_tail(c: Ctx, f: int, ts: list, i: int):
+    """``Math.pRegTail``: the further bound pairs of a region, each after
+    ``\\times [`` (the two tokens ``\\times`` and ``[``)."""
+    out = []
+    while True:
+        if f == 0:
+            return None
+        f -= 1
+        if _at(ts, i) != K.TIMES or _at(ts, i + 1) != K.LBK:
+            return out, i
+        r = _p_pair(c, f, ts, i + 2)
+        if r is None:
+            return None
+        out.append(r[0])
+        i = r[1]
+
+
+def _p_mk_rows(c: Ctx, f: int, csep: str, rsep: str, close_k: str, ts: list, i: int):
+    """``Math.pMkRows``: the rows of a ``makearray`` table: a value, the cell
+    separator ``csep``, a region; rows separated by ``rsep``, up to ``close_k``
+    (consumed). A row is ``(value, [(a, b), …])``."""
+    out = []
+    while True:
+        if f == 0:
+            return None
+        f -= 1
+        r = p_or(c, f, ts, i)
+        if r is None:
+            return None
+        v, j = r
+        if _at(ts, j) != csep or _at(ts, j + 1) != K.LBK:
+            return None
+        r1 = _p_pair(c, f, ts, j + 2)
+        if r1 is None:
+            return None
+        r2 = _p_reg_tail(c, f, ts, r1[1])
+        if r2 is None:
+            return None
+        out.append((v, [r1[0], *r2[0]]))
+        k = _at(ts, r2[1])
+        if k == rsep:
+            i = r2[1] + 1
+        elif k == close_k:
+            return out, r2[1] + 1
+        else:
+            return None
 
 
 def _p_esc_args(c: Ctx, f: int, ts: list, i: int):

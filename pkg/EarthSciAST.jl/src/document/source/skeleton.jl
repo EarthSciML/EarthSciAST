@@ -180,6 +180,12 @@ ps(t::Tm) = t.lhs === nothing ? t.params : strs_of(look("params", t.attrs))
 """`Tm.scope`: the table around it, with the parameters declared."""
 scope(t::Tm, s::Sym) = Sym(vcat(s.names, ps(t)), copy(s.templates))
 
+"""`Tm.mscope`: the symbol table a rule's `match` pattern is read under: its
+body's, with no templates. A pattern never applies a template (spec §9.7.3), so
+an operator in it named like a template in scope (a rule is in scope under its
+own name) reads as that operator, in the call form."""
+mscope(t::Tm, s::Sym) = Sym(scope(t, s).names, Tuple{String, Vector{String}}[])
+
 function heads(ms)
     out = Templates()
     for m in ms

@@ -314,6 +314,13 @@ const MAP_CHILD_KEYS = ['bindings'] as const
 const SCALAR_CHILD_KEYS = ['lower', 'upper', 'expr', 'filter', 'key'] as const
 
 /**
+ * The `ExpressionNode` fields that annotate the node itself rather than
+ * parameterize its operator: `id` (the node's identity) and `expect_cadence`
+ * (an assertion about it). The single list of them in the package.
+ */
+export const EXPRESSION_NODE_ANNOTATIONS = ['id', 'expect_cadence'] as const
+
+/**
  * The COMPLETE, canonical set of `ExpressionNode` fields that carry child
  * expressions, in deterministic visit order (`args`, the integral/aggregate
  * scalar slots, `values`, `key`, `bindings`). This is the single

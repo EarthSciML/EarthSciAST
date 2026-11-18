@@ -55,6 +55,7 @@ from .error_handling import (
     TEMPLATE_INJECT_TARGET_UNKNOWN,
     TEMPLATE_LIBRARY_ILLEGAL_PAYLOAD,
 )
+from .esm_types import NODE_ANNOTATION_KEYS
 
 # Shared leaf primitives (also used by lower_expression_templates). Importing
 # them from the json_walk leaf — rather than from lower_expression_templates —
@@ -281,7 +282,7 @@ _AXIS_KEYS = frozenset({"wrt", "dim", "var"})
 #: rewrite ``{"op": "max", …}`` into ``{"op": 3, …}``, which then dies in the
 #: typed load with a raw "cannot unmarshal number into `op`" instead of a
 #: diagnostic. Opaque to substitution AND copied verbatim by the rename walk.
-_NODE_HEADER_KEYS = frozenset({"op", "id", "expect_cadence"})
+_NODE_HEADER_KEYS = frozenset({"op"}) | NODE_ANNOTATION_KEYS
 
 #: Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
 #: node-header fields these are names rather than values, so they are opaque to

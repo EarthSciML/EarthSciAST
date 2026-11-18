@@ -40,6 +40,7 @@ var typKwTable = map[Kw]string{
 	KwFloor: "floor", KwCeil: "ceil", KwPdiff: "partial", KwDif: "dif", KwCases: "cases",
 	KwEsmnode: "esm.node", KwVec: "vec", KwMat: "mat", KwSum: "sum", KwProd: "product",
 	KwInn: "in", KwLimits: "limits", KwLr: "lr", KwNl: "\\",
+	KwLset: "{", KwRset: "}",
 }
 
 // typKwChars is `Typst.kwChars` (empty for the LaTeX-only keywords).
@@ -360,6 +361,10 @@ func typPunct(c rune) (Kw, bool) {
 		return KwSdot, true
 	case '\\':
 		return KwNl, true
+	case '{':
+		return KwLset, true
+	case '}':
+		return KwRset, true
 	}
 	return 0, false
 }

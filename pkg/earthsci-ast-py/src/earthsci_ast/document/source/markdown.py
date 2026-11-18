@@ -977,7 +977,7 @@ class CapsMd(Caps):
         return all(attr_ok(kv) and dq_ok(kv[1]) for kv in a)
 
     def tm(self, s: Sym, t: Tm) -> bool:
-        lhs = None if t.lhs is None else print_latex(s, t.lhs)
+        lhs = None if t.lhs is None else print_latex(Sym(s.names, ()), t.lhs)
         raw = Tm(t.name, t.params, lhs, print_latex(s, t.body), t.attrs)
         return item_ok_tm(raw) and all(dq_ok(kv[1]) for kv in t.attrs)
 

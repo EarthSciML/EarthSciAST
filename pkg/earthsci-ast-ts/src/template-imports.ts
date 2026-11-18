@@ -46,6 +46,7 @@ import {
   validateTemplates,
 } from './lower-expression-templates.js'
 import { EnumLoweringError, lowerEnumOpsForFile } from './lower-enums.js'
+import { EXPRESSION_NODE_ANNOTATIONS } from './expression.js'
 import { isNumericLiteral } from './numeric-literal.js'
 import { deepClone, isObject } from './object-utils.js'
 import { expandRefEnv, isRemoteRef, normalizeRef, readFileSyncNode } from './path-utils.js'
@@ -305,7 +306,7 @@ const AXIS_KEYS = ['wrt', 'dim', 'var'] as const
 // `{"op": "max", …}` into `{"op": 3, …}`, which then dies in the typed load with
 // a raw "cannot unmarshal number into `op`" instead of a diagnostic. Opaque to
 // substitution AND copied verbatim by the rename walk.
-const NODE_HEADER_KEYS = ['op', 'id', 'expect_cadence'] as const
+const NODE_HEADER_KEYS = ['op', ...EXPRESSION_NODE_ANNOTATIONS] as const
 
 // Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
 // node-header fields these are names rather than values, so they are opaque to

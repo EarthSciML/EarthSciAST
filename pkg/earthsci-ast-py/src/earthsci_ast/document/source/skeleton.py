@@ -122,6 +122,13 @@ class Tm:
             return s
         return Sym(s.names | frozenset(ps), s.templates)
 
+    def mscope(self, s: Sym) -> Sym:
+        """``Tm.mscope``: the table a rule's ``match`` pattern is read under: its
+        body's, with no templates. A pattern never applies a template (spec §9.7.3),
+        so an operator in it named like a template in scope (a rule is in scope
+        under its own name) reads as that operator, in the call form."""
+        return Sym(self.scope(s).names, ())
+
 
 def mx_field(m: tuple) -> str:
     """``Mx.field``."""

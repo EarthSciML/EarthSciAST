@@ -731,7 +731,7 @@ class CapsT(Caps):
         return all(arg_ok(kv) for kv in a)
 
     def tm(self, s: Sym, t: Tm) -> bool:
-        lhs = None if t.lhs is None else print_typst(s, t.lhs)
+        lhs = None if t.lhs is None else print_typst(Sym(s.names, ()), t.lhs)
         return _item_ok_tm(Tm(t.name, t.params, lhs, print_typst(s, t.body), t.attrs))
 
 

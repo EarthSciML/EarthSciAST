@@ -59,7 +59,7 @@ def capsT : Caps where
     (tmLexT (prT S e).toList).isNone
   rxn S x := rxnOK { x with rate := printTypst S x.rate }
   plot a := a.all argOK
-  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printTypst S j), body := printTypst S t.body })
+  tm S t := itemOK (.tm { t with lhs := t.lhs.map (fun j => printTypst (Esm.Document.Math.Sym.mk S.names []) j), body := printTypst S t.body })
 
 theorem ckT_prT (S : Sym) (e : Eqn) (hc : capsT.eqn S e = true) (hl : isE e.lhs = true)
     (hr : isE e.rhs = true) : ckT S (prT S e) = some [e] := by

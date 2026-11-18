@@ -135,17 +135,23 @@ inductive V (c : Ctx) : Json → Prop where
       (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
       (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, isE x = true)
       (hf : ∀ kv ∈ fieldsOf kvs, jwf kv.2 = true)
-      (hcore : coreOps.contains o = false) (hopn : opnOK o = true) (htp : tparams c.S o = none)
+      (hcf : callFormOK o (fieldsOf kvs) = true) (hopn : opnOK o = true) (htp : tparams c.S o = none)
+      (hnat : nativeK c.sf kvs = false)
       (hkey : ∀ kv ∈ fieldsOf kvs, keyOK kv.1 = true)
       (hsz : ∀ x ∈ as, sizeOf x < sizeOf (Json.obj kvs))
       (hszf : ∀ kv ∈ fieldsOf kvs, sizeOf kv.2 < sizeOf (Json.obj kvs))
       (hpr : pr c (.obj kvs) = mkOut c.sf 10 (openToks c.sf o (as.map fun x => (pr c x).at c.sf 4)
         ((fieldsOf kvs).map fun kv =>
-          keyToks c.sf kv.1 ++ .kw .eq :: (if isE kv.2 then (pr c kv.2).at c.sf 4 else jsonVal c.sf kv.2)))) :
+          keyToks c.sf kv.1 ++ .kw .eq :: (if mathField o kv then (pr c kv.2).at c.sf 4 else jsonVal c.sf kv.2)))) :
       V c (.obj kvs)
   | faq (kvs : List (String × Json)) (F : FaqForm) (hF : faqForm kvs = some F) (hok : faqOK F = true)
       (P : Json → Out) (hP : ∀ x ∈ faqSubs F, P x = pr c x)
       (hpr : pr c (.obj kvs) = faqOut c P F) : V c (.obj kvs)
+  | mk (kvs : List (String × Json)) (M : MkForm) (hM : mkForm kvs = some M) (hok : mkOK M = true)
+      (P : Json → Out) (hP : ∀ x ∈ mkSubs M, P x = pr c x)
+      (hpr : pr c (.obj kvs) = mkOutT c P M) : V c (.obj kvs)
+  | tbare (n : String) (hn : tnameOK n = true) (hps : positional c.S n [] = none)
+      (hpr : pr c (tNode n []) = mkOut c.sf 5 [.opn n]) : V c (tNode n [])
   | esc (kvs : List (String × Json)) (o : String) (as : List Json)
       (hop : look "op" kvs = some (.str o)) (hargs : look "args" kvs = some (.arr as))
       (hs : keysSorted kvs = true) (hx : ∀ x ∈ as, isE x = true)
@@ -297,11 +303,10 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
     have fbOpn : ∀ X : Out, pr c (.obj kvs) = X →
         X = (match look "op" kvs, _hk : look "args" kvs with
           | some (.str o), some (.arr as) =>
-            if !(coreOps.contains o) && opnOK o && (tparams c.S o).isNone &&
-                (fieldsOf kvs).all (fun kv => keyOK kv.1) then
+            if callCond c o kvs && (fieldsOf kvs).all (fun kv => keyOK kv.1) then
               mkOut c.sf 10 (openToks c.sf o (as.attach.map fun x => (pr c x.1).at c.sf 4)
                 ((fieldsOf kvs).attach.map fun x =>
-                  keyToks c.sf x.1.1 ++ .kw .eq :: (if isE x.1.2 then (pr c x.1.2).at c.sf 4 else jsonVal c.sf x.1.2)))
+                  keyToks c.sf x.1.1 ++ .kw .eq :: (if mathField o x.1 then (pr c x.1.2).at c.sf 4 else jsonVal c.sf x.1.2)))
             else (match look "op" kvs, _hk : look "args" kvs with
               | some (.str o), some (.arr as) =>
                 mkOut c.sf 10 (escToks c.sf o (fieldsOf kvs) (as.attach.map fun x => (pr c x.1).at c.sf 1))
@@ -316,14 +321,14 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
       · rename_i o as hop hargs
         split at hX
         · rename_i hcond
-          simp only [Bool.and_eq_true, Bool.not_eq_true', Option.isNone_iff_eq_none,
+          simp only [callCond, Bool.and_eq_true, Option.isNone_iff_eq_none, Bool.not_eq_true',
             List.all_eq_true] at hcond
-          obtain ⟨⟨⟨hc1, hc2⟩, hc3⟩, hc4⟩ := hcond
-          refine V.openop kvs o as hop hargs hs0 (isE_args h hargs) hf0 hc1 hc2 hc3 hc4
+          obtain ⟨⟨⟨⟨hc1, hc2⟩, hc3⟩, hnat⟩, hc4⟩ := hcond
+          refine V.openop kvs o as hop hargs hs0 (isE_args h hargs) hf0 hc1 hc2 hc3 hnat hc4
             (sizeOf_obj_lt hargs) sizeOf_fields_lt ?_
           rw [hX, attach_map_eq as (fun x => Out.at c.sf 4 (pr c x)),
             attach_map_eq (fieldsOf kvs) (fun kv =>
-              keyToks c.sf kv.1 ++ .kw .eq :: (if isE kv.2 then (pr c kv.2).at c.sf 4 else jsonVal c.sf kv.2))]
+              keyToks c.sf kv.1 ++ .kw .eq :: (if mathField o kv then (pr c kv.2).at c.sf 4 else jsonVal c.sf kv.2))]
         · simp only at hX
           exact V.esc kvs o as hop hargs hs0 (isE_args h hargs) hf0
             (by rw [hop0] at hop; cases hop; exact hok0) (by rw [hop0] at hop; cases hop; exact hrem0)
@@ -416,14 +421,14 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
           have := hf0 ("value", .num n) (by simp [fieldsOf])
           simpa [jwf, numOK_iff] using this
         exact V.qty u n hn hu hpr
-      · exact fbEsc _ hpr rfl
+      · exact fbOpn _ hpr rfl
     · rename_i u xs
       split at hpr
       · rename_i af haf
         split at hpr
         · rename_i hu; exact V.arrU u xs af haf hu hpr
-        · exact fbEsc _ hpr rfl
-      · exact fbEsc _ hpr rfl
+        · exact fbOpn _ hpr rfl
+      · exact fbOpn _ hpr rfl
     · rename_i xs
       split at hpr
       · rename_i af haf; exact V.arr xs af haf hpr
@@ -448,7 +453,9 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
             refine V.tnamed n bs hn hs hb hps hne.1 hne.2 hkn ?_
             unfold tNode; rw [hpr, attach_map_eq bs (fun kv => (kv.1, Out.at c.sf 4 (pr c kv.2))), List.map_map]
             rfl
-          · exact fbEsc _ hpr rfl
+          · split at hpr
+            · rename_i hbs; subst hbs; exact V.tbare n hn hps hpr
+            · exact fbEsc _ hpr rfl
       · exact fbEsc _ hpr rfl
     · split at hpr
       · rename_i o ho
@@ -461,7 +468,18 @@ theorem view (c : Ctx) : ∀ e, isE e = true → V c e
             rw [hpr, attach_map_eq (faqSubs F) (fun x => (x, pr c x))]
           · cases ho
         · cases ho
-      · exact fbOpn _ hpr rfl
+      · split at hpr
+        · rename_i o ho
+          split at ho
+          · rename_i M hM
+            split at ho
+            · rename_i hok
+              cases ho
+              refine V.mk kvs M hM hok _ (fun x hx => tableP_eq (mkSubs M) (pr c) x hx) ?_
+              rw [hpr, attach_map_eq (mkSubs M) (fun x => (x, pr c x))]
+            · cases ho
+          · cases ho
+        · exact fbOpn _ hpr rfl
   | .null, h => by simp [isE] at h
   | .bool _, h => by simp [isE] at h
   | .arr _, h => by simp [isE] at h

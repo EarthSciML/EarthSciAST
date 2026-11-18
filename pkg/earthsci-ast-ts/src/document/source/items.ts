@@ -16,6 +16,7 @@ import {
   isMathField,
   mapMath,
   symFor,
+  tmMscope,
   tmScope,
   topSym,
   type Comp,
@@ -236,7 +237,7 @@ export function prMx(
         m: 'tm',
         t: {
           ...m.t,
-          lhs: m.t.lhs === undefined ? undefined : prR(sc, m.t.lhs),
+          lhs: m.t.lhs === undefined ? undefined : prR(tmMscope(m.t, s), m.t.lhs),
           body: prR(sc, m.t.body),
         },
       }
@@ -266,7 +267,7 @@ export function ckMx(
       const sc = tmScope(m.t, s)
       let lhs: Json | undefined
       if (m.t.lhs !== undefined) {
-        lhs = ckR(sc, m.t.lhs)
+        lhs = ckR(tmMscope(m.t, s), m.t.lhs)
         if (lhs === undefined) return undefined
       }
       const body = ckR(sc, m.t.body)

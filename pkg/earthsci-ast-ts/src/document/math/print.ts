@@ -35,6 +35,7 @@ import {
   type Json,
   type Kvs,
 } from '../json.js'
+import { EXPRESSION_NODE_ANNOTATIONS } from '../../expression.js'
 import { digitChar, type Chars, type Read } from '../number.js'
 import {
   REMOVED_OPS,
@@ -55,6 +56,7 @@ import {
 } from './expr.js'
 import {
   kw,
+  tAcols,
   tCode,
   tEsc,
   tGreek,
@@ -352,6 +354,21 @@ export const CALL_OPS: readonly string[] = [
   'enum',
 ]
 
+/**
+ * `Math.fieldCallOps`: core operators with no notation of their own that print
+ * in the call form, their fields as named arguments after `;` (when no field
+ * annotates the node).
+ */
+export const FIELD_CALL_OPS: readonly string[] = [
+  'broadcast',
+  'reshape',
+  'transpose',
+  'concat',
+  'faq',
+  'makearray',
+  'const',
+]
+
 /** `Math.reservedOpn`: names `\operatorname{…}` never means a template or an open operator by. */
 export function reservedOpn(n: string): boolean {
   return CALL_OPS.includes(n) || n === 'D' || n === 'neg' || n === 'pow' || REMOVED_OPS.includes(n)
@@ -425,6 +442,33 @@ export function opnOk(s: string): boolean {
   if (s.length === 0 || !isIdStart(s[0])) return false
   for (let i = 1; i < s.length; i++) if (!isIdChar(s[i]) && s[i] !== '.') return false
   return true
+}
+
+/**
+ * `Math.callFormOK`: an operator prints in the call form: an open operator, or
+ * a core operator of {@link FIELD_CALL_OPS} none of whose fields annotates it.
+ */
+export function callFormOk(o: string, fs: readonly Kv[]): boolean {
+  return (
+    !isCoreOp(o) ||
+    (FIELD_CALL_OPS.includes(o) &&
+      fs.every((kv) => !(EXPRESSION_NODE_ANNOTATIONS as readonly string[]).includes(kv[0])))
+  )
+}
+
+/**
+ * `Math.mathKeys`: the fields of a core operator in the call form that hold an
+ * expression; the others print as JSON, even a string that is a name.
+ */
+export const MATH_KEYS: readonly string[] = ['expr', 'filter', 'key']
+
+/**
+ * `Math.mathField`: a field of a call-form node prints as math: its value is an
+ * expression and, for a core operator, the field holds one. An open operator's
+ * fields are all read as math when they can be.
+ */
+export function mathField(o: string, kv: Kv): boolean {
+  return isE(kv[1]) && (!isCoreOp(o) || MATH_KEYS.includes(kv[0]))
 }
 
 /** `Math.keyOK`: a field key printed upright in a call: an identifier. */
@@ -930,17 +974,19 @@ export function rowsOf(xs: readonly Json[]): JNum[][] | undefined {
 export type AForm =
   { readonly k: 'col'; readonly ns: JNum[] } | { readonly k: 'mat'; readonly rs: JNum[][] }
 
-/** `Math.arrForm`: a constant array printed natively. */
+/**
+ * `Math.arrForm`: a constant array printed natively: a column for rank 1, or a
+ * matrix of at least two columns (a single-column matrix would print like a
+ * column), of any size, every entry a well-formed number.
+ */
 export function arrForm(j: Json): AForm | undefined {
   if (j.t !== 'arr') return undefined
   const ns = numsOf(j.xs)
-  if (ns !== undefined) return ns.length > 0 && ns.length <= 16 ? { k: 'col', ns } : undefined
+  if (ns !== undefined) return ns.length > 0 ? { k: 'col', ns } : undefined
   const rs = rowsOf(j.xs)
   if (rs === undefined || rs.length === 0) return undefined
   const r = rs[0]
-  return 2 <= r.length &&
-    rs.slice(1).every((q) => q.length === r.length) &&
-    rs.length * r.length <= 16
+  return 2 <= r.length && rs.slice(1).every((q) => q.length === r.length)
     ? { k: 'mat', rs }
     : undefined
 }
@@ -955,21 +1001,29 @@ export function numToks(ns: readonly JNum[]): Tok[][] {
   return ns.map((n) => [tNum(n)])
 }
 
-/** `Math.arrToks`: LaTeX `bmatrix`, Typst `vec(…)` / `mat(…)`. */
+/** `Math.bmatMaxCols`: the most columns a LaTeX `bmatrix` holds (amsmath `MaxMatrixCols`). */
+export const BMAT_MAX_COLS = 10
+
+/**
+ * `Math.arrToks`: LaTeX `bmatrix`, or `\left[\begin{array}{c…c} … \end{array}\right]`
+ * for a matrix wider than {@link BMAT_MAX_COLS}; Typst `vec(…)` / `mat(…)`.
+ */
 export function arrToks(sf: Sf, a: AForm): Tok[] {
   if (a.k === 'col') {
     return sf === 'latex'
       ? cat([kw('Bmat')], sepBy([kw('Nl')], numToks(a.ns)), [kw('Emat')])
       : cat([kw('Vec'), kw('Lp')], sepBy(COMMA, numToks(a.ns)), [kw('Rp')])
   }
+  const width = a.rs[0].length
+  const wide = width > BMAT_MAX_COLS
   return sf === 'latex'
     ? cat(
-        [kw('Bmat')],
+        wide ? [kw('Lbkg'), tAcols(width)] : [kw('Bmat')],
         sepBy(
           [kw('Nl')],
           a.rs.map((r) => sepBy([kw('Amp')], numToks(r))),
         ),
-        [kw('Emat')],
+        wide ? [kw('Earr'), kw('Rbkg')] : [kw('Emat')],
       )
     : cat(
         [kw('Mat'), kw('Lp')],
@@ -1049,7 +1103,11 @@ export function redField(r: RedK): Kv[] {
   }
 }
 
-/** `Math.FaqForm`: a `faq` node with a native spelling, by its parts. */
+/**
+ * `Math.FaqForm`: a `faq` node with a native spelling, by its parts. `marked`:
+ * `args` lists the arrays the body indexes; otherwise `args` is `set` (empty,
+ * or names printed as a superscript set).
+ */
 export interface FaqForm {
   readonly red: RedK
   readonly marked: boolean
@@ -1057,13 +1115,23 @@ export interface FaqForm {
   readonly ranges: readonly Kv[]
   readonly expr: Json
   readonly filter: Json | undefined
+  readonly set: readonly string[]
+}
+
+/** `Math.FaqForm.args`: the `args` of a native `faq`. */
+export function faqArgs(f: FaqForm): Json[] {
+  return (f.marked ? bases(f.expr) : f.set).map(jstr)
+}
+
+/** `Math.FaqForm.sup`: the names a superscript set shows: `set` when `args` is not the body's arrays. */
+export function faqSup(f: FaqForm): readonly string[] {
+  return f.marked ? [] : f.set
 }
 
 /** `Math.faqJson`. */
 export function faqJson(f: FaqForm): Json {
-  const args = f.marked ? bases(f.expr).map(jstr) : []
   const kvs: Kv[] = [
-    ['args', jarr(args)],
+    ['args', jarr(faqArgs(f))],
     ['expr', f.expr],
   ]
   if (f.filter !== undefined) kvs.push(['filter', f.filter])
@@ -1072,6 +1140,16 @@ export function faqJson(f: FaqForm): Json {
   if (f.ranges.length > 0) kvs.push(['ranges', jobj(f.ranges)])
   kvs.push(...redField(f.red))
   return jobj(kvs)
+}
+
+/** `Math.strsOf`: the strings of a list of JSON values, when they are all strings. */
+export function strsOf(xs: readonly Json[]): string[] | undefined {
+  const out: string[] = []
+  for (const x of xs) {
+    if (x.t !== 'str') return undefined
+    out.push(x.s)
+  }
+  return out
 }
 
 /** `Math.faqCand`: the parts a `faq` node would have. */
@@ -1092,13 +1170,28 @@ export function faqCand(kvs: Kvs): FaqForm | undefined {
   if (rg === undefined) ranges = []
   else if (rg.t === 'obj') ranges = rg.kvs
   else return undefined
+  let marked: boolean
+  let set: readonly string[]
+  if (args.xs.length === 0) {
+    marked = false
+    set = []
+  } else if (jbeq(jarr(args.xs), jarr(bases(e).map(jstr)))) {
+    marked = true
+    set = []
+  } else {
+    const st = strsOf(args.xs)
+    if (st === undefined) return undefined
+    marked = false
+    set = st
+  }
   return {
     red,
-    marked: args.xs.length > 0,
+    marked,
     out: out.xs,
     ranges,
     expr: e,
     filter: look('filter', kvs),
+    set,
   }
 }
 
@@ -1164,6 +1257,7 @@ export function faqOk(f: FaqForm): boolean {
     (filter === undefined || isE(filter)) &&
     f.out.every(outOk) &&
     nodup(names) &&
+    f.set.every(nameOk) &&
     keysSorted(f.ranges) &&
     f.ranges.every(
       ([k, v]) =>
@@ -1223,10 +1317,13 @@ export function headToks(sf: Sf, f: FaqForm): Tok[] {
   return f.marked ? [kw('Limits'), kw('Lp'), kw(redKw(f.red)), kw('Rp')] : [kw(redKw(f.red))]
 }
 
-/** `Math.subToksL`: the LaTeX subscript. */
+/**
+ * `Math.subToksL`: the LaTeX subscript: none, one row, a lone dense range
+ * `_{k=a}^{b}` (not when `args` is a superscript set), or `\substack`.
+ */
 export function subToksL(c: Ctx, f: FaqForm): Tok[] {
   const rr = redRanges(f)
-  if (rr.length === 1 && f.filter === undefined) {
+  if (rr.length === 1 && f.filter === undefined && faqSup(f).length === 0) {
     const [k, ab] = rr[0]
     if (ab.t === 'arr' && ab.xs.length === 2) {
       return cat(
@@ -1260,9 +1357,34 @@ export function subToks(c: Ctx, f: FaqForm): Tok[] {
   return c.sf === 'latex' ? subToksL(c, f) : subToksT(c, f)
 }
 
-/** `Math.redToks`: operator, subscript, body at level 5. */
+/** `Math.supToks`: the superscript set of names: LaTeX `^{\{f, g\}}`, Typst `^({f, g})`. */
+export function supToks(c: Ctx, ns: readonly string[]): Tok[] {
+  const names = sepBy(
+    COMMA,
+    ns.map((n) => nameToks(c, n)),
+  )
+  return c.sf === 'latex'
+    ? cat([kw('Caret'), kw('Lb'), kw('Lset')], names, [kw('Rset'), kw('Rb')])
+    : cat([kw('Caret'), kw('Lpg'), kw('Lset')], names, [kw('Rset'), kw('Rp')])
+}
+
+/** `Math.supT`: the `args` set of a `faq`, as a superscript, when it is one. */
+export function supT(c: Ctx, f: FaqForm): Tok[] {
+  const sup = faqSup(f)
+  return sup.length === 0 ? [] : supToks(c, sup)
+}
+
+/**
+ * `Math.redToks`: operator, subscript, the superscript set (on the operator
+ * only when there are no output indices), body at level 5.
+ */
 export function redToks(c: Ctx, f: FaqForm): Tok[] {
-  return cat(headToks(c.sf, f), subToks(c, f), pa(c, 5, f.expr))
+  return cat(
+    headToks(c.sf, f),
+    subToks(c, f),
+    f.out.length === 0 ? supT(c, f) : [],
+    pa(c, 5, f.expr),
+  )
 }
 
 /** `Math.entryToks`: an output entry: its range row when it has one. */
@@ -1276,7 +1398,9 @@ export function entryToks(c: Ctx, f: FaqForm, j: Json): Tok[] {
 
 /**
  * `Math.faqOut`: the native `faq`, wrapped with its output indices when it has
- * some.
+ * some. A superscript set goes on the bracket, before its subscript; the form
+ * is then a power's level (a power of it, or an index into it, is
+ * parenthesized: no double superscript).
  *
  * Lean passes the printer of the sub-expressions as a table (`tableP` over
  * `faqSubs`); every lookup is of a member of `faqSubs`, so the port calls
@@ -1288,22 +1412,189 @@ export function faqOut(c: Ctx, f: FaqForm): Out {
     COMMA,
     f.out.map((j) => entryToks(c, f, j)),
   )
+  const sup = supT(c, f)
+  const l = sup.length === 0 ? 10 : 8
   if (c.sf === 'latex') {
     return mkOut(
-      10,
-      cat([kw('Lbkg')], redToks(c, f), [kw('Rbkg'), kw('Us'), kw('Lb')], es, [kw('Rb')]),
+      l,
+      cat([kw('Lbkg')], redToks(c, f), [kw('Rbkg')], sup, [kw('Us'), kw('Lb')], es, [kw('Rb')]),
     )
   }
   return mkOut(
-    10,
+    l,
     cat(
       [kw('Lr'), kw('Lp'), kw('Lbk')],
       redToks(c, f),
-      [kw('Rbk'), kw('Rp'), kw('Us'), kw('Lpg')],
+      [kw('Rbk'), kw('Rp')],
+      sup,
+      [kw('Us'), kw('Lpg')],
       es,
       [kw('Rp')],
     ),
   )
+}
+
+// ## Block assembly (`makearray`)
+
+/**
+ * `Math.MkForm`: a `makearray` node with a native spelling, by its parts: the
+ * output indices (empty when the node has no `output_idx`), and the regions
+ * with their values.
+ */
+export interface MkForm {
+  readonly out: readonly string[]
+  readonly regions: readonly (readonly (readonly [Json, Json])[])[]
+  readonly values: readonly Json[]
+}
+
+/** `Math.mkJson`. */
+export function mkJson(m: MkForm): Json {
+  const kvs: Kv[] = [
+    ['args', jarr([])],
+    ['op', jstr('makearray')],
+  ]
+  if (m.out.length > 0) kvs.push(['output_idx', jarr(m.out.map(jstr))])
+  kvs.push(['regions', jarr(m.regions.map((r) => jarr(r.map((p) => jarr([p[0], p[1]])))))])
+  kvs.push(['values', jarr(m.values)])
+  return jobj(kvs)
+}
+
+/** `Math.pairsOf`: the bound pairs of a region. */
+export function pairsOf(xs: readonly Json[]): [Json, Json][] | undefined {
+  const out: [Json, Json][] = []
+  for (const x of xs) {
+    if (x.t !== 'arr' || x.xs.length !== 2) return undefined
+    out.push([x.xs[0], x.xs[1]])
+  }
+  return out
+}
+
+/** `Math.regionsOf`: the regions of a `regions` list. */
+export function regionsOf(xs: readonly Json[]): [Json, Json][][] | undefined {
+  const out: [Json, Json][][] = []
+  for (const x of xs) {
+    if (x.t !== 'arr') return undefined
+    const q = pairsOf(x.xs)
+    if (q === undefined) return undefined
+    out.push(q)
+  }
+  return out
+}
+
+/** `Math.mkCand`: the parts a `makearray` node would have. */
+export function mkCand(kvs: Kvs): MkForm | undefined {
+  const rs = look('regions', kvs)
+  const vs = look('values', kvs)
+  if (rs?.t !== 'arr' || vs?.t !== 'arr') return undefined
+  const o = look('output_idx', kvs)
+  let out: string[] | undefined
+  if (o === undefined) out = []
+  else if (o.t === 'arr') out = strsOf(o.xs)
+  else return undefined
+  const regs = regionsOf(rs.xs)
+  if (out === undefined || regs === undefined) return undefined
+  return { out, regions: regs, values: vs.xs }
+}
+
+/**
+ * `Math.mkForm`: the parts of a `makearray` node, when it is exactly the node
+ * they rebuild: `args` empty, `regions` and `values`, and an `output_idx` of
+ * names or none.
+ */
+export function mkForm(kvs: Kvs): MkForm | undefined {
+  const m = mkCand(kvs)
+  return m !== undefined && jbeq(mkJson(m), jobj(kvs)) ? m : undefined
+}
+
+/**
+ * `Math.mkOK`: the conditions under which the native spelling reads back: one
+ * value per region, at least one region, each region a nonempty list of bound
+ * pairs, values and bounds expressions, output indices names.
+ */
+export function mkOk(m: MkForm): boolean {
+  return (
+    m.values.length > 0 &&
+    m.regions.length === m.values.length &&
+    m.values.every(isE) &&
+    m.regions.every((r) => r.length > 0 && r.every((p) => isE(p[0]) && isE(p[1]))) &&
+    m.out.every(nameOk)
+  )
+}
+
+/** `Math.cellSep`: the cell separator of the table. */
+export function cellSep(sf: Sf): Kw {
+  return sf === 'latex' ? 'Amp' : 'Comma'
+}
+
+/** `Math.rowSep`: the row separator of the table. */
+export function rowSep(sf: Sf): Kw {
+  return sf === 'latex' ? 'Nl' : 'Semi'
+}
+
+/** `Math.pairToks`: a bound pair: `a, b` (its brackets are written around it). */
+export function pairToks(c: Ctx, p: readonly [Json, Json]): Tok[] {
+  return cat(pa(c, 1, p[0]), COMMA, pa(c, 1, p[1]))
+}
+
+/** `Math.regToks`: a region: `[a, b] \times [c, d]`, one bound pair per dimension. */
+export function regToks(c: Ctx, ps: readonly (readonly [Json, Json])[]): Tok[] {
+  if (ps.length === 0) return []
+  const out = cat([kw('Lbk')], pairToks(c, ps[0]), [kw('Rbk')])
+  for (const q of ps.slice(1)) out.push(kw('Times'), kw('Lbk'), ...pairToks(c, q), kw('Rbk'))
+  return out
+}
+
+/** `Math.mkRow`: a row of the table: the value, then the region it fills. */
+export function mkRow(c: Ctx, v: Json, r: readonly (readonly [Json, Json])[]): Tok[] {
+  return cat(pa(c, 1, v), [kw(cellSep(c.sf))], regToks(c, r))
+}
+
+/**
+ * `Math.matHead`: the Typst table head: `mat(delim: "[", augment: #1,`; `delim`
+ * and `augment` are plain words, not keywords.
+ */
+export function matHead(): Tok[] {
+  return [
+    kw('Mat'),
+    kw('Lp'),
+    tWord('delim'),
+    kw('Colon'),
+    tTxt('['),
+    kw('Comma'),
+    tWord('augment'),
+    kw('Colon'),
+    tCode(jnum(mkInt(1))),
+    kw('Comma'),
+  ]
+}
+
+/** `Math.mkSub`: the output indices as the bracket's subscript. */
+export function mkSub(c: Ctx, out: readonly string[]): Tok[] {
+  if (out.length === 0) return []
+  const names = sepBy(
+    COMMA,
+    out.map((n) => nameToks(c, n)),
+  )
+  return c.sf === 'latex'
+    ? cat([kw('Us'), kw('Lb')], names, [kw('Rb')])
+    : cat([kw('Us'), kw('Lpg')], names, [kw('Rp')])
+}
+
+/**
+ * `Math.mkOutT`: the native `makearray`: a bracketed two-column table, value
+ * then region, one row per region in order; LaTeX
+ * `\left[\begin{array}{l|l} v & [a, b] \\ … \end{array}\right]`, Typst
+ * `mat(delim: "[", augment: #1, v, [a, b]; …)`; the output indices as its
+ * subscript. As for {@link faqOut}, the port calls {@link pr} directly.
+ */
+export function mkOutT(c: Ctx, m: MkForm): Out {
+  const rows = sepBy(
+    [kw(rowSep(c.sf))],
+    m.values.map((v, i) => mkRow(c, v, m.regions[i])),
+  )
+  return c.sf === 'latex'
+    ? mkOut(10, cat([kw('Lbkg'), kw('Barr')], rows, [kw('Earr'), kw('Rbkg')], mkSub(c, m.out)))
+    : mkOut(10, cat(matHead(), rows, [kw('Rp')], mkSub(c, m.out)))
 }
 
 /** `Math.tnameOK`. */
@@ -1338,13 +1629,17 @@ export function pr(c: Ctx, e: Json): Out {
     const f = faqForm(kvs)
     return f !== undefined && faqOk(f) ? faqOut(c, f) : undefined
   }
+  const mk = (): Out | undefined => {
+    const m = mkForm(kvs)
+    return m !== undefined && mkOk(m) ? mkOutT(c, m) : undefined
+  }
   const opn = (): Out => {
     const o = look('op', kvs)
     const args = look('args', kvs)
     if (o?.t !== 'str' || args?.t !== 'arr') return esc()
     const fs = fieldsOf(kvs)
     if (
-      isCoreOp(o.s) ||
+      !callFormOk(o.s, fs) ||
       !opnOk(o.s) ||
       tparams(c.s, o.s) !== undefined ||
       !fs.every((kv) => keyOk(kv[0]))
@@ -1357,7 +1652,13 @@ export function pr(c: Ctx, e: Json): Out {
         sf,
         o.s,
         args.xs.map((a) => pa(c, 4, a)),
-        fs.map(([k, v]) => cat(keyToks(sf, k), [kw('Eq')], isE(v) ? pa(c, 4, v) : jsonVal(sf, v))),
+        fs.map((kv) =>
+          cat(
+            keyToks(sf, kv[0]),
+            [kw('Eq')],
+            mathField(o.s, kv) ? pa(c, 4, kv[1]) : jsonVal(sf, kv[1]),
+          ),
+        ),
       ),
     )
   }
@@ -1403,24 +1704,13 @@ export function pr(c: Ctx, e: Json): Out {
         }
         return esc()
       }
-      const v = field(2, 'value')
-      if (emptyArgs() && strAt(1, 'op', 'const') && v?.t === 'arr') {
-        const af = arrForm(v)
-        return af !== undefined ? mkOut(10, arrToks(sf, af)) : opn()
-      }
+      const cn = constNative(sf, kvs)
+      if (cn !== undefined) return cn
       break
     }
     case 4: {
-      const u = field(2, 'units')
-      if (emptyArgs() && strAt(1, 'op', 'const') && u?.t === 'str') {
-        const v = field(3, 'value')
-        if (v?.t === 'num') return unitsOk(sf, u.s) ? mkOut(7, qtyToks(v.n, factorsOf(u.s))) : esc()
-        if (v?.t === 'arr') {
-          const af = arrForm(v)
-          if (af === undefined) return esc()
-          return unitsOk(sf, u.s) ? mkOut(7, cat(arrToks(sf, af), unitToks(factorsOf(u.s)))) : esc()
-        }
-      }
+      const cn = constNative(sf, kvs)
+      if (cn !== undefined) return cn
       if (emptyArgs()) {
         const bs = field(1, 'bindings')
         const n = field(2, 'name')
@@ -1431,7 +1721,7 @@ export function pr(c: Ctx, e: Json): Out {
       break
     }
   }
-  return fq() ?? opn()
+  return fq() ?? mk() ?? opn()
 }
 
 /** The `[("args", .arr as), ("op", .str o)]` case of `Math.pr`. */
@@ -1569,7 +1859,58 @@ function prTemplate(c: Ctx, n: string, bs: Kvs, esc: () => Out): Out {
       ),
     )
   }
+  if (bs.length === 0) return mkOut(5, [tOpn(n)])
   return esc()
+}
+
+/**
+ * `Math.constNative`: the native spelling of a constant, `{args: [], op:
+ * "const", value}` with an array value or `{args: [], op: "const", units, value}`
+ * with a number or array value and a unit the surface spells; undefined when
+ * the node has none. Only numbers and units are printed, no subexpression.
+ */
+export function constNative(sf: Sf, kvs: Kvs): Out | undefined {
+  const at = (i: number, k: string): Json | undefined =>
+    i < kvs.length && kvs[i][0] === k ? kvs[i][1] : undefined
+  const args = at(0, 'args')
+  const o = at(1, 'op')
+  if (!(args?.t === 'arr' && args.xs.length === 0 && o?.t === 'str' && o.s === 'const'))
+    return undefined
+  if (kvs.length === 3) {
+    const v = at(2, 'value')
+    const af = v?.t === 'arr' ? arrForm(v) : undefined
+    return af && mkOut(10, arrToks(sf, af))
+  }
+  const u = at(2, 'units')
+  const v = at(3, 'value')
+  if (kvs.length !== 4 || u?.t !== 'str' || !unitsOk(sf, u.s)) return undefined
+  if (v?.t === 'num') return mkOut(7, qtyToks(v.n, factorsOf(u.s)))
+  const af = v?.t === 'arr' ? arrForm(v) : undefined
+  return af && mkOut(7, cat(arrToks(sf, af), unitToks(factorsOf(u.s))))
+}
+
+/**
+ * The printer writes node `kvs`, of operator `o` with fields `fs`, in the call
+ * form `\operatorname{o}(…; …)`: {@link callFormOk}, a name {@link opnOk}, no
+ * template of that name in scope, and no native spelling (a constant, a `faq`
+ * or a `makearray`). The `D` and template nodes with their own spellings are
+ * core operators {@link callFormOk} already excludes. The field keys are not
+ * checked ({@link keyOk}): the reader takes any key spelling. Nothing is
+ * printed; only a `faq` or `makearray` node is walked, by the same shape tests
+ * the printer applies to it.
+ */
+export function callFormNode(c: Ctx, o: string, fs: readonly Kv[], kvs: Kvs): boolean {
+  if (!(callFormOk(o, fs) && opnOk(o) && tparams(c.s, o) === undefined)) return false
+  if (o === 'const') return constNative(c.sf, kvs) === undefined
+  if (o === 'faq') {
+    const f = faqForm(kvs)
+    return !(f !== undefined && faqOk(f))
+  }
+  if (o === 'makearray') {
+    const m = mkForm(kvs)
+    return !(m !== undefined && mkOk(m))
+  }
+  return true
 }
 
 /** `Math.pa`: the tokens of an expression for a position needing level `L`. */

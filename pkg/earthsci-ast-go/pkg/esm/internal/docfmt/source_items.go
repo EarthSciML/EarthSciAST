@@ -258,7 +258,7 @@ func itemsPrMx(prE func(*Sym, *Eqn) string, prR func(*Sym, Json) string, s *Sym,
 		sc := t.scope(s)
 		out := Tm[string]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Body: prR(sc, t.Body), Attrs: t.Attrs}
 		if t.HasLhs {
-			out.Lhs = prR(sc, t.Lhs)
+			out.Lhs = prR(t.mscope(s), t.Lhs)
 		}
 		return MR{K: MxTm, Tm: out}
 	}
@@ -285,7 +285,7 @@ func itemsCkMx(lim *Lim, ckE func(*Lim, *Sym, string) ([]Eqn, bool), ckR func(*L
 		sc := t.scope(s)
 		out := Tm[Json]{Name: t.Name, Params: t.Params, HasLhs: t.HasLhs, Attrs: t.Attrs}
 		if t.HasLhs {
-			l, ok := ckR(lim, sc, t.Lhs)
+			l, ok := ckR(lim, t.mscope(s), t.Lhs)
 			if !ok {
 				return nil, false
 			}

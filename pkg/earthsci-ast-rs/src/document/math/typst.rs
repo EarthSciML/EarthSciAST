@@ -103,6 +103,8 @@ pub fn kw_chars(k: Kw) -> &'static str {
         Kw::Limits => "limits",
         Kw::Lr => "lr",
         Kw::Nl => "\\",
+        Kw::Lset => "{",
+        Kw::Rset => "}",
         Kw::Rpg
         | Kw::Lb
         | Kw::Rb
@@ -121,7 +123,9 @@ pub fn kw_chars(k: Kw) -> &'static str {
         | Kw::Substack
         | Kw::Lbkg
         | Kw::Rbkg
-        | Kw::LimitsL => "",
+        | Kw::LimitsL
+        | Kw::Barr
+        | Kw::Earr => "",
     }
 }
 
@@ -164,7 +168,7 @@ pub fn tok_chars(t: &Tok) -> Vec<char> {
         Tok::Code(j) => std::iter::once('#').chain(typst_dict::encode(j)).collect(),
         Tok::Units(l) => unit_chars(l),
         Tok::Kw(k) => kw_chars(*k).chars().collect(),
-        Tok::Rm(_) | Tok::Jstr(_) | Tok::Esc(_) => vec![],
+        Tok::Rm(_) | Tok::Jstr(_) | Tok::Esc(_) | Tok::Carr(_) => vec![],
     }
 }
 
@@ -398,6 +402,8 @@ pub fn punct(c: char) -> Option<Kw> {
         '&' => Kw::Amp,
         '.' => Kw::Sdot,
         '\\' => Kw::Nl,
+        '{' => Kw::Lset,
+        '}' => Kw::Rset,
         _ => return None,
     })
 }
