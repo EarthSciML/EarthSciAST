@@ -5433,8 +5433,8 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
 
-- `constrained_match_scope/` — one document, one shape-constrained `div` rule, two shaped variables: only the conforming variable's `div` is rewritten; the other survives lowering intact (positive + negative in one expanded golden).
-- `two_div_two_meshes/` — two equal-priority `div` rules, each `where`-scoped to its own mesh's edge set: each `div` lowers by its own mesh's rule, with no `priority` games (the pre-`where` engine would have sent both to the first-declared rule).
+- `constrained_match_scope/` — one document, one shape-constrained spatial-`D` rule, two shaped variables: only the conforming variable's `D` is rewritten; the other survives lowering intact (positive + negative in one expanded golden).
+- `two_div_two_meshes/` — two equal-priority rules on the user op `fv_div` (an unstructured-mesh divergence, not a per-axis `D`), each `where`-scoped to its own mesh's edge set: each `fv_div` lowers by its own mesh's rule, with no `priority` games (the pre-`where` engine would have sent both to the first-declared rule).
 - `per_variable_scheme_literal_args/` — the sanctioned ground-pattern per-variable selector: an upwind rule matching literal `u` (priority 10) and a generic central rule capturing everything else, mixed schemes on one axis.
 - `constraint_unknown_index_set/` — invalid: a `shape` constraint naming an undeclared index set → `template_constraint_unknown_index_set` at load.
 
