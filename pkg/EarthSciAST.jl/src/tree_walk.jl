@@ -52,7 +52,8 @@ include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLay
 include("tree_walk/node.jl")             # §3   the `_Node` IR and its payload types
 include("tree_walk/dag.jl")              #      unique-node walks over a shared DAG
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
-include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
+include("tree_walk/build_helpers.jl")    #      sentinels, claimed-slot set, small utilities
+include("tree_walk/bounded_const_array.jl") #    const-array boundary policy
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
 include("tree_walk/build_records.jl")    #      the records a build hands back
@@ -92,6 +93,7 @@ include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate r
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build
+include("tree_walk/build_equation_prep.jl")   #      broadcast lowering, observed LHS, lifts, folds
 include("tree_walk/build_refusals.jl")        #      refusals at the build entry
 include("tree_walk/build_classify.jl")        # §2b  pre-lowering + variable classification
 include("tree_walk/build_caller_data.jl")     #      caller data, keys, parameter scope
