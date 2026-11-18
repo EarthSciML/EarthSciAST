@@ -1485,7 +1485,11 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
    by the resolution table of esm-spec §4.2: a state's own tendency, an observed's definition
    differentiated by the chain rule, `0` for a time-invariant name, and the sum, product and
    quotient rules through `+ - neg * /`. A `D` the table cannot answer, and a cyclic chain, is left
-   standing for the `unlowered_operator` gate. Left-hand sides are never rewritten.
+   standing for the `unlowered_operator` gate. Left-hand sides are never rewritten. A structural
+   `D` inside a template body, or applied to a reference, is resolved in the body without
+   expanding, by esm-spec §9.6.4 rule 3 ("Time derivatives"): a parameter's derivative becomes a
+   `p_dt` parameter that each reference binds to the resolution of its own operand, and a
+   reference's derivative becomes a reference to the template's `<name>.ddt` entry.
 
    **`ic` right-hand sides are resolved too.** An `ic` equation (esm-spec §11.4) is still in the
    equation list when this step runs, and step 4 classifies it out into `field_ics` afterwards, so
@@ -1533,8 +1537,11 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      renamed per owner too, so no deduplicated entry is left holding a reference the merged
      registry cannot resolve. Downstream
      consumers — graph construction, simulation backends, emit — resolve surviving
-     `apply_expression_template` references against this registry; a consumer MAY evaluate them
-     natively or via `Expand` (esm-spec §9.6.4 rule 2), whose observable behavior is identical.
+     `apply_expression_template` references against this registry. Builders, evaluators and
+     analyses SHOULD NOT expand them: they SHOULD evaluate each referenced template natively,
+     once per template and binding shape (esm-spec §9.6.4 rule 2). A consumer that does expand
+     still conforms if its observable behavior is identical; explicit expansion utilities (for
+     tools and interchange) remain permitted.
    - **`state_variables` is the solved-for vector, not a classification.** esm-spec
   §6.3.1's `ode_states` / `observed_unknowns` / `algebraic_unknowns` partition the
   UNKNOWNS and are recovered by the accessors of that section; they are a different

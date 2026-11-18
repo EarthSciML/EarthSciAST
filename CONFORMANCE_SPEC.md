@@ -7834,10 +7834,13 @@ the lift of the expansion did. Each case gains a second golden, the flattened
 equations with references kept and the reached registry entries, byte for byte
 across bindings, and the set gains a case whose application binds an array to a
 mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
-parameter. A template body holding a structural time derivative is pinned by an
-invalid fixture expecting `template_body_time_derivative`, once with a literal
-`wrt` (at registration) and once with a parameter bound to `"t"` (at the
-reference).
+parameter. A structural time derivative inside a template body is pinned by
+a fixture whose flattened golden (after `Expand`) equals the expansion's
+resolution: one `D` with `wrt` absent over a parameter bound to a state, one
+over a parameter bound to an observed (chain rule), one over a nested
+reference (`<S>.ddt`), one `wrt` parameter bound to `"t"` in one instance and to
+a spatial axis in another, and one that the table cannot answer, refused by
+the build gate as its expansion is.
 
 **What this category does not pin.** How a binding memoizes instances, and
 whether its build compiles a referenced body once or once per call site:

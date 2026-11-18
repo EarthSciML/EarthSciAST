@@ -11,29 +11,30 @@
 > no match spans a template boundary, `Expand(load(f))` is the same tree as under 2.3.0. The
 > breaking differences are:
 >
-> 1. **A template body holding a structural time derivative is rejected**
->    (`template_body_time_derivative`, §9.6.4 rule 3). 2.3.0 accepted it and expanded the
->    reference eagerly.
-> 2. **A pattern no longer matches across a reference to a template whose body holds a
+> 1. **A pattern no longer matches across a reference to a template whose body holds a
 >    rewrite-target op.** 2.3.0 expanded such a reference before the fixpoint, so a compound
 >    pattern could match a node assembled partly from the call site and partly from the body;
 >    now the reference is a leaf (§9.6.4 rule 4, case c).
-> 3. **A compound pattern no longer matches around another rule's replacement**, because the
+> 2. **A compound pattern no longer matches around another rule's replacement**, because the
 >    replacement is now a reference (§9.6.4 rule 4, case a).
-> 4. **Inside a template body, a pattern sees a parameter only through its kind and declared
+> 3. **Inside a template body, a pattern sees a parameter only through its kind and declared
 >    shape**; a structured or ground pattern node at a parameter no longer matches what the
 >    call site bound (§9.6.4 rule 4, case b).
-> 5. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
+> 4. **The reference-preserving (emitted) form changes**: a lowered node is a reference to
 >    its rule; a referenced rule is emitted as a match-less entry under its name; rewritten
 >    template bodies replace authored ones, and the registry gains `<name>.variant<k>` and
 >    `<name>.cellwise<k>` entries. A consumer that reads a loaded or emitted document
 >    expecting inlined stencils (e.g. one that counts zero `apply_expression_template` nodes)
 >    must expand first.
-> 6. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
->    keep references, and the merged registry carries them; `Expand` of the flattened system is
->    unchanged.
+> 5. **The flattened system's form changes**: elementwise-lifted equations and mounted leaves
+>    keep references; a structural `D` inside a template body is resolved in the body, adding
+>    `p_dt` parameters and bindings and `<name>.ddt` derivative entries; the merged registry
+>    carries them all; `Expand` of the flattened system is unchanged.
 >
-> Differences 2–4 change which rules fire, and so what a document means, wherever they apply;
+> A template body holding a structural time derivative is still accepted, and resolves to
+> exactly what its expansion did (§9.6.4 rule 3).
+>
+> Differences 1–3 change which rules fire, and so what a document means, wherever they apply;
 > none applies anywhere in the 2026-11 corpus of real models. These semantics are not
 > version-switched: a loader implementing them applies them to every document it accepts, as
 > the reference-preserving load of 0.9.0 did.
@@ -5235,15 +5236,56 @@ special-case older versions to recover Option A matching. Motivation and measure
      made it, so the bound accepts and rejects the same documents as that engine did; a
      binding computes it once per instance (the instance's own pass count plus the deepest
      instance it writes), not once per call site.
-   - *Time derivatives.* A template body — match-less, or a `match` rule's — MUST NOT hold a
-     structural time derivative: a `D` whose `wrt` is `"t"` or absent, or whose `wrt` is a
-     parameter that a reference binds to `"t"`. Flatten resolves a right-hand-side time `D`
-     against the tendencies the system defines (§4.2), which needs the name the derivative is
-     taken of, and that is a call-site fact the instance does not carry; no template in the
-     corpus writes one. Such a body is rejected with `template_body_time_derivative`: at
-     registration (§9.7.3) for a literal or absent `wrt`, and at the reference for a parameter
-     bound to `"t"`, naming the template and the reference. (A later revision may instead
-     resolve such a `D` per instance.)
+   - *Time derivatives.* A template body — match-less, or a `match` rule's — MAY hold a
+     structural time derivative: a `D` whose `wrt` is `"t"` or absent, or, in an instance
+     whose `wrt` parameter is bound to `"t"`, a `D` whose `wrt` is that parameter (the bound
+     literal is part of the instance, so such a `D` is structural in that instance and
+     spatial in another). It is resolved in flatten step 3a (esm-libraries-spec §4.7.5) by
+     §4.2's table, **without expanding**, as follows. Resolving inside a body follows the
+     table's structural recursion unchanged, except at three kinds of leaf:
+     - a **parameter** `p` resolves to a fresh parameter `p_dt` (`_dt` appended to `p`, then
+       `_` until it names no parameter of the template and no name its body reads), which each
+       reference binds to §4.2's resolution of `D(b)` for the `b` it binds to `p`, computed at
+       the reference like any right-hand-side `D`;
+     - a **reference** `R` to template `S` resolves to a reference to `S`'s **derivative
+       entry** (the resolution of `S`'s whole body, by this same rule, registered once per
+       template as `<S>.ddt`, named like rule 3's variants), bound to `R`'s bindings plus a
+       `q_dt` binding for each of `S`'s parameters `q` that the derivative entry needs;
+     - every other name and every literal resolves exactly as at a call site: a state to its
+       tendency, an observed by the chain rule, a time-invariant name to `0`.
+
+     The body with its `D`s resolved replaces the template's body in the flattened registry,
+     with the `p_dt` parameters appended to its `params`, and every reference to it gains the
+     `p_dt` bindings. This depends on the template alone (which parameters sit under a
+     structural `D` is read from the body), plus the `wrt` literal where `wrt` is a
+     parameter, so it is done once per template instance. **It equals the expansion's
+     resolution exactly**: §4.2's recursion is structural, so resolving `D(e[p := b])`
+     visits the nodes of `e` as resolving `D(e)` in the body does and, at each place `b` was
+     substituted, yields the resolution of `D(b)` — which is what `p_dt` is bound to.
+     Free names in the body are flatten-scoped names of the system (§10.7), resolved against
+     the same equations; cycles are detected over names exactly as at a call site.
+
+     When the table answers nothing — an operator outside it inside the body, or a `D(b)` at
+     a reference that answers nothing — the expansion would leave its `D` standing, and so
+     does this rule: a `D` the body's own recursion cannot answer stays in the body, and a
+     reference for which some `p_dt` cannot be resolved keeps pointing at the unresolved body
+     (registered as `<name>.unresolved` when other references resolve). Either way the
+     `unlowered_operator` gate (§9.6.3 constraint 6) rejects the build exactly as it would
+     reject the expansion, naming the `D`, the template and the reference. A structural `D`
+     on a reference written at a call site (`D(ref(T, b), t)`) resolves to a reference to
+     `<T>.ddt` the same way.
+
+     Order and the lifts: step 3a runs where esm-libraries-spec §4.7.5 puts it, after the
+     pointwise lift (step 3b) and before the elementwise lift (§9.6.11). Each of the three
+     treats a parameter by its role exactly as it treats the binding substituted for it in the
+     expansion — a `D` operand is an array position (§9.6.11), so a lift leaves a binding read
+     only under `D` whole, as it leaves the substituted operand whole — and so the composite
+     equals the expansion's. Roles that the elementwise lift reads after step 3a are read
+     from the resolved body, where `p_dt` stands where `D(p)` stood. A `match` rule MAY match
+     a structural `D` like any node; it fires at load, inside bodies per this rule, before
+     flatten resolves what is left. Structural `D` is strictly unary (§4.2), so an instance
+     whose `wrt` parameter is bound to `"t"` on a `D` with trailing operands is rejected at
+     that reference with `operator_arity`.
    - *Equivalence.* Wherever no match would span a reference boundary (rule 4), `Expand` of
      the result equals the tree that substituting each firing rule's body in place, and
      continuing the fixpoint on the substituted tree, would produce. Where a match would span
@@ -5466,7 +5508,6 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `apply_expression_template_recursive_body` | A template-body reference cycle (self or mutual) in the §9.7.3 registration-time DAG. (Redefined by the template-library RFC: acyclic body references are legal — checked at registration and, from `esm: 0.9.0`, preserved uninlined, §9.6.4/§9.7.3.) |
 | `apply_expression_template_invalid_declaration` | `params` is missing/empty/duplicates entries, `body` is missing, a malformed `where` block (§9.6.1: `where` without `match`, a key that is not a declared param, an unknown constraint kind — v1 admits exactly `shape` — or an empty/non-string `shape` list), or other structural defects. |
 | `rewrite_rule_nonterminating` | The rewrite fixpoint did not converge within `MAX_REWRITE_PASSES` (64) passes (§9.6.3), counted as rewrite depth through template bodies, or a template instance's rewriting needs the same instance again (§9.6.4 rule 3). |
-| `template_body_time_derivative` | A template body (match-less, or a `match` rule's) holds a structural time derivative: a `D` whose `wrt` is `"t"` or absent (at registration, §9.7.3), or whose `wrt` is a parameter a reference binds to `"t"` (at that reference) (§9.6.4 rule 3). |
 | `derived_index_set_unmaterialized` | An expression ranges over a `kind: "derived"` index set whose producer could not be materialized at build — a `distinct` producer whose key column is not a constant factor (§4.2), or a producer no stage evaluated. Raised when the model is built for evaluation, naming the index set and its `from_faq` producer. The evaluator MUST NOT contract the range as empty: an empty range folds to the semiring's additive identity, and a `0` indistinguishable from a real count is exactly the silent wrong answer this code exists to prevent. |
 | `value_invention_key_out_of_range` | A `distinct` producer's `key`, or a column a value-invention `join.on` clause reads, evaluates to NaN at build. The key templates of `lib/relational.esm` (`pair_key`, `edge_key`) return NaN for a component that is outside its declared range, non-integral or NaN, so that a key can never collide silently with another; this code is how that reaches the author. Raised when value invention runs, naming the column (the producer whose `key` it is, or the join column) and the loop indices at which it was NaN. Takes precedence over `derived_index_set_unmaterialized`: the producer ran, and the column, not the data, is wrong. Fixture: `tests/conformance/value_invention_materialize/fixtures/key_out_of_range.esm`. |
 | `unlowered_operator` | A rewrite-target op (§4.2) reached evaluation/compilation without being lowered — no rule eliminated it. Fires before evaluation, not necessarily at load (loading is permissive). One uniform code superseding the former per-language spatial-op errors (`E_TREEWALK_UNREACHABLE_SPATIAL_OP` / `UnreachableSpatialOperatorError` / `UnsupportedDimensionalityError`). |
@@ -5742,7 +5783,7 @@ An **ordered array** appearing (i) inside a `model` or `reaction_system`, or (ii
 
 #### 9.7.3 Registration-time body checking
 
-A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`), chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`), and a body holding a structural time derivative (`template_body_time_derivative`, §9.6.4 rule 3). Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
+A template `body` MAY contain `apply_expression_template` nodes referencing other templates that are **in scope** (declared locally or imported) and **match-less**. After the effective sequence (§9.7.4) is fixed and before the §9.6.3 fixpoint runs, the loader builds the body-reference graph, rejects cycles (`apply_expression_template_recursive_body`), and chains deeper than `MAX_TEMPLATE_EXPANSION_DEPTH = 32` (`template_body_expansion_too_deep`). Bodies are **not** inlined (from `esm: 0.9.0`; pre-0.9.0 loaders inlined here in topological order — substitution is confluent, so the result was order-independent). Because nothing inlines at a library boundary anymore, the depth bound is measured on the **full merged cross-file reference graph**: a chain deeper than 32 across files is rejected even though each file's local chain is shallow (under Option A each library's own composition closed its bodies at its edge, resetting the count — a deliberate, corner-case-only behavioral change of 0.9.0). A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.
 
 #### 9.7.4 Effective declaration order
 
