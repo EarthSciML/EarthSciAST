@@ -105,10 +105,10 @@ end
 # `_IcPlan`: build_records.jl.
 
 function _ic_plan(
-        model::Model, scalar_ics, field_ics;
+        model::Model, scalar_ics::Vector{Tuple{String, ASTExpr}}, field_ics::Vector{Tuple{String, ASTExpr}};
         param_scope::AbstractDict, base_arrays::AbstractDict,
         param_arrays::AbstractDict, index_sets::AbstractDict,
-        derived_extents::AbstractDict, factor_scope::AbstractDict, vi_vars
+        derived_extents::AbstractDict, factor_scope::AbstractDict, vi_vars::Set{String}
     )
     params = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in param_scope)
     bound_fields = Tuple{String, ASTExpr}[(n, _ic_bind_start_time(r)) for (n, r) in field_ics]
@@ -274,7 +274,7 @@ end
 # Each scalar `ic` right-hand side evaluated in the start-of-run scope (see
 # `_ic_start_scope`, which has already refused a state read).
 function _fold_scalar_ics(
-        scalar_ics, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict
+        scalar_ics::Vector{Tuple{String, ASTExpr}}, unknowns::AbstractSet{String}, s::_IcStart, base_arrays::AbstractDict
     )
     eq_ics = Dict{String, Float64}()
     isempty(scalar_ics) && return eq_ics
@@ -320,7 +320,7 @@ end
 function _enumerate_declared_array_cells!(
         array_cells, model::Model,
         index_sets::AbstractDict,
-        derived_extents::AbstractDict, vi_vars
+        derived_extents::AbstractDict, vi_vars::Set{String}
     )
     state_here = Set{String}(solver_unknowns(model))
     for (n, v) in model.variables
@@ -378,7 +378,7 @@ end
 # the seed path cannot evaluate, is a hard error — a missing/unsupported scoped
 # ic is never silently dropped.
 function _fold_field_ics!(
-        set, field_ics, array_cells, layout::StateLayout,
+        set, field_ics::Vector{Tuple{String, ASTExpr}}, array_cells, layout::StateLayout,
         param_scope::AbstractDict,
         const_arrays::AbstractDict
     )
@@ -646,7 +646,7 @@ end
 # initial condition or the caller's `u0` names (`skip_slots`) keeps its value.
 function _seed_faq_init_u0!(
         u0::Vector{Float64}, init_equations::Vector{Equation},
-        initial_conditions::AbstractDict, cs::_CompileScope, p;
+        initial_conditions::AbstractDict, cs::_CompileScope, p::Union{Nothing, NamedTuple};
         skip_slots::Set{Int} = Set{Int}()
     )
     var_map = cs.var_map

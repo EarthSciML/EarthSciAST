@@ -23,7 +23,7 @@
 function _build_lower_and_classify(
         model::Model;
         const_arrays::AbstractDict, param_arrays::AbstractDict,
-        vi_vars, materialize_out, index_sets = nothing
+        vi_vars::Set{String}, materialize_out::Union{Nothing, DiscreteMaterializer}, index_sets = nothing
     )
     # ---- Observed synthesis + equation pre-lowering ----
     # (see `_prepare_model_equations`: expression-defined observed synthesis,
@@ -167,7 +167,7 @@ function _build_partition_and_materialize(
         model::Model, cls::_VariableClasses;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         index_sets::AbstractDict, const_arrays::AbstractDict,
-        param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars, vi_extents::AbstractDict,
+        param_arrays::AbstractDict, parameter_overrides::AbstractDict, vi_vars::Set{String}, vi_extents::AbstractDict,
         vi_maps,
         # Build-time parameter-read sink (see `_record_param_read`): the two consumers
         # below (`_materialize_geometry_setup`, the `ic` evaluation) record the
@@ -379,7 +379,7 @@ end
 # `parts.eq_ics`), and seed u0 and the scalar-parameter NamedTuple.
 function _build_state_layout(
         model::Model, cls::_VariableClasses, parts::_EquationPartition;
-        initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars,
+        initial_conditions::AbstractDict, index_sets::AbstractDict, const_arrays::AbstractDict, vi_vars::Set{String},
         # Build-time parameter-read sink (see `_record_param_read`): the field-ic fold
         # below is the fourth build-time consumer of the parameter scope.
         param_reads::Union{Nothing, Set{String}} = nothing,
@@ -593,7 +593,7 @@ function _build_compile_evaluator(
         index_sets::AbstractDict = Dict{String, Any}(), const_arrays::AbstractDict,
         const_array_boundaries::AbstractDict, param_arrays::AbstractDict,
         initial_conditions::AbstractDict, tspan,
-        products::Union{Nothing, BuildProducts}, materialize_out,
+        products::Union{Nothing, BuildProducts}, materialize_out::Union{Nothing, DiscreteMaterializer},
         form::_BuildForm,
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
         caller_u0 = nothing

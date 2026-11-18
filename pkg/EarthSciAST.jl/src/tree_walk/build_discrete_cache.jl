@@ -100,7 +100,7 @@ end
 
 # Dependency order over the discrete-materialize vars (a cache that gathers another
 # cache must fill AFTER it). Mirrors `_geom_setup_order`.
-function _discrete_fill_order(discrete_vars, discrete_defs)
+function _discrete_fill_order(discrete_vars::Set{String}, discrete_defs)
     return _dependency_order(
         collect(discrete_vars),
         n -> intersect(_referenced_var_names(discrete_defs[n]), discrete_vars);
@@ -202,8 +202,8 @@ end
 # the time tiers. Returns `nothing` when there is nothing to fill.
 function _build_discrete_materializer!(
         mut::DiscreteMaterializer,
-        discrete_vars, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
-        cs::_CompileScope, p, n_states::Int
+        discrete_vars::Set{String}, discrete_defs::Dict{String, ASTExpr}, resolved_obs::Dict{String, ASTExpr},
+        cs::_CompileScope, p::Union{Nothing, NamedTuple}, n_states::Int
     )
     isempty(discrete_vars) && return nothing
     order = _discrete_fill_order(discrete_vars, discrete_defs)

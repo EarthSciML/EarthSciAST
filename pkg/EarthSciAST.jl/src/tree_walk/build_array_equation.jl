@@ -1651,7 +1651,7 @@ end
 # ranges as a tuple, so the loop is compiled for their rank rather than
 # dispatched per cell. Returns the number of cells.
 function _ac_claim_outs!(
-        outs::Vector{Int}, covered, blk, var_map, vname::String,
+        outs::Vector{Int}, covered::_Covered, blk, var_map, vname::String,
         cell::Vector{Int}, forms, iters::Tuple
     )
     c = 0
@@ -1979,7 +1979,7 @@ end
 
 # Mark output slot `idx` (cell key `cname`) written; a second writer is a
 # duplicate derivative.
-function _claim_cell!(covered, idx::Int, cname::AbstractString)
+function _claim_cell!(covered::_Covered, idx::Int, cname::AbstractString)
     covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE", cname))
     covered[idx] = true
     return idx

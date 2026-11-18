@@ -51,7 +51,7 @@
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.
 # Returns `(equations, folded_array_obs)`.
-function _prepare_model_equations(model::Model; vi_vars = Set{String}())
+function _prepare_model_equations(model::Model; vi_vars::Set{String} = Set{String}())
     # esm 1.0.0: an observed unknown's defining right-hand side IS an equation
     # (esm-spec §6.3), so there is no variable-level `expression` left to
     # synthesize an equation from — the list is already complete.
@@ -87,7 +87,7 @@ end
 # `has_setup_geometry` gates the setup-vars discovery / materialization.
 function _discover_geometry_vars(
         model::Model, equations::Vector{Equation}, g::_DefGraph,
-        param_arrays::AbstractDict, vi_vars; index_sets = nothing
+        param_arrays::AbstractDict, vi_vars::Set{String}; index_sets = nothing
     )
     has_geometry_seed = _model_has_setup_join_reduction(equations)
     pre_state_names = setdiff(Set{String}(solver_unknowns(model)), vi_vars)
@@ -226,7 +226,7 @@ end
 # producer and keeps the scalar-observed path.
 function _collect_array_inline_vars(
         model::Model, equations::Vector{Equation},
-        geom_setup_vars, geom_inline_vars
+        geom_setup_vars::Set{String}, geom_inline_vars::Set{String}
     )
     array_inline_vars = Set{String}()
     observed_here = Set{String}(observed_unknowns(model))
@@ -305,7 +305,7 @@ _array_obs_inline_forced() = _compiler_plan_now().name === :interpreter
 # materialized (an unread one costs nothing inlined and is not recorded).
 function _collect_materialized_array_obs(
         model::Model, equations::Vector{Equation},
-        array_inline_vars, discrete_vars;
+        array_inline_vars::Set{String}, discrete_vars::Set{String};
         why::Union{Nothing, Dict{String, String}} = nothing
     )
     (_array_obs_inline_forced() || isempty(array_inline_vars)) && return Set{String}()
@@ -647,8 +647,8 @@ function _register_bare_alias_arrays!(
         const_obs_vars::Set{String},
         model::Model, equations::Vector{Equation};
         const_arrays::AbstractDict,
-        geom_setup_vars, geom_inline_vars,
-        array_inline_vars
+        geom_setup_vars::Set{String}, geom_inline_vars::Set{String},
+        array_inline_vars::Set{String}
     )
     alias_defs = Dict{String, ASTExpr}()
     for eq in equations
@@ -695,7 +695,7 @@ end
 # tuple stays homogeneous Float64); an array-shaped observed must be owned.
 function _partition_variables(
         model::Model, cls::_VariableClasses;
-        vi_vars, const_arrays::AbstractDict, param_arrays::AbstractDict
+        vi_vars::Set{String}, const_arrays::AbstractDict, param_arrays::AbstractDict
     )
     param_names = String[]
     observed_names = String[]
@@ -767,8 +767,8 @@ end
 # named prelude def instead of splicing the resolved chain into every reader.
 function _split_observed_and_derivatives(
         equations::Vector{Equation},
-        observed_names, geom_setup_vars, geom_inline_vars,
-        array_inline_vars,
+        observed_names::Vector{String}, geom_setup_vars::Set{String}, geom_inline_vars::Set{String},
+        array_inline_vars::Set{String},
         mat_array_vars = _EMPTY_NAME_SET,
         array_shaped_vars = _EMPTY_NAME_SET
     )
@@ -926,7 +926,7 @@ function _plan_observed_slots(
         derivative_eqs::Vector{Equation},
         raw_obs::Dict{String, ASTExpr},
         resolved_obs::Dict{String, ASTExpr},
-        observed_names
+        observed_names::Vector{String}
     )
     n_total = length(raw_obs)
     none = (; defs = Pair{String, ASTExpr}[], inline = nothing, n_inlined = n_total)

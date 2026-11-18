@@ -78,7 +78,7 @@ end
 # partition places (a state, a scalar parameter or observed, or an array
 # parameter backed by data). `vi_vars` are the value-invention outputs, which
 # are materialized at setup before the build runs.
-function _partition_owner(cls::_VariableClasses, vi_vars, name::String)
+function _partition_owner(cls::_VariableClasses, vi_vars::Set{String}, name::String)
     name in vi_vars && return :value_invention
     name in cls.geom_setup_vars && return :setup_array
     name in cls.geom_inline_vars && return :inlined_geometry
