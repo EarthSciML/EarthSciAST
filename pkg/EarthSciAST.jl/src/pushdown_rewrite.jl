@@ -14,10 +14,10 @@
 # (`_aggregate_oplus_identity == ("+", 0.0)`); a `max_product` / `min_sum` /
 # etc. aggregate of the SAME shape is left untouched (the soundness guard).
 #
-# Hooked in the AbstractDict front door (`_build_evaluator(esm; …)`), opt-in
-# behind the `pushdown_rewrite=true` kwarg, BEFORE `coerce_esm_file` so both
-# the typed value-invention path and the impl re-parse see the generated
-# constructs. Off by default so every existing test is byte-identical.
+# Run by `esm_problem(…; pushdown_rewrite = true)` on the authored document
+# before it is flattened (and by the native-document build door,
+# `_build_evaluator(esm; pushdown_rewrite = true)`), so value invention and the
+# build both see the generated constructs. Off by default.
 # ========================================================================
 
 """
@@ -362,11 +362,15 @@ function _pd_matvec_factors(
 end
 
 # (⊕ spelling, 0̄) for an aggregate node, or `nothing` on an unknown semiring.
-_pd_oplus(agg::OpExpr) =
-try
-    _aggregate_oplus_identity(agg.semiring, agg.reduce)
-catch
-    nothing
+# The node's ⊕ and 0̄, or `nothing` for a semiring or reducer the registry
+# refuses (the rewrite then leaves the node alone, and the build reports it).
+function _pd_oplus(agg::OpExpr)
+    return try
+        _aggregate_oplus_identity(agg.semiring, agg.reduce)
+    catch err
+        err isa EarthSciASTError || rethrow()
+        nothing
+    end
 end
 
 _pd_flip(op) = op == "<" ? ">" : op == "<=" ? ">=" : op == ">" ? "<" : "<="
@@ -1480,7 +1484,7 @@ function _pushdown_gate_axes(
 end
 
 """
-    _inject_pushdown_aliases!(dst, run_doc, coupling_pairs) -> dst
+    _inject_pushdown_aliases!(dst, run_file::EsmFile, coupling_pairs) -> dst
 
 Alias-key injection for the `esm_problem` pushdown path (same-object references,
 no copies). The flattener rewrites EQUATION references through the coupling
@@ -1500,21 +1504,14 @@ authored name (`"src_W"`) must ALSO resolve under:
 Existing keys are never overwritten.
 """
 function _inject_pushdown_aliases!(
-        dst::AbstractDict, run_doc::AbstractDict,
+        dst::AbstractDict, run_file::EsmFile,
         coupling_pairs::AbstractVector
     )
     for (frm, to) in coupling_pairs
         haskey(dst, frm) && !haskey(dst, to) && (dst[to] = dst[frm])
     end
-    models = get(run_doc, "models", nothing)
-    models isa AbstractDict || return dst
-    vnames = String[]
-    for (_, m) in models
-        m isa AbstractDict || continue
-        mv = get(m, "variables", nothing)
-        mv isa AbstractDict || continue
-        append!(vnames, (String(k) for k in keys(mv)))
-    end
+    run_file.models === nothing && return dst
+    vnames = String[v for m in values(run_file.models) for v in keys(m.variables)]
     for k in collect(keys(dst))
         ks = String(k)
         occursin('.', ks) && continue
@@ -1527,7 +1524,7 @@ function _inject_pushdown_aliases!(
 end
 
 # The coupling `variable_map` (from ⇒ to) pairs of a raw document — captured
-# BEFORE `_prepare_run_doc` flattens them away, for `_inject_pushdown_aliases!`.
+# BEFORE `_prepare_run` flattens them away, for `_inject_pushdown_aliases!`.
 function _pushdown_coupling_pairs(doc::AbstractDict)
     out = Pair{String, String}[]
     cp = get(doc, "coupling", nothing)

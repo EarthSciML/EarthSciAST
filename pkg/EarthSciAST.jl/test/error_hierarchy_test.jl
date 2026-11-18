@@ -26,8 +26,8 @@ include("testutils.jl")
 
     # Walk the module (and its two namespaced submodules) for concrete Exception
     # types and assert every one of them is under the root. `all=true` reaches
-    # the unexported internals — the control-flow signals (`_CodegenDecline`,
-    # `_StencilFallback`, …) are covered deliberately, so the rule "every
+    # the unexported internals — the control-flow signals (`_Decline`,
+    # `_DiagnosticCap`, …) are covered deliberately, so the rule "every
     # exception in this package is an EarthSciASTError" has no exceptions.
     @testset "every exception type in the package subtypes it" begin
         strays = String[]

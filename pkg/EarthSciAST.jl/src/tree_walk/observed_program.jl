@@ -230,56 +230,26 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     levels = Any[]
     if !isempty(mat_vars)
         recur_names = _recurrence_names(mat_defs, mat)
+        # The same sweep the right-hand side's fill levels run
+        # (recurrence_sweep.jl), against this program's layout.
+        recurrence = m -> m in recur_names ? _with_open_rule_label(
+                () -> _compile_recurrence_sweep(
+                    m, mat_defs[m], mat_dims[m],
+                    get(model.variables, m, nothing), resolved_obs, avi, vm,
+                    ctx.const_registry, ctx.pgather, ctx.param_sym_set
+                ), m
+            ) : nothing
+        fill = m -> _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
-            lvl_scalars = Tuple{Int, _Node}[]
-            lvl_kernels = _AccKernel[]
-            lvl_scans = _ScanFold[]
-            lvl_acs = _ArrayContraction[]
-            lvl_recurs = Any[]
-            for m in lvl
-                if m in recur_names
-                    # The same sweep the right-hand side's fill levels run
-                    # (recurrence_sweep.jl), against this program's layout.
-                    push!(
-                        lvl_recurs, _with_open_rule_label(m) do
-                            _compile_recurrence_sweep(
-                                m, mat_defs[m], mat_dims[m],
-                                get(model.variables, m, nothing), resolved_obs, avi, vm,
-                                ctx.const_registry, ctx.pgather, ctx.param_sym_set
-                            )
-                        end
-                    )
-                    continue
-                end
-                feqs = _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
-                se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
-                    _compile_derivative_equations(
-                        feqs, resolved_obs, avi, vm,
-                        ctx.const_registry, ctx.pgather, ctx.param_sym_set, n_total; template_sites = ctx.template_sites
-                    )
-                end
-                for (slot, ex) in se
-                    push!(
-                        lvl_scalars, (
-                            slot, _compile(
-                                ex, vm, ctx.param_sym_set
-                            ),
-                        )
-                    )
-                end
-                append!(lvl_scalars, pcs)
-                append!(lvl_kernels, aks)
-                append!(lvl_scans, sfs)
-                append!(lvl_acs, acs)
-            end
-            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
-            section = _with_open_rule_label(name) do
-                _make_kernel_section(merged)
-            end
+            lv = _compile_fill_level(
+                lvl, :dynamic, fill, recurrence, resolved_obs, avi, vm,
+                ctx.const_registry, ctx.pgather, ctx.param_sym_set, n_total;
+                label_by_name = true, template_sites = ctx.template_sites
+            )
             push!(
-                levels, (
-                    lvl_scalars, section, lvl_scans,
-                    _make_contraction_section(lvl_acs), Tuple(lvl_recurs),
+                levels, _inplace_fill_level(
+                    lv.scalars, lv.kernels, lv.scans, lv.contractions, lv.recurrences;
+                    section_label = f -> _with_open_rule_label(f, name)
                 )
             )
         end

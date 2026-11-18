@@ -369,37 +369,19 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
         n for (n, v) in model.variables
             if v.type == ParameterVariable
     )
-    namespaces = _override_namespaces(param_names; model = model)
+    table = NameTable(param_names; namespaces = _override_namespaces(param_names; model = model))
     # `Any`-valued: esm-spec §6.6.2 admits INLINE ARRAY DATA for a SHAPED
     # parameter alongside a scalar, and the array must survive key
     # canonicalization intact (`_register_inline_array_parameters` routes it to
     # the const-array channel just below).
-    normalized, unknown, ambiguous, collisions =
-        _canonicalize_override_keys(Any, param_names, namespaces, overrides)
-    if !isempty(ambiguous)
-        k, cands = first(sort!(collect(ambiguous), by = first))
-        throw(ArgumentError(_override_ambiguous_message("parameter_overrides", k, cands)))
-    end
-    if !isempty(collisions)
-        name, keys_ = first(sort!(collect(collisions), by = first))
-        throw(
-            ArgumentError(
-                _override_collision_message(
-                    "parameter_overrides", "parameter", name, keys_
-                )
-            )
-        )
-    end
-    if !isempty(unknown)
-        throw(
-            ArgumentError(
-                "parameter_overrides: unknown parameter '$(first(sort(unknown)))' — " *
-                    "this model declares no such parameter " *
-                    "(known: $(isempty(param_names) ? "none" : join(sort(collect(param_names)), ", "))). " *
-                    "esm-spec §6.6.2 keys parameter_overrides by LOCAL parameter name."
-            )
-        )
-    end
+    normalized, unknown, ambiguous, collisions = canonicalize_keys(Any, table, overrides)
+    _raise_key_failures(
+        "parameter_overrides", "parameter", unknown, ambiguous, collisions;
+        unknown_message = k -> "parameter_overrides: unknown parameter '$k' — " *
+            "this model declares no such parameter " *
+            "(known: $(isempty(param_names) ? "none" : join(sort(collect(param_names)), ", "))). " *
+            "esm-spec §6.6.2 keys parameter_overrides by LOCAL parameter name."
+    )
     return normalized
 end
 
@@ -429,164 +411,32 @@ function _normalize_const_array_keys(model::Model, const_arrays::AbstractDict)
             if v.type == ParameterVariable && _is_array_shape(v.shape)
     )
     isempty(shaped) && return const_arrays
-    namespaces = _override_namespaces(shaped; model = model)
-    suffix_group = Dict{String, Vector{String}}()
-    for n in shaped, s in _dotted_suffixes(n)
-        push!(get!(suffix_group, s, String[]), n)
-    end
+    table = NameTable(shaped; namespaces = _override_namespaces(shaped; model = model))
     claims = Dict{String, Vector{String}}()
     for rawk in keys(const_arrays)
         k = String(rawk)
         haskey(model.variables, k) && continue    # an exact name
-        name = _dotted_suffix_hit(shaped, namespaces, k)
-        if name === nothing
-            cands = get(suffix_group, k, nothing)
-            cands === nothing && continue          # designates no shaped parameter
-            length(cands) == 1 || throw(
-                ArgumentError(
-                    "const_arrays: ambiguous parameter name '$(k)' — it is carried as a " *
-                        "suffix by $(length(cands)) shaped parameters " *
-                        "($(join(sort(cands), ", "))). Qualify it further with its owning " *
-                        "component (esm-spec §6.6.2)."
-                )
-            )
-            name = cands[1]
-        end
-        haskey(const_arrays, name) && continue     # the exact key wins
-        push!(get!(claims, name, String[]), k)
+        r = resolve_key(table, k)
+        r.how === :unknown && continue             # designates no shaped parameter
+        r.how === :ambiguous && throw(
+            SimulateError(_override_ambiguous_message("const_arrays", k, r.candidates))
+        )
+        haskey(const_arrays, r.name) && continue   # the exact key wins
+        push!(get!(claims, r.name, String[]), k)
     end
     isempty(claims) && return const_arrays
     merged = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     for name in sort!(collect(keys(claims)))
         ks = claims[name]
         length(ks) == 1 || throw(
-            ArgumentError(
-                _override_collision_message(
-                    "const_arrays", "parameter", name, sort!(ks)
-                )
+            SimulateError(
+                _override_collision_message("const_arrays", "parameter", name, sort!(ks))
             )
         )
         merged[name] = merged[ks[1]]
     end
     return merged
 end
-
-# ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
-# Rewrite each caller key onto the build-resolved name it designates, and
-# classify the ones that designate none — or the ones that designate one the
-# same name as another key. `names` is the set of names the build actually
-# resolves (flattening-qualified parameters, or state elements); `namespaces` is
-# the component / subsystem scope rule 2 validates a key's LEADING segments
-# against (`_override_namespaces`).
-#
-# Returns `(normalized, unknown, ambiguous, collisions)`: `ambiguous` maps a
-# bare key to the candidates that carry it, and `collisions` maps a resolved
-# name to the two or more NON-EXACT keys that all designate it — so the caller
-# can raise the three cases apart, each with the remedy that fits it (correct
-# the name; qualify it; drop one of the duplicate keys).
-#
-# The value type `V` is a parameter so the SOLVE-time override path
-# (`remake_parameters`, simulate.jl) can reuse the identical key resolution
-# while keeping each value's own type — a `Dual` passed as a numeric parameter
-# override must stay a `Dual`, or differentiating through `remake(prob; p = …)`
-# would be defeated by the resolver.
-_canonicalize_override_keys(
-    names::AbstractSet{String}, namespaces::AbstractSet{String},
-    overrides::AbstractDict
-) =
-    _canonicalize_override_keys(Float64, names, namespaces, overrides)
-
-@inline _override_value(::Type{Any}, v) = v
-@inline _override_value(::Type{V}, v) where {V} = V(v)
-
-function _canonicalize_override_keys(
-        ::Type{V}, names::AbstractSet{String},
-        namespaces::AbstractSet{String},
-        overrides::AbstractDict
-    ) where {V}
-    # Dotted suffix → the unique name carrying it as one. Rule 3 admits EVERY
-    # proper suffix of a build name, not only its trailing segment, so a
-    # flattened `P.sub.g` is reachable as `sub.g` as well as `g` — the §4.6
-    # spelling an author writes against a single-model build that carries the
-    # mounted subsystem parameter as `sub.g` outright. A suffix carried by two
-    # or more names is AMBIGUOUS: recorded here with its candidates rather than
-    # resolved, so it is never bound to one of them.
-    suffix_group = Dict{String, Vector{String}}()
-    for n in names
-        for s in _dotted_suffixes(n)
-            push!(get!(suffix_group, s, String[]), n)
-        end
-    end
-    normalized = Dict{String, V}()
-    unknown = String[]
-    ambiguous = Dict{String, Vector{String}}()
-    # Which key(s) CLAIMED each resolved name. An EXACT hit (rule 1) is recorded
-    # apart from the non-exact claims (rules 2 and 3) because it WINS rather
-    # than collides: it identifies its name outright, so any bare or
-    # more-qualified claim on that same name is simply discarded. Two NON-EXACT
-    # keys on one name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
-    # landing on `Left.solo`, or `A.M.g` and `B.M.g` both landing on `M.g` — is a
-    # document authoring error: the caller wrote two overrides and only one can
-    # take effect, so it is reported rather than ranked away.
-    exact = Set{String}()
-    claims = Dict{String, Vector{Tuple{String, Any}}}()
-    for (rawk, v) in overrides
-        k = String(rawk)
-        if k in names                             # rule 1: exact hit
-            push!(exact, k)
-            normalized[k] = _override_value(V, v)
-            continue
-        end
-        local name::String
-        suffix = _dotted_suffix_hit(names, namespaces, k)
-        if suffix !== nothing                     # rule 2: longest known suffix
-            name = suffix
-        elseif haskey(suffix_group, k)
-            cands = suffix_group[k]
-            if length(cands) == 1                 # rule 3: unique suffix alias
-                name = cands[1]
-            else                                  # rule 4: ambiguous suffix
-                ambiguous[k] = cands
-                continue
-            end
-        else                                      # rule 5: matches nothing
-            push!(unknown, k)
-            continue
-        end
-        push!(get!(claims, name, Tuple{String, Any}[]), (k, v))
-    end
-    collisions = Dict{String, Vector{String}}()
-    for (name, cs) in claims
-        name in exact && continue
-        if length(cs) > 1
-            collisions[name] = sort!(String[k for (k, _) in cs])
-        else
-            normalized[name] = _override_value(V, cs[1][2])
-        end
-    end
-    sort!(unknown)
-    return normalized, unknown, ambiguous, collisions
-end
-
-# The esm-spec §6.6.2 "two keys, one name" diagnostic, worded identically in
-# Python (`_collision_message`) and Rust
-# (`SimulateError::CollidingParameterKeys`).
-_override_collision_message(
-    surface::AbstractString, kind::AbstractString,
-    name::AbstractString, keys_::AbstractVector{String}
-) =
-    "$(surface): $(length(keys_)) keys designate the $(kind) '$(name)' " *
-    "($(join(keys_, ", "))). Supply exactly one override key per name " *
-    "(esm-spec §6.6.2)."
-
-# The esm-spec §6.6.2 "a key two parameters carry" diagnostic, shared by every
-# surface whose keys `_canonicalize_override_keys` resolves onto parameters.
-_override_ambiguous_message(
-    surface::AbstractString, k::AbstractString, cands::AbstractVector{String}
-) =
-    "$(surface): ambiguous parameter name '$(k)' — it is carried " *
-    "as a suffix by $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
-    "Qualify it further with its owning component (esm-spec §6.6.2)."
 
 # The COMPONENT / SUBSYSTEM names a rule-2 override key may spell in its LEADING
 # segments (esm-spec §6.6.2 rule 2, §4.6).

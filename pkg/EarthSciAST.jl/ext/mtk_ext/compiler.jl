@@ -38,11 +38,11 @@
 # the `_compiler_backend` seam (src/simulate.jl), because rebuilding one out of
 # the right-hand side alone would drop all three.
 #
-# NOTE the deliberate difference from `esm_problem`'s own `_prepare_run_doc`:
-# that path calls `_refuse_flat_events`, which is exactly the §5.39 refusal this
-# compiler exists to lift, and it applies the tree-walk shape transforms
-# (`algebraic_states_to_observeds`, `promote_downstream_shapes`) whose job
-# `mtkcompile` does here. So the coercion below is its own.
+# The document is prepared by the same `_prepare_run` every compiler uses, with
+# this compiler's own refusals in place of the tree-walk build's (it runs the
+# events that build refuses), and without the tree-walk shape transforms
+# (`algebraic_states_to_observeds`, `promote_downstream_shapes`), whose job
+# `mtkcompile` does here.
 
 const _MTK_SII = ModelingToolkit.SciMLBase.SymbolicIndexingInterface
 
@@ -120,10 +120,9 @@ const _MTK_TRY_INSTEAD =
 # The keyword surface `esm_problem` accepts and this compiler cannot honour.
 # Checked BEFORE the load, because the answer does not depend on the document
 # and making the caller wait through a load to hear it is a worse diagnostic.
-function _mtk_refuse_unsupported_inputs(;
-        providers, const_arrays, param_arrays,
-        pushdown_rewrite
-    )
+function _mtk_refuse_unsupported_inputs(req::EarthSciAST._ProblemRequest)
+    providers = req.providers
+    const_arrays, param_arrays = req.const_arrays, req.param_arrays
     if providers !== nothing && !isempty(providers)
         k = String(first(sort!([String(x) for x in keys(providers)])))
         _mtk_refuse(
@@ -147,7 +146,13 @@ function _mtk_refuse_unsupported_inputs(;
                 "the call would never be read. $_MTK_TRY_INSTEAD"
         )
     end
-    pushdown_rewrite && _mtk_refuse(
+    req.runtime_array_parameters && _mtk_refuse(
+        "(the document)",
+        "`runtime_array_parameters = true` asks for every shaped parameter to be a " *
+            "live forcing buffer, and this compiler carries every parameter as a " *
+            "ModelingToolkit symbol, with no buffer to hold one. $_MTK_TRY_INSTEAD"
+    )
+    req.pushdown_rewrite && _mtk_refuse(
         "(the document)",
         "`pushdown_rewrite = true` asks for the projection-pushdown desugar, " *
             "whose whole purpose is to gate a PROVIDER's fetch to an invented index " *
@@ -157,8 +162,9 @@ function _mtk_refuse_unsupported_inputs(;
 end
 
 # File-level constructs `flatten` does not carry into the `FlattenedSystem`
-# this compiler lowers, so building without a refusal would drop them.
-function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile)
+# this compiler lowers, so building without a refusal would drop them. Runs as
+# `_prepare_run`'s file refusal, in place of the tree-walk build's.
+function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile, _strip_taken)
     # A coupling-level event (esm-spec §9.6.6): not an event of any model, so it
     # never reaches the system's event lists.
     for entry in EarthSciAST.expand_coupling_imports(file)
@@ -169,13 +175,14 @@ function _mtk_refuse_unsupported_file(file::EarthSciAST.EsmFile)
                 "lowers only the events a model declares. $_MTK_TRY_INSTEAD"
         )
     end
-    # A `faq`-valued initialization equation (esm-spec §6.2) seeds the cells of
-    # an array state; this compiler takes initial values from defaults and
-    # `ic` equations only.
-    init = EarthSciAST.Equation[]
-    for (mname, model) in something(file.models, ())
-        EarthSciAST._collect_initialization_faqs!(init, model, String(mname))
-    end
+    return nothing
+end
+
+# A `faq`-valued initialization equation (esm-spec §6.2) seeds the cells of an
+# array state; this compiler takes initial values from defaults and `ic`
+# equations only.
+function _mtk_refuse_faq_initialization(flat::FlattenedSystem)
+    init = EarthSciAST._faq_initialization(flat)
     isempty(init) || _mtk_refuse(
         _mtk_equation_label(first(init)),
         "it is a `faq`-valued initialization equation, which this compiler has no " *
@@ -575,9 +582,8 @@ end
 function _mtk_resolve_overrides(flat::FlattenedSystem, overrides::AbstractDict)
     isempty(overrides) && return Dict{String, Any}()
     names = Set{String}(String(k) for k in keys(flat.parameters))
-    namespaces = EarthSciAST._override_namespaces(names)
     normalized, unknown, ambiguous, collisions =
-        EarthSciAST._canonicalize_override_keys(Any, names, namespaces, overrides)
+        EarthSciAST.canonicalize_keys(Any, EarthSciAST.NameTable(names), overrides)
     isempty(collisions) || throw(
         SimulateError(
             EarthSciAST._override_collision_message(
@@ -643,62 +649,6 @@ EarthSciAST.param_map(::ModelingToolkit.MTKParameters) = Dict{String, Int}()
 # The build
 # ---------------------------------------------------------------------------
 
-# The run system. Deliberately NOT `EarthSciAST._prepare_run_doc`: that path
-# calls `_refuse_flat_events`, which is the §5.39 refusal this compiler exists
-# to lift, and it runs the tree-walk shape transforms whose job `mtkcompile`
-# does here.
-function _mtk_run_system(input; metaparameters, base_path, renames_out)
-    if input isa AbstractString
-        isfile(input) ||
-            throw(SimulateError("esm_problem: no such file '$input'"))
-        input = EarthSciAST.load_path(input; metaparameters = metaparameters)
-    end
-    input isa AbstractDict && (
-        input = EarthSciAST.load_document(
-            input; base_path = base_path, metaparameters = metaparameters
-        )
-    )
-    coordinates = nothing
-    solver_block = nothing
-    if input isa EarthSciAST.EsmFile
-        # The document-level refusals every compiler applies (as
-        # `_prepare_run_doc` does for the others).
-        EarthSciAST._refuse_unsupported_major_version(input.esm)
-        EarthSciAST._refuse_reserved_declaration_names(input)
-        EarthSciAST._refuse_unregistered_callback_reads(input)
-        EarthSciAST._refuse_reference_integrity_errors(input)
-        _mtk_refuse_unsupported_file(input)
-        coordinates = input.coordinates
-        solver_block = input.solver
-        EarthSciAST._refuse_reserved_liftings(input)
-        input = flatten(input)
-    end
-    input isa FlattenedSystem || throw(
-        SimulateError(
-            "esm_problem: unsupported input of type $(typeof(input)); pass a path, " *
-                "EsmFile, FlattenedSystem, or native ESM Dict"
-        )
-    )
-    flat = input
-    EarthSciAST._refuse_reserved_liftings(flat)
-    EarthSciAST._refuse_parameter_definitions(
-        flat.equations,
-        merge(flat.state_variables, flat.observed_variables, flat.parameters)
-    )
-    merge!(renames_out, flat.metadata.merged_variable_renames)
-    # The run DOCUMENT is metadata only: output naming / CF coordinates, the
-    # §2.2 `solver` block, the equation count `show` prints, and the component
-    # set `observed_field`'s bare-name rule reads. The SYSTEM is what is built.
-    doc = EarthSciAST.flattened_to_esm(flat)
-    coordinates === nothing || isempty(coordinates) ||
-        (doc["coordinates"] = coordinates)
-    if solver_block !== nothing
-        block = EarthSciAST.serialize_solver(solver_block)
-        isempty(block) || (doc["solver"] = block)
-    end
-    return flat, doc
-end
-
 # The per-rule record (API_SPEC §5.8). Under `:native` a tier names which arm of
 # the cascade took a rule; there is no cascade here, so a tier names WHAT
 # `mtkcompile` DID WITH IT — which is the system-level decision a caller of this
@@ -757,8 +707,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
             bump!(tier)
             push!(
                 rules, EarthSciAST.CompilerRuleRecord(
-                    nm, :equation, tier,
-                    Pair{Symbol, Symbol}[]
+                    nm, :equation, tier
                 )
             )
         end
@@ -773,8 +722,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
             bump!(tier)
             push!(
                 rules, EarthSciAST.CompilerRuleRecord(
-                    nm, :observed, tier,
-                    Pair{Symbol, Symbol}[]
+                    nm, :observed, tier
                 )
             )
         end
@@ -784,7 +732,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
         push!(
             rules, EarthSciAST.CompilerRuleRecord(
                 _mtk_event_label("continuous_events", ev, i), :event,
-                :mtk_continuous_event, Pair{Symbol, Symbol}[]
+                :mtk_continuous_event
             )
         )
     end
@@ -793,7 +741,7 @@ function _mtk_report(flat::FlattenedSystem, system, rev::Dict{Symbol, String})
         push!(
             rules, EarthSciAST.CompilerRuleRecord(
                 _mtk_event_label("discrete_events", ev, i), :event,
-                :mtk_discrete_event, Pair{Symbol, Symbol}[]
+                :mtk_discrete_event
             )
         )
     end
@@ -818,73 +766,43 @@ function _mtk_event_label(kind::AbstractString, ev, i::Int)
 end
 
 """
-    EarthSciAST._mtk_problem(input, span; kwargs...) -> EsmProblem
+    EarthSciAST._mtk_problem(input, req::EarthSciAST._ProblemRequest) -> EsmProblem
 
 `esm_problem(input, tspan; compiler = :mtk, …)`. See the file header for what
 this compiler is for and what it refuses.
 """
-function EarthSciAST._mtk_problem(
-        input, span::Tuple{Float64, Float64};
-        p::AbstractDict,
-        u0,
-        providers,
-        model_name,
-        metaparameters::AbstractDict,
-        base_path::AbstractString,
-        sample_time::Float64,
-        const_arrays::AbstractDict,
-        param_arrays::AbstractDict,
-        inspect,
-        materialize_out,
-        pushdown_rewrite::Bool,
-        seed_ic!,
-        sinks,
-        snapshot,
-        pre_write,
-        checkpoint_predicates,
-        checkpoint_sinks,
-        terminate_on_checkpoint::Bool
-    )
+function EarthSciAST._mtk_problem(input, req::EarthSciAST._ProblemRequest)
     # Every refusal below goes through `_refuse_rule`, which names the compiler
     # in force — so the whole build runs under the `:mtk` plan.
     return EarthSciAST._with_compiler_plan(EarthSciAST._plan_for(:mtk)) do
-        _mtk_problem_impl(
-            input, span; p, u0, providers, model_name,
-            metaparameters, base_path, sample_time, const_arrays,
-            param_arrays, inspect, materialize_out,
-            pushdown_rewrite, seed_ic!, sinks, snapshot,
-            pre_write, checkpoint_predicates, checkpoint_sinks,
-            terminate_on_checkpoint
-        )
+        _mtk_problem_impl(input, req)
     end
 end
 
-function _mtk_problem_impl(
-        input, span::Tuple{Float64, Float64};
-        p, u0, providers, model_name, metaparameters,
-        base_path, sample_time, const_arrays, param_arrays,
-        inspect, materialize_out, pushdown_rewrite, seed_ic!,
-        sinks, snapshot, pre_write, checkpoint_predicates,
-        checkpoint_sinks, terminate_on_checkpoint
+function _mtk_problem_impl(input, req::EarthSciAST._ProblemRequest)
+    _mtk_refuse_unsupported_inputs(req)
+    span = req.span
+    prep = EarthSciAST._prepare_run(
+        input; metaparameters = req.metaparameters, base_path = req.base_path,
+        refuse_file = _mtk_refuse_unsupported_file, refuse_flat = _mtk_refuse_faq_initialization
     )
-    _mtk_refuse_unsupported_inputs(;
-        providers = providers,
-        const_arrays = const_arrays,
-        param_arrays = param_arrays,
-        pushdown_rewrite = pushdown_rewrite
+    flat = prep.flat
+    EarthSciAST._refuse_parameter_definitions(
+        flat.equations,
+        merge(flat.state_variables, flat.observed_variables, flat.parameters)
     )
-
-    merged_renames = EarthSciAST.OrderedDict{String, String}()
-    flat, doc = _mtk_run_system(
-        input; metaparameters = metaparameters,
-        base_path = base_path,
-        renames_out = merged_renames
+    merged_renames = EarthSciAST.OrderedDict{String, String}(EarthSciAST._merged_renames(prep))
+    # The run document is metadata only: output naming and CF coordinates, the
+    # §2.2 `solver` block, the equation count `show` prints, and the component
+    # set `observed_field`'s bare-name rule reads. The SYSTEM is what is built.
+    run_file = EarthSciAST._run_file(
+        prep; init = EarthSciAST.Equation[], shape_transforms = false
     )
     # `model_name` selects under the SAME rule `:native` applies: its build runs
-    # `_select_model` against the flattened run document, whose one model is
-    # the whole flattened system — so both compilers accept the same names and
-    # raise the same error for any other.
-    EarthSciAST._select_model(EarthSciAST.coerce_esm_file(doc), model_name)
+    # `_select_model` against the run document, whose one model is the whole
+    # flattened system — so both compilers accept the same names and raise the
+    # same error for any other.
+    EarthSciAST._select_model(run_file, req.model_name)
     # Expand surviving template references first, so the operator scan below
     # sees what the lowering will (`System` expands too; a second call is a
     # no-op).
@@ -895,9 +813,10 @@ function _mtk_problem_impl(
         merged_renames,
         Dict{String, Any}(
             String(k) => EarthSciAST._coerce_inline_value(v)
-                for (k, v) in p
+                for (k, v) in req.p
         )
     )
+    u0 = req.u0
     u0 = u0 === nothing || isempty(merged_renames) ? u0 :
         (
             u0 isa AbstractDict ?
@@ -910,7 +829,7 @@ function _mtk_problem_impl(
     # ESM → ModelingToolkit, then the structural compile. `model_name`, once
     # selected above, names the compiled system, which is what
     # ModelingToolkit's printing shows.
-    name = model_name === nothing ? :esm : Symbol(String(model_name))
+    name = req.model_name === nothing ? :esm : Symbol(req.model_name)
     system = ModelingToolkit.mtkcompile(ModelingToolkit.System(flat; name = name))
 
     # An `ic` on a variable the compile solved away is a GUESS, not a
@@ -946,9 +865,9 @@ function _mtk_problem_impl(
 
     u0_built = prototype.u0 === nothing ? Float64[] :
         Vector{Float64}(prototype.u0)
-    u0_run = EarthSciAST._seed_u0(u0_built, var_map, u0, seed_ic!)
+    u0_run = EarthSciAST._seed_u0(u0_built, var_map, u0, req.seed_ic!)
 
-    inspect === nothing || EarthSciAST._take_inspection!(inspect)
+    req.inspect === nothing || EarthSciAST._take_inspection!(req.inspect)
     products = EarthSciAST.BuildProducts()
     products.compiler_report = _mtk_report(flat, system, rev)
     merge!(
@@ -958,52 +877,26 @@ function _mtk_problem_impl(
     )
     param_classes = _mtk_param_classes(flat)
     merge!(products.param_classes, param_classes)
-    inspect === nothing || EarthSciAST._publish_inspection!(inspect, products)
+    req.inspect === nothing || EarthSciAST._publish_inspection!(req.inspect, products)
 
     # The problem's own callbacks (§2.5.4). There are no PROVIDER refresh
     # callbacks on this path — a data-fed document is refused above — so the set
     # is the streaming-output one: an output-sink callback and a checkpoint
     # callback, each a solve-time callback that DiffEq composes with the
     # compiled system's own event callbacks rather than replacing them.
-    cbs = Any[]
-    tstops = Float64[]
-    sink_vec = collect(Any, sinks)
-    save_everystep = true
-    prob_ref = Ref{Any}(nothing)
-    snapshot = EarthSciAST._observed_snapshot(snapshot, sink_vec, prob_ref)
-    if !isempty(sink_vec)
-        out_cb, out_tstops = EarthSciAST.build_output_callback(;
-            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write
-        )
-        tstops = EarthSciAST._union_tstops(tstops, out_tstops)
-        push!(cbs, out_cb)
-        save_everystep = false
-    end
-    ck_vec = checkpoint_sinks === nothing ? sink_vec :
-        collect(Any, checkpoint_sinks)
-    if !isempty(collect(Any, checkpoint_predicates))
-        push!(
-            cbs, EarthSciAST.build_checkpoint_callback(;
-                sinks = ck_vec, predicates = checkpoint_predicates,
-                snapshot = snapshot, pre_write = pre_write,
-                terminate_on_fire = terminate_on_checkpoint
-            )
-        )
-        save_everystep = false
-    end
-
-    dm = materialize_out === nothing ? EarthSciAST.DiscreteMaterializer() :
-        materialize_out
-    prob = EarthSciAST.EsmProblem(
-        f!, u0_run, span, prototype.p, var_map, Dict{String, Any}(),
-        Dict{String, Any}(), dm, EarthSciAST._doc_equation_count(doc),
-        Ref(sample_time), Ref(false), EarthSciAST.derive_output_meta(doc), doc,
-        Ref{Any}(nothing), param_classes, EarthSciAST._ProblemBuild(products),
-        EarthSciAST._compose_callbacks(cbs), tstops, save_everystep,
-        sink_vec, EarthSciAST._distinct_sinks(sink_vec, ck_vec),
-        Ref{Any}(nothing), merged_renames
+    cbs = EarthSciAST._problem_callbacks(req, nothing)
+    dm = req.materialize_out === nothing ? EarthSciAST.DiscreteMaterializer() :
+        req.materialize_out
+    prob = EarthSciAST.EsmProblem(;
+        f!, u0 = u0_run, tspan = span, p = prototype.p, var_map, dm,
+        n_equations = EarthSciAST._doc_equation_count(run_file),
+        buffer_time = Ref(req.sample_time),
+        output_meta = EarthSciAST.derive_output_meta(run_file), run_file,
+        param_classes, build = EarthSciAST._ProblemBuild(products),
+        callback = cbs.callback, tstops = cbs.tstops, save_everystep = cbs.save_everystep,
+        sinks = cbs.sinks, lifecycle_sinks = cbs.lifecycle_sinks, merged_renames
     )
-    prob_ref[] = prob
+    cbs.prob_ref[] = prob
     return prob
 end
 

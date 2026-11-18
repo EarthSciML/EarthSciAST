@@ -202,7 +202,7 @@ end
         err = _pfc_err(
             () -> mk(providers = Dict{String, Any}(pk_ => pr), const_arrays = Dict(ck => [9.0]))
         )
-        @test err isa ArgumentError && occursin("both supply the parameter 'M.s'", err.msg)
+        @test err isa SimulateError && occursin("both supply the parameter 'M.s'", err.msg)
     end
     # The override replaces the data under every key that holds it: the
     # caller's spelling (`s`) beside the build's name (`M.s`), so a consumer
@@ -239,7 +239,7 @@ end
             providers = Dict{String, Any}("Fed.s" => pr), const_arrays = Dict("s" => [9.0])
         )
     )
-    @test err isa ArgumentError && occursin("const_arrays: ambiguous parameter name 's'", err.msg)
+    @test err isa SimulateError && occursin("const_arrays: ambiguous parameter name 's'", err.msg)
     # The other model's own `s`, named in full, is no overlap.
     prob = PFC.esm_problem(
         two, (0.0, 1.0); compiler = :native,

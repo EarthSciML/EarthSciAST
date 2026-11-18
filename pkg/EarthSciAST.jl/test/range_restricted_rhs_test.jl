@@ -618,15 +618,13 @@ end
         @test occursin("Diff.u", err.msg)
     end
 
-    @testset "the program seed is built on the first rhs_program call" begin
+    @testset "the program is built on the first rhs_program call, once" begin
         p2 = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
-        r = p2.build.program_seed
-        @test r isa RRT._ProgramSeedRecipe
-        @test r.memo[] === nothing
-        @test !any(f -> getfield(r, f) isa RRT.FlattenedSystem, fieldnames(typeof(r)))
+        @test p2.build.seed isa RRT._ProgramSeed
+        @test p2.build.program[] === nothing
         pr = rhs_program(p2)
-        @test r.memo[] !== nothing && r.memo[].flat isa RRT.FlattenedSystem
-        @test rhs_program(p2).seed === pr.seed
+        @test p2.build.program[] === pr
+        @test rhs_program(p2) === pr
         @test _rrt_bits.(_rrt_eval(pr, p2.p)) == _rrt_bits.(_rrt_eval(prog, prob.p))
     end
 

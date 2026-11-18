@@ -53,7 +53,7 @@ end
 #   * `_NK_STATE(idx ≥ 0)`     invariant fixed state slot  → `_AccStateFixed`
 #   * `_NK_PARAM_GATHER`       invariant forcing gather    → `_AccArrFixed`
 #   * `_NK_LITERAL/PARAM/TIME`  pass through (the access evaluator handles them)
-# Anything not modelled (a contraction node) throws `_StencilFallback` so the
+# Anything not modelled (a contraction node) throws a `_Decline` so the
 # caller runs the per-cell path — never a wrong kernel.
 #
 # IDENTITY-MEMOIZED (ESS-0hh): the compiled template is a DAG (`_stencilize` /
@@ -115,7 +115,7 @@ function _lower_to_access_node(
         push!(acc, _AccArrFixed(tmpl.payload::Vector{Float64}, tmpl.idx))
         return _acc(length(acc))
     elseif k === _NK_CONTRACTION
-        throw(_StencilFallback("affine lowering: contraction node in template"))
+        _decline(:unknown_kind, "a contraction node in a template")
     elseif k === _NK_OP
         # `payload` is carried through (`nothing` for every arithmetic op).
         ch = _Node[
@@ -124,7 +124,7 @@ function _lower_to_access_node(
         ]
         return _mknode(kind = _NK_OP, op = tmpl.op, children = ch, payload = tmpl.payload)
     end
-    throw(_StencilFallback("affine lowering: unhandled node kind $(Int(k))"))
+    return _decline(:unknown_kind, string(k))
 end
 
 # Lower one sub-kernel call site (compile-once template tier): slice the body's
@@ -553,7 +553,7 @@ function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map
         cl = collect(Int, corner)
         want = _box_oln(base, strides, cl, D)
         got = _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(env, idx_names, cl), var_map)
-        want == got || throw(_StencilFallback("output layout non-affine"))
+        want == got || _decline(:output_layout_not_affine, lhs_var)
     end
     return base, strides
 end
@@ -900,12 +900,7 @@ function _region_cut_candidates(body, idx_names::Vector{String})
         elseif length(s) == 1
             full[s[1]] = true
         else
-            throw(
-                _StencilFallback(
-                    "makearray region selected by a subscript of " *
-                        "several loop indices; no box cut describes it"
-                )
-            )
+            _decline(:region_multi_index, "no box cut describes it")
         end
     end
     # A producer gathered at subscripts `subs` (one analysis per axis).
@@ -1605,7 +1600,7 @@ function _derive_lane_repl(
         return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
     elseif rec.kind == LANE_LOOPLIT
         dim = findfirst(==(rec.loop_name), idx_names)
-        dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))
+        dim === nothing && _decline(:subscript_not_static, "loop literal '$(rec.loop_name)' is not an output index")
         return thin[dim] ? _LitRepl(Float64(rep[dim])) : _AccRepl(_AccLoopIdx(dim))
     elseif rec.kind == LANE_EXPRTBL
         # Rescued build-time-evaluable SUBTREE (stencil.jl SUBTREE-TABLE
@@ -1843,7 +1838,7 @@ function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
         v = try
             _eval_recipe(rec, env, var_map, const_arrays)
         catch err
-            (err isa TreeWalkError || err isa _StencilFallback) && return nothing
+            (err isa TreeWalkError || err isa _Decline) && return nothing
             rethrow()
         end
         return _mknode(kind = _NK_LITERAL, literal = Float64(v))
@@ -1929,11 +1924,7 @@ function _guarded_lane_repl(
             _is_const_oob(err) || rethrow()
             g = _lane_guard_at(paths, recipes, env, var_map, const_arrays)
             g === :taken && rethrow()
-            g === :unknown && throw(
-                _StencilFallback(
-                    "a const subscript is out of range under a run-time guard"
-                )
-            )
+            g === :unknown && _decline(:guarded_out_of_range)
             unread[j] = true
             nothing
         end
@@ -1995,7 +1986,7 @@ function _guarded_box_repl(
             const_arrays, run
         )
     catch err
-        (err isa _StencilFallback && run === box && _range_memo_records(spec)) &&
+        (err isa _Decline && run === box && _range_memo_records(spec)) &&
             lock(() -> get!(memo.verdicts, key, err), memo.lock)
         rethrow()
     end
@@ -2151,7 +2142,7 @@ function _process_affine_box!(
     for cn in corners
         _box_oln(base, strides, cn, D) ==
             _oln_via_ix(lhs_ix, lhs_var, lhs_idx_args, cn, denv, idx_names, var_map) ||
-            throw(_StencilFallback("box output slot ≠ var_map"))
+            _decline(:output_layout_not_affine, lhs_var)
     end
     oln_rep = _box_oln(base, strides, rep, D)
 
@@ -2377,12 +2368,10 @@ function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args,
     end
 end
 
-# An equation the affine tier does not admit, with the reason recorded so a
-# strict refusal can name it.
-_affine_admission_decline(reason::Symbol) = (_note_decline!(:affine, reason); nothing)
-
 # Compile an array equation via the affine polyhedral build.
-# Returns `Vector{_AccKernel}`, or `nothing` to fall back to the per-cell chain.
+# Returns `Vector{_AccKernel}`, or declines (`_Decline`) with `covered` untouched;
+# the cascade (`_AffineTier`, build_array_equation.jl) files the decline and
+# moves on.
 #
 # With `reduce` the equation is a contraction `⊕_{k…} rhs_body(i…, k…)` whose
 # contracted indices `reduce.names` stay symbolic: they join the output indices
@@ -2416,14 +2405,14 @@ function _try_affine_stencil(
             lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
             !isempty((lhs_body.args[1]::OpExpr).args) &&
             (lhs_body.args[1]::OpExpr).args[1] isa VarExpr
-    ) || return _affine_admission_decline(:lhs_not_indexed_derivative)
+    ) || _decline(:lhs_not_indexed_derivative)
 
     D = length(idx_names)
-    D >= 1 || return _affine_admission_decline(:no_output_index)
+    D >= 1 || _decline(:no_output_index)
     ranges = UnitRange{Int}[]
     for r in range_iters
         (length(r) >= 1 && _is_unit_run(r)) ||
-            return _affine_admission_decline(:range_not_unit_run)
+            _decline(:range_not_unit_run)
         push!(ranges, first(r):last(r))
     end
 
@@ -2457,7 +2446,7 @@ function _try_affine_stencil(
     inner = lhs_body.args[1]::OpExpr
     lhs_var = (inner.args[1]::VarExpr).name
     lhs_idx_args = inner.args[2:end]
-    length(lhs_idx_args) == D || return _affine_admission_decline(:lhs_subscript_count)
+    length(lhs_idx_args) == D || _decline(:lhs_subscript_count)
     # The loop dims: the output's, then (for a contraction kept as a loop) the
     # contracted ones.
     all_names = reduce === nothing ? idx_names : vcat(idx_names, reduce.names)
@@ -2474,58 +2463,50 @@ function _try_affine_stencil(
         array_var_info, const_arrays, pgather, tctx
     )
     sig = _AffineSig()
-    try
-        base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
-        # The output slot does not move along a contracted dim.
-        all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
-        cuts = _affine_cut_points(
-            sig, body, all_names, all_ranges, ctx_proto,
-            var_map, param_sym_set,
-            (base, all_strides)
-        )
-        for d in (D + 1):Dall
-            length(cuts[d]) == 1 ||
-                throw(_StencilFallback("affine reduction: contracted axis is cut"))
-        end
-        segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
-        run = run_iters === nothing ? nothing :
-            UnitRange{Int}[first(r):last(r) for r in run_iters]
-        shift = view === nothing ? 0 : view.shift
-        kernels = _AccKernel[]
-        spine_cache = Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}()
-        flat_cache = IdDict{Any, Vector{Float64}}()
-        boxes = Vector{UnitRange{Int}}[]
-        for segtuple in Iterators.product(segs...)
-            box = UnitRange{Int}[segtuple[d] for d in 1:D]
-            reduce === nothing || append!(box, reduce.ranges)
-            # The cells of the box this program runs: all of them, or a tile's
-            # share (possibly none; the box is then derived and emitted all
-            # the same, and runs no cell).
-            cbox = run === nothing ? box :
-                UnitRange{Int}[
-                    d <= D ? _clip_run(box[d], run[d]) : box[d]
-                    for d in eachindex(box)
-                ]
-            _process_affine_box!(
-                kernels, spine_cache, flat_cache, box, all_names,
-                body, ctx_proto, var_map, const_arrays,
-                param_sym_set, base, all_strides,
-                lhs_var, lhs_idx_args, sig, reduce;
-                out_ranges = ranges, cbox = cbox, view = view
-            )
-            all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
-        end
-        # Only after every box is verified: mark covered (untouched on fallback).
-        for box in boxes
-            _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
-        end
-        view === nothing || _range_real_fixed!(view, kernels)
-        return kernels
-    catch err
-        if err isa _StencilFallback
-            _note_decline!(:affine, Symbol(err.reason))
-            return nothing
-        end
-        rethrow()
+    base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
+    # The output slot does not move along a contracted dim.
+    all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
+    cuts = _affine_cut_points(
+        sig, body, all_names, all_ranges, ctx_proto,
+        var_map, param_sym_set,
+        (base, all_strides)
+    )
+    for d in (D + 1):Dall
+        length(cuts[d]) == 1 ||
+            _decline(:contracted_axis_cut, all_names[d])
     end
+    segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
+    run = run_iters === nothing ? nothing :
+        UnitRange{Int}[first(r):last(r) for r in run_iters]
+    shift = view === nothing ? 0 : view.shift
+    kernels = _AccKernel[]
+    spine_cache = Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}()
+    flat_cache = IdDict{Any, Vector{Float64}}()
+    boxes = Vector{UnitRange{Int}}[]
+    for segtuple in Iterators.product(segs...)
+        box = UnitRange{Int}[segtuple[d] for d in 1:D]
+        reduce === nothing || append!(box, reduce.ranges)
+        # The cells of the box this program runs: all of them, or a tile's
+        # share (possibly none; the box is then derived and emitted all
+        # the same, and runs no cell).
+        cbox = run === nothing ? box :
+            UnitRange{Int}[
+                d <= D ? _clip_run(box[d], run[d]) : box[d]
+                for d in eachindex(box)
+            ]
+        _process_affine_box!(
+            kernels, spine_cache, flat_cache, box, all_names,
+            body, ctx_proto, var_map, const_arrays,
+            param_sym_set, base, all_strides,
+            lhs_var, lhs_idx_args, sig, reduce;
+            out_ranges = ranges, cbox = cbox, view = view
+        )
+        all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
+    end
+    # Only after every box is verified: mark covered (untouched on fallback).
+    for box in boxes
+        _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
+    end
+    view === nothing || _range_real_fixed!(view, kernels)
+    return kernels
 end

@@ -3,7 +3,7 @@
 #
 # BEFORE-SHAPE (reproduced on the pre-rescue build, N=8): one nested scalar
 # reduction Σ_{k=1..3} W[i,k]·k inside an otherwise-affine stencil body threw
-#     _StencilFallback("unsupported loop-var-dependent op 'faq'")
+#     _Decline(:unsupported_op, "loop-index-dependent op 'faq'")
 # out of `_stencilize_op_core`'s catch-all, and the WHOLE equation landed on
 # the per-cell scalarize fallback — a `:percell_acc` count of 1,
 # O(#cells) IR (the failure mode behind the GEOS-FP incident where one

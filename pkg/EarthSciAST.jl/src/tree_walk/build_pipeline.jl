@@ -843,7 +843,6 @@ function _build_compile_evaluator(
         Set{String}()
     end
     level_plan = Tuple{Vector{String}, Symbol}[]
-    pending_levels = Any[]
     if !isempty(mat_vars)
         isempty(mat_const) || foreach(
             l -> push!(level_plan, (l, :const)),
@@ -861,88 +860,51 @@ function _build_compile_evaluator(
             )
         )
     end
-    if !isempty(level_plan)
-        for (lvl, lvl_cadence) in level_plan
-            lvl_scalars = Tuple{Int, _Node}[]
-            lvl_kernels = _AccKernel[]
-            lvl_scans = _ScanFold[]
-            lvl_acs = _ArrayContraction[]
-            lvl_recurs = Any[]
-            lvl_owner = IdDict{Any, String}()
-            for name in lvl
-                if name in recur_names
-                    # A causal self-reference: an ordered sweep, not a fill
-                    # equation (recurrence_sweep.jl). The out-of-place product
-                    # has no sweep section, so a compiler that builds it
-                    # refuses the rule by name.
-                    form === :oop && _refuse_rule(
-                        name,
-                        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
-                            "lowering in the out-of-place product this compiler emits; " *
-                            "its cells cannot be computed as one whole-array program " *
-                            "(CONFORMANCE_SPEC §5.19.2)"
-                    )
-                    sw = _compile_recurrence_sweep(
-                        name, mat_defs[name],
-                        layout.mat_dims[name], get(model.variables, name, nothing),
-                        resolved_obs, array_var_info, var_map, const_registry,
-                        pgather, param_sym_set
-                    )
-                    _record_rule!(name, :observed, _recurrence_tier(sw))
-                    products === nothing ||
-                        push!(products.recurrences, _recurrence_info(name, mat_defs[name], sw))
-                    push!(lvl_recurs, sw)
-                    continue
-                end
-                feqs = _range_fill_equations(
-                    _range_spec_now(), name, mat_defs[name],
-                    layout.mat_dims[name],
-                    array_var_info[name]
+    # A causal self-reference is an ordered sweep, not a fill equation
+    # (`_level_recurrence`).
+    level_recurrence = let form = form, recur_names = recur_names, mat_defs = mat_defs,
+            layout = layout, model = model, resolved_obs = resolved_obs,
+            array_var_info = array_var_info, var_map = var_map,
+            const_registry = const_registry, pgather = pgather,
+            param_sym_set = param_sym_set, products = products
+        name -> _level_recurrence(
+            name, form, recur_names, mat_defs, layout, model, resolved_obs,
+            array_var_info, var_map, const_registry, pgather, param_sym_set, products
+        )
+    end
+    level_fill = let mat_defs = mat_defs, layout = layout, array_var_info = array_var_info
+        name -> _range_fill_equations(
+            _range_spec_now(), name, mat_defs[name], layout.mat_dims[name], array_var_info[name]
+        )
+    end
+    pending_levels = _LevelParts[]
+    for (lvl, lvl_cadence) in level_plan
+        lv = _compile_fill_level(
+            lvl, lvl_cadence, level_fill, level_recurrence,
+            resolved_obs, array_var_info, var_map, const_registry,
+            pgather, param_sym_set, n_total;
+            template_sites = template_sites,
+            rhs_list_compiled = form === :oop,
+            obs_nst = form === :inplace ? n_states : 0
+        )
+        mat_scan_fold_count += length(lv.scans)
+        mat_array_contraction_count += length(lv.contractions)
+        mat_recurrence_count += length(lv.recurrences)
+        if form === :oop
+            merged, _ = _merge_acc_kernel_classes(lv.kernels)
+            push!(
+                mat_levels_oop,
+                (
+                    lv.scalars, merged,
+                    _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
+                    lv.scans, lv.contractions,
                 )
-                se, pcs, aks, sfs, acs = _compile_derivative_equations(
-                    feqs,
-                    resolved_obs, array_var_info, var_map, const_registry,
-                    pgather, param_sym_set, n_total;
-                    template_sites = template_sites,
-                    rhs_list_compiled = form === :oop,
-                    obs_nst = form === :inplace ? n_states : 0
-                )
-                for (slot, ex) in se
-                    push!(
-                        lvl_scalars,
-                        (slot, _compile(ex, var_map, param_sym_set))
-                    )
-                end
-                append!(lvl_scalars, pcs)
-                append!(lvl_kernels, aks)
-                append!(lvl_scans, sfs)
-                foreach(S -> (lvl_owner[S] = name), sfs)
-                append!(lvl_acs, acs)
-            end
-            mat_scan_fold_count += length(lvl_scans)
-            mat_array_contraction_count += length(lvl_acs)
-            mat_recurrence_count += length(lvl_recurs)
-            if form === :oop
-                merged, _ = _merge_acc_kernel_classes(lvl_kernels)
-                push!(
-                    mat_levels_oop,
-                    (
-                        lvl_scalars, merged,
-                        _OopAccPlan[_build_oop_acc_plan(K) for K in merged],
-                        lvl_scans, lvl_acs,
-                    )
-                )
-            else
-                # The in-place sections are made once the state equations are
-                # compiled, so a fused scan can take in a state kernel that
-                # consumes it (`_scan_consumer_plan`).
-                push!(
-                    pending_levels, (
-                        lvl_owner, lvl_cadence, lvl_scalars, lvl_kernels,
-                        lvl_scans, lvl_acs, lvl_recurs,
-                    )
-                )
-            end
+            )
+        else
+            # The in-place sections are made once the state equations are
+            # compiled, so a fused scan can take in a state kernel that
+            # consumes it (`_scan_consumer_plan`).
+            push!(pending_levels, lv)
         end
     end
     products === nothing || sort!(products.recurrences; by = r -> r.var)
@@ -953,8 +915,7 @@ function _build_compile_evaluator(
     # bound above): a reader's `index(<materialized observed>, i…)` must resolve
     # through the ordinary array-gather path onto the observed's buffer block.
     # `scan_folds` is the ess-scan post-pass list for the STATE equations.
-    scalar_entries, percell_scalar, acc_kernels_pre, scan_folds, array_contractions =
-        _compile_derivative_equations(
+    state_eqs = _compile_derivative_equations(
         derivative_eqs,
         resolved_obs, array_var_info, var_map, const_registry, pgather,
         param_sym_set, n_states; template_sites = template_sites,
@@ -962,6 +923,11 @@ function _build_compile_evaluator(
         rhs_list_compiled = form === :oop,
         obs_nst = (form === :inplace && n_total > n_states) ? n_states : 0
     )
+    scalar_entries = state_eqs.scalar_entries
+    percell_scalar = state_eqs.percell
+    acc_kernels_pre = state_eqs.kernels
+    scan_folds = state_eqs.scan_folds
+    array_contractions = state_eqs.contractions
     # States without a D(...) equation get du=0 (integrator leaves them
     # at their initial value — a common pattern for reified constants).
 
@@ -1002,25 +968,21 @@ function _build_compile_evaluator(
             (raw_obs, mat_defs, resolved_obs)
         )
         consumed = IdDict{Any, Bool}()
-        for (
-                _, lvl_cadence, lvl_scalars, lvl_kernels, lvl_scans, lvl_acs,
-                lvl_recurs,
-            ) in pending_levels
+        for lv in pending_levels
             lvl_kernels, lvl_scans, lvl_fused =
                 _detach_fused_scans(
-                lvl_kernels, lvl_scans; nst = n_states,
+                lv.kernels, lv.scans; nst = n_states,
                 consumers = consumers, consumed = consumed
             )
-            lvl_cadence === :dynamic &&
-                (lvl_acs = _ac_take_consumers(lvl_acs, acc_kernels_pre, n_states, consumed))
-            merged, _ = _merge_acc_kernel_classes(lvl_kernels)
+            lvl_acs = lv.cadence === :dynamic ?
+                _ac_take_consumers(lv.contractions, acc_kernels_pre, n_states, consumed) :
+                lv.contractions
             push!(
-                lvl_cadence === :const ? mat_const_levels :
-                    lvl_cadence === :time ? mat_time_levels : mat_levels,
-                (
-                    lvl_scalars, _make_kernel_section(merged; nst = n_states),
-                    _make_scan_section(lvl_scans, lvl_fused),
-                    _make_contraction_section(lvl_acs), Tuple(lvl_recurs),
+                lv.cadence === :const ? mat_const_levels :
+                    lv.cadence === :time ? mat_time_levels : mat_levels,
+                _inplace_fill_level(
+                    lv.scalars, lvl_kernels, _make_scan_section(lvl_scans, lvl_fused),
+                    lvl_acs, lv.recurrences; nst = n_states
                 )
             )
         end
@@ -1414,11 +1376,10 @@ function _build_evaluator_impl_inner(
     # An event, continuous or discrete, is refused before anything is built
     # (esm-spec §9.6.6): this evaluator has no event handling, so a model built
     # without its events would report a wrong answer. This check covers a model
-    # handed to the builder directly. A FLATTENED system reaches this entry
-    # through `flattened_to_esm`, which does not carry events, so `simulate` (and
-    # with it `run_inline_tests`) and `_build_evaluator(::FlattenedSystem)` refuse
-    # it earlier, while the events are still in hand. The ModelingToolkit export
-    # runs both kinds of event and does not come through here.
+    # handed to the builder directly. A FLATTENED system reaches this entry as a
+    # run file, which carries no events, so `_prepare_run` refuses them earlier,
+    # while the events are still in hand. The ModelingToolkit compiler runs both
+    # kinds of event and does not come through here.
     ev = _first_event(model)
     ev === nothing || throw(_event_refusal(ev))
     # An unknown carrying BOTH `D(x) ~ f` and `x ~ g` is one more equation than
@@ -1427,8 +1388,8 @@ function _build_evaluator_impl_inner(
     # before classification files the two equations into competing buckets and
     # the bare one falls out as an `E_TREEWALK_UNSUPPORTED_EQUATION` naming
     # neither the unknown nor either equation. A flattened system reaches this
-    # entry through `flattened_to_esm`, which namespaces every name, so the
-    # message names the unknown as the run document spells it.
+    # entry as a run file, whose names are namespaced, so the message names the
+    # unknown as the run document spells it.
     _refuse_doubly_defined_unknown(model.equations)
     # A DATA-FED parameter with nothing bound to it is refused here too, and for
     # the same reason (esm-spec §9.6.6 `data_source_unbound`, CONFORMANCE_SPEC
@@ -1688,3 +1649,32 @@ end
 # `time_span` belongs to that test (esm-spec §6.6) and is not a default for the
 # system; the flattened system the build reads carries no tests.
 _pick_tspan(tspan) = tspan === nothing ? (0.0, 1.0) : (Float64(tspan[1]), Float64(tspan[2]))
+
+# A materialized observed `name` of the right-hand side's fill levels that is a
+# causal self-reference: its ordered sweep (recurrence_sweep.jl), its report row
+# and its inspection record; `nothing` for any other name. The out-of-place
+# product has no sweep section, so a compiler that builds it refuses the rule by
+# name.
+function _level_recurrence(
+        name, form, recur_names, mat_defs, layout, model, resolved_obs,
+        array_var_info, var_map, const_registry, pgather, param_sym_set, products
+    )
+    name in recur_names || return nothing
+    form === :oop && _refuse_rule(
+        name,
+        "an ordered recurrence sweep (esm-spec §4.3.1.1) has no " *
+            "lowering in the out-of-place product this compiler emits; " *
+            "its cells cannot be computed as one whole-array program " *
+            "(CONFORMANCE_SPEC §5.19.2)"
+    )
+    sw = _compile_recurrence_sweep(
+        name, mat_defs[name],
+        layout.mat_dims[name], get(model.variables, name, nothing),
+        resolved_obs, array_var_info, var_map, const_registry,
+        pgather, param_sym_set
+    )
+    _record_rule!(name, :observed, _recurrence_tier(sw))
+    products === nothing ||
+        push!(products.recurrences, _recurrence_info(name, mat_defs[name], sw))
+    return sw
+end

@@ -24,7 +24,7 @@
 # elementwise ops + `index(state/const/pgather, …)` gathers + bare
 # loop-index literals; ANY loop-var-dependent construct outside that set
 # (`faq`/`makearray`/`integral`/`index`-of-those/…)
-# throws `_StencilFallback` and the caller runs the unchanged per-cell path. So the
+# declines (`_Decline`) and the caller runs the unchanged per-cell path. So the
 # fast path is provably identical WHERE it applies and simply absent elsewhere.
 # ONE refinement keeps the failure mode SUBTERM-granular instead of
 # whole-equation: a construct that would throw but is BUILD-TIME EVALUABLE
@@ -35,10 +35,6 @@
 # With this tier off (`compiler=:interpreter`) an array equation takes the
 # per-cell SCALAR reference instead: compiled cell nodes on `rhs_list`,
 # evaluated by `_eval_node` — the differential oracle.
-
-struct _StencilFallback <: EarthSciASTError
-    reason::String
-end
 
 @enum _LaneKind LANE_STATE LANE_CONST LANE_PGATHER LANE_LOOPLIT LANE_EXPRTBL
 
@@ -301,7 +297,7 @@ _StencilCtx(
 # `_stencilize` transforms `expr` into the sentinel spine and appends a
 # `_LaneRecipe` (to `ctx.recipes`) for every loop-var-dependent leaf.
 # Loop-INVARIANT subtrees are returned verbatim (resolved/compiled once, shared).
-# Throws `_StencilFallback` on any loop-var-dependent construct not modelled here.
+# Declines (`_Decline`) on any loop-var-dependent construct not modelled here.
 _stencilize(e::NumExpr, ::_StencilCtx) = e
 _stencilize(e::IntExpr, ::_StencilCtx) = e
 function _stencilize(e::VarExpr, ctx::_StencilCtx)
@@ -350,7 +346,7 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
                 e.output_idx === nothing && e.filter === nothing && e.lower === nothing &&
                 e.upper === nothing && e.key === nothing
         ) ||
-            throw(_StencilFallback("elementwise op '$op' carries structural fields"))
+            _decline(:unsupported_op, "elementwise op '$op' carries structural fields")
         new_args = ASTExpr[_stencilize(a, ctx) for a in e.args]
         return reconstruct(e; args = new_args)
     end
@@ -372,18 +368,17 @@ function _stencilize_op_core(e::OpExpr, ctx::_StencilCtx)
     # value summed with other terms, reaches the tier this way; the reduction
     # hoist (hoist.jl) does not look inside a region value. Below the
     # contraction loop's floor only, as for a top-level contraction
-    # (`long_contraction`): a longer one is left to the tiers that keep it a
+    # (`_long_contraction`): a longer one is left to the tiers that keep it a
     # loop, and refused by name where none does.
     _is_short_scalar_contraction(e) && return _stencilize_indexed(e, ASTExpr[], ctx)
-    throw(_StencilFallback("unsupported loop-var-dependent op '$op'"))
+    return _decline(:unsupported_op, "loop-index-dependent op '$op'")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SUBTREE-TABLE RESCUE (subterm-granular fallback). Historically ONE
-# unsupported loop-var-dependent construct anywhere in a rule body threw
-# `_StencilFallback` and the ENTIRE equation dropped to per-cell
-# scalarization — O(#cells) IR and build time (the GEOS-FP incident: one
-# declined equation was ~910k of ~935k `_compile` calls). The escape hatch the
+# SUBTREE-TABLE RESCUE (subterm-granular fallback). Without it ONE
+# unsupported loop-var-dependent construct anywhere in a rule body declines the
+# ENTIRE equation to per-cell scalarization — O(#cells) IR and build time. The
+# escape hatch the
 # box processor already carries for LEAVES — a non-uniform state/const/pgather
 # lane materializes a per-box table instead of declining
 # (`_materialize_state_tbl` / `_materialize_const_box` /
@@ -519,7 +514,7 @@ end
 # params are deliberately ABSENT (`_EMPTY_PARAMS`) — the evaluability contract
 # is loop indices + literals + const arrays only. A compile failure (an op
 # `_compile` cannot evaluate, an unresolvable gather, a loop index named "t")
-# throws the whole-equation `_StencilFallback` the rescue displaced — the
+# throws the whole-equation `_Decline` the rescue displaced — the
 # original decline, one hop later.
 function _attach_exprtbl_evals!(
         rs::Vector{_LaneRecipe},
@@ -532,12 +527,9 @@ function _attach_exprtbl_evals!(
         ce = _cell_evaluator(
             spec.expr, spec.idx_names, const_arrays, _EMPTY_PARAMS; index_outputs = true
         )
-        ce === nothing && throw(
-            _StencilFallback(
-                "subtree-table lane: compile-once evaluator declined (op '" *
-                    (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) *
-                    "')"
-            )
+        ce === nothing && _decline(
+            :subtree_table_declined,
+            "op '" * (spec.expr isa OpExpr ? (spec.expr::OpExpr).op : string(typeof(spec.expr))) * "'"
         )
         spec.ce = ce
     end
@@ -653,7 +645,7 @@ end
 # branch and its `_resolve_index_of_{makearray,faq}` helpers; anything not
 # modelled falls back.
 function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
-    isempty(e.args) && throw(_StencilFallback("empty index op"))
+    isempty(e.args) && _decline(:malformed_index)
     first_arg = e.args[1]
     idx_args = e.args[2:end]
     if first_arg isa OpExpr && (_is_faq_op(first_arg.op) || first_arg.op == "makearray")
@@ -671,17 +663,12 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
             lane = _try_exprtbl_lane(e, ctx)
             lane === nothing || return lane
         end
-        throw(
-            _StencilFallback(
-                "index subscript is not an integer function of the " *
-                    "loop indices and build-time tables"
-            )
-        )
+        _decline(:subscript_not_static, "a subscript of '$(first_arg isa VarExpr ? first_arg.name : "?")'")
     end
     if first_arg isa VarExpr && haskey(ctx.array_var_info, first_arg.name)
         lo, hi = ctx.array_var_info[first_arg.name]
         length(idx_args) == length(lo) ||
-            throw(_StencilFallback("index ndim mismatch on '$(first_arg.name)'"))
+            _decline(:subscript_rank_mismatch, "state array '$(first_arg.name)'")
         push!(
             ctx.recipes, _LaneRecipe(
                 LANE_STATE, first_arg.name, idx_args,
@@ -693,7 +680,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     if first_arg isa VarExpr && haskey(ctx.pgather, first_arg.name)
         pg = ctx.pgather[first_arg.name]::_PGatherArray
         length(idx_args) == length(pg.dims) ||
-            throw(_StencilFallback("pgather ndim mismatch on '$(first_arg.name)'"))
+            _decline(:subscript_rank_mismatch, "parameter array '$(first_arg.name)'")
         push!(
             ctx.recipes, _LaneRecipe(
                 LANE_PGATHER, first_arg.name, idx_args,
@@ -705,7 +692,7 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     if first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
         arr = ctx.const_arrays[first_arg.name]
         length(idx_args) == ndims(arr) ||
-            throw(_StencilFallback("const-array ndim mismatch on '$(first_arg.name)'"))
+            _decline(:subscript_rank_mismatch, "const array '$(first_arg.name)'")
         push!(
             ctx.recipes, _LaneRecipe(
                 LANE_CONST, first_arg.name, idx_args,
@@ -724,9 +711,9 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
             (first_arg::OpExpr).value isa AbstractVector
         arr, cname = _intern_inline_const(first_arg::OpExpr, ctx.const_arrays)
         haskey(ctx.const_arrays, cname) ||
-            throw(_StencilFallback("inline const array outside a const registry"))
+            _decline(:unknown_array, "an inline const array outside a const registry")
         length(idx_args) == ndims(arr) ||
-            throw(_StencilFallback("const-array ndim mismatch on an inline const"))
+            _decline(:subscript_rank_mismatch, "an inline const array")
         push!(
             ctx.recipes, _LaneRecipe(
                 LANE_CONST, cname, idx_args,
@@ -769,17 +756,13 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     end
     # Name the producer: "some var is not an array" is not actionable, and the
     # thing that failed to resolve is exactly what you need to see.
-    throw(
-        _StencilFallback(
-            "index into non-array/unknown var (loop-var-dependent): " *
-                (
-                first_arg isa VarExpr ? "'$(first_arg.name)'" :
-                    first_arg isa OpExpr ?
-                    "producer op '$((first_arg::OpExpr).op)' :: " *
-                    first(sprint(show, first_arg), 160) :
-                    "non-var $(typeof(first_arg))"
-            )
-        )
+    return _decline(
+        :unknown_array,
+        first_arg isa VarExpr ? "'$(first_arg.name)'" :
+            first_arg isa OpExpr ?
+            "producer op '$((first_arg::OpExpr).op)' :: " *
+            first(sprint(show, first_arg), 160) :
+            "non-var $(typeof(first_arg))"
     )
 end
 
@@ -844,16 +827,11 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
             ns = region === nothing ? Int[] :
                 Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
             rank == length(ns) ||
-                throw(
-                _StencilFallback(
-                    "makearray reduced-rank region value: region " *
-                        "$r value op '$(re.op)' rank $rank vs $(length(ns)) " *
-                        "non-singleton of $(length(kargs)) index args" *
-                        (
-                        re.op == "makearray" ? "" :
-                            ", output_idx $(re.output_idx)"
-                    )
-                )
+                _decline(
+                :region_value_shape,
+                "region $r value op '$(re.op)' rank $rank vs $(length(ns)) " *
+                    "non-singleton of $(length(kargs)) index args" *
+                    (re.op == "makearray" ? "" : ", output_idx $(re.output_idx)")
             )
             return _stencilize_indexed(re, kargs[ns], ctx)
         end
@@ -861,14 +839,17 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     end
     # aggregate / faq
     (producer.join_gates === nothing && producer.filter === nothing) ||
-        throw(_StencilFallback("index(aggregate) with join/filter"))
+        _decline(
+        producer.join_gates === nothing ? :filtered_reduction : :gated_reduction,
+        "a gathered reduction"
+    )
     oi_raw = producer.output_idx === nothing ? Any[] : producer.output_idx
     oi = String[String(s) for s in oi_raw if s isa AbstractString]
     length(oi) == length(kargs) ||
-        throw(_StencilFallback("index(aggregate) output_idx/arg mismatch"))
+        _decline(:gathered_reduction_shape, "$(length(oi)) output indices, $(length(kargs)) subscripts")
     ranges = _ranges_dict(producer)
     body = producer.expr_body
-    body === nothing && throw(_StencilFallback("index(aggregate) with no body"))
+    body === nothing && _decline(:gathered_reduction_shape, "no body")
     cnames = _contracted_index_names(ranges, oi)
     if !isempty(cnames)
         # CONSTANT-bound contraction: unroll into the same ⊕-combined term list
@@ -890,12 +871,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
         for n in cnames
             raw = ranges[n]
             (raw isa AbstractVector && _is_const_int_range(raw)) ||
-                throw(
-                _StencilFallback(
-                    "index(aggregate) contracted index '$n' " *
-                        "has no constant dense range"
-                )
-            )
+                _decline(:ragged_contraction, "contracted index '$n' of a gathered reduction")
             push!(citers, collect(_expand_int_range(raw)))
         end
         oplus, zerobar = _aggregate_oplus_identity(producer.semiring, producer.reduce)
@@ -1140,7 +1116,7 @@ function _branch_key_indexed!(
             # §9.6.8 reduced-rank region value: key it at the region's
             # NON-SINGLETON k-args — the same slicing `_stencilize_indexed`
             # applies, so key and spine traversals stay in lockstep. A shape
-            # neither models throws `_StencilFallback` in the spine build, so
+            # neither models throws a `_Decline` in the spine build, so
             # returning here (key incomplete) can never pair with an accepted
             # spine.
             ka = kargs
@@ -1199,12 +1175,7 @@ function _branch_key_indexed!(
         # all), or a ragged / expression-valued bound, which has no value without
         # the enclosing per-cell environment.
         raw isa AbstractVector && _is_const_int_range(raw) ||
-            throw(
-            _StencilFallback(
-                "branch key: contracted index '$(cnames[d])' " *
-                    "has no constant dense range"
-            )
-        )
+            _decline(:ragged_contraction, "contracted index '$(cnames[d])' of a gathered reduction")
         citers[d] = collect(_expand_int_range(raw))
     end
     # ONE SEGMENT PER BINDING. Each gather walks the body afresh under its own
@@ -1337,11 +1308,7 @@ function _eval_recipe(
         # class as the state/pgather table materializers — never per eval.
         spec = rec.arr::_ExprTblSpec
         ce = spec.ce
-        ce === nothing && throw(
-            _StencilFallback(
-                "subtree-table lane evaluated before its evaluator was attached"
-            )
-        )
+        ce === nothing && _decline(:subtree_table_declined, "evaluated before its evaluator was attached")
         cell = Vector{Int}(undef, length(spec.idx_names))
         @inbounds for d in eachindex(spec.idx_names)
             cell[d] = idx_env[spec.idx_names[d]]

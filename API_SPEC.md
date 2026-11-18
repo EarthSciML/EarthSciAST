@@ -866,7 +866,58 @@ build actually used, and `compiler_report` gives, per rule, the tier it landed
 on — which is informative even under `native`, where the interesting question
 is affine versus codegen versus whole-array, or taped versus fused. Both names
 and both meanings are stable surface. The report's exact **shape** is
-per-binding for now and is not pinned here. A compiler that builds a FOREIGN
+per-binding for now and is not pinned here.
+
+**Why a tier passed, in Julia.** Each row of Julia's report also lists the
+tiers that looked at the rule and passed it, deepest last, as
+`(tier, reason, detail)`: `reason` is a `Symbol` from a CLOSED vocabulary and
+`detail` is free text naming the construct (the operator, the variable, the
+error the body raised). A strict `compiler_refused_rule` message prints every
+one, with its detail. The vocabulary, whose meanings the `CompilerRuleRecord`
+docstring repeats:
+
+| Reason | Meaning |
+|---|---|
+| `lhs_not_indexed_derivative` | the left-hand side is not `D(index(var, i…))` |
+| `lhs_subscript_count` | the left-hand side's subscripts do not match the output indices |
+| `no_output_index` | the equation has no output index |
+| `no_contracted_index` | the equation has no contracted index |
+| `range_not_unit_run` | an output range is empty or not a unit-step run |
+| `below_floor` | the contraction is shorter than the tier's length floor |
+| `tier_off` | the tier is off under this compiler |
+| `gated_reduction` | a contraction with a join gate, whose terms vary per output cell |
+| `filtered_reduction` | a contraction with a filter the tier cannot guard |
+| `ragged_contraction` | a contracted range that is not a constant dense range |
+| `contracted_axis_cut` | a contracted axis the box cut splits, so one fold cannot walk it in one piece |
+| `symbolic_body_did_not_lower` | the body does not resolve or compile with its indices kept symbolic |
+| `unsupported_op` | an operator the tier has no form for |
+| `unknown_kind` | a compiled node kind the tier has no form for |
+| `unknown_array` | a gather of a name that is not a known array |
+| `malformed_index` | an `index` node with no operand |
+| `subscript_rank_mismatch` | a gather whose subscript count is not the array's rank |
+| `subscript_not_static` | a subscript that is not an integer function of the loop indices and build-time tables |
+| `gathered_reduction_shape` | a gathered reduction whose output indices do not match its subscripts |
+| `region_value_shape` | a `makearray` region value whose rank does not match the region |
+| `region_multi_index` | a `makearray` region selected by a subscript of several loop indices |
+| `guarded_out_of_range` | a constant subscript out of range under a run-time guard |
+| `output_layout_not_affine` | the output cells' slots are not an affine function of the loop indices |
+| `subtree_table_declined` | a build-time-evaluable subtree that the compile-once evaluator declined |
+| `scatter_too_many_pinned_cells` | the equality filter pins more output cells than the scatter takes |
+| `scatter_ragged_or_empty` | a scatter whose contracted range is ragged or empty |
+| `scatter_ragged_reads_output` | a ragged scatter whose body reads its own output |
+| `budget` | the generated code would exceed its node budget |
+| `unsupported_desc` | an access descriptor the code generator has no form for |
+| `unsupported_bound` | a loop bound the code generator cannot write |
+| `foreign_scratch` | a read of a scratch buffer the generated function does not own |
+| `subcall_order` | a sub-kernel call emitted before its invariants are in scope |
+| `loopvar_out_of_scope` | a loop variable read outside the loop that binds it |
+| `loop_reentered` | a loop entered again inside its own body |
+| `lane_spec_on_scalar_spine` | a lane descriptor on a scalar spine |
+| `cached_scalar_slot` | a cached scalar slot the generated function cannot read |
+
+The vocabulary is Julia's and is not a cross-binding contract: Python's and
+Rust's refusals carry their tiers' decline reasons as free text, and their
+reports do not list declines this way. A compiler that builds a FOREIGN
 program reports that program's decisions in the same record: `mtk` names, per
 rule, whether the compiled system integrates it, carries it in a residual, or
 ELIMINATED it into an observed equation — the third being a decision no other

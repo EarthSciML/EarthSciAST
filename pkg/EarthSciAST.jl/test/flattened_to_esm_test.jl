@@ -122,4 +122,63 @@ V(n) = E.VarExpr(n); N(x) = E.NumExpr(x)
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.y"]] ≈ 143.0   # x=3: a4 b8 c12 d144 e143
     end
+
+    # The build compiles a typed run file made from the flattened system, so a
+    # literal's sign survives: a `const` -0.0 times a positive state is -0.0.
+    @testset "a const -0.0 keeps its sign through the build" begin
+        c = Dict("op" => "const", "args" => Any[], "value" => [[-0.0, -0.0], [-0.0, -0.0]])
+        doc = Dict{String, Any}(
+            "esm" => "2.0.0", "metadata" => Dict("name" => "neg0"),
+            "models" => Dict(
+                "R" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "E" => Dict("type" => "unknown", "default" => 1.0),
+                        "y" => Dict("type" => "unknown", "default" => 0.0)
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "*",
+                                "args" => Any[Dict("op" => "index", "args" => Any[c, 1, 1]), "E"]
+                            )
+                        ),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["E"], "wrt" => "t"),
+                            "rhs" => 0.0
+                        ),
+                    ]
+                )
+            )
+        )
+        f!, u0, p, _t, vmap = E.Internal.build(doc)
+        du = fill(NaN, length(u0)); f!(du, u0, p, 0.0)
+        @test du[vmap["R.y"]] == 0.0 && signbit(du[vmap["R.y"]])
+    end
+
+    @testset "flattened_to_esm writes the initialization equations" begin
+        flat = E.flatten(
+            E.load_document(
+                Dict{String, Any}(
+                    "esm" => "2.0.0", "metadata" => Dict("name" => "init"),
+                    "models" => Dict(
+                        "M" => Dict{String, Any}(
+                            "variables" => Dict("x" => Dict("type" => "unknown")),
+                            "equations" => Any[
+                                Dict(
+                                    "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                    "rhs" => 0.0
+                                ),
+                            ],
+                            "initialization_equations" => Any[Dict("lhs" => "x", "rhs" => 2.0)]
+                        )
+                    )
+                )
+            )
+        )
+        @test !isempty(flat.initialization_equations)
+        doc = E.flattened_to_esm(flat)
+        @test length(doc["models"]["Flattened"]["initialization_equations"]) ==
+            length(flat.initialization_equations)
+    end
 end

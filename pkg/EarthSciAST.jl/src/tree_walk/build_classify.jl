@@ -17,8 +17,8 @@
 #     (skipping any an equation already defines) so they flow through the same
 #     ISR-resolution / observed-substitution pipeline as equation-defined
 #     observeds. This is the transitive-inlining path that lets a DEEP
-#     algebraic chain — e.g. the flattened Rothermel fire-physics chain
-#     reconstituted by `flattened_to_esm` — resolve through `_build_evaluator`
+#     algebraic chain — e.g. the flattened Rothermel fire-physics chain of a
+#     run file — resolve through `_build_evaluator`
 #     with NO caller pre-inlining (`_resolve_observed` collapses the chain to a
 #     fixed point). It used to be gated on geometry, which left a non-geometry
 #     expression-defined observed unbound. Synthesis only ADDS equations for
@@ -45,8 +45,8 @@
 #     `D(state) = <array rhs>` over a declared shape is lifted into the
 #     per-cell `faq` form the derivative partition consumes (see
 #     `_lift_wholearray_deriv_equations`). Spatial-operator zeroing over a
-#     structurally-0-D field is done EARLIER, at the flatten→document boundary
-#     (`flattened_to_esm`), so a raw `grad`/`div`/`laplacian` reaching the
+#     structurally-0-D field is done EARLIER, in flatten, so a raw
+#     `grad`/`div`/`laplacian` reaching the
 #     compiler directly (a hand-built Model, never discretized) still
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.

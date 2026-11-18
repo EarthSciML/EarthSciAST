@@ -701,7 +701,6 @@ const _GEO_CG_BINARY = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _BINARY_EL
 const _GEO_CG_CMP = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _COMPARISON_ELEMENTWISE_OPS)
 const _GEO_CG_MINMAX = Dict{Symbol, Symbol}(r.sym => r.fnsym for r in _NARY_MINMAX_OPS)
 
-struct _GeoCGDecline <: EarthSciASTError end
 
 mutable struct _GeoCG
     refs::_NodeMap{Int}
@@ -747,7 +746,8 @@ function _geo_cg_scan!(g::_GeoCG, n::_Node, depth::Int)
         bits = UInt64(1) << get(g.slot_level, n.idx, 0)
     elseif n.kind == _NK_OP && n.op === :geo_agg
         sp = n.payload::_GeoAggSpec
-        (sp.gates === nothing && depth + 1 < 64) || throw(_GeoCGDecline())
+        sp.gates === nothing || _decline(:gated_reduction, "a nested geometry reduction")
+        depth + 1 < 64 || _decline(:budget, "geometry reductions nested 64 deep")
         for s in sp.slots
             g.slot_level[s] = depth + 1
         end
@@ -817,7 +817,7 @@ end
 function _geo_cg_raw(g::_GeoCG, n::_Node)
     n.kind == _NK_LITERAL && return n.literal
     n.kind == _NK_STATE && return :(u[$(n.idx)])
-    n.kind == _NK_OP || throw(_GeoCGDecline())
+    n.kind == _NK_OP || _decline(:unknown_kind, string(n.kind))
     op = n.op
     c = n.children
     em(x) = _geo_cg(g, x)
@@ -831,13 +831,13 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         return acc
     elseif op === :- || op === :neg
         length(c) == 1 && return :(-$(em(c[1])))
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(em(c[1])) - $(em(c[2])))
     elseif haskey(_GEO_CG_BINARY, op)
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return Expr(:call, _GEO_CG_BINARY[op], em(c[1]), em(c[2]))
     elseif haskey(_GEO_CG_CMP, op)
-        length(c) == 2 || throw(_GeoCGDecline())
+        length(c) == 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(Expr(:call, _GEO_CG_CMP[op], em(c[1]), em(c[2]))) ? 1.0 : 0.0)
     elseif op === :and || op === :or
         # Operands emit in evaluation order: the first always runs, each later
@@ -854,17 +854,17 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         end
         return acc
     elseif op === :not
-        length(c) == 1 || throw(_GeoCGDecline())
+        length(c) == 1 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return :($(em(c[1])) == 0 ? 1.0 : 0.0)
     elseif op === :ifelse
-        length(c) == 3 || throw(_GeoCGDecline())
+        length(c) == 3 || _decline(:unsupported_op, "ifelse with $(length(c)) operands")
         cond = em(c[1])
         return :($cond != 0 ? $(_geo_cg_branch(g, c[2])) : $(_geo_cg_branch(g, c[3])))
     elseif haskey(_GEO_CG_UNARY, op)
-        length(c) == 1 || throw(_GeoCGDecline())
+        length(c) == 1 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         return Expr(:call, _GEO_CG_UNARY[op], em(c[1]))
     elseif haskey(_GEO_CG_MINMAX, op)
-        length(c) >= 2 || throw(_GeoCGDecline())
+        length(c) >= 2 || _decline(:unsupported_op, "$(op) with $(length(c)) operands")
         acc = em(c[1])
         for i in 2:length(c)
             acc = Expr(:call, _GEO_CG_MINMAX[op], acc, em(c[i]))
@@ -873,7 +873,7 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
     elseif op === :geo_gather
         src = n.payload
         (src isa Array{Float64} && 1 <= ndims(src) <= 3 && ndims(src) == length(c)) ||
-            throw(_GeoCGDecline())
+            _decline(:unknown_array, "a geometry source that is not a Float64 array of rank 1 to 3")
         k = get!(g.src_ix, src) do
             push!(g.srcs, src)
             length(g.srcs)
@@ -889,7 +889,7 @@ function _geo_cg_raw(g::_GeoCG, n::_Node)
         end
         return :(_geo_count_value(srcs[$k], $(em(c[1]))::Float64))
     end
-    throw(_GeoCGDecline())
+    return _decline(:unsupported_op, String(op))
 end
 
 function _geo_cg_agg(g::_GeoCG, n::_Node)
@@ -912,7 +912,7 @@ function _geo_cg_agg(g::_GeoCG, n::_Node)
         push!(resets, :($(Symbol(m, :_set)) = false))
     end
     sets = Any[:(u[$(sp.slots[i])] = Float64($(ks[i]))) for i in eachindex(ks)]
-    _is_numeric_reducer(sp.op) || throw(_GeoCGDecline())
+    _is_numeric_reducer(sp.op) || _decline(:unsupported_op, "⊕ = $(sp.op)")
     fold = :($acc = $(_reducer_fnsym(sp.op))($acc, _v))
     inner = quote
         $(sets...)
@@ -1023,8 +1023,11 @@ function _geo_kernel(body::_Node; cache::Union{Nothing, _GeoKernelCache} = nothi
         _tally_cascade!(:geo_kernel)
         return _GeoKernel(f, Tuple(g.srcs))
     catch err
-        err isa _GeoCGDecline && return nothing
-        _is_resource_error(err) && rethrow()
+        # A shape the emitter has no form for declines, and so does a body that
+        # raises a document-level refusal while it is emitted; the caller walks
+        # it instead. Anything else (a programming error, a resource error)
+        # propagates.
+        err isa EarthSciASTError || rethrow()
         return nothing
     end
 end

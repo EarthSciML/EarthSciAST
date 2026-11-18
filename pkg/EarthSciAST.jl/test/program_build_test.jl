@@ -398,11 +398,10 @@ end
     end
     prog = rhs_program(shared)
     @test forcing_slots(prog) == forcing_slots(rhs_program(base))
-    # The seed recipe holds the document after the rewrite, so a program built
-    # later neither rewrites again nor repeats its diagnostics.
-    recipe = base.build.program_seed
-    @test recipe isa EarthSciAST._ProgramSeedRecipe
-    @test recipe.input isa AbstractDict && EarthSciAST._pushdown_record(recipe.input) !== nothing
+    # A program is built from the prepared run the Problem's build compiled,
+    # so a program built later neither rewrites again nor samples a provider.
+    @test base.build.seed isa EarthSciAST._ProgramSeed
+    @test base.build.seed.prep isa EarthSciAST.PreparedRun
     # Each const provider is sampled once, at construction, and each gated one
     # fetches its selection once: the program is built from those samples.
     @test all(p.n == 1 for p in values(pv) if p isa _PbtConst)
