@@ -1,11 +1,10 @@
 # `esm_problem(…; compiler = :xla)` — the direct StableHLO emitter on the SOLVE
 # path (API_SPEC §5.8, src/compiler_xla.jl, ext/reactant_direct/problem.jl).
 #
-# OPT-IN, like every reactant_*_test.jl: included only under
-# `ESM_TEST_REACTANT=1`. Standalone, from an environment with Reactant:
+# Part of the Reactant suite (test/reactant/runtests.jl, its own environment).
+# Standalone, from the repository root once that environment is set up:
 #
-#     ESM_TEST_REACTANT=1 julia --project=<env> \
-#       -e 'cd("pkg/EarthSciAST.jl/test"); include("compiler_xla_test.jl")'
+#     julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/compiler_xla_test.jl
 #
 # reactant_direct_emit_test.jl gates the EMITTER — one right-hand side, at fixed
 # probe states, against the interpreter's. This file gates the PROBLEM: that the
@@ -43,7 +42,7 @@ const CX = EarthSciAST
 const CX_EXT = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
 @assert CX_EXT !== nothing "the Reactant extension did not load"
 
-const CX_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
+const CX_ROOT = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
 _cx_fixture(parts...) = joinpath(CX_ROOT, "tests", parts...)
 
 # Two documents of two different shapes, both already in the
@@ -209,7 +208,7 @@ _cx_du(prob, u, t) = (
         prog = [r for r in rep.rules if r.kind === :rhs_program]
         @test length(prog) == 1
         @test prog[1].rule == "the right-hand side"
-        @test prog[1].tier === :xla_direct_cpu   # ESM_TEST_REACTANT runs on the host client
+        @test prog[1].tier === :xla_direct_cpu   # the Reactant suite runs on the host client
         @test any(r -> r.kind === :equation, rep.rules)
         # The emitter's op census rides in the tally, so a caller can see that a
         # program was emitted rather than take the row's word for it.

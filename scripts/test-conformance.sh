@@ -874,8 +874,8 @@ run_compiled_rhs_conformance_interpreter_python() {
 }
 
 # Julia's compiled lane is direct StableHLO emission through the Reactant
-# extension. OPT-IN under ESM_TEST_REACTANT=1, exactly as the package's own
-# reactant_*_test.jl files are (test/runtests.jl reads the same variable).
+# extension. OPT-IN under ESM_TEST_REACTANT=1 (the package's own Reactant tests
+# are a separate suite, test/reactant/, with its own environment).
 #
 # The gate is not decoration. The adapter's compiled lane self-bootstraps
 # scripts/compiled_rhs_reactant_env, and that environment lists Reactant, so
