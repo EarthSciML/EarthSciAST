@@ -64,6 +64,22 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     expect(niRunoff.equations[0].rhs.args[1].op).toBe('D')
   })
 
+  // esm-spec §4.7 / §9.7.10 form A: the edge's injected import ref is written by
+  // the mounting document, so it resolves against THAT document's directory at
+  // both mount forms. The leaf sits in leaves/, where the injected relative ref
+  // names nothing.
+  it.each(['subsystem_form.esm', 'toplevel_form.esm'])(
+    'form A — %s resolves the injected ref against the mounting directory',
+    async (name) => {
+      const f = await loadResolved(conf('inject_mounting_directory', name))
+      const runoff =
+        name === 'subsystem_form.esm' ? f.models.Assembly.subsystems.Runoff : f.models.Runoff
+      expect(runoff.ref).toBeUndefined()
+      expect(runoff.equations[0].rhs.args[1].op).toBe('makearray')
+      expect(f.index_sets.lon.size).toBe(288)
+    },
+  )
+
   it('form B — coupling-entry injection (§10.8 / §9.7.10)', () => {
     const f = loadPath(conf('inject_coupling_entry', 'fixture.esm'))
     // Advection is discretized by name; its lon-derivative is lowered.
