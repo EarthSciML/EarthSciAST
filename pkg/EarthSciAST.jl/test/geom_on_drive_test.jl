@@ -12,14 +12,11 @@
 # (`:geom_eq_drive`, read through `EarthSciAST.Internal.counting`) keeps each
 # comparison non-vacuous.
 
-module GeomOnDriveTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -67,13 +64,11 @@ function both_ways(json, env = ENV0)
     return got, ref, de
 end
 
-bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex(a))
-
 @testset "setup-time bin-equality broad phase" begin
 
     @testset "MAP over both gated indices: PAIRS-driven, bit-identical" begin
         j = _agg(
-            ["i", "j"], ["i" => "S", "j" => "T"], _op("*", _ix("sv", "i"), _ix("tv", "j"));
+            ["i", "j"], ["i" => "S", "j" => "T"], jop("*", jidx("sv", "i"), jidx("tv", "j"));
             join = _on("sb", "tb")
         )
         got, ref, de = both_ways(j)
@@ -87,7 +82,7 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
     @testset "MAP with an ungated output index around the pairs" begin
         j = _agg(
             ["i", "k", "j"], ["i" => "S", "k" => "K", "j" => "T"],
-            _op("*", _ix("kk", "k"), _op("+", _ix("sv", "i"), _ix("tv", "j")));
+            jop("*", jidx("kk", "k"), jop("+", jidx("sv", "i"), jidx("tv", "j")));
             join = _on("sb", "tb")
         )
         got, ref, de = both_ways(j)
@@ -102,25 +97,25 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
         for (nm, extra) in (
                 "plain" => Dict{String, Any}(),
                 "filtered" => Dict{String, Any}(
-                    "filter" => _op(">", _op("abs", _ix("sv", "i")), "atol")
+                    "filter" => jop(">", jop("abs", jidx("sv", "i")), "atol")
                 ),
                 "max" => Dict{String, Any}("reduce" => "max"),
                 "min" => Dict{String, Any}("reduce" => "min"),
             )
-            j = _agg(["j"], ["i" => "S", "j" => "T"], _ix("sv", "i"); join = _on("sb", "tb"))
+            j = _agg(["j"], ["i" => "S", "j" => "T"], jidx("sv", "i"); join = _on("sb", "tb"))
             merge!(j, extra)
             got, ref, de = both_ways(j)
             @test (nm, de) == (nm, 1)
             @test (nm, bitsame(got, ref)) == (nm, true)
         end
-        j = _agg(["j"], ["i" => "S", "j" => "T"], _ix("sv", "i"); join = _on("sb", "tb"))
+        j = _agg(["j"], ["i" => "S", "j" => "T"], jidx("sv", "i"); join = _on("sb", "tb"))
         got, _, _ = both_ways(j)
         @test got == [1.0, 1.5, 3.0, 0.0]
     end
 
     @testset "the gated index may be the contracted one on either side" begin
         j = _agg(
-            ["i"], ["i" => "S", "j" => "T"], _op("*", _ix("sv", "i"), _ix("tv", "j"));
+            ["i"], ["i" => "S", "j" => "T"], jop("*", jidx("sv", "i"), jidx("tv", "j"));
             join = _on("sb", "tb")
         )
         got, ref, de = both_ways(j)
@@ -133,7 +128,7 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
         # Both gated indices contracted: the drive plan cannot express it.
         j = _agg(
             ["k"], ["i" => "S", "j" => "T", "k" => "K"],
-            _op("*", _ix("kk", "k"), _op("*", _ix("sv", "i"), _ix("tv", "j")));
+            jop("*", jidx("kk", "k"), jop("*", jidx("sv", "i"), jidx("tv", "j")));
             join = _on("sb", "tb")
         )
         got, ref, de = both_ways(j)
@@ -142,7 +137,7 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
         # A key column shorter than its range is never indexed.
         rhs = EA.expression_from_json(
             _agg(
-                ["j"], ["i" => "S", "j" => "T"], _ix("sv", "i");
+                ["j"], ["i" => "S", "j" => "T"], jidx("sv", "i");
                 join = _on("sb_short", "tb")
             )
         )
@@ -160,7 +155,7 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
         )
         rhs2 = EA.expression_from_json(
             _agg(
-                ["j"], ["i" => "S", "j" => "T"], _ix("sv", "i");
+                ["j"], ["i" => "S", "j" => "T"], jidx("sv", "i");
                 join = _on("sb", "tb")
             )
         )
@@ -173,7 +168,7 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
     @testset "the interpreter takes the dense sweep" begin
         rhs = EA.expression_from_json(
             _agg(
-                ["j"], ["i" => "S", "j" => "T"], _ix("sv", "i");
+                ["j"], ["i" => "S", "j" => "T"], jidx("sv", "i");
                 join = _on("sb", "tb")
             )
         )
@@ -193,5 +188,3 @@ bitsame(a, b) = size(a) == size(b) && all(isequal(a[i], b[i]) for i in eachindex
         @test EA._equality_match_index(1:1, p -> missing, 1:1, p -> 1) === nothing
     end
 end
-
-end # module

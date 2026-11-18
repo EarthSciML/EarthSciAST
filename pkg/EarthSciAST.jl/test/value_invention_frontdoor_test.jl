@@ -1,4 +1,4 @@
-# Value-invention evaluator front-door — Julia reference (bead ess-3lj.1, F1).
+# Value-invention evaluator front-door — Julia reference.
 #
 # RFC semiring-faq-unified-ir §6.1 (cadence-partition) / §5.5 (determinism) /
 # §7.3 (edge enumeration); CONFORMANCE_SPEC.md §5.5 / §5.7.
@@ -44,7 +44,7 @@ _vi_typed_fixture(rel, name) = _vi_typed(_vi_raw(rel), name)
 # the model-level `index_sets` block is hoisted to the document scope
 # (esm-spec v0.8.0) and the model mounted as `models.M`.
 function _vi_inline_model(json)
-    m = ESS.Cadence.to_native(JSON3.read(json))
+    m = JSON3.read(json, Dict{String, Any})
     doc = Dict{String, Any}(
         "esm" => "0.9.0",
         "metadata" => Dict{String, Any}("name" => "inline"),
@@ -55,7 +55,7 @@ function _vi_inline_model(json)
 end
 
 
-@testset "value-invention front-door (ess-3lj.1)" begin
+@testset "value-invention front-door" begin
 
     @testset "edge-enumeration: build end-to-end (§7.3)" begin
         rel = "tests/valid/faq/edge_enumeration_area_eff.esm"

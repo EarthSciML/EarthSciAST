@@ -19,9 +19,9 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
     @testset "ValidationResult struct" begin
         schema_errors = [EarthSciAST.SchemaError("/", "Schema error", "required")]
         structural_errors = [EarthSciAST.StructuralError("models.test", "Structural error", "missing_equation")]
-        # `unit_warnings` is a STRUCTURED record (finding D-8), matching the
-        # Python/TypeScript/Go bindings and CONFORMANCE_SPEC §3.1 — not the bare
-        # string it used to be, so a caller can route findings by `code`.
+        # `unit_warnings` is a STRUCTURED record, matching the
+        # Python/TypeScript/Go bindings and CONFORMANCE_SPEC §3.1 — not a bare
+        # string, so a caller can route findings by `code`.
         unit_warnings = [
             EarthSciAST.UnitWarning(
                 "/models/m/equations/0",
@@ -109,7 +109,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
 
         @testset "Reaction with invalid stoichiometry" begin
             # StoichiometryEntry enforces finite, positive stoichiometry at
-            # construction (gt-1e96), so negative values are rejected before
+            # construction, so negative values are rejected before
             # validate_structural ever sees them.
             @test_throws ArgumentError EarthSciAST.StoichiometryEntry("A", -1)
         end
@@ -376,7 +376,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         # with units 'kcal/mol' — missing the temperature dimension (canonical is
         # 'J/(mol*K)'). Must be rejected as a structural unit_inconsistency error
         # at the usage site `gas_law_calculation` (mirrors Python's
-        # units.UnitValidator._check_physical_constants, gt-3tgv).
+        # units.UnitValidator._check_physical_constants).
         @testset "Invalid fixture units_dimensional_constant_error.esm is rejected" begin
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_dimensional_constant_error.esm")
             if _require_fixture(fixture_path)
@@ -399,7 +399,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
-        # Scale-aware conversion factor check (gt-l76y). Observed variable
+        # Scale-aware conversion factor check. Observed variable
         # declared in Pa is assigned '50000 * p_atm' where p_atm is in atm;
         # dimensions match but the numeric scale factor should be 101325 Pa/atm.
         # Mirrors Python's units.UnitValidator._check_conversion_factor.

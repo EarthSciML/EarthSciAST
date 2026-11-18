@@ -447,15 +447,11 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
     @testset "A species in NO reaction gets no equation, and is ALGEBRAIC" begin
         # esm-libraries-spec §4.6.1. A species touched by no reaction has an EMPTY
-        # stoichiometric sum. Emitting `D(X,t) = 0` for it — which Julia used to do
-        # — makes it a DIFFERENTIAL unknown that never moves; esm-spec §6.3.1
-        # classifies by COMPLEMENT, so omitting the equation is what makes it the
-        # ALGEBRAIC unknown it is: a quantity the reaction network says nothing
-        # about, not one whose dynamics are known to be trivial.
-        #
-        # Julia was the 4-1 outlier on this (Python, Rust, Go and TypeScript all
-        # omit; Rust argues the case in its own `reactions.rs` comment), and
-        # §4.6.1 ruled against it. This is the regression pin for that ruling.
+        # stoichiometric sum. Emitting `D(X,t) = 0` for it would make it a
+        # DIFFERENTIAL unknown that never moves; esm-spec §6.3.1 classifies by
+        # COMPLEMENT, so omitting the equation is what makes it the ALGEBRAIC
+        # unknown it is: a quantity the reaction network says nothing about, not
+        # one whose dynamics are known to be trivial.
         species = [
             Species("A", default = 1.0), Species("B", default = 0.0),
             Species("Xe", default = 5.0),

@@ -1,4 +1,4 @@
-# Lane-batched grouping of the per-cell scalar surface (ess-oop-batch).
+# Lane-batched grouping of the per-cell scalar surface.
 #
 # `rhs_list` entries a state equation lowers to when it declines the kernel path
 # (a runtime contraction loop routes there by design), and the per-column
@@ -21,8 +21,7 @@
 #     `rest` and there are no groups at all.
 #
 # The emitted program the groups become is pinned in
-# test/reactant_direct_emit_test.jl ("the lane-batched scalar surface"), under
-# ESM_TEST_REACTANT=1.
+# test/reactant/reactant_direct_emit_test.jl ("the lane-batched scalar surface").
 using Test
 include("testutils.jl")
 
@@ -31,7 +30,7 @@ const _SB_ESS = EarthSciAST
 
 # Lane batching is a property of the PER-CELL contraction loop's `rhs_list`
 # entries, so every fixture here has to actually reach that tier. The whole-array
-# contraction nest (ess-array-contraction) sits above it and takes any reduction
+# contraction nest sits above it and takes any reduction
 # that clears its floor for the whole equation at once — leaving no per-cell
 # entries to batch. These reductions are far under the shipped floor, but the
 # floor is named rather than inherited so the routing under test is a fact of the
@@ -105,7 +104,7 @@ function _sb_halo(M::Int)
     return (doc, ics, NI, NJ)
 end
 
-@testset "lane-batched grouping of the per-cell scalar surface (ess-oop-batch)" begin
+@testset "lane-batched grouping of the per-cell scalar surface" begin
 
     @testset "rhs_list contraction loops: one group, every lane in it" begin
         doc, ics, NI, NJ = _sb_halo(8)

@@ -1,5 +1,4 @@
-# Conformance harness adapter — pushdown category (Phase 3, clean
-# consolidation). Contract (tests/conformance/pushdown/README.md): run
+# Conformance harness adapter — pushdown category. Contract (tests/conformance/pushdown/README.md): run
 # desugar_pushdown on each manifest input and deep-compare the result to the
 # committed golden as parsed JSON; assert idempotency on the golden and input
 # purity. The goldens were EMITTED by this binding

@@ -1,22 +1,16 @@
 # esm-spec §6.6.3 — the relative bound is SYMMETRIC in `actual` and `expected`.
 #
 # The scale is `max(|actual|, |expected|)`, the larger of the two magnitudes,
-# NOT `|expected|` alone. §6.6.3 used to state both: the normative box (and the
-# schema's `Tolerance` description) gave the `|expected|`-only denominator while
-# the finiteness rationale further down the same section reasoned from
-# `max(|∞|, |expected|)` — two different rules for one predicate, and the three
-# executing bindings all implemented the symmetric one. EarthSciML/EarthSciAST#193
-# settled it as symmetric; this pins the choice at the seam where the two
-# readings actually disagree.
+# NOT `|expected|` alone (EarthSciML/EarthSciAST#193). This pins the choice at
+# the seam where the two readings actually disagree.
 #
 # Their VERDICTS disagree only inside `rtol*|e| < |a - e| <= rtol*|a|`, which
 # needs an OVERSHOOT (`|actual| > |expected|`) whose margin is itself of order
 # `rtol`. Everywhere else `max(|a|, |e|) == |e|` or the difference is on the
-# same side of both bounds, and the two return the same answer — which is why
-# the divergence survived: every pre-existing tolerance case in every binding
-# gets the same verdict under both readings, and the `assertion_nonfinite`
-# category compares verdicts on non-finite actuals, so nothing here was
-# covered. Reverting `_check_assertion` to the `|expected|` denominator must
+# same side of both bounds, and the two return the same answer — so the other
+# tolerance cases in every binding get the same verdict under both readings,
+# and the `assertion_nonfinite` category compares verdicts on non-finite
+# actuals; neither covers this. Reverting `_check_assertion` to the `|expected|` denominator must
 # turn this red.
 using Test
 using EarthSciAST

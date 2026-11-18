@@ -1,4 +1,4 @@
-# Intra-kernel body split (ess-iip-split, tree_walk/codegen_kernel.jl).
+# Intra-kernel body split (tree_walk/codegen_kernel.jl).
 #
 # A kernel whose emitted cell body exceeds `_codegen_fn_node_cap` is partitioned
 # so no single generated function is oversized — the body is split across

@@ -4,8 +4,8 @@
 #
 #     D(J[i]) = makearray([[1,N]], [[1,N]]; [0, faq_i( Σ_j body(i, j) )])
 #
-# Native used to refuse it: with the cell index symbolic the whole-array nest
-# could not pick the makearray's region. It now takes one equation per region
+# With the cell index symbolic the whole-array nest cannot pick the makearray's
+# region, so native takes one equation per region
 # (`_makearray_region_equations`), and the nest keeps the nested reduction as a
 # counted loop (`_NEST_SCALAR_LOOPS`) instead of unrolling one term per `j` into
 # its one body. This pins, against `compiler=:interpreter` (the per-cell unroll):

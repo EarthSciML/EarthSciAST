@@ -1,4 +1,4 @@
-# Tests for generic const_array boundary policy in tree_walk (ess-gj4).
+# Tests for generic const_array boundary policy in tree_walk.
 #
 # A const_array stencil gather at an out-of-range index resolves per a declared
 # per-dimension boundary policy instead of erroring:
@@ -18,7 +18,7 @@ include("testutils.jl")  # _n/_i/_v/_op/_idx builder quartet
 
 const ESM = EarthSciAST
 
-@testset "const_array boundary policy (ess-gj4)" begin
+@testset "const_array boundary policy" begin
 
     # ------------------------------------------------------------------
     # A. Value gather (_resolve_indices): D(y[i]) = index(M, i+1)

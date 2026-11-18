@@ -5,24 +5,22 @@
 # isolation and zero allocation.
 
 using Test
+include("testutils.jl")
 using Random
 using EarthSciAST
 
 const PRT = EarthSciAST
-
-_prt_idx(v, ix...) = Dict("op" => "index", "args" => Any[v, ix...])
-_prt_op(op, args...) = Dict("op" => op, "args" => Any[args...])
 
 # A 2-D diffusion `u` forced by a gridded `F`, a 0-d `y` driven by one cell of
 # `F` (a read the prelude memoizes in its time tier), and a 0-d `w` reading the
 # const table `C` at a subscript taken from the forcing `G`, so a forcing set
 # can make one evaluation fault.
 function _prt_doc(nx::Int, ny::Int)
-    u(i, j) = _prt_idx("u", i, j)
-    lap = _prt_op(
-        "+", u(_prt_op("-", "i", 1), "j"), u(_prt_op("+", "i", 1), "j"),
-        u("i", _prt_op("-", "j", 1)), u("i", _prt_op("+", "j", 1)),
-        _prt_op("*", -4, u("i", "j"))
+    u(i, j) = jidx("u", i, j)
+    lap = jop(
+        "+", u(jop("-", "i", 1), "j"), u(jop("+", "i", 1), "j"),
+        u("i", jop("-", "j", 1)), u("i", jop("+", "j", 1)),
+        jop("*", -4, u("i", "j"))
     )
     faq(e) = Dict(
         "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
@@ -31,11 +29,11 @@ function _prt_doc(nx::Int, ny::Int)
     )
     du = faq(Dict("op" => "D", "args" => Any[u("i", "j")], "wrt" => "t"))
     rhs = faq(
-        _prt_op(
-            "+", _prt_op("*", "k", lap),
-            _prt_op(
-                "*", _prt_idx("F", "i", "j"),
-                _prt_op("exp", _prt_op("*", -1, "k", "t"))
+        jop(
+            "+", jop("*", "k", lap),
+            jop(
+                "*", jidx("F", "i", "j"),
+                jop("exp", jop("*", -1, "k", "t"))
             )
         )
     )
@@ -64,15 +62,15 @@ function _prt_doc(nx::Int, ny::Int)
                 "equations" => Any[
                     Dict("lhs" => du, "rhs" => rhs),
                     Dict(
-                        "lhs" => _prt_op("D", "y"),
-                        "rhs" => _prt_op(
-                            "+", _prt_op("*", "k", _prt_idx("F", 1, 1)),
-                            _prt_op("*", "k", _prt_idx("F", 1, 1))
+                        "lhs" => jop("D", "y"),
+                        "rhs" => jop(
+                            "+", jop("*", "k", jidx("F", 1, 1)),
+                            jop("*", "k", jidx("F", 1, 1))
                         )
                     ),
                     Dict(
-                        "lhs" => _prt_op("D", "w"),
-                        "rhs" => _prt_idx("C", _prt_idx("G", 1))
+                        "lhs" => jop("D", "w"),
+                        "rhs" => jidx("C", jidx("G", 1))
                     ),
                 ]
             )
@@ -92,25 +90,6 @@ function _prt_problem(nx, ny; compiler = :native)
 end
 
 _prt_alloc(du, x, ws, u, aux, p, t, fs) = @allocated rhs!(du, x, ws, u, aux, p, t, fs)
-
-# Every object reachable from `f`, by identity.
-function _prt_objects(f)
-    seen = IdDict{Any, Nothing}()
-    function walk(x)
-        isbits(x) && return
-        x isa Union{String, Symbol, Expr, Module, DataType, UnionAll, Core.TypeName, Method} && return
-        haskey(seen, x) && return
-        seen[x] = nothing
-        if x isa Array
-            isbitstype(eltype(x)) && return
-            foreach(i -> isassigned(x, i) && walk(x[i]), eachindex(x))
-            return
-        end
-        return foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
-    end
-    walk(f)
-    return seen
-end
 
 _prt_is_data(x) = x isa Array && isbitstype(eltype(x))
 
@@ -339,7 +318,7 @@ end
 
     @testset "workspaces share read-only data, never state" begin
         w1, w2 = rhs_workspace(prog), rhs_workspace(prog)
-        o1, o2, ot = _prt_objects(w1.f!), _prt_objects(w2.f!), _prt_objects(prog.f!)
+        o1, o2, ot = reachable_objects(w1.f!), reachable_objects(w2.f!), reachable_objects(prog.f!)
         # The const table `C` and the gather index tables are the program's.
         C = [x for x in keys(o1) if x isa Vector{Float64} && x == [10.0, 20.0, 30.0]]
         @test length(C) == 1 && haskey(o2, C[1]) && haskey(ot, C[1])
@@ -440,7 +419,7 @@ end
 # behind values filled before it: a parameter vector or a time outside its
 # domain throws midway through refilling a tier.
 function _prt_fault_doc()
-    two(e) = _prt_op("+", e, e)
+    two(e) = jop("+", e, e)
     return Dict{String, Any}(
         "esm" => "2.0.0",
         "metadata" => Dict("name" => "prt_fault"),
@@ -455,20 +434,20 @@ function _prt_fault_doc()
                 ),
                 "equations" => Any[
                     Dict(
-                        "lhs" => _prt_op("D", "a"),
-                        "rhs" => _prt_op("+", two(_prt_op("exp", "k")), two(_prt_op("*", "k", "k")))
+                        "lhs" => jop("D", "a"),
+                        "rhs" => jop("+", two(jop("exp", "k")), two(jop("*", "k", "k")))
                     ),
-                    Dict("lhs" => _prt_op("D", "b"), "rhs" => two(_prt_op("log", "k"))),
+                    Dict("lhs" => jop("D", "b"), "rhs" => two(jop("log", "k"))),
                     Dict(
-                        "lhs" => _prt_op("D", "c"),
-                        "rhs" => _prt_op(
-                            "+", two(_prt_op("exp", _prt_op("*", "k", "t"))),
-                            two(_prt_op("cos", "t"))
+                        "lhs" => jop("D", "c"),
+                        "rhs" => jop(
+                            "+", two(jop("exp", jop("*", "k", "t"))),
+                            two(jop("cos", "t"))
                         )
                     ),
                     Dict(
-                        "lhs" => _prt_op("D", "d"),
-                        "rhs" => two(_prt_op("log", _prt_op("-", 2, "t")))
+                        "lhs" => jop("D", "d"),
+                        "rhs" => two(jop("log", jop("-", 2, "t")))
                     ),
                 ]
             )
@@ -518,8 +497,8 @@ function _prt_ap_doc(n::Int)
                 ),
                 "equations" => Any[
                     Dict(
-                        "lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i")], "wrt" => "t")),
-                        "rhs" => faq(_prt_op("*", -1, _prt_idx("K", "i"), _prt_idx("u", "i")))
+                        "lhs" => faq(Dict("op" => "D", "args" => Any[jidx("u", "i")], "wrt" => "t")),
+                        "rhs" => faq(jop("*", -1, jidx("K", "i"), jidx("u", "i")))
                     ),
                 ]
             )
@@ -607,14 +586,14 @@ function _prt_lane_doc(nx::Int, ny::Int)
                     Dict(
                         "lhs" => faq(
                             Dict(
-                                "op" => "D", "args" => Any[_prt_idx("u", "i", "j")],
+                                "op" => "D", "args" => Any[jidx("u", "i", "j")],
                                 "wrt" => "t"
                             )
                         ),
                         "rhs" => faq(
-                            _prt_op(
-                                "-", _prt_idx("F", "i", "j"),
-                                _prt_op("*", "k", _prt_idx("u", "i", "j"))
+                            jop(
+                                "-", jidx("F", "i", "j"),
+                                jop("*", "k", jidx("u", "i", "j"))
                             )
                         )
                     ),
@@ -784,18 +763,18 @@ function _prt_fed_doc(n::Int)
                     Dict(
                         "lhs" => faq(
                             Dict(
-                                "op" => "D", "args" => Any[_prt_idx("u", "i")],
+                                "op" => "D", "args" => Any[jidx("u", "i")],
                                 "wrt" => "t"
                             )
                         ),
                         "rhs" => faq(
-                            _prt_op(
-                                "-", _prt_op("*", "s", _prt_idx("E", "i")),
-                                _prt_op("*", "k", _prt_idx("u", "i"))
+                            jop(
+                                "-", jop("*", "s", jidx("E", "i")),
+                                jop("*", "k", jidx("u", "i"))
                             )
                         )
                     ),
-                    Dict("lhs" => _prt_op("D", "y"), "rhs" => _prt_op("*", "s", "k")),
+                    Dict("lhs" => jop("D", "y"), "rhs" => jop("*", "s", "k")),
                 ]
             )
         )

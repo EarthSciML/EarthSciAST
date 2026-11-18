@@ -1,11 +1,10 @@
-# Cross-binding conformance for the `expression` initial-condition type
-# (bead ess-gjn, epic campfire-e2e ea-6sh).
+# Cross-binding conformance for the `expression` initial-condition type.
 #
 # The shared golden under tests/valid/initial_conditions/ declares a domain-level
 # `expression` initial condition: u's initial field is the existing expression
 # AST psi(x) = 0.5 * (1 + tanh((x - 0.3) / 0.15)) evaluated over the spatial grid
 # at t=0 (no new primitive). Python evaluates this end-to-end; Julia loads it as
-# the shared contract — expression-IC evaluation in Julia is deferred per ess-gjn
+# the shared contract — expression-IC evaluation in Julia is deferred
 # (Python-first scope). This test pins that Julia parses the golden, that the
 # domain exposes the spatial grid, and that the initial condition carries the
 # Expression AST, so the fixture is the lever the Julia evaluator builds against.
@@ -19,7 +18,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
 
-@testset "expression initial-condition golden loads (ess-gjn)" begin
+@testset "expression initial-condition golden loads" begin
     path = joinpath(
         _EXPRIC_REPO_ROOT, "tests", "valid", "initial_conditions",
         "expression_ignition_front_1d.esm"

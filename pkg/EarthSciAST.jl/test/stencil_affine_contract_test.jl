@@ -1,7 +1,6 @@
 # Differential test for CONSTANT-bound contractions (aggregate reductions) on the
-# affine access-kernel path (ess-affine). A contraction used to be gated out of the
-# affine path entirely (`isempty(contract_names)`), forcing the per-cell reduce.
-# It is now UNROLLED into a plain ⊕-fold of affine-gather terms
+# affine access-kernel path. A contraction is UNROLLED into a plain ⊕-fold of
+# affine-gather terms
 # (`_unrolled_contraction_body`) and lowered by the existing box processor — no
 # runtime reduce, no per-cell loop. The unroll reuses `_foreach_aggregate_term`
 # (term order, filter `ifelse`-guard) and seeds the fold with the 0̄ identity first,
@@ -38,7 +37,7 @@ function _reduce_model(statevars, ybody, ni, klo, khi; reduce = "+", filt = noth
     return ESM.Model(vars, [ESM.Equation(_ao1(_Didx(statevars[1], _v("i")), "i", 1, ni), rhs)])
 end
 
-@testset "affine constant-bound contraction ≡ per-cell (differential, ess-affine)" begin
+@testset "affine constant-bound contraction ≡ per-cell (differential)" begin
     @testset "matvec sum_product D(y[i])=Σ A[i,k]·x[k]" begin
         A = [1.0 2.0 3.0; 4.0 5.0 6.0]
         body = _op("*", _idx("A", _v("i"), _v("k")), _idx("x", _v("k")))

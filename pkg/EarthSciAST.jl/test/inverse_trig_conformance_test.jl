@@ -1,5 +1,5 @@
 # Cross-binding conformance tests for the four inverse-trigonometric scalar
-# leaf ops acos / asin / atan / atan2 (bead ess-9x1).
+# leaf ops acos / asin / atan / atan2.
 #
 # Loads the shared fixture tests/valid/scalar_leaves/inverse_trig_leaves.esm —
 # which carries an inline `tests` block checked by Python (simulate) and Rust
@@ -17,8 +17,8 @@
 # the 2-arg quadrant resolution rather than a bare atan of a ratio.
 #
 # These leaves back the spherical-geometry FAQs (great-circle arc R·acos,
-# lat/lon asin/atan2) consumed by M4 polygon_area (ess-my4.4.3) and the ESD-DUO
-# geometry beads.
+# lat/lon asin/atan2) consumed by polygon_area and the spherical geometry
+# templates.
 
 using Test
 using EarthSciAST
@@ -44,7 +44,7 @@ function _eval_invtrig_fixture(
     return du, Dict(k[(length(model_name) + 2):end] => v for (k, v) in vmap)
 end
 
-@testset "inverse-trig scalar-leaf conformance (ess-9x1)" begin
+@testset "inverse-trig scalar-leaf conformance" begin
     du, vmap = _eval_invtrig_fixture(
         "inverse_trig_leaves.esm", "InverseTrigLeaves",
         ["asin_v", "acos_v", "atan_v", "atan2_v"]
@@ -56,11 +56,11 @@ end
 end
 
 # Hyperbolic family sinh / cosh / tanh and inverses asinh / acosh / atanh
-# (bead ess-v9a.1). Same constant-RHS-from-zero worked-example construction as
+# Same constant-RHS-from-zero worked-example construction as
 # the inverse-trig set above, so each du element IS the op's value at t=1; the
 # asserted constants mirror the shared fixture's inline `tests[].expected`,
 # which Python (simulate) and Rust (simulate) also check.
-@testset "hyperbolic-trig scalar-leaf conformance (ess-v9a.1)" begin
+@testset "hyperbolic-trig scalar-leaf conformance" begin
     du, vmap = _eval_invtrig_fixture(
         "hyperbolic_trig_leaves.esm", "HyperbolicTrigLeaves",
         ["sinh_v", "cosh_v", "tanh_v", "asinh_v", "acosh_v", "atanh_v"]

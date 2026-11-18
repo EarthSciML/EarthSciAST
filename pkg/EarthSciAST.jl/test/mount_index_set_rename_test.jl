@@ -47,12 +47,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
     @testset "the field applies at a top-level model `{ref}` mount" begin
         # esm-spec §4.7 "Where it applies": `index_set_rename` is normative at
         # BOTH mount forms, with the same meaning and the same pipeline — "a
-        # binding MUST NOT make the two forms differ". Julia used to refuse the
-        # field at a top-level `models.<k>` `{ref}` with
-        # `subsystem_index_set_rename_unsupported_mount_form`, because that form
-        # was a raw pre-pass with no resolved mounted document to rename. The
-        # form now runs the §4.7 edge pipeline, so the rename applies: the spec
-        # says the refusal "closes when that gap does".
+        # binding MUST NOT make the two forms differ". A top-level
+        # `models.<k>` `{ref}` runs the §4.7 edge pipeline, so the rename
+        # applies there and is not refused with
+        # `subsystem_index_set_rename_unsupported_mount_form`.
         dir = mktempdir()
         leaf = Dict{String, Any}(
             "esm" => "2.0.0", "metadata" => Dict("name" => "leaf"),

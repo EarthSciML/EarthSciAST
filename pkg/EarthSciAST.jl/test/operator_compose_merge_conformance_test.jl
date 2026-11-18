@@ -151,10 +151,10 @@ end
     end
 
     @testset "flipping the `systems` order changes nothing observable" begin
-        # Issue #195 Symptom 1, in the form that fails under the old rule. Two
-        # pairs of fixtures, each differing ONLY in the `systems` array's order.
-        # The AMBIGUOUS pair used to produce different state names carrying
-        # different initial conditions — an argument order choosing an IC.
+        # Two pairs of fixtures, each differing ONLY in the `systems` array's
+        # order. The AMBIGUOUS pair must not produce different state names
+        # carrying different initial conditions — an argument order choosing
+        # an IC.
         # Compared BETWEEN the two runs rather than against the manifest, so this
         # fails on disagreement even if both were re-recorded.
         by_id = Dict(String(c.id) => c for c in _OCM_MANIFEST.cases)

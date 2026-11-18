@@ -5,8 +5,8 @@
 # other:
 #
 #   * ANGLES CONVERT. `deg` is a registry unit at scale π/180, so
-#     `sin(theta [deg])` is a CONFORMING document — and `flatten` used to hand
-#     the stored number straight to `sin`, so `sin(90 [deg])` evaluated
+#     `sin(theta [deg])` is a CONFORMING document — and `flatten` must not hand
+#     the stored number straight to `sin`, or `sin(90 [deg])` evaluates
 #     0.8939966636005579, which is `sin(90 radians)`, with no diagnostic. The
 #     conversion is exact and has exactly one reading.
 #   * SCALED DIMENSIONLESS REFUSES. `ppm` is dimensionless at 1e-6, so
@@ -88,9 +88,8 @@ end
     # `rad` is one of the eight axes (§4.8.1) and `sr` is that axis SQUARED, so
     # in the four bindings that carry a dimension vector NONE of the arguments
     # below is dimensionless and all of them are refused. Unitful models every
-    # angle as `NoDims`, so this binding used to accept them — the one place
-    # where it, alone of the five, said VALID where the other four said INVALID.
-    # `EarthSciAST._is_angle_bearing` reads the unit's symbol to stand in for
+    # angle as `NoDims`, so on Unitful alone this binding would accept them,
+    # alone of the five. `EarthSciAST._is_angle_bearing` reads the unit's symbol to stand in for
     # the missing axis. Delete that call from any of the three rules and the
     # matching case here goes red.
     @testset "an angle-bearing unit is not dimensionless" begin

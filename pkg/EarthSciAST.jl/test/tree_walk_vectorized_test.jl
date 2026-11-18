@@ -1,4 +1,4 @@
-# Vectorized array-kernel RHS property tests (ess-dhq).
+# Vectorized array-kernel RHS property tests.
 #
 # Verifies that the tree-walk runner evaluates discretized `faq` derivative
 # equations as WHOLE-ARRAY kernels whose compiled-node count is independent of
@@ -57,7 +57,7 @@ function _fieldic_model(N)
     )
 end
 
-@testset "tree_walk vectorized array-kernel RHS (ess-dhq)" begin
+@testset "tree_walk vectorized array-kernel RHS" begin
 
     @testset "N-independent compiled-kernel count (two+ grid sizes)" begin
         diags = map((8, 16, 64)) do N
@@ -165,13 +165,13 @@ end
     end
 end
 
-# The compile-once field-ic fast path (ess-perf) compiles a coordinate ic's
+# The compile-once field-ic fast path compiles a coordinate ic's
 # closed-form body ONCE with the loop indices bound as parameters, deriving each
 # cell's u0 by re-evaluation instead of a per-cell _index_at_cell→resolve→compile
 # rebuild. `_eval_node` computes every leaf in Float64, so an index bound as a
 # param equals that index folded to a literal — the u0 field must be bit-identical
 # to the forced per-cell path. `compiler=:interpreter` forces that per-cell path.
-@testset "compile-once field-ic ≡ per-cell fallback (u0, ess-perf)" begin
+@testset "compile-once field-ic ≡ per-cell fallback (u0)" begin
     _build_u0(N, disable) =
         EarthSciAST.Internal.build(
         _fieldic_model(N);

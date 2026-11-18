@@ -51,33 +51,30 @@ function _eval1(
     return du[var_map["M._probe"]]
 end
 
-@testset "tree_walk.jl evaluator (gt-e8yw)" begin
+@testset "tree_walk.jl evaluator" begin
 
     # ========================================================
     # Scalar op coverage
     # ========================================================
     #
-    # The op-by-op VALUE tests that used to live here — arithmetic, integer vs
-    # float literals, comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the
-    # elementary functions — are now the cross-binding
+    # The op-by-op VALUE tests — arithmetic, integer vs float literals,
+    # comparisons and logic, `ifelse`/`sign`/`min`/`max`, and the elementary
+    # functions — live in the cross-binding
     # `tests/conformance/scalar_operator_semantics/` tier (CONFORMANCE_SPEC
-    # §5.45.4), which pins every one of them at EXACT tolerance over the UNION of
-    # the operand values this file and Rust's `tests/interpret.rs` each used to
-    # pin privately, and which `scripts/test-conformance.sh` runs for julia, rust
-    # and python under both `interpreter` and `native`.
+    # §5.45.4), which pins every one of them at EXACT tolerance and which
+    # `scripts/test-conformance.sh` runs for julia, rust and python under both
+    # `interpreter` and `native`.
     #
-    # Three private op tables and no cross-binding gate is how two bindings
-    # disagree for a year: moving them found that Julia has an evaluation rule
-    # for the `true` literal op and NONE for `false`, and that Rust refuses `pow`
-    # and `false` outright and cannot lower `true` under `native`. All of that is
-    # recorded as named exclusions in that tier rather than in three suites that
-    # never compared notes.
+    # Private per-binding op tables with no cross-binding gate let bindings
+    # disagree unnoticed. The known gaps — Julia has an evaluation rule for the
+    # `true` literal op and NONE for `false`; Rust refuses `pow` and `false`
+    # outright and cannot lower `true` under `native` — are recorded as named
+    # exclusions in that tier.
     #
     # What stays below is everything a document cannot state: the closed-function
     # registry, the unsupported-op diagnostics, observed inlining and cycle
-    # detection, and the solves. The ModelingToolkit parity sampling that used
-    # to sit here is test/mtk/tree_walk_mtk_parity_test.jl, in the separate
-    # ModelingToolkit suite.
+    # detection, and the solves. The ModelingToolkit parity sampling is
+    # test/mtk/tree_walk_mtk_parity_test.jl, in the separate ModelingToolkit suite.
 
     @testset "Time variable and Pre" begin
         @test _eval1(_v("t"); t = 3.5) == 3.5

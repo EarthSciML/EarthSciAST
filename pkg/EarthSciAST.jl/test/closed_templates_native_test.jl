@@ -26,7 +26,6 @@ const _CT_LIB = joinpath(TESTUTILS_REPO_ROOT, "lib")
 
 _ct_op(o, a...; kw...) = Dict{String, Any}("op" => o, "args" => Any[a...], (String(k) => v for (k, v) in kw)...)
 _ct_ix(a, s...) = _ct_op("index", a, s...)
-_ct_const(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _ct_apply(name; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => name,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
@@ -133,7 +132,7 @@ function _ct_regrid_doc(n, manifold; area = :tpl)
         "atol" => Dict("type" => "parameter", "default" => 1.0e-12), "kd" => Dict("type" => "parameter", "default" => 0.1),
     )
     eqs = Any[
-        Dict("lhs" => "src_poly", "rhs" => _ct_const(src)), Dict("lhs" => "tgt_poly", "rhs" => _ct_const(tgt)),
+        Dict("lhs" => "src_poly", "rhs" => jconst(src)), Dict("lhs" => "tgt_poly", "rhs" => jconst(tgt)),
         bbox("src_lon", "src_cells", "src_poly", "i", 1), bbox("src_lat", "src_cells", "src_poly", "i", 2),
         bbox("tgt_lon", "tgt_cells", "tgt_poly", "j", 1), bbox("tgt_lat", "tgt_cells", "tgt_poly", "j", 2),
         bincol("src_bx", "src_lon", "dx", "i", "src_cells"), bincol("src_by", "src_lat", "dy", "i", "src_cells"),
@@ -184,8 +183,8 @@ function _ct_nearest_doc(np, ng)
     )
     vars["w"] = Dict("type" => "unknown", "shape" => Any["points"], "default" => 0.0)
     eqs = Any[
-        Dict("lhs" => "px", "rhs" => _ct_const(px)), Dict("lhs" => "py", "rhs" => _ct_const(py)),
-        Dict("lhs" => "gx", "rhs" => _ct_const(gx)), Dict("lhs" => "gy", "rhs" => _ct_const(gy)),
+        Dict("lhs" => "px", "rhs" => jconst(px)), Dict("lhs" => "py", "rhs" => jconst(py)),
+        Dict("lhs" => "gx", "rhs" => jconst(gx)), Dict("lhs" => "gy", "rhs" => jconst(gy)),
         Dict("lhs" => _ct_ix("assign", "i"), "rhs" => _ct_faq(assign, ["i"], P; args = Any["px", "py", "gx", "gy"])),
         Dict("lhs" => _ct_dlhs("w", ["i"], P), "rhs" => _ct_faq(_ct_op("-", _ct_ix("gx", _ct_ix("assign", "i")), _ct_ix("w", "i")), ["i"], P; args = Any["gx", "assign"])),
     ]
@@ -217,7 +216,7 @@ function _ct_relational_doc()
         _ct_apply("argmax_where"; f = d("k_argmax_where_1"), p = pass("k_argmax_where_1"), n = 6),
         _ct_apply("pair_key"; a = ka, b = kb, lo_a = 0, lo_b = 1, n_a = 8, n_b = 5),
         _ct_apply("edge_key"; u = ka, v = kb, lo = 0, n = 8),
-        _ct_apply("rank_of"; x = x, members = _ct_const([0.5, 1.0, 1.5, 2.25]), n = 4),
+        _ct_apply("rank_of"; x = x, members = jconst([0.5, 1.0, 1.5, 2.25]), n = 4),
         _ct_apply("rank_of_set"; x = x, members = "gx", S = "generators"),
     )
     vars = Dict{String, Any}(
@@ -226,7 +225,7 @@ function _ct_relational_doc()
         "y" => Dict("type" => "unknown", "shape" => Any["points"]),
     )
     eqs = Any[
-        Dict("lhs" => "gx", "rhs" => _ct_const([0.5, 1.0, 1.5, 1.0, 2.0, 2.5])),
+        Dict("lhs" => "gx", "rhs" => jconst([0.5, 1.0, 1.5, 1.0, 2.0, 2.5])),
         Dict("lhs" => "y", "rhs" => _ct_faq(sum, ["i"], P)),
         Dict("lhs" => _ct_dlhs("x", ["i"], P), "rhs" => _ct_faq(_ct_op("-", _ct_op("*", 0.01, _ct_ix("y", "i")), x), ["i"], P)),
     ]
@@ -252,7 +251,7 @@ function _ct_mesh_doc(; split::Bool, observed_conn::Bool)
     F = Dict("f" => Dict("from" => "faces"))
     FL = Dict("f" => Dict("from" => "faces"), "le" => Dict("from" => "local_edges"))
     Ed = Dict("e" => Dict("from" => "edge_ids"))
-    e = observed_conn ? "edge_of" : _ct_const(conn)
+    e = observed_conn ? "edge_of" : jconst(conn)
     face_sum = _ct_faq(_ct_ix("w", _ct_ix(e, "f", "le")), ["f"], FL; semiring = "sum_product")
     vars = Dict{String, Any}(
         "w" => Dict("type" => "unknown", "shape" => ["edge_ids"], "default" => 0.0),
@@ -266,7 +265,7 @@ function _ct_mesh_doc(; split::Bool, observed_conn::Bool)
     ]
     if observed_conn
         vars["edge_of"] = Dict("type" => "unknown", "shape" => ["faces", "local_edges"])
-        pushfirst!(eqs, Dict("lhs" => "edge_of", "rhs" => _ct_const(conn)))
+        pushfirst!(eqs, Dict("lhs" => "edge_of", "rhs" => jconst(conn)))
     end
     if split
         vars["q_in"] = Dict("type" => "unknown", "shape" => ["faces"])
@@ -412,8 +411,8 @@ end
         @test _ct_same(_ct_du(tp, :native), _ct_du(tp, :interpreter))
     end
 
-    # The nested sum used to leave a bare array producer in the cell body, so
-    # every compiler failed with E_TREEWALK_UNBOUND_VARIABLE on `w`.
+    # The nested sum must not leave a bare array producer in the cell body,
+    # where every compiler would fail with E_TREEWALK_UNBOUND_VARIABLE on `w`.
     @testset "nested face sum through connectivity (observed=$observed_conn)" for observed_conn in (true, false)
         unsplit = _ct_write(_ct_mesh_doc(; split = false, observed_conn))
         ref = _ct_du(_ct_write(_ct_mesh_doc(; split = true, observed_conn)), :interpreter)

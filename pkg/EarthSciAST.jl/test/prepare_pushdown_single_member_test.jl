@@ -30,11 +30,6 @@ const _FIXTURE = joinpath(
 )
 
 # ---- provider mocks (module-local types for the sample overloads) -----------
-struct MockConstN1
-    arr::Any
-end
-EA.provider_refresh_times(::MockConstN1) = Float64[]
-EA.provider_sample(m::MockConstN1, ::Real; selection = nothing) = m.arr
 
 mutable struct MockGatedN1
     full::Array{Float64, 3}          # native [layer, src, rcv]
@@ -128,13 +123,13 @@ end
     # so a provider is keyed by the CONSUMING PARAMETER's flattened name
     # (`ISRM.emis_lon`), not by `<Source>.<file_variable>` (`MockPts.lon`).
     providers = Dict{String, Any}(
-        "ISRM.TotalPop" => MockConstN1(TotalPop),
-        "ISRM.MortalityRate" => MockConstN1(MortalityRate),
-        "ISRM.emis_lon" => MockConstN1(lon), "ISRM.emis_lat" => MockConstN1(lat),
-        "ISRM.emis_annual" => MockConstN1(emis_annual),
-        "ISRM.is_VOC" => MockConstN1(is_VOC), "ISRM.is_NOx" => MockConstN1(is_NOx),
-        "ISRM.is_NH3" => MockConstN1(is_NH3), "ISRM.is_SOx" => MockConstN1(is_SOx),
-        "ISRM.is_PM25" => MockConstN1(is_PM25)
+        "ISRM.TotalPop" => ConstProvider(TotalPop),
+        "ISRM.MortalityRate" => ConstProvider(MortalityRate),
+        "ISRM.emis_lon" => ConstProvider(lon), "ISRM.emis_lat" => ConstProvider(lat),
+        "ISRM.emis_annual" => ConstProvider(emis_annual),
+        "ISRM.is_VOC" => ConstProvider(is_VOC), "ISRM.is_NOx" => ConstProvider(is_NOx),
+        "ISRM.is_NH3" => ConstProvider(is_NH3), "ISRM.is_SOx" => ConstProvider(is_SOx),
+        "ISRM.is_PM25" => ConstProvider(is_PM25)
     )
     for v in LVARS
         providers["ISRM.SR_$v"] = gmocks[v]

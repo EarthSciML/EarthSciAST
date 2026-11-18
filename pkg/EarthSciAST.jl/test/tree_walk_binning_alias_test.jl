@@ -1,18 +1,18 @@
-# Regression tests for two build-time tree-walk limitations the conservative-
-# regridding broad phase hit (ess: julia-treewalk gaps 1 & 2).
+# Tests for two build-time tree-walk shapes the conservative-regridding broad
+# phase uses.
 #
-#  GAP 1 — a TEMPLATE-CONSTRUCTED (aggregate-valued) binning coordinate is now an
-#          admissible build-time bin-key input. Previously only a
-#          const-supplied / reduce-over-const coordinate was admitted, so a
-#          coordinate derived from constructed cell rings (an aggregate over a grid
-#          spec) threw E_TREEWALK_VI_INDEX. Determinism is preserved: only a
+#  GAP 1 — a TEMPLATE-CONSTRUCTED (aggregate-valued) binning coordinate is an
+#          admissible build-time bin-key input, not only a const-supplied /
+#          reduce-over-const coordinate: a coordinate derived from constructed
+#          cell rings (an aggregate over a grid spec) must not throw
+#          E_TREEWALK_VI_INDEX. Determinism is preserved: only a
 #          statically-determinable (state-free) build-time coordinate is admitted.
 #
 #  GAP 2 — a setup-geometry var (an overlap-area `A_ij` aggregate) may reference a
 #          BARE-ALIAS array observed (`src_poly := base_poly`, the MPAS keyed-factor
-#          re-exposure). Previously the geometry-setup backward pass pulled the bare
-#          alias into the setup vars and `_materialize_geom_array` crashed on the
-#          `VarExpr` (`no field output_idx`).
+#          re-exposure). The geometry-setup backward pass must not pull the bare
+#          alias into the setup vars, where `_materialize_geom_array` cannot
+#          handle a `VarExpr` (`no field output_idx`).
 
 using Test
 using EarthSciAST

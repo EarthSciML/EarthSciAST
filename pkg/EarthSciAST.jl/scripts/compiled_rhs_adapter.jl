@@ -450,23 +450,23 @@ function main()
         try
             fixtures[id] = fixture_rhs_compiled(fx, base, compiler)
         catch err
+            o = outcome(err)
             if err isa EarthSciAST.DirectEmitError
                 fixtures[id] = Dict(
                     "status" => "refused",
-                    "rule" => err.rule,
-                    "reason" => string(err.construct, ": ", err.detail)
+                    "rule" => o.rule,
+                    "reason" => string(err.construct, ": ", o.detail)
                 )
-            elseif err isa EarthSciAST.TreeWalkError &&
-                    err.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE &&
-                    !isempty(err.rule)
+            elseif o.code == EarthSciAST.ERROR_CODES.COMPILER_REFUSED_RULE &&
+                    !isempty(o.rule)
                 # The out-of-place product refused a rule by name before any
                 # emission (a causal recurrence, for one): the same hard-error
                 # ruling, reached one step earlier. A refusal that names no
                 # rule falls through to the failure arm below.
                 fixtures[id] = Dict(
                     "status" => "refused",
-                    "rule" => err.rule,
-                    "reason" => err.detail
+                    "rule" => o.rule,
+                    "reason" => o.detail
                 )
             else
                 failed = true

@@ -10,7 +10,7 @@ import OrdinaryDiffEqTsit5
 
 const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
 
-@testset "run_esm_tests walker on compiled fixtures (esm-ol5qa)" begin
+@testset "run_esm_tests walker on compiled fixtures" begin
 
     @testset "passing fixture → all PASS" begin
         passing = joinpath(_inline_dir, "passing_decay.esm")
@@ -44,7 +44,7 @@ const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
         @test exit_code != 0
     end
 
-    @testset "subsystem-composed fixture → all PASS (esm-ol5qa)" begin
+    @testset "subsystem-composed fixture → all PASS" begin
         # Assertions and parameter_overrides use spec §10.7 fully-qualified
         # refs of the form "ModelName.sub.var".
         results, exit_code = run_esm_tests(
@@ -95,8 +95,8 @@ const _inline_dir = joinpath(@__DIR__, "..", "fixtures", "inline_tests")
         end
         @test !isempty(by_test)
         # Every assertion of one test carries the SAME even share of the
-        # test's wall time (the pre-fix code stamped cumulative elapsed time,
-        # strictly increasing across a test's assertions).
+        # test's wall time, not a cumulative elapsed time that increases
+        # across a test's assertions.
         for durations in values(by_test)
             @test all(d -> d == durations[1], durations)
             @test all(d -> d >= 0.0, durations)

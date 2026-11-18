@@ -1,6 +1,6 @@
 # `p` AS AN `AbstractVector` — the parameter-vector ABI.
 #
-# `p` used to be a `NamedTuple` and nothing else. That is the right container for
+# A `NamedTuple` `p` is the right container for
 # a HUMAN (parameters have names, and a name is checkable where a position is not)
 # and the right one for the RHS (a compile-time-literal `getfield` is free), but it
 # is the wrong container for every consumer that wants to MOVE the parameters: an
@@ -38,6 +38,7 @@
 #      that build_pipeline.jl warns about (~48 B/call when the union boxes).
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 using ForwardDiff
 using ComponentArrays
@@ -46,9 +47,6 @@ const _PV_ESM = EarthSciAST
 
 include("zero_alloc_harness.jl")
 
-_pv_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pv_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
-_pv_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _pv_ao(e) = Dict{String, Any}(
     "op" => "faq", "output_idx" => Any["i"],
     "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
@@ -76,14 +74,14 @@ end
 # 1-D reaction–diffusion: the ARRAY path — access
 # kernels, the lane-invariant `exp(-Ea/T)` hoist, and the codegen tier.
 function _pv_rd(N)
-    stencil = _pv_o(
-        "+", _pv_o(
-            "-", _pv_ix("c", _pv_o("-", "i", 1.0)),
-            _pv_o("*", 2.0, _pv_ix("c", "i"))
+    stencil = jop(
+        "+", jop(
+            "-", jidx("c", jop("-", "i", 1.0)),
+            jop("*", 2.0, jidx("c", "i"))
         ),
-        _pv_ix("c", _pv_o("+", "i", 1.0))
+        jidx("c", jop("+", "i", 1.0))
     )
-    rate = _pv_o("*", "k_rxn", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))))
+    rate = jop("*", "k_rxn", jop("exp", jop("neg", jop("/", "Ea", "T"))))
     return _pv_doc(
         "RD",
         Dict{String, Any}(
@@ -93,13 +91,13 @@ function _pv_rd(N)
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _pv_ao(_pv_Dt(_pv_ix("c", "i"))),
+                "lhs" => _pv_ao(jD(jidx("c", "i"))),
                 "rhs" => _pv_ao(
-                    _pv_o(
-                        "-", _pv_o("*", "k_diff", stencil),
-                        _pv_o(
+                    jop(
+                        "-", jop("*", "k_diff", stencil),
+                        jop(
                             "*", rate,
-                            _pv_o("^", _pv_ix("c", "i"), 2.0)
+                            jop("^", jidx("c", "i"), 2.0)
                         )
                     )
                 )
@@ -115,9 +113,9 @@ end
 # walker (`_eval_node`) is exercised and not only the array kernels.
 # Between the two models every `_NK_PARAM` arm in the package is reached.
 function _pv_zerod()
-    shared = _pv_o(
-        "*", _pv_o("exp", _pv_o("neg", _pv_o("/", "Ea", "T"))),
-        _pv_o("*", "x", "y")
+    shared = jop(
+        "*", jop("exp", jop("neg", jop("/", "Ea", "T"))),
+        jop("*", "x", "y")
     )
     return _pv_doc(
         "Z",
@@ -129,16 +127,15 @@ function _pv_zerod()
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _pv_Dt("x"),
-                "rhs" => _pv_o("neg", _pv_o("*", "k", shared))
+                "lhs" => jD("x"),
+                "rhs" => jop("neg", jop("*", "k", shared))
             ),
-            Dict{String, Any}("lhs" => _pv_Dt("y"), "rhs" => shared),
+            Dict{String, Any}("lhs" => jD("y"), "rhs" => shared),
         ]
     )
 end
 
 _pv_seed(n) = [0.5 + 0.1k for k in 1:n]
-_pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 @testset "parameter-vector ABI (`p::AbstractVector`)" begin
 
@@ -177,9 +174,9 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
                 cv = ComponentVector(p)                     # named AND dense
                 pv = collect(Float64, values(p))            # dense only
 
-                ref_ip = _pv_ip(fi, u, p, t)
-                @test _pv_ip(fi, u, cv, t) == ref_ip
-                @test _pv_ip(fi, u, pv, t) == ref_ip
+                ref_ip = rhs_du(fi, u, p, t)
+                @test rhs_du(fi, u, cv, t) == ref_ip
+                @test rhs_du(fi, u, pv, t) == ref_ip
 
                 # The value type is derived from all three arguments for a vector
                 # `p` exactly as it is for a NamedTuple one.
@@ -226,7 +223,7 @@ _pv_ip(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
         fi, _, p, _, _ = _PV_ESM.Internal.build(_pv_rd(N))
         u = _pv_seed(N)
         short = collect(Float64, values(p))[1:(end - 1)]
-        @test_throws BoundsError _pv_ip(fi, u, short, 0.0)
+        @test_throws BoundsError rhs_du(fi, u, short, 0.0)
     end
 
     @testset "no allocation regression on the scalar parameter read" begin

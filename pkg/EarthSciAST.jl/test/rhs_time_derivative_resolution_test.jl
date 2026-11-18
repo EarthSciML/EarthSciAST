@@ -15,22 +15,16 @@
 # side of the same gate `test_rhs_time_derivative_conformance.py` and
 # `rhs_time_derivative_conformance.rs` run.
 #
-# It used to assert Julia's EXCLUSION from that category instead. The exclusion
-# rested on two gaps in `run_inline_tests`, neither in the §4.2 transform:
+# Two properties of `run_inline_tests` carry the category, neither in the §4.2
+# transform:
 #
-#   1. it could not READ a 0-D observed — `_evaluate_assertion`'s pointwise
-#      branch resolved the asserted name against the state vector alone
-#      (`_scalar_slot`) with no observed fallback, so `dxdt ~ D(x, t)` answered
-#      "scalar state 'dxdt' not found";
-#   2. it did not REFUSE an unresolvable right-hand-side `D` — the category's
-#      two refusal fixtures built and solved without complaint, so the
-#      `unlowered_operator` contract §4.2 requires went unmet on this path.
-#
-# Closing (1) closed (2) with it: the refusal fixtures' `D` survives into the
-# observed body this branch now evaluates, and the evaluator's own
-# rewrite-target gate raises `unlowered_operator` there. So the manifest's
-# `scope_excluded.julia` entry is gone, `julia` is in `bindings_required`, and
-# what follows is the adapter that entry asked for.
+#   1. it READS a 0-D observed — `_evaluate_assertion`'s pointwise branch falls
+#      back to the observed definitions when the asserted name is not a state,
+#      so `dxdt ~ D(x, t)` resolves;
+#   2. it REFUSES an unresolvable right-hand-side `D` — the refusal fixtures'
+#      `D` survives into the observed body that branch evaluates, and the
+#      evaluator's own rewrite-target gate raises `unlowered_operator` there,
+#      as §4.2 requires.
 
 using Test
 using JSON3

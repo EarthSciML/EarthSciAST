@@ -6,15 +6,12 @@
 # demand `isequal` cell for cell — never `≈` and never `==`: `-0.0` must not
 # pass for `+0.0` and `NaN` must match `NaN`.
 
-module GeomSweepSpecializeTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
     d = Dict{String, Any}(
         "op" => "faq", "output_idx" => collect(output_idx),
@@ -55,46 +52,37 @@ contracted(json) = (
     String[k for k in keys(rhs.ranges) if !(k in rhs.output_idx)]
 )
 
-# Bitwise array agreement — the correctness bar.
-function bitsame(a, b)
-    size(a) == size(b) || return false
-    for i in eachindex(a)
-        isequal(a[i], b[i]) || return false
-    end
-    return true
-end
-
 @testset "geometry sweep rank specialization" begin
 
     @testset "MAP sweeps at ranks 1, 2 and 3" begin
-        Aij = _ix("A", "i", "j")
-        Bij = _ix("B", "i", "j")
+        Aij = jidx("A", "i", "j")
+        Bij = jidx("B", "i", "j")
         s, thr = 1.5, 0.0
         cases = Dict(
             # rank 2, signed zero out of the false arm of a gated branch
             "rank2_gated" => (
                 _agg(
                     ["i", "j"], ["i" => "I", "j" => "J"],
-                    _op(
-                        "ifelse", _op(">", Aij, "thr"),
-                        _op("*", Aij, "s"), _op("*", -1.0, _op("*", 0.0, Bij))
+                    jop(
+                        "ifelse", jop(">", Aij, "thr"),
+                        jop("*", Aij, "s"), jop("*", -1.0, jop("*", 0.0, Bij))
                     )
                 ),
                 [A[i, j] > thr ? A[i, j] * s : -1.0 * (0.0 * B[i, j]) for i in 1:5, j in 1:4],
             ),
             # rank 2, ±Inf where A is zero
             "rank2_inf" => (
-                _agg(["i", "j"], ["i" => "I", "j" => "J"], _op("/", "s", Aij)),
+                _agg(["i", "j"], ["i" => "I", "j" => "J"], jop("/", "s", Aij)),
                 [s / A[i, j] for i in 1:5, j in 1:4],
             ),
             # rank 2, NaN (0/0) where A is zero
             "rank2_nan" => (
-                _agg(["i", "j"], ["i" => "I", "j" => "J"], _op("/", Aij, Aij)),
+                _agg(["i", "j"], ["i" => "I", "j" => "J"], jop("/", Aij, Aij)),
                 [A[i, j] / A[i, j] for i in 1:5, j in 1:4],
             ),
             # rank 1
             "rank1" => (
-                _agg(["i"], ["i" => "I"], _op("/", "s", _ix("A", "i", 2))),
+                _agg(["i"], ["i" => "I"], jop("/", "s", jidx("A", "i", 2))),
                 [s / A[i, 2] for i in 1:5],
             ),
             # rank 3 over a [pos, vert, coord] ring stack — the shape a
@@ -102,9 +90,9 @@ end
             "rank3" => (
                 _agg(
                     ["i", "v", "c"], ["i" => "I", "v" => "V", "c" => "C"],
-                    _op(
-                        "+", _op("*", _ix("R", "i", "v", "c"), "s"),
-                        _op("-", _ix("R", "i", "v", "c"), _ix("A", "i", 1))
+                    jop(
+                        "+", jop("*", jidx("R", "i", "v", "c"), "s"),
+                        jop("-", jidx("R", "i", "v", "c"), jidx("A", "i", 1))
                     )
                 ),
                 [R[i, v, c] * s + (R[i, v, c] - A[i, 1]) for i in 1:5, v in 1:3, c in 1:2],
@@ -125,7 +113,7 @@ end
     @testset "CONTRACTING sweeps keep the fold term sequence" begin
         # A `-0.0` summand and a `NaN` summand both reach the accumulator here,
         # so a reordered or dropped term shows up as a bit difference.
-        body = _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
+        body = jop("*", jidx("A", "i", "j"), jidx("B", "i", "j"))
         for (nm, extra, init, f) in (
                 ("sum", Dict{String, Any}(), 0.0, +),
                 ("min", Dict{String, Any}("reduce" => "min"), Inf, min),
@@ -142,9 +130,9 @@ end
         # A NaN in the fold: `+` propagates it, so the contraction is not
         # vacuously finite.
         jn = _agg(
-            ["j"], ["i" => "I", "j" => "J"], _op(
-                "/", _ix("A", "i", "j"),
-                _ix("A", "i", "j")
+            ["j"], ["i" => "I", "j" => "J"], jop(
+                "/", jidx("A", "i", "j"),
+                jidx("A", "i", "j")
             )
         )
         got = materialize(jn)
@@ -155,7 +143,7 @@ end
     @testset "rank-2 output over TWO contracted indices" begin
         # Two contracted vars: the inner `CartesianIndices` nests them first
         # fastest, in the order the sweep lists them.
-        body = _op("*", _ix("R", "i", "v", "c"), _ix("A", "i", "j"))
+        body = jop("*", jidx("R", "i", "v", "c"), jidx("A", "i", "j"))
         j = _agg(["i", "j"], ["i" => "I", "j" => "J", "v" => "V", "c" => "C"], body)
         ext = Dict("v" => 3, "c" => 2)
         con = contracted(j)
@@ -181,7 +169,7 @@ end
         # that driver off so the DENSE sweep is the one checked.
         dense = EA._plan_with(EA._compiler_plan(:native); strict = false, join_on_gate = false)
         dense_mat(j) = EA._with_compiler_plan(() -> materialize(j), dense)
-        body = _op("+", _ix("A", "i", "j"), "s")
+        body = jop("+", jidx("A", "i", "j"), "s")
         j = _agg(
             ["i", "j"], ["i" => "I", "j" => "J"], body;
             join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])]
@@ -192,9 +180,9 @@ end
         @test !all(iszero, got)
         # ... and the same gate on the CONTRACTED index, with a filter on top.
         jc = _agg(
-            ["j"], ["i" => "I", "j" => "J"], _ix("B", "i", "j");
+            ["j"], ["i" => "I", "j" => "J"], jidx("B", "i", "j");
             join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])],
-            filter = _op(">", _ix("A", "i", "j"), "thr")
+            filter = jop(">", jidx("A", "i", "j"), "thr")
         )
         gotc = dense_mat(jc)
         wantc = [
@@ -208,10 +196,10 @@ end
     @testset "nested aggregate in the body" begin
         # `:geo_agg` allocates its own frame slots from the shared counter, so
         # the sweep must not disturb them.
-        inner = _agg(String[], ["v" => "V"], _ix("R", "i", "v", 1))
+        inner = _agg(String[], ["v" => "V"], jidx("R", "i", "v", 1))
         j = _agg(
             ["i", "j"], ["i" => "I", "j" => "J"],
-            _op("*", inner, _ix("A", "i", "j"))
+            jop("*", inner, jidx("A", "i", "j"))
         )
         got = materialize(j)
         want = [foldl(+, (R[i, v, 1] for v in 1:3); init = 0.0) * A[i, jj] for i in 1:5, jj in 1:4]
@@ -224,7 +212,7 @@ end
         # yields exactly one empty index, so the arm must not fall over on N == 0.
         j = _agg(
             String[], ["i" => "I", "j" => "J"],
-            _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
+            jop("*", jidx("A", "i", "j"), jidx("B", "i", "j"))
         )
         con = contracted(j)
         ext = Dict("i" => 5, "j" => 4)
@@ -249,12 +237,12 @@ end
         @test vA == A                       # same values, different type
         @test !(vA isa Array{Float64, 2})    # ... and it really misses the arm
         bodies = (
-            _op("/", _ix("A", "i", "j"), _ix("A", "i", "j")),
-            _op("*", _ix("A", "i", "j"), "s"),
-            _op(
-                "ifelse", _op(">", _ix("A", "i", "j"), "thr"),
-                _op("/", "s", _ix("A", "i", "j")),
-                _op("*", -1.0, _op("*", 0.0, _ix("B", "i", "j")))
+            jop("/", jidx("A", "i", "j"), jidx("A", "i", "j")),
+            jop("*", jidx("A", "i", "j"), "s"),
+            jop(
+                "ifelse", jop(">", jidx("A", "i", "j"), "thr"),
+                jop("/", "s", jidx("A", "i", "j")),
+                jop("*", -1.0, jop("*", 0.0, jidx("B", "i", "j")))
             ),
         )
         for body in bodies
@@ -291,14 +279,14 @@ end
         end
         env = Dict{String, Any}("src_poly" => srcp, "tgt_poly" => tgtp)
         # The SW (vertex 1) and NE (vertex 3) corners of the two squares.
-        ov(c) = _op(
-            "max", 0.0, _op(
+        ov(c) = jop(
+            "max", 0.0, jop(
                 "-",
-                _op("min", _ix("src_poly", "i", 3, c), _ix("tgt_poly", "j", 3, c)),
-                _op("max", _ix("src_poly", "i", 1, c), _ix("tgt_poly", "j", 1, c))
+                jop("min", jidx("src_poly", "i", 3, c), jidx("tgt_poly", "j", 3, c)),
+                jop("max", jidx("src_poly", "i", 1, c), jidx("tgt_poly", "j", 1, c))
             )
         )
-        pia = _op("*", ov(1), ov(2))
+        pia = jop("*", ov(1), ov(2))
         j = _agg(["i", "j"], ["i" => "S", "j" => "T"], pia)
         idx = Dict{String, Int}("S" => 6, "T" => 3)
         rhs = EA.expression_from_json(j)
@@ -313,5 +301,3 @@ end
     end
 
 end
-
-end # module

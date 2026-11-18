@@ -161,7 +161,7 @@ include("testutils.jl")
         @test [e.error_type for e in by_path.structural_errors] ==
             [e.error_type for e in typed.structural_errors]
 
-        # `validate` no longer has a String method: a caller who passes a path
+        # `validate` has no String method: a caller who passes a path
         # gets a MethodError, not a silent file read.
         @test isempty(methods(validate, (AbstractString,)))
         @test_throws MethodError validate(path)

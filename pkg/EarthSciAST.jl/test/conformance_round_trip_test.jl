@@ -1,13 +1,13 @@
 # Conformance harness adapter — round-trip category. REFERENCE ADAPTER.
 #
-# The oracle is the AUTHORED FIXTURE. This file used to compare emit pass 2
-# against emit pass 3 — `save(load(F))` vs `save(load(save(load(F))))`, with F
-# itself never a participant — which is the self-comparing shape described in
+# The oracle is the AUTHORED FIXTURE, not emit pass 2 against emit pass 3 —
+# `save(load(F))` vs `save(load(save(load(F))))`, with F itself never a
+# participant — which is the self-comparing shape described in
 # tests/conformance/README.md and is blind to any field lost on the FIRST load:
 # the second emit forgets exactly what the first forgot, so the equation holds
 # perfectly over an already-damaged document.
 #
-# esm-spec §9.6.4 rule 5 now states BOTH halves normatively ("Load preservation"
+# esm-spec §9.6.4 rule 5 states BOTH halves normatively ("Load preservation"
 # and "Idempotence"), and neither implies the other, so both are asserted here.
 #
 # See tests/conformance/README.md for the full contract: the five
@@ -167,7 +167,7 @@ end
                     "the document around it."
             )
 
-            # 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — still required, no longer alone.
+            # 3. IDEMPOTENCE (esm-spec §9.6.4 rule 5) — required alongside load preservation.
             second_json = to_json_compact(
                 EarthSciAST.load_document(
                     JSON3.read(first_json, OrderedDict{String, Any})

@@ -1,11 +1,10 @@
 # The closed-AST standard-library shapes under direct StableHLO emission
 # (ext/reactant_direct/closed.jl), against the in-place interpreter.
 #
-# OPT-IN, like every reactant_*_test.jl: included only under `ESM_TEST_REACTANT=1`.
-# Standalone, from an environment with Reactant + JSON3:
+# Part of the Reactant suite (test/reactant/runtests.jl, its own environment).
+# Standalone, from the repository root once that environment is set up:
 #
-#     ESM_TEST_REACTANT=1 julia --project=<env> \
-#       -e 'cd("pkg/EarthSciAST.jl/test"); include("reactant_direct_closed_test.jl")'
+#     julia --project=pkg/EarthSciAST.jl/test/reactant pkg/EarthSciAST.jl/test/reactant/reactant_direct_closed_test.jl
 #
 # WHAT IS ASSERTED.
 #
@@ -32,7 +31,7 @@ using EarthSciAST
 using Reactant
 using JSON3
 
-include("testutils.jl")  # TESTUTILS_REPO_ROOT
+include("../testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const CT_RX = Reactant
 const CT_EXT = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)

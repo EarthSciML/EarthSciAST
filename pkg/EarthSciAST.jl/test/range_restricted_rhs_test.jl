@@ -3,6 +3,7 @@
 # The manifest-driven suite is conformance_range_restricted_rhs_test.jl.
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 
 const RRT = EarthSciAST
@@ -293,13 +294,6 @@ function _rrt_eval(x, p)
     du = fill(NaN, L.n_u)
     rhs!(du, x, rhs_workspace(x), u, aux, p, 0.0, default_forcing_set(x))
     return du
-end
-
-_rrt_err(f) = try
-    f()
-    nothing
-catch e
-    e
 end
 
 _rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p, 0.0, fs)
@@ -687,11 +681,11 @@ end
         @test _rrt_bits.(_rrt_eval(select(no2), sprob.p)) ==
             _rrt_bits.(_rrt_eval(no2, sprob.p))
         # A variable the program only reads cannot be written.
-        err = _rrt_err(() -> select(no2; writes = ["Chem.O3"]))
+        err = caught(() -> select(no2; writes = ["Chem.O3"]))
         @test err isa SimulateError && occursin("Chem.O3", err.msg)
         # Kept contributions to a variable left out of `writes` still raise.
         emis = select(sp; writes = ["Chem.NO2", "Chem.O3"], terms = [TO(coupling = 0)])
-        err = _rrt_err(() -> select(emis; writes = ["Chem.O3"]))
+        err = caught(() -> select(emis; writes = ["Chem.O3"]))
         @test err isa SimulateError && err.code == "range_selection_writes_incomplete"
         @test occursin("Chem.NO2", err.msg)
     end
@@ -708,7 +702,7 @@ end
             storage = ("x" => 4:11, "y" => 0:7)
         )
         T = tile_layout(tile)
-        err = _rrt_err(
+        err = caught(
             () -> rhs!(
                 zeros(T.n_u), tile, rhs_workspace(other), zeros(T.n_u),
                 Float64[], prob.p, 0.0, default_forcing_set(tile)

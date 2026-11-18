@@ -15,10 +15,6 @@
 # plausible number — the NEXT row's payload instead of the PREVIOUS row's — so
 # "it built" and "the shape is right" prove nothing. The transposed answer is
 # asserted too, as the thing the default must NOT produce.
-#
-# Wrapped in a module so the local JSON builders stay out of `Main` (see
-# join_on_equality_gate_test.jl's header).
-module JoinOnSelfJoinTests
 
 using Test
 using EarthSciAST
@@ -27,8 +23,6 @@ import JSON3
 const ESS = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
-
-_ix(f, a...) = Dict("op" => "index", "args" => Any[f, a...])
 
 # `payload[i] = 7i + 4` for i = 1…n, distinct enough that no wrong pairing
 # coincides with the right one.
@@ -72,7 +66,7 @@ function _self_join_doc(
                             "reduce" => "+",
                             "ranges" => Dict(s => Dict("from" => "rows") for s in range_syms),
                             "join" => [clause],
-                            "expr" => _ix("payload", "b" in range_syms ? "b" : range_syms[end])
+                            "expr" => jidx("payload", "b" in range_syms ? "b" : range_syms[end])
                         )
                     ),
                 ]
@@ -283,5 +277,3 @@ end
     pe = JSON3.read(JSON3.write(ESS.serialize_esm_file(plain)))
     @test !haskey(pe[:models][:S][:equations][1][:rhs][:join][1], :syms)
 end
-
-end # module
