@@ -135,7 +135,7 @@ describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
     'distinct',
     '=',
     'pow',
-    'grad',
+    'integral',
   ])('rejects the NON-scalar fn %s', (fn) => {
     expect(findings(scalarModel({ op: 'broadcast', fn, args: ['x'] } as Expression))).toContain(
       'invalid_broadcast_fn @ /models/TestModel/equations/0/rhs',

@@ -10,9 +10,8 @@
  *
  * Both entry points walk the whole expression BEFORE evaluating any of it
  * (esm-spec §9.6.6) and refuse an operator this evaluator cannot evaluate: an op
- * outside the §4.2 evaluable core — the open-tier sugar
- * `grad`/`div`/`laplacian`/`integral`, a user op, or a spatial / right-hand-side
- * `D` — with `unlowered_operator`, and a core op with no scalar rule — the
+ * outside the §4.2 evaluable core — an open-tier op such as `integral` or a
+ * user op, or a spatial / right-hand-side `D` — with `unlowered_operator`, and a core op with no scalar rule — the
  * array/query and value-invention ops, `Pre`, an unlowered `enum` — with
  * `unevaluable_operator`. An op in an untaken `ifelse` branch is refused too.
  */
@@ -234,10 +233,9 @@ function evalExprNode(expr: Expr, bindings: Map<string, number>): number {
 
     // Rewrite-target op gate (esm-spec §4.2 / §9.6.8). The evaluable-core op
     // vocabulary is the op-registry (op-registry.ts) — the SINGLE SOURCE OF
-    // TRUTH, no bespoke {grad,div,laplacian} name list. ANY op reaching
-    // evaluation that the registry does not know is an OPEN-TIER rewrite-target:
-    // the optional spatial sugar `grad`/`div`/`laplacian`/`integral`, or a user
-    // op such as `godunov_hamiltonian`. It carries no evaluator and must have
+    // TRUTH, no bespoke name list. ANY op reaching evaluation that the
+    // registry does not know is an OPEN-TIER rewrite-target: `integral`, or a
+    // user op such as `godunov_hamiltonian`. It carries no evaluator and must have
     // been lowered to a stencil by a rewrite rule (§9.6) first. `D` is the one
     // registered op that is evaluable-core ONLY in its structural equation-LHS
     // role (§4.2) — reaching THIS scalar evaluator (a spatial `D`, or any `D` in

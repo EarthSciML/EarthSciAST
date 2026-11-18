@@ -1297,7 +1297,7 @@ func TestCheckerB_B_VarPlaceholderLegalInCoupledModel(t *testing.T) {
 	      "variables":{"u":{"type":"parameter","units":"m/s","default":1.0}},
 	      "equations":[{"lhs":{"op":"D","args":["_var"],"wrt":"t"},
 	                    "rhs":{"op":"*","args":[{"op":"-","args":["u"]},
-	                                            {"op":"grad","args":["_var"],"dim":"x"}]}}],
+	                                            {"op":"D","args":["_var"],"wrt":"x"}]}}],
 	      "continuous_events":[{
 	        "name":"floor",
 	        "conditions":[{"op":"-","args":["u",0.001]}],

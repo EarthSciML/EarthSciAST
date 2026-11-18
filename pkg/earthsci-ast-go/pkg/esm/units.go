@@ -1602,9 +1602,8 @@ func (ut unitTyper) literalUnit(v float64) *Unit {
 
 // propagate is the recursive dimension propagator implementing the
 // PropagateDimension contract. Operators with no modeled dimensional rule —
-// including the open-tier rewrite-target sugar grad/div/laplacian, which carry
-// no privileged spatial-calculus semantics here — fall through to the final
-// unknown-op arm and return an indeterminate (nil) dimension: their dimension
+// including open-tier rewrite-target user ops, which carry no privileged
+// semantics here — fall through to the final unknown-op arm and return an indeterminate (nil) dimension: their dimension
 // is undeterminable until a discretization rewrite lowers them (esm-spec §4.2 /
 // §9.6.8), so the units layer reports nothing.
 //
@@ -2142,8 +2141,8 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		// The `+` rule: known operands agree, unknown ones are skipped.
 		return ut.agreeingUnit(node.Op, node.Args, env)
 	}
-	// Unknown / unmodeled operator (including the open-tier rewrite-target sugar
-	// grad/div/laplacian, which have no privileged dimensional rule): propagate
+	// Unknown / unmodeled operator (including open-tier rewrite-target user
+	// ops, which have no privileged dimensional rule): propagate
 	// nothing rather than erroring, matching the Julia reference which warns and
 	// returns nothing. Their dimension is undeterminable until a discretization
 	// rewrite lowers them (esm-spec §4.2 / §9.6.8).
