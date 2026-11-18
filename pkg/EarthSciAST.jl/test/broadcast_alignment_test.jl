@@ -310,7 +310,7 @@ _bc_oracle(name, body) = _bc_model(
             (_bc_bcast("faq", "x"), "non_scalar"),
             (_bc_bcast("index", "x"), "non_scalar"),
             (_bc_bcast("makearray", "x"), "non_scalar"),
-            (_bc_bcast("grad", "x"), "non_scalar"),
+            (_bc_bcast("D", "x"), "non_scalar"),
             (_bc_bcast("sin", "x", "x"), "arity"),
             (_bc_bcast("/", "x"), "arity"),
             (_bc_bcast("ifelse", "x", "x"), "arity"),
@@ -434,7 +434,7 @@ _bc_oracle(name, body) = _bc_model(
         for n in [
                 "faq", "faq", "index", "makearray", "broadcast",
                 "reshape", "transpose", "concat",
-                "grad", "div", "laplacian", "D", "ic", "call",
+                "D", "ic", "call",
                 "const", "enum", "some_open_tier_user_op",
             ]
             @test !E._is_scalar_op(n)
@@ -474,8 +474,7 @@ _bc_oracle(name, body) = _bc_model(
         end
         for n in [
                 "faq", "faq", "index", "makearray", "broadcast",
-                "reshape", "transpose", "concat", "D", "ic", "grad", "div",
-                "laplacian", "call", "const", "enum",
+                "reshape", "transpose", "concat", "D", "ic", "call", "const", "enum",
                 "definitely_not_an_op",
             ]
             @test !E._is_scalar_op(n)

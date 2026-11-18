@@ -103,7 +103,7 @@ recorded so the disagreement is visible in the source rather than in a diff.
 
 (RESOLVED 2026-08-24: `independent_variables` used to diverge because the oracle
 SORTED them — `for dim in sorted(spatial_dims)` — which §4.7.5 step 4's ordering
-rule forbids. It showed only on `full_coupled`, whose `grad` dims are declared
+rule forbids. It showed only on `full_coupled`, whose spatial axes are written
 `lon, lat, lev`; every other case's axes happen to sort into document order,
 which is why it hid. Julia's document order was the correct one; the ORACLE was
 fixed, along with TypeScript, Go and Rust, all four of which accumulated into an
@@ -147,19 +147,14 @@ the transport term, and the equation ORDER agrees.)
 only the reaction-lowering coefficient rendering — the oracle wrote `-1 * rate`
 where Julia wrote `-rate` — and esm-libraries-spec §4.6.2 settled that (see "the
 reaction-lowering cases" below). The case is compared in full.)
-* `equations` / `independent_variables` on `operator_compose_translate` — two
-  separate oracle gaps, neither about the composition this case exists to pin
-  (the merge itself matches the corpus exactly and is asserted locally below).
-  (i) `independent_variables`: the fixture's diffusion term is
-  `{"op":"D","args":["ozone_conc"],"wrt":"z"}`, and §4.7.6's scan names "`grad`,
-  `div`, `laplacian`, or **`D` with `wrt ≠ "t"`**". Julia reports
-  `["t","z","x","y"]`; the oracle reports `["t","x","y"]`, because
-  `_spatial_dims_in_expr` harvests only a node's `dim` field and a spatial `D`
-  carries its axis in `wrt`. It is the same axis the oracle's own expected
-  equations print as `D(ChemistrySystem.O3)/Dz`, so the omission also makes the
-  case's `system_kind: "pde"` rest on `grad` alone. Julia's answer is the
-  spec's; pinned locally below.
-  (ii) `equations`: `DepositionSystem` writes `surface_flux = deposition_velocity
+* `equations` on `operator_compose_translate` — an oracle gap that is not about
+  the composition this case exists to pin (the merge itself matches the corpus
+  exactly and is asserted locally below). (RESOLVED with esm 2.4.0:
+  `independent_variables` used to diverge too, because the oracle harvested
+  axes only from `dim` fields and missed the spatial `D`'s `wrt: z`; with the
+  `grad`/`laplacian` sugar gone the corpus records `["t","z","x","y"]`, Julia's
+  answer, and the field is compared normally.)
+  `equations`: `DepositionSystem` writes `surface_flux = deposition_velocity
   * O3` for an `O3` it does not declare and no coupling binds — the same
   under-specified-fixture shape as `complete_coupling_types` below. Julia's
   namespacing prefixes only a component's OWN locals, so the dangling reference
@@ -251,7 +246,7 @@ const _FC_DIVERGENCES = Dict{String, Vector{String}}(
     "edge_enumeration_area_eff" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
-    "operator_compose_translate" => ["equations", "independent_variables"],
+    "operator_compose_translate" => ["equations"],
     "term_provenance_pointwise_lift" => ["equations"],
 )
 
@@ -559,10 +554,9 @@ end
             @test (id, "independent_variables", act["independent_variables"]) ==
                 (id, "independent_variables", exp["independent_variables"])
         else
-            # The one skipped case (`operator_compose_translate`) diverges by an
-            # axis the oracle MISSES, not by order — so containment is still a
-            # real check: every axis the oracle found must be here too, and the
-            # extra one is pinned locally below.
+            # A case skipping this field may only ADD axes the oracle misses,
+            # not drop or reorder them: every axis the oracle found must be
+            # here too.
             @test (
                 id, "independent_variables (⊇)",
                 String[
@@ -728,7 +722,7 @@ end
     # untested, or a regression would land silently. Each expectation below is
     # Julia's own answer with the reason it is the defensible one.
     @testset "document-ordered independent variables" begin
-        # tests/valid/full_coupled.esm declares its `grad`/`laplacian` dims in the
+        # tests/valid/full_coupled.esm writes its spatial `D` axes in the
         # order lon, lat, lev. §4.7.5 step 4 requires document order; the oracle
         # sorts, so the corpus records [t, lat, lev, lon] and cannot pin this.
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "full_coupled.esm")))
@@ -833,11 +827,11 @@ end
             _fD(oh),
             _fe(
                 "+",
-                _fe("*", _fe("-", "Transport.u"), _fe("grad", oh; dim = "lon")),
-                _fe("*", _fe("-", "Transport.v"), _fe("grad", oh; dim = "lat")),
-                _fe("*", _fe("-", "Transport.w"), _fe("grad", oh; dim = "lev")),
-                _fe("*", "Transport.K_h", _fe("laplacian", oh; dim = "lon")),
-                _fe("*", "Transport.K_v", _fe("laplacian", oh; dim = "lev")),
+                _fe("*", _fe("-", "Transport.u"), _fD(oh; wrt = "lon")),
+                _fe("*", _fe("-", "Transport.v"), _fD(oh; wrt = "lat")),
+                _fe("*", _fe("-", "Transport.w"), _fD(oh; wrt = "lev")),
+                _fe("*", "Transport.K_h", _fD(_fD(oh; wrt = "lon"); wrt = "lon")),
+                _fe("*", "Transport.K_v", _fD(_fD(oh; wrt = "lev"); wrt = "lev")),
             )
         )
         # ... and every equation is the one the shared corpus records:
@@ -881,8 +875,8 @@ end
         )
         adv(a, c, v) = _fe(
             "+",
-            _fe("*", _fe("-", "$a.u_wind"), _fe("grad", "$c.$v"; dim = "x")),
-            _fe("*", _fe("-", "$a.v_wind"), _fe("grad", "$c.$v"; dim = "y")),
+            _fe("*", _fe("-", "$a.u_wind"), _fD("$c.$v"; wrt = "x")),
+            _fe("*", _fe("-", "$a.v_wind"), _fD("$c.$v"; wrt = "y")),
         )
         o = "SimpleOzone"
         @test _fjson(flat.equations) == [
@@ -925,8 +919,7 @@ end
 
     @testset "operator_compose tier: the TRANSLATED composition, in full" begin
         # `operator_compose_translate` skips `equations` over the oracle's
-        # namespacing of one dangling reference, and `independent_variables` over
-        # the oracle's `dim`-only spatial scan (see the header). Everything the
+        # namespacing of one dangling reference (see the header). Everything the
         # case exists to pin — a bare `translate` map that finally MATCHES, the
         # merge under A's spelling, and the prune of the two merged-away
         # declarations — is asserted here in full instead.
@@ -941,7 +934,7 @@ end
         c = "ChemistrySystem"
         diff(v) = _fe(
             "+",
-            _fe("*", "DiffusionSystem.kh", _fe("laplacian", "$c.$v")),
+            _fe("*", "DiffusionSystem.kh", _fD(_fD("$c.$v"; wrt = "z"); wrt = "z")),
             _fe("*", "DiffusionSystem.kv", _fD("$c.$v"; wrt = "z")),
         )
         @test _fjson(flat.equations) == [
@@ -956,8 +949,8 @@ end
                 _fD("AdvectionSystem.u"),
                 _fe(
                     "+",
-                    _fe("*", _fe("-", "AdvectionSystem.u"), _fe("grad", "AdvectionSystem.u"; dim = "x")),
-                    _fe("*", _fe("-", "AdvectionSystem.v"), _fe("grad", "AdvectionSystem.u"; dim = "y")),
+                    _fe("*", _fe("-", "AdvectionSystem.u"), _fD("AdvectionSystem.u"; wrt = "x")),
+                    _fe("*", _fe("-", "AdvectionSystem.v"), _fD("AdvectionSystem.u"; wrt = "y")),
                 )
             ),
             # The one equation the oracle namespaces differently (`O3` vs
@@ -1146,7 +1139,7 @@ end
         # equation's document slot, so NO's chain ends at the sink's slot and
         # O3's at the source's (its last matching A).
         loss(k, v) = _fe("*", _fe("-", k), "Chem.$v")
-        adv(v) = _fe("*", _fe("-", "Adv.wind"), _fe("grad", "Chem.$v"))
+        adv(v) = _fe("*", _fe("-", "Adv.wind"), _fD("Chem.$v"; wrt = "x"))
         # Each right-hand side is the left fold of its contributions
         # (esm-libraries-spec §4.7.5).
         @test _fjson(flat.equations) == [
@@ -1197,7 +1190,7 @@ end
            "Adv": {"variables": {"wind": {"type": "parameter", "units": "m/s", "default": 3.0}},
                    "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["wind"]},
-                                                              {"op": "grad", "args": ["_var"]}]}}]}},
+                                                              {"op": "D", "args": ["_var"], "wrt": "x"}]}}]}},
          "coupling": [$(join(order, ", "))]}
         """
         compose = """{"type": "operator_compose", "systems": ["Chem", "Adv"]}"""
@@ -1225,7 +1218,7 @@ end
                 _fe(
                     "+",
                     _fe("*", _fe("-", "Scale.factor"), "Chem.O3"),
-                    _fe("*", _fe("-", "Adv.wind"), _fe("grad", "Chem.O3")),
+                    _fe("*", _fe("-", "Adv.wind"), _fD("Chem.O3"; wrt = "x")),
                 ),
                 "Scale.factor",
             )

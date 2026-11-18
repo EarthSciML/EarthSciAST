@@ -382,27 +382,15 @@ const _OP_TABLE = _OpSpec[
 
     # ── Calculus / initial-condition markers (resolved or rejected at build
     #    time; never scalar-evaluated) ──
-    #    The spatial-calculus sugar `grad`/`div`/`laplacian` carry NO
-    #    dimensional / spatial / coordinate privilege (esm-spec §4.2): they have
-    #    no dimensional rule (§4.8.3 "any other op" ⇒ UNDETERMINABLE — units.jl
-    #    has no rule for them), and spatial axes / system dimensionality are
-    #    derived STRUCTURALLY from the `dim`/`wrt` FIELDS and variable shapes
-    #    over `index_sets` (§4.9.1(ii), §11.2, flatten.jl), never from these op
-    #    names. They carry NO bespoke registry flag AT ALL — not even `cse=true`.
-    #    Their membership in the open rewrite-target tier T (`_op_in_T`, via
-    #    `_REWRITE_TARGET_OPS`, templates/rewrite.jl) is the SINGLE
-    #    source of two behaviours: (1)
-    #    `_cse_hoistable` treats every T op as a non-hoistable CSE barrier,
-    #    routing it to `_compile`/`_compile_op` instead of the guardless
-    #    `_cse_rebuild` generic-node path; and (2) that path's GENERIC
-    #    `unlowered_operator` gate rejects any non-evaluable-core op uniformly —
-    #    so an arbitrary open-tier USER op is rejected identically to
-    #    grad/div/laplacian, by predicate, not by an op-name list
-    #    (tree_walk/compile.jl; pinned by tree_walk_test.jl "unlowered
-    #    rewrite-target op surfaced before evaluation"). This is special COMPILE
-    #    handling that REJECTS them, not a privilege. `D`/`ic` keep `cse=true`:
-    #    `D` is in T but `ic` is not, and both stay CSE barriers via their own
-    #    `_compile_op` arms regardless.
+    #    The former spatial-calculus sugar `grad`/`div`/`laplacian` was
+    #    removed at esm 2.4.0 (refused by name at load, `removed_op`) and is
+    #    not registered. An open-tier USER op is in the rewrite-target tier T
+    #    (`_op_in_T`, templates/rewrite.jl) by having no registry entry: it is a
+    #    non-hoistable CSE barrier and is rejected by the GENERIC
+    #    `unlowered_operator` gate when no rule lowers it (tree_walk/compile.jl;
+    #    pinned by tree_walk_test.jl "unlowered rewrite-target op surfaced
+    #    before evaluation"). `D`/`ic` keep `cse=true`: `D` is in T but `ic` is
+    #    not, and both stay CSE barriers via their own `_compile_op` arms.
     #    `D`'s arity is FIELD-dependent (esm-spec §4.2 "Arity of `D`"), which is
     #    why the nominal range below is open-ended rather than `1:1`. The
     #    STRUCTURAL time derivative (`wrt == "t"`, or an absent `wrt`) is
@@ -417,9 +405,6 @@ const _OP_TABLE = _OpSpec[
     #    the range makes that union EXPLICIT instead of leaving it to `nothing`.
     _op("D"; arity = 1:typemax(Int), category = :calculus, cse = true, known = true),
     _op("ic"; category = :calculus, cse = true, known = true),
-    _op("grad"; category = :calculus),
-    _op("div"; category = :calculus),
-    _op("laplacian"; category = :calculus),
 
     # ── Array producers / gathers / reshapes ──
     _op(
@@ -605,7 +590,7 @@ _op_category(name::AbstractString) = (s = _op_spec(name); s === nothing ? nothin
 _is_comparison_op(name::AbstractString) = _op_category(name) === :comparison
 "`and`, `or`, `not`: a registered boolean connective."
 _is_logical_op(name::AbstractString) = _op_category(name) === :logical
-"`D`, `ic`, `grad`, `div`, `laplacian`: a registered calculus operator."
+"`D`, `ic`: a registered calculus operator."
 _is_calculus_op(name::AbstractString) = _op_category(name) === :calculus
 
 """
@@ -688,8 +673,7 @@ lifted over an array. This is the positive half of esm-spec §4.3.4's
 "`fn` must name a scalar operator (arithmetic, elementary function,
 comparison, etc.)"; its complement is the STRUCTURAL half of the vocabulary —
 `:array` (`index`/`makearray`/`broadcast`/`reshape`/`transpose`/`concat`),
-`:aggregate` (`faq`), `:calculus` (`D`/`ic`/`grad`/`div`/
-`laplacian`), `:data` (`const`/`enum`),
+`:aggregate` (`faq`), `:calculus` (`D`/`ic`), `:data` (`const`/`enum`),
 `:value_invention` — none of which is a scalar operator.
 
 `:constant` (the niladic `pi`/`e`/`true`/`false`) IS a scalar category; a
@@ -736,7 +720,7 @@ The `broadcast.fn` contract of esm-spec §4.3.4, as pure data: `nothing` when
 - `:missing`    — the `broadcast` node carries no `fn` field (or an empty one),
 - `:unknown`    — `fn` names no registry op,
 - `:non_scalar` — `fn` names a STRUCTURAL op (`faq`, `index`,
-                  `makearray`, `grad`, …), not a scalar operator,
+                  `makearray`, `D`, …), not a scalar operator,
 - `:arity`      — `fn` is a scalar op but `nargs` is outside its arity.
 
 **The rule is `broadcast(fn: F, args)` is legal exactly when `{op: F, args}`

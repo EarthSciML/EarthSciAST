@@ -111,8 +111,7 @@ const _CLS = ClassificationConformanceAdapter
 
     @testset "system_kind derivation: order is sde → pde → nonlinear → ode" begin
         pde = EarthSciAST.load_path(joinpath(_CLS_DIR, "fixtures", "system_kind_pde.esm"))
-        # A spatial `D` (wrt an axis) and the grad/div/laplacian sugar are both
-        # the pde signal; neither spelling is canonical.
+        # A spatial `D` (wrt an axis), alone or nested, is the pde signal.
         @test system_kind(pde.models["Transient"]) == "pde"
         @test system_kind(pde.models["SugarOps"]) == "pde"
         # pde BEFORE nonlinear: a steady-state PDE has no time derivative.

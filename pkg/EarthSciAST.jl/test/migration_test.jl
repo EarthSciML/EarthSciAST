@@ -279,6 +279,71 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         @test err isa MigrationError && err.code == "removed_op"
     end
 
+    @testset "a document using an op esm 2.4.0 removed is refused" begin
+        # `grad`, `div` and `laplacian` have no codemod: the message points at
+        # spatial `D` and MIGRATION.md, not at `python -m earthsci_ast.migrate`.
+        for version in ("1.3.0", "2.3.0"), (name, node) in (
+                ("grad", Dict{String, Any}("op" => "grad", "dim" => "x", "args" => Any["x"])),
+                ("div", Dict{String, Any}("op" => "div", "args" => Any["x"])),
+                ("laplacian", Dict{String, Any}("op" => "laplacian", "args" => Any["x"])),
+            )
+            d = Dict{String, Any}(
+                "esm" => version, "metadata" => Dict{String, Any}("name" => "m"),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "x" => Dict{String, Any}("type" => "unknown", "default" => 0.0)
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}(
+                                "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                "rhs" => node,
+                            ),
+                        ],
+                    ),
+                ),
+            )
+            @test can_migrate(d, _MIG_SCHEMA_VERSION) == false
+            err = try
+                migrate(d, _MIG_SCHEMA_VERSION)
+                nothing
+            catch e
+                e
+            end
+            @test err isa MigrationError
+            @test err isa MigrationError && err.code == "removed_op"
+            @test err isa MigrationError && err.path == "/models/M/equations/0/rhs"
+            msg = err isa MigrationError ? err.message : ""
+            @test occursin("`\"op\": \"$(name)\"`", msg)
+            @test occursin("esm 2.4.0", msg)
+            @test !occursin("earthsci_ast.migrate", msg)
+        end
+        # A typed file built in memory is refused the same way.
+        built = EarthSciAST.EsmFile(
+            "2.3.0", EarthSciAST.Metadata("m");
+            models = Dict(
+                "M" => EarthSciAST.Model(
+                    Dict{String, EarthSciAST.ModelVariable}(),
+                    [
+                        EarthSciAST.Equation(
+                            EarthSciAST.VarExpr("x"),
+                            EarthSciAST.OpExpr("laplacian", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("u")])
+                        ),
+                    ]
+                ),
+            )
+        )
+        @test can_migrate(built, _MIG_SCHEMA_VERSION) == false
+        err = try
+            migrate(built, _MIG_SCHEMA_VERSION)
+            nothing
+        catch e
+            e
+        end
+        @test err isa MigrationError && err.code == "removed_op" &&
+            occursin("esm 2.4.0", err.message)
+    end
+
     @testset "marker-only: every other field survives" begin
         # A real loaded document, so the carried-across fields are the populated
         # ones an actual file has rather than a hand-built skeleton's `nothing`s.

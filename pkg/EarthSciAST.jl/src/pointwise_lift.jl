@@ -11,7 +11,7 @@ using OrderedCollections: OrderedDict
 # (reactions → generic `D(sp)=Σ terms` equations, then `operator_compose` merges
 # each species' reaction ODE with the spatial operator's advection contribution).
 # What operator_compose does NOT do is array-ify the result: the merged
-# `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+# `D(sp) = <reaction> + <-u·makearray(D(sp, x))>` still has a SCALAR `sp` while
 # its advection `makearray` indexes `sp` per grid cell. This step performs the
 # `lifting:"pointwise"` promotion — it reuses the same faq lowering a spatial
 # MODEL uses — by wrapping each such merged state ODE in a `faq` over the

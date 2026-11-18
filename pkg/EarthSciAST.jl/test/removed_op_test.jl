@@ -72,6 +72,57 @@ end
         end
     end
 
+    @testset "grad, div and laplacian were removed at esm 2.4.0, whatever the declared version" begin
+        node(op) = Dict{String, Any}("op" => op, "args" => Any["x"], "dim" => "x")
+        for op in ("grad", "div", "laplacian"), version in ("1.3.0", "2.3.0", EarthSciAST.SCHEMA_VERSION)
+            doc = Dict{String, Any}(
+                "esm" => version,
+                "metadata" => Dict{String, Any}("name" => "m"),
+                "models" => Dict{String, Any}(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict{String, Any}(
+                            "x" => Dict{String, Any}("type" => "unknown", "default" => 0.0)
+                        ),
+                        "equations" => Any[
+                            Dict{String, Any}(
+                                "lhs" => Dict{String, Any}("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                                "rhs" => Dict{String, Any}("op" => "+", "args" => Any[1.0, node(op)]),
+                            ),
+                        ],
+                    ),
+                ),
+            )
+            for load in (
+                    () -> EarthSciAST.load_string(JSON3.write(doc)),
+                    () -> EarthSciAST.load_document(doc),
+                )
+                err = _removed_op_error(load)
+                @test err isa EarthSciAST.ParseError
+                @test err isa EarthSciAST.ParseError && err.code == "removed_op"
+                @test err isa EarthSciAST.ParseError && err.path == "/models/M/equations/0/rhs/args/1"
+                msg = err isa EarthSciAST.ParseError ? err.message : ""
+                @test occursin("`\"op\": \"$(op)\"`", msg) && occursin("esm 2.4.0", msg)
+                @test occursin("spatial `D`", msg)
+                @test !occursin("earthsci_ast.migrate", msg)
+            end
+            err = _removed_op_error(() -> EarthSciAST.expression_from_json(node(op)))
+            @test err isa EarthSciAST.ParseError && err.code == "removed_op"
+        end
+        # The shared fixtures, one per op, each declaring esm 2.3.0.
+        dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "removed_ops")
+        for op in ("grad", "div", "laplacian")
+            path = joinpath(dir, "removed_op_$(op).esm")
+            _require_fixture(path) || continue
+            err = _removed_op_error(() -> EarthSciAST.load_path(path))
+            @test err isa EarthSciAST.ParseError && err.code == "removed_op"
+            @test err isa EarthSciAST.ParseError && occursin(op, err.message)
+        end
+        # The math notation refuses them as it does the other removed names.
+        for op in ("grad", "div", "laplacian")
+            @test op in EarthSciAST.DocumentFormats.MExpr.REMOVED_OPS
+        end
+    end
+
     @testset "the shared removed_op fixtures" begin
         dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "removed_ops")
         if isdir(dir)

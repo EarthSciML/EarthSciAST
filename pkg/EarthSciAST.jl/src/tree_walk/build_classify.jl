@@ -45,7 +45,7 @@
 #     per-cell `faq` form the derivative partition consumes (see
 #     `_lift_wholearray_deriv_equations`). Spatial-operator zeroing over a
 #     structurally-0-D field is done EARLIER, in flatten, so a raw
-#     `grad`/`div`/`laplacian` reaching the
+#     spatial `D` reaching the
 #     compiler directly (a hand-built Model, never discretized) still
 #     hard-errors as the pipeline-violation guard requires. No-op for a model
 #     without a whole-array D.

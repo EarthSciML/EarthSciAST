@@ -459,6 +459,24 @@ function _variable_kinds(model::Model)::Dict{String, String}
     return kinds
 end
 
+# The variables an expression reads, for its dependency edges: its free
+# variables less a name that appears ONLY as a derivative's `wrt` axis. A
+# spatial `D(u, wrt: x)` differentiates along the axis `x`; it does not read a
+# variable `x`, so `x` gets no node (as in every other binding's graph).
+function _graph_sources(expr::ASTExpr)::Set{String}
+    fv = free_variables(expr)
+    axes = Set{String}()
+    read = Set{String}()
+    foreach_subexpr(expr) do x
+        if x isa VarExpr
+            push!(read, x.name)
+        elseif x isa OpExpr && x.wrt !== nothing
+            push!(axes, x.wrt)
+        end
+    end
+    return Set{String}(v for v in fv if v in read || !(v in axes))
+end
+
 """Add one equation's LHS/RHS dependency edges under `system`."""
 function _process_equation!(
         b::_ExprGraphBuilder, equation::Equation,
@@ -470,7 +488,7 @@ function _process_equation!(
 
     # Every RHS free variable feeds the LHS. A SELF-reference is kept: §4.8.2's
     # worked example lists `NO → NO` / `O₃ → O₃` self-loss edges explicitly.
-    for rhs_var in sort!(collect(free_variables(equation.rhs)))
+    for rhs_var in sort!(collect(_graph_sources(equation.rhs)))
         source_key = _add_node!(b, rhs_var, "parameter", nothing, system)
         _add_dependency!(b, source_key, lhs_key, "additive", equation_index, equation.rhs)
     end
@@ -482,7 +500,7 @@ function _process_reaction!(
         b::_ExprGraphBuilder, reaction::Reaction,
         reaction_index::Int, system::AbstractString
     )
-    rate_vars = sort!(collect(free_variables(reaction.rate)))
+    rate_vars = sort!(collect(_graph_sources(reaction.rate)))
     substrates = reaction.substrates === nothing ? StoichiometryEntry[] : reaction.substrates
     products = reaction.products === nothing ? StoichiometryEntry[] : reaction.products
 
@@ -684,7 +702,7 @@ function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
     # the document, so it gets a synthetic target every free variable feeds.
     b = _ExprGraphBuilder()
     result_key = _add_node!(b, _EXPR_RESULT, "observed", nothing, _DEFAULT_SYSTEM)
-    for var_name in sort!(collect(free_variables(expr)))
+    for var_name in sort!(collect(_graph_sources(expr)))
         source_key = _add_node!(b, var_name, "parameter", nothing, _DEFAULT_SYSTEM)
         # `_NON_EQUATION_INDEX`: a bare expression has no positional equation to
         # index, which is exactly what the sentinel is for. (The Equation and

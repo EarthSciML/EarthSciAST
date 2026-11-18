@@ -13,6 +13,10 @@
 #   `removed_op`; rewriting it onto the `esm:std/*.esm` templates is the offline
 #   codemod's job (`python -m earthsci_ast.migrate`).
 #
+# A document of any version using an op esm 2.4.0 removed (`grad`, `div`,
+# `laplacian`) is refused with `removed_op` too. There is no codemod for those:
+# they are rewritten by hand with spatial `D` (MIGRATION.md, "esm 2.4.0").
+#
 # Nothing crosses the 1.0.0 boundary: its changes reshape the document and need
 # information only the equations carry, so a 0.x source has no supported
 # targets (scripts/migrate-0x-to-1.0.0.py does the mechanical part and refuses
@@ -156,7 +160,8 @@ function _removed_construct(file::EsmFile)
     seen = IdDict{Any, Nothing}()
     function visit(x, path)
         if x isa OpExpr
-            x.op in _REMOVED_OPS_2_0_0 && return (x.op, path)
+            (x.op in _REMOVED_OPS_2_0_0 || x.op in _REMOVED_OPS_2_4_0) &&
+                return (x.op, path)
         elseif x isa Union{AbstractString, Number, Symbol, Nothing, Function, Type}
             return nothing
         end
@@ -190,7 +195,7 @@ function _removed_construct_error(name::AbstractString, path::AbstractString, fr
     what = name == "function_tables" ? "the `function_tables` block" : "`\"op\": \"$(name)\"`"
     return MigrationError(
         "[E_REMOVED_OP] removed_op at $(path): cannot relabel esm $(from) as " *
-            "$(SCHEMA_VERSION): $(what) was $(_REMOVED_2_0_0_HINT).";
+            "$(SCHEMA_VERSION): $(what) was $(_removed_op_hint(name)).";
         code = ERROR_CODES.REMOVED_OP, path = path
     )
 end
