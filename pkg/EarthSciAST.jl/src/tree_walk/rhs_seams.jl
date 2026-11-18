@@ -15,7 +15,7 @@
 #
 # Every argument's TYPE determines the answer, so inference constant-folds this to
 # a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf` a
-# static dispatch and keeps the Float64 path byte-for-byte what it was.
+# static dispatch on the Float64 path.
 
 @inline _promote_val_types(::Tuple{}) = Bool   # identity for `promote_type`
 @inline _promote_val_types(x::Tuple) =

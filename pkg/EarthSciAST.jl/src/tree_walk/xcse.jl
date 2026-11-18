@@ -1,30 +1,12 @@
-# ========================================================================
-# tree_walk/xcse.jl — part of the tree-walk evaluator.
-# Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Section 4e: CROSS-KERNEL and KERNEL↔PRELUDE sharing of
-# lane-invariant expensive subtrees via shared scalar prelude slots
-# (perf-gap-closure plan item B4).
-# ========================================================================
+# tree_walk/xcse.jl — cross-kernel and kernel↔prelude sharing of lane-invariant
+# expensive subtrees through shared scalar prelude slots.
 #
-# THE GAP THIS CLOSES
-# -------------------
-# Two independent mechanisms name a repeated LANE-INVARIANT computation, and
-# they have nothing to say to each other:
-#
-#   * `_cse_compile_scalar` (scalar_cse.jl) shares subexpressions across SCALAR
-#     equations and observed defs, keyed on `canonical_json`, into a prelude of
-#     `_CSECache` slots refilled at the top of every `f!` call.
-#   * `_build_acc_cse` (access_kernel.jl) hoists every loop-invariant OP subtree
-#     of ONE array kernel into that kernel's `inv_recipes` tier — one scalar
-#     eval per RHS call instead of one per cell, but PER KERNEL, shared with
-#     nothing.
-#
-# So a lane-invariant subtree such as a solar-zenith factor `cos(f(t))`
-# feeding the balances of K species — K array kernels — is evaluated K times per
-# RHS call (once per kernel's `_fill_invariant!`), and a K+1'th time if a scalar
-# equation or observed carries the same expression (which `_cse_count!` sees as
-# a singleton, because array equations never produce the `ASTExpr` entries it
-# counts). This pass makes each such subtree ONE shared scalar prelude slot:
+# The scalar CSE (`_cse_compile_scalar`, scalar_cse.jl) shares subexpressions
+# across scalar equations into the prelude; `_build_acc_cse` (access_kernel.jl)
+# hoists one kernel's loop-invariant subtrees into that kernel's `inv_recipes`.
+# Neither sees the other, so an invariant subtree read by K kernels (a
+# solar-zenith factor feeding K species balances) would be evaluated K times
+# per call. This pass gives each such subtree one prelude slot:
 #
 #   1. every existing scalar prelude def is EXACTLY value-numbered (slot order,
 #      so `_NK_CACHED` refs expand through already-numbered slots);

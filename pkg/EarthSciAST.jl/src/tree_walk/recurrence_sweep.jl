@@ -215,7 +215,7 @@ end
 # Replace every self-read `index(name, …)` in `e` by the `__recur_read` marker
 # that `_compile` lowers to `_NK_RECUR_GATHER`, with the subscripts as its args.
 function _mark_self_reads(
-        e::ASTExpr, name::String, ref::_RecurGatherRef,
+        e::ASTExpr, name::String, ref::_Lowered,
         memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
     )
     e isa OpExpr || return e
@@ -316,7 +316,7 @@ function _compile_recurrence_sweep(
         contract_names, contract_ranges, contract_const, dop.join_gates, dop.filter,
         oplus, zerobar,
         (; resolved_obs, cs);
-        prepare = t -> _mark_self_reads(t, name, _RecurGatherRef(rg))
+        prepare = t -> _mark_self_reads(t, name, _Lowered(_NK_RECUR_GATHER, rg))
     )
     prog isa _Decline && throw(
         TreeWalkError(

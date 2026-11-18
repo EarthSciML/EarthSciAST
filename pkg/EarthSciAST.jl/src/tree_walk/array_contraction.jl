@@ -1,4 +1,4 @@
-# Whole-array contraction nest (ess-array-contraction).
+# Whole-array contraction nest.
 #
 # An array-producing aggregate `out[i…] = ⊕_{k…} body(i…, k…)` is compiled to ONE
 # term node plus one flat slot vector, and emitted as a loop NEST: the output
@@ -424,7 +424,7 @@ function _cg_share_pay!(K::_CGShareKeys, pl)
     key = if pl isa _ConstGatherArray
         (:cga, _flat_content_id!(K.flats, pl.flat), pl.strides, pl.dims, pl.boundary, pl.name)
     elseif pl isa _StateGather
-        (:sg, pl.slot_flat, pl.strides, pl.lo, pl.hi, pl.len)
+        (:sg, pl.slot_flat, pl.run_base, pl.strides, pl.lo, pl.hi, pl.len)
     else
         (:obj, _cg_share_obj!(K, pl))
     end
@@ -858,7 +858,7 @@ function _count_const_axis(a::_Node, spec::_ContractLoop, cg = a.payload)
     return (vals, true)
 end
 
-# A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds
+# A scalar reduction nested in a nest's term (`_ResolveCtx.nest_loops`). Its bounds
 # are build-time integers read through the geometry tables, and its counter's
 # span is known.
 function _cg_nest_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -1083,7 +1083,7 @@ function _ac_state_gather_entries(kc::_CGScalarCtx, sg::_StateGather, children)
             end
             off += (x - sg.lo[d]) * sg.strides[d]
         end
-        slots[e] = off < 0 ? 0 : sg.slot_flat[off + 1]
+        slots[e] = off < 0 ? 0 : _sg_slot(sg, off)
     end
     return slots
 end
@@ -1125,14 +1125,16 @@ function _cg_state_gather_dim(
     )
     children = nd.children
     if d > length(children)
-        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
-        _cg_slot_run(sg.slot_flat) &&
+        if sg.run_base != 0
+            side = _cg_slot_side(ctx.nst, sg.run_base, sg.run_base + sg.len - 1)
             return _cg_uread(
-            side, :(
-                $(_cg_geo!(ctx, sg.slot_flat[1], (sg.slot_flat, :run))) +
-                    $(_cg_foldl(:+, off))
+                side, :(
+                    $(_cg_geo!(ctx, sg.run_base, (sg.slot_flat, :run))) +
+                        $(_cg_foldl(:+, off))
+                )
             )
-        )
+        end
+        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
         return _cg_uread(side, :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
     end
     sd = _cg_name(ctx, "sgs")
@@ -1715,7 +1717,7 @@ end
 # reasoning `_fill_obs_levels!` states for its levels.
 #
 # The tail recursion stays static only while the tuple is short: past
-# inference's splat limit `Base.tail` of a long tuple is no longer inferred, so
+# inference's splat limit `Base.tail` of a long tuple is not inferred, so
 # every step allocates a fresh tuple and reaches the next generated function by
 # dynamic dispatch (a model with a table lookup per photolysis bin builds one
 # contraction per lookup, hundreds in all). A long section is therefore stored

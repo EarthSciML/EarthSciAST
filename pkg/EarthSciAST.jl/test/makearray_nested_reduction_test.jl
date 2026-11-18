@@ -7,7 +7,7 @@
 # With the cell index symbolic the whole-array nest cannot pick the makearray's
 # region, so native takes one equation per region
 # (`_makearray_region_equations`), and the nest keeps the nested reduction as a
-# counted loop (`_NEST_SCALAR_LOOPS`) instead of unrolling one term per `j` into
+# counted loop (`_ResolveCtx.nest_loops`) instead of unrolling one term per `j` into
 # its one body. This pins, against `compiler=:interpreter` (the per-cell unroll):
 #
 #   * bit-identity, `===` per element, for one region, `[0, nested]` over the same

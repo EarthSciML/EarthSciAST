@@ -94,5 +94,5 @@ rule inline on the evaluation path.
         (sg.lo[d] <= s <= sg.hi[d]) || return 0
         off += (s - sg.lo[d]) * sg.strides[d]
     end
-    return @inbounds sg.slot_flat[off + 1]
+    return _sg_slot(sg, off)
 end

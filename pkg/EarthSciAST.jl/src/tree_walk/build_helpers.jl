@@ -16,10 +16,9 @@
 # recorded expansion roots from the tree by identity. Walk the old and new trees
 # in parallel (`child_exprs` yields the same expression slots in the same order
 # when only non-expression fields changed) and map each recorded root to its
-# rebuilt counterpart. Old keys are kept (harmless — they no longer appear in
-# any tree); a subtree whose expression-slot count changed is skipped, so its
+# rebuilt counterpart. Old keys are kept (they appear in no tree); a subtree whose expression-slot count changed is skipped, so its
 # sites degrade to the fused build — slower, never wrong.
-# Identity-deduped on the OLD node (ESS-0hh): the shape-preserving rewrites are
+# Identity-deduped on the OLD node: the shape-preserving rewrites are
 # identity-memoized, so a shared old node maps to exactly ONE new node — a
 # repeat (old, new) visit through another parent is redundant, and skipping it
 # keeps the lockstep walk O(distinct nodes) on a shared DAG (unchanged
@@ -195,4 +194,90 @@ function _dependency_order(names, deps::F; on_cycle::G) where {F, G}
         progressed || on_cycle(done)
     end
     return order
+end
+
+# True iff `e` is a `const`-op node (build-time literal data — a vertex ring
+# array, a source field). Its value lives in `e.value`, not `e.args`.
+_is_const_op(e) = e isa OpExpr && (e::OpExpr).op == "const"
+
+# A `const`-op node's stored (nested-vector) value → a dense Float64 array whose
+# rank is the nesting depth (`[[[...]]]` → 3-D): an in-file
+# `src_poly[cell, vert, coord]` ring stack or a 1-D `F_src[cell]` field.
+# Column-major fill matches
+# Julia's native layout, so `index(src_poly, i)` slices out cell `i`'s ring
+# matrix.
+function _const_op_to_array(val)::Array{Float64}
+    dims = Int[]
+    node = val
+    while !(node isa Number)
+        n = length(node)
+        push!(dims, n)
+        n == 0 && break
+        node = first(node)
+    end
+    A = Array{Float64}(undef, dims...)
+    _fill_const_dense!(A, val, dims) || _fill_const_array!(A, val, ())
+    return A
+end
+
+# The fill for a value whose every level is a list of exactly the probed
+# extent with numbers at the bottom (every well-formed inline array): each
+# element goes straight to its column-major offset. Returns `false` on any
+# other shape, and the caller redoes the fill with `_fill_const_array!`.
+function _fill_const_dense!(A::Array{Float64}, val, dims::Vector{Int})
+    (isempty(dims) || any(==(0), dims)) && return false
+    strides = Vector{Int}(undef, length(dims))
+    s = 1
+    for d in eachindex(dims)
+        strides[d] = s
+        s *= dims[d]
+    end
+    return _fill_const_level!(vec(A), val, 1, 1, dims, strides)
+end
+
+_fill_const_level!(
+    A::Vector{Float64}, node, depth::Int, off::Int, dims::Vector{Int},
+    strides::Vector{Int}
+)::Bool =
+    node isa Vector{Any} ? _fill_const_level_vec!(A, node, depth, off, dims, strides) :
+    node isa AbstractVector ? _fill_const_level_vec!(A, node, depth, off, dims, strides) : false
+
+function _fill_const_level_vec!(
+        A::Vector{Float64}, node::AbstractVector, depth::Int, off::Int,
+        dims::Vector{Int}, strides::Vector{Int}
+    )::Bool
+    n = length(node)
+    n == dims[depth] || return false
+    s = strides[depth]
+    if depth == length(dims)
+        for k in 1:n
+            x = node[k]
+            v = x isa Int64 ? Float64(x) : x isa Float64 ? x :
+                x isa Number ? Float64(x)::Float64 : return false
+            @inbounds A[off + (k - 1) * s] = v
+        end
+    else
+        for k in 1:n
+            sub = node[k]
+            o = off + (k - 1) * s
+            # The common nested `Vector{Any}` row takes a static call.
+            (
+                sub isa Vector{Any} ? _fill_const_level_vec!(A, sub, depth + 1, o, dims, strides) :
+                    _fill_const_level!(A, sub, depth + 1, o, dims, strides)
+            ) ||
+                return false
+        end
+    end
+    return true
+end
+
+function _fill_const_array!(A, node, idx::Tuple)
+    if node isa Number
+        A[idx...] = Float64(node)
+        return
+    end
+    for (k, sub) in enumerate(node)
+        _fill_const_array!(A, sub, (idx..., k))
+    end
+    return
 end

@@ -78,7 +78,7 @@
 # is a separate pass, keyed structurally on the kernel spine rather than on
 # `canonical_json`: see tree_walk/xcse.jl.
 #
-# WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. Scalar
+# WHAT THIS PASS NO LONGER CARRIES: AUTHOR-NAMED sharing. Scalar
 # observeds now compile as NAMED PRELUDE DEFS in this same prelude
 # (`_plan_observed_slots` in build_classify.jl; the `obs_defs` argument of
 # `_cse_compile_scalar`), so what is left for the canonical-key machinery is exactly
@@ -460,7 +460,7 @@ mutable struct _CSEContext
     # function of the node for a fixed build context).
     keymemos::_CSEKeyMemos
     compiled::IdDict{OpExpr, _Node}
-    # NAMED scalar-observed slots (ess-obs-slots): observed name → prelude slot.
+    # NAMED scalar-observed slots: observed name → prelude slot.
     # Filled by `_cse_compile_scalar` as it compiles each observed def (in
     # dependency order, before any equation); a `VarExpr` reader whose name is
     # registered here lowers to `_NK_CACHED` on that slot instead of a spliced
@@ -487,7 +487,7 @@ end
 # Falls back to plain `_compile` for leaves and opaque ops, so the result is
 # identical to `_compile` wherever nothing is hoisted.
 function _compile_cse(expr::ASTExpr, var_map, param_syms, ctx::_CSEContext)
-    # A named scalar-observed reference reads its prelude slot (ess-obs-slots).
+    # A named scalar-observed reference reads its prelude slot.
     # Checked FIRST: an observed name is neither a state, a parameter, nor `t`,
     # so plain `_compile` would (rightly) reject it as unbound. Observed names
     # are disjoint from the state/param namespaces by `_partition_variables`,
@@ -583,7 +583,7 @@ function _cse_compile_scalar(
         cached, Dict{Int, Int}(), _Node[], cache, pgctx,
         keymemos, IdDict{OpExpr, _Node}(), Dict{String, Int}()
     )
-    # ---- Named observed prelude defs, in dependency order (ess-obs-slots) ----
+    # ---- Named observed prelude defs, in dependency order ----
     # Compiled BEFORE the equations so every reader's slot exists, and in
     # dependency order so a def's slot reads land strictly below it (the
     # topological-prelude invariant const_tier.jl and xcse.jl rely

@@ -6,7 +6,7 @@
 # with observed variables and index ops are resolved to flat-slot references
 # here; compilation to the compact `_Node` form is deferred to the caller's
 # single batched `_cse_compile_scalar` pass, so common subexpressions are
-# eliminated across equations as well as within one RHS (ess-r7h). Array
+# eliminated across equations as well as within one RHS. Array
 # (`faq`) derivative equations compile to whole-array access kernels
 # instead of N per-cell scalar nodes — see `_compile_faq_equation!`.
 # `percell_scalar` carries the per-cell reference's compiled nodes (empty
@@ -28,7 +28,7 @@ function _compile_derivative_equations(
         derivative_eqs::Vector{Equation},
         resolved_obs::Dict{String, ASTExpr}, cs::_CompileScope, n_states::Int;
         template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
-        # SCALAR-arm substitution map (ess-obs-slots): `resolved_obs` minus the
+        # SCALAR-arm substitution map: `resolved_obs` minus the
         # observeds compiled as named prelude slots, so a slot reference stays a
         # bare `VarExpr` for `_compile_cse` to lower onto its slot. `nothing`
         # (no slots) ⇔ the full map — byte-identical to the pre-slot build. The
@@ -53,8 +53,8 @@ function _compile_derivative_equations(
     scalar_entries = Tuple{Int, ASTExpr}[]
     percell_scalar = Tuple{Int, _Node}[]
     acc_kernels = _AccKernel[]
-    scan_folds = _ScanFold[]           # ess-scan post-passes (scan.jl); usually empty
-    # ess-array-contraction whole-equation loop nests (array_contraction.jl);
+    scan_folds = _ScanFold[]           # prefix-scan post-passes (scan.jl); usually empty
+    # whole-equation loop nests (array_contraction.jl);
     # empty unless a contraction clears the length floor.
     array_contractions = _ArrayContraction[]
     covered = _Covered(n_states)
@@ -220,7 +220,7 @@ end
 # `faq(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_faq(...)`
 # Expand by iterating the Cartesian product of output_ranges.
 # Per-cell compiled nodes are collected and then merged into whole-array
-# kernels (ess-dhq) rather than pushed individually into `rhs_list`; the
+# kernels rather than pushed individually into `rhs_list`; the
 # per-cell build logic (ghost cells, const-array inlining, joins/filters,
 # variable-valence bounds) is unchanged. Appends to `acc_kernels` and marks
 # `covered` for every cell it owns. The tiers are offered in order at the
@@ -229,7 +229,7 @@ end
 # (`acc_kernels` is a `Vector{_AccKernel}`; the annotation is omitted because
 # `_AccKernel` is defined in access_kernel.jl, included after this build section.)
 
-# ess-affine: unroll a CONSTANT-bound contraction (aggregate reduction) into a
+# Unroll a CONSTANT-bound contraction (aggregate reduction) into a
 # plain ⊕-fold AST so the existing affine box processor can lower it — no runtime
 # reduce, no per-cell loop. Output indices stay SYMBOLIC (one fold template shared
 # across every output cell); only the contracted indices are expanded, through the
@@ -304,7 +304,7 @@ function _fold_form_refusal(contract_names::Vector{String}, contract_const, oplu
     return "it needs at least two terms over constant ranges"
 end
 
-# ess-scan: recognize a CUMULATIVE (prefix) reduction — an aggregate whose
+# Recognize a CUMULATIVE (prefix) reduction — an aggregate whose
 # filter admits the monotone window `j ⋚ i` against one output index — so the
 # equation can be evaluated as a term pass plus an O(N) accumulation instead of
 # the O(N²) guarded fold `_unrolled_contraction_body` would emit. See scan.jl
@@ -422,15 +422,11 @@ end
 # per-cell tier at O(#cells) IR. On a real transport model a staggered prefix scan
 # and its column integrals all declined here rather than at any tier's own guard.
 #
-# WHY IT IS SAFE FOR MORE THAN A SCAN. This unwrap was originally admitted for
-# prefix scans ALONE, because `_derive_lane_repl` (stencil_affine.jl) used to
-# decide a const lane was loop-invariant by comparing its VALUES at the box
-# CORNERS: a const gather that agreed at the corners and differed inside — a
-# regrid weight column (0, 0.5, 0) — folded to a literal and silently zeroed the
-# interior cell. A scan never reaches that fold. `_derive_lane_repl` no longer
-# samples values at all; it derives invariance STRUCTURALLY from the resolved
-# linear INDEX (an all-zero stride vector over the box), so the fold cannot be
-# fooled by adversarial data and the restriction is no longer needed.
+# It is safe for any reduction, not only a scan: `_derive_lane_repl`
+# (stencil_affine.jl) decides a const lane is loop-invariant structurally, from
+# the resolved linear index (an all-zero stride vector over the box), never by
+# sampling values, so a const column that agrees at the box corners and differs
+# inside is not folded to a literal.
 #
 # STILL DELIBERATELY NARROW: the bare form is adopted only when it UNLOCKS
 # something — i.e. only when the producer actually contracts, or carries a
@@ -509,8 +505,7 @@ function _unwrap_identity_gather(
         output_idx = Any[n for n in idx_names],
         ranges = newranges,
         join_gates = gates,
-        # `a.filter` is `nothing` for a plain (unfiltered) reduction — a shape
-        # this unwrap now admits, where it once took scans only.
+        # `a.filter` is `nothing` for a plain (unfiltered) reduction.
         filter = (a.filter === nothing || isempty(ren)) ? a.filter :
             _sub_preserving(a.filter, ren),
         expr_body = isempty(ren) ? a.expr_body : _sub_preserving(a.expr_body, ren)
@@ -696,7 +691,7 @@ end
 #   :empty_output       — an equation over an empty output range: no cell
 #   :scan               — a forward cumulative (prefix) reduction, rewritten
 #                         into an affine TERM build plus an O(N) accumulation
-#                         (ess-scan, scan.jl). Counted instead of `:affine`,
+#                         (scan.jl). Counted instead of `:affine`,
 #                         since the term kernels are what the affine build
 #                         actually produced.
 #   :percell_disabled   — the affine stencil tier is off, so the equation took
@@ -1055,8 +1050,7 @@ function _loop_decline(a::_FaqEq, sc::_FaqScope)
     probe = isempty(sc.resolved_obs) ? probe : _sub_preserving(probe, sc.resolved_obs)
     pranges = [_expand_int_range(a.contract_ranges[d]) for d in 1:length(a.contract_names)]
     got = _try_build_contraction_loop(
-        probe, a.contract_names, pranges, a.oplus,
-        a.zerobar, sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather
+        probe, a.contract_names, pranges, a.oplus, a.zerobar, _resolve_ctx(sc.cs)
     )
     return got isa _Decline ? got : nothing
 end
@@ -1815,8 +1809,7 @@ function _compile_cell_program(
     isempty(sc.resolved_obs) || (term = _sub_preserving(term, sc.resolved_obs))
     term = prepare(term)
     got = _resolve_array_contraction_term(
-        term, idx_names, contract_names,
-        sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather;
+        term, idx_names, contract_names, _resolve_ctx(sc.cs);
         nest_scalar_loops = nest_scalar_loops, memo = memo
     )
     got isa _Decline && return got
@@ -1848,7 +1841,7 @@ function _compile_cell_program(
     return _CellProgram(out_refs, node, fold)
 end
 
-# ---- Stage: whole-array contraction loop nest (ess-array-contraction) ----
+# ---- Stage: whole-array contraction loop nest ----
 # Compile ONE body for the whole equation — output AND contracted indices kept
 # symbolic — plus the flat `du` slot of every output cell, and return the
 # `_ArrayContraction` the RHS section runs (array_contraction.jl). Declines
@@ -1860,7 +1853,7 @@ end
 # build time to resolve or compile anything — the cell loop below only reads each
 # cell's slot out of `var_map`, which is an integer lookup, not IR.
 function _try_compile_array_contraction(a::_FaqEq, sc::_FaqScope)
-    # A scalar reduction nested in the term stays a loop (`_NEST_SCALAR_LOOPS`).
+    # A scalar reduction nested in the term stays a loop (`_ResolveCtx.nest_loops`).
     # A memo of this symbolic body's own: it shares nothing with the concrete
     # per-cell builds (the isolation the per-cell loop tier's compile relies
     # on), but a sub-tree the body reaches from several parents resolves and
@@ -2081,7 +2074,7 @@ function _compile_faq_percell!(
     # unrolling: its node flows into the stencil / access-kernel merge, which
     # models unrolled scalar terms. Mark the array-cell resolve so
     # `_resolve_scalar_faq` confines the runtime contraction loop to scalar
-    # contexts (ess-runtime-contraction). try/finally: the guard must unwind even
+    # contexts. try/finally: the guard must unwind even
     # if a cell resolve throws.
     cell_state = _build_state()
     cell_state.array_cell_depth += 1
@@ -2108,7 +2101,7 @@ function _compile_faq_percell!(
                 rhs_r = _resolve_in(cs, sub_rhs, cell_memo)
                 push!(cell_entries, (idx, _compile_in(cs, rhs_r, cell_memo)))
             elseif contraction_loop
-                # Runtime contraction loop (ess-runtime-contraction): compile the inner
+                # Runtime contraction loop: compile the inner
                 # reduction ONCE into an `_NK_CONTRACTION_LOOP` for THIS output cell —
                 # the output indices are already concrete in `sub_rhs_outer`; the
                 # contracted indices stay symbolic and iterate at eval time. Constant
@@ -2122,9 +2115,8 @@ function _compile_faq_percell!(
                         for d in 1:length(contract_names)
                 ]
                 marker = _try_build_contraction_loop(
-                    body2, contract_names, pranges,
-                    rhs_oplus, rhs_zerobar, cs.array_var_info, var_map,
-                    const_registry, cs.pgather
+                    body2, contract_names, pranges, rhs_oplus, rhs_zerobar,
+                    _ResolveCtx(cs.array_var_info, var_map, const_registry, cs.pgather)
                 )
                 marker isa _Decline &&
                     throw(
@@ -2155,7 +2147,7 @@ function _compile_faq_percell!(
                     contract_names, contract_ranges, idx_env,
                     const_registry, contract_const
                 )
-                # M2 (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
+                # Joins and filters (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
                 # a join-rejected combination is dropped (so a degenerate join
                 # keeps every term and is byte-identical); a filter-rejected one
                 # contributes 0̄ at runtime via an `ifelse` guard. The filter

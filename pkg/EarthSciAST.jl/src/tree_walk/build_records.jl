@@ -167,9 +167,12 @@ struct _CompileScope{L <: AbstractDict{String, Int}, C <: AbstractDict, G <: Abs
     param_index::Dict{Symbol, Int}
 end
 
+# A resolve against `s`, with no names bound.
+_resolve_ctx(s::_CompileScope, memo = nothing) =
+    _ResolveCtx(s.array_var_info, s.var_map, s.const_registry, s.pgather, memo)
+
 # `e` with its index operations resolved to slot, const and buffer reads.
-_resolve_in(s::_CompileScope, e::ASTExpr, memo = nothing) =
-    _resolve_indices(e, s.array_var_info, s.var_map, s.const_registry, s.pgather, memo)
+_resolve_in(s::_CompileScope, e::ASTExpr, memo = nothing) = _resolve_indices(e, _resolve_ctx(s, memo))
 
 # `e`, already resolved, compiled to a `_Node`.
 _compile_in(s::_CompileScope, e::ASTExpr, memo = nothing) =

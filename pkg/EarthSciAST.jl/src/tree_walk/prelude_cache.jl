@@ -6,7 +6,7 @@
 # RHS has two value types (see `_rhs_value_type`):
 #
 #   * `f64`  — the production `Float64` slots. Sized once at build; `f!` writes it
-#              and `_NK_CACHED` reads it, exactly as before this struct existed.
+#              and `_NK_CACHED` reads it.
 #   * `alt`  — the buffer for whatever NON-`Float64` value type last called `f!`
 #              (a `Vector{Dual}` under ForwardDiff). `nothing` until the first such
 #              call, so a model that is only ever integrated pays ZERO extra memory

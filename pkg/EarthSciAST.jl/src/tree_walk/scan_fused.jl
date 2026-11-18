@@ -242,10 +242,8 @@ _consumer_ix(c::_ScanConsumer) = only(keys(c.reads))
 _cg_consumer(ctx::_CGCtx, ::Nothing) = nothing
 function _cg_consumer(ctx::_CGCtx, c::_ScanConsumer)
     _cg_note_nest!(ctx, c.K)
-    return (
-        K = c.K, ix = _consumer_ix(c), delta = c.delta, store = c.store,
-        invsyms = _cg_inv!(ctx, c.K),
-    )
+    ix = _consumer_ix(c)
+    return _CGConsumer(c.K, ix, c.delta, c.store, _cg_inv!(ctx, c.K))
 end
 
 # The one kernel among `Ks` (sub-kernels included) that may read a slot in
@@ -391,10 +389,7 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
         end
         invsyms = _cg_inv!(ctx, K)
         cons = consumer === nothing ? nothing : _cg_consumer(ctx, consumer)
-        ctx.scanmode = (
-            acc = acc, a = av, b = bv, op = opsym, inclusive = S.inclusive,
-            cons = cons,
-        )
+        ctx.scanmode = _CGScanMode(acc, av, bv, opsym, S.inclusive, cons)
         geo = Any[]
         nest = _cg_with_geosink(ctx, geo) do
             _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx)

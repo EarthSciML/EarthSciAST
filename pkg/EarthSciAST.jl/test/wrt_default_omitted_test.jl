@@ -2,7 +2,7 @@
 #
 # Regression for EarthSciAST#407. `classification.jl` had always applied the
 # default (`_is_time_derivative` accepts `wrt === nothing`), but the tree-walk
-# runner's own LHS predicates in `tree_walk/resolve.jl` spelled the test
+# runner's own LHS predicates in `tree_walk/lhs_cells.jl` spelled the test
 # `lhs.wrt == "t"` and therefore did not. So `ode_states` reported `z` as a
 # state of the document while `run_inline_tests` refused the very same document
 # with `E_TREEWALK_UNSUPPORTED_EQUATION` — the binding disagreeing with itself
