@@ -270,11 +270,11 @@ end
         @test [only(tables_read(K)) for K in apart] == [A, B]   # and each keeps its own table
     end
 
-    @testset "round 1 of the kernel-class merge (`_oop_merge_sig!`)" begin
+    @testset "round 1 of the kernel-class merge (`_oop_merge_class!`)" begin
         KA, KB = ESM._acc_from_cell_entries([(1, gather(A, 1)), (2, gather(B, 2))])
         KA2 = only(ESM._acc_from_cell_entries([(3, gather(copy(A), 3))]))
-        ids = ESM._ConstTableIds()
-        ksig(K) = ESM._oop_merge_kernel_sig(K, true, false, ids)
+        classes = ESM._OopSigClasses()
+        ksig(K) = ESM._oop_merge_kernel_sig(K, true, false, classes)
         @test all(s -> s[2] === :ok, (ksig(KA), ksig(KB), ksig(KA2)))
         @test ksig(KA)[1] != ksig(KB)[1]
         @test ksig(KA)[1] == ksig(KA2)[1]
@@ -361,5 +361,29 @@ end
         merged, _, diag = ESM._merge_oop_acc_kernels(kernels, plans)
         @test diag.n_out == 1 && diag.n_failed == 0
         @test nnodes(only(merged).spine) == nnodes(kernels[1].spine)
+    end
+
+    # Round 1's signature names each node by its CLASS — its own token plus the
+    # classes of its children — instead of writing the unfolded tree as text.
+    @testset "round 1's signature" begin
+        classes = ESM._OopSigClasses()
+        ksig(K) = ESM._oop_merge_kernel_sig(K, true, false, classes)
+        kernel(spine, acc = ESM._AccDesc[]) = ESM._AccKernel(
+            ESM._outs_cells([1]), spine, acc, ESM._FixedBound(0), 0.0
+        )
+        over(slot, f) = kernel(
+            op(:+, doubled(ESM._acc(1), 60), op(f, ESM._acc(1))),
+            ESM._AccDesc[ESM._AccStateFixed(slot)]
+        )
+        s1, s2, s3 = ksig(over(1, :exp)), ksig(over(2, :exp)), ksig(over(3, :cos))
+        @test s1[2] === :ok
+        @test s1[1] == s2[1]                  # which state slot a lane reads is free
+        @test s1[1] != s3[1]                  # another operator is another class
+        @test sizeof(s1[1]) < 200             # 2^60 nodes as a tree
+        # a key delimits its children, which the concatenated text did not:
+        # f(aT) and f(a, t) both read "Of(PaT)"
+        par(name) = ESM._mknode(kind = ESM._NK_PARAM, sym = name)
+        tnode = ESM._mknode(kind = ESM._NK_TIME)
+        @test ksig(kernel(op(:f, par(:aT))))[1] != ksig(kernel(op(:f, par(:a), tnode)))[1]
     end
 end
