@@ -152,6 +152,8 @@ include("canonicalize.jl")
 # Markdown and Typst document source formats (CONFORMANCE §5.58); after
 # canonicalize.jl, whose `canonicalize_document` the printers apply first.
 include("document_format.jl")
+# `show` of expressions, equations and components: their Typst math.
+include("show.jl")
 # Build-time kernels, MTK-export glue
 include("relational.jl")
 include("mtk_export.jl")

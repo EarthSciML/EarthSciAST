@@ -876,3 +876,48 @@ function simplify(expr::OpExpr)::ASTExpr
     # If no simplification rules apply, return the fully-recursed expression.
     return recursed
 end
+
+"""
+    expression_names(expr) -> Vector{String}
+
+The variable names an expression or an equation uses, in order of first use:
+its string leaves under `lhs`, `rhs` and `args`. These are the `names` to give
+[`print_math`](@ref) to show an expression on its own, with its names declared.
+
+`expr` is a decoded ESM expression or equation (the value `print_math` takes),
+or a typed [`ASTExpr`](@ref) or [`Equation`](@ref).
+
+```julia
+julia> expression_names(Dict("lhs" => "y", "rhs" => Dict("op" => "*", "args" => ["k", "y"])))
+2-element Vector{String}:
+ "y"
+ "k"
+```
+"""
+function expression_names(expr)
+    out = String[]
+    _expression_names!(out, expr)
+    return out
+end
+
+function _expression_names!(out::Vector{String}, v)
+    if v isa AbstractString
+        name = String(v)
+        name in out || push!(out, name)
+    elseif v isa AbstractVector
+        foreach(x -> _expression_names!(out, x), v)
+    elseif v isa AbstractDict
+        for key in ("lhs", "rhs", "args")
+            child = get(v, key, get(v, Symbol(key), nothing))
+            child === nothing || _expression_names!(out, child)
+        end
+    elseif v isa VarExpr
+        v.name in out || push!(out, v.name)
+    elseif v isa OpExpr
+        foreach(x -> _expression_names!(out, x), v.args)
+    elseif v isa Equation
+        _expression_names!(out, v.lhs)
+        _expression_names!(out, v.rhs)
+    end
+    return out
+end
