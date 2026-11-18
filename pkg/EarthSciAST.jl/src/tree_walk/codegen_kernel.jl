@@ -246,11 +246,16 @@ mutable struct _CGFunction
     space::_CGSlotSpace
     nest::_CGNest
     tx::_CGKernelTx
+    # The template-instance functions minted so far (`_cg_instance_call!`):
+    # canonical body text → (name, position in `helpers`, definition). An entry
+    # whose definition a declined kernel's rollback cut from `helpers` is stale.
+    instfns::Dict{String, Tuple{Symbol, Int, Expr}}
 end
 _CGFunction(budget::Int, shared_cache::Union{Nothing, _CSECache} = nothing; nst::Int = 0) =
     _CGFunction(
     _CGTabs(), Int[], _CGPrologue(), Any[], 0, budget, 0, shared_cache, 0,
-    _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}())
+    _CGSlotSpace(nst), _CGNest(), _CGKernelTx(_CGMark(0, 0, 0, 0, 0), Dict{String, Symbol}()),
+    Dict{String, Tuple{Symbol, Int, Expr}}()
 )
 
 _cg_name(ctx::_CGFunction, base::String) = Symbol("_cg", base, ctx.nname += 1)
@@ -845,11 +850,12 @@ function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGFunction, kc::_CGKernCtx)
     return stmts
 end
 
-# Template sub-kernel call (`_NK_SUBCALL`): the body is inlined at the call
-# site — its per-cell CSE recipes become occurrence-local locals, then its
-# spine evaluates against its OWN descriptor table, with the parent's cell
-# context. Its invariant tier was emitted once in the prologue (`_cg_inv!`;
-# `K.subs` holds every transitive sub, nested-first).
+# Template sub-kernel call (`_NK_SUBCALL`): the body — its per-cell CSE recipes
+# as locals, then its spine against its OWN descriptor table, in the parent's
+# cell context — is emitted ONCE as a function of its run-time inputs and
+# called at each use (`_cg_instance_call!`). Its invariant tier was emitted
+# once in the prologue (`_cg_inv!`; `K.subs` holds every transitive sub,
+# nested-first).
 function _cg_emit_subcall(ctx::_CGFunction, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.prologue.invdone, S, nothing)
     invsyms === nothing && _decline(:subcall_order)
@@ -860,9 +866,115 @@ function _cg_emit_subcall(ctx::_CGFunction, kc::_CGKernCtx, S::_AccKernel)
     )
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
     spine = _cg_emit(ctx, inner, S.spine)
-    isempty(stmts) && return spine
-    return Expr(:block, stmts..., spine)
+    body = isempty(stmts) ? spine : Expr(:block, stmts..., spine)
+    return _cg_instance_call!(ctx, body)
 end
+
+# ---- One function per template instance --------------------------------------
+# A template body compiles to one sub-kernel per use (each use reads its own
+# arrays through its own descriptors), but the CODE of those sub-kernels is the
+# same wherever the template instance — template and binding signature — is
+# the same: every descriptor field the body reads is run-time data (geometry
+# locals, `_cg_geo!`; tables, hoisted below), and the cell coordinates,
+# invariants and value type arrive as locals. So the body is emitted as an
+# `@noinline` function whose parameters are exactly the outer locals it reads,
+# renamed canonically (`_cga1`, `_cga2`, … in order of first use), and the use
+# becomes a call to it. Two uses whose bodies are the same text after renaming
+# call ONE function: the 12 tracers of a transport model that apply the same
+# flux template share one compiled body.
+#
+# The function is `Base.@constprop :none` and every argument is a run-time
+# value (a local, never a literal the caller could propagate), so inference
+# runs once per function rather than once per call site. The arithmetic, its
+# operands and its order are the inlined body's, so values are bit-identical;
+# a call in a conditional arm is still evaluated only when the arm is taken.
+
+# Replace each literal-position tab read `_cggrpG[pos]` in `ex` by a local
+# read once in the current geometry sink (as `_cg_tabh!` does), so the body
+# names its tables by parameter, not by their position in this function's tab
+# groups.
+function _cg_hoist_grprefs!(ctx::_CGFunction, ex)
+    ex isa Expr || return ex
+    if ex.head === :ref && length(ex.args) == 2 && ex.args[1] isa Symbol &&
+            startswith(String(ex.args[1]::Symbol), "_cggrp") && ex.args[2] isa Integer
+        key = (:grpref, ex.args[1], ex.args[2])
+        got = get(ctx.nest.memo, key, nothing)
+        got === nothing || return got
+        s = _cg_name(ctx, "tb")
+        push!(ctx.nest.sink, :(local $s = $ex))
+        ctx.nest.memo[key] = s
+        return s
+    end
+    for i in eachindex(ex.args)
+        ex.args[i] = _cg_hoist_grprefs!(ctx, ex.args[i])
+    end
+    return ex
+end
+
+# The passable outer names `ex` reads (`_cg_is_passable`, plus `u`/`p`/`t`
+# never: those are fixed parameters), in order of first occurrence, skipping
+# names `ex` binds itself.
+function _cg_free_ordered!(acc::Vector{Symbol}, seen::Set{Symbol}, ex, bound::Set{Symbol})
+    if ex isa Symbol
+        if !(ex in seen) && !(ex in bound) && _cg_is_passable(ex)
+            push!(seen, ex)
+            push!(acc, ex)
+        end
+    elseif ex isa Expr
+        for a in ex.args
+            _cg_free_ordered!(acc, seen, a, bound)
+        end
+    end
+    return acc
+end
+
+_cg_rename_syms(ex::Symbol, m::Dict{Symbol, Symbol}) = get(m, ex, ex)
+_cg_rename_syms(ex::Expr, m::Dict{Symbol, Symbol}) =
+    Expr(ex.head, Any[_cg_rename_syms(a, m) for a in ex.args]...)
+_cg_rename_syms(ex, ::Dict{Symbol, Symbol}) = ex
+
+# Mint (or reuse) the instance function for `body`; return its call.
+function _cg_instance_call!(ctx::_CGFunction, body)
+    body = _cg_hoist_grprefs!(ctx, body)
+    bound = _cg_collect_bound!(Set{Symbol}(), body)
+    free = _cg_free_ordered!(Symbol[], Set{Symbol}(), body, bound)
+    # Locals the body binds are renamed too, so two uses whose bodies differ
+    # only in the names the emitter minted for them read as the same text.
+    ren = Dict{Symbol, Symbol}()
+    for (i, s) in enumerate(free)
+        ren[s] = Symbol("_cga", i)
+    end
+    for s in sort!(collect(bound); by = string)
+        haskey(ren, s) || (ren[s] = Symbol("_cgl", length(ren) + 1))
+    end
+    canon = _cg_rename_syms(body, ren)
+    key = string(canon)
+    args = Any[:u, :p, :t, free...]
+    got = get(ctx.instfns, key, nothing)
+    if got !== nothing
+        name, at, def = got
+        if at <= length(ctx.helpers) && ctx.helpers[at] === def
+            _tally_cascade!(:cg_instance_shared)
+            return Expr(:call, name, args...)
+        end
+    end
+    ln = LineNumberNode(0, Symbol("ess-template-instance"))
+    stmts = Any[Expr(:meta, :no_constprop)]
+    _cg_reads_sym(canon, :_cgT) && push!(stmts, :(local _cgT = _rhs_value_type(u, p, t)))
+    push!(stmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $canon)))
+    name = _cg_name(ctx, "hi")
+    params = Any[:u, :p, :t, (Symbol("_cga", i) for i in eachindex(free))...]
+    fdef = Expr(:function, Expr(:call, name, params...), Expr(:block, stmts...))
+    def = Expr(:macrocall, Symbol("@noinline"), ln, fdef)
+    push!(ctx.helpers, def)
+    ctx.instfns[key] = (name, length(ctx.helpers), def)
+    _tally_cascade!(:cg_instance_fn)
+    return Expr(:call, name, args...)
+end
+
+_cg_reads_sym(ex::Symbol, s::Symbol) = ex === s
+_cg_reads_sym(ex::Expr, s::Symbol) = any(a -> _cg_reads_sym(a, s), ex.args)
+_cg_reads_sym(ex, ::Symbol) = false
 
 # ---- Op application -----------------------------------------------------------
 #
@@ -2337,12 +2449,22 @@ Base.deepcopy_internal(f::_CGSubFn, ::IdDict) = f
     length(params) == var"##n" ||
         error("codegen: by-value sub-function $(var"##id") takes $(length(params)) arguments, called with $(var"##n")")
     args = Symbol("##args")
+    body = def.args[2]
+    # A `meta` heading the definition's body (a template-instance function's
+    # `no_constprop`, `_cg_instance_call!`) must head the method's body to
+    # take effect, so it moves up with `noinline`.
+    metas = Any[Expr(:meta, :noinline)]
+    if body isa Expr && body.head === :block && !isempty(body.args) &&
+            body.args[1] isa Expr && (body.args[1]::Expr).head === :meta
+        push!(metas, body.args[1])
+        body = Expr(:block, body.args[2:end]...)
+    end
     return Expr(
         :block,
         # Compiled on its own, as the inner definition it replaces would be.
-        Expr(:meta, :noinline),
+        metas...,
         Any[:($(params[i]) = @inbounds $args[$i]) for i in 1:var"##n"]...,
-        def.args[2],
+        body,
     )
 end
 
