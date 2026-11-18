@@ -597,11 +597,9 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
         Dict{String, DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
     end
 
-    # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
-    # Track-A parameterizations migrate to AST expressions;
-    # Track-B state-mutating schemes route through the discretization
-    # RFC's named schemes (`docs/rfcs/closed-function-registry.md` §6).
-    # A document carrying one is refused.
+    # The format has no top-level `operators` block (esm-spec §9 closure;
+    # `docs/content/rfcs/closed-function-registry.md` §6). A document carrying
+    # one is refused.
     if _raw_get(data, "operators", nothing) !== nothing
         throw(
             ParseError(
@@ -951,15 +949,12 @@ end
 
 Coerce a reaction system's `subsystems` block (schema §4.7: each entry is
 `oneOf [ReactionSystem, SubsystemRef]`). Recurses through
-[`coerce_reaction_system`](@ref), so a hierarchy of any depth survives — it used
-to be dropped wholesale, silently flattening every reaction-system tree to its
-root at load.
+[`coerce_reaction_system`](@ref), so a hierarchy of any depth survives.
 
 The `{"ref": …}` arm is REJECTED rather than skipped. `ReactionSystem.subsystems`
 is typed `OrderedDict{String,ReactionSystem}` and has no unresolved-ref arm the
 way `Model.subsystems` does (`SubsystemNode`), and `resolve_subsystem_refs!`
-walks models only — so accepting one could only mean dropping it again, which
-is the defect this function exists to close. An explicit rejection says so.
+walks models only — so accepting one could only mean silently dropping it.
 """
 function _coerce_reaction_system_subsystems(raw)::OrderedDict{String, ReactionSystem}
     out = OrderedDict{String, ReactionSystem}()

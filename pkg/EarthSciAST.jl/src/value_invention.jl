@@ -672,8 +672,8 @@ function _vi_join_column(ctx::_ViCtx, name::String)
 end
 
 # The key-equality match pairs of a bin-equality gate, as the drive index for
-# `_vi_enumerate_join`, or `nothing` (the gate then filters the full product as
-# before). Built only where the driven walk provably visits a subset of what
+# `_vi_enumerate_join`, or `nothing` (the gate then filters the full product).
+# Built only where the driven walk provably visits a subset of what
 # the product visits and skips only tuples the gate rejects: both gated ranges
 # are interval or categorical (their values are the positions `1:n`), and each
 # buffer holds every one of those positions, so the product would never have
