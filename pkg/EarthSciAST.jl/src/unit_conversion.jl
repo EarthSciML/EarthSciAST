@@ -27,11 +27,22 @@
 # disagreement here is a disagreement about the numbers the model integrates.
 # ============================================================================
 
-"""A `unit_conversion` that cannot be parsed or applied."""
+"""
+    UnitConversionError <: EarthSciASTError
+
+A `unit_conversion` that cannot be parsed or applied. Fields: `code`
+(`unit_error`, the code TypeScript's `UnitConversionError` carries) and
+`message`.
+
+    UnitConversionError(message)
+"""
 struct UnitConversionError <: EarthSciASTError
-    msg::String
+    code::String
+    message::String
 end
-Base.showerror(io::IO, e::UnitConversionError) = print(io, e.msg)
+UnitConversionError(message::AbstractString) =
+    UnitConversionError(ERROR_CODES.UNIT_ERROR, String(message))
+Base.showerror(io::IO, e::UnitConversionError) = print(io, e.message)
 
 """
     parse_unit_conversion(raw; variable_name) -> Nothing | Float64 | ASTExpr

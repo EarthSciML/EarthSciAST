@@ -296,7 +296,7 @@ shared traversal.
 # `output_idx` axis names, an integral's `int_var`). These are node-local
 # binders, not references to enclosing-scope variables.
 #
-# NOT the same set as validate.jl's `_bound_index_symbols`, deliberately: that
+# NOT the same set as validation/references.jl's `_bound_index_symbols`, deliberately: that
 # checker additionally credits subscript-position index names
 # (`index(u, i+1)`) and `bindings` KEYS (template formal parameters — the table's `binds_scope`
 # flag) into reference-check scope, because validation answers "could this

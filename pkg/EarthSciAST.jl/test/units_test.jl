@@ -1303,4 +1303,87 @@ using Unitful
         @test !isempty(found)
     end
 
+
+    @testset "every unit check site is judged as an error" begin
+        E = EarthSciAST.ASTExpr
+        MV, U, P = EarthSciAST.ModelVariable, EarthSciAST.UnknownVariable, EarthSciAST.ParameterVariable
+        md = EarthSciAST.Metadata("unit-sites")
+        unit_errors(file) = sort!(
+            [
+                (e.error_type, e.path) for e in EarthSciAST.validate_structural(file)
+                    if startswith(e.error_type, "unit_")
+            ]
+        )
+        sum_mk = OpExpr("+", E[VarExpr("x"), VarExpr("y")])   # m + kg
+        badconst = OpExpr("const", E[]; value = 2.0, units = "not_a_unit")
+
+        # Initialization equations: the two sides, and a mismatch inside one.
+        m = EarthSciAST.Model(
+            Dict(
+                "x" => MV(U; units = "m", default = 1.0),
+                "y" => MV(P; units = "kg", default = 1.0),
+                "z" => MV(P; units = "m", default = 1.0),
+                "w" => MV(
+                    P; units = "m", default = 1.0,
+                    update = [EarthSciAST.ParameterUpdate("condition"; when = OpExpr(">", E[VarExpr("x"), NumExpr(0.0)]), expression = OpExpr("*", E[VarExpr("z"), badconst]))]
+                ),
+            ),
+            [EarthSciAST.Equation(OpExpr("D", E[VarExpr("x")]; wrt = "t"), OpExpr("*", E[NumExpr(0.1), VarExpr("z")]))];
+            initialization_equations = [
+                EarthSciAST.Equation(VarExpr("x"), VarExpr("y")),
+                EarthSciAST.Equation(VarExpr("z"), sum_mk),
+            ]
+        )
+        f = EarthSciAST.EsmFile("2.3.0", md; models = Dict("M" => m))
+        @test unit_errors(f) == [
+            ("unit_inconsistency", "/models/M/initialization_equations/0"),
+            ("unit_inconsistency", "/models/M/initialization_equations/1"),
+            ("unit_parse_error", "/models/M/variables/w/update/expression"),
+        ]
+
+        # A reaction system: constraint equations and the inside of a rate.
+        rs = ReactionSystem(
+            [Species("A"; units = "mol/m^3")],
+            [Reaction(Dict("A" => 1), Dict{String, Int}(), OpExpr("+", E[VarExpr("k"), VarExpr("A")]))];
+            parameters = [Parameter("k", 1.0; units = "1/s")],
+            constraint_equations = [EarthSciAST.Equation(VarExpr("A"), VarExpr("k"))]
+        )
+        f = EarthSciAST.EsmFile("2.3.0", md; reaction_systems = Dict("R" => rs))
+        @test unit_errors(f) == [
+            ("unit_inconsistency", "/reaction_systems/R/constraint_equations/0"),
+            ("unit_inconsistency", "/reaction_systems/R/reactions/0"),
+        ]
+
+        # The same unit spelled two ways is not a default_units mismatch, but a
+        # Kelvin unit against an affine Celsius default is.
+        same(u, du) = EarthSciAST.EsmFile(
+            "2.3.0", md; models = Dict(
+                "M" => EarthSciAST.Model(
+                    Dict("e" => MV(P; units = u, default_units = du, default = 1.0)), EarthSciAST.Equation[]
+                )
+            )
+        )
+        @test isempty(unit_errors(same("J", "N*m")))
+        @test unit_errors(same("K", "degC")) == [("unit_inconsistency", "/models/M/variables/e")]
+    end
+
+    @testset "the independent variable is the document's" begin
+        E = EarthSciAST.ASTExpr
+        MV, U = EarthSciAST.ModelVariable, EarthSciAST.UnknownVariable
+        # `x [m] = tau` with `tau` the independent variable (seconds) is a
+        # mismatch; with `t` the independent variable, `tau` is undeclared.
+        m = EarthSciAST.Model(
+            Dict("x" => MV(U; units = "m", default = 1.0)),
+            [EarthSciAST.Equation(VarExpr("x"), VarExpr("tau"))]
+        )
+        md = EarthSciAST.Metadata("indep")
+        found(dom) = [
+            e.path for e in EarthSciAST.validate_structural(
+                    EarthSciAST.EsmFile("2.3.0", md; models = Dict("M" => m), domain = dom)
+                ) if e.error_type == "unit_inconsistency"
+        ]
+        @test found(EarthSciAST.Domain(; independent_variable = "tau")) == ["/models/M/variables/x"]
+        @test isempty(found(nothing))
+    end
+
 end

@@ -18,7 +18,7 @@ using JSON3
         # The schema's `$id` is
         # https://earthsciml.org/schemas/esm/<version>/esm.schema.json — the
         # single source of truth TypeScript, Go and Rust all pin to. Julia's
-        # constant is a literal (it is needed before validate.jl is included),
+        # constant is a literal (it is needed before src/validation/ is included),
         # so this test is what keeps it from hand-drifting.
         schema_path = joinpath(pkgdir(EarthSciAST), "data", "esm-schema.json")
         @test isfile(schema_path)

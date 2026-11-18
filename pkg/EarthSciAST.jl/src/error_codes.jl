@@ -41,7 +41,7 @@ julia> length(ERROR_CODES)   # how many codes this binding knows
 ```
 """
 const ERROR_CODES = (
-    # ── Structural validation (validate.jl; the `error_type` of a
+    # ── Structural validation (src/validation/; the `error_type` of a
     #    `StructuralError`, pinned by tests/invalid/expected_errors.json) ────
     ARRAY_SHAPE_MISMATCH = "array_shape_mismatch",
     # esm-spec §6.6.5: an assertion whose form does not match the declared rank of
@@ -163,6 +163,8 @@ const ERROR_CODES = (
     # key that matches no declared name under the override-key rules.
     UNKNOWN_OVERRIDE_KEY = "unknown_override_key",
     UNRESOLVED_SCOPED_REF = "unresolved_scoped_ref",
+    # A coupling event affect target that resolves to no variable (validation/references.jl).
+    UNRESOLVED_AFFECT_TARGET = "unresolved_affect_target",
 
     # ── Units (units.jl §4.8.4). Both are HARD errors: `UNIT_INCONSISTENCY`
     #    is a PROVABLE dimensional mismatch, `UNIT_PARSE_ERROR` a declared
@@ -268,6 +270,14 @@ const ERROR_CODES = (
     METAPARAMETER_UNBOUND = "metaparameter_unbound",
     METAPARAMETER_TYPE_ERROR = "metaparameter_type_error",
     METAPARAMETER_NAME_CONFLICT = "metaparameter_name_conflict",
+
+    # ── A document that fails the schema at load (`SchemaValidationError`;
+    #    the code TypeScript's `SchemaValidationError` carries). ─────────────
+    SCHEMA_VALIDATION_ERROR = "schema_validation_error",
+
+    # ── A data-source `unit_conversion` that cannot be parsed or applied
+    #    (`UnitConversionError`; the code TypeScript's carries). ─────────────
+    UNIT_ERROR = "unit_error",
 
     # ── Coupling-library imports (esm-spec §10.9–§10.11;
     #    coupling_imports.jl). ──────────────────────────────────────────────

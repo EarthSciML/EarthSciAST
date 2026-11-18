@@ -122,13 +122,11 @@ function _check_variable_bounds!(
             )
         end
         if var.lb isa Real && var.ub isa Real && var.lb > var.ub
-            push!(
-                errors, StructuralError(
-                    vpointer,
-                    "'$vname' has lb $(var.lb) greater than ub $(var.ub)",
-                    ERROR_CODES.VARIABLE_BOUNDS_INVERTED,
-                    Dict{String, Any}("variable" => vname, "lb" => var.lb, "ub" => var.ub)
-                )
+            _report!(
+                errors, ERROR_CODES.VARIABLE_BOUNDS_INVERTED,
+                vpointer,
+                "'$vname' has lb $(var.lb) greater than ub $(var.ub)",
+                Dict{String, Any}("variable" => vname, "lb" => var.lb, "ub" => var.ub)
             )
         end
     end
@@ -147,13 +145,11 @@ function _check_bound_reference!(
     # Rule 1: the reference resolves as an expression's free variable would.
     target = g.resolve(scoped_path, ref)
     if target === nothing
-        push!(
-            errors, StructuralError(
-                pointer,
-                "Variable \"$ref\" referenced as the $field of '$vname' but not declared",
-                ERROR_CODES.UNDEFINED_VARIABLE,
-                Dict{String, Any}("variable" => ref, "bound" => field)
-            )
+        _report!(
+            errors, ERROR_CODES.UNDEFINED_VARIABLE,
+            pointer,
+            "Variable \"$ref\" referenced as the $field of '$vname' but not declared",
+            Dict{String, Any}("variable" => ref, "bound" => field)
         )
         return
     end
@@ -165,14 +161,12 @@ function _check_bound_reference!(
     ref_shape = something(_declared_shape_of(file, target), String[])
     if !isempty(ref_shape) && ref_shape != own_shape
         show_shape(s) = isempty(s) ? "(scalar)" : "[" * join(s, ", ") * "]"
-        push!(
-            errors, StructuralError(
-                pointer,
-                "The $field of '$vname' references '$ref', shaped $(show_shape(ref_shape)); " *
-                    "a bound must be scalar or the bounded variable's shape $(show_shape(own_shape))",
-                ERROR_CODES.VARIABLE_BOUND_SHAPE_MISMATCH,
-                details
-            )
+        _report!(
+            errors, ERROR_CODES.VARIABLE_BOUND_SHAPE_MISMATCH,
+            pointer,
+            "The $field of '$vname' references '$ref', shaped $(show_shape(ref_shape)); " *
+                "a bound must be scalar or the bounded variable's shape $(show_shape(own_shape))",
+            details
         )
     end
 
@@ -185,10 +179,11 @@ function _check_bound_reference!(
         "The $field of '$vname' refers to '$vname' itself" :
         "The $field of '$vname' refers to '$ref', whose definition depends on " *
         "'$vname' ($(join(short.(chain), " -> ")))"
-    push!(
-        errors, StructuralError(
-            pointer, message, ERROR_CODES.VARIABLE_BOUND_CIRCULAR, details
-        )
+    _report!(
+        errors, ERROR_CODES.VARIABLE_BOUND_CIRCULAR,
+        pointer,
+        message,
+        details
     )
     return
 end

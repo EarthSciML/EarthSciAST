@@ -149,18 +149,23 @@ transforms are exempt: `conversion_factor` declares the conversion explicitly;
 equivalence at the mapping site (units are still validated elsewhere).
 """
 function _check_variable_map_units(file::EsmFile)
-    isempty(file.coupling) && return
     for entry in file.coupling
-        entry isa CouplingVariableMap || continue
-        entry.transform == "identity" || continue
-        src_units = _lookup_variable_units(file, entry.from)
-        tgt_units = _lookup_variable_units(file, entry.to)
-        (src_units === nothing || tgt_units === nothing) && continue
-        if src_units != tgt_units
-            throw(DomainUnitMismatchError(entry.from, src_units, tgt_units))
-        end
+        conflict = _variable_map_unit_conflict(file, entry)
+        conflict === nothing || throw(DomainUnitMismatchError(entry.from, conflict...))
     end
     return
+end
+
+# The `(from_units, to_units)` of an `identity` `variable_map` entry whose two
+# endpoints both declare non-empty units that differ, else `nothing`. The one
+# statement of the esm-spec §4.7.6 rule, read by flatten and by `validate`.
+function _variable_map_unit_conflict(file::EsmFile, entry)
+    (entry isa CouplingVariableMap && entry.transform == "identity") || return nothing
+    src_units = _lookup_variable_units(file, entry.from)
+    tgt_units = _lookup_variable_units(file, entry.to)
+    (src_units === nothing || tgt_units === nothing) && return nothing
+    (isempty(src_units) || isempty(tgt_units) || src_units == tgt_units) && return nothing
+    return (src_units, tgt_units)
 end
 
 """

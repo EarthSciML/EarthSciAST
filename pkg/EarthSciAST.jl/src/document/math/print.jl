@@ -34,7 +34,7 @@ using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, Sym, is_e, is_formula, is_id_char, i
     keys_sorted, name_ok, pieces, seg_ok, split_dots, sub_parts, num_ok
 
 # The package the document module sits in: its unit grammar reads a units
-# string's factors (`factors_of`).
+# string's factors (`factors_of`) and spells them.
 const HOST = parentmodule(parentmodule(@__MODULE__))
 
 kw(k::Kw) = TKw(k)
@@ -443,34 +443,12 @@ does not parse): the parse's factors normalized per side (`Esm.Units.norm2`),
 positive exponents first."""
 function factors_of(u::AbstractString)
     isempty(u) && return Factor[]
-    toks = HOST._canon_lex(collect(HOST._normalize_unit_string(u)))
-    toks === nothing && return Factor[]
-    p = HOST._CanonParser(toks, 1)
-    fs = try
-        f = HOST._cp_unit!(p)
-        p.i == length(toks) + 1 || return Factor[]
-        f
-    catch e
-        e isa HOST._CanonFail && return Factor[]
-        rethrow()
-    end
-    num = HOST._canon_side(filter(f -> f[2] > 0, fs))
-    den = HOST._canon_side(filter(f -> !(f[2] > 0), fs))
-    return Factor[(String(s), Rational{BigInt}(q)) for (s, q) in vcat(num, den)]
+    l = HOST._canonical_unit_factors(u)
+    return l === nothing ? Factor[] : l
 end
 
 """`Esm.Units.spell`: the canonical spelling of a factor list."""
-function spell_unit_factors(l)
-    num = [HOST._canon_factor((s, q)) for (s, q) in l if q > 0]
-    den = [HOST._canon_factor((s, q)) for (s, q) in l if !(q > 0)]
-    out = isempty(num) ? "1" : join(num, "*")
-    if length(den) == 1
-        out *= "/" * den[1]
-    elseif length(den) > 1
-        out *= "/(" * join(den, "*") * ")"
-    end
-    return out
-end
+spell_unit_factors(l) = HOST._spell_unit_factors(l)
 
 """`Math.unitsOK`: the units of a quantity print typeset."""
 function units_ok(sf::Sf, u::AbstractString)

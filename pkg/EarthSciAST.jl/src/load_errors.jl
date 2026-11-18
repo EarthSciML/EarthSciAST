@@ -5,7 +5,8 @@
 
 Supertype of the errors a load raises about the document it is reading:
 [`ParseError`](@ref), [`ExpressionTemplateError`](@ref),
-[`SubsystemRefError`](@ref) and [`EnumLoweringError`](@ref). Each subtype leads with the same five fields, in
+[`SubsystemRefError`](@ref), [`EnumLoweringError`](@ref) and
+[`SchemaValidationError`](@ref). Each subtype leads with the same five fields, in
 this order, and puts anything of its own after them:
 
 | Field | Type | Meaning |

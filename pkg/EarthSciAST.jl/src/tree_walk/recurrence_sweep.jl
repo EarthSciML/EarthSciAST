@@ -114,8 +114,9 @@ function _collect_self_read_args!(out::Vector{Vector{ASTExpr}}, e::ASTExpr, name
 end
 
 # The recurrence axis of `name`'s definition `def` (a `faq` whose output indices
-# are `idx_names`), decided the way the validator decides it (recurrence.jl) but
-# against the RESOLVED ranges the build holds, which prove at least as much. A
+# are `idx_names`): each self-read through the validator's own lag analysis
+# (`_recurrence_read_lag`, recurrence.jl), against the RESOLVED ranges the build
+# holds, which prove at least as much. A
 # document that skipped `validate()` still cannot reach the sweep with a
 # self-read that is not well founded: it is refused here with the validator's
 # code.
@@ -155,58 +156,24 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     max_lag = 0
     lag_proven = true
     for args in reads
-        length(args) == length(idx_names) ||
-            bad(
-            "a causal self-read supplies $(length(args)) indices but the frame " *
-                "has $(length(idx_names)) axes"
+        lag = _recurrence_read_lag(
+            args, idx_names, env; member_sym = RECURRENCE_MEMBER_SYM
         )
-        lagged = 0
-        for (d, arg) in enumerate(args)
-            # The member axis of a stacked recurrence group (esm-spec §4.3.1.2,
-            # recurrence_group.jl): a read SELECTS a member with a constant —
-            # the one non-identity index admitted off the recurrence axis.
-            if idx_names[d] == RECURRENCE_MEMBER_SYM
-                arg isa IntExpr && continue
-                bad("a read of the stacked recurrence group does not select a member with a constant")
-            end
-            aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
-            aff === nothing &&
-                bad(
-                "index $(d - 1) of a causal self-read is not affine in its frame " *
-                    "symbol '$(idx_names[d])'"
-            )
-            coef, konst = aff
-            coef == 1 ||
-                bad(
-                "index $(d - 1) of a causal self-read carries its frame symbol with " *
-                    "coefficient $coef, not 1"
-            )
-            if konst !== nothing
-                lag_lo, lag_hi = -konst[2], -konst[1]
-                (lag_lo == 0 && lag_hi == 0) && continue
-                lag_hi <= 0 &&
-                    bad(
-                    "a causal self-read names the cell being written, or a later " *
-                        "one, on axis '$(idx_names[d])'"
-                )
-                lag_proven &= lag_lo >= 1
-                max_lag = max(max_lag, lag_hi)
-            else
-                lag_proven = false
-            end
-            lagged == 0 || bad("a causal self-read is offset on more than one axis")
-            lagged = d
-        end
+        lag isa _LagDefect && throw(
+            TreeWalkError(ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED, _lag_defect_message(lag, name))
+        )
+        lag_proven &= lag.proven
+        max_lag = max(max_lag, lag.lag_hi)
         # A stacked group's same-cell read of an EARLIER member (esm-spec
         # §4.3.1.2 rule 1): published in within-cell order, so the fail-closed
         # read admits it exactly when that member precedes this one.
-        lagged == 0 && RECURRENCE_MEMBER_SYM in idx_names && continue
-        lagged == 0 && bad("a causal self-read is at the same cell on every axis")
-        axis == 0 && (axis = lagged)
-        axis == lagged ||
+        lag.axis == 0 && RECURRENCE_MEMBER_SYM in idx_names && continue
+        lag.axis == 0 && bad("a causal self-read is at the same cell on every axis")
+        axis == 0 && (axis = lag.axis)
+        axis == lag.axis ||
             bad(
             "the causal self-reads disagree on the recurrence axis " *
-                "('$(idx_names[axis])' and '$(idx_names[lagged])')"
+                "('$(idx_names[axis])' and '$(idx_names[lag.axis])')"
         )
     end
     return axis, max_lag, lag_proven
