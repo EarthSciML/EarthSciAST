@@ -2483,6 +2483,54 @@ end
 # reference, as explicit arguments — it captures nothing, so the RHS stays
 # allocation-free. Kernels that decline stay on their existing runners
 # (`covered[j] == false`). Returns `nothing` when no kernel could be emitted.
+# How far a generated function's emission state reached before one kernel (or
+# row group) began: its prologue, its invariant registrations, its split
+# helpers, its node count and shared-prelude read count.
+struct _CGMark
+    nprologue::Int
+    ninvlog::Int
+    nhelpers::Int
+    nodes::Int
+    fscratch::Int
+end
+_cg_mark(ctx::_CGCtx) = _CGMark(
+    length(ctx.prologue), length(ctx.invlog), length(ctx.helpers), ctx.nodes, ctx.fscratch
+)
+
+# Take the function's emission state back to `m`: a declined kernel's partial
+# prologue statements, its invariant registrations (a later kernel sharing
+# that sub-kernel would otherwise reference rolled-back locals), its split
+# helpers and its node count.
+function _cg_rollback!(ctx::_CGCtx, m::_CGMark)
+    resize!(ctx.prologue, m.nprologue)
+    _cg_prolog_rollback!(ctx, m.nprologue)
+    for i in length(ctx.invlog):-1:(m.ninvlog + 1)
+        delete!(ctx.invdone, ctx.invlog[i])
+    end
+    resize!(ctx.invlog, m.ninvlog)
+    resize!(ctx.helpers, m.nhelpers)
+    ctx.nodes = m.nodes
+    ctx.fscratch = m.fscratch
+    return nothing
+end
+
+# One kernel's emission as a transaction: `emit()`'s loop nest with its
+# emitted-node cost and whether it read the shared prelude, or — when it
+# declines — the `_Decline`, with every piece of state it added taken back.
+# The helper dedup scope is the one kernel (see the field doc).
+function _cg_transaction(emit, ctx::_CGCtx)
+    m = _cg_mark(ctx)
+    empty!(ctx.helper_dedup)
+    try
+        lx = emit()
+        return (lx, ctx.nodes - m.nodes, ctx.fscratch > m.fscratch)
+    catch err
+        err isa _Decline || rethrow()
+        _cg_rollback!(ctx, m)
+        return err::_Decline
+    end
+end
+
 function _build_codegen_rhs(
         acc_kernels::AbstractVector{_AccKernel};
         budget::Int = _codegen_node_budget(),
@@ -2502,66 +2550,34 @@ function _build_codegen_rhs(
     for (j, K) in enumerate(acc_kernels)
         if haskey(groups, j)
             js = groups[j]
-            nprologue = length(ctx.prologue)
-            ninvlog = length(ctx.invlog)
-            nhelpers = length(ctx.helpers)
-            nodes0 = ctx.nodes
-            fscratch0 = ctx.fscratch
-            empty!(ctx.helper_dedup)
-            try
-                lx = _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
-                push!(kloops, (lx, ctx.nodes - nodes0))
+            r = _cg_transaction(ctx) do
+                _cg_emit_rowgroup!(ctx, _AccKernel[acc_kernels[m] for m in js])
+            end
+            if !(r isa _Decline)
+                lx, cost, fscratch = r
+                push!(kloops, (lx, cost))
                 for m in js
                     covered[m] = true
                     ingroup[m] = true
                     _tally_cascade!(:codegen_kernel)
                 end
                 _tally_cascade!(:cg_rowfused_group)
-                ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
-            catch err
-                err isa _Decline || rethrow()
-                resize!(ctx.prologue, nprologue)
-                _cg_prolog_rollback!(ctx, nprologue)
-                for i in length(ctx.invlog):-1:(ninvlog + 1)
-                    delete!(ctx.invdone, ctx.invlog[i])
-                end
-                resize!(ctx.invlog, ninvlog)
-                resize!(ctx.helpers, nhelpers)
-                ctx.nodes = nodes0
-                ctx.fscratch = fscratch0
+                fscratch && _tally_cascade!(:cg_foreign_scratch_emit)
             end
         end
         ingroup[j] && continue
-        # Snapshot for rollback: a mid-kernel decline must discard its partial
-        # prologue statements AND its invariant registrations (a later kernel
-        # sharing that sub-kernel would otherwise reference rolled-back locals).
-        nprologue = length(ctx.prologue)
-        ninvlog = length(ctx.invlog)
-        nhelpers = length(ctx.helpers)
-        nodes0 = ctx.nodes
-        fscratch0 = ctx.fscratch
-        empty!(ctx.helper_dedup)   # dedup scope = this kernel (see the field doc)
-        try
-            lx = _cg_emit_kernel!(ctx, K)
-            push!(kloops, (lx, ctx.nodes - nodes0))
+        r = _cg_transaction(() -> _cg_emit_kernel!(ctx, K), ctx)
+        if r isa _Decline
+            reasons[j] = r.reason
+            _tally_cascade!(Symbol("codegen_decline_", r.reason))
+        else
+            lx, cost, fscratch = r
+            push!(kloops, (lx, cost))
             covered[j] = true
             _tally_cascade!(:codegen_kernel)
-            # Shared-prelude read observability: this kernel
-            # compiled carrying at least one such read.
-            ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
-        catch err
-            err isa _Decline || rethrow()
-            resize!(ctx.prologue, nprologue)
-            _cg_prolog_rollback!(ctx, nprologue)
-            for i in length(ctx.invlog):-1:(ninvlog + 1)
-                delete!(ctx.invdone, ctx.invlog[i])
-            end
-            resize!(ctx.invlog, ninvlog)
-            resize!(ctx.helpers, nhelpers)     # discard this kernel's split helpers
-            ctx.nodes = nodes0
-            ctx.fscratch = fscratch0
-            reasons[j] = err.reason
-            _tally_cascade!(Symbol("codegen_decline_", err.reason))
+            # Shared-prelude read observability: this kernel compiled carrying
+            # at least one such read.
+            fscratch && _tally_cascade!(:cg_foreign_scratch_emit)
         end
     end
     any(covered) || return nothing
