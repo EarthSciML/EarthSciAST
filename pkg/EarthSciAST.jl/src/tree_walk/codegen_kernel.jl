@@ -34,7 +34,7 @@
 # or descriptor, a foreign CSE scratch (except the build's own shared
 # scalar-prelude cache, which since ess-cgfsc is emitted as the interpreter's
 # `_cse_read`; see the tier note below), an oversized spine —
-# declines THAT kernel silently (`_CodegenDecline`); the kernel keeps the
+# declines THAT kernel silently (`_Decline`); the kernel keeps the
 # per-cell interpreter (`_run_acc_kernel!`, eltype-generic). Declines are
 # counted per reason in the build's cascade tally (`:codegen_kernel` /
 # `:codegen_decline_<reason>`, `_tally_cascade!`).
@@ -67,23 +67,9 @@ _codegen_disabled() = !_compiler_plan_now().codegen
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
 
-# Emitted-node size of a kernel: its spine, both CSE recipe tiers, and
-# (recursively) every template sub-kernel it inlines. A sub-kernel shared by
-# several parents is counted once per parent.
+# Emitted-node size of a tree: a node shared by several parents is counted
+# once per parent, as the emitter writes it once per use.
 _cg_node_tree_size(n::_Node) = 1 + sum(_cg_node_tree_size, n.children; init = 0)
-function _cg_kernel_node_size(K::_AccKernel)
-    s = _cg_node_tree_size(K.spine)
-    for r in K.cse.recipes
-        s += _cg_node_tree_size(r)
-    end
-    for r in K.cse.inv_recipes
-        s += _cg_node_tree_size(r)
-    end
-    for sub in K.subs
-        s += _cg_kernel_node_size(sub)
-    end
-    return s
-end
 
 # ---- Dual overflow tier (ess-dualfp) ----------------------------------------
 # Kernels the primary emission declines — in practice on the node BUDGET, which
@@ -160,11 +146,9 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 # kernel that later declines for another reason is not counted).
 _cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
-# Per-kernel decline: the kernel keeps the per-cell interpreter runner.
-# Never an error — the tier is a pure optimization.
-struct _CodegenDecline <: EarthSciASTError
-    reason::Symbol
-end
+# A kernel the emitter cannot model declines through `_Decline` (compiler.jl);
+# the per-kernel transaction in `_build_codegen_rhs` catches it and the kernel
+# keeps its per-cell runner.
 
 # ---- Emission context (one per generated function) --------------------------
 mutable struct _CGCtx
@@ -273,7 +257,7 @@ _cg_grp_sym(g::Int) = Symbol("_cggrp", g)
 
 @inline function _cg_budget!(ctx::_CGCtx)
     ctx.nodes += 1
-    ctx.nodes > ctx.budget && throw(_CodegenDecline(:budget))
+    ctx.nodes > ctx.budget && _decline(:budget)
     return nothing
 end
 
@@ -735,7 +719,7 @@ function _cg_fetch(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc, key = nothing)
         ctx.tblread = true
         return :($(_cg_tabh!(ctx, a.arr))[$(_cg_tabh!(ctx, a.conn))[$addr]])
     end
-    throw(_CodegenDecline(:unsupported_desc))
+    return _decline(:unsupported_desc)
 end
 
 # Left-nested binary fold `((e1 op e2) op e3)…` — the interpreters' exact
@@ -816,7 +800,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
             ctx.fscratch += 1
             return :(_cse_read($(_cg_tab!(ctx, pl)), $(nd.idx), _cgT))
         end
-        throw(_CodegenDecline(:foreign_scratch))
+        _decline(:foreign_scratch)
     elseif k === _NK_REDUCE
         # `s = K.zerobar; for m in 1:cnt; s += ev(body @ n=m); end` — the
         # `_eval_acc` REDUCE arm verbatim (the ⊕ is always `+`, seeded from
@@ -824,7 +808,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         b = kc.K.bound
         cnt = b isa _FixedBound ? b.k :
             b isa _VarBound ? :($(_cg_tab!(ctx, b.valence))[$(kc.c)]) :
-            throw(_CodegenDecline(:unsupported_bound))
+            _decline(:unsupported_bound)
         s = _cg_name(ctx, "r")
         m = _cg_name(ctx, "m")
         inner = _CGKernCtx(
@@ -859,7 +843,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     elseif k === _NK_OP
         return _cg_emit_op(ctx, kc, nd)
     end
-    throw(_CodegenDecline(:unknown_kind))
+    return _decline(:unknown_kind, string(k))
 end
 
 # Affine reduction (`_NK_AREDUCE`) — `_eval_acc_areduce` as a loop nest: one
@@ -923,7 +907,7 @@ end
 # `K.subs` holds every transitive sub, nested-first).
 function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.invdone, S, nothing)
-    invsyms === nothing && throw(_CodegenDecline(:subcall_order))
+    invsyms === nothing && _decline(:subcall_order)
     ctx.subks[S] = true
     inner = _CGKernCtx(
         S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
@@ -989,7 +973,7 @@ function _cg_emit_op(ctx::_CGCtx, kc, nd::_Node)
     ch = nd.children
     s = get(_OP_SYM_INDEX, op, nothing)
     (s === nothing || s.shape === nothing || !(length(ch) in s.arity)) &&
-        throw(_CodegenDecline(:unsupported_op))
+        _decline(:unsupported_op, String(op))
     operands = Any[
         _op_arg_conditional(op, j) ? _cg_emit_region(ctx, kc, c) : _cg_emit(ctx, kc, c)
             for (j, c) in enumerate(ch)
@@ -2440,6 +2424,51 @@ end
 _cg_pack_fns(tabpack::Tuple, ::Nothing) = tabpack
 _cg_pack_fns(tabpack::Tuple, fns::Vector{Expr}) = (tabpack..., _cg_subfns(fns))
 
+"""
+    _cg_finish(ctx, args, stmts...; pre = (), by_value = nothing) -> (f, fns)
+
+The one epilogue of every generated function: hoist each tab group to its
+`_cggrpG` local, bind the value type `_cgT`, splice `pre`, the split helpers
+(`ctx.helpers`) and `stmts`, return `nothing`; then give the split helpers the
+transport this Julia supports (`_cg_split_transport`, `by_value` forcing one)
+and build the `RuntimeGeneratedFunction` over the signature `args`. `fns` goes
+to `_cg_tabpack`.
+"""
+function _cg_finish(ctx::_CGCtx, args::Tuple, stmts...; pre = (), by_value = nothing)
+    ngrp = length(ctx.tab_types)
+    body = Expr(
+        :block,
+        Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]...,
+        :(local _cgT = _rhs_value_type(u, p, t)),
+        pre...,
+        ctx.helpers...,
+        stmts...,
+        :(return nothing)
+    )
+    ex, fns = _cg_split_transport(Expr(:function, Expr(:tuple, args...), body), ngrp; by_value = by_value)
+    return RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex), fns
+end
+
+# The runtime `tabs` argument of a generated function: one HOMOGENEOUS container
+# per group, converted to the group's concrete element type (`Vector{Vector{Int}}`,
+# …), packed in a small tuple, plus the split helpers in the by-value transport.
+_cg_tabpack(ctx::_CGCtx, fns) =
+    _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), length(ctx.tab_types)), fns)
+
+# A state consumer `(K, ix, delta[, …])` taken into a generated section, as the
+# emitter reads it: the kernel, the descriptor it reads the section's value
+# through, the slot offset, whether the value is still stored, and the
+# consumer's invariant symbols (registered with the function's prologue).
+function _cg_consumer(ctx::_CGCtx, consumer, store::Bool = true)
+    consumer === nothing && return nothing
+    Kc, ix, delta = consumer[1], consumer[2], consumer[3]
+    _cg_note_nest!(ctx, Kc)
+    return (K = Kc, ix = ix, delta = delta, store = store, invsyms = _cg_inv!(ctx, Kc))
+end
+
+# The signature of a section's generated function.
+const _CG_SECTION_ARGS = (:du, :u, :p, :t, :tabs, :_cgci, :_cgnc)
+
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.
 function _cg_collect_syms!(acc::Set{Symbol}, ex)
@@ -2678,7 +2707,7 @@ function _build_codegen_rhs(
                 _tally_cascade!(:cg_rowfused_group)
                 ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
             catch err
-                err isa _CodegenDecline || rethrow()
+                err isa _Decline || rethrow()
                 resize!(ctx.prologue, nprologue)
                 _cg_prolog_rollback!(ctx, nprologue)
                 for i in length(ctx.invlog):-1:(ninvlog + 1)
@@ -2709,7 +2738,7 @@ function _build_codegen_rhs(
             # compiled carrying at least one such read.
             ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
         catch err
-            err isa _CodegenDecline || rethrow()
+            err isa _Decline || rethrow()
             resize!(ctx.prologue, nprologue)
             _cg_prolog_rollback!(ctx, nprologue)
             for i in length(ctx.invlog):-1:(ninvlog + 1)
@@ -2802,9 +2831,6 @@ function _build_codegen_rhs(
         end
     end
 
-    # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
-    # local (a handful of statements, not one per object).
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     # No `Base.Experimental.@aliasscope` here: on Julia 1.11 to 1.13 it tags
     # every load in the scope, not only `Const` ones, so it would let LLVM
     # move any load ahead of a store to the same element (JuliaLang/julia#63129),
@@ -2825,33 +2851,17 @@ function _build_codegen_rhs(
             callstmts...
         )
     )
-    body = Expr(
-        :block,
-        grpstmts...,
-        :(local _cgT = _rhs_value_type(u, p, t)),
-        # Intra-kernel split helpers (ess-iip-split): defined FIRST so the
-        # invariant prologue and every chunk sub-function can call them by
-        # name. Each is `@noinline`, params-only (captures nothing).
-        ctx.helpers...,
-        fndefs...,
-        kernels,
-        :(return nothing)
-    )
-    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
-    # By value, every sub-function becomes its own generated function, arriving
-    # in a tuple appended to `tabs` (`_cg_split_transport`).
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex
-    )
+    # The intra-kernel split helpers (ess-iip-split) come FIRST so the
+    # invariant prologue and every chunk sub-function can call them by name;
+    # each is `@noinline`, params-only (captures nothing). By value, every
+    # sub-function becomes its own generated function, arriving in a tuple
+    # appended to `tabs` (`_cg_split_transport`).
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, fndefs..., kernels)
     # Threaded cell axis: total covered cells + the global out-slot
     # disjointness verdict, both facts of the BUILD (the runtime chunk verdict
     # is `_sec_prep_threads!`'s).
     ncells, disjoint, work, rmw = _cg_covered_outs_disjoint(acc_kernels, covered)
-    # The runtime `tabs` argument: one HOMOGENEOUS container per group, converted
-    # to the group's concrete element type (`Vector{Vector{Int}}`, …), packed in a
-    # small tuple. `_cggrpG[pos]` then reads a concrete-element container.
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    tabpack = _cg_tabpack(ctx, fns)
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
 

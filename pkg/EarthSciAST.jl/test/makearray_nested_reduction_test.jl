@@ -295,7 +295,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         @test all(r -> r.kind === :equation, rows)
         @test all(r -> r.tier in (:affine, :array_contraction_codegen), rows)
         # The equation's own decline, before the split, heads every piece's.
-        @test all(r -> !isempty(r.declines) && r.declines[1].first === :affine, rows)
+        @test all(r -> !isempty(r.declines) && r.declines[1].tier === :affine, rows)
     end
 
     @testset "zero-allocation steady-state f!" begin

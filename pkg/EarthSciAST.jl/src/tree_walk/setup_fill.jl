@@ -126,27 +126,28 @@ function _compile_setup_fill(
     rec = _BuildRecord(_compiler_plan_now())
     return _with_build_record(rec) do
         try
-            se, pcs, aks, sfs, acs = _compile_derivative_equations(
+            ce = _compile_derivative_equations(
                 Equation[eq],
                 Dict{String, ASTExpr}(), avi, layout, const_arrays, pgather,
                 param_sym_set, n
             )
-            (isempty(se) && isempty(pcs)) || return nothing
+            (isempty(ce.scalar_entries) && isempty(ce.percell)) || return nothing
             tiers = Symbol[r.tier for r in rec.rules]
             (length(tiers) == 1 && tiers[1] in _SETUP_FILL_TIERS) || return nothing
-            merged, _ = _merge_acc_kernel_classes(aks)
+            merged, _ = _merge_acc_kernel_classes(ce.kernels)
             section = _make_kernel_section(merged)
             _section_interprets(section) && return nothing
             return _SetupFill(
-                box[1], box[2], n, section, sfs,
-                _make_contraction_section(acs), p, tiers[1]
+                box[1], box[2], n, section, ce.scan_folds,
+                _make_contraction_section(ce.contractions), p, tiers[1]
             )
         catch err
-            # Running out of memory or stack, or an interrupt, says nothing
-            # about whether this form serves the fill; everything else is a
-            # decline, and the caller's route reproduces the document's own
-            # value or error.
-            _is_resource_error(err) && rethrow()
+            # A document-level refusal (an `EarthSciASTError`, a strict
+            # compiler's refusal among them) is a decline, and the caller's
+            # route reproduces the document's own value or error. Running out
+            # of memory or stack, an interrupt, or a programming error says
+            # nothing about whether this form serves the fill, and propagates.
+            err isa EarthSciASTError || rethrow()
             return nothing
         end
     end

@@ -309,8 +309,7 @@ function _xla_record!(
         report.rules,
         CompilerRuleRecord(
             "the right-hand side", :rhs_program,
-            Symbol("xla_direct_", device),
-            Pair{Symbol, Symbol}[]
+            Symbol("xla_direct_", device)
         )
     )
     for (k, v) in stats

@@ -205,9 +205,8 @@ function _scan_consumer(slots::Vector{Int}, Ks::AbstractVector{_AccKernel}, nst:
 end
 
 # The consumers of the in-place build's observed scans: fold → `(Kc, ix,
-# delta, store)`. `levels` are the pending observed levels `(owner, cadence,
-# scalars, kernels, scans, contractions, recurrences)`, `owner` naming the
-# observed each fold fills; `Ks` the state kernels; `nst` the state length.
+# delta, store)`. `levels` are the pending observed levels (`_LevelParts`),
+# whose `owner` names the observed each fold fills; `Ks` the state kernels; `nst` the state length.
 # Only a scan of a level filled on every call takes a consumer, since the
 # consumer's `du` must be written on every call.
 #
@@ -222,8 +221,9 @@ function _scan_consumer_plan(
     )
     plan = IdDict{Any, Any}()
     _codegen_disabled() && return plan
-    for (li, (owner, cadence, _, kernels, scans, _, _)) in enumerate(levels)
-        cadence === :dynamic || continue
+    for (li, lv) in enumerate(levels)
+        owner, kernels, scans = lv.owner, lv.kernels, lv.scans
+        lv.cadence === :dynamic || continue
         for S in scans
             length(S.terms) == 1 || continue
             Kt = S.terms[1]
@@ -270,15 +270,7 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
             _cg_inv!(ctx, Sub)
         end
         invsyms = _cg_inv!(ctx, K)
-        cons = nothing
-        if consumer !== nothing
-            Kc, ix, delta, store = consumer
-            _cg_note_nest!(ctx, Kc)
-            cons = (
-                K = Kc, ix = ix, delta = delta, store = store,
-                invsyms = _cg_inv!(ctx, Kc),
-            )
-        end
+        cons = consumer === nothing ? nothing : _cg_consumer(ctx, consumer, consumer[4])
         ctx.scanmode = (
             acc = acc, a = av, b = bv, op = opsym, inclusive = S.inclusive,
             cons = cons,
@@ -301,13 +293,11 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
             end
         end
     catch err
-        err isa _CodegenDecline || rethrow()
+        err isa _Decline || rethrow()
         _tally_cascade!(Symbol(:scan_fused_decline_, err.reason))
         return nothing
     end
     ln = LineNumberNode(0, Symbol("ess-scan-fused"))
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     # No alias scope, as in the kernel section (JuliaLang/julia#63129). The
     # term reads no slot the scan writes (a level's `(ue, ue)` call included).
     run = Expr(
@@ -324,17 +314,8 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
             Expr(:macrocall, Symbol("@inbounds"), ln, blk)
         )
     )
-    body = Expr(
-        :block, grpstmts...,
-        :(local _cgT = _rhs_value_type(u, p, t)),
-        ctx.helpers...,
-        run,
-        :(return nothing)
-    )
-    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, run)
+    tabpack = _cg_tabpack(ctx, fns)
     nlanes = div(length(S.slots), S.len)
     _tally_cascade!(:scan_fused)
     if consumer !== nothing
@@ -470,18 +451,17 @@ _colscan_levels(S::_ScanFold, sh) =
 # The slot extents a level writes, and whether it writes slots not known here
 # (a contraction nest or a recurrence).
 function _level_write_extents(level)
-    _, _, scalars, kernels, scans, acs, recurs = level
     ext = Tuple{Int, Int}[]
-    for (slot, _) in scalars
+    for (slot, _) in level.scalars
         push!(ext, (slot, slot))
     end
-    for K in kernels
+    for K in level.kernels
         push!(ext, _cg_oln_extent(K.cells))
     end
-    for S in scans
+    for S in level.scans
         isempty(S.slots) || push!(ext, extrema(S.slots))
     end
-    return ext, !(isempty(acs) && isempty(recurs))
+    return ext, !(isempty(level.contractions) && isempty(level.recurrences))
 end
 
 # The consumer of column scan `S` (term kernel `K`, shape `sh`) among the state
@@ -519,7 +499,7 @@ function _colscan_consumer(
     # Slots the scan's own level writes in its kernel section, before the scan
     # (only from kernels that reach the scanned observed's slots).
     before = Set{Int}()
-    for K2 in levels[li][4]
+    for K2 in levels[li].kernels
         K2 === K && continue
         _scan_overlaps(_cg_oln_extent(K2.cells), lo - abs(S.kstride), hi + abs(S.kstride)) ||
             continue
@@ -618,13 +598,11 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
             $nest
         end
     catch err
-        err isa _CodegenDecline || rethrow()
+        err isa _Decline || rethrow()
         _tally_cascade!(Symbol(:scan_colscan_decline_, err.reason))
         return nothing
     end
     ln = LineNumberNode(0, Symbol("ess-scan-column"))
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     # No alias scope, as in the kernel section (JuliaLang/julia#63129): the
     # per-lane buffer is stored and read back level after level.
     run = Expr(
@@ -641,17 +619,8 @@ function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer 
             Expr(:macrocall, Symbol("@inbounds"), ln, blk)
         )
     )
-    body = Expr(
-        :block, grpstmts...,
-        :(local _cgT = _rhs_value_type(u, p, t)),
-        ctx.helpers...,
-        run,
-        :(return nothing)
-    )
-    ex = Expr(:function, Expr(:tuple, :du, :u, :p, :t, :tabs, :_cgci, :_cgnc), body)
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    f, fns = _cg_finish(ctx, _CG_SECTION_ARGS, run)
+    tabpack = _cg_tabpack(ctx, fns)
     _tally_cascade!(:scan_colscan)
     if consumer !== nothing
         _tally_cascade!(:scan_colscan_consumer)

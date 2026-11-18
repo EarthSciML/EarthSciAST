@@ -1046,6 +1046,8 @@ end
         @test code_of(e) == _PR.ERROR_CODES.COMPILER_REFUSED_RULE
         @test occursin("declined by the whole-array contraction tier", e.detail)
         @test occursin("takes no ragged contraction", e.detail)
+        # The nest's own reason is cited, in the decline vocabulary.
+        @test occursin("array_contraction: budget", e.detail)
         @test !occursin("declined by the affine", e.detail)
         @test occursin("per-cell build", e.detail)
         @test occursin(_PR._ONE_CELL_NOTE, e.detail)
@@ -1084,15 +1086,26 @@ end
                 Dict(k => (k == K ÷ 2 ? 7 : 0) for k in 1:K)
             ),
         ]
+        lhs_op = _PR.OpExpr(
+            "faq", _PR.ASTExpr[]; output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => Any[1, 1]), expr_body = lhs
+        )
+        scope = _PR._FaqScope(
+            Dict{String, _PR.ASTExpr}(), Dict("u" => ([1], [1])), Dict("u[1]" => 1),
+            Dict{String, Any}(), Dict{String, Any}(), Dict{Symbol, Int}(),
+            nothing, nothing, nothing, false, 0,
+            Tuple{Int, _PR._Node}[], _PR._AccKernel[], _PR._ScanFold[],
+            _PR._ArrayContraction[], _PR._Covered(1)
+        )
         diag(gates, n) = _PR._faq_diagnostic_cell(
-            _PR._PerCellProbe(), lhs, body;
-            idx_names = ["i"], range_iters = [[1]], contract_names = ["k"],
-            contract_ranges = [Any[1, n]], contract_const = [collect(1:n)],
-            rhs_zerobar = 0.0, agg_gates = gates, agg_filter = nothing,
-            resolved_obs = Dict{String, _PR.ASTExpr}(),
-            array_var_info = Dict("u" => ([1], [1])),
-            var_map = Dict("u[1]" => 1), const_registry = Dict{String, Any}(),
-            pgather = Dict{String, Any}(), param_sym_set = Dict{Symbol, Int}()
+            _PR._PerCellProbe(),
+            _PR._FaqEq(
+                _PR.Equation(lhs_op, body), lhs_op, lhs, ["i"], lhs_op.ranges, [[1]],
+                body, body, ["k"], [Any[1, n]],
+                Union{AbstractVector{Int}, Nothing}[collect(1:n)], "+", 0.0, gates,
+                nothing, "D(u)[i=1]", nothing
+            ),
+            scope
         )
         @test diag(nothing, 8) === :cell
         @test diag(nothing, K) === :part

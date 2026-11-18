@@ -405,7 +405,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
             _sc_sig!(S, c)
         end
     elseif k === _NK_CACHED
-        nd.payload === S.cache || throw(_CodegenDecline(:foreign_scratch))
+        nd.payload === S.cache || _decline(:foreign_scratch)
         lp = get(S.localpos, nd.idx, 0)
         if lp != 0
             push!(sig, 7, lp)
@@ -447,7 +447,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         end
     elseif k === _NK_LOOPVAR
         d = findfirst(r -> r === nd.payload, S.loops)
-        d === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
+        d === nothing && _decline(:loopvar_out_of_scope)
         push!(sig, 10, d)
     elseif k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
@@ -459,7 +459,7 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         _sc_sig!(S, nd.children[1])
         pop!(S.loops)
     else
-        throw(_CodegenDecline(:unknown_kind))
+        _decline(:unknown_kind, string(nd.kind))
     end
     return nothing
 end
@@ -516,7 +516,7 @@ function _sc_classes(
         try
             _sc_unit_sig!(S, U, rhs_list, prelude, ext)
         catch err
-            err isa _CodegenDecline || rethrow()
+            err isa _Decline || rethrow()
             push!(declined, ui)
             continue
         end
@@ -585,7 +585,7 @@ function _cg_count_axis(ctx::_CGCtx, kc::_CGUnitCtx, a::_Node, spec::_ContractLo
 end
 
 _cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
-    throw(_CodegenDecline(:lane_spec_on_scalar_spine))
+    _decline(:lane_spec_on_scalar_spine)
 
 # A repeated sub-tree (array_contraction.jl, "A repeated sub-tree computed
 # once"): a unit's node is keyed by its hole where it has one, since that is
@@ -656,7 +656,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
         return _cg_state_gather(ctx, kc, nd)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
-        s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
+        s === nothing && _decline(:loopvar_out_of_scope)
         return :(Float64($s))
     elseif k === _NK_CONTRACTION_LOOP
         # The range is part of the class signature (`_sc_sig!`), so its bounds
@@ -664,7 +664,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
         spec = nd.payload::_ContractLoop
         return _cg_contraction_loop(ctx, kc, nd, spec.lo, spec.step, spec.hi)
     end
-    throw(_CodegenDecline(:unknown_kind))
+    return _decline(:unknown_kind, string(nd.kind))
 end
 
 # One emitted item: a loop over a class's members running some of its
@@ -965,8 +965,6 @@ function _sc_build_gen(
         )
     end
     ln = LineNumberNode(0, Symbol("ess-scalar-codegen"))
-    ngrp = length(ctx.tab_types)
-    grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     # No alias scope, as in the kernel section. This function stores cache
     # slots and reads them back (a class in cache mode, a tier slot that reads
     # an earlier one), and inside `Base.Experimental.@aliasscope` Julia 1.11 to
@@ -974,21 +972,10 @@ function _sc_build_gen(
     # same element (JuliaLang/julia#63129), such as in the members loop here:
     # the read-back then sees the previous call's value.
     run = Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, loops...))
-    body = Expr(
-        :block, grpstmts...,
-        :(local _cgT = _rhs_value_type(u, p, t)),
-        ctx.geosink...,
-        ctx.helpers...,
-        run,
-        :(return nothing)
+    f, fns = _cg_finish(
+        ctx, (:du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), run; pre = ctx.geosink
     )
-    ex = Expr(
-        :function,
-        Expr(:tuple, :du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), body
-    )
-    ex, fns = _cg_split_transport(ex, ngrp)
-    f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
-    tabpack = _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp), fns)
+    tabpack = _cg_tabpack(ctx, fns)
     return _ScGen(f, tabpack)
 end
 
@@ -1079,7 +1066,7 @@ function _sc_program(
                     )
                     break
                 catch err
-                    err isa _CodegenDecline || rethrow()
+                    err isa _Decline || rethrow()
                     # Find the declining class by emitting each alone.
                     bad = findfirst(run) do it
                         try
@@ -1092,7 +1079,7 @@ function _sc_program(
                             )
                             false
                         catch e2
-                            e2 isa _CodegenDecline || rethrow()
+                            e2 isa _Decline || rethrow()
                             true
                         end
                     end
