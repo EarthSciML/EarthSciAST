@@ -74,8 +74,7 @@ end
 function _cai_run(doc)
     path = joinpath(mktempdir(), "doc.esm")
     write(path, JSON3.write(doc))
-    results = EarthSciAST.AssertionResult[]
-    EarthSciAST.run_file_tests!(results, path)
+    results = EarthSciAST.run_inline_tests(path; compiler = :mtk)
     @test length(results) == 1
     return only(results)
 end
