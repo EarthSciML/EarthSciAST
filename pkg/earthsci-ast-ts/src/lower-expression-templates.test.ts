@@ -528,7 +528,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
   })
 
   it('nested-derivative fixpoint converges across passes', () => {
-    // laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
+    // lap_xy -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D ->
     // stencil (pass 2). A produced body is re-scanned only in a subsequent pass.
     const out = lowerFixture('fixpoint_nested_deriv')
     expect(out.models.m.variables).toEqual(expandedVars('fixpoint_nested_deriv'))
@@ -541,7 +541,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
       ],
     })
     const exprJson = JSON.stringify(definingRhs(out.models.m, 'lap'))
-    expect(exprJson).not.toContain('laplacian')
+    expect(exprJson).not.toContain('lap_xy')
     expect(exprJson).not.toContain('"op":"D"')
   })
 
@@ -931,7 +931,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
   const lower = (name: string) => expandDocument(lowerExpressionTemplates(fixture(name))) as any
 
   it('constrained_match_scope: fires only where the shape constraint holds', () => {
-    // div(F_edge) rewritten (F over [edges]); div(F_cell) constraint-excluded,
+    // D(F_edge, wrt: x) rewritten (F over [edges]); D(F_cell, wrt: x) constraint-excluded,
     // survives as the un-lowered rewrite-target (loading is permissive).
     const out = lower('constrained_match_scope')
     expect(out.models).toEqual(golden('constrained_match_scope').models)
@@ -939,11 +939,11 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
       op: '*',
       args: ['inv_area', 'F_edge'],
     })
-    expect(definingRhs(out.models.m, 'div_cell')).toEqual({ op: 'div', args: ['F_cell'] })
+    expect(definingRhs(out.models.m, 'div_cell')).toEqual({ op: 'D', args: ['F_cell'], wrt: 'x' })
   })
 
   it('two_div_two_meshes: identical patterns routed by shape at equal priority', () => {
-    // Without `where`, the declaration-order tie-break would send BOTH div
+    // Without `where`, the declaration-order tie-break would send BOTH fv_div
     // nodes to fv_div_mesh_a. Constraints filter before selection, so each div
     // lowers by its own mesh's rule.
     const out = lower('two_div_two_meshes')
