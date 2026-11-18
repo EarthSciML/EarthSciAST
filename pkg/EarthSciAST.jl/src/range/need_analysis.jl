@@ -310,14 +310,11 @@ function _is_arrayish(ctx::_NeedCtx, e::ASTExpr)
         (e::VarExpr).name in ctx.arrays
     e isa OpExpr || return false
     o = e::OpExpr
-    (
-        o.op == "makearray" || (
-            _is_faq_op(o.op) && o.output_idx !== nothing &&
-                !isempty(o.output_idx)
-        )
-    ) && return true
-    o.op == "const" && return o.value isa AbstractVector
-    o.op == "index" && return false
+    kind = _index_target_kind(o)
+    kind === _IT_MAKEARRAY && return true
+    kind === _IT_FAQ && return o.output_idx !== nothing && !isempty(o.output_idx)
+    kind === _IT_CONST_ARRAY && return true
+    (kind === _IT_INDEX || o.op == "const") && return false
     return _anyof(a -> _is_arrayish(ctx, a), o.args)
 end
 
@@ -488,7 +485,8 @@ function _need_index!(
     end
     target isa OpExpr || return nothing
     o = target::OpExpr
-    if _is_faq_op(o.op) && o.expr_body !== nothing
+    kind = _index_target_kind(o)
+    if kind === _IT_FAQ && o.expr_body !== nothing
         outs = _output_idx_strings(o)
         rd = _ranges_dict(o)
         env2 = copy(env)
@@ -513,7 +511,7 @@ function _need_index!(
         o.filter === nothing || _need_walk!(ctx, o.filter, env2, anchors2, rule)
         return nothing
     end
-    if o.op == "makearray" && o.regions !== nothing && o.values !== nothing
+    if kind === _IT_MAKEARRAY && o.regions !== nothing && o.values !== nothing
         regions, values = o.regions, o.values
         boxes = Vector{Vector{UnitRange{Int}}}()
         ok = true
@@ -564,10 +562,8 @@ function _need_index!(
         end
         return nothing
     end
-    if o.op == "const"
-        return nothing
-    end
-    if o.op == "index"
+    (kind === _IT_CONST_ARRAY || o.op == "const") && return nothing
+    if kind === _IT_INDEX
         _need_walk!(ctx, o, env, anchors, rule)
         return nothing
     end

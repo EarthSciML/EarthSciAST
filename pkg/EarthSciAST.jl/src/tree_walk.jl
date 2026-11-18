@@ -91,7 +91,9 @@ include("tree_walk/ranges.jl")           #      integer range expansion
 include("tree_walk/memory.jl")           #      zero-filled buffers
 include("tree_walk/const_int.jl")        #      the integer subscript evaluator
 include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
-include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
+include("tree_walk/index_sets.jl")       # §5d  `ranges` naming an index set
+include("tree_walk/resolve.jl")          #      index resolution, `_PGatherArray`
+include("tree_walk/lhs_cells.jl")        #      array variables, LHS cells, model selection
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build
 include("tree_walk/build_equation_prep.jl")   #      broadcast lowering, observed LHS, lifts, folds
