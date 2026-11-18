@@ -609,6 +609,12 @@ positional (Python), an options object (TypeScript), and **a separate function**
 in Rust (`flatten_with_options`) and Go (`FlattenWithOptions`). Julia and Rust
 additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
+Julia's `FlattenedSystem` also carries the optional `initialization_equations`
+field (esm-libraries-spec §4.7.5 step 4), named by flatten; the other bindings
+leave it out. Julia builds a `FlattenedSystem` with one keyword constructor,
+`FlattenedSystem(; fields...)`, and copies one with `FlattenedSystem(flat;
+fields...)`; its three subset maps are read off their parent maps.
+
 ### 5.7 Load-time lowering
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
