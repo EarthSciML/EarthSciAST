@@ -912,20 +912,16 @@ function _region_cut_candidates(body, idx_names::Vector{String})
             for (r, v) in enumerate(values)
                 if _is_array_producer(v)
                     ve = v::OpExpr
-                    rank = ve.op == "makearray" ?
-                        (
-                            (ve.regions === nothing || isempty(ve.regions)) ? 0 :
-                            length(ve.regions[1])
-                        ) :
-                        count(s -> s isa AbstractString, ve.output_idx)
+                    rank = _producer_rank(ve)
                     vs = subs
                     if rank != length(subs) && r <= length(regions)
                         reg = regions[r]
-                        ns = [
-                            j for j in eachindex(subs)
-                                if j <= length(reg) && reg[j][1] != reg[j][2]
+                        vs = subs[
+                            _region_value_axes(
+                                rank, length(subs),
+                                j -> !(j <= length(reg) && reg[j][1] != reg[j][2])
+                            ),
                         ]
-                        vs = subs[ns]
                     end
                     length(vs) == rank ? indexed!(ve, vs, alias) : walk(ve, alias)
                 else

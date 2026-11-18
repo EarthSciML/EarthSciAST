@@ -39,6 +39,20 @@ function _is_array_producer(expr::ASTExpr)::Bool
     return any(s -> s isa AbstractString, expr.output_idx)
 end
 
+# The rank of the array an array producer yields: a `makearray`'s region rank
+# (0 with no region), a `faq`'s count of string output indices.
+_producer_rank(v::OpExpr) = v.op == "makearray" ?
+    ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
+    count(s -> s isa AbstractString, something(v.output_idx, ()))
+
+# The axes of an `n`-axis `makearray` region at which a region value of rank
+# `rank` is indexed: every axis when the ranks agree, else the region's
+# non-singleton axes (`singleton(d)`: axis `d` spans one cell), since a face or
+# strip region pins the others to one line (esm-spec §9.6.8). The caller checks
+# that the count matches `rank`.
+_region_value_axes(rank::Int, n::Int, singleton) =
+    rank == n ? collect(1:n) : Int[d for d in 1:n if !singleton(d)]
+
 """
     _AxisAlign(axes, var_shapes)
 

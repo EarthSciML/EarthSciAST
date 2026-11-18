@@ -813,9 +813,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
         sel = _bind_makearray_loop(producer, producer.values[r], kargs)
         if _is_array_producer(sel)
             re = sel::OpExpr
-            rank = re.op == "makearray" ?
-                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                count(s -> s isa AbstractString, re.output_idx)
+            rank = _producer_rank(re)
             rank == length(kargs) && return _stencilize_indexed(re, kargs, ctx)
             # §9.6.8 REDUCED-RANK region value: the value array covers the
             # region's NON-SINGLETON axes (a face/strip region pins the others
@@ -824,7 +822,7 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
             # The pinned axes need no verification: region coverage already
             # fixed their k-values to the singleton bound.
             ns = region === nothing ? Int[] :
-                Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
+                _region_value_axes(rank, length(kargs), d -> region[d][1] == region[d][2])
             rank == length(ns) ||
                 _decline(
                 :region_value_shape,
@@ -1119,12 +1117,10 @@ function _branch_key_indexed!(
             # returning here (key incomplete) can never pair with an accepted
             # spine.
             ka = kargs
-            rank = re.op == "makearray" ?
-                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                count(s -> s isa AbstractString, re.output_idx)
+            rank = _producer_rank(re)
             if rank != length(kargs)
                 region === nothing && return
-                ns = Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
+                ns = _region_value_axes(rank, length(kargs), d -> region[d][1] == region[d][2])
                 rank == length(ns) || return
                 ka = kargs[ns]
             end

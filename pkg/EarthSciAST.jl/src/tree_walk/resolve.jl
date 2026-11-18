@@ -663,28 +663,21 @@ function _resolve_index_of_makearray(
     # holds an aggregate over `j` alone).
     if _is_array_producer(result_expr)
         re = result_expr::OpExpr
-        rank = re.op == "makearray" ?
-            ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-            length(_output_idx_strings(re))
-        sel = if rank == ndim
-            k_vals
-        else
-            nonsingleton = [
-                d for d in 1:ndim
-                    if result_region === nothing ||
-                    result_region[d][1] != result_region[d][2]
-            ]
-            rank == length(nonsingleton) ||
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_MAKEARRAY_VALUE_RANK",
-                    "makearray region value produces a rank-$(rank) array " *
-                        "but the region has $(length(nonsingleton)) non-singleton " *
-                        "axis/axes of $(ndim) total"
-                )
+        rank = _producer_rank(re)
+        axes = _region_value_axes(
+            rank, ndim,
+            d -> result_region !== nothing && result_region[d][1] == result_region[d][2]
+        )
+        rank == length(axes) ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_MAKEARRAY_VALUE_RANK",
+                "makearray region value produces a rank-$(rank) array " *
+                    "but the region has $(length(axes)) non-singleton " *
+                    "axis/axes of $(ndim) total"
             )
-            k_vals[nonsingleton]
-        end
+        )
+        sel = k_vals[axes]
         sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
             _resolve_index_of_makearray(
@@ -798,11 +791,8 @@ function _resolve_index_of_makearray_symbolic(
         branch = val_expr
         if _is_array_producer(val_expr)
             re = val_expr::OpExpr
-            rank = re.op == "makearray" ?
-                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                length(_output_idx_strings(re))
-            sel = rank == ndim ? collect(1:ndim) :
-                [d for d in 1:ndim if region[d][1] != region[d][2]]
+            rank = _producer_rank(re)
+            sel = _region_value_axes(rank, ndim, d -> region[d][1] == region[d][2])
             rank == length(sel) ||
                 throw(
                 TreeWalkError(

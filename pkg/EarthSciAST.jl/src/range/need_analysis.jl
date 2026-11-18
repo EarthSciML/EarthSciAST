@@ -587,12 +587,9 @@ function _need_region_value!(
     )
     if val isa OpExpr && _is_array_producer(val)
         v = val::OpExpr
-        rank = v.op == "makearray" ?
-            ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
-            length(_output_idx_strings(v))
+        rank = _producer_rank(v)
         if rank > 0
-            sel = rank == length(subs) ? subs :
-                ASTExpr[subs[d] for d in eachindex(subs) if length(box[d]) != 1]
+            sel = subs[_region_value_axes(rank, length(subs), d -> length(box[d]) == 1)]
             length(sel) == rank &&
                 return _need_index!(ctx, v, sel, env, anchors, rule)
         end
