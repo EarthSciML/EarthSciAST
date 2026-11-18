@@ -403,7 +403,7 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 		return v["models"].(map[string]any)["m"].(map[string]any)["equations"]
 	}
 	for _, group := range []string{
-		"constrained_match_scope",          // shape-constrained div rule; one fires, one survives
+		"constrained_match_scope",          // shape-constrained D rule; one fires, one survives
 		"per_variable_scheme_literal_args", // ground-pattern per-variable selector
 		"two_div_two_meshes",               // identical patterns, distinct `where` scopes
 	} {
@@ -423,7 +423,7 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 }
 
 // TestTemplateImports_WhereRenameCarriesShape pins the §9.7.7 composition fix:
-// a `where`-constrained div rule imported twice under prefix has its
+// a `where`-constrained `fv_div` rule imported twice under prefix has its
 // where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index set,
 // so each instance registers and fires only on its own field. Without the
 // rewrite this raised template_constraint_unknown_index_set.
@@ -448,7 +448,7 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 			t.Fatalf("%s: no defining equation", name)
 		}
 		if expr["op"] != "*" {
-			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
+			t.Errorf("%s: op = %v; want * (fv_div node not lowered)", name, expr["op"])
 		}
 		coef := expr["args"].([]any)[0].(map[string]any)
 		if coef["op"] != "/" || coef["args"].([]any)[1].(float64) != wantN {
@@ -514,7 +514,7 @@ func TestTemplateImports_IntegralRenameFollowsAxis(t *testing.T) {
 // NAME, not an expression position. Go was the only binding that omitted it
 // from the substitution skip set, so a bound metaparameter sharing a name with
 // an axis rewrote the axis into an integer: with `x` bound to 3,
-// {"op":"grad","args":["x"],"dim":"x"} became {"op":"grad","args":[3],"dim":3}
+// {"op":"upwind_flux","args":["x"],"dim":"x"} became {"op":"upwind_flux","args":[3],"dim":3}
 // in Go alone, while `wrt` in the same node was correctly left alone. Julia,
 // TypeScript, Python and Rust all skip `dim`; this asserts Go agrees.
 func TestTemplateImports_MetaparamDoesNotRewriteDimSlot(t *testing.T) {
@@ -523,7 +523,7 @@ func TestTemplateImports_MetaparamDoesNotRewriteDimSlot(t *testing.T) {
 	// must not.
 	var node any
 	if err := json.Unmarshal(
-		[]byte(`{"op":"grad","args":["x"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		[]byte(`{"op":"upwind_flux","args":["x"],"dim":"x","wrt":"x"}`), &node); err != nil {
 		t.Fatal(err)
 	}
 	got := substituteMetaparams(node, map[string]any{"x": int64(3)})
@@ -578,7 +578,7 @@ func TestTemplateImports_MetaparamDoesNotRewriteDimInDocument(t *testing.T) {
           "variables": {"c": {"type": "unknown", "units": "1", "default": 0.5}},
           "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
                          "rhs": {"op": "*", "args": [
-                           {"op": "grad", "args": ["c"], "dim": "lev"}, "lev"]}}]
+                           {"op": "upwind_flux", "args": ["c"], "dim": "lev"}, "lev"]}}]
         }
       }
     }`
@@ -598,14 +598,14 @@ func TestTemplateImports_MetaparamDoesNotRewriteDimInDocument(t *testing.T) {
 	if !ok || len(rhsArgs) != 2 {
 		t.Fatalf("rhs.args = %#v; want two entries", rhs["args"])
 	}
-	grad, ok := rhsArgs[0].(map[string]any)
+	flux, ok := rhsArgs[0].(map[string]any)
 	if !ok {
-		t.Fatalf("rhs.args[0] = %#v; want the grad node", rhsArgs[0])
+		t.Fatalf("rhs.args[0] = %#v; want the upwind_flux node", rhsArgs[0])
 	}
 	// The axis slot survives as an axis NAME…
-	if grad["dim"] != "lev" {
-		t.Errorf("grad.dim = %#v; want %q — the §4.9.1 axis name must survive the "+
-			"§9.7.6 close", grad["dim"], "lev")
+	if flux["dim"] != "lev" {
+		t.Errorf("upwind_flux.dim = %#v; want %q — the §4.9.1 axis name must survive the "+
+			"§9.7.6 close", flux["dim"], "lev")
 	}
 	// …while the genuine expression position beside it closes to the integer.
 	if rhsArgs[1] != float64(3) {
@@ -654,7 +654,7 @@ func tiDig(v any, path ...any) any {
 func TestTemplateImports_RenameStillRewritesDimAxis(t *testing.T) {
 	var node any
 	if err := json.Unmarshal(
-		[]byte(`{"op":"grad","args":["c"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		[]byte(`{"op":"upwind_flux","args":["c"],"dim":"x","wrt":"x"}`), &node); err != nil {
 		t.Fatal(err)
 	}
 	walked := renameWalk(node, map[string]string{}, map[string]string{"x": "lev"},

@@ -98,9 +98,8 @@ func lookupBinding(name string, bindings map[string]Expression, file *ESMFile, c
 //
 // The `dim` slot is resolved STRUCTURALLY — by the field, not the op name
 // (esm-spec §4.9.1) — because `dim` is an ordinary axis-naming scalar with no
-// privileged op semantics: grad/div/laplacian all carry it, and so may any
-// open-tier user op. Keying it on the `grad` op (as this did) silently skipped
-// the `dim` of `div`/`laplacian`.
+// privileged op semantics: `bc`, `integral` and any open-tier user op may
+// carry it.
 func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
 	out, err := mapExprChildren(node, func(child Expression) (Expression, error) {
 		return substituteRec(child, bindings, file, currentSystem)
@@ -118,7 +117,7 @@ func substituteNode(node ExprNode, bindings map[string]Expression, file *ESMFile
 }
 
 // substituteScalarField resolves a substitution for a *string variable-name
-// slot (a `wrt`/`dim` name a D/grad op carries outside `args`). A binding is
+// slot (a `wrt`/`dim` name a node carries outside `args`). A binding is
 // applied only when the replacement is itself a bare name (string); a
 // non-string replacement, or no binding, leaves the slot unchanged. It performs
 // no recursion (a name has no children).
