@@ -2716,22 +2716,10 @@ end
 @inline (b::_CGChunk)(args, c::Int, nchunks::Int) =
     b.f(args[1], args[2], args[3], args[4], b.tabs, c, nchunks)
 
-# Run one generated function chunked when the section's verdict allows, and
-# serially otherwise (one thread, too few cells, shared out-slots): its
-# `(1, 1)` instance, or `ntiles` serial cell tiles (`_run_cg_section_serial!`).
-# Every value type takes the same route: a chunk computes each of
-# its cells exactly as the serial instance does.
-@inline function _run_cg_maybe_threaded!(
-        f, tabs, du, u, p, t, tc::_SecTCache,
-        ntiles::Int = 1
-    )
-    if _threads_available() && _sec_prep_threads!(tc).state == 1
-        _run_chunked!(tc, _CGChunk(f, tabs), (du, u, p, t))
-    else
-        _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles)
-    end
-    return nothing
-end
+# Run one generated function through the section runner (threading.jl):
+# chunked when the verdict allows, else serially in `ntiles` cell tiles.
+@inline _run_cg_maybe_threaded!(f, tabs, du, u, p, t, tc::_SecTCache, ntiles::Int = 1) =
+    _run_section!(tc, _CGChunk(f, tabs), (du, u, p, t), typemax(Int), ntiles)
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, rhs_assembly.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
@@ -2796,17 +2784,6 @@ const _SECTION_TILE_CELLS = 1024
 function _section_tiles(ncells::Int, n_emitted::Int, disjoint::Bool)
     (disjoint && n_emitted >= 2) || return 1
     return max(1, div(ncells, n_emitted * _SECTION_TILE_CELLS))
-end
-
-@inline function _run_cg_section_serial!(f, tabs, du, u, p, t, ntiles::Int)
-    if ntiles == 1
-        f(du, u, p, t, tabs, 1, 1)
-    else
-        for c in 1:ntiles
-            f(du, u, p, t, tabs, c, ntiles)
-        end
-    end
-    return nothing
 end
 
 @inline function (s::_KernelSection{F, TB, W})(
