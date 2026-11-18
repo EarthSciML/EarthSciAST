@@ -6,7 +6,7 @@
 # that returns a CONSERVATIVE SUPERSET of the (query × cell) index pairs whose
 # 2D bounding boxes (envelopes) intersect. Phase 3b will consume this to replace
 # a uniform-grid bin-equality join gate (tree-walk `_join_admits`,
-# src/tree_walk/semiring.jl); here we deliver ONLY the primitive + its oracle.
+# src/tree_walk/join_gates.jl); here we deliver ONLY the primitive + its oracle.
 #
 # `broad_phase_candidates(query_envs, cell_envs; eps)` tests envelope
 # intersection pair by pair (with a uniform-grid binning above a size cutoff,
@@ -95,7 +95,7 @@ end
 # `Set{(src_pos, tgt_pos)}` an OVERLAP join gate admits on. Built ONCE per gate
 # (cached on the resolved `_JoinGate` / `_ViJoinGate`), then consulted by
 # membership per contracted tuple in BOTH join paths — `_join_admits`
-# (tree_walk/semiring.jl) and `_vi_join_ok` (value_invention.jl). The narrow
+# (tree_walk/join_gates.jl) and `_vi_join_ok` (value_invention.jl). The narrow
 # phase (exact rectangle / polygon test) stays as the aggregate's `filter`; this
 # is ONLY the conservative broad phase.
 # =========================================================================== #
@@ -302,7 +302,7 @@ end
 #     enumerates ranges LAZILY (a ragged `of` bound depends on its parent
 #     binding), so it recurses; BOTH gated symbols are contracted there.
 #   * the dense aggregate expansion (`_foreach_aggregate_term`,
-#     tree_walk/resolve.jl) unrolls `Iterators.product` over PRE-EXPANDED
+#     tree_walk/aggregate_expand.jl) unrolls `Iterators.product` over PRE-EXPANDED
 #     iterators once per output cell, and the output cell has usually already
 #     bound one of the two gated symbols.
 #

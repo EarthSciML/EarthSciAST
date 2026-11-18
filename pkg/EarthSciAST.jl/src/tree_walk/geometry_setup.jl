@@ -204,7 +204,7 @@ end
 # Extent of an IndexSetRef range against the model's index sets + derived extents.
 #
 # A `kind:"derived"` set resolves through its `from_faq`, exactly as
-# `_resolve_index_set_ranges` (tree_walk/resolve.jl) does for the ODE stream:
+# `_resolve_index_set_ranges` (tree_walk/index_sets.jl) does for the ODE stream:
 # `derived_extents` is keyed by the PRODUCER id, not by the set name. Setup-time
 # geometry can range over one because the projection pushdown re-points a binning
 # aggregate onto `pd_support__<C>` — and when that aggregate's weight is an
@@ -565,7 +565,7 @@ end
 # axis names the range, which holds for every env form because a factor's first
 # axis is always its position axis (`_overlap_env_rank`). The factor ranks are
 # checked below against `_overlap_env_rank`, the rule `_overlap_env_sym` in
-# tree_walk/semiring.jl (the right-hand side's resolver) also checks. The two
+# tree_walk/join_gates.jl (the right-hand side's resolver) also checks. The two
 # differ in what a mismatch does: here it DECLINES to the ungated sweep, which
 # still gives the old values; the right-hand side throws `E_TREEWALK_JOIN_OVERLAP`.
 function _geo_overlap_gate(faq, ctx::_GeoCtx, setof, scope, cache)

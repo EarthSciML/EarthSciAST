@@ -776,7 +776,7 @@ function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, cs::_Compi
     node = try
         _compile_in(cs, resolved)
     catch err
-        # Only a document-level refusal is a decline (see resolve.jl).
+        # Only a document-level refusal is a decline (see resolve_loops.jl).
         err isa EarthSciASTError || rethrow()
         return nothing
     end

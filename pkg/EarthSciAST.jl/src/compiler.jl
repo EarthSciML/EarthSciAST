@@ -574,7 +574,7 @@ mutable struct _BuildState
     # out.
     scatter_keep::Union{Nothing, IdDict{Any, Nothing}}
     # The scalar parameter values a join gate's computed key column reads while
-    # the gates resolve (`_with_join_params`, semiring.jl); empty otherwise.
+    # the gates resolve (`_with_join_params`, join_key_columns.jl); empty otherwise.
     join_params::Dict{String, Float64}
 end
 _BuildState(

@@ -177,7 +177,7 @@ Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 # to its bucket code. A bin-EQUALITY combination is admitted iff
 # `codes_l[pos_l] == codes_r[pos_r]` for every gate. Defined HERE — ahead of
 # `OpExpr` — so the internal `OpExpr.join_gates` field can name this concrete
-# element type; it is BUILT and CONSUMED in tree_walk/semiring.jl
+# element type; it is BUILT and CONSUMED in tree_walk/join_gates.jl
 # (`_resolve_join_gates_for` / `_join_admits`), never parsed or serialized.
 #
 # The two fields answer two DIFFERENT questions, and a gate may carry both.

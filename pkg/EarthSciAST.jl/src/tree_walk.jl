@@ -37,8 +37,8 @@
 # the files below (under src/tree_walk/), included here in the original
 # definition order. Definitions used at include time (structs, consts) must
 # stay before their include-time uses — in particular `_Node` (node.jl) and
-# `_BuildMemo`/`_MaybeMemo` (compile.jl) precede the `_resolve_indices`
-# signatures (resolve.jl). The build pipeline
+# `_BuildMemo`/`_MaybeMemo` (compile.jl) precede `_ResolveCtx`
+# (resolve_ctx.jl), which every resolve signature names. The build pipeline
 # (tree_walk/build_*.jl) is included after the compile layer, so its
 # signatures may name compile-layer types; only its records
 # (build_records.jl) and the run-time types a kernel dispatches on
@@ -59,6 +59,7 @@ include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFo
 include("tree_walk/build_records.jl")    #      the records a build hands back
 include("tree_walk/hoist.jl")            #      nested reductions lifted to internal observeds
 include("tree_walk/compile.jl")          # §3   expression → `_Node`
+include("tree_walk/resolve_ctx.jl")      #      the index-resolution context, `_PGatherArray`
 include("tree_walk/prelude_cache.jl")    #      the scalar prelude cache and its stamps
 include("tree_walk/rhs_seams.jl")        #      value type, parameter read, Float32 guard
 include("tree_walk/scalar_cse.jl")       # §3b  scalar common-subexpression elimination
@@ -90,9 +91,16 @@ include("tree_walk/cellwise.jl")         #      cell-wise evaluation, compile-on
 include("tree_walk/ranges.jl")           #      integer range expansion
 include("tree_walk/memory.jl")           #      zero-filled buffers
 include("tree_walk/const_int.jl")        #      the integer subscript evaluator
-include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
+include("tree_walk/semiring.jl")         # §5c  semiring registry and reducers
+include("tree_walk/join_gates.jl")       #      join clauses resolved to gates
+include("tree_walk/join_key_columns.jl") #      the key columns a join compares
 include("tree_walk/index_sets.jl")       # §5d  `ranges` naming an index set
-include("tree_walk/resolve.jl")          #      index resolution, `_PGatherArray`
+include("tree_walk/aggregate_expand.jl") #      the unroll of an aggregate's contracted indices
+include("tree_walk/gather_resolve.jl")   #      const, inline-const and state gathers; guards
+include("tree_walk/shape_ops.jl")        #      shape ops and broadcasting as index maps
+include("tree_walk/resolve_loops.jl")    #      reductions kept as run-time loops
+include("tree_walk/resolve_producers.jl") #     `index(faq, …)` and `index(makearray, …)`
+include("tree_walk/resolve.jl")          #      `_resolve_indices` and its dispatch
 include("tree_walk/lhs_cells.jl")        #      array variables, LHS cells, model selection
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build

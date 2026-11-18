@@ -4,7 +4,7 @@
 # §7.3 (edge enumeration); CONFORMANCE_SPEC.md §5.5 / §5.7.
 #
 # The front-door sizes what the resolver would otherwise refuse with
-# `derived_index_set_unmaterialized` (tree_walk/resolve.jl):
+# `derived_index_set_unmaterialized` (tree_walk/index_sets.jl):
 # a `kind:"derived"` index set whose `from_faq` names a `distinct` producer is
 # materialized ONCE at setup through the `Relational` engine and its cardinality
 # handed to the index-set resolver as the dense extent. The value-invention

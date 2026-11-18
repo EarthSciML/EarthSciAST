@@ -35,7 +35,7 @@ _register_loopvar!(name::AbstractString, ref::Base.RefValue{Int}) =
 # it never changes a result.
 #
 # `deferrals` counts the guarded out-of-range const reads the resolve deferred to
-# run time (resolve.jl). Such a result depends on the guards the node was
+# run time (gather_resolve.jl). Such a result depends on the guards the node was
 # resolved under, not on the node alone, so it is not memoized when any guard
 # was in force (`_resolve_indices`).
 struct _BuildMemo

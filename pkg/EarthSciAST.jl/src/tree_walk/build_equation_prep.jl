@@ -18,7 +18,7 @@
 # `fn` is a BUILD error even for a caller that never ran `validate()`.
 # `reshape`/`transpose`/`concat` are NOT lowered here — they are genuine shape
 # ops with no scalar-operator spelling. Under an `index` they become gathers of
-# their operand (`_index_through_shape_op`, resolve.jl); a bare one still meets
+# their operand (`_index_through_shape_op`, shape_ops.jl); a bare one still meets
 # its `unevaluable_operator` rejection in `_compile_op`.
 #
 # DAG-SAFE, WITHOUT TAXING THE COMMON CASE (ESS-0hh).

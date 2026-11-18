@@ -104,7 +104,7 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:self_indexed`       → `_SELF_INDEXED_OPS`             (shape_promotion.jl)
 - `:builtin_fn`         → `_BUILTIN_FUNCTION_NAMES`       (validation/references.jl)
 - `:xcse_expensive`     → `_XCSE_EXPENSIVE_OPS`           (tree_walk/xcse.jl)
-- `:shape_remap`        → `_SHAPE_REMAP_OPS`              (tree_walk/resolve.jl) and
+- `:shape_remap`        → `_SHAPE_REMAP_OPS`              (tree_walk/shape_ops.jl) and
                           `_LIFT_WHOLE_ARRAY_OPS`         (pointwise_lift.jl): the ops
                           that restructure a whole array (esm-spec §4.3.5)
 """
