@@ -102,12 +102,10 @@ const BINDING = "julia"
 # which then raises the `compiler_unavailable` this adapter reports verbatim.
 #
 # CALLED AT TOP LEVEL, not from `main`. A package loaded by `@eval` defines its
-# methods in a NEW world age, and a frame that is already running cannot call
-# them — from inside `main` every fixture failed with "method too new to be
-# called from this world context" naming the extension's own entry point, which
-# reads as a broken binding rather than as this file calling too early. Each
-# top-level statement gets the current world, so loading here and calling `main`
-# on the next line is what makes the extension visible.
+# methods in a NEW world age, which a frame that is already running cannot call
+# ("method too new to be called from this world context"). Each top-level
+# statement gets the current world, so loading here and calling `main` on the
+# next line is what makes the extension visible.
 function load_compiler_runtime(compiler)
     if compiler == "mtk"
         @eval begin

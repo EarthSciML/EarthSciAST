@@ -1217,9 +1217,8 @@ end
 # Assertion `reference` (spec §6.6.5): the from_file shape is a JSON object
 # whose `type` is the literal string "from_file"; everything else — including
 # an inline Expression AST, which is ALSO an object — parses as an Expression.
-# The discriminator MUST be the `type` field: testing "is it dict-like"
-# (a previous bug) routed every inline reference to the from_file branch and
-# left the analytic-reference path unreachable.
+# The discriminator MUST be the `type` field: "is it dict-like" would route
+# every inline reference to the from_file branch.
 function _coerce_assertion_reference(ref)
     reftype = ref isa AbstractDict && haskey(ref, "type") ?
         string(ref["type"]) : ""

@@ -180,7 +180,7 @@ _doc_raw(file) = _doc_raw(serialize_esm_file(file))
 # four document fields — how the format decodes (`reader_options`), how a text
 # column becomes numbers (`codes`), which records are real (`record_filter`),
 # and what the loader delivers (`select`) — plus a fifth, `extent`, by which a
-# loader tells `prepare` its own record count. NONE of them is a caller-side
+# loader tells `esm_problem` its own record count. NONE of them is a caller-side
 # transform any more: a runner that does not know this model can run it.
 # --------------------------------------------------------------------------- #
 
@@ -659,7 +659,7 @@ provider_extent_metaparameter(p::DeclaredProvider) = p.extent_mp
 _has_gated_axis(axes::Vector{_AxisSelect}) = any(ax -> ax isa _GatedAxis, axes)
 
 # A declared select carrying a `gated_by` axis IS a provider-declared gate:
-# `prepare` defers it past value-invention and fetches it pre-sliced to the
+# `esm_problem` defers it past value-invention and fetches it pre-sliced to the
 # materialised members, through the machinery the record-derived gate uses.
 function provider_gate_spec(p::DeclaredProvider)
     p.select === nothing && return nothing
@@ -746,7 +746,7 @@ end
 
 function provider_sample(p::DeclaredProvider, t::Real; selection = nothing)
     if selection !== nothing
-        # The GATED path: `prepare` resolved the members and is asking for that
+        # The GATED path: `esm_problem` resolved the members and is asking for that
         # slab. It supersedes the declared select it was derived from — but NOT
         # the declared unit_conversion, which is a property of the VALUES rather
         # than of which of them were fetched. A provider that cannot push it

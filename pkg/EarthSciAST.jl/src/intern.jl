@@ -4,36 +4,26 @@
 # `_intern_expr` maps every `OpExpr` to ONE canonical object per structure, so
 # the in-memory AST becomes a DAG: textually identical subtrees — which
 # template inlining (esm-spec §9.7.3 has no `let` node) manufactures as fresh
-# copies, re-inflating one species' RHS to ~57,000 index ops — become the SAME
-# object. Every downstream build pass is already identity-memoized
-# (`_sub_preserving`, `foreach_subexpr_once`, `_BuildMemo.resolve/compile`,
-# `_build_acc_cse`, the `_stencilize` memo, the lowering memo); without
-# interning those memos miss on the copies, which are distinct objects. With it
-# they hit, and the build cost is the unique-node count.
+# copies — become the SAME object. Every downstream build pass is
+# identity-memoized (`_sub_preserving`, `foreach_subexpr_once`,
+# `_BuildMemo.resolve/compile`, `_build_acc_cse`, the `_stencilize` memo, the
+# lowering memo), so with interning the build cost is the unique-node count.
 #
-# WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build_pipeline.jl),
-# right after `apply_expression_template` reference expansion — the latest
-# point that covers the whole build hot path. NOT at parse: parse-time
-# interning would also be sound today (the mutation audit in
-# audits/intern_preaudit_2026-07-19.md found no post-construction mutation of
-# any expression node anywhere in src/ or ext/), but the build entry keeps the
-# blast radius minimal and covers exactly the passes whose memos need it.
+# It runs once, at the `_build_evaluator_impl` entry
+# (tree_walk/build_pipeline.jl), right after `apply_expression_template`
+# reference expansion.
 #
-# CORRECTNESS INVARIANTS (see the pre-audit for the site-by-site argument):
+# CORRECTNESS INVARIANTS:
 #   1. Structural equality/hash cover ALL semantic `OpExpr` fields — the
 #      three walkers below are GENERATED from `OPEXPR_FIELD_TABLE` (types.jl),
 #      the same single source of truth the parse/serialize/traversal walkers
 #      derive from, so a newly added field is covered automatically (an
 #      unknown-kind or unknown-typed field falls to the `===`-only fallback:
 #      MISSED sharing, never a wrong merge). "Semantic" here means *emitted*,
-#      not merely *evaluated*: `expect_cadence` (an author cadence assertion)
-#      and `attrs` (an open rewrite-target op's scheme parameters) change no
-#      evaluation result, but they DO round-trip to the wire, so two nodes
-#      differing only in one of them are different documents and must not
-#      collapse to a single allocation — which would silently unify, and so
-#      drop, one of the two annotations. Their `:scalar` rows put them on the
-#      `_plain_eq`/`_plain_hash` path automatically; Rust's `node_eq`/
-#      `node_hash` make the same call.
+#      not merely *evaluated*: `expect_cadence` and `attrs` change no
+#      evaluation result but DO round-trip to the wire, so two nodes differing
+#      only in one of them must not collapse. Their `:scalar` rows put them on
+#      the `_plain_eq`/`_plain_hash` path; Rust's `node_eq`/`node_hash` agree.
 #   2. Children are interned bottom-up, so `===` on an already-interned child
 #      IS structural equality — shallow comparisons/hashes over child slots
 #      use pointer identity (`===` / `objectid`), making one intern pass

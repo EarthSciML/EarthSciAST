@@ -1062,7 +1062,7 @@ end
 
 # --------------------------------------------------------------------------- #
 # Loader-discovered extents (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5) — the
-# pre-pass `prepare` runs before ANY load, because a discovered extent closes a
+# pre-pass `esm_problem` runs before ANY load, because a discovered extent closes a
 # metaparameter and metaparameters are bound at the loader API.
 #
 # Returns `(metaparameters, discovered)`: the caller's bindings PLUS whatever

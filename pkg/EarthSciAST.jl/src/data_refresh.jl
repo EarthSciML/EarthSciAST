@@ -116,8 +116,7 @@ gating derived set's members — then pushes that set down as a per-axis
 
 The gate is `Dict("axes"=>[…], "applies_to"=>[names…])`, mirroring the `.esm`
 `data_sources.<name>.metadata.x_esd.gated_select` field (which the runner reads
-to construct the gated provider — `format`/gating live at provider creation, not
-in the 0.8.0 source schema). Each entry of `axes` is one per NATIVE array axis:
+to construct the gated provider). Each entry of `axes` is one per NATIVE array axis:
 
   * `"all"`                       → the whole axis;
   * `Dict("fixed"=>[i])`          → native 0-based index `i`, DROPPED (length-1);
@@ -195,9 +194,8 @@ record axis is not one the select names): it reports
 record is sliced.
 
 Keyed `"<ModelPath>.<param>"` — the CONSUMING parameter's flattened name, not
-`"<Loader>.<var>"`. esm 1.0.0 moved the binding from the source to the consumer:
-a source declares no variables of its own, so there is no loader-side name left
-to key on; a model reads a field by declaring a parameter whose `update` names
+`"<Loader>.<var>"`. The binding lives on the consumer: a source declares no
+variables of its own, so there is no loader-side name to key on; a model reads a field by declaring a parameter whose `update` names
 the source and binds a `file_variable` (esm-spec §8.5). These are exactly the
 `providers` keys [`esm_problem`](@ref) consumes (and, with `pushdown_rewrite=true`,
 gates from the rewrite record). `doc` is a raw document `Dict`, an `EsmFile`, or

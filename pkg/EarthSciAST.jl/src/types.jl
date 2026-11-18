@@ -275,21 +275,11 @@ print a node carrying one in the escape form.
 """
 const EXPRESSION_NODE_ANNOTATIONS = ("id", "expect_cadence")
 
-# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
-# licence to mutate: the build path treats `OpExpr` as an immutable value and only
-# ever copies-with-changes through `reconstruct` (fields are never assigned after
-# construction). Mutability buys true POINTER-IDENTITY for the build-time
-# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
-# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
-# are STRUCTURAL — every memo probe would re-hash the `op` String and walk all ~35
-# fields. A mutable struct makes `objectid`/`===` (hence `IdDict` and the
-# `r !== args[i]` "did this subtree change" identity checks throughout the tree
-# walk) pointer-based, so the memos are O(1) identity caches. No custom
-# `==`/`hash` is defined: `OpExpr` is never a *value*-keyed `Dict`/`Set` key
-# anywhere (only ever an `IdDict` key), and structural `==` on trees would not
-# hold anyway — two distinct-but-equal `OpExpr`s hold `args` `Vector`s that differ
-# by identity.
+# `mutable struct` for POINTER IDENTITY, not to be mutated: fields are never
+# assigned after construction (copies go through `reconstruct`). Identity makes
+# `objectid`/`===` O(1), so the build's `IdDict{OpExpr,…}` memos and the
+# `r !== args[i]` "did this subtree change" checks do not hash ~35 fields. No
+# custom `==`/`hash`: an `OpExpr` is only ever an `IdDict` key.
 """
     OpExpr(op::String, args::Vector{ASTExpr}; kwargs...)
     OpExpr(op::String, args::AbstractVector; kwargs...)
