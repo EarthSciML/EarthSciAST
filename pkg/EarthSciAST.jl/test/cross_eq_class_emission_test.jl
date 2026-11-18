@@ -16,25 +16,24 @@
 #      `:affine_subtree_tbl`). These have no per-cell scalar trees to pool
 #      (the box compiler exists to never scalarize), so their emitter sits at
 #      the assembled-kernel level: `_merge_acc_kernel_classes` runs its class
-#      rounds as a DIRECT emission stage (`:direct_classmerge_round{1,2}_merge`
-#      tallies) before the counted repair pass.
+#      rounds over them (`:classmerge_round{1,2}_merge` tallies).
 #
 # What must hold, and is asserted here:
 #   (a) CROSS-EQUATION: identical-shape per-cell kernels from different
-#       equations become ONE class kernel with repair-pass tallies ZERO
-#       (`:classmerge_round1_merge` / `:classmerge_round2_merge` == 0).
-#   (b) AFFINE-BOX: the box/table kernel classes are emitted by the direct
-#       stage (its own merge tallies are non-zero) and the repair pass finds
-#       NOTHING left to do.
+#       equations become ONE class kernel straight out of the pooled
+#       scalarizer, with no class-merge round firing.
+#   (b) AFFINE-BOX: the box/table kernel classes are merged by the class
+#       rounds, and applying the rounds a second time
+#       (`_with_merge_recheck`, `:classmerge_recheck`) merges NOTHING.
 #   (c) GRID INDEPENDENCE: for a multi-equation fixture the kernel count,
 #       every structural diag counter, and the cascade tally are identical at
 #       N and 3N; per-lane data grows exactly 3x.
 #   (d) BIT-IDENTITY: du is `===` per element (NaN/-0.0 count) against the
 #       per-cell scalar reference (`compiler=:interpreter`) — kernels emitted
 #       and left on the per-cell runner, and through ForwardDiff Duals.
-#   (e) CORPUS: over tests/valid + tests/conformance the repair pass performs
-#       NO merge anywhere — every class the corpus contains was emitted
-#       directly.
+#   (e) CORPUS: over tests/valid + tests/conformance a second application of
+#       the class rounds performs NO merge anywhere — the rounds are
+#       idempotent.
 #
 # The per-cell fixtures force the per-cell path: an aggregate whose contracted bound is
 # expression-valued but constant (`k in 1:(i+2-i)` == `1:2`), which declines
@@ -135,21 +134,22 @@ function _xq_build(
         const_arrays = Dict{String, Any}()
     )
     return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
-        f, u0, p, _t, vm, rep = ESM.Internal.build(
-            model;
-            initial_conditions = ics, const_arrays = const_arrays,
-            compiler = compiler
-        )
+        f, u0, p, _t, vm, rep = ESM._with_merge_recheck() do
+            ESM.Internal.build(
+                model;
+                initial_conditions = ics, const_arrays = const_arrays,
+                compiler = compiler
+            )
+        end
         (f = f, u0 = u0, p = p, vm = vm, diag = rep.stats, tally = rep.tally, kernels = rep.kernels)
     end
 end
 
 _xq_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _xq_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
-_xq_repair(t) = get(t, :classmerge_round1_merge, 0) +
+_xq_repair(t) = get(t, :classmerge_recheck, 0)
+_xq_directmerge(t) = get(t, :classmerge_round1_merge, 0) +
     get(t, :classmerge_round2_merge, 0)
-_xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
-    get(t, :direct_classmerge_round2_merge, 0)
 
 
 # ---- tests ------------------------------------------------------------------
@@ -183,8 +183,7 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         end
 
         # ON: the pooled scalarizer emitted ONE class kernel across both
-        # equations; neither the direct kernel stage nor the repair pass had
-        # anything left to do.
+        # equations; no class-merge round had anything left to do.
         @test ron.diag.n_acc_kernels == 1
         @test ron.diag.n_classmerge_in == ron.diag.n_acc_kernels
         @test _xq_repair(ron.tally) == 0
@@ -195,7 +194,7 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         @test _xq_directmerge(rref.tally) == 0
     end
 
-    @testset "(b) affine-box classes: direct stage emits, repair finds nothing" begin
+    @testset "(b) affine-box classes: the rounds merge, a second application finds nothing" begin
         N = 8
         model = _xq_afbox_model(N)
         ics = _xq_ics(N)
@@ -208,9 +207,8 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         @test get(ron.tally, :percell_acc, 0) == 0
         @test get(ron.tally, :affine_subtree_tbl, 0) >= 1
 
-        # The assembled-kernel classes are emitted by the DIRECT stage, and
-        # the repair pass that follows it found NOTHING: every merge in this
-        # build is on a `direct_classmerge_*` key.
+        # The assembled-kernel classes are merged by the class rounds, and
+        # applying them a second time merges NOTHING.
         @test _xq_repair(ron.tally) == 0
         @test _xq_directmerge(ron.tally) >= 1
 
@@ -265,9 +263,8 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         @test drop(A.diag) == drop(B.diag)
         @test A.diag.n_acc_kernels == 1
 
-        # Cascade tally identical — in particular zero repair AND zero
-        # direct-stage merges at both sizes (the pooled scalarizer emitted the
-        # class outright).
+        # Cascade tally identical — in particular no class-merge round fired
+        # at either size (the pooled scalarizer emitted the class outright).
         @test A.tally == B.tally
         @test _xq_repair(A.tally) == 0
         @test _xq_directmerge(A.tally) == 0
@@ -284,15 +281,15 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         @test dA * N2 == dB * N1
     end
 
-    # ---- (e) repo fixture sweep: the repair pass finds nothing anywhere ----
+    # ---- (e) repo fixture sweep: the class rounds are idempotent everywhere ----
     # Every .esm under tests/valid and tests/conformance that builds through
     # the tree-walk evaluator is built once, whole (flattened), and its cascade
     # counts read. Documents that cannot build standalone (MTK-only surfaces,
     # providers, missing data) are skipped. Cross-COMPILER agreement over this corpus is the
     # conformance tier's job, not this file's; what this sweep owns is the
-    # claim no fixture can make on its own — that across the whole corpus the
-    # repair pass performs no merge, because every class was emitted directly.
-    @testset "(e) fixture-corpus zero repair tallies" begin
+    # claim no fixture can make on its own — that across the whole corpus a
+    # second application of the class rounds performs no merge.
+    @testset "(e) fixture-corpus zero recheck tallies" begin
         roots = [
             joinpath(TESTUTILS_REPO_ROOT, "tests", "valid"),
             joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance"),
@@ -310,7 +307,9 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         function corpus_build(file)
             withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
                 try
-                    f!, u0, p, _t, _vm, rep = ESM.Internal.build(file)
+                    f!, u0, p, _t, _vm, rep = ESM._with_merge_recheck() do
+                        ESM.Internal.build(file; compiler = _XQ_NATIVE)
+                    end
                     return (f = f!, u0 = u0, p = p, tally = rep.counts)
                 catch e
                     corpus_is_resource_error(e) && rethrow()
@@ -344,9 +343,8 @@ _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
         # The sweep is real (a corpus regression that stops fixtures building
         # would otherwise pass this vacuously) …
         @test built >= 40
-        # … and on the whole corpus the repair pass had NOTHING to do: every
-        # class was emitted directly (scalarizer pool, per-equation emitter,
-        # or the assembled-kernel direct stage).
+        # … and on the whole corpus a second application of the class rounds
+        # had NOTHING to do.
         @test repair_total == 0
     end
 end

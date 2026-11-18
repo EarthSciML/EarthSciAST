@@ -62,13 +62,9 @@ _acc_node_has_lazy(n::_Node) =
 #      the class facts only come into existence AT ASSEMBLY, so the emitter
 #      for it is sited at the assembled-kernel level:
 #      `_merge_acc_kernel_classes` (oop_merge.jl) runs its two class-merge
-#      rounds as a DIRECT EMISSION stage (tallies
-#      `:direct_classmerge_round{1,2}_merge`) and then re-runs them as the
-#      counted repair safety net — which is expected to find NOTHING
-#      (`:classmerge_round{1,2}_merge` == 0, pinned by
-#      test/cross_eq_class_emission_test.jl). Reusing the proven lockstep
-#      clone instead of writing a parallel box-level emitter keeps the
-#      bit-identity argument exactly the one the repair pass already carries.
+#      rounds over the assembled kernels (tallies
+#      `:classmerge_round{1,2}_merge`), with the lockstep clone's
+#      bit-identity argument.
 #
 # The stage runs whenever the class merge does.
 _cross_eq_class_emit_enabled() = !_oop_merge_disabled()
