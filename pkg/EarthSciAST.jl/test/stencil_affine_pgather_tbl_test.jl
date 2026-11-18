@@ -31,11 +31,11 @@ _pgt_q(ics) = Dict("M.$k" => v for (k, v) in ics)
 function _pgt_build3(model, ics, bufs)
     out = Dict{Symbol, Any}()
     for (tag, compiler) in ((:tbl, :native), (:ref, :interpreter))
-        f!, u0, p, _t, _vm, rep = ESM.Internal.build(
+        b = ESM.Internal.build(
             model;
             initial_conditions = _pgt_q(ics), param_arrays = bufs, compiler = compiler
         )
-        out[tag] = (f!, u0, p, rep.counts)
+        out[tag] = (b.f!, b.u0, b.p, b.report.counts, b)
     end
     return out
 end
@@ -154,8 +154,9 @@ function _pgt_oracle(model, ics, bufs; refresh!)
     @test du2[:tbl] != du[:tbl]
     for buf in values(bufs)
         buf .= 0.5 .- 1.5 .* buf
-        ESM.notify_forcing_refresh!(buf)
     end
+    ESM.notify_forcing_refresh!(b[:tbl][5])
+    ESM.notify_forcing_refresh!(b[:ref][5])
     du3 = Dict(tag => _pgt_eval(b[tag], 1.0) for tag in (:tbl, :ref))
     @test du3[:tbl] == du3[:ref]
     @test du3[:tbl] != du2[:tbl]

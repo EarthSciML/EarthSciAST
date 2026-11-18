@@ -1636,13 +1636,9 @@ end
     flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
 
 Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
-(`Dict{String,Any}`) that can be run directly: `_build_evaluator(doc)` for a 0-D /
-array system, or `discretize(doc)` first when it carries a spatial PDE.
-
-A native dict — not a typed `EsmFile` — is the target on purpose: the value-
-invention front-door (RFC §6.1, geometry / derived index sets) and the
-`discretize` entry both dispatch on `AbstractDict`, and only the raw document
-carries the index-set vocabulary the typed IR doesn't surface.
+(`Dict{String,Any}`): the exporter for a caller that wants the flattened system
+as a document. The build does not read it; it compiles a typed run file made
+from the flattened system directly.
 
 The single model collects:
 - all three variable partitions (states, parameters, observeds) — observeds keep
@@ -1650,14 +1646,10 @@ The single model collects:
 - every flattened equation (state ODEs + the synthesized observed definitions),
   so the evaluator's own observed-equation synthesis is a no-op (it skips any
   observed already defined by an equation — no double definition);
+- the namespaced initialization equations;
 - the document-scoped `index_sets` registry (esm-spec v0.8.0), emitted at the
   top level so the regridders' `ranges.from` / `from_faq` / producer `id`
   references resolve.
-
-This is the monolithic path the staged camp-fire run previously could not take,
-because a lossy `flatten` dropped the geometry `manifold` data and the
-index-set registry. With those preserved (canonical `reconstruct` + the registry
-fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
 
 `equation_contributions` is NOT carried: the `.esm` format has no slot for
 per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
@@ -1700,6 +1692,12 @@ function flattened_to_esm(
     model = Dict{String, Any}(
         "variables" => variables,
         "equations" => equations,
+    )
+    # The namespaced initialization equations (esm-spec §6.2), which a
+    # document carries on its model.
+    isempty(flat.initialization_equations) || (
+        model["initialization_equations"] =
+            Any[serialize_equation(eq) for eq in flat.initialization_equations]
     )
     # esm-spec §9.6.4 Option B: surviving `apply_expression_template` references
     # in the equations resolve against the merged registry — emit it as the

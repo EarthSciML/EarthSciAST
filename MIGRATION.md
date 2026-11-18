@@ -381,6 +381,23 @@ reasoning is worth reading once rather than five times.
 | `build_evaluator(input; …)` (deprecated alias) | `esm_problem(input, tspan; …)`, then `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`; `compiler = :xla` for what `form = :oop` handed a compiled backend. The alias is removed (`API_SPEC.md` §8 item 23). | `deleted` |
 | `insp.observed_defs`, `.derived_extents`, `.forcing_buffers`, `.forcing_buffer_index`, `.unvalued_slots`, `.ic_reseed`, `.program_seed`, `.observed_memo` and the other undocumented `BuildInspection` fields | gone from the record; `forcing_buffers(prob)` / `forcing_buffer_index(prob)` for the forcing buffers. A `BuildInspection` keeps `setup_arrays`, `const_arrays`, `observed_exprs`, `params`, `param_classes`, `recurrences`, `compiler_report`. | `deleted` |
 | one `BuildInspection` passed to two `esm_problem` calls | raises `ArgumentError`; pass a fresh record to each | `semantics` |
+| `EarthSciAST.notify_forcing_refresh!(buffer)` / `notify_forcing_refresh!()` after a direct write to a live forcing buffer | `EarthSciAST.notify_forcing_refresh!(prob)` or `notify_forcing_refresh!(prob, name)` (or the build's `DiscreteMaterializer`): the announcement goes to the build that reads the buffer, see below | `deleted` |
+| `build_refresh_callback(; providers, buffers)` | `build_refresh_callback(; providers, buffers, owner = prob)`: `owner` is required, so each boundary's writes are announced to the build that reads them (`owner = nothing` opts out) | `semantics` |
+
+### A forcing write is announced to the build that reads it
+
+The forcing epoch, which tells a build's memoized time-cadence values and
+discrete-cadence caches that a live buffer changed in place, now belongs to the
+build and is reached through its owner: `notify_forcing_refresh!(prob)`,
+`notify_forcing_refresh!(prob, name)` (which also checks that `name` is one of
+the Problem's forcing buffers), or `notify_forcing_refresh!(dm)` for the
+`DiscreteMaterializer` the build filled. The raw-array form and the
+process-wide no-argument form are gone with the process-wide table that served
+them. Two consequences: a write is no longer announced to every build that
+aliases the array, so tell each Problem you wrote under; and `_write_forcing!`
+(the refresh callback's write) announces nothing by itself — the problem's own
+refresh callback announces, and `build_refresh_callback` now takes a required
+`owner` to announce to.
 
 ### `unknown_names` and `parameter_names` stay exported
 

@@ -59,7 +59,10 @@ const _HOIST_ONE_IDX = "\0hoist\0i"
 _is_hoisted_name(n::AbstractString) = occursin(_HOIST_PREFIX, n)
 
 # The names an expression reads that no binder inside it binds. A range
-# bound, and a ragged range's parent indices, are read in the enclosing scope.
+# bound, and a ragged range's parent indices, are read in the enclosing scope:
+# `free_variables` subtracts a node's binders from its range bounds and does
+# not see a ragged range's parents, so it would miss an outer index the
+# reduction depends on.
 function _hoist_free_names!(out::Set{String}, e::ASTExpr, bound::Set{String})
     if e isa VarExpr
         (e::VarExpr).name in bound || push!(out, (e::VarExpr).name)
@@ -112,6 +115,30 @@ _hoist_plain(e::OpExpr) = e.op != "index" && !_is_faq_op(e.op) &&
     e.expr_body === nothing && e.values === nothing && e.filter === nothing &&
     e.lower === nothing && e.upper === nothing && e.key === nothing
 
+# The operand positions of a plain operator that are always evaluated: all of
+# them, or those before the first lazy one (`ifelse` branches, a
+# short-circuited `and` / `or` operand).
+function _hoist_eager_args(o::OpExpr)
+    lazy = _op_lazy_from(o.op)
+    return 1:(lazy > 0 ? min(lazy - 1, length(o.args)) : length(o.args))
+end
+
+# Record a lifted definition, once per `key`: mint its name from `kind` (one
+# letter naming what was lifted, see `_hoist_public_label`) and `owner`, then
+# `make(name)` returns its shape, its definition and the expression that reads
+# it in place. Returns that reader, the memoized one on a repeat.
+function _hoist_define!(make::F, hc, key, kind::String, owner::String) where {F}
+    hit = get(hc.memo, key, nothing)
+    hit === nothing || return hit
+    name = string(_HOIST_PREFIX, kind, length(hc.memo) + 1, '\0', owner)
+    shape, def, reader = make(name)
+    hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
+    push!(hc.eqs, Equation(VarExpr(name), def))
+    hc.owner[name] = owner
+    hc.memo[key] = reader
+    return reader
+end
+
 function _hoist_walk(
         e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
         owner::String, hc::_HoistCtx
@@ -127,9 +154,8 @@ function _hoist_walk(
         return r === nothing ? o : r
     end
     _hoist_plain(o) || return o
-    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
     new = o.args
-    for j in 1:min(eager, length(o.args))
+    for j in _hoist_eager_args(o)
         a = o.args[j]
         b = _hoist_walk(a, out_idx, ranges, contracted, owner, hc)
         if b !== a
@@ -182,33 +208,24 @@ function _hoist_try(
         gather || haskey(g.ranges, s) && return nothing
         push!(sets, r.from)
     end
-    key = (objectid(g), vcat(S, sets))
-    hit = get(hc.memo, key, nothing)
-    hit === nothing || return hit
-    name = string(_HOIST_PREFIX, gather ? "g" : "", length(hc.memo) + 1, '\0', owner)
-    rng = gather ? Dict{String, Any}() : Dict{String, Any}(String(k) => v for (k, v) in g.ranges)
     # A gather is lifted as the faq producing it over S, its body the gather.
     lift(oi, rg) = gather ?
         OpExpr("faq", ASTExpr[]; output_idx = oi, ranges = rg, expr_body = g) :
         reconstruct(g; output_idx = oi, ranges = rg)
-    if isempty(S)
-        rng[_HOIST_ONE_IDX] = IndexSetRef(_HOIST_ONE_SET)
-        def = lift(Any[_HOIST_ONE_IDX], rng)
-        shape = String[_HOIST_ONE_SET]
-        reader = OpExpr("index", ASTExpr[VarExpr(name), IntExpr(1)])
-    else
-        for (s, st) in zip(S, sets)
+    return _hoist_define!(hc, (objectid(g), vcat(S, sets)), gather ? "g" : "", owner) do name
+        rng = gather ? Dict{String, Any}() :
+            Dict{String, Any}(String(k) => v for (k, v) in g.ranges)
+        if isempty(S)
+            rng[_HOIST_ONE_IDX] = IndexSetRef(_HOIST_ONE_SET)
+            reader = OpExpr("index", ASTExpr[VarExpr(name), IntExpr(1)])
+            return String[_HOIST_ONE_SET], lift(Any[_HOIST_ONE_IDX], rng), reader
+        end
+        for s in S
             rng[s] = ranges[s]
         end
-        def = lift(Any[S...], rng)
-        shape = sets
         reader = OpExpr("index", ASTExpr[VarExpr(name), (VarExpr(s) for s in S)...])
+        return sets, lift(Any[S...], rng), reader
     end
-    hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
-    push!(hc.eqs, Equation(VarExpr(name), def))
-    hc.owner[name] = owner
-    hc.memo[key] = reader
-    return reader
 end
 
 # A SCATTER-SHAPED reduction is lifted even when it reads every enclosing
@@ -251,10 +268,15 @@ end
 # positions only, carries no join, and every output range is a whole declared
 # index set, which is then the lifted observed's shape: the lifted fill
 # evaluates it at exactly the cells the whole-array arithmetic did.
-_hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &&
+#
+# What both forms below require: a filtered, join-free array producer whose
+# output indices are all names.
+_hoist_liftable_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &&
     e.join === nothing && e.join_gates === nothing && e.expr_body !== nothing &&
     e.ranges !== nothing && _is_array_producer(e) &&
-    all(x -> x isa AbstractString, e.output_idx) &&
+    all(x -> x isa AbstractString, e.output_idx)
+
+_hoist_filtered_producer(e::OpExpr) = _hoist_liftable_producer(e) &&
     all(
     x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
     e.output_idx
@@ -267,12 +289,7 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
 # unknown of size 8): the lifted observed takes that declared shape, and its
 # fill covers the same cells the whole-array arithmetic did.
 function _hoist_filtered_producer_on(e::OpExpr, od)
-    od === nothing && return false
-    (
-        _is_faq_op(e.op) && e.filter !== nothing && e.join === nothing &&
-            e.join_gates === nothing && e.expr_body !== nothing && e.ranges !== nothing &&
-            _is_array_producer(e) && all(x -> x isa AbstractString, e.output_idx)
-    ) || return false
+    (od !== nothing && _hoist_liftable_producer(e)) || return false
     shape, dims = od
     length(e.output_idx) == length(dims) || return false
     for (d, x) in enumerate(e.output_idx)
@@ -323,8 +340,7 @@ function _hoist_split_operands!(
         return out
     end
     _hoist_plain(o) || return out
-    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
-    for j in 1:min(eager, length(o.args))
+    for j in _hoist_eager_args(o)
         _hoist_split_operands!(out, o.args[j], dims, seen)
     end
     return out
@@ -372,17 +388,9 @@ function _hoist_regions_cover(regs, dims::Vector{Int})
     return true
 end
 
-function _hoist_lift_split(g::OpExpr, owner::String, shape::Vector{String}, hc::_HoistCtx)
-    key = (objectid(g), vcat(String["\0makearray"], shape))
-    hit = get(hc.memo, key, nothing)
-    hit === nothing || return hit
-    name = string(_HOIST_PREFIX, "m", length(hc.memo) + 1, '\0', owner)
-    hc.vars[name] = ModelVariable(UnknownVariable; shape = copy(shape))
-    push!(hc.eqs, Equation(VarExpr(name), g))
-    hc.owner[name] = owner
-    reader = VarExpr(name)
-    hc.memo[key] = reader
-    return reader
+_hoist_lift_split(g::OpExpr, owner::String, shape::Vector{String}, hc::_HoistCtx) =
+    _hoist_define!(hc, (objectid(g), vcat(String["\0makearray"], shape)), "m", owner) do name
+    copy(shape), g, VarExpr(name)
 end
 
 # The declared shape of the variable `owner` and each set's size, when every
@@ -413,9 +421,8 @@ function _hoist_operand_walk(
     _hoist_plain(o) || return o
     hit = get(memo, o, nothing)
     hit === nothing || return hit
-    eager = _op_lazy_from(o.op) > 0 ? _op_lazy_from(o.op) - 1 : length(o.args)
     new = o.args
-    for j in 1:min(eager, length(o.args))
+    for j in _hoist_eager_args(o)
         a = o.args[j]
         b = if split !== nothing && a isa OpExpr && haskey(split[1], a::OpExpr)
             _hoist_lift_split(a::OpExpr, owner, split[2], hc)
@@ -441,35 +448,37 @@ function _hoist_lift_producer(
         shape::Union{Nothing, Vector{String}} = nothing
     )
     key = (objectid(g), vcat(String["\0producer"], something(shape, String[])))
-    hit = get(hc.memo, key, nothing)
-    hit === nothing || return hit
-    name = string(_HOIST_PREFIX, "a", length(hc.memo) + 1, '\0', owner)
-    shape === nothing &&
-        (shape = String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx])
-    hc.vars[name] = ModelVariable(UnknownVariable; shape = shape)
-    push!(hc.eqs, Equation(VarExpr(name), g))
-    hc.owner[name] = owner
-    reader = VarExpr(name)
-    hc.memo[key] = reader
-    return reader
+    return _hoist_define!(hc, key, "a", owner) do name
+        sh = something(
+            shape, String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx]
+        )
+        sh, g, VarExpr(name)
+    end
 end
 
 # A compiler-report rule label with every lifted name replaced by the variable
-# whose equation it was lifted from (the name ends in it, after a NUL).
+# whose equation it was lifted from (the name ends in it, after a NUL) and what
+# was lifted (the letter after the prefix, `_hoist_define!`).
+const _HOIST_LABEL_RE = r"\0hoist\0([gam]?)\d+\0([^\0\[\]]*)"
+const _HOIST_LABEL_KIND = Dict(
+    "" => "reduction", "g" => "gather", "a" => "aggregate", "m" => "region term",
+)
 _hoist_public_label(label::AbstractString) =
     replace(
-    replace(
-        replace(
-            replace(
-                label,
-                r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"
-            ),
-            r"\0hoist\0a\d+\0([^\0\[\]]*)" => s"\1 (hoisted aggregate)"
-        ),
-        r"\0hoist\0m\d+\0([^\0\[\]]*)" => s"\1 (hoisted region term)"
-    ),
-    r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)"
+    label, _HOIST_LABEL_RE => function (s)
+        m = match(_HOIST_LABEL_RE, s)
+        return string(m[2], " (hoisted ", _HOIST_LABEL_KIND[m[1]], ")")
+    end
 )
+
+# The variable an equation's lifted definitions are filed under: its left-hand
+# side's name, or the alphabetically first name a derivative's left-hand side
+# reads.
+function _hoist_owner(lhs::ASTExpr)
+    lhs isa VarExpr && return (lhs::VarExpr).name
+    names = _hoist_free_names!(Set{String}(), lhs, Set{String}(["t"]))
+    return isempty(names) ? "" : minimum(names)
+end
 
 # The build's copy of `model` with every qualifying nested reduction lifted
 # (see the header), the index sets with the one-cell set added when one was
@@ -485,16 +494,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
         rhs = eq.rhs
         if rhs isa OpExpr && _hoist_plain(rhs::OpExpr) &&
                 (eq.lhs isa VarExpr || (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D"))
-            names = sort!(
-                collect(
-                    _hoist_free_names!(
-                        Set{String}(), eq.lhs,
-                        Set{String}(["t"])
-                    )
-                )
-            )
-            owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
-                isempty(names) ? "" : first(names)
+            owner = _hoist_owner(eq.lhs)
             split = nothing
             od = _hoist_owner_dims(owner, hc, index_sets)
             if od !== nothing
@@ -522,16 +522,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
         out_idx = String[String(x) for x in f.output_idx if x isa AbstractString]
         isempty(out_idx) && continue
         contracted = Set{String}(String(k) for k in keys(f.ranges) if !(String(k) in out_idx))
-        lhs_names = sort!(
-            collect(
-                _hoist_free_names!(
-                    Set{String}(), eq.lhs,
-                    Set{String}(["t"])
-                )
-            )
-        )
-        owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
-            isempty(lhs_names) ? "" : first(lhs_names)
+        owner = _hoist_owner(eq.lhs)
         body = _hoist_walk(f.expr_body, out_idx, f.ranges, contracted, owner, hc)
         body === f.expr_body && continue
         eqs === model.equations && (eqs = copy(model.equations))
@@ -540,12 +531,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
     isempty(hc.eqs) && return model, index_sets, hc.owner
     vars = OrderedDict{String, ModelVariable}(model.variables)
     merge!(vars, hc.vars)
-    m = Model(
-        vars, vcat(eqs, hc.eqs), model.discrete_events, model.continuous_events,
-        model.subsystems; tolerance = model.tolerance, tests = model.tests,
-        analyses = model.analyses, initialization_equations = model.initialization_equations,
-        guesses = model.guesses, system_kind = model.system_kind, reference = model.reference
-    )
+    m = reconstruct(model; variables = vars, equations = vcat(eqs, hc.eqs))
     isets = index_sets
     if any(v -> v.shape == [_HOIST_ONE_SET], values(hc.vars))
         isets = copy(index_sets)

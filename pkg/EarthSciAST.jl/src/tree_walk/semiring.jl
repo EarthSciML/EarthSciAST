@@ -874,7 +874,7 @@ function _cc_values(
     # compiles a function of its own.
     cells = _row_major_cells(ext)
     out = Array{Float64}(undef, ext...)
-    ce = _cellwise_compile_once_impl(e, length(ext), ca, used)
+    ce = _cell_evaluator(e, _cell_oidx_syms(length(ext)), ca, used; index_outputs = true)
     if ce !== nothing
         for c in cells
             out[c...] = ce(c)

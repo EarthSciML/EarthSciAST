@@ -139,7 +139,7 @@ concurrent caller; restrict it with [`halo`](@ref), [`restrict`](@ref) and
 [`lanes`](@ref). Immutable once built: one program serves every thread.
 """
 struct RhsProgram{F}
-    seed::Any                       # `_program_seed(prob)`
+    seed::Any                       # the Problem's `_ProgramSeed`
     compiler::Symbol
     writes::Vector{String}          # W, flat-layout order
     aux_names::Vector{String}       # R \ W, flat-layout order
@@ -416,9 +416,9 @@ function _relower_kwargs(front)
     return kw
 end
 
-# Build the program of `doc` (a selected run document) the way `esm_problem`
-# built the Problem's, without its discrete-cadence cut, recording what its
-# workspaces need (`_WsCapture`).
+# Build the program of `file` (a run file of `seed`'s prepared run) the way
+# `esm_problem` built the Problem's, without its discrete-cadence cut,
+# recording what its workspaces need (`_WsCapture`).
 #
 # Every externally fed parameter is a live buffer of the program (a forcing
 # slot), whatever the Problem's own build made of it: the build registers each
@@ -429,7 +429,7 @@ end
 # its program (`esm_problem(…; program_build = true)`) passes on; the build's
 # initial state `u0` is returned for that Problem too.
 function _program_build(
-        seed, doc::Dict{String, Any}; products = nothing, param_classes = nothing
+        seed::_ProgramSeed, file::EsmFile; products = nothing, param_classes = nothing
     )
     front = Ref{Any}(nothing)
     memo = _ProgramMemo()
@@ -437,11 +437,11 @@ function _program_build(
     cap = _WsCapture()
     f!, u0, p, _ts, var_map = _with_ws_capture(cap) do
         _with_range_spec(_CaptureSpec(front, memo)) do
-            _build_evaluator(
-                doc; compiler = seed.compiler, form = :inplace,
+            _build_run(
+                file; compiler = seed.compiler, form = :inplace,
                 model_name = seed.model_name, parameter_overrides = seed.overrides,
                 const_arrays = seed.const_arrays, param_arrays = pa,
-                _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
+                gated_providers = seed.gated_providers, sample_time = seed.sample_time,
                 _runtime_array_parameters = seed.runtime_array_parameters,
                 _live_fed_parameters = true,
                 _ic_t0 = seed.ic_t0,
@@ -464,8 +464,8 @@ end
 # provider's), `:array_parameter` for every other one: a shaped parameter made
 # live by `runtime_array_parameters`, or one whose buffer the caller handed
 # `esm_problem` as `param_arrays`.
-function _program_shared(seed, p, pa, f!, n::Int, cap::_WsCapture)
-    decl = seed.flat.parameters
+function _program_shared(seed::_ProgramSeed, p, pa, f!, n::Int, cap::_WsCapture)
+    decl = seed.prep.flat.parameters
     function declared(n)
         v = get(decl, n, nothing)
         return (v !== nothing && v.default isa Real) ? Float64(v.default) : nothing
@@ -514,7 +514,7 @@ function _relower(prog::RhsProgram, spec::_RangeSpec)
     f!, _u0, _p, _ts, var_map = _with_ws_capture(cap) do
         _with_compiler_plan(_plan_for(prog.compiler)) do
             _with_range_spec(spec) do
-                _build_evaluator(file; model_name = model_name, kw...)
+                _build_selected(file; model_name = model_name, kw...)
             end
         end
     end
@@ -652,12 +652,11 @@ function _whole_program_built(
         seed, flat::FlattenedSystem, W::Set{String}, R::Set{String};
         parent = nothing, products = nothing, param_classes = nothing
     )
-    init = seed.init
     live = union(W, R)
-    init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
-    doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
+    init = _select_init(_faq_initialization(seed.prep.flat), live)
+    file = _run_file(seed.prep; flat = _scalar_slots_to_arrays(flat), init = init)
     f!, internal, front, u0, p, pa, cap, memo = _program_build(
-        seed, doc; products = products, param_classes = param_classes
+        seed, file; products = products, param_classes = param_classes
     )
     present = Set{String}(
         vcat(
@@ -702,50 +701,48 @@ value, is read from the set, never from build-time data.
 [`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
 """
 function rhs_program(prob::EsmProblem)
-    # A Problem built as its program (`esm_problem(…; program_build = true)`)
-    # holds the very program this call would build, but for its default
-    # forcing set, which is the Problem's forcing as it is now.
-    r = prob.build.program_seed
-    r isa _ProgramSeedRecipe && r.program[] !== nothing &&
-        return _current_program(r, prob.param_buffers)
-    c = compiler(prob)
-    seed = c in (:native, :interpreter) ? _program_seed(prob) : nothing
-    (seed === nothing || !(c in (:native, :interpreter))) &&
-        throw(
+    b = prob.build
+    b.seed === nothing && throw(
         _range_error(
             ERROR_CODES.COMPILER_UNAVAILABLE,
             "rhs_program needs a Problem built by esm_problem with compiler = :native " *
-                "(or :interpreter); this one was built with compiler = :$c, which carries no " *
-                "program of its own (API_SPEC §5.8)"
+                "(or :interpreter); this one was built with compiler = :$(compiler(prob)), " *
+                "which carries no program of its own (API_SPEC §5.8)"
         )
     )
-    return first(_problem_program(seed))
+    # The model is lowered once per Problem: the first call builds the program
+    # (unless `esm_problem(…; program_build = true)` already did) and every call
+    # returns it with its default forcing set holding the Problem's forcing as
+    # it is now.
+    lock(b.program_lock) do
+        b.program[] === nothing && (b.program[] = first(_problem_program(b.seed)))
+    end
+    return _current_program(b, prob.param_buffers)
 end
 
 # The whole-model program of `seed` with the build's sinks `products` and
 # `param_classes` filled, and the build's initial state and parameters:
 # `(prog, u0, p)`. `rhs_program` builds it with no sinks; a Problem built with
 # `program_build = true` is built from it, with its own.
-function _problem_program(seed; products = nothing, param_classes = nothing)
-    flat, W, R = _select_flat(seed.flat, :all, :all)
+function _problem_program(seed::_ProgramSeed; products = nothing, param_classes = nothing)
+    flat, W, R = _select_flat(seed.prep.flat, :all, :all)
     return _whole_program_built(
         seed, flat, W, R; products = products, param_classes = param_classes
     )
 end
 
-# The program recipe `r` holds, as `rhs_program` would build it now: the same
-# program, with its default forcing set copied from the Problem's live buffers
-# `live` when one of them has changed since the set was taken (a discrete
-# provider's refresh writes them in place). The program then held is that one,
-# so a later call with nothing changed returns the same value. A slot the
-# Problem holds no buffer for is one the program's build registered itself,
-# which nothing writes; its buffer is kept.
-function _current_program(r::_ProgramSeedRecipe, live::AbstractDict)
-    return lock(r.lock) do
-        prog = r.program[]::RhsProgram
+# The program the Problem build `b` holds, with its default forcing set copied
+# from the Problem's live buffers `live` when one of them has changed since the
+# set was taken (a discrete provider's refresh writes them in place). The
+# program then held is that one, so a later call with nothing changed returns
+# the same value. A slot the Problem holds no buffer for is one the program's
+# build registered itself, which nothing writes; its buffer is kept.
+function _current_program(b::_ProblemBuild, live::AbstractDict)
+    return lock(b.program_lock) do
+        prog = b.program[]::RhsProgram
         sh = prog.shared
         d = sh.default
-        stale(k, s) = (b = get(live, s.name, nothing); b !== nothing && !isequal(vec(b), d.bufs[k]))
+        stale(k, s) = (x = get(live, s.name, nothing); x !== nothing && !isequal(vec(x), d.bufs[k]))
         any(((k, s),) -> stale(k, s), enumerate(sh.slots)) || return prog
         bufs = Vector{Float64}[
             haskey(live, s.name) ? vec(copy(live[s.name])) : d.bufs[k]
@@ -757,7 +754,7 @@ function _current_program(r::_ProgramSeedRecipe, live::AbstractDict)
             _RhsShared(sh.params, sh.slots, ForcingSet(sh.slots, bufs, _next_set_epoch()), sh.factory),
             prog.memo
         )
-        r.program[] = cur
+        b.program[] = cur
         return cur
     end
 end
@@ -3168,7 +3165,7 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
     f!, _u0, _p, _ts, internal = _with_ws_capture(cap) do
         _with_compiler_plan(_plan_for(op.compiler)) do
             _with_range_spec(spec) do
-                _build_evaluator(file; model_name = model_name, kw...)
+                _build_selected(file; model_name = model_name, kw...)
             end
         end
     end

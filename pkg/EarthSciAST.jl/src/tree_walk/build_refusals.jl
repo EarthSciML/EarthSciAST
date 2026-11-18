@@ -24,8 +24,8 @@ _event_refusal(ev::Union{ContinuousEvent, DiscreteEvent}) = TreeWalkError(
 )
 
 # Throw the refusal when a flattened system carries an event, continuous or
-# discrete. Called before `flattened_to_esm`, which does not carry events into
-# the run document, so the model-level check at the build entry would never see
+# discrete. Called when the run is prepared (`_prepare_run`): the run file
+# carries no events, so the model-level check at the build entry would never see
 # them.
 function _refuse_flat_events(flat::FlattenedSystem)
     isempty(flat.continuous_events) || throw(_event_refusal(flat.continuous_events[1]))

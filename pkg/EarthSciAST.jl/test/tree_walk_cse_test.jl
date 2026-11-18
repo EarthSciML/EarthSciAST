@@ -557,11 +557,10 @@ end
         # Hoisting caches the value for one `(p, t, forcing-epoch)` stamp (B3): the
         # buffer cannot change mid-call, and an in-place refresh BETWEEN calls must
         # show through the cached slot — through the epoch bump when the refresh
-        # lands at an already-seen `t` (a refresh callback fires AT its tstop; the
-        # in-tree write paths `_write_forcing!`/`materialize!` bump it themselves),
-        # and through the `t` key at any new `t`.
+        # lands at an already-seen `t` (a refresh callback fires AT its tstop and
+        # announces its write to the build), and through the `t` key at any new `t`.
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
+        (f!, u0, p, _ts, vm, rep) = b = ESM.Internal.build(
             _pg_shared_model();
             param_arrays = Dict("F" => buf)
         )
@@ -572,7 +571,7 @@ end
         @test du[vm["M.y"]] === 5.0 * k
 
         buf[1] = 42.0                        # ...and still tracks the live buffer:
-        ESM.notify_forcing_refresh!()        # refresh at the SAME t, epoch-keyed
+        ESM.notify_forcing_refresh!(b)       # refresh at the SAME t, epoch-keyed
         f!(du, u0, p, 0.0)
         @test du[vm["M.x"]] === sin(42.0 * k) + cos(42.0 * k)
         @test du[vm["M.y"]] === 42.0 * k
@@ -961,8 +960,8 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
     # PLACE between calls while `p` never moves, so a `p`-keyed stamp cannot see it
     # change: a slot reading one must NEVER be const. Since B3 it is TIME-cadence —
     # memoized on `(p, t, forcing epoch)`, so an in-place refresh is seen through the
-    # epoch bump (`notify_forcing_refresh!`, which `_write_forcing!`/`materialize!`
-    # call automatically) or at any new `t`, while `p` alone can never validate it.
+    # epoch bump (a write announced with `notify_forcing_refresh!`, or a
+    # `materialize!`) or at any new `t`, while `p` alone can never validate it.
     # The model carries BOTH a param-only chain (const) and a gather chain (time),
     # so "all dynamic" cannot pass this vacuously.
     #   D(x) = sin(F[1]*k) + cos(F[1]*k) ;  D(y) = F[1]*k ;  D(z) = exp(k*m) + 2*exp(k*m)
@@ -989,7 +988,7 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
             ),
         ]
         buf = [5.0, 6.0]
-        f!, u0, p, _ts, vm, rep = ESM.Internal.build(
+        (f!, u0, p, _ts, vm, rep) = b = ESM.Internal.build(
             ESM.Model(vars, eqs);
             param_arrays = Dict("F" => buf)
         )
@@ -1005,14 +1004,13 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
         @test du[vm["M.y"]] === 5.0 * k
         @test du[vm["M.z"]] === exp(k * m) + 2.0 * exp(k * m)
 
-        # THE ASSERTION, half A. Refresh the buffer in place and notify (the two
-        # in-tree refresh surfaces — `_write_forcing!` and `materialize!` — bump the
-        # epoch themselves; a direct `buf[i] = …` is the raw form of the same event).
+        # THE ASSERTION, half A. Refresh the buffer in place and announce it to the
+        # build (what a refresh callback given the build as its owner does).
         # `p` is unchanged and `t` is the SAME `t` as the last call — exactly when a
         # refresh callback fires — so a const classification of the gather slot (or a
         # stamp that ignored the epoch) would freeze `F[1]*k` at 10.0 forever.
         buf[1] = 42.0
-        ESM.notify_forcing_refresh!()
+        ESM.notify_forcing_refresh!(b)
         du = _ct_call(f!, u0, p, 0.0)
         @test du[vm["M.x"]] === sin(42.0 * k) + cos(42.0 * k)
         @test du[vm["M.y"]] === 42.0 * k
@@ -1026,12 +1024,11 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
     end
 
     # ----------------------------------------------------------------
-    # (6b) The forcing epoch is PER BUILD: a refresh written into one build's
-    # buffer invalidates that build's time tier (at the same `t`) and leaves a
-    # second build, reading a different buffer, alone. A write through the
-    # caller's N-d array reaches the build that reads it through its `vec`.
+    # (6b) The forcing epoch is PER BUILD: a refresh announced to one build
+    # invalidates that build's time tier (at the same `t`) and leaves a second
+    # build alone.
     # ----------------------------------------------------------------
-    @testset "a refresh invalidates only the builds that read the buffer" begin
+    @testset "a refresh invalidates only the build it is announced to" begin
         vars = Dict{String, ModelVariable}(
             "y" => ModelVariable(UnknownVariable; default = 1.0),
             "k" => ModelVariable(ParameterVariable; default = 2.0)
@@ -1049,11 +1046,11 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
         )
         bufA = [5.0 6.0; 7.0 8.0]
         bufB = [1.0, 2.0]
-        fA, uA, pA, _, vmA, dA = ESM.Internal.build(
+        (fA, uA, pA, _, vmA, dA) = bA = ESM.Internal.build(
             mk(_i(1), _i(1));
             param_arrays = Dict("F" => bufA)
         )
-        fB, uB, pB, _, vmB, dB = ESM.Internal.build(
+        (fB, uB, pB, _, vmB, dB) = bB = ESM.Internal.build(
             mk(_i(1));
             param_arrays = Dict("F" => bufB)
         )
@@ -1065,11 +1062,13 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
         _ct_call(fB, uB, pB, 0.5)
         a0, b0 = eA[], eB[]
         ESM._write_forcing!(bufA, "F", Dict("F" => [40.0 6.0; 7.0 8.0]))
+        @test eA[] == a0                     # the write alone announces nothing
+        ESM.notify_forcing_refresh!(bA)
         @test eA[] == a0 + 1
         @test eB[] == b0
         @test _ct_call(fA, uA, pA, 0.5)[vmA["M.y"]] === 40.0 * 2.0 + 40.0 * 2.0
         @test _ct_call(fB, uB, pB, 0.5)[vmB["M.y"]] === 1.0 * 2.0 + 1.0 * 2.0
-        ESM.notify_forcing_refresh!(bufB)
+        ESM.notify_forcing_refresh!(bB)
         @test eB[] == b0 + 1 && eA[] == a0 + 1
     end
 

@@ -630,7 +630,7 @@ end
         rows = [r for r in compiler_report(pn).rules if r.kind === :observed]
         @test [(r.rule, r.tier) for r in rows] == [("k", :output_compiled)]
         # …until a live buffer is refreshed in place.
-        _PR.notify_forcing_refresh!()
+        _PR.notify_forcing_refresh!(pn)
         v, n = read_k()
         @test v == [2.0, 4.0, 6.0] && n == 1
         @test count(r -> r.kind === :observed, compiler_report(pn).rules) == 1

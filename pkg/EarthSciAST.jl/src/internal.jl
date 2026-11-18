@@ -42,7 +42,7 @@ What one [`Internal.build`](@ref) did.
   merge.
 * `products` — the build's [`BuildProducts`](@ref): the public
   [`BuildInspection`](@ref) fields and the rest of what the build produced.
-* `run_doc` — the flattened run document the build compiled.
+* `run_file` — the single-model run document the build compiled.
 """
 struct BuildReport
     compiler_report::CompilerReport
@@ -51,7 +51,7 @@ struct BuildReport
     stats::NamedTuple
     kernels::AbstractVector
     products::BuildProducts
-    run_doc::Dict{String, Any}
+    run_file::EsmFile
 end
 
 """
@@ -71,6 +71,11 @@ struct Build{F, P, V}
 end
 Base.iterate(b::Build, i::Int = 1) = i > 6 ? nothing : (getfield(b, i), i + 1)
 Base.length(::Build) = 6
+
+# A forcing write announced to the build that reads it (see
+# `EarthSciAST.notify_forcing_refresh!`).
+EarthSciAST.notify_forcing_refresh!(b::Build) =
+    EarthSciAST._bump_epoch!(b.report.products.forcing_epoch)
 
 """
     Internal.build(input; model_name = "M", compiler = :native, index_sets = nothing,
@@ -116,12 +121,11 @@ function build(
         kwargs...
     )
     products = BuildProducts()
-    (out, doc), counts = EarthSciAST._with_counts() do
+    (out, file), counts = EarthSciAST._with_counts() do
         supplied = Set{String}(
             String(k) for name in (:const_arrays, :param_arrays)
                 for k in keys(get(kwargs, name, Dict{String, Any}()))
         )
-        run_flat = Ref{Any}(nothing)
         document = _document(input, model_name, index_sets)
         # The projection-pushdown rewrite reads the authored model, so it runs
         # before flattening, as in `esm_problem`.
@@ -130,24 +134,24 @@ function build(
                 EarthSciAST._pushdown_input(document, nothing, metaparameters, String(base_path))
             )
         )
-        doc = EarthSciAST._prepare_run_doc(
-            document;
-            metaparameters = metaparameters, base_path = String(base_path),
-            supplied_names = supplied, flat_out = run_flat
+        prep = EarthSciAST._prepare_run(
+            document; metaparameters = metaparameters, base_path = String(base_path),
+            supplied_names = supplied
         )
-        _, doc = EarthSciAST._prepared_with_data_shapes(
-            run_flat[], doc, get(kwargs, :const_arrays, Dict{String, Any}()),
+        prep = EarthSciAST._with_data_shapes(
+            prep, get(kwargs, :const_arrays, Dict{String, Any}()),
             get(kwargs, :param_arrays, Dict{String, Any}())
         )
-        out = EarthSciAST._build_evaluator(
-            doc; compiler = compiler, products = products, kwargs...
+        file = EarthSciAST._run_file(prep)
+        out = EarthSciAST._build_run(
+            file; compiler = compiler, products = products, kwargs...
         )
-        (out, doc)
+        (out, file)
     end
     f!, u0, p, tspan, var_map = out
     report = BuildReport(
         products.compiler_report, products.compiler_report.tally, counts,
-        products.stats, products.kernels, products, doc
+        products.stats, products.kernels, products, file
     )
     return Build(f!, u0, p, (Float64(tspan[1]), Float64(tspan[2])), var_map, report)
 end

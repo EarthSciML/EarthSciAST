@@ -13,7 +13,7 @@ module EarthSciASTCallbacksExt
 
 using EarthSciAST: RefreshBuffers, RefreshError, OutputError, StateSnapshot,
     provider_is_const, provider_refresh_times, provider_sample, _write_forcing!,
-    sink_output_times, sink_write!, sink_flush!, _union_tstops
+    notify_forcing_refresh!, sink_output_times, sink_write!, sink_flush!, _union_tstops
 import EarthSciAST: build_refresh_callback, build_output_callback,
     build_checkpoint_callback
 import DiffEqCallbacks: PresetTimeCallback
@@ -65,7 +65,14 @@ end
 function build_refresh_callback(;
         providers::AbstractDict,
         buffers::RefreshBuffers,
+        owner,
         post_refresh::Function = () -> nothing
+    )
+    owner === nothing || applicable(notify_forcing_refresh!, owner) || throw(
+        ArgumentError(
+            "build_refresh_callback: `owner` must be the Problem or DiscreteMaterializer " *
+                "whose build reads `buffers`; got a $(typeof(owner))"
+        )
     )
     groups = _group_discrete_providers(providers, buffers)
     tstops = Float64[]
@@ -73,9 +80,10 @@ function build_refresh_callback(;
         tstops = _union_tstops(tstops, collect(Float64, provider_refresh_times(prov)))
     end
 
-    # At each anchor: sample, write each forcing into its buffer in place, run
-    # `post_refresh` (recomputes the derived discrete-cadence caches from the
-    # fresh buffers), then mark a derivative discontinuity. The flag must be
+    # At each anchor: sample, write each forcing into its buffer in place,
+    # announce the writes to the build that reads them, run `post_refresh`
+    # (recomputes the derived discrete-cadence caches from the fresh buffers),
+    # then mark a derivative discontinuity. The flag must be
     # `true`: `p` changed, so `f(u, p, t)` changed although `u` did not, and an
     # FSAL integrator would otherwise reuse the last stage's derivative computed
     # from the old forcing. `u` itself is not touched.
@@ -87,6 +95,7 @@ function build_refresh_callback(;
                 _write_forcing!(buffers[var], var, sample)
             end
         end
+        owner === nothing || notify_forcing_refresh!(owner)
         post_refresh()
         _derivative_discontinuity!(integrator, true)
         return nothing

@@ -35,14 +35,7 @@ function _stack_recurrence_groups(model::Model, index_sets::AbstractDict)
     for g in groups
         _stack_one_group!(variables, equations, isets, g)
     end
-    stacked = Model(
-        variables, equations, model.discrete_events, model.continuous_events,
-        model.subsystems;
-        tolerance = model.tolerance, tests = model.tests, analyses = model.analyses,
-        initialization_equations = model.initialization_equations,
-        guesses = model.guesses, system_kind = model.system_kind,
-        reference = model.reference
-    )
+    stacked = reconstruct(model; variables = variables, equations = equations)
     return stacked, isets
 end
 

@@ -154,9 +154,8 @@ end
     @testset "a mimicked FD-Jacobian fill evaluates the time tier exactly once" begin
         K, M = 4, 3
         buf = [10.0]
-        f!, u0, p, _ts, vm, _diag = ESM.Internal.build(
-            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
-        )
+        b = ESM.Internal.build(_tc_fastjx_model(K, M); param_arrays = Dict("F" => buf))
+        f!, u0, p, _ts, vm, _diag = b
         t = 1.75
         N = length(u0)
 
@@ -188,7 +187,7 @@ end
         # Trigger 2 — forcing refresh at the SAME t: notify bumps the epoch and
         # the very next call re-evaluates.
         buf[1] = 55.0
-        ESM.notify_forcing_refresh!()
+        ESM.notify_forcing_refresh!(b)
         du3 = _tc_call(f!, u0, p, t2)
         @test du3[vm["M.x1"]] === _tc_ref_du(K, 1, t2, 55.0; xj = u0[vm["M.x1"]])
 
@@ -220,9 +219,8 @@ end
     @testset "ForwardDiff Jacobian at fixed t reuses one time-tier fill" begin
         K, M = 4, 2
         buf = [3.0]
-        f!, u0, p, _ts, _vm, _diag = ESM.Internal.build(
-            _tc_fastjx_model(K, M); param_arrays = Dict("F" => buf)
-        )
+        b = ESM.Internal.build(_tc_fastjx_model(K, M); param_arrays = Dict("F" => buf))
+        f!, u0, p, _ts, _vm, _diag = b
         t = 0.6
         g!(d, uu) = f!(d, uu, p, t)
         J1 = ForwardDiff.jacobian(g!, zeros(length(u0)), u0)
@@ -233,7 +231,7 @@ end
         J2 = ForwardDiff.jacobian(g!, zeros(length(u0)), u0)
         @test J2 == J1                      # zero re-evaluations of the tier
 
-        ESM.notify_forcing_refresh!()
+        ESM.notify_forcing_refresh!(b)
         J3 = ForwardDiff.jacobian(g!, zeros(length(u0)), u0)
         @test J3 != J1                      # the refresh reached the Dual buffer
         # met went 3.0*scale → 30.0*scale and enters ∂/∂x linearly:
@@ -324,11 +322,10 @@ end
         buf = [6.0]
         mk() = _tc_fastjx_model(K, M)
         pa() = Dict("F" => buf)
-        fi, u0, p, _ts, _vm, ri = ESM.Internal.build(mk(); param_arrays = pa())
-        fun, _u3, _p3, _ts3, _vm3, rint = ESM.Internal.build(
-            mk();
-            param_arrays = pa(), compiler = :interpreter
-        )
+        bi = ESM.Internal.build(mk(); param_arrays = pa())
+        bu = ESM.Internal.build(mk(); param_arrays = pa(), compiler = :interpreter)
+        fi, u0, p, _ts, _vm, ri = bi
+        fun, _u3, _p3, _ts3, _vm3, rint = bu
         @test ri.stats.n_time_slots > 0
         @test rint.stats.n_const_slots == 0 && rint.stats.n_time_slots == 0
 
@@ -347,7 +344,8 @@ end
         for step in seq
             if step[1] === :refresh
                 buf[1] = step[2]
-                ESM.notify_forcing_refresh!()
+                ESM.notify_forcing_refresh!(bi)
+                ESM.notify_forcing_refresh!(bu)
                 continue
             end
             u, pp, t = step

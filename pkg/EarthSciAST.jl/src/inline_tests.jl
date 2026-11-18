@@ -789,9 +789,8 @@ end
 # too). A name that is neither is UNBOUND, which is what keeps a typo ("sub.gg")
 # an error rather than a silent zero.
 #
-# The suffix enumeration is the override resolver's own `_dotted_suffixes`
-# (src/tree_walk/build_caller_data.jl), shared rather than re-derived so the two positions
-# cannot drift apart again.
+# The suffixes are the override resolver's own (`NameTable`, src/name_table.jl),
+# so the two positions cannot drift apart.
 function _param_scope_with_aliases(
         params::AbstractDict,
         owner::AbstractString = ""
@@ -807,17 +806,11 @@ function _param_scope_with_aliases(
             haskey(out, rest) || (out[rest] = Float64(v))
         end
     end
-    # (3) Globally unambiguous dotted suffixes.
-    counts = Dict{String, Int}()
-    for k in keys(params)
-        for suffix in _dotted_suffixes(String(k))
-            counts[suffix] = get(counts, suffix, 0) + 1
-        end
-    end
-    for (k, v) in params
-        for suffix in _dotted_suffixes(String(k))
-            (counts[suffix] == 1 && !haskey(out, suffix)) && (out[suffix] = Float64(v))
-        end
+    # (3) Globally unambiguous dotted suffixes (esm-spec §6.6.2 rule 3).
+    byname = Dict{String, Any}(String(k) => v for (k, v) in params)
+    for (suffix, names) in NameTable(keys(byname)).by_suffix
+        (length(names) == 1 && !haskey(out, suffix)) &&
+            (out[suffix] = Float64(byname[only(names)]))
     end
     return out
 end

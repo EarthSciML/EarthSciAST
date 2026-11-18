@@ -15,7 +15,7 @@
 # THREADED TIER, and why this file pins the SERIAL path explicitly.
 # The codegen tier can run a section's cell axis as static chunks on
 # Polyester's worker pool (`_run_cg_maybe_threaded!`, codegen_kernel.jl;
-# the dispatch is thread_dispatch.jl's, and allocates nothing either).
+# the dispatch is threading.jl's, and allocates nothing either).
 #
 # The tier arms itself whenever Julia runs with more than one thread, so
 # whether these measurements see the serial or the threaded path depends on

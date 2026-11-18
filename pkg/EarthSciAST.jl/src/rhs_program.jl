@@ -536,9 +536,8 @@ function _inst_kind(@nospecialize(x), @nospecialize(k), c::_InstCtx)
     elseif x isa _AccScratch
         return c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
     elseif x isa _ForcingEpoch
-        # A workspace tracks its forcing set's epoch itself, never the
-        # process-wide refresh count.
-        e = _ForcingEpoch(UInt64(0), false)
+        # A workspace tracks its forcing set's epoch itself.
+        e = _ForcingEpoch(UInt64(0))
         push!(c.epochs, e)
         return c.memo[x] = e
     elseif x isa _SecTCache
