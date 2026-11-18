@@ -102,8 +102,8 @@ func TestRewriteEngine_GodunovBeatsInnerDerivative(t *testing.T) {
 }
 
 // TestRewriteEngine_NestedDerivativeFixpoint exercises the bounded fixpoint:
-// laplacian -> D(D(u,x),x)+D(D(u,y),y) (pass 1), then each nested D -> stencil
-// (pass 2). A produced body is re-scanned only in a SUBSEQUENT pass.
+// a second derivative D(D(u,x),x) lowers in two passes: the outer D is
+// rewritten (pass 1), then the D its body produces -> stencil (pass 2). A produced body is re-scanned only in a SUBSEQUENT pass.
 func TestRewriteEngine_NestedDerivativeFixpoint(t *testing.T) {
 	got := lowerConfFixture(t, "fixpoint_nested_deriv")
 	want := decodeFixture(t, string(confFixtureBytes(t, "fixpoint_nested_deriv", "expanded.esm")))
@@ -115,9 +115,6 @@ func TestRewriteEngine_NestedDerivativeFixpoint(t *testing.T) {
 	}
 
 	exprJSON := mustJSON(t, modelMDefinition(t, got, "lap"))
-	if strings.Contains(exprJSON, "laplacian") {
-		t.Errorf("expanded lap still contains laplacian: %s", exprJSON)
-	}
 	if strings.Contains(exprJSON, `"op":"D"`) {
 		t.Errorf("expanded lap still contains a nested D op: %s", exprJSON)
 	}

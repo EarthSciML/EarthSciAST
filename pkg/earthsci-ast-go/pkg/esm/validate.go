@@ -763,8 +763,8 @@ func coupledSystemNames(file *ESMFile) map[string]bool {
 // v0.8.0 removed `Domain.spatial`, so a coordinate has NO declaration site in
 // the schema: it is named directly in an expression (`ic(u) ~ 0.5*(1 +
 // tanh((x - 0.3)/0.15))`, tests/valid/initial_conditions/
-// expression_ignition_front_1d.esm) and as the `dim` of a `grad`/`div`/
-// `laplacian` node. It is a coordinate of the domain, not an entry of any
+// expression_ignition_front_1d.esm), as the `wrt` of a spatial `D` and as the
+// `dim` of a node that carries one. It is a coordinate of the domain, not an entry of any
 // `variables` block — reporting it as an undefined variable rejects a valid
 // file.
 var conventionalCoordinateNames = []string{"x", "y", "z", "lon", "lat", "lev"}
@@ -1149,7 +1149,7 @@ func (s *structuralScan) creditIndependentVariable(allVars map[string]bool) {
 // in-scope. Like the independent variable, a coordinate belongs to the DOMAIN,
 // not to any `variables` block — v0.8.0 removed `Domain.spatial`, so it has no
 // declaration site at all — yet an expression may name it directly (the `x` of
-// an expression initial condition, the `dim` of a `grad`). See coordinateNames.
+// an expression initial condition, the `wrt` of a spatial `D`). See coordinateNames.
 func (s *structuralScan) creditCoordinateNames(allVars map[string]bool) {
 	for name := range s.coords {
 		allVars[name] = true
@@ -2326,7 +2326,7 @@ func typedUpdateSites(update any, varPath string, out []string) []string {
 
 // DeprecatedRecordsPerSampleSites lists, sorted, the JSON pointers at which a
 // loaded document writes the deprecated `records_per_sample` (esm-spec §8.3,
-// §8.5.1; removed at esm 3.0.0): `/data_sources/<S>/temporal/records_per_sample`,
+// §8.5.1; removed in a later major): `/data_sources/<S>/temporal/records_per_sample`,
 // `/models/<M>[/subsystems/<S>…]/variables/<v>/update[/<i>]/from/records_per_sample`
 // and
 // `/reaction_systems/<R>[/subsystems/<S>…]/parameters/<p>/update[/<i>]/from/records_per_sample`
@@ -2375,7 +2375,7 @@ func warnDeprecatedRecordsPerSample(file *ESMFile) {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"warning: %s: `records_per_sample` is deprecated and is removed at esm 3.0.0; "+
+		"warning: %s: `records_per_sample` is deprecated and is removed in a later major version; "+
 			"the number of records a data-fed parameter receives is said by its record shape, "+
 			"two when its first axis is an interval index set with \"records\": true (esm-spec §8.5.1). "+
 			"Written at: %s.\n", codeDeprecatedRecordsPerSample, strings.Join(sites, ", "))

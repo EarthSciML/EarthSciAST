@@ -93,7 +93,7 @@ func TestUnevaluableOperatorClassification(t *testing.T) {
 		_, err := Evaluate(ExprNode{Op: op, Args: []any{"x"}}, map[string]float64{"x": 1})
 		requireEvaluationCode(t, op, err, "unevaluable_operator", op)
 	}
-	for _, op := range []string{"grad", "godunov_hamiltonian"} {
+	for _, op := range []string{"upwind_flux", "godunov_hamiltonian"} {
 		_, err := Evaluate(ExprNode{Op: op, Args: []any{"x"}}, map[string]float64{"x": 1})
 		requireEvaluationCode(t, op, err, "unlowered_operator", op)
 	}
@@ -104,19 +104,19 @@ func TestUnevaluableOperatorClassification(t *testing.T) {
 // evaluation would never reach it — an untaken `ifelse` branch, or an `and`/`or`
 // operand past the short-circuit.
 func TestUnloweredOperatorInUnreachedOperandIsRefused(t *testing.T) {
-	grad := ExprNode{Op: "grad", Args: []any{"p"}, Dim: strPtr("x")}
+	dx := ExprNode{Op: "upwind_flux", Args: []any{"p"}, Dim: strPtr("x")}
 	exprs := map[string]ExprNode{
 		"ifelse untaken branch": {Op: "ifelse", Args: []any{
-			ExprNode{Op: ">", Args: []any{"u", 100.0}}, grad, 1.0}},
-		"and after a false operand": {Op: "and", Args: []any{0.0, grad}},
-		"or after a true operand":   {Op: "or", Args: []any{1.0, grad}},
+			ExprNode{Op: ">", Args: []any{"u", 100.0}}, dx, 1.0}},
+		"and after a false operand": {Op: "and", Args: []any{0.0, dx}},
+		"or after a true operand":   {Op: "or", Args: []any{1.0, dx}},
 	}
 	for label, expr := range exprs {
 		v, err := Evaluate(expr, map[string]float64{"u": 1, "p": 2})
 		if err == nil {
-			t.Errorf("%s: `grad` is unlowered and must be refused before evaluation, got value %v", label, v)
+			t.Errorf("%s: `upwind_flux` is unlowered and must be refused before evaluation, got value %v", label, v)
 			continue
 		}
-		requireEvaluationCode(t, label, err, "unlowered_operator", "grad")
+		requireEvaluationCode(t, label, err, "unlowered_operator", "upwind_flux")
 	}
 }

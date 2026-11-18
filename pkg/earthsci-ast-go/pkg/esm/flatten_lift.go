@@ -19,7 +19,7 @@ import (
 // (reactions -> a generic `D(sp) = Σ terms`; then `operator_compose` merges each
 // species' reaction ODE with the spatial operator's advection makearray). What
 // operator_compose does NOT do is array-ify the result: the merged
-// `D(sp) = <reaction> + <-u·makearray(grad(sp))>` still has a SCALAR `sp` while
+// `D(sp) = <reaction> + <-u·makearray(D(sp, wrt: x))>` still has a SCALAR `sp` while
 // its advection makearray indexes `sp` per grid cell. This pass performs the
 // pointwise promotion — wrapping each merged state ODE in an `faq` over the
 // grid, indexing the bare reaction species per cell and each operator makearray
