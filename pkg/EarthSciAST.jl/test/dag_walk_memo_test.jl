@@ -269,14 +269,14 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
         # rule's semantics — while completing in O(depth).
         deep = _doubling_dag(_v("g"), 20)
         tot = Dict{String, Int}(); unc = Dict{String, Int}()
-        t = @elapsed ESM._count_obs_refs!(deep, names, tot, unc, false)
+        t = @elapsed ESM._count_obs_refs!(deep, names, tot, unc)
         @test t < 10
         @test tot["g"] == 2^20
         @test unc["g"] == 2^20
         # A guard above the shared DAG forwards NO unconditional multiplicity.
         guarded = _op("ifelse", _v("c"), deep, _n(0.0))
         tot2 = Dict{String, Int}(); unc2 = Dict{String, Int}()
-        ESM._count_obs_refs!(guarded, names, tot2, unc2, false)
+        ESM._count_obs_refs!(guarded, names, tot2, unc2)
         @test tot2["g"] == 2^20
         @test get(unc2, "g", 0) == 0
         # Small-tree reference values (identical to the old per-path recursion):
@@ -287,7 +287,7 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
             _op("ifelse", _v("q"), _v("g"), _v("g"))
         )
         tot3 = Dict{String, Int}(); unc3 = Dict{String, Int}()
-        ESM._count_obs_refs!(small, names, tot3, unc3, false)
+        ESM._count_obs_refs!(small, names, tot3, unc3)
         @test tot3["g"] == 4
         @test unc3["g"] == 2
         # Barrier ops (index/aggregate/makearray) tally DISTINCT names once per
@@ -295,7 +295,7 @@ const _CHAIN_ICS = Dict("M.psi[1]" => 1.0, "M.psi[2]" => 2.0, "M.psi[3]" => 3.0)
         gat = _op("index", _v("arr"), _op("+", _v("g"), _v("g")))
         both = _op("+", gat, gat)
         tot4 = Dict{String, Int}(); unc4 = Dict{String, Int}()
-        ESM._count_obs_refs!(both, names, tot4, unc4, false)
+        ESM._count_obs_refs!(both, names, tot4, unc4)
         @test tot4["g"] == 2
         @test get(unc4, "g", 0) == 0
     end

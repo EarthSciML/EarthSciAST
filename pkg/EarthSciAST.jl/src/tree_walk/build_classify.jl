@@ -1004,10 +1004,10 @@ function _plan_observed_slots(
         tot = Dict{String, Int}()
         unc = Dict{String, Int}()
         for rhs in scalar_rhs
-            _count_obs_refs!(rhs, candidates, tot, unc, false)
+            _count_obs_refs!(rhs, candidates, tot, unc)
         end
         for name in candidates
-            _count_obs_refs!(raw_obs[name], candidates, tot, unc, false)
+            _count_obs_refs!(raw_obs[name], candidates, tot, unc)
         end
         demote = String[n for n in candidates if get(unc, n, 0) == 0]
         isempty(demote) && break
@@ -1205,80 +1205,42 @@ end
 # an unselected makearray region), so a reference below them is not provably
 # evaluated — the conservative answer is today's inlining.
 #
-# Occurrences are counted as PATHS through the expression, exactly as the
-# original per-path recursion did — the per-path multiplicity is SEMANTIC
-# here (the demotion rule reasons about total/unconditional occurrence
-# counts), so this walk must NOT be collapsed to distinct-node visits. It is
-# instead computed by multiplicity propagation over the UNIQUE-node DAG,
-# mirroring `_cse_count!` (scalar_cse.jl): one reverse-postorder pass pushes each
-# node's (total, unconditional) path multiplicity down its `args` edges — a
-# conditional argument edge forwards no unconditional multiplicity — and each
-# unique node then contributes its multiplicities to its referenced names
-# ONCE. On a pure tree this produces the same numbers as the recursion,
-# occurrence for occurrence; on the shared DAGs template lowering produces it
-# is O(nodes + edges) instead of exponential (ESS-0hh). Additions saturate at
-# `typemax(Int)` (`_sat_add`) — the demotion rule only ever asks `unc == 0`.
-#
-# The DFS mirrors the recursion's edge set exactly: only `args` of
-# non-barrier ops are descended; a barrier node (aggregate/makearray/index)
-# is a leaf whose whole subtree is tallied by `_referenced_var_names` (one
-# distinct-name tally per PATH to the barrier, i.e. × its total multiplicity).
+# Occurrences are counted as PATHS through the expression: the demotion rule
+# reasons about total and unconditional occurrence counts, so this is not a
+# distinct-node count. The path counts come from the unique-node walk
+# (`_dag_postorder`, `_dag_path_counts`, dag.jl) over `args` edges, a barrier
+# node (faq / makearray / index) being a leaf whose referenced names are
+# tallied once per path to it. Additions saturate at `typemax(Int)`; the rule
+# only asks whether the unconditional count is zero.
 _count_obs_barrier(op::String) =
     _is_faq_op(op) || op == "makearray" || op == "index"
 
+_count_obs_kids(n::OpExpr) = _count_obs_barrier(n.op) ? () : n.args
+
 function _count_obs_refs!(
-        e::ASTExpr, names::Set{String},
-        tot::Dict{String, Int}, unc::Dict{String, Int}, cond::Bool
+        e::ASTExpr, names::Set{String}, tot::Dict{String, Int}, unc::Dict{String, Int}
     )
     if e isa VarExpr
         if e.name in names
             tot[e.name] = _sat_add(get(tot, e.name, 0), 1)
-            cond || (unc[e.name] = _sat_add(get(unc, e.name, 0), 1))
+            unc[e.name] = _sat_add(get(unc, e.name, 0), 1)
         end
         return nothing
     end
     e isa OpExpr || return nothing
-    # ---- unique nodes in postorder (children before parents, args edges) ----
-    order = OpExpr[]
-    seen = IdDict{OpExpr, Nothing}()
-    function dfs(n::OpExpr)
-        haskey(seen, n) && return
-        seen[n] = nothing
-        if !_count_obs_barrier(n.op)
-            for a in n.args
-                a isa OpExpr && dfs(a)
-            end
-        end
-        return push!(order, n)
-    end
-    dfs(e)
-    # ---- multiplicity propagation: reverse postorder = parents first ----
-    total = IdDict{OpExpr, Int}()
-    uncond = IdDict{OpExpr, Int}()
-    total[e] = 1
-    uncond[e] = cond ? 0 : 1
-    for i in length(order):-1:1
-        n = order[i]
-        _count_obs_barrier(n.op) && continue
-        t = get(total, n, 0)
-        u = get(uncond, n, 0)
-        for (j, a) in enumerate(n.args)
-            a isa OpExpr || continue
-            total[a] = _sat_add(get(total, a, 0), t)
-            if u > 0 && !_cse_arg_conditional(n.op, j)
-                uncond[a] = _sat_add(get(uncond, a, 0), u)
-            end
-        end
-    end
-    # ---- per-unique-node contributions, weighted by multiplicity ----
-    for n in order
-        t = get(total, n, 0)
+    keep(a) = a isa OpExpr
+    order, pos = _dag_postorder(e::OpExpr, _count_obs_kids, keep)
+    total, uncond = _dag_path_counts(
+        order, pos, _count_obs_kids, keep, (n, j) -> _cse_arg_conditional(n.op, j)
+    )
+    for (i, n) in enumerate(order)
+        t = total[i]
         if _count_obs_barrier(n.op)
             for r in _referenced_var_names(n)
                 r in names && (tot[r] = _sat_add(get(tot, r, 0), t))
             end
         else
-            u = get(uncond, n, 0)
+            u = uncond[i]
             for (j, a) in enumerate(n.args)
                 (a isa VarExpr && a.name in names) || continue
                 tot[a.name] = _sat_add(get(tot, a.name, 0), t)
