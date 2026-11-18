@@ -91,15 +91,18 @@ end
 # dispatch is a tuning threshold (`ESS_THREADS_MIN_WORK`), read on the
 # right-hand-side call where the build's plan is no longer in scope.
 
-_plan_all(name::Symbol, strict::Bool, on::Bool) =
-    CompilerPlan(
-    name, strict,
-    on, on, on, on, on, on, on, on, on,
-    on, on, on, on,
-    on, on, on, on, on, on,
-    on, on,
-    on, on, on
-)
+# A plan by keyword: every tier flag defaults to `compiled` (all on for a
+# compiling plan, all off for the interpreter's). Tests and bisections switch
+# single tiers off by naming them.
+function CompilerPlan(name::Symbol; strict::Bool, compiled::Bool, tiers...)
+    flags = fieldnames(CompilerPlan)[3:end]
+    for k in keys(tiers)
+        k in flags || throw(ArgumentError("CompilerPlan: no tier flag `$k`"))
+    end
+    return CompilerPlan(name, strict, (Bool(get(tiers, f, compiled)) for f in flags)...)
+end
+
+_plan_all(name::Symbol, strict::Bool, on::Bool) = CompilerPlan(name; strict = strict, compiled = on)
 
 # `plan` with the named fields replaced.
 _plan_with(plan::CompilerPlan; kw...) =
@@ -113,14 +116,50 @@ _setup_compile_once_enabled() = _compiler_plan_now().setup_map_compile_once
 """
     _compiler_plan(compiler::Symbol) -> CompilerPlan
 
-Expand a vocabulary value into the tier plan that implements it. Raises for the
-values this binding does not provide, never substituting another one.
+Check that `compiler` is a vocabulary value this session can run
+(`_check_compiler`) and expand it into the tier plan that implements it
+(`_plan`). Raises for the values this binding does not provide, never
+substituting another one.
 """
-function _compiler_plan(compiler::Symbol)
-    if compiler === :native
-        return _plan_all(:native, true, true)
-    elseif compiler === :interpreter
-        return _plan_all(:interpreter, false, false)
+_compiler_plan(compiler::Symbol) = (_check_compiler(compiler); _plan(compiler))
+
+"""
+    _plan(compiler::Symbol) -> CompilerPlan
+
+The tier plan of a vocabulary value already checked by `_check_compiler`: a
+pure expansion, with no availability probe, for an evaluation on behalf of a
+problem that compiler built.
+"""
+function _plan(compiler::Symbol)
+    compiler === :native && return _plan_all(:native, true, true)
+    compiler === :interpreter && return _plan_all(:interpreter, false, false)
+    # `:xla`'s plan is `native`'s: the emitter lowers the compiled tree-walk
+    # intermediate representation, so the tiers that build it all run, and
+    # they run strictly — a rule `native` would refuse is a rule `:xla` has no
+    # program for either.
+    compiler === :xla && return _plan_all(:xla, true, true)
+    # `:mtk`: every right-hand-side tier is OFF, since this compiler emits
+    # nothing of this package's own; `strict` stays TRUE, so `:mtk` refuses a
+    # document it cannot express by name (`compiler_refused_rule`). The
+    # construction-time compile-once forms stay ON: ModelingToolkit owns the
+    # right-hand side, not the evaluations this package still performs for the
+    # problem (a `seed_ic!` hook's `seed_expression_ic!` above all), which run
+    # under this plan strictly and so need the compiled-once form.
+    compiler === :mtk &&
+        return CompilerPlan(:mtk; strict = true, compiled = false, setup_map_compile_once = true)
+    return _check_compiler(compiler)
+end
+
+"""
+    _check_compiler(compiler::Symbol)
+
+Raise `compiler_unknown` for a value outside the vocabulary and
+`compiler_unavailable` for one this session cannot run; return `nothing`
+otherwise.
+"""
+function _check_compiler(compiler::Symbol)
+    if compiler === :native || compiler === :interpreter
+        return nothing
     elseif compiler === :xla
         # The specialty compiler that needs a HEAVY EXTERNAL DEPENDENCY: the
         # direct StableHLO emitter, which exists only with Reactant in the
@@ -131,13 +170,9 @@ function _compiler_plan(compiler::Symbol)
         # this process does not have is `compiler_unavailable` — so neither
         # waits for a load, a flatten and a build. Everything else about the
         # lane is in compiler_xla.jl.
-        # The PLAN is `native`'s: the emitter lowers the compiled tree-walk
-        # intermediate representation, so the tiers that build it all run, and
-        # they run strictly — a rule `native` would refuse is a rule `:xla` has
-        # no program for either.
         _xla_extension()
         _xla_client(_xla_device())
-        return _plan_all(:xla, true, true)
+        return nothing
     elseif compiler === :mtk
         # VOCABULARY FIRST, AVAILABILITY SECOND. `:mtk` is a member of the
         # closed vocabulary, so a session without ModelingToolkit hears
@@ -161,19 +196,7 @@ function _compiler_plan(compiler::Symbol)
                 ERROR_CODES.COMPILER_UNAVAILABLE
             )
         )
-        # Every right-hand-side tier is OFF: this compiler emits nothing of
-        # this package's own, so a tier flag would describe a cascade that
-        # never runs. `strict` stays TRUE — `:mtk` refuses a document it cannot
-        # express by name (`compiler_refused_rule`) rather than building part
-        # of it, which is what `_refuse_rule` reads off the plan in force.
-        #
-        # The construction-time compile-once forms stay ON. ModelingToolkit
-        # owns the right-hand side, not the evaluations this package still
-        # performs for the problem — a `seed_ic!` hook's `seed_expression_ic!`
-        # above all. Those run under this plan, strictly, so they need the
-        # compiled-once form `native` gives them: with it off every seed would
-        # take the per-cell route, which a strict plan refuses.
-        return _plan_with(_plan_all(:mtk, true, false); setup_map_compile_once = true)
+        return nothing
     elseif compiler === :sympy
         throw(
             SimulateError(
@@ -791,8 +814,13 @@ Raise `compiler_refused_rule` for the compiler in force. The message names the
 compiler, the rule (component-qualified) and the deepest reason, which is the
 shape §2.5.10 fixes and what the compiler-agreement tier reads back.
 """
-function _refuse_rule(rule::AbstractString, reason::AbstractString)
-    plan = _compiler_plan_now()
+_refuse_rule(rule::AbstractString, reason::AbstractString) =
+    _refuse_rule(_compiler_plan_now(), rule, reason)
+
+# The refusal under an explicit `plan`, for one raised after the build that
+# produced a problem has returned (the `:xla` emission works on the build's
+# product).
+function _refuse_rule(plan::CompilerPlan, rule::AbstractString, reason::AbstractString)
     throw(
         TreeWalkError(
             ERROR_CODES.COMPILER_REFUSED_RULE,

@@ -113,28 +113,6 @@ caller reach.
 function _xla_client end
 
 """
-    _xla_refuse(rule, reason) -> never returns
-
-`compiler_refused_rule` for the `:xla` compiler, in the exact message shape
-`_refuse_rule` produces — `compiler=:xla refuses '<rule>': <reason>` — which is
-what esm-libraries-spec §2.5.10 fixes and what the compiler-agreement adapter
-reads back.
-
-It is spelled here rather than through `_refuse_rule` because these refusals are
-raised AFTER the build's plan has gone out of scope (the emission happens on the
-build's product, not inside it), and a refusal that read the ambient plan there
-would name `:native` for a run the caller asked to be `:xla`.
-"""
-_xla_refuse(rule::AbstractString, reason::AbstractString) =
-    throw(
-    TreeWalkError(
-        ERROR_CODES.COMPILER_REFUSED_RULE,
-        "compiler=:xla refuses '$rule': $reason",
-        String(rule)
-    )
-)
-
-"""
     _xla_check_form(compiler, form)
 
 `compiler = :xla` builds ONE thing: the out-of-place compiled intermediate
@@ -162,7 +140,8 @@ end
 # verbatim rather than an anonymous failure. Nothing here retries, demotes or
 # falls back: `:xla` either runs the whole document or names what it refused.
 function _xla_refuse_emit(err::DirectEmitError)
-    return _xla_refuse(
+    return _refuse_rule(
+        _plan(:xla),
         err.rule,
         "the direct StableHLO emitter cannot lower $(err.construct): $(err.detail)"
     )
@@ -190,7 +169,8 @@ function _xla_compile_rhs end
 # result to say so, so it is a named refusal instead.
 function _xla_refuse_live_buffers(names)
     ns = sort!(String.(collect(names)))
-    return _xla_refuse(
+    return _refuse_rule(
+        _plan(:xla),
         "live forcing buffers (" * join(ns, ", ") * ")",
         "this document binds $(length(ns)) live forcing buffer(s), which a " *
             "compiled program must receive as arguments and have re-synced to the " *
