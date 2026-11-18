@@ -814,7 +814,7 @@ function _build_compile_evaluator(
     mat_time_levels = Any[]
     recur_names = _recurrence_names(mat_defs, mat_vars)
     # The const-cadence observeds fill in their own levels, ahead of the rest
-    # and only when `p` moves (`_make_rhs_with_obs_buffers`). The untiered
+    # and only when `p` moves (`_RhsObserved`, rhs_assembly.jl). The untiered
     # build (`compiler = :interpreter`, the oracle) refills everything on every
     # call, as its prelude does; the out-of-place product has no such skip.
     mat_const = if form === :inplace && !_untiered() && !isempty(mat_vars)
@@ -1093,27 +1093,24 @@ function _build_compile_evaluator(
     # `f!(du, u, p, t)`; `:oop` is the compiled IR itself, for a compiled
     # backend to lower. `:oop` does not evaluate on the host.
     f! = if form === :inplace
-        # The factored array-observed fills wrap the state RHS: `f!` copies `u`
-        # into the extended value vector, fills every observed buffer in
-        # dependency order, and hands the extended vector to the state RHS as its
-        # `u`. With nothing materialized the wrapper is not applied at all, so the
-        # closure (and its zero-allocation property) is byte-identical.
-        # The inner state RHS keeps its own `scan_folds` (the prefix reductions
+        # The materialized array observeds fill their buffers in dependency
+        # order before the state stage runs over the extended slot space
+        # (`_RhsObserved`, `nothing` when nothing is materialized); the discrete
+        # caches are brought up to the call's `p` first (`_DiscreteRefill`).
+        # The state stage keeps its own `scan_folds` (the prefix reductions
         # among the STATE equations); each fill level carries its own.
-        # The discrete caches are brought up to the call's `p` first (see
-        # `_DiscreteRefill`); without a cache the wrapper is not applied.
-        rhs0 = _make_rhs_with_obs_buffers(
-            _make_rhs(
-                rhs_list, scalar_prelude, scalar_cache, acc_kernels,
-                const_slots, time_slots, dyn_slots, scan_folds,
-                _make_contraction_section(array_contractions);
-                scalar = scalar_section, fused_scans = state_fused_scans,
-                nst = obs_nst
+        _make_rhs(
+            rhs_list, scalar_prelude, scalar_cache, acc_kernels,
+            const_slots, time_slots, dyn_slots, scan_folds,
+            _make_contraction_section(array_contractions);
+            scalar = scalar_section, fused_scans = state_fused_scans,
+            nst = obs_nst,
+            observed = _rhs_observed(
+                n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
+                Tuple(mat_time_levels), forcing_epoch
             ),
-            n_total, n_states, Tuple(mat_levels), Tuple(mat_const_levels),
-            Tuple(mat_time_levels), forcing_epoch
+            refill = discrete_refill
         )
-        discrete_refill === nothing ? rhs0 : _make_rhs_discrete_refill(rhs0, discrete_refill)
     elseif form === :oop
         # `pgather` (raw `param_arrays` buffers + discrete-cadence caches) rides
         # along so the out-of-place build can expose its live forcing buffers as

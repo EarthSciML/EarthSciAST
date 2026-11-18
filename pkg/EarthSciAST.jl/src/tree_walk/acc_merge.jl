@@ -1,8 +1,8 @@
 # ========================================================================
 # tree_walk/acc_merge.jl — part of the tree-walk evaluator (array-IR B, stage 3/4).
 # Included by src/tree_walk.jl AFTER access_kernel.jl (`_AccKernel` and
-# descriptors). Owns the per-cell → access-kernel merge, the structural
-# grouping signature, and the in-place RHS closure generator `_make_rhs`.
+# descriptors). Owns the per-cell → access-kernel merge and its structural
+# grouping signature.
 #
 # The PER-CELL fallback's whole-array host: group an array equation's compiled
 # per-cell `(du_slot, _Node)` entries by structural signature and merge each
@@ -239,29 +239,4 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
         )
     end
     return kernels
-end
-
-# The in-place right-hand side over the build's sections (`_rhs_closure`,
-# scalar_codegen.jl). With a scalar section the scalar equations and the
-# prelude run as generated code and only what it left behind is walked;
-# without one every prelude slot and scalar equation is walked.
-function _make_rhs(
-        rhs_list::AbstractVector{Tuple{Int, _Node}},
-        cse_prelude::AbstractVector{_Node},
-        cse_cache::_CSECache,
-        acc_kernels::AbstractVector{_AccKernel},
-        const_slots::AbstractVector{Int},
-        time_slots::AbstractVector{Int},
-        dyn_slots::AbstractVector{Int},
-        scan_folds::AbstractVector{_ScanFold} = _ScanFold[],
-        array_contractions = _make_contraction_section(_ArrayContraction[]);
-        scalar = nothing, fused_scans::Tuple = (), nst::Int = 0
-    )
-    sec = scalar === nothing ?
-        _walked_scalar_section(rhs_list, cse_prelude, const_slots, time_slots, dyn_slots) :
-        scalar
-    return _rhs_closure(
-        sec, cse_prelude, cse_cache, acc_kernels, const_slots, time_slots,
-        _make_scan_section(scan_folds, fused_scans), array_contractions; nst = nst
-    )
 end

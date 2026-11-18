@@ -1,6 +1,5 @@
-# tree_walk/obs_buffers.jl — run-time types of a build's right-hand side: the discrete refill,
-# the two-buffer observed slot space (`_ObsSplitVec`, `_ObsExtVec`) and the
-# observed fill levels.
+# tree_walk/obs_buffers.jl — run-time types of a build's right-hand side: the discrete refill
+# and the two-buffer observed slot space (`_ObsSplitVec`, `_ObsExtVec`).
 
 # The right-hand side's check that the discrete caches hold its own `p` and the
 # forcing they were filled from, and the refill when they do not. The `p`
@@ -36,15 +35,6 @@ end
 @inline function (g::_DiscreteRefill)(p)
     _discrete_forcing_current(g) || g.materialize!()
     return nothing
-end
-
-# The in-place right-hand side with the discrete caches brought up to its `p`
-# before the state equations read them.
-function _make_rhs_discrete_refill(inner::F, refill::G) where {F, G}
-    return function (du, u, p, t)
-        refill(p)
-        return inner(du, u, p, t)
-    end
 end
 
 # ============================================================
@@ -187,85 +177,4 @@ end
         s.tpalt === _CSE_INVALID || (s.tpalt = _CSE_INVALID)
     end
     return nothing
-end
-
-# Wrap the compiled state RHS with the per-call observed fills. Returns `f_state!`
-# UNCHANGED when nothing is materialized, so every model without a factored array
-# observed keeps a byte-identical closure (and its zero-allocation property).
-# `levels` is a vector of
-# `(scalar_nodes, kernel_section, scan_folds, array_contractions,
-# recurrence_sweeps)` in dependency order. `const_levels` has the same shape and
-# holds the const-cadence observeds (`_const_cadence_mat_obs`), which read no
-# `levels` entry; they run first, and only when the buffer's const stamp says
-# `p` moved or the buffer is new. `time_levels` holds the time-cadence ones,
-# which read only const ones and each other; they run next, and only when
-# `(p, t, the build's forcing epoch)` moved — so the columns of a Jacobian, all
-# at one `t`, fill them once.
-function _make_rhs_with_obs_buffers(
-        f_state!, n_total::Int, n_states::Int,
-        levels::Tuple, const_levels::Tuple = (),
-        time_levels::Tuple = (),
-        epoch::_ForcingEpoch = _new_forcing_epoch()
-    )
-    isempty(levels) && isempty(const_levels) && isempty(time_levels) && return f_state!
-    ext = _ObsExtVec(n_total - n_states, epoch)
-    function f!(du, u, p, t)
-        T = _rhs_value_type(u, p, t)
-        o = _obsext_buf(ext, T)
-        uv = _ObsSplitVec(_obsext_state(ext, u, T), o, n_states)
-        duv = _ObsSplitVec(du, o, n_states)
-        if !isempty(const_levels) && _obsext_const_stale(ext, T, p)
-            _fill_obs_levels!(const_levels, duv, uv, p, t, T)
-            _obsext_mark_const!(ext, T, p)
-        end
-        if !isempty(time_levels) && _obsext_t_stale(ext, T, p, t)
-            _fill_obs_levels!(time_levels, duv, uv, p, t, T)
-            _obsext_mark_t!(ext, T, p, t)
-        end
-        # Fill the observed buffers level by level: a level's defs read only the
-        # state and STRICTLY LOWER levels, both already valid in `uv`.
-        _fill_obs_levels!(levels, duv, uv, p, t, T)
-        f_state!(du, uv, p, t)
-        return nothing
-    end
-    return f!
-end
-
-# The levels are a TUPLE, walked by tail recursion so the loop unrolls and every
-# `_KernelSection` call site is statically dispatched — a `Vector` of levels
-# would box each heterogeneously-parameterized section and cost an allocation
-# per level per RHS call (the RHS must stay allocation-free in steady state).
-#
-# `ue` is the slot space a level writes (`du`) and reads (`u`): one full-length
-# vector, or the two views `f!` passes, which share the observed buffer and
-# differ in the state part (the integrator's `du` and `u`). A level writes only
-# its own observed slots — except a fused scan that also computes a state
-# equation from each value it folds (scan_fused.jl), which writes that
-# equation's `du` slots.
-@inline _fill_obs_levels!(levels::Tuple, ue, p, t, ::Type{T}) where {T} =
-    _fill_obs_levels!(levels, ue, ue, p, t, T)
-@inline _fill_obs_levels!(::Tuple{}, due, ue, p, t, ::Type{T}) where {T} = nothing
-@inline function _fill_obs_levels!(levels::Tuple, due, ue, p, t, ::Type{T}) where {T}
-    lv = levels[1]
-    ents = lv[1]
-    @inbounds for k in eachindex(ents)
-        e = ents[k]
-        due[e[1]] = _eval_node(e[2], ue, p, t, T)
-    end
-    lv[2](due, ue, p, t, T)
-    # ess-scan: this level's forward prefix reductions accumulate in place over
-    # the terms the kernel section just wrote — the same post-pass, in the same
-    # position, that `_make_rhs` runs behind the state kernel section. Empty for
-    # every level whose observeds carry no cumulative reduction.
-    sf = lv[3]
-    isempty(sf) || _apply_scan_folds!(due, ue, p, t, sf)
-    # ess-array-contraction: this level's whole-array contraction nests, in the
-    # same position behind the kernel section that `_make_rhs` puts them in.
-    ac = lv[4]
-    isempty(ac) || _apply_array_contractions!(due, ue, p, t, ac, T)
-    # This level's causal self-references, each one ordered sweep over its own
-    # buffer (recurrence_sweep.jl). Nothing else in the level reads them. A
-    # sweep reads and writes only observed slots, which both views share.
-    _run_recurrence_sweeps!(lv[5], ue, p, t, T)
-    return _fill_obs_levels!(Base.tail(levels), due, ue, p, t, T)
 end

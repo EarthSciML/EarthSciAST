@@ -82,10 +82,8 @@ function _lc_holds_license(x, seen = IdDict{Any, Nothing}(), depth = 0)
     return false
 end
 
-# The kernel section of an evaluator, through the wrapper of a build that
-# fills array observeds into buffers.
-_lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_section) :
-    _lc_section(getfield(f, :f_state!))
+# The kernel section of an evaluator's state stage.
+_lc_section(f) = f.state.kernels
 
 @testset "per-cell evaluation needs a license" begin
 

@@ -2725,7 +2725,7 @@ end
     return nothing
 end
 
-# ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
+# ---- The RHS's kernel section (wired into `_make_rhs`, rhs_assembly.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
 # plus the residual kernels the emitter declined. The `F === Nothing` branch
 # folds away per closure specialization. Emitted kernels write disjoint du
@@ -2817,7 +2817,7 @@ end
 # the codegen tier off (or an empty emission) the section is the plain kernel
 # loop.
 # `shared_cache`: the build's scalar prelude `_CSECache`, passed ONLY by the
-# `_make_rhs` call site (acc_merge.jl) — the one place where the section
+# `_make_rhs` call site (rhs_assembly.jl) — the one place where the section
 # provably runs after that cache's prelude tiers were filled in the same `f!`
 # call. Every other caller keeps the default `nothing`, which keeps the
 # `:foreign_scratch` decline for shared-prelude reads.

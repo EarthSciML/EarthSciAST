@@ -69,7 +69,7 @@ include("tree_walk/threading.jl")        #      thread verdicts, partition, chun
 include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
 include("tree_walk/knot_count.jl")       #      the comparison count over a whole lane
 include("tree_walk/oop.jl")              # §4d  the out-of-place build product
-include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
+include("tree_walk/acc_merge.jl")        # §4e  per-cell merge into access kernels
 include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude CSE
 include("tree_walk/obs_buffers.jl")      #      run-time observed slot space + discrete refill
@@ -80,6 +80,7 @@ include("tree_walk/scatter.jl")          #      one-pass scatter for an equality
 include("tree_walk/recurrence_sweep.jl") #      the ordered sweep of a causal self-reference
 include("tree_walk/recurrence_group.jl") #      a recurrence group as its stacked single recurrence
 include("tree_walk/scalar_codegen.jl")   #      …and for the scalar equations and the prelude
+include("tree_walk/rhs_assembly.jl")     #      the in-place right-hand side and its stages
 include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)

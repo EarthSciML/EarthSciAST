@@ -204,22 +204,6 @@ function _compile_fill_level(
     return lv
 end
 
-# One in-place fill level as `_fill_obs_levels!` runs it:
-# `(scalars, kernel section, scans, contraction section, recurrence sweeps)`,
-# the kernels class-merged first. The kernel section's emission refuses what it
-# cannot generate, naming the rule open at the time; `section_label` (a
-# function of the build, `f -> …`) opens the right one around it.
-function _inplace_fill_level(
-        scalars, kernels, scans, contractions, recurrences;
-        nst::Int = 0, section_label = f -> f()
-    )
-    merged, _ = _merge_acc_kernel_classes(kernels)
-    section = section_label(() -> _make_kernel_section(merged; nst = nst))
-    return (
-        scalars, section, scans, _make_contraction_section(contractions), Tuple(recurrences),
-    )
-end
-
 # ---- Stage: one faq derivative equation → whole-array kernels ----
 # `faq(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_faq(...)`
 # Expand by iterating the Cartesian product of output_ranges.

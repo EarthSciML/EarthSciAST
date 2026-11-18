@@ -97,7 +97,7 @@ function _gi_build(N)
         (
             f = f, u0 = u0, p = p, vm = vm, diag = rep.stats, tally = rep.counts,
             kernels = rep.kernels,
-            n_emitted = getfield(getfield(f, :kernel_section), :n_emitted),
+            n_emitted = getfield(f.state.kernels, :n_emitted),
         )
     end
 end
