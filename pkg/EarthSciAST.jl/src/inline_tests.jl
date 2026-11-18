@@ -52,18 +52,20 @@
 # ===========================================================================
 
 """
-    InlineTestError(msg)
+    InlineTestError(msg, code = "")
 
 A §6.6.5 inline-test evaluation failed: an ill-formed `coords` / `reduce`
 assertion, a `from_file` reference that is missing or shape-mismatched, an
 asserted variable with no field, or a per-test discretization injection
 (§9.7.10 form C) that could not build. `run_inline_tests` catches it per
 assertion and records the message on the failing [`AssertionResult`](@ref).
+Fields: `code` (an [`ERROR_CODES`](@ref) value, or `""`) and `msg`.
 """
 struct InlineTestError <: EarthSciASTError
+    code::String
     msg::String
+    InlineTestError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.msg)
 
 # Both inline-test runners share one result type, [`AssertionResult`](@ref)
 # (run_tests.jl), with one JUnit emitter. For results this runner produces, `container_kind` is `:model` or
@@ -451,12 +453,13 @@ function _variable_shape(
                 "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"
             )
         )
-        throw(InlineTestError("model '$(mname)' not found"))
+        throw(InlineTestError("model '$(mname)' not found", ERROR_CODES.UNDEFINED_SYSTEM))
     end
     v = get(model.variables, String(variable), nothing)
     v === nothing && throw(
         InlineTestError(
-            "variable '$(variable)' is not declared in model '$(mname)'"
+            "variable '$(variable)' is not declared in model '$(mname)'",
+            ERROR_CODES.UNDEFINED_VARIABLE
         )
     )
     (v.shape === nothing || isempty(v.shape)) && throw(
@@ -626,7 +629,8 @@ function _ephemeral_injected_file(
     end
     injected || throw(
         InlineTestError(
-            "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"
+            "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)",
+            ERROR_CODES.UNDEFINED_SYSTEM
         )
     )
     f = load_string(JSON3.write(raw); base_path = String(base_dir))
@@ -840,7 +844,7 @@ function _resolve_test_target(
             t.expression_template_imports, resolved_base
         )
     catch err
-        err isa InterruptException && rethrow()
+        _is_resource_error(err) && rethrow()
         return "per-test discretization injection failed: " *
             "$(sprint(showerror, err))"
     end
@@ -1071,7 +1075,7 @@ function _engine_setup(e::SimulateTestEngine, t)
                 saveat = times
             )
     catch err
-        err isa InterruptException && rethrow()
+        _is_resource_error(err) && rethrow()
         return "simulation failed: $(sprint(showerror, err))"
     end
     # `retcode` is a SciML `ReturnCode` (§2.5.3); compare it by name so this

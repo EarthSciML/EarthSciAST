@@ -30,9 +30,6 @@ struct CanonicalizeError <: EarthSciASTError
     message::String
 end
 
-Base.showerror(io::IO, e::CanonicalizeError) =
-    print(io, "CanonicalizeError(", e.code, "): ", e.message)
-
 """
     canonicalize(expr::ASTExpr) -> ASTExpr
 

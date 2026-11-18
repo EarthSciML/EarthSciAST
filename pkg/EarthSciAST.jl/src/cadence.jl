@@ -61,7 +61,7 @@ materialised set→set graph instead of carrying its own cycle detector.
 module Cadence
 
 import JSON3
-using ..EarthSciAST: EarthSciASTError, ReferenceGraph, ReferenceVertex, detect_cycle,
+using ..EarthSciAST: EarthSciASTError, ERROR_CODES, ReferenceGraph, ReferenceVertex, detect_cycle,
     _ensure_vertex!, _add_edge!
 
 export CadenceError, classify,
@@ -78,16 +78,18 @@ const RANK_CLASS = Dict(0 => "const", 1 => "discrete", 2 => "continuous")
 const RELATIONAL_OPS = Set(["distinct", "join"])
 
 """
-    CadenceError(msg)
+    CadenceError(msg, code = "")
 
 A cadence-partition contract violation in a fixture or producer output —
 a wrong `expect_cadence`, a `continuous` relational node (§5.7 guard 2), a
 `from_faq` cycle (§5.7 guard 1), a float topology key, or an unknown fold.
+Fields: `code` (an [`ERROR_CODES`](@ref) value, or `""`) and `msg`.
 """
 struct CadenceError <: EarthSciASTError
+    code::String
     msg::String
+    CadenceError(msg::AbstractString, code::AbstractString = "") = new(String(code), String(msg))
 end
-Base.showerror(io::IO, e::CadenceError) = print(io, "CadenceError: ", e.msg)
 
 # ── Raw-JSON access ─────────────────────────────────────────────────────────
 # Convert JSON3 structures to native `Dict{String,Any}` / `Vector{Any}` so node
@@ -256,7 +258,8 @@ function seed_leaf(leaf, model, resolving::Tuple = ())
                 leaf in resolving && throw(
                     CadenceError(
                         "observed definition cycle through $(repr(leaf)): " *
-                            join(String[resolving..., leaf], " -> ")
+                            join(String[resolving..., leaf], " -> "),
+                        ERROR_CODES.OBSERVED_CYCLE
                     )
                 )
                 return classify(defs[leaf], model, ClassMemo(), (resolving..., leaf))
@@ -491,7 +494,8 @@ function assert_no_continuous_relational(node, model, memo::ClassMemo = ClassMem
             CadenceError(
                 "relational/value-invention node op=$(repr(op)) classifies CONTINUOUS — " *
                     "it may not run on the hot path (§5.7 guard 2). A state-dependent " *
-                    "distinct/join is out of scope for v1."
+                    "distinct/join is out of scope for v1.",
+                ERROR_CODES.RELATIONAL_NODE_IN_CONTINUOUS
             )
         )
     end
@@ -573,7 +577,8 @@ function assert_acyclic_index_sets(model)
     cyc === nothing || throw(
         CadenceError(
             "cycle in the ≤DISCRETE index-set dependency graph " *
-                "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> ")
+                "(implicit solve, out of scope — §5.7 guard 1): " * join(cyc, " -> "),
+            ERROR_CODES.CIRCULAR_DEPENDENCY
         )
     )
     return

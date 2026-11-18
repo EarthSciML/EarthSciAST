@@ -670,14 +670,18 @@ when an expression references a variable name that is not in the supplied
 bindings. Defined here so it is in scope for callers that catch the
 "binding not yet resolved" signal during iterated observed-variable
 fixed-point passes.
+Fields: `code` (always `E_TREEWALK_UNBOUND_VARIABLE`, the walker's code for
+it), `variable_name` and `message`.
+
+    UnboundVariableError(variable_name, message)
 """
 struct UnboundVariableError <: EarthSciASTError
+    code::String
     variable_name::String
     message::String
+    UnboundVariableError(variable_name::AbstractString, message::AbstractString) =
+        new("E_TREEWALK_UNBOUND_VARIABLE", String(variable_name), String(message))
 end
-
-Base.showerror(io::IO, e::UnboundVariableError) =
-    print(io, "UnboundVariableError: ", e.message)
 
 # ========================================
 # 5. Expression Simplification

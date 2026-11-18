@@ -412,7 +412,7 @@ using JSON3
 
     @testset "UnboundVariableError uses showerror" begin
         err = UnboundVariableError("x", "variable 'x' is unbound")
-        @test sprint(showerror, err) == "UnboundVariableError: variable 'x' is unbound"
+        @test sprint(showerror, err) == "UnboundVariableError [E_TREEWALK_UNBOUND_VARIABLE]: variable 'x' is unbound"
     end
 
     @testset "map_children is copy-on-write; the child walks agree" begin
