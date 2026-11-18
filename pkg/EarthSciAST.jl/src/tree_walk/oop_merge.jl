@@ -193,6 +193,26 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     end
 end
 
+# One aligned member tuple (`clone`'s argument in `_oop_merge_group`) as a `Dict`
+# key: equal iff the tuples hold the SAME node objects, member by member.
+struct _NodeTupleKey
+    nodes::Vector{_Node}
+end
+function Base.:(==)(a::_NodeTupleKey, b::_NodeTupleKey)
+    length(a.nodes) == length(b.nodes) || return false
+    @inbounds for i in eachindex(a.nodes)
+        a.nodes[i] === b.nodes[i] || return false
+    end
+    return true
+end
+Base.isequal(a::_NodeTupleKey, b::_NodeTupleKey) = a == b
+function Base.hash(k::_NodeTupleKey, h::UInt)
+    for n in k.nodes
+        h = hash(_NodeKey(n), h)
+    end
+    return h
+end
+
 # Merge one class of lockstep-identical kernels (indices `js` into
 # kernels/plans) into a single lane-batched kernel. Members' lanes are
 # concatenated in `js` order; each varying leaf becomes a table over the
@@ -229,7 +249,27 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         )
         newscr = _AccScratch(keep ? n_cell : n_inv + n_cell)
         invscr = _AccScratch(keep ? n_inv : 0)
+        # THE MEMBERS' TREES ARE DAGS. A member references one subexpression
+        # object from several places, and a clone that descends into every
+        # reference unfolds them: 162 distinct subtrees became 1.9 million
+        # nodes. `cloned` maps an aligned member tuple to the node already
+        # built for it, so a subexpression the members share at the same places
+        # is cloned once and stays shared. The key is the WHOLE tuple, by
+        # identity: this round's signature does not record sharing, so the
+        # representative repeating a node says nothing about the others. A
+        # repeated tuple names the same descriptors and literals in every
+        # member, so the node built for it — including a lane table, which the
+        # repeat now reads instead of minting a copy — holds the same values.
+        cloned = Dict{_NodeTupleKey, _Node}()
         function clone(nodes::Vector{_Node})::_Node
+            key = _NodeTupleKey(nodes)
+            hit = get(cloned, key, nothing)
+            hit === nothing || return hit
+            out = clone_new(nodes)
+            cloned[key] = out
+            return out
+        end
+        function clone_new(nodes::Vector{_Node})::_Node
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
                 vals = Float64[n.literal for n in nodes]
