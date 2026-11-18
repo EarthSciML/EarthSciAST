@@ -917,7 +917,7 @@ function _scatter_symbolic(
     b = isempty(resolved_obs) ? e : _sub_preserving(e, resolved_obs)
     got = _resolve_array_contraction_term(
         b, idx_names, contract_names,
-        array_var_info, var_map, const_registry, pgather; nest_scalar_loops = true
+        _ResolveCtx(array_var_info, var_map, const_registry, pgather); nest_scalar_loops = true
     )
     got isa _Decline && return got
     nd = try

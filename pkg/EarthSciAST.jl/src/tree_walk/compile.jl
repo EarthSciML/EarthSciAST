@@ -127,52 +127,17 @@ _unevaluable_operator(op, why::AbstractString) = TreeWalkError(
 
 function _compile_op(expr::OpExpr, var_map, param_syms, memo::_MaybeMemo)
     op_sym = Symbol(expr.op)
-    # Runtime contraction loop marker: the loop body is
-    # the single child arg, compiled ONCE here; the loop metadata rides on `.value`.
-    # Compiles iff the (unrolled) body would compile — the only leaf difference is a
-    # loop-var `VarExpr` (→ `_NK_LOOPVAR`) where the unroll puts an `IntExpr`, and no
-    # `_compile` arm treats those two leaf kinds differently — so this never fails
-    # where the unroll fallback would have succeeded.
-    if op_sym === :__contract_loop
-        lb = expr.value::_ContractLoopBuild
-        body = _compile(expr.args[1], var_map, param_syms, memo)
-        return _mknode(
-            kind = _NK_CONTRACTION_LOOP, op = lb.oplus, literal = lb.zerobar,
-            payload = _ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
-            children = _Node[body]
-        )
-    end
-    if op_sym === :__ragged_loop
-        lb = expr.value::_RaggedLoopBuild
+    # A run-time loop or gather resolve lowered (`_Lowered`): its args are the
+    # node's children (a loop body, ragged bounds, gather subscripts). A loop
+    # body compiles iff the unrolled body would: the only leaf difference is a
+    # loop-var `VarExpr` (`_NK_LOOPVAR`) where the unroll has an `IntExpr`.
+    if expr.value isa _Lowered
+        lw = expr.value::_Lowered
         kids = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
         return _mknode(
-            kind = _NK_RAGGED_LOOP, op = lb.oplus, literal = lb.zerobar,
-            payload = _RaggedLoop(lb.ref, lb.step, lb.reach), children = kids
+            kind = lw.kind, op = lw.op, literal = lw.literal, payload = lw.payload,
+            children = kids
         )
-    end
-    # Runtime state gather: a state read at a
-    # loop-var-dependent slot. The subscript `args` compile as children (a loop
-    # var → `_NK_LOOPVAR`, an indirect const-connectivity subscript → a nested
-    # `_NK_CONST_GATHER`); the slot table + bounds ride on `.value`.
-    if op_sym === :__state_gather
-        ref = expr.value::_StateGatherRef
-        subs = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
-        return _mknode(
-            kind = _NK_STATE_GATHER,
-            payload = _StateGather(
-                ref.slot_flat, ref.strides, ref.lo, ref.hi,
-                length(ref.slot_flat)
-            ),
-            children = subs
-        )
-    end
-
-    # A recurrence's causal self-read (recurrence_sweep.jl): the subscripts
-    # compile as children, the published-cell check rides on `.value`.
-    if op_sym === :__recur_read
-        ref = expr.value::_RecurGatherRef
-        subs = _Node[_compile(a, var_map, param_syms, memo) for a in expr.args]
-        return _mknode(kind = _NK_RECUR_GATHER, payload = ref.gather, children = subs)
     end
 
     children = _Node[

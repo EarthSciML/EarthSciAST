@@ -6,6 +6,56 @@
 # markers), and the guards a gather is resolved under.
 # ========================================================================
 
+# The `ifelse` / `and` / `or` guards the node being resolved sits under: each
+# guard's resolved condition and the truth value its branch needs (see
+# `_resolve_guarded_op`).
+const _ResolveGuards = Vector{Tuple{ASTExpr, Bool}}
+
+"""
+    _ResolveCtx
+
+What one index resolution reads besides the expression: each array's cell
+bounds (`array_var_info`), the slot layout (`var_map`), the build-time arrays
+(`const_arrays`), the live forcing buffers (`pgather`), the build memo (`memo`,
+`nothing` for a resolve that must not share the concrete build's), the index
+names kept symbolic (`bound`), whether a scalar reduction nested in the term
+stays a loop (`nest_loops`, the whole-array nest's own resolve), and the guards
+the node sits under (`guards`, shared by every context derived from one
+resolve).
+"""
+struct _ResolveCtx{L <: AbstractDict{String, Int}, C <: AbstractDict, G <: AbstractDict}
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    var_map::L
+    const_arrays::C
+    pgather::G
+    memo::_MaybeMemo
+    bound::Set{String}
+    nest_loops::Bool
+    guards::_ResolveGuards
+end
+
+# `rc` with some of its fields replaced; the guards stay shared.
+_derive(
+    rc::_ResolveCtx; memo::_MaybeMemo = rc.memo, bound::Set{String} = rc.bound,
+    nest_loops::Bool = rc.nest_loops, const_arrays::AbstractDict = rc.const_arrays
+) = _ResolveCtx(
+    rc.array_var_info, rc.var_map, const_arrays, rc.pgather, memo, bound, nest_loops, rc.guards
+)
+
+# A context starting a resolve with no names bound and no guards in force.
+_ResolveCtx(
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+    var_map::AbstractDict{String, Int},
+    const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+    pgather::AbstractDict = _EMPTY_PGATHER,
+    memo::_MaybeMemo = nothing
+) = _ResolveCtx(
+    array_var_info, var_map, const_arrays, pgather, memo, _EMPTY_BOUND_SYMS, false, _ResolveGuards()
+)
+
+# Whether the resolve keeps some index symbolic: a compile-once or loop path.
+_is_symbolic(rc::_ResolveCtx) = rc.nest_loops || !isempty(rc.bound)
+
 # ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------
 # The three aggregate expansions — the LHS-faq einsum
 # (`_compile_faq_percell!`), the expression-position gather
@@ -403,13 +453,8 @@ _expand_contract_range(rspec, idx_env::Dict{String, Int}, const_arrays::Abstract
 # substituting the output_idx values and unrolling contracted indices at
 # build time. Mirrors the LHS-faq expansion (`_compile_faq_percell!`) but
 # produces a scalar ASTExpr instead of writing to rhs_list.
-function _resolve_index_of_faq(
-        faq_expr::OpExpr, idx_args::Vector{ASTExpr},
-        array_var_info, var_map, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
+function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr}, rc::_ResolveCtx)
+    const_arrays = rc.const_arrays
     output_idx_strs = _output_idx_strings(faq_expr)
     length(output_idx_strs) == length(idx_args) ||
         throw(
@@ -433,8 +478,8 @@ function _resolve_index_of_faq(
     # Output-index substitution. Each output-index arg is EITHER a bound symbol —
     # kept SYMBOLIC, substituted as its own resolved-in-place expression so the
     # unrolled body reads `A[c, <sym>]` and lowers to a runtime `_ConstGatherRef`
-    # — OR a build-time constant, folded to an `IntExpr`. With an EMPTY
-    # `bound_syms` every arg is constant.
+    # — OR a build-time constant, folded to an `IntExpr`. With no bound
+    # names every arg is constant.
     nd = length(output_idx_strs)
     symbolic = falses(nd)
     k_vals = Vector{Int}(undef, nd)
@@ -466,12 +511,10 @@ function _resolve_index_of_faq(
     )
     # A ragged bound over a symbolic output index becomes a run-time loop
     # (`_NK_RAGGED_LOOP`), which reads the bound at the cell the call is at.
-    if any_symbolic && !isempty(bound_syms) &&
+    if any_symbolic && _is_symbolic(rc) &&
             any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
         return _resolve_ragged_faq_loop(
-            faq_expr, sub_body, ranges_dict, idx_exprs,
-            contract_names, oplus, zerobar, array_var_info,
-            var_map, const_arrays, pgather, bound_syms
+            faq_expr, sub_body, ranges_dict, idx_exprs, contract_names, oplus, zerobar, rc
         )
     end
     contract_iters = _contract_iters_at(
@@ -498,16 +541,13 @@ function _resolve_index_of_faq(
         )
     )
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(
-            sub_body, array_var_info, var_map, const_arrays,
-            pgather, memo, bound_syms
-        )
+        return _resolve_indices(sub_body, rc)
     end
 
     # Join/filter expansion via the shared core; the filter carries the (fixed)
     # output-index substitution already, matching the hoisted `sub_body`. The
-    # term resolution forwards `bound_syms` so the symbolic subscripts survive
-    # into `_ConstGatherRef`s (in concrete mode `bound_syms` is empty → no-op).
+    # terms resolve under the same bound names, so the symbolic subscripts
+    # survive into `_ConstGatherRef`s.
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
     contract_iters = _window_iters(contract_iters, filt0, contract_names, output_idx_strs)
     terms = ASTExpr[]
@@ -515,12 +555,7 @@ function _resolve_index_of_faq(
         sub_body, contract_names, contract_iters,
         gates, filt, zerobar, _out_idx_env
     ) do term
-        push!(
-            terms, _resolve_indices(
-                term, array_var_info, var_map, const_arrays,
-                pgather, memo, bound_syms
-            )
-        )
+        push!(terms, _resolve_indices(term, rc))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
 end
@@ -541,8 +576,7 @@ end
 function _resolve_ragged_faq_loop(
         faq_expr::OpExpr, sub_body::ASTExpr, ranges_dict,
         idx_exprs::Dict{String, ASTExpr}, contract_names::Vector{String},
-        oplus::String, zerobar::Float64, array_var_info, var_map, const_arrays,
-        pgather::AbstractDict, bound_syms::Set{String}
+        oplus::String, zerobar::Float64, rc::_ResolveCtx
     )
     decline(why) = throw(
         TreeWalkError(
@@ -562,12 +596,9 @@ function _resolve_ragged_faq_loop(
         step = Int(rspec[2])
         step == 0 && decline("a zero step")
     end
+    own = _derive(rc; memo = nothing)
     bound(x) = x isa Integer ? IntExpr(Int64(x)) :
-        x isa ASTExpr ? _resolve_indices(
-            _sub_preserving(x, idx_exprs), array_var_info,
-            var_map, const_arrays, pgather, nothing,
-            bound_syms
-        ) :
+        x isa ASTExpr ? _resolve_indices(_sub_preserving(x, idx_exprs), own) :
         decline("a bound that is not an integer or an expression")
     lo = bound(rspec[1])
     hi = bound(rspec[end])
@@ -577,17 +608,13 @@ function _resolve_ragged_faq_loop(
         sub_body,
         Dict{String, ASTExpr}(contract_names[1] => VarExpr(kname))
     )
-    kbsyms = union(bound_syms, Set{String}((kname,)))
-    resolved = _resolve_indices(
-        body, array_var_info, var_map, const_arrays, pgather,
-        nothing, kbsyms
-    )
+    resolved = _resolve_indices(body, _derive(own; bound = union(rc.bound, Set{String}((kname,)))))
     _register_loopvar!(kname, kref)
     return OpExpr(
         "__ragged_loop", ASTExpr[resolved, lo, hi];
-        value = _RaggedLoopBuild(
-            kref, step, _ragged_reach(rspec, const_arrays),
-            Symbol(oplus), zerobar
+        value = _Lowered(
+            _NK_RAGGED_LOOP, Symbol(oplus), zerobar,
+            _RaggedLoop(kref, step, _ragged_reach(rspec, rc.const_arrays))
         )
     )
 end
@@ -611,13 +638,7 @@ end
 # selecting the value expression whose region covers (k1, k2, ...).
 # Later regions overwrite earlier ones, matching the Python reference
 # semantics (`_eval_makearray` in numpy_interpreter.py).
-function _resolve_index_of_makearray(
-        makearray_expr::OpExpr, idx_args::Vector{ASTExpr},
-        array_var_info, var_map, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
+function _resolve_index_of_makearray(makearray_expr::OpExpr, idx_args::Vector{ASTExpr}, rc::_ResolveCtx)
     regions = makearray_expr.regions === nothing ?
         Vector{Vector{Vector{Any}}}() : makearray_expr.regions
     values = makearray_expr.values === nothing ? ASTExpr[] : makearray_expr.values
@@ -629,13 +650,12 @@ function _resolve_index_of_makearray(
                 "($(length(regions)) vs $(length(values)))"
         )
     )
-    if !isempty(bound_syms) && any(a -> _reads_bound_sym(a, bound_syms), idx_args)
+    if !isempty(rc.bound) && any(a -> _reads_bound_sym(a, rc.bound), idx_args)
         return _resolve_index_of_makearray_symbolic(
-            regions, _bind_makearray_loops(makearray_expr, values, idx_args), idx_args,
-            array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+            regions, _bind_makearray_loops(makearray_expr, values, idx_args), idx_args, rc
         )
     end
-    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
+    k_vals = [_eval_const_int(a, _EMPTY_IDX_ENV, rc.const_arrays) for a in idx_args]
     ndim = length(k_vals)
     result_expr::ASTExpr = NumExpr(0.0)  # default: 0 if no region covers the point
     result_region = nothing
@@ -680,19 +700,10 @@ function _resolve_index_of_makearray(
         sel = k_vals[axes]
         sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
-            _resolve_index_of_makearray(
-                re, sel_exprs, array_var_info, var_map,
-                const_arrays, pgather, memo, bound_syms
-            ) :
-            _resolve_index_of_faq(
-                re, sel_exprs, array_var_info, var_map,
-                const_arrays, pgather, memo, bound_syms
-            )
+            _resolve_index_of_makearray(re, sel_exprs, rc) :
+            _resolve_index_of_faq(re, sel_exprs, rc)
     end
-    return _resolve_indices(
-        result_expr, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
+    return _resolve_indices(result_expr, rc)
 end
 
 # A `makearray`'s string `output_idx` entries are loop symbols it binds to the
@@ -748,9 +759,7 @@ end
 # symbols) and integer region bounds are taken; anything else declines as the
 # symbolic path always has.
 function _resolve_index_of_makearray_symbolic(
-        regions, values, idx_args::Vector{ASTExpr},
-        array_var_info, var_map, const_arrays,
-        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String}
+        regions, values, idx_args::Vector{ASTExpr}, rc::_ResolveCtx
     )
     decline(why) = throw(
         TreeWalkError(
@@ -762,8 +771,8 @@ function _resolve_index_of_makearray_symbolic(
         decline("a subscript that is not a sum, difference or product of integers and symbols")
     ndim = length(idx_args)
     k_const = Union{Nothing, Int}[
-        _reads_bound_sym(a, bound_syms) ? nothing :
-            _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args
+        _reads_bound_sym(a, rc.bound) ? nothing :
+            _eval_const_int(a, _EMPTY_IDX_ENV, rc.const_arrays) for a in idx_args
     ]
     acc::ASTExpr = NumExpr(0.0)
     for (region, val_expr) in zip(regions, values)
@@ -811,9 +820,7 @@ function _resolve_index_of_makearray_symbolic(
                 ]
             )
     end
-    return _resolve_indices(
-        acc, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-    )
+    return _resolve_indices(acc, rc)
 end
 
 # Whether the subscript `e` reads one of `syms` as a free name.
@@ -859,10 +866,8 @@ end
 
 # `(lo, ext)` of an array-valued expression the shape-op remap can see through,
 # `(Int[], Int[])` for a scalar, `nothing` when the shape is not known here.
-function _remap_operand_shape(
-        e::ASTExpr, array_var_info, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER
-    )
+function _remap_operand_shape(e::ASTExpr, rc::_ResolveCtx)
+    array_var_info, const_arrays, pgather = rc.array_var_info, rc.const_arrays, rc.pgather
     e isa NumExpr && return (Int[], Int[])
     e isa IntExpr && return (Int[], Int[])
     if e isa VarExpr
@@ -888,12 +893,12 @@ function _remap_operand_shape(
         return (ones(Int, length(ext)), ext)
     elseif o.op == "transpose"
         length(o.args) == 1 || return nothing
-        s = _remap_operand_shape(o.args[1], array_var_info, const_arrays, pgather)
+        s = _remap_operand_shape(o.args[1], rc)
         s === nothing && return nothing
         perm = _transpose_perm(o, length(s[2]))
         return (ones(Int, length(perm)), s[2][perm .+ 1])
     elseif o.op == "concat"
-        parts = [_remap_operand_shape(a, array_var_info, const_arrays, pgather) for a in o.args]
+        parts = [_remap_operand_shape(a, rc) for a in o.args]
         (isempty(parts) || any(p -> p === nothing, parts)) && return nothing
         ax = something(o.axis, 0) + 1
         exts = [isempty(p[2]) ? [1] : p[2] for p in parts]
@@ -902,7 +907,7 @@ function _remap_operand_shape(
         ext[ax] = sum(x[ax] for x in exts)
         return (ones(Int, length(ext)), ext)
     elseif _is_scalar_op(o.op)
-        shapes = [_remap_operand_shape(a, array_var_info, const_arrays, pgather) for a in o.args]
+        shapes = [_remap_operand_shape(a, rc) for a in o.args]
         any(s -> s === nothing, shapes) && return nothing
         ext = _positional_broadcast_extent([s[2] for s in shapes], o)
         return (ones(Int, length(ext)), ext)
@@ -961,17 +966,13 @@ _shape_remap_refuse(o::OpExpr, why::AbstractString) =
 # `index(o, subs…)` with `o` a shape op → `index(X, subs′…)` (or the scalar
 # operand itself for a scalar `concat` part). Not yet resolved: the caller runs
 # `_resolve_indices` on the result, which recurses through nested shape ops.
-function _index_through_shape_op(
-        o::OpExpr, subs::Vector{ASTExpr},
-        array_var_info, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER
-    )::ASTExpr
-    shp = _remap_operand_shape(o, array_var_info, const_arrays, pgather)
+function _index_through_shape_op(o::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveCtx)::ASTExpr
+    shp = _remap_operand_shape(o, rc)
     shp === nothing && _shape_remap_refuse(o, "the operand's shape is not known at build time")
     ext = shp[2]
     length(subs) == length(ext) ||
         _shape_remap_refuse(o, "the result is rank $(length(ext)) but got $(length(subs)) subscripts")
-    ks = Union{Int, Nothing}[_try_const_int(s, const_arrays) for s in subs]
+    ks = Union{Int, Nothing}[_try_const_int(s, rc.const_arrays) for s in subs]
     for d in eachindex(ks)
         k = ks[d]
         (k === nothing || 1 <= k <= ext[d]) ||
@@ -980,7 +981,7 @@ function _index_through_shape_op(
     at(d, lo) = ks[d] === nothing ? _remap_shift(subs[d], lo) : IntExpr(Int64(ks[d] - 1 + lo))
     if o.op == "transpose"
         x = o.args[1]
-        xlo, _ = _remap_operand_shape(x, array_var_info, const_arrays, pgather)
+        xlo, _ = _remap_operand_shape(x, rc)
         perm = _transpose_perm(o, length(ext))
         xs = Vector{ASTExpr}(undef, length(ext))
         for d in eachindex(perm)
@@ -990,7 +991,7 @@ function _index_through_shape_op(
     elseif o.op == "reshape"
         length(o.args) == 1 || _shape_remap_refuse(o, "reshape takes one operand")
         x = o.args[1]
-        xs0 = _remap_operand_shape(x, array_var_info, const_arrays, pgather)
+        xs0 = _remap_operand_shape(x, rc)
         xs0 === nothing && _shape_remap_refuse(o, "the operand's shape is not known at build time")
         xlo, xext = xs0
         prod(xext) == prod(ext) ||
@@ -1033,7 +1034,7 @@ function _index_through_shape_op(
     )
     off = 0
     for a in o.args
-        plo, pext = _remap_operand_shape(a, array_var_info, const_arrays, pgather)
+        plo, pext = _remap_operand_shape(a, rc)
         n = isempty(pext) ? 1 : pext[ax]
         if kax <= off + n
             isempty(pext) && return a
@@ -1059,11 +1060,9 @@ _mentions_shape_op(e::ASTExpr) = e isa OpExpr && (
 # subscripts, and an operand axis of extent 1 against a longer result axis reads
 # its one element. `nothing` when the operand needs no adjustment.
 function _broadcast_operand_subs(
-        a::ASTExpr, subs::Vector{ASTExpr}, result_ext::Vector{Int},
-        array_var_info, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER
+        a::ASTExpr, subs::Vector{ASTExpr}, result_ext::Vector{Int}, rc::_ResolveCtx
     )
-    s = _remap_operand_shape(a, array_var_info, const_arrays, pgather)
+    s = _remap_operand_shape(a, rc)
     s === nothing && return nothing
     lo, ext = s
     length(ext) <= length(subs) || return nothing
@@ -1077,65 +1076,46 @@ function _broadcast_operand_subs(
     return adj ? out : nothing
 end
 
-# ── Runtime contraction loop gate ─────────────────────────────────────────────
-# Depth of the array-equation per-cell resolve (`_compile_faq_percell!`). A
-# scalar aggregate nested INSIDE an array-equation cell body must keep unrolling:
-# its compiled node flows into the stencil / access-kernel merge (acc_merge.jl,
-# stencil_affine.jl, oop_merge.jl), which model unrolled scalar terms — so the
-# loop node is confined to SCALAR contexts (rhs_list / scalar observeds), where the
-# eval-time consumer is exactly `_eval_node` (which handles it) and the CSE keyer
-# (xcse.jl, which safely DECLINES an unknown kind → leaves it inline). The depth
-# is the build's (`_BuildState.array_cell_depth`, compiler.jl).
-
-# A member of a symbolic resolve's bound names that no index name can be: the
-# whole-array nest puts it in the bound names it resolves its term with
-# (`_resolve_array_contraction_term(...; nest_scalar_loops=true)`), and every
-# resolve of that term passes it down with them. A scalar reduction nested in
-# the term then stays a loop (`_resolve_scalar_faq`) instead of unrolling one
-# term per contracted index into the nest's one body, which would make the
-# generated code as long as the reduction. The nest's emitter writes it as a
-# counted loop (`_cg_emit`, array_contraction.jl). A resolve started anywhere
-# else has bound names without it, so it never sees the loop node.
-const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
-
-# Tier gate and coverage floor. On under `native`, but only for reductions at
-# least `_contraction_loop_min()` long — small reductions keep unrolling so the
-# vast existing small-aggregate test surface (and its CSE / stencil interactions)
-# is byte-for-byte unchanged. Off, the pure unroll is the reference everywhere.
+# ── Runtime contraction loops ────────────────────────────────────────────────
+# A scalar aggregate nested inside an array equation's per-cell resolve
+# (`_BuildState.array_cell_depth`, compiler.jl) keeps unrolling: its node flows
+# into the stencil and access-kernel merges, which model unrolled scalar terms.
+# The loop node is confined to scalar contexts, whose consumers are `_eval_node`
+# and the CSE keyer (which declines an unknown kind and leaves it inline).
 #
-# The floor is overridden with ESS_CONTRACTION_LOOP_MIN: a REFUSAL BOUNDARY
-# under `native`, because which side of it a reduction falls on decides which
-# tier compiles the equation and therefore whether the compiler can express it.
+# The whole-array nest resolves its term with `nest_loops` set (see
+# `_ResolveCtx`): a scalar reduction nested in that term stays a loop instead of
+# unrolling one term per contracted index into the nest's one body, and the
+# nest's emitter writes it as a counted loop (`_cg_emit`, array_contraction.jl).
+
+# Tier gate and coverage floor: on under `native` for reductions at least
+# `_contraction_loop_min()` long; shorter ones unroll. The floor is a refusal
+# boundary under `native` (which side a reduction falls on decides which tier
+# compiles the equation). Both are read once per build (`_BuildContext`).
 _contraction_loop_enabled() = _compiler_plan_now().contraction_loop
-# The build reads it once, when it starts (`_BuildContext`, compiler.jl).
 _contraction_loop_min() = _tuning_now().contraction_loop_min
 
 # Resolve `body` with each of `names` replaced by a fresh reserved loop-var
-# name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
-# `extra_syms`: `(refs, resolved)`, one `Ref` per name in `names` order, or
-# a `_Decline` (`:symbolic_body_did_not_lower`, the error's text as its
-# detail) when the body does not resolve that way. Only a document-level
-# refusal (an `EarthSciASTError`) is such a decline: a resource error never is
-# (errors.jl) — the per-cell path a caller falls back to resolves the SAME body
-# once per output cell, so reading an exhausted heap as "this body will not
-# resolve symbolically" walks the build into a far larger allocation with the
-# cause erased — and a programming error would otherwise surface only as a
-# tier that declined. `memo` is `nothing` or one made for this symbolic resolve
-# alone, never the concrete RHS build's. The refs are published to
-# the build state (`_register_loopvar!`), so `_compile` lowers each surviving loop-var `VarExpr` to an
-# `_NK_LOOPVAR` reading its ref, only after a clean resolve.
+# name (`_fresh_loopvar_name`) kept symbolic beside `rc.bound`, under `memo`
+# (`nothing` or one made for this symbolic resolve alone, never the concrete
+# build's): `(refs, resolved)`, one `Ref` per name in `names` order, or a
+# `_Decline` (`:symbolic_body_did_not_lower`, the error's text as its detail).
+# Only a document-level refusal (an `EarthSciASTError`) is such a decline: a
+# resource error is not (the per-cell fallback resolves the same body once per
+# cell, so an exhausted heap read as a decline walks the build into a larger
+# allocation), and a programming error must not surface as a declined tier.
+# The refs are registered on the build state only after a clean resolve, so
+# `_compile` lowers each surviving loop-var `VarExpr` to an `_NK_LOOPVAR`.
 function _resolve_symbolic(
-        body::ASTExpr, names::Vector{String}, extra_syms::Set{String},
-        array_var_info, var_map, const_arrays, pgather::AbstractDict,
-        memo::_MaybeMemo = nothing
+        body::ASTExpr, names::Vector{String}, rc::_ResolveCtx, memo::_MaybeMemo = nothing
     )
     fresh = String[_fresh_loopvar_name() for _ in names]
     refs = Base.RefValue{Int}[Ref(0) for _ in names]
     subs = Dict{String, ASTExpr}(names[d] => VarExpr(fresh[d]) for d in eachindex(names))
     subbed = _sub_preserving(body, subs)
-    bsyms = union(Set{String}(fresh), extra_syms)
+    sym = _derive(rc; memo = memo, bound = union(Set{String}(fresh), rc.bound))
     resolved = try
-        _resolve_indices(subbed, array_var_info, var_map, const_arrays, pgather, memo, bsyms)
+        _resolve_indices(subbed, sym)
     catch err
         err isa EarthSciASTError || rethrow()
         return _Decline(:symbolic_body_did_not_lower, sprint(showerror, err))
@@ -1146,39 +1126,31 @@ function _resolve_symbolic(
     return refs, resolved
 end
 
-# Try to compile a uniform contraction to a single runtime loop node instead of
-# unrolling it. Returns a `__contract_loop` marker-op
-# ASTExpr (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) on success, or
-# the resolve's `_Decline` to fall back to the exact unroll. Keeps the contracted index SYMBOLIC
-# (a reserved bound-sym `VarExpr`) and resolves the body ONCE: a loop var reaching
-# a const-array subscript lowers to a runtime `_NK_CONST_GATHER` (existing Phase-C
-# machinery); a loop var reaching a STATE index or a ragged bound throws
-# `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
+# A uniform contraction as one run-time loop: a `__contract_loop` marker per
+# contracted index (lowered to `_NK_CONTRACTION_LOOP` by `_compile`) around the
+# body resolved once with the indices symbolic, or the resolve's `_Decline`, on
+# which the caller unrolls. `rc.bound` and `rc.nest_loops` are the enclosing
+# symbolic resolve's, which the body may read (a reduction nested in the
+# whole-array nest's term); a context with neither gives a plain loop.
 function _try_build_contraction_loop(
         body::ASTExpr, contract_names::Vector{String},
-        ranges::AbstractVector, oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict;
-        # The enclosing symbolic resolve's own bound names, which the body may
-        # read (a reduction nested in the whole-array nest's term).
-        outer_syms::Set{String} = _EMPTY_BOUND_SYMS
+        ranges::AbstractVector, oplus::String, zerobar::Float64, rc::_ResolveCtx
     )
-    got = _resolve_symbolic(
-        body, contract_names, outer_syms, array_var_info, var_map, const_arrays, pgather
-    )
+    got = _resolve_symbolic(body, contract_names, rc)
     got isa _Decline && return got
     refs, resolved = got
     oplus_sym = Symbol(oplus)
     node::ASTExpr = resolved
-    # Nest innermost-first: `contract_names[1]` varies FASTEST in the unroll's
-    # `Iterators.product` order, so it is the INNERMOST loop — the fold order then
-    # matches the unrolled `_combine_with_reducer` accumulation.
+    # `contract_names[1]` varies fastest in the unroll's `Iterators.product`
+    # order, so it is the innermost loop and the fold order matches
+    # `_combine_with_reducer`'s.
     for d in eachindex(contract_names)
         r = ranges[d]
         node = OpExpr(
             "__contract_loop", ASTExpr[node];
-            value = _ContractLoopBuild(
-                refs[d], first(r), last(r), step(r),
-                oplus_sym, zerobar
+            value = _Lowered(
+                _NK_CONTRACTION_LOOP, oplus_sym, zerobar,
+                _ContractLoop(refs[d], first(r), last(r), step(r))
             )
         )
     end
@@ -1186,71 +1158,51 @@ function _try_build_contraction_loop(
 end
 
 # ── Whole-array contraction loop nest ────────────────
-# Kill-switch + coverage floor for the tier that keeps the OUTPUT indices
-# symbolic too (see `_resolve_array_contraction_term`). WHICH tier gets an
-# equation is decided by POSITION in the cascade: `_compile_faq_equation!`
-# offers this one once the affine tier has declined, so the alternative is
-# always the per-cell build. The in-place build offers it every such equation;
-# the floor applies only to the out-of-place build, whose emitters compile the
-# per-cell build's cells and have no arm for this tier's section, so there an
-# equation under the floor keeps the per-cell build they can emit.
-#
-# The contraction-loop gate disables this tier too: it forces the pure-unroll
-# reference EVERYWHERE, and this tier is a contraction loop — one that also
-# loops the output index.
-#
-# The floor is overridden with ESS_ARRAY_CONTRACTION_MIN. It is a tuning
-# threshold, not a refusal boundary: moving it moves an out-of-place equation
-# between this tier and the per-cell build.
+# The tier that keeps the output indices symbolic too (see
+# `_resolve_array_contraction_term`). `_compile_faq_equation!` offers it once
+# the affine tier has declined, so the alternative is always the per-cell
+# build. The in-place build offers it every such equation; the floor applies
+# only to the out-of-place build, whose emitters have no arm for this tier's
+# section, so there an equation under the floor keeps the per-cell build. The
+# contraction-loop gate disables this tier too. The floor is a tuning
+# threshold, not a refusal boundary.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
 _array_contraction_min() = _tuning_now().array_contraction_min
 
-# The term of an array einsum resolved ONCE with its output and its contracted
+# The term of an array einsum resolved once with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
 # `(out_refs, contract_refs, resolved)`, or a `_Decline` when the body does not
-# resolve that way. Keeping the output indices symbolic as well as the
-# contracted ones makes the build O(1) in both extents: the body's reads lower
-# through the run-time gather machinery (a const read at an output subscript is
+# resolve that way. The build is then O(1) in both extents: the body's reads
+# lower through the run-time gathers (a const read at an output subscript is
 # `_NK_CONST_GATHER`, a state read `_NK_STATE_GATHER`, a bare output symbol
 # `_NK_LOOPVAR`) and the caller drives the counters at eval time. The
-# whole-array nest (array_contraction.jl) drives the contracted refs from the
-# admitted tuples or its own loops; `_compile_init_once` (no contracted index)
-# compiles the term once for every output cell.
+# whole-array nest (array_contraction.jl) drives the contracted refs;
+# `_compile_init_once` (no contracted index) compiles the term once for every
+# output cell. `rc` is the build's concrete context; this resolve gets its own
+# bound names, the nest's `nest_loops` when `nest_scalar_loops` is set, and
+# `memo`, a memo of this resolve's own (a sub-tree reached from several parents
+# then resolves once, and the caller compiles the result with the same memo).
 function _resolve_array_contraction_term(
         body::ASTExpr, out_names::Vector{String},
-        contract_names::Vector{String},
-        array_var_info, var_map, const_arrays, pgather::AbstractDict;
-        # The whole-array nest's own resolve, whose emitter writes a nested
-        # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
+        contract_names::Vector{String}, rc::_ResolveCtx;
         nest_scalar_loops::Bool = false,
-        # A build memo of THIS resolve's own (never the concrete RHS build's):
-        # a sub-tree reached from several parents (a template parameter written
-        # at each of its uses) then resolves once, and the caller compiles the
-        # result with the same memo, so the emitter sees one shared node.
         memo::_MaybeMemo = nothing
     )
     nout = length(out_names)
-    extra = nest_scalar_loops ? Set{String}((_NEST_SCALAR_LOOPS,)) : _EMPTY_BOUND_SYMS
     got = _resolve_symbolic(
-        body, vcat(out_names, contract_names), extra,
-        array_var_info, var_map, const_arrays, pgather, memo
+        body, vcat(out_names, contract_names),
+        _derive(rc; bound = _EMPTY_BOUND_SYMS, nest_loops = nest_scalar_loops), memo
     )
     got isa _Decline && return got
     refs, resolved = got
     return (refs[1:nout], refs[(nout + 1):end], resolved)
 end
 
-# Expand a scalar faq (empty output_idx) to a plain scalar ASTExpr by
-# unrolling all contracted indices at build time and combining them with the
-# declared reducer. This is the build-time equivalent of an einsum over a
-# general expression body — compile once, evaluate cheaply at every RHS call.
-function _resolve_scalar_faq(
-        faq_expr::OpExpr, array_var_info, var_map, const_arrays,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
+# A scalar faq (empty output_idx) as a plain scalar expression: the contracted
+# indices unrolled at build time and combined with the declared reducer, or a
+# run-time loop where the gates below admit one.
+function _resolve_scalar_faq(faq_expr::OpExpr, rc::_ResolveCtx)
     body = faq_expr.expr_body
     body === nothing &&
         throw(
@@ -1263,71 +1215,54 @@ function _resolve_scalar_faq(
     oplus, zerobar = _aggregate_oplus_identity(faq_expr.semiring, faq_expr.reduce)
     # Every range key contracts (a scalar aggregate has no output indices).
     contract_names = _contracted_index_names(ranges_dict, ())
-    # A contracted range bound may be a per-cell INDEX EXPRESSION (e.g. the
-    # variable-valence unstructured reduction's `index(n_edges_on_cell, i)`).
-    # This scalar-faq resolver is reached from `_resolve_indices` AFTER the
-    # outer loop variable has been substituted to a literal in `body`/`ranges`,
-    # so the bound is evaluable now via `_eval_const_int` against `const_arrays`
-    # with the empty idx_env (any surviving symbol would be unbound — an error,
-    # as before). Constant bounds pass through unchanged (backward compatible).
+    # A contracted bound may be a per-cell index expression (a ragged set's
+    # `index(n_edges_on_cell, i)`); the outer loop variable is already a
+    # literal in `body` and `ranges` here, so the bound evaluates against the
+    # const arrays with no index bound.
     contract_iters = _contract_iters_at(
-        contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, const_arrays
+        contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, rc.const_arrays
     )
-    # Build-time join gates + runtime filter guard (§5.3 / §7.2). Every join
-    # key of a scalar aggregate is a contracted symbol, so the binding is the
-    # contraction tuple (no output-index seed).
+    # Build-time join gates and the run-time filter guard (§5.3 / §7.2). Every
+    # join key of a scalar aggregate is a contracted symbol, so the binding is
+    # the contraction tuple.
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
     if isempty(contract_names) && gates === nothing && filt0 === nothing
-        return _resolve_indices(
-            body, array_var_info, var_map, const_arrays,
-            pgather, memo, bound_syms
-        )
+        return _resolve_indices(body, rc)
     end
-    # ── Runtime contraction loop opt-in ──────────────
-    # Emit a compile-once loop for a SIMPLE UNIFORM reduction; everything else
-    # unrolls. Gated conservatively (correctness first):
-    #   * enabled by the compiler plan, and NOT already inside an array-equation cell resolve
-    #     (loop node is confined to scalar-walker contexts — see `_BuildState.array_cell_depth`);
-    #   * NOT the symbolic compile-once cellwise path (`bound_syms` empty) — that
-    #     path binds its own reserved symbols and runs a separate evaluator;
-    #   * a plain arithmetic reducer ∈ {+,*,max,min}, no join gates / filter;
-    #   * every contracted range a CONSTANT integer range (ragged bounds keep
-    #     unrolling — they already resolve to a per-cell concrete bound);
-    #   * total reduction length ≥ the coverage floor;
-    #   * the body resolves with the index symbolic (`_try_build_contraction_loop`
-    #     returns a `_Decline` otherwise → unroll).
+    # A run-time loop for a simple uniform reduction: enabled by the plan, not
+    # inside an array equation's cell resolve, not a symbolic resolve, a
+    # numeric reducer with no gates or filter, constant contracted ranges, and
+    # at least the coverage floor long. A body that does not resolve with the
+    # index symbolic declines and unrolls.
     if _contraction_loop_enabled() && _build_state().array_cell_depth == 0 &&
-            isempty(bound_syms) && gates === nothing && filt0 === nothing &&
+            !_is_symbolic(rc) && gates === nothing && filt0 === nothing &&
             _is_numeric_reducer(oplus) &&
             all(n -> _is_const_int_range(ranges_dict[n]), contract_names)
         ranges = [_expand_int_range(ranges_dict[n]) for n in contract_names]
         total = isempty(ranges) ? 0 : prod(length(r) for r in ranges)
         if total >= _contraction_loop_min() && all(!isempty, ranges)
             looped = _try_build_contraction_loop(
-                body, contract_names, ranges,
-                oplus, zerobar, array_var_info, var_map, const_arrays, pgather
+                body, contract_names, ranges, oplus, zerobar,
+                _derive(rc; memo = nothing, bound = _EMPTY_BOUND_SYMS, nest_loops = false)
             )
             looped isa _Decline || return looped
         end
     end
-    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
-    # bound names), a reduction over ONE constant range at least the loop floor
-    # long stays a loop that reads the nest's counters. It folds from 0̄, so its
-    # value is the unroll's below bit for bit: the same terms in the same order,
-    # left to right from the same seed (esm-spec §4.3.1). Two or more
-    # contracted indices keep unrolling, since nested loops would group the sum
-    # by the outer index.
-    if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
+    # In the whole-array nest's term, a reduction over one constant range at
+    # least the loop floor long stays a loop that reads the nest's counters. It
+    # folds from 0̄, so its value is the unroll's bit for bit: the same terms in
+    # the same order, left to right from the same seed (esm-spec §4.3.1). Two or
+    # more contracted indices keep unrolling, since nested loops would group the
+    # sum by the outer index.
+    if rc.nest_loops && gates === nothing &&
             filt0 === nothing && length(contract_names) == 1 &&
             _is_numeric_reducer(oplus) &&
             _is_const_int_range(ranges_dict[contract_names[1]])
         r = _expand_int_range(ranges_dict[contract_names[1]])
         if length(r) >= _contraction_loop_min()
             looped = _try_build_contraction_loop(
-                body, contract_names, [r], oplus,
-                zerobar, array_var_info, var_map, const_arrays,
-                pgather; outer_syms = bound_syms
+                body, contract_names, [r], oplus, zerobar, _derive(rc; memo = nothing)
             )
             looped isa _Decline || return looped
         end
@@ -1337,12 +1272,7 @@ function _resolve_scalar_faq(
         body, contract_names, contract_iters,
         gates, filt0, zerobar
     ) do term
-        push!(
-            terms, _resolve_indices(
-                term, array_var_info, var_map, const_arrays,
-                pgather, memo, bound_syms
-            )
-        )
+        push!(terms, _resolve_indices(term, rc))
     end
     return _combine_with_reducer(oplus, zerobar, terms; scalar = true)
 end
@@ -1492,17 +1422,12 @@ _subscript_from_counters(::ASTExpr, ::Set{String}) = false
 # esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
 # const read out of range under a branch the cell does not take is no error
 # (the interpreter raises E_TREEWALK_CONSTARRAY_OOB where a read is
-# EVALUATED). The resolve below builds every branch, so it keeps, per task,
-# the guards the node being resolved sits under: the resolved condition and
-# the truth value its branch needs. An out-of-range constant subscript is
-# then raised at build only when every guard is decided at build and taken;
-# otherwise it becomes a run-time gather that raises the same error if it is
-# ever evaluated.
-const _ResolveGuards = Vector{Tuple{ASTExpr, Bool}}
-_resolve_guards() = get!(
-    () -> _ResolveGuards(), task_local_storage(),
-    :esm_resolve_guards
-)::_ResolveGuards
+# EVALUATED). The resolve below builds every branch, so it keeps the guards
+# the node being resolved sits under (`_ResolveCtx.guards`): the resolved
+# condition and the truth value its branch needs. An out-of-range constant
+# subscript is then raised at build only when every guard is decided at build
+# and taken; otherwise it becomes a run-time gather that raises the same error
+# if it is ever evaluated.
 
 # Whether the read the current guards protect is certainly evaluated: every
 # guard reads only literals (so its value is the build's to know) and has the
@@ -1527,10 +1452,8 @@ end
 
 # Whether an out-of-range read under the current guards is left for run time:
 # some guard is in force and the build cannot show every one taken.
-function _guarded_oob_deferred()
-    guards = _resolve_guards()
-    return !isempty(guards) && !_guarded_read_taken(guards)
-end
+_guarded_oob_deferred(rc::_ResolveCtx) =
+    !isempty(rc.guards) && !_guarded_read_taken(rc.guards)
 
 @noinline _throw_pgather_oob(name, ci, n, d) = throw(
     TreeWalkError(
@@ -1551,19 +1474,12 @@ _deferred_const_gather(vals::AbstractArray, name::String, subs::Vector{Int}) =
 # Resolve `ifelse` / `and` / `or` with each lazily evaluated operand under its
 # guard (see above). Every other operand is resolved exactly as the generic
 # recursion does, and an unchanged node is returned as is.
-function _resolve_guarded_op(
-        expr::OpExpr, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
+function _resolve_guarded_op(expr::OpExpr, rc::_ResolveCtx)
     args = expr.args
-    guards = _resolve_guards()
+    guards = rc.guards
     depth = length(guards)
     new_args = Vector{ASTExpr}(undef, length(args))
-    res(a) = (a isa OpExpr || a isa VarExpr) ?
-        _resolve_indices(
-            a, array_var_info, var_map, const_arrays, pgather, memo,
-            bound_syms
-        ) : a
+    res(a) = (a isa OpExpr || a isa VarExpr) ? _resolve_indices(a, rc) : a
     try
         new_args[1] = res(args[1])
         if expr.op == "ifelse"
@@ -1591,17 +1507,14 @@ end
 # `index({op:const, value:[…]}, …)` branch below. Fully-constant subscripts fold
 # to the scalar element (a `NumExpr` literal, the byte-identical frozen path); a
 # subscript that references a bound output-index symbol kept symbolic (the
-# compile-once `evaluate_cellwise` fast path, non-empty `bound_syms`) keeps the
+# compile-once `evaluate_cellwise` fast path, a non-empty `rc.bound`) keeps the
 # read runtime-varying and lowers to a `_ConstGatherRef` (→ `_NK_CONST_GATHER`),
 # with the constant dims still folded to `IntExpr`s under the same
 # `_resolve_const_index` boundary policy.
 function _resolve_const_array_gather(
-        vals::AbstractArray, name::String,
-        idx_args_expr::Vector{ASTExpr},
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int}, const_arrays::AbstractDict,
-        pgather::AbstractDict, memo::_MaybeMemo, bound_syms::Set{String}
+        vals::AbstractArray, name::String, idx_args_expr::Vector{ASTExpr}, rc::_ResolveCtx
     )
+    const_arrays, memo = rc.const_arrays, rc.memo
     length(idx_args_expr) == ndims(vals) ||
         throw(
         TreeWalkError(
@@ -1612,14 +1525,11 @@ function _resolve_const_array_gather(
     )
     if _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
-        guards = _resolve_guards()
+        guards = rc.guards
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
             if _subscript_is_runtime(a, const_arrays)
-                sub_nodes[d] = _resolve_indices(
-                    a, array_var_info, var_map,
-                    const_arrays, pgather, memo, bound_syms
-                )
+                sub_nodes[d] = _resolve_indices(a, rc)
             else
                 ci = _const_subscript_int(a, const_arrays)
                 # The guarded out-of-range rule, as for a read at constant
@@ -1640,7 +1550,7 @@ function _resolve_const_array_gather(
     end
     # Fully-constant subscripts: inline the value as a NumExpr literal.
     int_indices = Int[_const_subscript_int(a, const_arrays) for a in idx_args_expr]
-    guards = _resolve_guards()
+    guards = rc.guards
     if !isempty(guards) &&
             _anyof(
             d -> !(1 <= int_indices[d] <= size(vals, d)) &&
@@ -1743,18 +1653,11 @@ _refs_loopvar(e::ASTExpr) =
 # evaluated + bounds-checked at eval time. A missing state cell (sparse layout)
 # throws, which the loop-build try/catch converts to a fall-back to the exact unroll.
 function _resolve_state_gather(
-        vname::String, lo::Vector{Int}, hi::Vector{Int},
-        idx_args::Vector{ASTExpr}, array_var_info, var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict, pgather::AbstractDict, memo::_MaybeMemo,
-        bound_syms::Set{String}
+        vname::String, lo::Vector{Int}, hi::Vector{Int}, idx_args::Vector{ASTExpr}, rc::_ResolveCtx
     )
     nd = length(lo)
-    sub_nodes = ASTExpr[
-        _resolve_indices(
-            a, array_var_info, var_map, const_arrays,
-            pgather, memo, bound_syms
-        ) for a in idx_args
-    ]
+    var_map = rc.var_map
+    sub_nodes = ASTExpr[_resolve_indices(a, rc) for a in idx_args]
     slot_flat, strides = get!(_build_state().slot_tables, vname) do
         dims = Int[hi[d] - lo[d] + 1 for d in 1:nd]
         strd = Vector{Int}(undef, nd)
@@ -1793,7 +1696,10 @@ function _resolve_state_gather(
     end
     return OpExpr(
         "__state_gather", sub_nodes;
-        value = _StateGatherRef(slot_flat, strides, copy(lo), copy(hi))
+        value = _Lowered(
+            _NK_STATE_GATHER,
+            _StateGather(slot_flat, strides, copy(lo), copy(hi), length(slot_flat))
+        )
     )
 end
 
@@ -1802,27 +1708,17 @@ end
 # allocation) and `changed` is false, letting the caller keep its node verbatim;
 # only the first differing element triggers a single copy. Shared by the `index`
 # fallback and the generic-recurse arm of `_resolve_indices`.
-function _resolve_arg_vec(
-        args::Vector{ASTExpr},
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict,
-        pgather::AbstractDict,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
+function _resolve_arg_vec(args::Vector{ASTExpr}, rc::_ResolveCtx)
     changed = false
     new_args = args
     @inbounds for i in eachindex(args)
         a = args[i]
-        # Manual union-split (see `_sub_arg_vec`): the abstract `ASTExpr` element type
-        # makes a bare `_resolve_indices(a, …)` a dynamic dispatch. `NumExpr`/
-        # `IntExpr` resolve to themselves, so short-circuit them; `VarExpr` may
-        # const-fold (scalar loader field) so it keeps its call; `OpExpr` recurses —
-        # both now dispatch statically.
-        r = a isa OpExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
-            a isa VarExpr ? _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo, bound_syms) :
-            a                                            # NumExpr / IntExpr: verbatim
+        # Manual union split: the abstract element type would make a bare
+        # `_resolve_indices(a, rc)` a dynamic dispatch. Literals resolve to
+        # themselves.
+        r = a isa OpExpr ? _resolve_indices(a::OpExpr, rc) :
+            a isa VarExpr ? _resolve_indices(a::VarExpr, rc) :
+            a
         if r !== a
             if !changed
                 new_args = copy(args)
@@ -1834,57 +1730,39 @@ function _resolve_arg_vec(
     return new_args, changed
 end
 
-function _resolve_indices(
-        expr::NumExpr,
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+"""
+    _resolve_indices(expr, array_var_info, var_map, const_arrays = ∅, pgather = ∅, memo = nothing, bound = ∅)
+    _resolve_indices(expr, rc::_ResolveCtx)
+
+`expr` with every `index` resolved to a state slot reference, a ghost cell's
+`0.0`, a const literal, or a run-time gather marker, and every scalar `faq`
+expanded. The positional form starts a resolve with no guards in force; every
+recursion passes its `_ResolveCtx`.
+"""
+_resolve_indices(
+    expr::ASTExpr,
+    array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
+    var_map::AbstractDict{String, Int},
+    const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
+    pgather::AbstractDict = _EMPTY_PGATHER,
+    memo::_MaybeMemo = nothing,
+    bound_syms::Set{String} = _EMPTY_BOUND_SYMS
+) = _resolve_indices(
+    expr, _ResolveCtx(
+        array_var_info, var_map, const_arrays, pgather, memo, bound_syms, false, _ResolveGuards()
     )
-    return expr
-end
-function _resolve_indices(
-        expr::IntExpr,
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
-    return expr
-end
-function _resolve_indices(
-        expr::VarExpr,
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
-    # Bare (un-indexed) reference to a const-array-backed SCALAR field
-    # (RFC pure-io-data-loaders §4.3): a pure-I/O data-loader subsystem lowers
-    # each of its variables to a const-array-backed observed keyed
-    # `<owner>.<subkey>.<var>` (see flatten `_collect_model!`), and the provider
-    # seam materializes a CONST loader field into `const_arrays` under that same
-    # name (simulate.jl). When such a field is referenced by BARE name (not via a
-    # gather `index(name, …)`) and is a genuine scalar — a 0-D field or a
-    # single-cell array — const-fold it to its literal value here, so the compiler
-    # (which only consults state/param maps) resolves it exactly as the gather path
-    # already resolves `index(name, …)`. A live state slot always wins (never a
-    # loader field), and a multi-element array left bare is not scalarisable, so it
-    # passes through unchanged for the array machinery / normal error path.
-    # The live sibling: a bare reference to a ONE-CELL forcing buffer — the
-    # buffer a discrete provider rewrites for a 0-d data-fed parameter — reads
-    # the buffer, never a literal, exactly as `index(name, 1)` does below. The
-    # partition gives such a parameter no `p` slot (`_partition_variables`), so
-    # this is the only place its value comes from. A name a faq body binds
-    # shadows the buffer (`bound_syms`), and a discrete-cadence cache the build
-    # registered beside the buffers is not one.
-    if !haskey(var_map, expr.name) && !(expr.name in bound_syms) &&
+)
+
+_resolve_indices(expr::NumExpr, ::_ResolveCtx) = expr
+_resolve_indices(expr::IntExpr, ::_ResolveCtx) = expr
+function _resolve_indices(expr::VarExpr, rc::_ResolveCtx)
+    var_map, pgather, const_arrays = rc.var_map, rc.pgather, rc.const_arrays
+    # A bare reference to a one-cell live forcing buffer (a discrete
+    # provider's buffer for a 0-d data-fed parameter, which has no `p` slot)
+    # reads the buffer, as `index(name, 1)` does. A state slot wins, a name a
+    # faq body binds shadows the buffer, and a build-owned discrete cache is
+    # not one.
+    if !haskey(var_map, expr.name) && !(expr.name in rc.bound) &&
             haskey(pgather, expr.name)
         pg = pgather[expr.name]::_PGatherArray
         if !pg.cache && length(pg.flat) == 1
@@ -1894,6 +1772,9 @@ function _resolve_indices(
             )
         end
     end
+    # A bare reference to a scalar const field (a 0-d or one-cell const array,
+    # such as a pure-I/O loader field, esm-spec §4.3) folds to its value, as
+    # `index(name, …)` does. A multi-element array left bare passes through.
     if !haskey(var_map, expr.name) && haskey(const_arrays, expr.name)
         arr = const_arrays[expr.name]
         if arr isa AbstractArray && length(arr) == 1
@@ -1902,81 +1783,51 @@ function _resolve_indices(
     end
     return expr
 end
-function _resolve_indices(
-        expr::OpExpr,
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
-    # The memo is keyed on node identity and is a pure function of the node ONLY
-    # for a fixed `bound_syms`. It is threaded exclusively on the empty-`bound_syms`
-    # RHS-build path (the compile-once fast path passes `memo=nothing`), so the two
-    # modes never share a memo — a symbolic resolution can never be served from a
-    # concrete memo entry.
-    memo === nothing &&
-        return _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, nothing, bound_syms)
+function _resolve_indices(expr::OpExpr, rc::_ResolveCtx)
+    # The memo is keyed on node identity, which determines the result only
+    # for one set of bound names: a symbolic resolve carries no memo or one of
+    # its own (`_ResolveCtx.memo`).
+    memo = rc.memo
+    memo === nothing && return _resolve_indices_op(expr, rc)
     m = memo.resolve
     r = get(m, expr, nothing)
     r === nothing || return r
     n0 = memo.deferrals[]
-    r = _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+    r = _resolve_indices_op(expr, rc)
     # A read deferred under a guard this node sits under is this context's
     # answer only: the same (interned) node reached unguarded must still raise
     # at build. A deferral under guards inside the node is the node's own.
-    (memo.deferrals[] == n0 || isempty(_resolve_guards())) && (m[expr] = r)
+    (memo.deferrals[] == n0 || isempty(rc.guards)) && (m[expr] = r)
     return r
 end
-function _resolve_indices_op(
-        expr::OpExpr,
-        array_var_info::Dict{String, Tuple{Vector{Int}, Vector{Int}}},
-        var_map::AbstractDict{String, Int},
-        const_arrays::AbstractDict = _EMPTY_CONST_ARRAYS,
-        pgather::AbstractDict = _EMPTY_PGATHER,
-        memo::_MaybeMemo = nothing,
-        bound_syms::Set{String} = _EMPTY_BOUND_SYMS
-    )
+function _resolve_indices_op(expr::OpExpr, rc::_ResolveCtx)
     if _is_guarded_node_op(expr.op, length(expr.args)) &&
             expr.expr_body === nothing && expr.values === nothing
-        return _resolve_guarded_op(
-            expr, array_var_info, var_map, const_arrays,
-            pgather, memo, bound_syms
-        )
+        return _resolve_guarded_op(expr, rc)
     end
-    expr.op == "index" && return _resolve_index_op(
-        expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-    )
+    expr.op == "index" && return _resolve_index_op(expr, rc)
     if expr.op == "integral"
-        r = _resolve_integral(expr, array_var_info, var_map)
+        r = _resolve_integral(expr, rc.array_var_info, rc.var_map)
         r === nothing || return r
     end
-    # Scalar aggregate (empty output_idx) in expression position: expand inline.
-    # Non-scalar aggregate (non-empty output_idx) must be wrapped in index() —
-    # handled by the _resolve_indices index-of-aggregate branch above.
-    if _is_faq_op(expr.op)
-        if isempty(_output_idx_strings(expr))
-            return _resolve_scalar_faq(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
-        end
-        # Non-scalar faq without index() — pass through (will become a
-        # compile-time error in _compile with a helpful message).
+    # A scalar aggregate (empty output_idx) expands inline. A non-scalar one
+    # outside an `index` passes through to `_compile`, which refuses it.
+    if _is_faq_op(expr.op) && isempty(_output_idx_strings(expr))
+        return _resolve_scalar_faq(expr, rc)
     end
-    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+    new_args, changed = _resolve_arg_vec(expr.args, rc)
     new_body = expr.expr_body
     if expr.expr_body !== nothing
-        new_body = _resolve_indices(expr.expr_body, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+        new_body = _resolve_indices(expr.expr_body, rc)
         changed |= new_body !== expr.expr_body
     end
     new_values = expr.values
     if expr.values !== nothing
-        nv, vchanged = _resolve_arg_vec(expr.values, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+        nv, vchanged = _resolve_arg_vec(expr.values, rc)
         new_values = nv
         changed |= vchanged
     end
-    # No child, body, or value expression changed under resolution ⇒ the node is
-    # already fully resolved; return it verbatim rather than rebuilding a ~30-field
-    # OpExpr. In a stencil RHS the pure-parameter subtrees hit this fast path.
+    # Nothing changed: the node is already resolved and is returned as is.
     changed || return expr
     return reconstruct(expr; args = new_args, expr_body = new_body, values = new_values)
 end
@@ -2030,9 +1881,8 @@ _array_name(n::AbstractString, array_var_info, pgather, const_arrays) =
     s === :state || s === :forcing || (s === :const && !_is_scalar_const_field(const_arrays[n]))
 )
 
-function _resolve_index_op(
-        expr::OpExpr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-    )
+function _resolve_index_op(expr::OpExpr, rc::_ResolveCtx)
+    array_var_info, const_arrays, pgather = rc.array_var_info, rc.const_arrays, rc.pgather
     isempty(expr.args) &&
         throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
     target = expr.args[1]
@@ -2042,46 +1892,28 @@ function _resolve_index_op(
         # Expanded at build time by substituting the output indices and
         # unrolling the contracted ones, as `_compile_faq_percell!` does for a
         # whole-array derivative equation.
-        return _resolve_index_of_faq(
-            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_index_of_faq(target::OpExpr, subs, rc)
     elseif kind === _IT_MAKEARRAY
         # The value whose region covers (k1, …); later regions win.
-        return _resolve_index_of_makearray(
-            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_index_of_makearray(target::OpExpr, subs, rc)
     elseif kind === _IT_SHAPE_OP
-        return _resolve_indices(
-            _index_through_shape_op(target::OpExpr, subs, array_var_info, const_arrays, pgather),
-            array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_indices(_index_through_shape_op(target::OpExpr, subs, rc), rc)
     elseif kind === _IT_ELEMENTWISE
-        r = _resolve_index_of_elementwise(
-            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        r = _resolve_index_of_elementwise(target::OpExpr, subs, rc)
         r === nothing || return r
     elseif kind === _IT_CONST_ARRAY
-        return _resolve_index_of_inline_const(
-            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_index_of_inline_const(target::OpExpr, subs, rc)
     elseif kind === _IT_NAME
         n = (target::VarExpr).name
         src = _array_source(n, array_var_info, pgather, const_arrays)
-        src === :state && return _resolve_index_of_state(
-            n, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
-        src === :forcing && return _resolve_index_of_forcing(
-            n, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-        )
+        src === :state && return _resolve_index_of_state(n, subs, rc)
+        src === :forcing && return _resolve_index_of_forcing(n, subs, rc)
         # Pre-computed constant arrays: run-time and constant subscripts alike
         # go through `_resolve_const_array_gather`.
-        src === :const && return _resolve_const_array_gather(
-            const_arrays[n], n, subs, array_var_info, var_map,
-            const_arrays, pgather, memo, bound_syms
-        )
+        src === :const && return _resolve_const_array_gather(const_arrays[n], n, subs, rc)
     end
     # A scalar or unknown target: resolve the arguments only.
-    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+    new_args, changed = _resolve_arg_vec(expr.args, rc)
     changed || return expr
     return reconstruct(expr; args = new_args)
 end
@@ -2107,10 +1939,7 @@ end
 # cases (`index(aggregate,…)`, `index(makearray,…)`) were already handled
 # right above; this closes the combination case they left open. `nothing`
 # when no operand is array-valued.
-function _resolve_index_of_elementwise(
-        fa::OpExpr, subs::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
+function _resolve_index_of_elementwise(fa::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveCtx)
     # The operand test is `_index_pushdown_arrayish` (build_helpers.jl),
     # shared with `_stencilize_index`: it looks THROUGH nested elementwise
     # ops, so `index(1 + cos(pi*zc), j)` — an elementwise-defined array
@@ -2118,7 +1947,7 @@ function _resolve_index_of_elementwise(
     # `1 + cos(pi*index(zc, j))` instead of dropping the gather and
     # leaving `zc` bare. The leaf test spans every array source an index
     # can gather (`_array_name`).
-    _leaf_is_array(n) = _array_name(n, array_var_info, pgather, const_arrays)
+    _leaf_is_array(n) = _array_name(n, rc.array_var_info, rc.pgather, rc.const_arrays)
     _amemo = IdDict{OpExpr, Bool}()
     _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
     if _anyof(_arrayish, fa.args)
@@ -2127,24 +1956,15 @@ function _resolve_index_of_elementwise(
         # subscripts its own shape admits. A combination of variables
         # alone is left to the name-aligned lift, which has already
         # written each operand's own subscripts.
-        fshape = _mentions_shape_op(fa) ?
-            _remap_operand_shape(fa, array_var_info, const_arrays, pgather) : nothing
+        fshape = _mentions_shape_op(fa) ? _remap_operand_shape(fa, rc) : nothing
         rext = fshape === nothing ? nothing : fshape[2]
         _subs_for(a) = (rext === nothing || length(rext) != length(subs)) ? subs :
-            something(
-                _broadcast_operand_subs(
-                    a, subs, rext, array_var_info,
-                    const_arrays, pgather
-                ), subs
-            )
+            something(_broadcast_operand_subs(a, subs, rext, rc), subs)
         pushed = ASTExpr[
             _arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
                 for a in fa.args
         ]
-        return _resolve_indices(
-            reconstruct(fa; args = pushed), array_var_info,
-            var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_indices(reconstruct(fa; args = pushed), rc)
     end
     return nothing
 end
@@ -2160,27 +1980,20 @@ end
 # `non-scalar const outside an array-consuming position` dead-end. A SCALAR
 # `const` (a `Real` value) is not an array target — it falls through to the
 # generic recurse and const-folds in `_compile` as before.
-function _resolve_index_of_inline_const(
-        c::OpExpr, subs::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
+function _resolve_index_of_inline_const(c::OpExpr, subs::Vector{ASTExpr}, rc::_ResolveCtx)
+    memo, const_arrays = rc.memo, rc.const_arrays
     vals, cname = memo === nothing ?
         _intern_inline_const(c, const_arrays) :
         get!(() -> _intern_inline_const(c, const_arrays), memo.inline, c)
-    return _resolve_const_array_gather(
-        vals, cname, subs,
-        array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-    )
+    return _resolve_const_array_gather(vals, cname, subs, rc)
 end
 
 # `index(v, k…)` of an array state `v`: the cell's state reference, a ghost
 # cell's `0.0`, or a run-time state gather when a subscript is only known per
 # call.
-function _resolve_index_of_state(
-        vname::String, idx_args::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
-    lo, hi = array_var_info[vname]
+function _resolve_index_of_state(vname::String, idx_args::Vector{ASTExpr}, rc::_ResolveCtx)
+    var_map, const_arrays = rc.var_map, rc.const_arrays
+    lo, hi = rc.array_var_info[vname]
     length(idx_args) == length(lo) ||
         throw(
         TreeWalkError(
@@ -2197,13 +2010,10 @@ function _resolve_index_of_state(
     # observed (bound symbols keep their own path) reads its slot the
     # same way.
     if any(
-            a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
+            a -> _refs_loopvar(a) || _subscript_is_runtime(a, rc.bound, const_arrays),
             idx_args
         )
-        return _resolve_state_gather(
-            vname, lo, hi, idx_args, array_var_info,
-            var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_state_gather(vname, lo, hi, idx_args, rc)
     end
     # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
     # resolved: _eval_const_int will look up conn[c,k] as an integer. A
@@ -2214,13 +2024,10 @@ function _resolve_index_of_state(
     catch err
         (
             err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
-                !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())
+                _guarded_oob_deferred(rc)
         ) ||
             rethrow()
-        return _resolve_state_gather(
-            vname, lo, hi, idx_args, array_var_info,
-            var_map, const_arrays, pgather, memo, bound_syms
-        )
+        return _resolve_state_gather(vname, lo, hi, idx_args, rc)
     end
     for d in 1:length(indices)
         if indices[d] < lo[d] || indices[d] > hi[d]
@@ -2246,11 +2053,9 @@ end
 # the gather from being hoisted itself, it does NOT keep the ref out of
 # `canonical_json`, which sees it as a child of every hoistable ancestor
 # (see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
-function _resolve_index_of_forcing(
-        name::String, idx_args_expr::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
-        pgather, memo, bound_syms
-    )
-    pg = pgather[name]::_PGatherArray
+function _resolve_index_of_forcing(name::String, idx_args_expr::Vector{ASTExpr}, rc::_ResolveCtx)
+    const_arrays = rc.const_arrays
+    pg = rc.pgather[name]::_PGatherArray
     length(idx_args_expr) == length(pg.dims) ||
         throw(
         TreeWalkError(
@@ -2265,26 +2070,23 @@ function _resolve_index_of_forcing(
     # with each constant subscript bounds-checked here as below. Only
     # loop counters and literals qualify; any other run-time subscript
     # (one reading a state, a parameter or `t`) is refused below.
-    if !isempty(bound_syms) &&
+    if _is_symbolic(rc) &&
             _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr) &&
             all(
             a -> !_subscript_is_runtime(a, const_arrays) ||
-                _subscript_from_counters(a, bound_syms),
+                _subscript_from_counters(a, rc.bound),
             idx_args_expr
         )
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in eachindex(idx_args_expr)
             a = idx_args_expr[d]
             if _subscript_is_runtime(a, const_arrays)
-                sub_nodes[d] = _resolve_indices(
-                    a, array_var_info, var_map, const_arrays,
-                    pgather, memo, bound_syms
-                )
+                sub_nodes[d] = _resolve_indices(a, rc)
             else
                 ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                 # Out of range under a guard the build cannot show
                 # taken: the run-time gather checks it if evaluated.
-                (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred() ||
+                (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred(rc) ||
                     _throw_pgather_oob(name, ci, pg.dims[d], d)
                 sub_nodes[d] = IntExpr(Int64(ci))
             end
@@ -2303,7 +2105,7 @@ function _resolve_index_of_forcing(
         # The guarded out-of-range rule (above): a read the build
         # cannot show evaluated becomes the run-time gather, which
         # raises the same error if it is.
-        _guarded_oob_deferred() && return OpExpr(
+        _guarded_oob_deferred(rc) && return OpExpr(
             "index", ASTExpr[IntExpr(Int64(i)) for i in int_indices];
             value = _LiveGatherRef(pg.flat, pg.dims, name)
         )

@@ -770,10 +770,7 @@ end
 # compile with its indices symbolic.
 function _compile_init_once(body::ASTExpr, idx_names::Vector{String}, cs::_CompileScope)
     isempty(idx_names) && return nothing
-    got = _resolve_array_contraction_term(
-        body, idx_names, String[], cs.array_var_info, cs.var_map, cs.const_registry,
-        cs.pgather
-    )
+    got = _resolve_array_contraction_term(body, idx_names, String[], _resolve_ctx(cs))
     got isa _Decline && return nothing
     refs, _, resolved = got
     node = try

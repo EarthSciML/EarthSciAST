@@ -1055,8 +1055,7 @@ function _loop_decline(a::_FaqEq, sc::_FaqScope)
     probe = isempty(sc.resolved_obs) ? probe : _sub_preserving(probe, sc.resolved_obs)
     pranges = [_expand_int_range(a.contract_ranges[d]) for d in 1:length(a.contract_names)]
     got = _try_build_contraction_loop(
-        probe, a.contract_names, pranges, a.oplus,
-        a.zerobar, sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather
+        probe, a.contract_names, pranges, a.oplus, a.zerobar, _resolve_ctx(sc.cs)
     )
     return got isa _Decline ? got : nothing
 end
@@ -1815,8 +1814,7 @@ function _compile_cell_program(
     isempty(sc.resolved_obs) || (term = _sub_preserving(term, sc.resolved_obs))
     term = prepare(term)
     got = _resolve_array_contraction_term(
-        term, idx_names, contract_names,
-        sc.cs.array_var_info, sc.cs.var_map, sc.cs.const_registry, sc.cs.pgather;
+        term, idx_names, contract_names, _resolve_ctx(sc.cs);
         nest_scalar_loops = nest_scalar_loops, memo = memo
     )
     got isa _Decline && return got
@@ -1860,7 +1858,7 @@ end
 # build time to resolve or compile anything — the cell loop below only reads each
 # cell's slot out of `var_map`, which is an integer lookup, not IR.
 function _try_compile_array_contraction(a::_FaqEq, sc::_FaqScope)
-    # A scalar reduction nested in the term stays a loop (`_NEST_SCALAR_LOOPS`).
+    # A scalar reduction nested in the term stays a loop (`_ResolveCtx.nest_loops`).
     # A memo of this symbolic body's own: it shares nothing with the concrete
     # per-cell builds (the isolation the per-cell loop tier's compile relies
     # on), but a sub-tree the body reaches from several parents resolves and
@@ -2122,9 +2120,8 @@ function _compile_faq_percell!(
                         for d in 1:length(contract_names)
                 ]
                 marker = _try_build_contraction_loop(
-                    body2, contract_names, pranges,
-                    rhs_oplus, rhs_zerobar, cs.array_var_info, var_map,
-                    const_registry, cs.pgather
+                    body2, contract_names, pranges, rhs_oplus, rhs_zerobar,
+                    _ResolveCtx(cs.array_var_info, var_map, const_registry, cs.pgather)
                 )
                 marker isa _Decline &&
                     throw(

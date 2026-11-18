@@ -949,8 +949,7 @@ end
 function _join_literal_cell(mk::OpExpr, p::Int, const_arrays::AbstractDict)
     r = _resolve_index_of_makearray(
         mk, ASTExpr[IntExpr(Int64(p))],
-        Dict{String, Tuple{Vector{Int}, Vector{Int}}}(),
-        Dict{String, Int}(), const_arrays
+        _ResolveCtx(Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), Dict{String, Int}(), const_arrays)
     )
     r isa NumExpr && return (r::NumExpr).value
     r isa IntExpr && return (r::IntExpr).value

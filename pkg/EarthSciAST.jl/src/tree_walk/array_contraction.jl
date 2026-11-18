@@ -858,7 +858,7 @@ function _count_const_axis(a::_Node, spec::_ContractLoop, cg = a.payload)
     return (vals, true)
 end
 
-# A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds
+# A scalar reduction nested in a nest's term (`_ResolveCtx.nest_loops`). Its bounds
 # are build-time integers read through the geometry tables, and its counter's
 # span is known.
 function _cg_nest_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)

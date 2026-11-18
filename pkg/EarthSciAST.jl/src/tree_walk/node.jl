@@ -207,21 +207,6 @@ struct _ContractLoop
     step::Int
 end
 
-# Build-time side channel carrying the loop metadata from `_resolve_scalar_faq`
-# (resolve pass) to `_compile` (compile pass) on a synthetic `__contract_loop`
-# marker op's `.value` slot — the exact pattern `_ConstGatherRef` uses. A resolved
-# body is never re-substituted (`_sub_preserving` runs BEFORE resolution), so the
-# `.value` survives to `_compile` intact, the same guarantee `_ConstGatherRef`
-# relies on. The single child arg of the marker op is the loop body expression.
-struct _ContractLoopBuild
-    ref::Base.RefValue{Int}
-    lo::Int
-    hi::Int
-    step::Int
-    oplus::Symbol
-    zerobar::Float64
-end
-
 # A reduction over ONE contracted index whose bounds are themselves nodes,
 # evaluated on every call: a ragged range `[1, index(offsets, i)]` read inside an
 # array equation whose output index `i` is a loop counter of the whole-array
@@ -238,16 +223,6 @@ struct _RaggedLoop
     ref::Base.RefValue{Int}
     step::Int
     reach::Int
-end
-
-# Build→compile side channel for `_NK_RAGGED_LOOP`, carried on a `__ragged_loop`
-# marker op's `.value`; the marker's args are `[body, lo, hi]`.
-struct _RaggedLoopBuild
-    ref::Base.RefValue{Int}
-    step::Int
-    reach::Int
-    oplus::Symbol
-    zerobar::Float64
 end
 
 # ── Runtime STATE gather in a contraction-loop body (ess-runtime-contraction) ──
@@ -272,16 +247,6 @@ struct _StateGather
     len::Int
 end
 
-# Build→compile side channel (like `_ConstGatherRef`): carries the resolved state
-# slot table on a `__state_gather` marker op's `.value`; `_compile` compiles the
-# subscript `args` as children and lowers the node to `_NK_STATE_GATHER`.
-struct _StateGatherRef
-    slot_flat::Vector{Int}
-    strides::Vector{Int}
-    lo::Vector{Int}
-    hi::Vector{Int}
-end
-
 # ── A recurrence's causal self-read (esm-spec §4.3.1.1; recurrence_sweep.jl) ──
 # The payload of an `_NK_RECUR_GATHER` node. The subscripts are the node's
 # `children`; each is checked against its axis of the box the sweep fills
@@ -303,11 +268,19 @@ struct _RecurGather
     cur::Base.RefValue{Int}
 end
 
-# Build→compile side channel for it, like `_StateGatherRef`: rides on a
-# `__recur_read` marker op's `.value`, whose `args` are the subscripts.
-struct _RecurGatherRef
-    gather::_RecurGather
+# What resolve decided for a run-time loop or gather that the expression
+# language cannot spell, carried to `_compile` in the `value` of a marker op
+# (`__contract_loop`, `__ragged_loop`, `__state_gather`, `__recur_read`): the
+# node's kind, ⊕ and 0̄ for a fold, and its run-time payload. The marker's
+# `args` compile as the node's children. It exists only between the resolve and
+# compile passes of one build.
+struct _Lowered
+    kind::UInt8
+    op::Symbol
+    literal::Float64
+    payload::Any
 end
+_Lowered(kind::UInt8, payload) = _Lowered(kind, Symbol(""), 0.0, payload)
 
 function _mknode(;
         kind::UInt8, op::Symbol = Symbol(""),
