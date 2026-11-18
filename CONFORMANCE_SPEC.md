@@ -1290,8 +1290,10 @@ and **rule 2 governs it**: a reference denotes its expansion. Normatively:
 > **Whether the pushdown fires MUST NOT depend on whether the author factored
 > the binning body through an `expression_templates` entry.** A binding
 > implementation MUST recognise a factored body exactly as it recognises the
-> body's expansion — matching on `Expand(tree)`, per node or wholly, is the
-> implementation's choice; agreeing with the expansion is not.
+> body's expansion. How it recognises it is the implementation's choice;
+> agreeing with the expansion is not. Per esm-spec §9.6.4 rule 2 an
+> implementation SHOULD analyse the referenced body once per binding shape
+> rather than match on `Expand(tree)`.
 
 Emission is separately constrained, and in the opposite direction. The rewrite
 MUST re-point the rect factors by editing the **call site** — the reference's

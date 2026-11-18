@@ -296,6 +296,11 @@ Model selection matches the build's: `model_name = nothing`
 selects the document's only model, or throws `E_TREEWALK_AMBIGUOUS_MODEL`
 when there are several; an unknown name throws `E_TREEWALK_NO_MODEL`.
 A document with no surviving references returns the plain copy.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expanded_model(
         file::EsmFile,

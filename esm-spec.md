@@ -5128,8 +5128,13 @@ special-case older versions to recover Option A matching. Motivation and measure
    order-independent) — is deterministic: two expansions of the same `(template, bindings)`
    pair MUST produce structurally identical ASTs with bit-equal constants; caching MUST NOT be
    observable. All observable behavior MUST be as if evaluated on `Expand(tree)`; numeric
-   results MUST be bit-identical to it. Every consumer MAY expand — wholly, per node, or not
-   at all.
+   results MUST be bit-identical to it. Builders, evaluators and analyses SHOULD NOT expand
+   references: they SHOULD analyse and compile each template once — memoized per template and
+   binding shape — and reuse the result at every use, so that cost follows the size of the
+   template DAG rather than the size of `Expand(tree)`. A consumer that does expand, wholly or
+   per node, still meets this rule if its behavior is as stated above. Explicit expansion
+   utilities (for tools and interchange) remain permitted; they are not the build or analysis
+   path.
 3. **Eager expansion.** A reference whose template is **target-bearing** (its composed body
    contains, transitively through the §9.7.3-checked DAG — including inside the `bindings` of
    nested references — an op no evaluator implements: the §4.2 open rewrite-target tier, or
@@ -5151,17 +5156,20 @@ special-case older versions to recover Option A matching. Motivation and measure
    the `match`-pattern matcher, whose opacity keeps the fixpoint deterministic and
    byte-identical across bindings. It does **not** govern other consumers of the loaded tree —
    analyses, lowerings, evaluators and pre-build model transforms are governed by **rule 2**,
-   under which a reference denotes its expansion and every consumer MAY expand, wholly or per
-   node. A consumer whose *decisions* depend on the shape of an expression MUST therefore reach
-   those decisions on `Expand(tree)`, not on the reference-preserving tree, or its behavior
+   under which a reference denotes its expansion and such consumers SHOULD NOT expand it. A
+   consumer whose *decisions* depend on the shape of an expression MUST therefore reach
+   those decisions as it would on `Expand(tree)`, not on the reference-preserving tree read as
+   if a reference were a leaf, or its behavior
    becomes a function of the author's factoring — which rule 2 forbids ("all observable
    behavior MUST be as if evaluated on `Expand(tree)`"). The projection-pushdown desugar
    (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT
-   depend on whether the author factored the binning body through a template.** Note that
-   expanding for a decision does not oblige a consumer to expand what it *emits*: a transform
-   MAY match on the expanded view and then edit the reference-preserving tree (a call site's
-   `bindings`), which is how a consumer stays rule-2-correct without giving up the single
-   lowering Option B exists for.
+   depend on whether the author factored the binning body through a template.** The way to
+   reach such a decision without expanding is to analyse the referenced template's body once
+   per binding shape (memoized) and combine that result with the call site's `bindings`. A
+   transform MAY then edit the reference-preserving tree (a call site's `bindings`), which is
+   how a consumer stays rule-2-correct without giving up the single lowering Option B exists
+   for. A consumer that instead matches on an expanded view is still conformant, but is not
+   the recommended path.
 5. **Round-trip emits the reference-preserving, self-contained form.** Surviving call sites
    emit verbatim (post-substitution; post-fold on an **instantiating load** — see "Two load
    modes" below). Each component materializes into its own

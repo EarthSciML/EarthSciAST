@@ -1685,6 +1685,11 @@ structurally identical apply sites expand once and share the result. Pass `nothi
 per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expand_flattened_refs(
         flat::FlattenedSystem;

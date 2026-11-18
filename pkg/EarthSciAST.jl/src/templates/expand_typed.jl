@@ -570,6 +570,11 @@ file directly and expand at their own boundary, so this is for a consumer that
 wants the expanded DOCUMENT: an emitter, a diff against a fused golden, a
 reader with no template handling of its own. `file` is not modified, and a
 file with no surviving references comes back by identity.
+
+Not for build or analysis paths: esm-spec §9.6.4 rule 2 says builders,
+evaluators and analyses SHOULD NOT expand references (they analyse and compile
+each template once). This is an explicit expansion utility for tools and
+interchange.
 """
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
