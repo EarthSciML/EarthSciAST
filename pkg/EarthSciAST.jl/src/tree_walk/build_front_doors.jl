@@ -26,7 +26,7 @@ function _refuse_float32(model::Model, document::AbstractString, name::AbstractS
     return nothing
 end
 
-function _refuse_float32(file::EsmFile, model_name)
+function _refuse_float32(file::EsmFile, model_name::Union{Nothing, AbstractString})
     document = something(
         file.domain === nothing ? nothing : file.domain.element_type,
         "Float64"
@@ -267,7 +267,7 @@ end
 # `EsmFile.component_templates`, esm-spec §9.6.4 Option B), or `nothing` when the
 # document carries none. Mirrors `_select_model`'s name resolution; a selection
 # `_select_model` would reject returns `nothing` here and lets it throw.
-function _component_template_reg(file::EsmFile, model_name)
+function _component_template_reg(file::EsmFile, model_name::Union{Nothing, AbstractString})
     ct = file.component_templates
     ct === nothing && return nothing
     name = model_name !== nothing ? String(model_name) :

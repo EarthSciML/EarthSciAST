@@ -681,7 +681,7 @@ end
 # invalid, and a build refuses it by name rather than drop it or let it override
 # the parameter. `variables` is the flattened registry, so a scoped reference
 # into a subsystem is already its qualified name.
-function _refuse_parameter_definitions(equations, variables::AbstractDict)
+function _refuse_parameter_definitions(equations::AbstractVector{Equation}, variables::AbstractDict)
     for eq in equations
         (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic") && continue
         dn = _lhs_defined_name(eq.lhs)
