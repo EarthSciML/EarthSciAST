@@ -259,8 +259,7 @@ function _namespace_expr(
     # `bindings` values (esm-spec §9.6.4 rule 7 / §10.7: template `params` —
     # the map's KEYS — never namespace, they are the template's formal
     # parameters; the argument expressions bound TO them do, and `map_children`
-    # rewrites exactly the values). An explicit `bindings` carve-out used to
-    # live here because `map_children` skipped that field. `map_children`
+    # rewrites exactly the values). `map_children`
     # routes through `reconstruct`, preserving all non-expression fields
     # (semiring, output_idx, int_var, join/join_gates, manifold, …).
     result = map_children(
@@ -405,8 +404,12 @@ function _collect_model!(
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
-        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
     # Initialization equations (esm-spec §6.2) resolve in the same scope and
     # take the same renaming as the equations.
@@ -497,8 +500,12 @@ function _collect_reaction_system!(
         rhs0 = templates === nothing ? eq.rhs : _expand_expr_refs(eq.rhs, templates)
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
-        push!(st.equations, Equation(lhs, rhs; _comment = eq._comment))
-        push!(st.contribs, _authored(rhs, _component_origin(prefix)))
+        push!(
+            st.equations, _FlatEq(
+                Equation(lhs, rhs; _comment = eq._comment),
+                _authored(rhs, _component_origin(prefix)), _component_root(prefix)
+            )
+        )
     end
 
     # A reaction system's events are collected on the same footing as a model's

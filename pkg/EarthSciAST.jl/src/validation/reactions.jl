@@ -7,6 +7,16 @@ Validate reaction system consistency: species declared, positive stoichiometries
 no null-null reactions, rate references declared.
 """
 function validate_reaction_consistency(
+        rs::ReactionSystem, path::String; indep::AbstractString = "t"
+    )::Vector{StructuralError}
+    errors = StructuralError[]
+    _foreach_component(rs, path) do r, p, _
+        append!(errors, _validate_reaction_consistency_here(r, p; indep = indep))
+    end
+    return errors
+end
+
+function _validate_reaction_consistency_here(
         rs::ReactionSystem, path::String;
         indep::AbstractString = "t"
     )::Vector{StructuralError}
@@ -105,15 +115,6 @@ function validate_reaction_consistency(
         end
     end
 
-    # Recursively check subsystems
-    for (subsys_name, subsys) in rs.subsystems
-        append!(
-            errors, validate_reaction_consistency(
-                subsys, "$path/subsystems/$subsys_name";
-                indep = indep
-            )
-        )
-    end
 
     return errors
 end

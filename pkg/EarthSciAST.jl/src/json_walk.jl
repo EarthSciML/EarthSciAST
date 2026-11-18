@@ -325,6 +325,29 @@ function _walk_json_impl(f, key::Union{Nothing, String}, node)
 end
 
 """
+    _walk_json_path(f, node, at = ""; keys = k -> keys(k)) -> Nothing
+
+[`_walk_json`](@ref) carrying each node's path: `f(path, n)` for every object,
+array and leaf, parent before children, where `path` is `at` followed by one
+`/<key>` or `/<0-based index>` segment per level (keys as written, not
+RFC 6901-escaped). Return `false` from `f` to prune `n`'s children. `keys(obj)`
+gives an object's keys in the order to visit them.
+"""
+function _walk_json_path(f, node, at::AbstractString = ""; keys = Base.keys)
+    f(at, node) === false && return nothing
+    if _is_object(node)
+        for k in keys(node)
+            _walk_json_path(f, _raw_get(node, string(k)), string(at, "/", k); keys = keys)
+        end
+    elseif _is_array(node)
+        for (i, v) in enumerate(node)
+            _walk_json_path(f, v, string(at, "/", i - 1); keys = keys)
+        end
+    end
+    return nothing
+end
+
+"""
     _map_json(f, node)
 
 Structure-preserving rewrite of a raw JSON tree. `f` is called as `f(key, n)`

@@ -23,6 +23,11 @@ function _prefix_code(details::AbstractString, default::String)
     return m === nothing ? default : String(m.captures[1])
 end
 
+# A flatten diagnostic that does not stop the pass: logged at `Warn` level, the
+# message led by its code and the code also on the log record (`code`), so a
+# caller can filter on it.
+_flatten_warn(code::String, msg::String) = @warn "$(code): $(msg)" code = code
+
 # ========================================
 # Error Types (§4.7.5 / §4.7.6 taxonomy)
 # ========================================
@@ -148,7 +153,7 @@ _flatten_message(io::IO, e::OperatorComposeAmbiguousBareNameError) =
 Raised when a `variable_map` endpoint names nothing the flattened system
 carries (esm-spec §4.6, §10.4).
 
-Both halves of the entry are load-bearing and both used to fail SILENTLY. A
+Both halves of the entry are load-bearing, and neither may fail silently. A
 `to` that resolves to no parameter is simply never promoted
 (`_promote_variable_map_param!` returns on `haskey(params, entry.to) ||
 return`): the document declares a coupling, the target keeps its declared

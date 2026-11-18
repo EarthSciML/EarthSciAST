@@ -78,7 +78,7 @@ function comp_items(c::Comp, out::Vector{RItem})
 end
 
 """`Source.items`: the constructs of a skeleton, in the printer's order."""
-function items(d::Doc)
+function items(d::Doc{AsText})
     out = RItem[]
     d.desc === nothing || push!(out, RDesc(d.desc))
     for (k, v) in d.blocks
@@ -94,9 +94,9 @@ function items(d::Doc)
 end
 
 """`Comp.fresh`."""
-comp_fresh(k::Kind, n::String) = Comp(k, n, nothing, Decl[], Any[], Kvs(), Kvs())
+comp_fresh(k::Kind, n::String) = Comp{AsText}(k, n, nothing, Decl[], Any[], Kvs(), Kvs())
 
-with_desc(c::Comp, s) = Comp(c.kind, c.name, s, c.decls, c.math, c.math_blocks, c.blocks)
+with_desc(c::Comp{P}, s) where {P} = Comp{P}(c.kind, c.name, s, c.decls, c.math, c.math_blocks, c.blocks)
 
 """`Source.addTo`: add a construct to a component section (the updated section);
 a second description is refused (`nothing`)."""
@@ -129,10 +129,10 @@ mutable struct St
     desc::Union{Nothing, String}
     blocks::Kvs
     math::Vector{Any}
-    comps::Vector{Comp}
-    cur::Union{Nothing, Comp}
+    comps::Vector{Comp{AsText}}
+    cur::Union{Nothing, Comp{AsText}}
 end
-St() = St(nothing, Kvs(), Any[], Comp[], nothing)
+St() = St(nothing, Kvs(), Any[], Comp{AsText}[], nothing)
 
 """`Source.step`: read one construct (`false` when refused). Before the first
 directive only a description, blocks and templates are allowed."""
@@ -171,25 +171,25 @@ function unitems(front::Kvs, its)
     end
     comps = st.comps
     st.cur === nothing || push!(comps, st.cur)
-    return Doc(front, st.desc, st.blocks, st.math, comps)
+    return Doc{AsText}(front, st.desc, st.blocks, st.math, comps)
 end
 
 """`Source.rawDoc`: every math entry printed under its symbol table
 (`pr(sym, m)`)."""
-function raw_doc(pr, d::Doc)
+function raw_doc(pr, d::Doc{AsRead})::Doc{AsText}
     ts = top_sym(d)
-    comps = Comp[]
+    comps = Comp{AsText}[]
     for c in d.comps
         s = sym_for(d, c)
-        push!(comps, map_math(c, (_, m) -> pr(s, m)))
+        push!(comps, map_math(c, (_, m) -> pr(s, m), AsText))
     end
-    return Doc(d.front, d.desc, d.blocks, Any[pr(ts, m) for m in d.math], comps)
+    return Doc{AsText}(d.front, d.desc, d.blocks, Any[pr(ts, m) for m in d.math], comps)
 end
 
 """`Source.cookComp`: read a component's math entries under its symbol table;
 one math text may hold several equations (`ck(sym, m)` gives a vector or
 `nothing`)."""
-function cook_comp(ck, d::Doc, c::Comp)
+function cook_comp(ck, d::Doc{AsText}, c::Comp{AsText})
     s = sym_for(d, c)
     math = Any[]
     for m in c.math
@@ -197,7 +197,7 @@ function cook_comp(ck, d::Doc, c::Comp)
         x === nothing && return refused_math!(" in `$(c.name)`", m)
         append!(math, x)
     end
-    return Comp(c.kind, c.name, c.desc, c.decls, math, c.math_blocks, c.blocks)
+    return Comp{AsRead}(c.kind, c.name, c.desc, c.decls, math, c.math_blocks, c.blocks)
 end
 
 # Record a math entry of a component (`where`) that does not read, for the
@@ -210,7 +210,7 @@ function refused_math!(where::String, m)
 end
 
 """`Source.cookDoc`: read every math entry of a skeleton."""
-function cook_doc(ck, d::Doc)
+function cook_doc(ck, d::Doc{AsText})
     ts = top_sym(d)
     rm = Any[]
     for m in d.math
@@ -218,13 +218,13 @@ function cook_doc(ck, d::Doc)
         x === nothing && return refused_math!("", m)
         append!(rm, x)
     end
-    cs = Comp[]
+    cs = Comp{AsRead}[]
     for c in d.comps
         x = cook_comp(ck, d, c)
         x === nothing && return nothing
         push!(cs, x)
     end
-    return Doc(d.front, d.desc, d.blocks, rm, cs)
+    return Doc{AsRead}(d.front, d.desc, d.blocks, rm, cs)
 end
 
 """`Source.prMx`: a math entry's text, from the equation and expression

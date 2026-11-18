@@ -455,19 +455,10 @@ function _walk!(
         variables::Union{Nothing, AbstractDict},
         id_to_addr::OrderedDict{String, _RefNode}
     )
-    if value isa AbstractDict
-        _is_node(value) &&
-            _register_and_process!(g, value, path, model_name, index_sets, variables, id_to_addr)
-        for k in _str_keys(value)
-            _walk!(
-                g, _raw_get(value, k), string(path, "/", k), model_name, index_sets, variables,
-                id_to_addr
-            )
-        end
-    elseif value isa AbstractVector
-        for (i, v) in enumerate(value)
-            _walk!(g, v, string(path, "/", i - 1), model_name, index_sets, variables, id_to_addr)
-        end
+    _walk_json_path(value, path; keys = _str_keys) do at, v
+        (v isa AbstractDict && _is_node(v)) &&
+            _register_and_process!(g, v, at, model_name, index_sets, variables, id_to_addr)
+        return true
     end
     return g
 end
@@ -478,30 +469,20 @@ function _collect_ids!(
         nodes::OrderedDict{String, _RefNode}, value, path::AbstractString,
         model_name::AbstractString
     )
-    if value isa AbstractDict
-        if _is_node(value)
-            nid = _nonempty_str(_raw_get(value, "id"))
-            if nid !== nothing
-                qualified = string("models/", model_name, "/", path)
-                if haskey(nodes, nid)
-                    throw(
-                        ReferenceResolutionError(
-                            E_REF_DUPLICATE_NODE_ID,
-                            "duplicate expression-node id '$(nid)' in document " *
-                                "(at $(qualified) and $(nodes[nid].path))"
-                        )
-                    )
-                end
-                nodes[nid] = _RefNode(nid, qualified, _as_str(_raw_get(value, "op")))
-            end
-        end
-        for k in _str_keys(value)
-            _collect_ids!(nodes, _raw_get(value, k), string(path, "/", k), model_name)
-        end
-    elseif value isa AbstractVector
-        for (i, v) in enumerate(value)
-            _collect_ids!(nodes, v, string(path, "/", i - 1), model_name)
-        end
+    _walk_json_path(value, path; keys = _str_keys) do at, v
+        (v isa AbstractDict && _is_node(v)) || return true
+        nid = _nonempty_str(_raw_get(v, "id"))
+        nid === nothing && return true
+        qualified = string("models/", model_name, "/", at)
+        haskey(nodes, nid) && throw(
+            ReferenceResolutionError(
+                E_REF_DUPLICATE_NODE_ID,
+                "duplicate expression-node id '$(nid)' in document " *
+                    "(at $(qualified) and $(nodes[nid].path))"
+            )
+        )
+        nodes[nid] = _RefNode(nid, qualified, _as_str(_raw_get(v, "op")))
+        return true
     end
     return nodes
 end

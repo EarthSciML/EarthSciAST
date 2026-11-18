@@ -12,6 +12,16 @@ function _check_update_unit_conversions!(
         errors::Vector{StructuralError}, file::EsmFile,
         model::Model, path::String, scope::Set{String}
     )
+    _foreach_component(model, path) do m, p, _
+        _check_update_unit_conversions_here!(errors, file, m, p, scope)
+    end
+    return errors
+end
+
+function _check_update_unit_conversions_here!(
+        errors::Vector{StructuralError}, file::EsmFile,
+        model::Model, path::String, scope::Set{String}
+    )
     for name in sort!(collect(keys(model.variables)))
         rules = model.variables[name].update
         rules === nothing && continue
@@ -29,12 +39,6 @@ function _check_update_unit_conversions!(
             )
         end
     end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_update_unit_conversions!(
-            errors, file, subsys,
-            "$path/subsystems/$subsys_name", scope
-        )
-    end
     return errors
 end
 
@@ -50,6 +54,16 @@ genuinely reaches structural validation instead of being masked by a schema
 rejection.
 """
 function _check_update_sources!(
+        errors::Vector{StructuralError}, model::Model,
+        path::String, available::Vector{String}
+    )
+    _foreach_component(model, path) do m, p, _
+        _check_update_sources_here!(errors, m, p, available)
+    end
+    return errors
+end
+
+function _check_update_sources_here!(
         errors::Vector{StructuralError}, model::Model,
         path::String, available::Vector{String}
     )
@@ -71,9 +85,6 @@ function _check_update_sources!(
                 )
             )
         end
-    end
-    for (subsys_name, subsys) in model_subsystems(model)
-        _check_update_sources!(errors, subsys, "$path/subsystems/$subsys_name", available)
     end
     return errors
 end

@@ -200,18 +200,7 @@ builds it, so every one of these cases is compared in full.
   about the field set: (i) the oracle NAMESPACES an aggregate's loop
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
   wrong — index sets are a document-scoped registry with plain names, and a loop
-  variable is body-local, not a component variable. A second, the oracle
-  printing the lift's range as its extent (`1:4`) where Julia printed the
-  index-set name (`lon`), is RESOLVED: every binding ranges a lifted loop over
-  its index set (esm-libraries-spec §4.7.5, "Pointwise lift: index sets"). A
-  third, the reaction-lowering coefficient rendering, is RESOLVED
-  (esm-libraries-spec §4.6.2, see above). A fourth used to sit here —
-  `operator_compose` summing the matched RHSs in the opposite order — and is
-  RESOLVED (2026-08-24): `Advection` writes `D(Chemistry.O3, t) = …` itself, so
-  after namespacing its equations are indistinguishable from the reaction
-  system's, and the merge was reading the A/B roles off the dependent variable's
-  prefix and getting them backwards. Provenance is now recorded at collection
-  (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
+  variable is body-local, not a component variable.
 * `equations` on `term_provenance_pointwise_lift` — difference (i) of
   `advection_reaction_loaded_ic_bc` above, and nothing else: the oracle
   namespaces the lift's loop variable (`Adv.i`) where Julia keeps `i`. The

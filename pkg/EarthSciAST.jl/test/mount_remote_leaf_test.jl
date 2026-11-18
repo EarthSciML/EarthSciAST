@@ -154,6 +154,46 @@ using EarthSciAST
         end
     end
 
+    # The edge's injected imports are the assembler's: a relative ref resolves
+    # against the mounting document's directory and keeps naming that local
+    # file inside the remote leaf, rather than joining onto the leaf's URL.
+    @testset "an edge-injected import on a remote leaf stays local" begin
+        dir = mktempdir()
+        cp(
+            joinpath(@__DIR__, "..", "..", "..", "tests", "valid", "template_import_lib.esm"),
+            joinpath(dir, "template_import_lib.esm")
+        )
+        leaf = leaf_doc(
+            model = D(
+                "variables" => D(
+                    "x" => D("type" => "unknown", "units" => "1", "default" => 1.0),
+                    "y" => D("type" => "unknown", "units" => "1")
+                ),
+                "equations" => Any[
+                    D("lhs" => D("op" => "D", "args" => ["x"], "wrt" => "t"), "rhs" => D("op" => "-", "args" => ["x"])),
+                    D("lhs" => "y", "rhs" => D("op" => "scale_by_n", "args" => ["x"])),
+                ]
+            )
+        )
+        root = root_mounting("$host/scaled.esm"; form = :subsystem)
+        root["models"]["Host"]["subsystems"]["S"]["expression_template_imports"] =
+            Any[D("ref" => "./template_import_lib.esm")]
+        fetched = String[]
+        docs = D("$host/scaled.esm" => J(leaf))
+        fetch = url -> begin
+            push!(fetched, String(url))
+            haskey(docs, url) || error("offline host has no '$url'")
+            docs[url]
+        end
+        file = EarthSciAST._load_document(
+            EarthSciAST._to_ordered(root), dir;
+            source = EarthSciAST._DocumentSource(fetch = fetch)
+        )
+        @test fetched == ["$host/scaled.esm"]
+        y_eq = only(filter(eq -> eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "y", file.models["Host"].subsystems["S"].equations))
+        @test !occursin("scale_by_n", sprint(show, y_eq.rhs))
+    end
+
     @testset "an interrupt while fetching is not rebranded" begin
         root = root_mounting("$host/x.esm"; form = :subsystem)
         e = caught(

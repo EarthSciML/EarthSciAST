@@ -1157,15 +1157,11 @@ end
         mk(name) = Equation(_deriv(name), _N(0.0))
         dep(eq) = (eq.lhs.args[1]::E.VarExpr).name
         function place(names, owners, items, components)
-            eqs = Equation[mk(n) for n in names]
-            cs = Vector{E.Contribution}[E.Contribution[] for _ in names]
-            os = copy(owners)
+            pool = [E._FlatEq(mk(n), E.Contribution[], o) for (n, o) in zip(names, owners)]
             E._insert_into_component_blocks!(
-                eqs, cs, os,
-                [(mk(n), E.Contribution[], o) for (n, o) in items], components
+                pool, [E._FlatEq(mk(n), E.Contribution[], o) for (n, o) in items], components
             )
-            @test length(cs) == length(eqs)
-            return dep.(eqs), os
+            return [dep(f.eq) for f in pool], [f.owner for f in pool]
         end
         # Unowned "" equations belong to no block; items of one owner keep
         # their order; owners are visited in component order whatever the

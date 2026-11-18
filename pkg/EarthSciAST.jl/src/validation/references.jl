@@ -327,13 +327,13 @@ end
 # whose names the reference-integrity check resolves against the component's
 # scope. Not here: a reaction `rate` (`validate_reaction_consistency` reports
 # `undefined_parameter` there), a data update's `from.unit_conversion`
-# (`_check_update_unit_conversions!`), a variable's `lb` / `ub`, and a
-# continuous event's `affect_neg`. An inline test's `from_file` reference
-# (esm-spec §6.6.5 convention 3) is data, not an expression, and is not a site.
+# (`_check_update_unit_conversions!`) and a variable's `lb` / `ub`. An inline
+# test's `from_file` reference (esm-spec §6.6.5 convention 3) is data, not an
+# expression, and is not a site.
 const _REFERENCE_CHECKED_SITES = (
     :equation_lhs, :equation_rhs, :initialization_lhs, :initialization_rhs,
     :constraint_lhs, :constraint_rhs, :guess, :update_when, :update_expression,
-    :event_condition, :event_trigger, :affect, :test_reference,
+    :event_condition, :event_trigger, :affect, :affect_neg, :test_reference,
 )
 
 """

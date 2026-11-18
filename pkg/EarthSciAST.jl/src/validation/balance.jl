@@ -16,6 +16,27 @@ skips it once, instead of every recursion site repeating the
 model_subsystems(model::Model) =
     (pair for pair in model.subsystems if pair.second isa Model)
 
+"""
+    _foreach_component(f, node, path; sorted = false)
+
+Call `f(component, path, key)` for `node` and for every subsystem below it of
+its own kind (a `Model` below a model, a `ReactionSystem` below a reaction
+system), parent before children: `path` is the component's JSON pointer, each
+subsystem's extending its parent's by `/subsystems/<key>`, and `key` is its
+`subsystems` key (`nothing` for `node`). Siblings come in document order, or
+by key with `sorted`. The one walk of a component tree the structural checks
+share.
+"""
+function _foreach_component(f, node::T, path::AbstractString; sorted::Bool = false, key = nothing) where {T <: Union{Model, ReactionSystem}}
+    f(node, String(path), key)
+    subs = Pair{String, T}[k => v for (k, v) in node.subsystems if v isa T]
+    sorted && sort!(subs; by = first)
+    for (k, sub) in subs
+        _foreach_component(f, sub, "$path/subsystems/$k"; sorted = sorted, key = k)
+    end
+    return nothing
+end
+
 # The component the dotted `path` segments name below `c`, walking
 # `subsystems` one segment at a time through components of `c`'s own kind;
 # `nothing` when a segment is missing or names anything else (an unresolved
@@ -115,6 +136,18 @@ Two exemptions carry over, and both are one-directional:
   is the advected field the composition supplies.
 """
 function validate_model_balance(
+        model::Model, path::String; check_excess::Bool = true
+    )::Vector{StructuralError}
+    # The operator exemption is inherited: a subsystem of an operator still
+    # acts on the composed system's state.
+    errors = StructuralError[]
+    _foreach_component(model, path) do m, p, _
+        append!(errors, _validate_model_balance_here(m, p; check_excess = check_excess))
+    end
+    return errors
+end
+
+function _validate_model_balance_here(
         model::Model, path::String;
         check_excess::Bool = true
     )::Vector{StructuralError}
@@ -163,16 +196,6 @@ function validate_model_balance(
         )
     end
 
-    # Recursively check subsystems. The operator exemption is inherited: a
-    # subsystem of an operator is still acting on the composed system's state.
-    for (subsys_name, subsys) in model_subsystems(model)
-        append!(
-            errors, validate_model_balance(
-                subsys, "$path/subsystems/$subsys_name";
-                check_excess = check_excess
-            )
-        )
-    end
 
     return errors
 end
