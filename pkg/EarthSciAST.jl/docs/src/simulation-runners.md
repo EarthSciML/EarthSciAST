@@ -207,17 +207,14 @@ is no parallel dispatch table. Unbound variables raise
 
 ### Performance characteristics
 
-- **Build time independent of system size.** The build walks each
-  equation's RHS once at build time and produces a compact compiled-IR tree
-  (`_Node`) where ops are `Symbol` (pointer compare), state references have
-  their `u`-index baked in, parameter references have their `Val{sym}` type
-  parameter baked in for monomorphic `NamedTuple` access, and literals are
-  pre-promoted to `Float64`. There is no symbolic simplification or tearing
-  pass.
-- **Per-step cost is one type-stable closure call** that iterates `rhs_list`
-  and dispatches on `_Node.kind`/`_Node.op`. Observed-variable RHSes are
-  inlined at build time (substituted to a fixed point), so the runtime hot
-  path never re-resolves observers.
+- **Each equation is lowered once, at build time,** to a compact IR (`_Node`)
+  with state slots, parameter positions and literals resolved. Array
+  equations become access kernels; under `:native` those are compiled to
+  Julia functions (RuntimeGeneratedFunctions) and threaded when Julia runs
+  with more than one thread. Array observeds are materialized into buffers
+  the right-hand side reads.
+- **The right-hand side does not allocate** at `Float64` and is eltype-generic,
+  so ForwardDiff runs through it.
 - **No structural simplification.** Trade-off: MTK can eliminate observed
   variables, alias-equate states, and tear DAEs; `tree_walk` does not. If
   your model benefits from structural simplification and fits comfortably in
@@ -225,8 +222,8 @@ is no parallel dispatch table. Unbound variables raise
 
 ### Supported ops
 
-`tree_walk` consumes scalarized canonical-form AST. It supports the full
-arithmetic, comparison, logical and elementary-function op set per
+`tree_walk` consumes canonical-form AST, scalar and `faq` array equations. It
+supports the full arithmetic, comparison, logical and elementary-function op set per
 `esm-spec` §4:
 
 - Arithmetic: `+`, `-`, `*`, `/`, `^` / `pow`
@@ -259,7 +256,7 @@ cross-binding operator codes):
 | `unevaluable_operator` | An evaluable-core op the walker has no rule for (an array or value-invention op an earlier stage should have eliminated). Cross-binding code, raised at build (esm-spec §9.6.6). |
 | `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: a `call` op built in code (it is not part of the format), or an `index` that reached compilation unresolved. |
-| `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
+| `E_TREEWALK_UNSUPPORTED_SHAPE` | Array data that does not fit a variable's declared `shape` (or array data for an unshaped variable), or an array-shaped observed the build cannot own. |
 | `unsupported_construct` | The model declares a continuous event, a discrete event, an implicit equation (an expression LHS such as `s - f(s) ~ 0`), or Wiener noise (a parameter whose `update.kind` is `wiener`). The walker runs none of them, so `:native` and `:interpreter` both refuse; `compiler = :mtk` runs the events and implicit equations, and no compiler integrates an SDE (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
 | `E_TREEWALK_UNBOUND_VARIABLE` | Free variable is neither a state, parameter, nor `t`. |
