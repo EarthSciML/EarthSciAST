@@ -42,7 +42,6 @@ struct UnitConversionError <: EarthSciASTError
 end
 UnitConversionError(message::AbstractString) =
     UnitConversionError(ERROR_CODES.UNIT_ERROR, String(message))
-Base.showerror(io::IO, e::UnitConversionError) = print(io, e.message)
 
 """
     parse_unit_conversion(raw; variable_name) -> Nothing | Float64 | ASTExpr
@@ -81,6 +80,7 @@ function _unit_conversion_scale(conversion, variable_name::AbstractString)
         node = _compile(conversion, Dict{String, Int}(), Set{Symbol}())
         return _eval_node(node, Float64[], NamedTuple(), 0.0)
     catch e
+        _is_resource_error(e) && rethrow()
         throw(
             UnitConversionError(
                 "variable '$(variable_name)' unit_conversion is a constant expression " *

@@ -473,6 +473,7 @@ function _run_test_frame!(
                     )
                 end
             catch err
+                _is_resource_error(err) && rethrow()
                 actual_val = nothing
                 status = ERROR
                 msg = _engine_error_message(engine, err)
