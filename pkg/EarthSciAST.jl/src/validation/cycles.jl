@@ -162,14 +162,11 @@ function validate_coupling_cycles(file::EsmFile; toplevel = nothing)::Vector{Str
     crosses_scope(cycle) = any(n -> scope[n] != scope[cycle[1]], cycle)
     cycle = _first_observed_cycle(adj; accept = crosses_scope)
     cycle === nothing && return StructuralError[]
-    return [
-        StructuralError(
-            "/models",
-            "Circular dependency among observeds: " * join(cycle, " → "),
-            ERROR_CODES.CIRCULAR_DEPENDENCY,
-            Dict{String, Any}("cycle" => cycle)
-        ),
-    ]
+    return _report!(
+        StructuralError[], ERROR_CODES.CIRCULAR_DEPENDENCY, "/models",
+        "Circular dependency among observeds: " * join(cycle, " → "),
+        Dict{String, Any}("cycle" => cycle)
+    )
 end
 
 """
@@ -186,14 +183,8 @@ function of the equations ALONE: no shapes, no values, no solver. So it is
 decided here, at the same layer as `undefined_variable`, and it is a hard error
 on the same grounds as every other provable conflict in §4.9.
 
-Naming the cycle is the point, not a nicety. Before this check `validate()`
-accepted `tests/invalid/observed_cycle_array_elementwise.esm` and the tree-walk
-build reported `E_TREEWALK_UNBOUND_NAME: 'in_pbl'` — `in_pbl` being a fourth
-observed that is declared, defined and referenced perfectly well and merely
-reads one member of the cycle. It was simply the name the materialization walk
-happened to try first after the cycle stalled (issue #181). A report against an
-innocent bystander, from a stage that had already lost the information needed to
-say what was actually wrong, is what this replaces.
+The message names the observeds on the cycle, not a bystander that merely
+reads one of them (`tests/invalid/observed_cycle_array_elementwise.esm`).
 
 This is distinct from [`validate_coupling_cycles`](@ref), which finds the same
 kind of cycle when it crosses a model or subsystem boundary; that one attaches
@@ -204,11 +195,14 @@ Cross-binding pins: `(observed_cycle, /models/<M>)` only — the prose is
 deliberately NOT pinned (CONFORMANCE_SPEC §5.19.5); what every binding owes is
 that the message NAME the observeds on the cycle.
 """
-function validate_observed_cycles(file::EsmFile)::Vector{StructuralError}
+function validate_observed_cycles(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
-        _check_observed_cycles!(errors, file.models[model_name], "/models/$model_name")
+        # The template-expanded view, as `validate_recurrence_semantics` reads
+        # it, so the two agree on which self-reads are recurrence candidates.
+        model = _units_view(file, model_name, file.models[model_name], views)
+        _check_observed_cycles!(errors, model, "/models/$model_name")
     end
     return errors
 end
@@ -239,18 +233,16 @@ function _check_observed_cycles!(
         end
         cycle = _first_observed_cycle(adj)
         if cycle !== nothing
-            push!(
-                errors, StructuralError(
-                    path,
-                    "Observed dependency cycle: " * join(cycle, " -> ") * ". Each of these " *
-                        "observed variables is defined in terms of the next, so no evaluation " *
-                        "order satisfies every definition (esm-spec §4.9.6). Break the cycle by " *
-                        "splitting one observed into a pre-value and a post-value.",
-                    ERROR_CODES.OBSERVED_CYCLE,
-                    Dict{String, Any}(
-                        "cycle" => cycle,
-                        "dependency_type" => "observed_definitions"
-                    ),
+            _report!(
+                errors, ERROR_CODES.OBSERVED_CYCLE,
+                path,
+                "Observed dependency cycle: " * join(cycle, " -> ") * ". Each of these " *
+                    "observed variables is defined in terms of the next, so no evaluation " *
+                    "order satisfies every definition (esm-spec §4.9.6). Break the cycle by " *
+                    "splitting one observed into a pre-value and a post-value.",
+                Dict{String, Any}(
+                    "cycle" => cycle,
+                    "dependency_type" => "observed_definitions"
                 )
             )
         end

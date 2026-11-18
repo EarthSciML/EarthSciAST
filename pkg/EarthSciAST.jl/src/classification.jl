@@ -103,28 +103,63 @@ _is_spatial_derivative(e::ASTExpr)::Bool =
 )
 
 """
+    _LhsShape
+
+What an equation's left-hand side says it defines, read once by
+[`_lhs_shape`](@ref):
+
+- `role`: `:derivative`, `:definition`, `:none` (an `ic` LHS) or `:implicit`
+  (see the table above);
+- `name`: the variable defined or differentiated (`""` for `:none` and
+  `:implicit`); a dotted name is kept, since in a flattened system every name
+  is dotted;
+- `bare`: the LHS is the variable itself (`"y"`);
+- `indexed_faq`: the LHS is the indexed-`faq` form `faq{expr: index(V, k…)}`
+  (esm-spec §4.3), whose `output_idx` is `frame`.
+"""
+struct _LhsShape
+    role::Symbol
+    name::String
+    bare::Bool
+    indexed_faq::Bool
+    frame::Union{Vector{Any}, Nothing}
+end
+
+"""
+    _lhs_shape(lhs::ASTExpr) -> _LhsShape
+
+The one reading of an equation's left-hand side; see [`_LhsShape`](@ref).
+"""
+function _lhs_shape(lhs::ASTExpr)::_LhsShape
+    lhs isa VarExpr && return _LhsShape(:definition, lhs.name, true, false, nothing)
+    head = _lhs_unwrap(lhs)
+    if head isa VarExpr
+        inner = lhs isa OpExpr && lhs.op == "faq" ? lhs.expr_body : nothing
+        indexed_faq = inner isa OpExpr && inner.op == "index" && !isempty(inner.args) &&
+            inner.args[1] isa VarExpr
+        frame = indexed_faq ? (lhs::OpExpr).output_idx : nothing
+        return _LhsShape(:definition, head.name, false, indexed_faq, frame)
+    end
+    head isa OpExpr || return _LhsShape(:implicit, "", false, false, nothing)
+    head.op == "ic" && return _LhsShape(:none, "", false, false, nothing)
+    if _is_time_derivative(head) && !isempty(head.args)
+        base = _lhs_unwrap(head.args[1])
+        base isa VarExpr && return _LhsShape(:derivative, base.name, false, false, nothing)
+    end
+    return _LhsShape(:implicit, "", false, false, nothing)
+end
+
+"""
     _lhs_role(lhs::ASTExpr) -> Tuple{Symbol,String}
 
 The role an equation's LHS plays in classification: `(:derivative, base)`,
 `(:definition, base)`, `(:none, "")` for an `ic` LHS, or `(:implicit, "")` for
-an expression LHS that constrains its operands only implicitly.
+an expression LHS that constrains its operands only implicitly. The `role` and
+`name` of [`_lhs_shape`](@ref).
 """
 function _lhs_role(lhs::ASTExpr)::Tuple{Symbol, String}
-    head = _lhs_unwrap(lhs)
-    # A DOTTED name is not rejected here. In a FLATTENED system every variable
-    # key is `<ModelPath>.<name>`, so rejecting dots would leave a flattened
-    # model with no states and no observeds at all. Whether the name belongs to
-    # this model is decided by the caller's `model.variables` lookup, which also
-    # filters out a genuinely cross-system target in an unflattened document.
-    head isa VarExpr && return (:definition, head.name)
-    head isa OpExpr || return (:implicit, "")
-    head.op == "ic" && return (:none, "")
-    if _is_time_derivative(head) && !isempty(head.args)
-        base = _lhs_unwrap(head.args[1])
-        base isa VarExpr && return (:derivative, base.name)
-        return (:implicit, "")
-    end
-    return (:implicit, "")
+    s = _lhs_shape(lhs)
+    return (s.role, s.name)
 end
 
 # ── The three unknown sets (they partition) ─────────────────────────────────

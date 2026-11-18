@@ -36,13 +36,16 @@ Well-foundedness of every causal self-reference in the document
 
 Only TOP-LEVEL models are walked, and only their `equations` — the same surface
 the reference implementation checks, so a document either binding accepts is a
-document both accept.
+document both accept. Each model is read through its template-expanded view
+(`views`, a validation pass's `_UnitsInputs.models`; built here when absent),
+so a self-read or a group peer inside an `apply_expression_template` call is
+seen as the build sees it.
 """
-function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
+function validate_recurrence_semantics(file::EsmFile; views = nothing)::Vector{StructuralError}
     errors = StructuralError[]
     file.models === nothing && return errors
     for model_name in sort!(collect(keys(file.models)))
-        model = file.models[model_name]
+        model = _units_view(file, model_name, file.models[model_name], views)
         # An array-shaped variable is the only thing a causal self-reference can
         # define: a scalar has no axis to fold along. The declared TYPE is
         # deliberately not consulted — the reference implementation keys on the
@@ -81,16 +84,14 @@ function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
                         (frame[3] === nothing || frame[3] == first_frame[3])
                 ) && continue
                 mismatch = true
-                push!(
-                    errors, StructuralError(
-                        "/models/$model_name/equations/$(i - 1)/rhs",
-                        "'$var' and '$first_var' read each other as a recurrence group, but " *
-                            "'$var' does not sweep the same frame: every member shares one " *
-                            "cell frame — the same `output_idx`, the same ranges — and one " *
-                            "recurrence axis (esm-spec §4.3.1.2).",
-                        ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
-                        Dict{String, Any}("variable" => var, "group" => sort!(collect(g)))
-                    )
+                _report!(
+                    errors, ERROR_CODES.RECURRENCE_GROUP_AXIS_MISMATCH,
+                    "/models/$model_name/equations/$(i - 1)/rhs",
+                    "'$var' and '$first_var' read each other as a recurrence group, but " *
+                        "'$var' does not sweep the same frame: every member shares one " *
+                        "cell frame — the same `output_idx`, the same ranges — and one " *
+                        "recurrence axis (esm-spec §4.3.1.2).",
+                    Dict{String, Any}("variable" => var, "group" => sort!(collect(g)))
                 )
                 break
             end
@@ -100,16 +101,14 @@ function validate_recurrence_semantics(file::EsmFile)::Vector{StructuralError}
             cycle = _first_observed_cycle(adj)
             if cycle !== nothing
                 at = members[findfirst(f -> f[2] in cycle, members)]
-                push!(
-                    errors, StructuralError(
-                        "/models/$model_name/equations/$(at[1] - 1)/rhs",
-                        "the members of a recurrence group read one another at the cell being " *
-                            "written in a cycle (" * join(cycle, " -> ") * "), so no order " *
-                            "within the cell satisfies them. Reads between members at the same " *
-                            "position must be acyclic (esm-spec §4.3.1.2 rule 1).",
-                        ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                        Dict{String, Any}("variable" => at[2], "cycle" => cycle)
-                    )
+                _report!(
+                    errors, ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+                    "/models/$model_name/equations/$(at[1] - 1)/rhs",
+                    "the members of a recurrence group read one another at the cell being " *
+                        "written in a cycle (" * join(cycle, " -> ") * "), so no order " *
+                        "within the cell satisfies them. Reads between members at the same " *
+                        "position must be acyclic (esm-spec §4.3.1.2 rule 1).",
+                    Dict{String, Any}("variable" => at[2], "cycle" => cycle)
                 )
             end
         end
@@ -232,6 +231,124 @@ function _recurrence_affine_in_sym(
     return nothing
 end
 
+# ── One self-read's lag, shared by the validator and the build ──────────────
+
+# A self-read that is well founded along its frame: `axis` is the one frame
+# position it is offset on (0 when it is at the same cell on every axis),
+# `lag_hi` the largest proved upper bound of its lag there (0 when unproved),
+# and `proven` whether every value of that lag was shown `>= 1`.
+struct _ReadLag
+    axis::Int
+    lag_hi::Int
+    proven::Bool
+end
+
+# Why a self-read is not well founded (esm-spec §4.3.1.1): `kind` is
+# `:arity`, `:not_affine`, `:coefficient`, `:not_earlier`, `:two_axes` or
+# `:member_select`; `index` the 1-based frame position, `sym` its frame symbol,
+# `coef` the coefficient found, `nargs` the number of indices supplied and
+# `naxes` the number of frame axes.
+struct _LagDefect
+    kind::Symbol
+    index::Int
+    sym::String
+    coef::Int
+    nargs::Int
+    naxes::Int
+end
+
+"""
+    _recurrence_read_lag(args, idx_names, env; member_sym = nothing) -> Union{_ReadLag, _LagDefect}
+
+The lag analysis of one self-read `index(V, args...)` in a frame whose output
+indices are `idx_names`, with symbol bounds `env` (esm-spec §4.3.1.1): every
+index affine in its frame symbol with coefficient 1, offset on at most one
+axis, and never at the cell being written or a later one there. An unprovable
+constant part is a lag of unknown sign: admitted, but it counts as the axis.
+`member_sym` names the stacked member axis of a recurrence group (esm-spec
+§4.3.1.2), where a read selects a member with an integer constant.
+"""
+function _recurrence_read_lag(
+        args, idx_names::Vector{String}, env::Dict{String, Tuple{Int, Int}};
+        member_sym::Union{Nothing, String} = nothing
+    )::Union{_ReadLag, _LagDefect}
+    defect(kind, d = 0, coef = 0) = _LagDefect(
+        kind, d, d == 0 ? "" : idx_names[d], coef, length(args), length(idx_names)
+    )
+    length(args) == length(idx_names) || return defect(:arity)
+    lagged = 0
+    lag_hi = 0
+    proven = true
+    for (d, arg) in enumerate(args)
+        sym = idx_names[d]
+        if member_sym !== nothing && sym == member_sym
+            arg isa IntExpr && continue
+            return defect(:member_select, d)
+        end
+        aff = _recurrence_affine_in_sym(arg, sym, env)
+        aff === nothing && return defect(:not_affine, d)
+        coef, konst = aff
+        coef == 1 || return defect(:coefficient, d, coef)
+        if konst === nothing
+            lagged == 0 || return defect(:two_axes, d)
+            lagged = d
+            proven = false
+            continue
+        end
+        # lag = sym - arg, so the symbol-free part's bounds invert.
+        lo, hi = -konst[2], -konst[1]
+        (lo == 0 && hi == 0) && continue   # stays on this axis's own cell
+        hi <= 0 && return defect(:not_earlier, d)
+        lagged == 0 || return defect(:two_axes, d)
+        lagged = d
+        proven &= lo >= 1
+        lag_hi = hi
+    end
+    return _ReadLag(lagged, lag_hi, lagged == 0 || proven)
+end
+
+# The message of a lag defect in the definition of `var`.
+function _lag_defect_message(d::_LagDefect, var::AbstractString)::String
+    k = d.kind
+    i = d.index - 1
+    if k === :arity
+        return "a causal self-read of '$var' supplies $(d.nargs) indices but its frame " *
+            "has $(d.naxes) axes; every self-read indexes every axis (esm-spec §4.3.1.1)."
+    elseif k === :not_affine
+        sym = d.sym
+        return "index $i of a causal self-read of '$var' is not affine in its frame " *
+            "symbol '$sym'. A self-read names a position RELATIVE to the cell being " *
+            "written (`$sym - 1`, `$sym - a`, `$sym - a - 2`), which is what makes " *
+            "the recurrence axis and its direction decidable (esm-spec §4.3.1.1). " *
+            "If the offset is read from data (`$sym - index(lag, $sym)`), it has no " *
+            "direct spelling; contract it instead: either order the axis so the " *
+            "predecessor is the preceding position and the lag is the constant 1, or " *
+            "range a contracted index `a` over the lag's bounds and select the matching " *
+            "term with `ifelse(index(lag, $sym) == a, " *
+            "<term reading index($var, $sym - a)>, 0)`."
+    elseif k === :coefficient
+        return "index $i of a causal self-read of '$var' carries its frame symbol " *
+            "'$(d.sym)' with coefficient $(d.coef), not 1, so it does not name a position " *
+            "relative to the cell being written (esm-spec §4.3.1.1)."
+    elseif k === :not_earlier
+        return "index $i of a causal self-read of '$var' names the cell being " *
+            "written, or a later one, on axis '$(d.sym)'. A causal self-reference reads " *
+            "strictly EARLIER positions; no sweep order can satisfy a same-cell or " *
+            "forward read (esm-spec §4.3.1.1)."
+    elseif k === :two_axes
+        return "a causal self-read of '$var' is offset on more than one axis. A " *
+            "recurrence folds along exactly ONE axis; every other index must be the " *
+            "bare frame symbol (esm-spec §4.3.1.1)."
+    end
+    return "a read of the stacked recurrence group '$var' does not select a member " *
+        "with a constant (esm-spec §4.3.1.2)."
+end
+
+# The `recurrence_axis` a lag defect reports: the frame symbol where the
+# defect is an axis (a second offset axis, a non-earlier read), else nothing.
+_lag_defect_axis(d::_LagDefect) = d.kind in (:two_axes, :not_earlier) ? d.sym : nothing
+
+
 # One self-read the structural walk found: its index arguments, the symbol
 # bounds in scope where it was found, and whether it was reached ONLY through a
 # construct that cannot be restricted to one cell.
@@ -345,16 +462,10 @@ end
 # at `i−1` there is a gather on the solver's state vector, not a
 # self-reference — so it deliberately yields `nothing`.
 function _recurrence_lhs_target(lhs::ASTExpr)
-    if lhs isa VarExpr
-        return (lhs.name, nothing)
-    elseif lhs isa OpExpr && lhs.op == "faq"
-        inner = lhs.expr_body
-        (inner isa OpExpr && inner.op == "index" && !isempty(inner.args)) || return nothing
-        head = inner.args[1]
-        head isa VarExpr || return nothing
-        return (head.name, lhs.output_idx)
-    end
-    return nothing
+    s = _lhs_shape(lhs)
+    s.bare && return (s.name, nothing)
+    s.indexed_faq || return nothing
+    return (s.name, s.frame)
 end
 
 # Check ONE equation. Emits nothing when the RHS contains no self-read, which is
@@ -380,11 +491,11 @@ function _check_recurrence_equation!(
     _collect_recurrence_self_reads!(eq.rhs, vars, file, env, false, reads, bare)
     isempty(reads) && return nothing
 
-    push_err! = (code, message, axis) -> push!(
-        errors, StructuralError(
-            field_path, message, code,
-            Dict{String, Any}("variable" => var, "recurrence_axis" => axis)
-        )
+    push_err! = (code, message, axis) -> _report!(
+        errors, code,
+        field_path,
+        message,
+        Dict{String, Any}("variable" => var, "recurrence_axis" => axis)
     )
 
     if bare[]
@@ -448,95 +559,16 @@ function _check_recurrence_equation!(
     axis = nothing   # the one frame position every self-read must agree on
     same_cell = String[]   # §4.3.1.2 rule 1: peers read at the cell being written
     for read in reads
-        if length(read.args) != length(idx_names)
+        lag = _recurrence_read_lag(read.args, idx_names, merge(frame_env, read.env))
+        if lag isa _LagDefect
             push_err!(
-                ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                "a causal self-read of '$var' supplies $(length(read.args)) indices but " *
-                    "its frame has $(length(idx_names)) axes; every self-read indexes every " *
-                    "axis (esm-spec §4.3.1.1).", nothing
+                ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED, _lag_defect_message(lag, var),
+                _lag_defect_axis(lag)
             )
             return nothing
         end
-        env = merge(frame_env, read.env)
-        lagged = nothing
-        # Whether every value of the recurrence-axis lag was shown `>= 1`. A
-        # self-read need not be; a PEER read must be (esm-spec §4.3.1.2).
-        proven = true
-        for (d, arg) in enumerate(read.args)
-            sym = idx_names[d]
-            aff = _recurrence_affine_in_sym(arg, sym, env)
-            if aff === nothing
-                push_err!(
-                    ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                    "index $(d - 1) of a causal self-read of '$var' is not affine in its frame " *
-                        "symbol '$sym'. A self-read names a position RELATIVE to the cell being " *
-                        "written (`$sym - 1`, `$sym - a`, `$sym - a - 2`), which is what makes " *
-                        "the recurrence axis and its direction decidable (esm-spec §4.3.1.1). " *
-                        "If the offset is read from data (`$sym - index(lag, $sym)`), it has no " *
-                        "direct spelling; contract it instead: either order the axis so the " *
-                        "predecessor is the preceding position and the lag is the constant 1, or " *
-                        "range a contracted index `a` over the lag's bounds and select the matching " *
-                        "term with `ifelse(index(lag, $sym) == a, " *
-                        "<term reading index($var, $sym - a)>, 0)`.",
-                    nothing
-                )
-                return nothing
-            end
-            coef, konst = aff
-            if coef != 1
-                push_err!(
-                    ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                    "index $(d - 1) of a causal self-read of '$var' carries its frame symbol " *
-                        "'$sym' with coefficient $coef, not 1, so it does not name a position " *
-                        "relative to the cell being written (esm-spec §4.3.1.1).", nothing
-                )
-                return nothing
-            end
-            # An unprovable constant part is a lag of UNKNOWN SIGN. This axis
-            # IS the recurrence axis — the read is not the identity — and the
-            # cells where the lag would be non-causal cannot be read at all,
-            # because the sweep has not published them. Admitting it still
-            # COUNTS the axis, though: two unprovable offsets are two axes.
-            if konst === nothing
-                if lagged !== nothing
-                    push_err!(
-                        ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                        "a causal self-read of '$var' is offset on more than one axis. A " *
-                            "recurrence folds along exactly ONE axis; every other index must be " *
-                            "the bare frame symbol (esm-spec §4.3.1.1).", sym
-                    )
-                    return nothing
-                end
-                lagged = d
-                proven = false
-                continue
-            end
-            clo, chi = konst
-            # lag = sym - arg, so the symbol-free part's bounds invert.
-            lag_lo, lag_hi = -chi, -clo
-            (lag_lo == 0 && lag_hi == 0) && continue   # stays on this axis's own cell
-            if lag_hi <= 0
-                push_err!(
-                    ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                    "index $(d - 1) of a causal self-read of '$var' names the cell being " *
-                        "written, or a later one, on axis '$sym'. A causal self-reference reads " *
-                        "strictly EARLIER positions; no sweep order can satisfy a same-cell or " *
-                        "forward read (esm-spec §4.3.1.1).", sym
-                )
-                return nothing
-            end
-            if lagged !== nothing
-                push_err!(
-                    ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-                    "a causal self-read of '$var' is offset on more than one axis. A " *
-                        "recurrence folds along exactly ONE axis; every other index must be the " *
-                        "bare frame symbol (esm-spec §4.3.1.1).", sym
-                )
-                return nothing
-            end
-            lagged = d
-            proven &= lag_lo >= 1
-        end
+        lagged = lag.axis == 0 ? nothing : lag.axis
+        proven = lag.proven
         if lagged === nothing && read.target != var
             # A read of a PEER at the cell being written is an ordering WITHIN
             # the cell; the group check rejects it only if such reads form a
