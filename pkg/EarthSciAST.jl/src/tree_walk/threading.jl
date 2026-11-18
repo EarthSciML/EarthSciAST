@@ -188,6 +188,22 @@ end
     return jn
 end
 
+# Run a section: `body(args, c, nchunks)` for every chunk when its verdict
+# allows threading (at most `maxchunks` chunks), else its serial instance
+# `body(args, 1, 1)`. A chunk computes each of its cells exactly as the serial
+# instance does, so both routes give the same bits.
+@inline function _run_section!(
+        tc::_SecTCache, body::B, args::A, maxchunks::Int = typemax(Int)
+    ) where {B, A}
+    if _threads_available() && _sec_prep_threads!(tc).state == 1
+        tc.nchunks = min(tc.nchunks, maxchunks)
+        _run_chunked!(tc, body, args)
+    else
+        body(args, 1, 1)
+    end
+    return nothing
+end
+
 # Run `body(args, c, nchunks)` for every chunk of the section's verdict.
 @inline function _run_chunked!(tc::_SecTCache, body::B, args::A) where {B, A}
     j = _section_job!(tc, B, A)

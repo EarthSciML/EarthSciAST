@@ -1054,9 +1054,8 @@ end
     _run_scgens!(b.gens, args[1], args[2], args[3], args[4], b.cache, c, nc)
 
 @inline function (sp::_ScalarProgram)(du, u, p, t, cache, ::Type{T}) where {T}
-    if sp.threaded && _threads_available() &&
-            _sec_prep_threads!(sp.tcache).state == 1
-        _run_chunked!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
+    if sp.threaded
+        _run_section!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
     else
         _run_scgens!(sp.gens, du, u, p, t, cache, 1, 1)
     end
