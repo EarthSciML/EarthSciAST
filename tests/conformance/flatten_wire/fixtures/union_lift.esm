@@ -1,11 +1,11 @@
 {
  "esm": "1.3.0",
  "metadata": {
-  "name": "refused_lift",
+  "name": "union_lift",
   "authors": [
    "EarthSciAST test suite"
   ],
-  "description": "y applies linear elementwise over a (over [x]) and over b (over [y]): neither one's index sets contain the other's, so the lift refuses y (array_shape_mismatch). z alone could be lifted, but when the lift refuses any right-hand side flatten leaves every equation as written (esm-spec 9.6.11), and the build refuses it."
+  "description": "y applies linear elementwise over a (over [x]) and over b (over [y]). An elementwise result over disjoint index sets spans their union (esm-spec 4.3.4), so y is lifted over [x, y], the outer product, and z over [x]."
  },
  "index_sets": {
   "x": {

@@ -1112,7 +1112,7 @@ function _build_compile_evaluator(
         _retier_scalar_rules!(var_map, rhs_list, scalar_section)
 
     # ---- Default tspan ----
-    tspan_default = _pick_tspan(tspan, model)
+    tspan_default = _pick_tspan(tspan)
 
     # ---- The live forcing buffers (see `BuildProducts`) ----
     # Published for BOTH forms, from the same `pgather` the out-of-place product
@@ -1609,7 +1609,7 @@ function _build_evaluator_impl_inner(
         param_arrays = param_arrays, parameter_overrides = parameter_overrides, vi_vars = _vi_vars,
         vi_extents = _vi_extents, vi_maps = _vi_maps,
         param_reads = param_reads,
-        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan, model)[1] : Float64(_ic_t0),
+        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan)[1] : Float64(_ic_t0),
         ic_data = _ic_data
     )
     # A range-restricted program (src/range_restricted.jl) clips the equation

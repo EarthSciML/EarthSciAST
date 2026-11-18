@@ -293,9 +293,7 @@ end
 # fixed point. An explicit `shape: []` declares a scalar and is never given
 # one. The Rust binding's `promoted_var_shapes`.
 #
-# Returns the shapes and the variables whose definition was refused
-# (`array_shape_mismatch`): an operand-shape conflict is the build's to report,
-# so here it only means no shape. `seed` holds shapes inferred by an earlier
+# `seed` holds shapes inferred by an earlier
 # call on this system (the pointwise lift's); each is kept unless its
 # definition reads, directly or through another seeded variable, a name in
 # `stale` (a state whose declared shape has changed since).
@@ -337,26 +335,18 @@ function _flat_array_shapes(
             shapes[n] = seed[n]
         end
     end
-    refused = Set{String}()
     changed = true
     while changed
         changed = false
         for (n, rhs) in open
             haskey(shapes, n) && continue
-            sh = try
-                _infer_expr_shape(rhs, shapes, ctx)
-            catch e
-                e isa DimensionPromotionError || rethrow()
-                push!(refused, n)
-                String[]
-            end
+            sh = _infer_expr_shape(rhs, shapes, ctx)
             isempty(sh) && continue
-            delete!(refused, n)
             shapes[n] = sh
             changed = true
         end
     end
-    return shapes, refused
+    return shapes
 end
 
 # Whether `e` holds a template application: a reference this binding kept, or
@@ -386,9 +376,9 @@ array by bare name inside the template's bracket count, it would be refused as
 state's shape.
 
 No declaration changes (esm-libraries-spec §4.7.5). A lifted equation's
-contributions collapse into the one `faq`, their origins united. When any
-right-hand side is refused (`array_shape_mismatch`), every equation and initial
-condition is left as it was, for the build to refuse. `seed`/`stale` reuse the
+contributions collapse into the one `faq`, their origins united. When an
+operand cannot be aligned to its target (`array_shape_mismatch`), every equation
+and initial condition is left as it was, for the build to refuse. `seed`/`stale` reuse the
 pointwise lift's shapes (`_flat_array_shapes`). Returns the field initial
 conditions, lifted. The Rust binding's flatten writes the same equations.
 """
@@ -403,7 +393,7 @@ function _lift_elementwise_applications_flat!(
             any(p -> _holds_application(last(p)), field_ics)
     ) || return field_ics
     ctx = _ElementwiseContext(registry === nothing || isempty(registry) ? nothing : registry)
-    shapes, refused = _flat_array_shapes(
+    shapes = _flat_array_shapes(
         states, params, observeds, equations, ctx; seed = seed, stale = stale
     )
     lifted = Dict{Int, OpExpr}()
@@ -419,9 +409,6 @@ function _lift_elementwise_applications_flat!(
             eq.lhs isa VarExpr || continue
             name = (eq.lhs::VarExpr).name
             _has_elementwise_application(eq.rhs, shapes, ctx) || continue
-            # A refused definition refuses the lift (the Rust binding's
-            # `union_axes` error).
-            name in refused && return field_ics
             sh = get(shapes, name, String[])
             isempty(sh) && continue
             lifted[n] = _lift_elementwise_application(eq.rhs, sh, shapes, ctx, name)

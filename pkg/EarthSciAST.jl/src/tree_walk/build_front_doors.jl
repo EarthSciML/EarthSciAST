@@ -101,8 +101,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   §6.6.5 reference / observed assertion scope recorded in `products` —
   not just the runtime parameter NamedTuple.
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
-  `nothing`, the first inline `tests` block's `time_span` is used; if
-  the model has no tests, the null default `(0.0, 1.0)` is returned.
+  `nothing`, the default `(0.0, 1.0)` is returned.
 * `form::Symbol` — what to return in the RHS slot (`:inplace`, the
   default, or `:oop`). `:inplace` gives the `f!(du, u, p, t)` above:
   zero-allocation at Float64 AND eltype-generic, so it both solves and
