@@ -1047,7 +1047,8 @@ function _apply_connector_transform!(
         )
     elseif transform == "replacement"
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
                 "couple connector transform 'replacement' (esm-spec §10.3) is not " *
                     "implemented: its \"replace the variable value entirely\" semantics is " *
                     "ambiguous between replacing '$(to)'s tendency and making it algebraic. " *
@@ -1057,7 +1058,8 @@ function _apply_connector_transform!(
         )
     else
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT,
                 "invalid couple connector transform '$(transform)': must be one of " *
                     "additive, multiplicative, replacement (esm-spec §10.3)."
             )
@@ -1132,12 +1134,7 @@ function _combine_tendency_term!(
     )
     if combine == "*"
         idx = findlast(fe -> differential_lhs_variable(fe.eq.lhs) == to, pool)
-        idx === nothing && throw(
-            ArgumentError(
-                "couple connector 'multiplicative' transform targets '$(to)', which " *
-                    "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."
-            )
-        )
+        idx === nothing && throw(CoupleMultiplicativeNoTendencyError(to))
     else
         idx = findlast(fe -> lhs_dependent_variable(fe.eq.lhs) == to, pool)
     end
@@ -1224,7 +1221,8 @@ function _apply_expression_transform!(
     # the reference check is not blind to nested aggregate transforms.
     if !contains(transform, from)
         throw(
-            ArgumentError(
+            FlattenRefusal(
+                ERROR_CODES.VARIABLE_MAP_TRANSFORM_MISSING_FROM,
                 "variable_map($(from) -> $(to)): expression transform does not " *
                     "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"
             )

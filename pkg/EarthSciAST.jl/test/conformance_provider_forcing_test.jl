@@ -193,7 +193,8 @@ end
         @test run_du(prob) == [4.75]
         live = _PFCProvider(key, [0.5], Int[], 3.0, 0.0)
         err = _pfc_err(() -> mk(p = Dict("s" => 5.0), providers = Dict{String, Any}(key => live)))
-        @test err isa ArgumentError && occursin("live forcing buffer", err.msg)
+        @test err isa SimulateError && occursin("live forcing buffer", err.msg)
+        @test error_code(err) == ERROR_CODES.OVERRIDE_KEY_CONFLICT
     end
     # A provider and the caller's own array for one parameter, under any
     # spellings: refused rather than one silently replacing the other.

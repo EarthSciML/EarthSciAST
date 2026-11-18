@@ -267,6 +267,9 @@ const _FC_DIVERGENCES = Dict{String, Vector{String}}(
 const _FC_REFUSAL_TYPES = Dict{String, Type}(
     "VariableMapUnresolvedEndpointError" => EarthSciAST.VariableMapUnresolvedEndpointError,
     "VariableMapShapeConflictError" => EarthSciAST.VariableMapShapeConflictError,
+    "CoupleMultiplicativeNoTendencyError" => EarthSciAST.CoupleMultiplicativeNoTendencyError,
+    # Python's flatten raises a bare ValueError for a document with no component.
+    "ValueError" => EarthSciAST.FlattenRefusal,
 )
 
 _fc_skips(id) = get(_FC_DIVERGENCES, id, String[])
@@ -1324,7 +1327,8 @@ end
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa CoupleMultiplicativeNoTendencyError
+        @test err === nothing || error_code(err) == "couple_multiplicative_no_tendency"
         @test err === nothing || occursin("Surface.r", sprint(showerror, err))
         @test err === nothing || occursin("no tendency", sprint(showerror, err))
     end

@@ -203,11 +203,12 @@ function _build_var_dict(flat::FlattenedSystem)
         key = Symbol(replace(String(name), '.' => '_'))
         prior = get(sanitized, key, nothing)
         (prior === nothing || prior == name) || throw(
-            ArgumentError(
+            SimulateError(
                 "variables '$(prior)' and '$(name)' both become the " *
                     "ModelingToolkit symbol `$(key)` (a dot is not a Julia " *
                     "identifier character and is replaced by an underscore); " *
-                    "rename one of them"
+                    "rename one of them",
+                ERROR_CODES.UNSUPPORTED_CONSTRUCT
             )
         )
         sanitized[key] = String(name)
@@ -330,9 +331,10 @@ function _affect_to_eq(affect, L::_Lowering, state_syms)
         # An affect whose target is not a variable of the system would be
         # dropped, and the event would fire without it.
         haskey(L.vars, affect.lhs) || throw(
-            ArgumentError(
+            SimulateError(
                 "event affect targets '$(affect.lhs)', which is not a variable " *
-                    "of the flattened system"
+                    "of the flattened system",
+                ERROR_CODES.UNRESOLVED_AFFECT_TARGET
             )
         )
         target = L.vars[affect.lhs]
@@ -372,12 +374,13 @@ function _condition_to_root_equation(cond::ASTExpr, L::_Lowering)
     if cond isa OpExpr
         if cond.op in ("and", "or", "not")
             throw(
-                ArgumentError(
+                SimulateError(
                     "continuous-event condition uses the boolean operator '$(cond.op)', " *
                         "which has no zero-crossing function — a continuous event roots on a " *
                         "CONTINUOUS expression (esm-spec §5). Express the crossing directly " *
                         "(e.g. {\"op\":\"-\",\"args\":[a,b]} for a ~ b), or use a discrete " *
-                        "event with a condition trigger."
+                        "event with a condition trigger.",
+                    ERROR_CODES.UNSUPPORTED_CONSTRUCT
                 )
             )
         end

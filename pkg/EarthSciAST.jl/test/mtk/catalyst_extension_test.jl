@@ -392,14 +392,14 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa SimulateError
         @test occursin("constraint_equations", err.msg)
 
         nested = EarthSciAST.ReactionSystem(
             sp, rx; parameters = ps,
             subsystems = Dict("Inner" => EarthSciAST.ReactionSystem(sp, rx; parameters = ps))
         )
-        @test_throws ArgumentError Catalyst.ReactionSystem(nested; name = :N)
+        @test_throws SimulateError Catalyst.ReactionSystem(nested; name = :N)
 
         null_rx = EarthSciAST.ReactionSystem(
             sp, EarthSciAST.Reaction[EarthSciAST.Reaction("r0", nothing, nothing, VarExpr("k"))];
@@ -411,7 +411,7 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
         catch e
             e
         end
-        @test err isa ArgumentError
+        @test err isa SimulateError && error_code(err) == "null_reaction"
         @test occursin("null_reaction", err.msg)
     end
 

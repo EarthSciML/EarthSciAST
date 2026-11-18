@@ -563,6 +563,18 @@ function coerce_esm_file(
         data::Any;
         document_base::Union{Nothing, AbstractString} = nothing
     )::EsmFile
+    # A typed constructor refuses a bad value with an `ArgumentError`, which is
+    # right for a caller building it in Julia; reached from a document, the
+    # same refusal is about the document, so it leaves as a `ParseError`.
+    try
+        return _coerce_esm_file(data, document_base)
+    catch e
+        e isa ArgumentError || rethrow()
+        throw(ParseError(e.msg, e))
+    end
+end
+
+function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractString})::EsmFile
     data = _to_ordered_shared(data)
 
     # Extract required fields

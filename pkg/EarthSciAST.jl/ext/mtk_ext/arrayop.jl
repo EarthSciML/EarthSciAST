@@ -35,10 +35,11 @@ function _faq_reduce(expr::OpExpr)
     oplus, zerobar = EarthSciAST._aggregate_oplus_identity(expr.semiring, expr.reduce)
     fn = get(_REDUCE_FNS, oplus, nothing)
     fn === nothing && throw(
-        ArgumentError(
+        SimulateError(
             "faq reduction ⊕ = '$(oplus)'" *
                 (expr.semiring === nothing ? "" : " (semiring '$(expr.semiring)')") *
-                " has no ModelingToolkit lowering; the lowering folds +, *, max and min"
+                " has no ModelingToolkit lowering; the lowering folds +, *, max and min",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     return fn, zerobar
@@ -175,19 +176,21 @@ end
 function _build_arrayop_sym(expr::OpExpr, L::_Lowering)
     output_idx = expr.output_idx === nothing ? Any[] : expr.output_idx
     body = expr.expr_body
-    body === nothing && throw(ArgumentError("arrayop node missing 'expr' body"))
+    body === nothing && throw(SimulateError("arrayop node missing 'expr' body", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     reduce_fn, identity_val = _faq_reduce(expr)
 
     expr.ranges === nothing && throw(
-        ArgumentError(
+        SimulateError(
             "arrayop without explicit 'ranges' is not supported — all index " *
-                "variables must declare a concrete range"
+                "variables must declare a concrete range",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     expr.join === nothing && expr.join_gates === nothing || throw(
-        ArgumentError(
+        SimulateError(
             "relational `join` clauses on an aggregate are not supported by the " *
-                "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)"
+                "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     ranges = Dict{String, StepRange{Int, Int}}()
@@ -199,12 +202,12 @@ function _build_arrayop_sym(expr::OpExpr, L::_Lowering)
     for entry in output_idx
         if entry isa AbstractString
             name = String(entry)
-            haskey(ranges, name) || throw(ArgumentError("arrayop output index '$name' has no declared range"))
+            haskey(ranges, name) || throw(SimulateError("arrayop output index '$name' has no declared range", ERROR_CODES.UNBOUND_INDEX_SYMBOL))
             push!(output_names, name)
         elseif entry == 1
             # Singleton axis — no iteration variable; shape 1 handled below.
         else
-            throw(ArgumentError("arrayop output_idx entry must be a string or 1, got $(entry)"))
+            throw(SimulateError("arrayop output_idx entry must be a string or 1, got $(entry)", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
         end
     end
 
@@ -484,7 +487,7 @@ end
 #      name => size (see `_index_set_extents` in variables.jl); it arrives here
 #      as `_Lowering.extents`.
 #
-# Anything else is rejected with an `ArgumentError` naming the offending form —
+# Anything else is rejected with a `SimulateError` naming the offending form —
 # never a `MethodError`.
 #
 # `_range_int` returns the iteration range itself (a stepped `[start, step,
@@ -494,23 +497,24 @@ const _NO_EXTENTS = Dict{String, Int}()
 
 function _range_bounds_int(r, extents::AbstractDict = _NO_EXTENTS)
     rr = _range_int(r, extents)
-    isempty(rr) && throw(ArgumentError("range $(r) is empty"))
+    isempty(rr) && throw(SimulateError("range $(r) is empty", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
     return first(rr), last(rr)
 end
 
 function _range_int(r::AbstractVector, extents::AbstractDict = _NO_EXTENTS)
     all(x -> x isa Integer, r) || throw(
-        ArgumentError(
-            "expression-valued range bounds are not supported by the MTK evaluator path"
+        SimulateError(
+            "expression-valued range bounds are not supported by the MTK evaluator path",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     if length(r) == 2
         return Int(r[1]):1:Int(r[2])
     elseif length(r) == 3
-        Int(r[2]) == 0 && throw(ArgumentError("range $(r) has step 0"))
+        Int(r[2]) == 0 && throw(SimulateError("range $(r) has step 0", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
         return Int(r[1]):Int(r[2]):Int(r[3])
     end
-    throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
+    throw(SimulateError("range must have 2 or 3 entries, got $(length(r))", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
 end
 
 function _range_int(
@@ -518,34 +522,38 @@ function _range_int(
         extents::AbstractDict = _NO_EXTENTS
     )
     isempty(r.of) || throw(
-        ArgumentError(
+        SimulateError(
             "ragged index-set range `{from: \"$(r.from)\", of: $(r.of)}` is not " *
                 "supported by the MTK evaluator path — its extent varies with its " *
-                "parent index, so it has no single rectangular bound"
+                "parent index, so it has no single rectangular bound",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     n = get(extents, r.from, nothing)
     n === nothing && throw(
-        ArgumentError(
+        SimulateError(
             "cannot resolve the extent of index set '$(r.from)' in the MTK " *
                 "evaluator path: it is not in the flattened system's index-set " *
                 "registry. Build the system from a `FlattenedSystem` whose " *
                 "`index_sets` carry it (`flatten(::EsmFile)`); `flatten(::Model)` " *
-                "wraps the model in a synthetic file with an EMPTY registry"
+                "wraps the model in a synthetic file with an EMPTY registry",
+            ERROR_CODES.UNDEFINED_INDEX_SET
         )
     )
     n < 1 && throw(
-        ArgumentError(
-            "index set '$(r.from)' has non-positive size $(n)"
+        SimulateError(
+            "index set '$(r.from)' has non-positive size $(n)",
+            ERROR_CODES.UNSUPPORTED_CONSTRUCT
         )
     )
     return 1:1:Int(n)
 end
 
 _range_int(r, extents::AbstractDict = _NO_EXTENTS) = throw(
-    ArgumentError(
+    SimulateError(
         "unsupported `ranges` entry of type $(typeof(r)): the MTK evaluator path " *
             "accepts a dense `[lo, hi]`/`[lo, step, hi]` array or an index-set " *
-            "reference `{from: <index set>}`"
+            "reference `{from: <index set>}`",
+        ERROR_CODES.UNSUPPORTED_CONSTRUCT
     )
 )

@@ -570,7 +570,13 @@ end
             models = Dict("Sink" => sink, "Src" => src),
             coupling = CouplingEntry[CouplingVariableMap("Src.F", "Sink.F_in", transform)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa FlattenError
+        @test error_code(err) == ERROR_CODES.VARIABLE_MAP_TRANSFORM_MISSING_FROM
     end
 
     @testset "7d. expression transform takes no factor" begin
@@ -764,7 +770,13 @@ end
             reaction_systems = Dict("Chem" => rsys),
             coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.FlattenRefusal
+        @test error_code(err) == ERROR_CODES.UNSUPPORTED_CONSTRUCT
     end
 
     @testset "8e. unknown connector transform raises a clear error" begin
@@ -789,7 +801,13 @@ end
             reaction_systems = Dict("Chem" => rsys),
             coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
         )
-        @test_throws ArgumentError flatten(file)
+        err = try
+            flatten(file); nothing
+        catch e
+            e
+        end
+        @test err isa EarthSciAST.FlattenRefusal
+        @test error_code(err) == ERROR_CODES.UNSUPPORTED_CONSTRUCT
     end
 
     @testset "9. Nested subsystems produce full dot paths" begin

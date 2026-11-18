@@ -429,7 +429,7 @@ end
     # `MethodError` this replaced:
     #
     #   1. DIAGNOSTICS — a range the MTK path cannot resolve must raise a
-    #      descriptive `ArgumentError`. `System(::Model)` in particular cannot
+    #      descriptive `SimulateError`. `System(::Model)` in particular cannot
     #      see the document-scoped index-set registry (`flatten(::Model)`
     #      synthesizes an EsmFile with an empty one), so it must decline
     #      loudly rather than MethodError or guess a bound.
@@ -451,16 +451,16 @@ end
         MTKExt = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         @test MTKExt !== nothing
 
-        # ---- 1. diagnostics: ArgumentError, never MethodError ----
+        # ---- 1. diagnostics: SimulateError, never MethodError ----
         ref = EarthSciAST.IndexSetRef("x")
         @test MTKExt._range_bounds_int(ref, Dict("x" => 4)) == (1, 4)
         # Unresolvable set, ragged (`of`-parented) set, and a form that is
         # neither a dense array nor an index-set reference.
-        @test_throws ArgumentError MTKExt._range_bounds_int(ref, Dict{String, Int}())
-        @test_throws ArgumentError MTKExt._range_bounds_int(
+        @test_throws SimulateError MTKExt._range_bounds_int(ref, Dict{String, Int}())
+        @test_throws SimulateError MTKExt._range_bounds_int(
             EarthSciAST.IndexSetRef("x"; of = ["p"]), Dict("x" => 4)
         )
-        @test_throws ArgumentError MTKExt._range_bounds_int(:not_a_range)
+        @test_throws SimulateError MTKExt._range_bounds_int(:not_a_range)
 
         mname = "CumulativePrefixReduction"
         path = joinpath(
@@ -470,8 +470,8 @@ end
         file = EarthSciAST.load_path(path)
         model = file.models[mname]
 
-        # No registry reachable from a bare `Model` ⇒ ArgumentError, not MethodError.
-        @test_throws ArgumentError MTK2.System(model; name = Symbol(mname))
+        # No registry reachable from a bare `Model` ⇒ SimulateError, not MethodError.
+        @test_throws SimulateError MTK2.System(model; name = Symbol(mname))
 
         # ---- 2. admitted window: MTK RHS ≡ tree-walk RHS, cell by cell ----
         # Exactly-representable summands (powers of two), no cancellation, so
@@ -589,7 +589,7 @@ end
         # `[start, step, stop]` (esm-spec §4.3.1) visits 1, 3, 5.
         @test MTKExt._range_bounds_int([1, 2, 6]) == (1, 5)
         @test MTKExt._range_int([1, 2, 6]) == 1:2:5
-        @test_throws ArgumentError MTKExt._range_int([1, 0, 6])
+        @test_throws SimulateError MTKExt._range_int([1, 0, 6])
         stepped = ESM2.OpExpr(
             "faq", ESM2.ASTExpr[];
             output_idx = Any["i"], expr_body = _idx("u", _var("i")),
@@ -622,6 +622,6 @@ end
         end
         @test err isa EarthSciAST.TreeWalkError
         @test err.code == "E_TREEWALK_UNKNOWN_SEMIRING"
-        @test_throws ArgumentError lower(scalar_faq(; semiring = "bool_and_or"))
+        @test_throws SimulateError lower(scalar_faq(; semiring = "bool_and_or"))
     end
 end

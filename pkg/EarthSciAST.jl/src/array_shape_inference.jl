@@ -26,7 +26,8 @@ Semantics:
   iteration space. Index names with no explicit range are left for
   inference from their usages inside the body.
 - Conflicts: if a variable is referenced with inconsistent dimensionality
-  across equations, this function raises an `ArgumentError`.
+  across equations, this function raises a [`SimulateError`](@ref) with code
+  `array_shape_mismatch`.
 
 This pass is deliberately standalone — it does not mutate `FlattenedSystem`.
 It is called at ModelingToolkit build time from `ext/mtk_ext/variables.jl` so
@@ -114,7 +115,7 @@ function _range_bounds(r::AbstractVector)
     elseif length(r) == 3
         return Int(r[1]), Int(r[3])  # [start, step, stop]
     end
-    throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
+    throw(SimulateError("range must have 2 or 3 entries, got $(length(r))", ERROR_CODES.UNSUPPORTED_CONSTRUCT))
 end
 
 # Record a shape entry for `u` from `index(u, i1, i2, ...)`. Each index
@@ -140,9 +141,10 @@ function _record_index!(
         existing = shapes[vname]
         if length(existing) != length(axis_ranges)
             throw(
-                ArgumentError(
+                SimulateError(
                     "Inconsistent dimensionality for variable '$vname': " *
-                        "saw $(length(existing))-D and $(length(axis_ranges))-D references"
+                        "saw $(length(existing))-D and $(length(axis_ranges))-D references",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
         end

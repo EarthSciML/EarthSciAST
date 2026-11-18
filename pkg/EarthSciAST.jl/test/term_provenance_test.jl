@@ -311,7 +311,7 @@ end
         @test [_tp_origins(c) for c in pool[2].contribs] == [[(:component, "A")]]
         # With only the bare definition there is no tendency to scale.
         bare = [FE(Equation(VarExpr("x"), g), Contribution[Contribution(g, [A])], "A")]
-        @test_throws ArgumentError EarthSciAST._combine_tendency_term!(
+        @test_throws CoupleMultiplicativeNoTendencyError EarthSciAST._combine_tendency_term!(
             bare, "x", m, "*", C; states = Dict("x" => nothing), components = ["A"]
         )
     end
