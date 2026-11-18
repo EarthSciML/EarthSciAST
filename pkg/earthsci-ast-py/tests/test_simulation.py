@@ -132,10 +132,10 @@ class TestExpressionConversion:
         expected = sp.log(symbol_map["x"])
         assert result.equals(expected)
 
-    @pytest.mark.parametrize("spatial_op", ["grad", "div", "laplacian", "D"])
+    @pytest.mark.parametrize("spatial_op", ["D", "integral", "flux_divergence"])
     def test_spatial_operator_rejected(self, spatial_op):
-        """Feeding a non-lowered rewrite-target op — a spatial/RHS `D` or a
-        `grad`/`div`/`laplacian` sugar op — to the SymPy/lambdify simulator path
+        """Feeding a non-lowered rewrite-target op — a spatial/RHS `D`, an
+        `integral`, or a user op — to the SymPy/lambdify simulator path
         must raise the uniform `unlowered_operator` diagnostic (esm-spec §4.2 /
         §9.6.8) rather than silently producing a symbolic placeholder."""
         symbol_map = {"u": sp.Symbol("u")}

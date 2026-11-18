@@ -46,11 +46,11 @@ by a four-row table tested IN ORDER, first match wins (esm-spec §6.3.1):
 4. otherwise → ``"ode"``.
 
 The order is normative. ``pde`` precedes ``nonlinear`` so a steady-state PDE
-(``laplacian(phi) ~ f``) is a PDE and not a nonlinear system; ``sde`` precedes
-``pde`` because there is no SPDESystem constructor to select. A spatial
-derivative is a ``D`` whose ``wrt`` is present and is not ``"t"``, **or** one of
-the ``grad`` / ``div`` / ``laplacian`` sugar ops — both spellings count, since
-neither is canonical (they are open-tier rewrite targets).
+(``D(D(phi, wrt: x), wrt: x) ~ f``) is a PDE and not a nonlinear system;
+``sde`` precedes ``pde`` because there is no SPDESystem constructor to select. A
+spatial derivative is a ``D`` whose ``wrt`` is present and is not ``"t"``. (The
+``grad`` / ``div`` / ``laplacian`` ops that once also counted were removed at
+esm 3.0.0.)
 
 Dual representation
 ===================
@@ -73,7 +73,6 @@ from typing import Any
 from .esm_types import EXPR_WIRE_SPEC, ExprNode
 
 __all__ = [
-    "SPATIAL_DERIVATIVE_OPS",
     "SYSTEM_KINDS",
     "ClassificationError",
     "algebraic_unknowns",
@@ -97,19 +96,6 @@ __all__ = [
     "unknowns",
 ]
 
-
-#: The differential-operator sugar ops that mark an equation spatial. ``D`` with
-#: a non-``t`` ``wrt`` is the other spelling; both are recognized because neither
-#: is canonical — the sugar ops are open-tier rewrite targets that lower to ``D``
-#: only once a discretization rule fires.
-#:
-#: esm-spec §6.3.1 names EXACTLY these three. ``curl`` is spatial sugar too by
-#: §4.2, but §6.3.1 omits it, and this set is a cross-binding contract: adding a
-#: fourth op here would classify a curl-only model ``pde`` where every other
-#: binding says otherwise. Matching the spec exactly is what keeps the five
-#: bindings' answers identical; the omission is a question for the spec, not
-#: something to paper over locally.
-SPATIAL_DERIVATIVE_OPS = frozenset({"grad", "div", "laplacian"})
 
 #: The closed set of derived system kinds (esm-spec §6.3).
 SYSTEM_KINDS = ("ode", "nonlinear", "sde", "pde")
@@ -270,13 +256,9 @@ def _is_time_derivative(node: Any) -> bool:
 
 
 def _is_spatial_derivative(node: Any) -> bool:
-    """A spatial differential operator in either admissible spelling: a ``D``
-    whose ``wrt`` is PRESENT and is not ``"t"``, or one of the ``grad`` / ``div``
-    / ``laplacian`` sugar ops (esm-spec §6.3.1)."""
-    op = _op(node)
-    if op in SPATIAL_DERIVATIVE_OPS:
-        return True
-    if op != "D":
+    """A spatial differential operator: a ``D`` whose ``wrt`` is PRESENT and is
+    not ``"t"`` (esm-spec §6.3.1)."""
+    if _op(node) != "D":
         return False
     wrt = _slot(node, "wrt", "wrt")
     return wrt is not None and wrt != _TIME
@@ -307,7 +289,7 @@ def is_implicit_lhs(lhs: Any) -> bool:
     if _base_name(lhs) is not None or _derivative_targets(lhs):
         return False
     op = _op(lhs)
-    if op == "ic" or op in SPATIAL_DERIVATIVE_OPS or _is_spatial_d(lhs):
+    if op == "ic" or _is_spatial_d(lhs):
         return False
     if op == "faq":
         inner = _slot(lhs, "expr", "expr")

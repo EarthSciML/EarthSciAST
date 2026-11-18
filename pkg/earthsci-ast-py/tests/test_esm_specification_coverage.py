@@ -81,11 +81,11 @@ class TestSection01Overview:
                 jsonschema.validate(invalid_data, schema)
 
         # Incompatible major versions should fail at library level. The library
-        # reads majors 1 and 2; 1.0.0 is a CLEAN BREAK with no deprecation path,
+        # reads majors 1, 2 and 3; 1.0.0 is a CLEAN BREAK with no deprecation path,
         # so major version 0 is rejected exactly as an unreleased future major is.
         from earthsci_ast.parse import UnsupportedVersionError, load_document
 
-        for version in ["0.1.0", "0.9.0", "3.0.0"]:
+        for version in ["0.1.0", "0.9.0", "4.0.0"]:
             invalid_data = {
                 "esm": version,
                 "metadata": {"name": "Test"},
@@ -378,9 +378,11 @@ class TestSection04ExpressionAST:
 
         calculus_cases = [
             {"op": "D", "args": ["O3"], "wrt": "t"},  # Time derivative
-            {"op": "grad", "args": ["_var"], "dim": "x"},  # Spatial gradient
-            {"op": "div", "args": [{"op": "*", "args": ["u", "_var"]}]},  # Divergence
-            {"op": "laplacian", "args": ["_var"]},  # Laplacian
+            {"op": "D", "args": ["_var"], "wrt": "x"},  # Spatial derivative
+            # Divergence, one D per axis
+            {"op": "D", "args": [{"op": "*", "args": ["u", "_var"]}], "wrt": "x"},
+            # Second derivative (one axis of a Laplacian)
+            {"op": "D", "args": [{"op": "D", "args": ["_var"], "wrt": "z"}], "wrt": "z"},
         ]
 
         for op_case in calculus_cases:
@@ -1889,14 +1891,14 @@ class TestSection13CompleteExamples:
                                         "op": "*",
                                         "args": [
                                             {"op": "-", "args": ["u_wind"]},
-                                            {"op": "grad", "args": ["_var"], "dim": "x"},
+                                            {"op": "D", "args": ["_var"], "wrt": "x"},
                                         ],
                                     },
                                     {
                                         "op": "*",
                                         "args": [
                                             {"op": "-", "args": ["v_wind"]},
-                                            {"op": "grad", "args": ["_var"], "dim": "y"},
+                                            {"op": "D", "args": ["_var"], "wrt": "y"},
                                         ],
                                     },
                                 ],
@@ -1993,7 +1995,14 @@ class TestSection13CompleteExamples:
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
                             "rhs": {
                                 "op": "*",
-                                "args": ["Kz", {"op": "laplacian", "args": ["_var"]}],
+                                "args": [
+                                    "Kz",
+                                    {
+                                        "op": "D",
+                                        "args": [{"op": "D", "args": ["_var"], "wrt": "z"}],
+                                        "wrt": "z",
+                                    },
+                                ],
                             },
                         }
                     ],
@@ -2387,7 +2396,7 @@ class TestCrossSectionValidation:
                             "lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
                             "rhs": {
                                 "op": "*",
-                                "args": ["wind", {"op": "grad", "args": ["_var"], "dim": "x"}],
+                                "args": ["wind", {"op": "D", "args": ["_var"], "wrt": "x"}],
                             },
                         }
                     ],

@@ -52,9 +52,9 @@ def test_serialize_expression_with_metadata():
     expected = {"op": "D", "args": ["x"], "wrt": "t"}
     assert result == expected
 
-    expr_with_dim = ExprNode(op="grad", args=["T"], dim="x")
+    expr_with_dim = ExprNode(op="integral", args=["T"], dim="x")
     result = _serialize_expression(expr_with_dim)
-    expected = {"op": "grad", "args": ["T"], "dim": "x"}
+    expected = {"op": "integral", "args": ["T"], "dim": "x"}
     assert result == expected
 
 
