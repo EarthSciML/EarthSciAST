@@ -40,11 +40,9 @@ using EarthSciAST: FlattenedSystem, ModelVariable, UnknownVariable,
     Domain, flatten, infer_array_shapes, expand_flattened_refs,
     GapReport, SimulateError, EsmProblem,
     # MTK-independent helpers shared with the Catalyst extension
-    # (src/mtk_export.jl) plus the spatial-system predicate and its refusal
-    # message (src/flatten.jl).
+    # (src/mtk_export.jl).
     _strip_time, _resolve_sys_name,
-    _reference_notes, _esm_file_metadata, _warn_gaps,
-    _has_spatial_ivs, _spatial_system_msg
+    _reference_notes, _esm_file_metadata, _warn_gaps
 # Explicit import so we can add methods to these generics.
 import EarthSciAST: mtk2esm, mtk2esm_gaps
 const EsmExpr = EarthSciAST.ASTExpr

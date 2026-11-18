@@ -1619,9 +1619,8 @@ end
 """
     _data_fed_without_shape(file::EsmFile) -> Set{String}
 
-The scoped names of every data-fed parameter (a `kind: "data"` rule with a
-`from` binding) that declares no `shape`, in models at any subsystem depth and
-in reaction systems.
+The scoped names of every data-fed parameter ([`_is_data_fed`](@ref)) that
+declares no `shape`, in models and reaction systems at any subsystem depth.
 
 Absent and `[]` differ here, and only here: `[]` declares a scalar buffer,
 while an absent `shape` takes that of the `param_to_var` target the parameter
@@ -1631,41 +1630,30 @@ free to reshape.
 """
 function _data_fed_without_shape(file::EsmFile)
     names = Set{String}()
-    fed(update) = update !== nothing &&
-        any(r -> r.kind == "data" && r.from !== nothing, update)
-    function walk(model::Model, scope::String)
-        for (vname, var) in model.variables
-            (var.type == ParameterVariable && var.shape === nothing && fed(var.update)) &&
-                push!(names, "$scope.$vname")
-        end
-        for (sname, sub) in model.subsystems
-            sub isa Model && walk(sub, "$scope.$sname")
-        end
+    _for_each_data_param(file) do scope, name, var, _
+        var isa ModelVariable && var.type != ParameterVariable && return
+        (var.shape === nothing && _is_data_fed(var)) && push!(names, "$scope.$name")
         return
-    end
-    if file.models !== nothing
-        for (mname, model) in file.models
-            model isa Model && walk(model, String(mname))
-        end
-    end
-    if file.reaction_systems !== nothing
-        for (rname, rs) in file.reaction_systems
-            for p in rs.parameters
-                (p.shape === nothing && fed(p.update)) && push!(names, "$rname.$(p.name)")
-            end
-        end
     end
     return names
 end
 
-# True iff `v` carries a `kind: "data"` update WITH a `from` binding (esm-spec
-# §5.4/§8.5) — the predicate `_loader_fields` and `_collect_data_feeds!`
-# apply, so all three agree on which parameters are data-fed.
-_is_data_fed(v::ModelVariable) =
-    v.update !== nothing && any(rule -> rule.kind == "data" && rule.from !== nothing, v.update)
+"""
+    _is_data_fed(rule::ParameterUpdate) -> Bool
+    _is_data_fed(param) -> Bool
+
+A `kind: "data"` update rule with a `from` binding (esm-spec §5.4/§8.5); a
+parameter (a model variable or a reaction-system parameter) with such a rule.
+Whether the named source is declared is a separate question:
+`data_source_undefined` is the validator's finding, and the callers that need
+a declared source (`_loader_fields`) test `rule.source` themselves.
+"""
+_is_data_fed(rule::ParameterUpdate) = rule.kind == "data" && rule.from !== nothing
+_is_data_fed(v::Union{ModelVariable, Parameter}) =
+    v.update !== nothing && any(_is_data_fed, v.update)
 
 # ========================================
-# Coupling entry descriptions (unchanged from prior implementation)
+# Coupling entry descriptions
 # ========================================
 
 """

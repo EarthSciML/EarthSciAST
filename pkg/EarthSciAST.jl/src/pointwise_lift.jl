@@ -285,9 +285,6 @@ function _lift_gather_shaped(
     return OpExpr("index", subs)
 end
 
-# The top-level component a flattened name belongs to: its first segment.
-_lift_top_component(name::AbstractString)::String = String(first(split(name, '.'; limit = 2)))
-
 # A variable with no `shape`, or `shape: []`, is scalar (esm-spec §6.3).
 _lift_is_scalar(v::ModelVariable)::Bool = v.shape === nothing || isempty(v.shape)
 
@@ -390,9 +387,9 @@ function _apply_pointwise_lift!(
         lifting = hasproperty(c, :lifting) ? c.lifting : nothing
         (lifting === nothing || lifting == "pointwise") && continue
         if c isa CouplingOperatorCompose
-            union!(no_operator_route, (_lift_top_component(s) for s in c.systems))
+            union!(no_operator_route, (_component_root(s) for s in c.systems))
         elseif c isa CouplingVariableMap && !isempty(c.to) && !isempty(c.from)
-            push!(get!(masks, _lift_top_component(c.to), Set{String}()), c.from)
+            push!(get!(masks, _component_root(c.to), Set{String}()), c.from)
         end
     end
 
@@ -479,7 +476,7 @@ function _apply_pointwise_lift!(
         inference = Dict{String, _ShapeEnv{Nothing}}()
         found = OrderedDict{String, Vector{Tuple{String, Vector{String}}}}()
         for (target, n) in tendencies
-            comp = _lift_top_component(target)
+            comp = _component_root(target)
             wanted(comp) || continue
             if target in operator_plans
                 push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, plans[target].axes))
@@ -487,7 +484,7 @@ function _apply_pointwise_lift!(
             end
             shapes = get!(inference, comp) do
                 others = Dict{String, Vector{String}}(
-                    s => a for (s, a) in lifted_axes if _lift_top_component(s) != comp
+                    s => a for (s, a) in lifted_axes if _component_root(s) != comp
                 )
                 _lift_shape_env(variables, defs, others, get(masks, comp, Set{String}()))
             end
@@ -516,7 +513,7 @@ function _apply_pointwise_lift!(
                 )
             )
             for state in lift_states
-                _lift_top_component(state) == comp || continue
+                _component_root(state) == comp || continue
                 haskey(plans, state) || (
                     plans[state] = _LiftPlan(
                         copy(grid), Int[axis_size(a, state) for a in grid], nothing, nothing
@@ -614,7 +611,7 @@ function _pointwise_lifted_species(
         species = differential_lhs_variable(eq.lhs)
         species === nothing && continue
         (haskey(states, species) && _lift_is_scalar(states[species])) || continue
-        _lift_top_component(species) in exclude_components && continue
+        _component_root(species) in exclude_components && continue
         isempty(_collect_makearrays!(OpExpr[], eq.rhs)) && continue
         push!(lifted, species)
     end

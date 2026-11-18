@@ -102,6 +102,19 @@ include("validation/events.jl")
 include("validation/equation_lhs.jl")
 include("validate_inline_tests.jl")
 include("recurrence.jl")
+# Load-time lowering passes (enums, templates, imports) and their shared
+# raw-JSON traversal helpers
+include("json_walk.jl")
+include("enum_lowering.jl")
+# Reference spelling and location: `${VAR}`, the bundled standard library, URLs.
+include("ref_location.jl")
+include("templates/declarations.jl")
+include("templates/rewrite.jl")
+include("templates/metaparameters.jl")
+include("templates/imports.jl")
+include("templates/expand_typed.jl")
+include("templates/emit.jl")
+include("templates/flat_registry.jl")
 # Flattening pipeline (reactions → equations, subsystem flattening, shapes).
 # flatten()'s stages live in sibling files: error taxonomy, namespacing +
 # per-system collection, coupling application, pointwise lift, orchestrator,
@@ -117,19 +130,6 @@ include("flatten.jl")
 include("array_shape_inference.jl")
 include("shape_promotion.jl")
 include("elementwise_lift.jl")
-# Load-time lowering passes (enums, templates, imports) and their shared
-# raw-JSON traversal helpers
-include("json_walk.jl")
-include("enum_lowering.jl")
-# Reference spelling and location: `${VAR}`, the bundled standard library, URLs.
-include("ref_location.jl")
-include("templates/declarations.jl")
-include("templates/rewrite.jl")
-include("templates/metaparameters.jl")
-include("templates/imports.jl")
-include("templates/expand_typed.jl")
-include("templates/emit.jl")
-include("templates/flat_registry.jl")
 # esm-spec §4.7 mount helpers (mount-declared metaparameters, data-source
 # `extent` check, mount-edge index-set rename).
 include("mounts.jl")

@@ -2,6 +2,17 @@
 # ModelingToolkit.System constructors
 # ========================================
 
+# A flattened system whose independent variables are more than `[:t]` is a PDE
+# (esm-libraries-spec §4.7.6): this extension builds ODE systems only.
+_has_spatial_ivs(flat::FlattenedSystem) = flat.independent_variables != [:t]
+
+# The refusal for calling the ODE constructor `ctor` on such a system.
+_spatial_system_msg(flat::FlattenedSystem, ctor::String) =
+    "Flattened system has independent variables $(flat.independent_variables), " *
+    "which indicates a PDE with a continuous spatial dimension. $(ctor) builds " *
+    "ODE systems only and this binding has no PDE constructor: discretize the " *
+    "spatial operators (a `faq` stencil over an index set) first."
+
 # Spatial differential operators (`grad`/`div`/`laplacian`) must be rewritten
 # by discretization rules into `faq` stencils before a system is built.
 # Meeting one here means that rewrite did not happen; say so instead of

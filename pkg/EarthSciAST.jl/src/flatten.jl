@@ -423,37 +423,6 @@ function FlattenedSystem(flat::FlattenedSystem; kwargs...)
 end
 
 # ========================================
-# ODE-vs-PDE split predicate + redirect messages
-# ========================================
-
-"""
-    _has_spatial_ivs(flat::FlattenedSystem) -> Bool
-
-Return true when the flattened system has spatial independent variables. A
-FlattenedSystem with `[:t]` only is a pure ODE; anything else is a PDE, which
-the ModelingToolkit extension refuses (it has no PDE constructor).
-"""
-function _has_spatial_ivs(flat::FlattenedSystem)
-    return !(
-        length(flat.independent_variables) == 1 &&
-            flat.independent_variables[1] == :t
-    )
-end
-
-"""
-    _spatial_system_msg(flat, ctor) -> String
-
-Error text for calling the ODE constructor `ctor` (e.g.
-`"ModelingToolkit.System"`) on a flattened system with a continuous spatial
-independent variable.
-"""
-_spatial_system_msg(flat::FlattenedSystem, ctor::String) =
-    "Flattened system has independent variables $(flat.independent_variables), " *
-    "which indicates a PDE with a continuous spatial dimension. $(ctor) builds " *
-    "ODE systems only and this binding has no PDE constructor: discretize the " *
-    "spatial operators (a `faq` stencil over an index set) first."
-
-# ========================================
 # Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)
 # ========================================
 
@@ -940,10 +909,7 @@ function _extract_field_ics!(
     remaining_contribs = Vector{Contribution}[]
     for (eq, cs) in zip(equations, contribs)
         lhs = eq.lhs
-        target = (
-                lhs isa OpExpr && lhs.op == "ic" && length(lhs.args) == 1 &&
-                lhs.args[1] isa VarExpr
-            ) ? (lhs.args[1]::VarExpr).name : nothing
+        target = _ic_lhs_variable(lhs)
         if target === nothing
             push!(remaining, eq)
             push!(remaining_contribs, cs)
@@ -1006,7 +972,7 @@ function _loader_fields(
     for (name, var) in params
         var.update === nothing && continue
         for rule in var.update
-            (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
+            (_is_data_fed(rule) && rule.source !== nothing) || continue
             src = get(data_sources, rule.source, nothing)
             src === nothing && continue
             owner = String(first(rsplit(name, '.'; limit = 2)))
@@ -1071,7 +1037,7 @@ function _check_flattened_record_shapes(file::EsmFile)
         rules = var.update
         rules === nothing && return
         for (ri, rule) in enumerate(rules)
-            (rule.kind == "data" && rule.from !== nothing && rule.source !== nothing) || continue
+            (_is_data_fed(rule) && rule.source !== nothing) || continue
             src = get(file.data_sources, rule.source, nothing)
             src === nothing && continue
             at = _update_rule_path("$declpath/$name", rules, ri)
@@ -1729,6 +1695,59 @@ function flattened_to_esm(
         doc["domain"] = serialize_domain(flat.domain)
     end
     return doc
+end
+
+"""
+    expand_flattened_refs(flat::FlattenedSystem) -> FlattenedSystem
+
+The shared "Expand at your boundary" utility for `FlattenedSystem` consumers
+(esm-spec §9.6.4 rule 2, RFC out-of-line-expression-templates §7.7): expand
+every surviving `apply_expression_template` reference against the merged
+`template_registry`, returning an Expanded copy, bit-identical to the
+Expand-at-load image. A no-op when the registry is empty (no references
+survived). `flatten` ALWAYS carries references, so a consumer with no template
+handling calls this at its entry — the ModelingToolkit `System` constructor does; the
+tree-walk build does NOT (it expands at its own entry with site recording).
+
+Expanded positions: the equations, the field initial conditions, every event
+expression (conditions, condition triggers, affect right-hand sides), and each
+variable's sites (update rules and expression bounds, `_map_variable_sites`)
+in all three variable buckets; a bucket with no reference is kept as it is.
+The three subset maps (`algebraic_variables`, `brownian_parameters`,
+`discrete_parameters`) are re-read from the expanded buckets, so they hold the
+same expanded variables.
+
+`memo` is the shared expansion memo (`_expand_model_refs!`'s default):
+structurally identical apply sites expand once and share the result. Pass `nothing` for the
+per-site re-expansion. Sharing is safe here for the same reason it is in
+`_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
+would produce one pass later anyway.
+"""
+function expand_flattened_refs(
+        flat::FlattenedSystem;
+        memo::Union{_ExpandMemo, Dict{Tuple{String, String}, OpExpr}} = _ExpandCache()
+    )::FlattenedSystem
+    memo = _expand_cache(memo)
+    reg = flat.template_registry
+    isempty(reg) && return flat
+    # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
+    # reference whose body is a sum expands into terms that all inherit the
+    # contribution's origins.
+    expand = e -> _expand_expr_refs(e, reg, nothing, memo)
+    neweqs, newcontribs = _rewrite_flat_equations(expand, flat)
+    states = _map_variable_sites(expand, flat.state_variables)
+    params = _map_variable_sites(expand, flat.parameters)
+    observeds = _map_variable_sites(expand, flat.observed_variables)
+    return FlattenedSystem(
+        flat; equations = neweqs, equation_contributions = newcontribs,
+        state_variables = states, parameters = params, observed_variables = observeds,
+        algebraic_variables = _resubset(flat.algebraic_variables, states, observeds),
+        brownian_parameters = _resubset(flat.brownian_parameters, params),
+        discrete_parameters = _resubset(flat.discrete_parameters, params),
+        field_ics = Pair{String, ASTExpr}[name => expand(e) for (name, e) in flat.field_ics],
+        continuous_events = _map_event_exprs(expand, flat.continuous_events),
+        discrete_events = _map_event_exprs(expand, flat.discrete_events)
+    )
 end
 
 # The §6.3.1 subset maps re-read from their parents after a pass rewrote the
