@@ -403,7 +403,7 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 		return v["models"].(map[string]any)["m"].(map[string]any)["equations"]
 	}
 	for _, group := range []string{
-		"constrained_match_scope",          // shape-constrained div rule; one fires, one survives
+		"constrained_match_scope",          // shape-constrained D rule; one fires, one survives
 		"per_variable_scheme_literal_args", // ground-pattern per-variable selector
 		"two_div_two_meshes",               // identical patterns, distinct `where` scopes
 	} {
@@ -423,7 +423,7 @@ func TestMatchScoping_ConformanceGoldens(t *testing.T) {
 }
 
 // TestTemplateImports_WhereRenameCarriesShape pins the §9.7.7 composition fix:
-// a `where`-constrained div rule imported twice under prefix has its
+// a `where`-constrained `fv_div` rule imported twice under prefix has its
 // where.F.shape rewritten x -> meshA.x / meshB.x in lockstep with the index set,
 // so each instance registers and fires only on its own field. Without the
 // rewrite this raised template_constraint_unknown_index_set.
@@ -448,7 +448,7 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 			t.Fatalf("%s: no defining equation", name)
 		}
 		if expr["op"] != "*" {
-			t.Errorf("%s: op = %v; want * (div node not lowered)", name, expr["op"])
+			t.Errorf("%s: op = %v; want * (fv_div node not lowered)", name, expr["op"])
 		}
 		coef := expr["args"].([]any)[0].(map[string]any)
 		if coef["op"] != "/" || coef["args"].([]any)[1].(float64) != wantN {
