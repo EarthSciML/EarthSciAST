@@ -1817,7 +1817,13 @@ arrays, such as a 0-D component's coefficient `k = v · ρ / Δp` whose inputs a
 feeds from grid fields. The author wrote such a read elementwise and outside any `faq`; the lift
 is what puts it inside one, so a read the lift left bare would be refused at build as
 `faq_bare_array_operand` (esm-spec §4.3.1). Only a declared shape names an index set for the
-grid (rule 1 above). Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
+grid (rule 1 above). **A template reference is read at the cell without expanding it**, by the
+rule of esm-spec §9.6.11 "Realization": a reference whose value is an array (a stencil a
+discretization rule wrote, esm-spec §9.6.3 constraint 7) is read as `index(<reference>, ℓ…)`;
+inside a reference, a binding for a scalar-role parameter is read at the cell and a binding for
+an array-role parameter stays whole, with a mixed parameter taking the template's cellwise
+variant. The lift writes no expansion, and `Expand` of its result is what reading the expansion
+at the cell gives. Fixture: `tests/conformance/flatten_wire/fixtures/lift_inferred_operand.esm`.
 
 **Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
 contributions into one right-hand side. `equation_contributions` records where each summand came

@@ -7788,9 +7788,10 @@ make a required status check.
 ### 5.60 Rule Firings Write References (normative)
 
 **Decision pinned.** A firing `match` rule replaces the matched node with a
-reference to the rule (esm-spec §9.6.3 constraint 7), and rules apply inside
-template bodies once per template instance (esm-spec §9.6.4 rule 3). No step
-of loading inlines a template body, and eager expansion is retired.
+reference to the rule (esm-spec §9.6.3 constraint 7), rules apply inside
+template bodies once per template instance (esm-spec §9.6.4 rule 3), and the
+elementwise lift keeps references (esm-spec §9.6.11). No step of loading or
+flattening inlines a template body, and eager expansion is retired.
 
 **What is compared.** For every fixture under
 `tests/conformance/expression_templates/` in which a rule fires, two goldens:
@@ -7816,6 +7817,18 @@ golden would accept a binding that still inlines.
 body (`rewrite_depth_through_bodies`), a rewrite-target op left in a body and
 refused by the build gate (`unlowered_in_template_body`), and the two pinned
 opacity cases (`opacity_rule_replacement`).
+
+**The elementwise lift (esm-spec §9.6.11).** The `tests/conformance/flatten_wire/`
+goldens are serialized after `Expand` and MUST NOT change: they are the oracle
+that a lift which keeps references, reading bindings at the cell, denotes what
+the lift of the expansion did. Each case gains a second golden, the flattened
+equations with references kept and the reached registry entries, byte for byte
+across bindings, and the set gains a case whose application binds an array to a
+mixed parameter, pinning the `<name>.cellwise<k>` variant and its `p_cell`
+parameter. A template body holding a structural time derivative is pinned by an
+invalid fixture expecting `template_body_time_derivative`, once with a literal
+`wrt` (at registration) and once with a parameter bound to `"t"` (at the
+reference).
 
 **What this category does not pin.** How a binding memoizes instances, and
 whether its build compiles a referenced body once or once per call site:
