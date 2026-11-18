@@ -239,12 +239,31 @@ resolution. `load_path` anchors relative refs at the file's own directory; the
 other two take `base_path`.
 
 In Julia the load errors `ParseError`, `ExpressionTemplateError`,
-`SubsystemRefError` and `EnumLoweringError` lead with the same fields, in this order: `code`,
-`message`, `path` (an RFC 6901 pointer into the document the error is about,
-`""` if none), `file` (that document's canonical path or URL, `""` for the
-root document) and `details`; each type's own fields follow
-(`ParseError.original_error`; `SubsystemRefError.ref`, `.subsystem`,
-`.parent_model`). `SubsystemRefError` takes its `code` as a required keyword.
+`SubsystemRefError`, `EnumLoweringError` and `SchemaValidationError` lead with
+the same fields, in this order: `code`, `message`, `path` (an RFC 6901 pointer
+into the document the error is about, `""` if none), `file` (that document's
+canonical path or URL, `""` for the root document) and `details`; each type's
+own fields follow (`ParseError.original_error`; `SubsystemRefError.ref`,
+`.subsystem`, `.parent_model`; `SchemaValidationError.errors`).
+`SubsystemRefError` takes its `code` as a required keyword.
+
+**One error shape in Julia.** Every exported error type subtypes
+`EarthSciASTError` and stores its diagnostic code in its FIRST field, `code`
+(`""` when the failure has none). Four accessors read any of them:
+`error_code(e)`, `error_message(e)` (the text alone, which is what the
+conformance corpus pins), `error_path(e)` and `error_file(e)` (`""` when the
+type carries no location). All of them print through one `showerror`:
+`TypeName [code]: message (at /pointer in file)`, the bracket left out for an
+empty code and the parenthesis for an error with no location. The codes are
+`ERROR_CODES` values, or for the Julia evaluators' own failures an
+`E_TREEWALK_*`, `E_CANONICAL_*`, `E_REF_*` or `E_DIRECT_*` code, which are
+binding-local. An `ArgumentError` means the caller misused a Julia API (a wrong
+keyword value, an object made for another program, a typed constructor called
+with a bad value); a refusal of the document's content is always a package
+error: a value a typed constructor refuses while a document is read is a
+`ParseError`, a `flatten` refusal is a `FlattenError`, and a document construct
+the ModelingToolkit or Catalyst constructors cannot lower is a
+`SimulateError`.
 
 Options ride on the entry points they apply to: `metaparameters` and
 `base_path` on all three; TypeScript's `canonical` (tagged numeric literals,
@@ -603,7 +622,13 @@ lists each removed function and its replacement.
 Raises the §4.7.6.10 error taxonomy (`ConflictingDerivativeError`,
 `DimensionPromotionError`, `UnmappedDomainError`, `UnsupportedMappingError`,
 `DomainUnitMismatchError`, `DomainExtentMismatchError`,
-`SliceOutOfDomainError`, `CyclicPromotionError`).
+`SliceOutOfDomainError`, `CyclicPromotionError`), all under `FlattenError` in
+Julia, Python, TypeScript and Rust. Julia, Python, TypeScript and Go also name
+`CoupleMultiplicativeNoTendencyError`. A refusal no named type covers is a
+`FlattenError` with a code in Julia (the unexported `FlattenRefusal`:
+`nothing_to_flatten`, `unsupported_construct`,
+`variable_map_transform_missing_from`); Python raises a bare `FlattenError` or
+`ValueError` there.
 
 The options are reachable five different ways today: keywords (Julia),
 positional (Python), an options object (TypeScript), and **a separate function**
@@ -2188,6 +2213,7 @@ reading that as a gap.
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
+| `couple_multiplicative_no_tendency_error` | error | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_entry` | type | `CouplingEntry` | – | `CouplingEntry` | `CouplingEntry` | `CouplingEntry` |
 | `data_source` | type | `DataSource` | – | `DataSource` | `DataSource` | `DataSource` |
 | `data_source_binding` | type | `DataSourceBinding` | – | `DataSourceBinding` | `DataSourceBinding` | `DataSourceBinding` |
@@ -2210,6 +2236,7 @@ reading that as a gap.
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `extract` | function | `extract` | `extract` | `extract` / `extract_component_from_file` | – | `Extract` |
+| `flatten_error` | error | `FlattenError` | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
@@ -2249,7 +2276,6 @@ reading that as a gap.
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
-| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
@@ -2257,7 +2283,6 @@ reading that as a gap.
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
-| `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
 | `format_canonical_float` | function | `format_canonical_float` | `formatCanonicalFloat` | – | `format_canonical_float` | – |
