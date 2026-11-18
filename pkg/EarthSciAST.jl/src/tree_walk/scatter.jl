@@ -537,7 +537,7 @@ function _try_codegen_scatter(
         consumer = nothing
     )
     _codegen_disabled() && return _Decline(:tier_off, "code generation")
-    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    ctx = _CGFunction(_codegen_node_budget(); nst = nst)
     cons = _cg_consumer(ctx, consumer)
     kc = _CGScalarCtx()
     nd = length(out_refs)
@@ -743,8 +743,8 @@ function _try_codegen_scatter(
     dstore = oside === :x ? :du : :(_cg_dview(du, Val($(QuoteNode(oside)))))
     ln = LineNumberNode(0, Symbol("faq-equality-scatter"))
     whole = quote
-        $(ctx.geosink...)
-        $(cons === nothing ? nothing : Expr(:block, ctx.prologue...))
+        $(ctx.nest.sink...)
+        $(cons === nothing ? nothing : Expr(:block, ctx.prologue.stmts...))
         local $ov = $outsv
         $(colsets...)
         local $abv = _chunk_ordinals($nfreev, _cgci, _cgnc)

@@ -467,7 +467,7 @@ end
 # self-read compares its own position against `c` (`_cg_recur_gather`). Returns a
 # `_RecurrenceSweep` carrying the function, or the emitter's `_Decline`.
 function _try_codegen_recurrence(sw::_RecurrenceSweep)
-    ctx = _CGCtx(_codegen_node_budget())
+    ctx = _CGFunction(_codegen_node_budget())
     kc = _CGScalarCtx()
     cv = _cg_name(ctx, "c")
     kc.loops[sw.cur] = cv
@@ -513,7 +513,7 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
     ncells = _cg_geo!(ctx, sw.ncells, (sw, :ncells))
     ln = LineNumberNode(0, Symbol("ess-recurrence-sweep"))
     loop = quote
-        $(ctx.geosink...)
+        $(ctx.nest.sink...)
         for $cv in 0:($ncells - 1)
             $(seek...)
             local $pcv = $offv + 1
@@ -532,7 +532,7 @@ end
 # range-checked in dimension order, the later ones not evaluated once one is out
 # of the frame; then the read is served only from a cell whose sweep position is
 # before the current one, `c`.
-function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+function _cg_recur_gather(ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node)
     rg = nd.payload::_RecurGather
     cv = get(kc.loops, rg.cur, nothing)
     cv === nothing && _decline(:loopvar_out_of_scope, "the recurrence cursor")
@@ -543,7 +543,7 @@ function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
 end
 
 function _cg_recur_gather_dim(
-        ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
+        ctx::_CGFunction, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
         rgv::Symbol, cv::Symbol, d::Int, ord::Vector{Any},
         slot::Vector{Any}, subs::Vector{Symbol}
     )

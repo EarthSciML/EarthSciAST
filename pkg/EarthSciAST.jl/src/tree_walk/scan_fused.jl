@@ -14,7 +14,7 @@
 # the fold's own order (lane by lane, ascending along the scanned axis), the
 # build compiles that kernel's loop nest with the fold inside it instead: per
 # lane the nest runs the lane's cells, and each cell computes its term (the
-# kernel's own emitted body, `_cg_emit_kernel_nest!` in scan mode), converts
+# kernel's own emitted body, `_cg_emit_kernel_nest!` with a scan store), converts
 # it as the store into `du` would, and folds it into the lane's running value
 # in exactly `_scan_lanes!`'s order:
 #
@@ -239,8 +239,8 @@ _consumer_ix(c::_ScanConsumer) = only(keys(c.reads))
 # it: the kernel, the descriptor it reads the section's value through, the
 # slot offset, whether the value is still stored, and the consumer's invariant
 # symbols (registered with the function's prologue).
-_cg_consumer(ctx::_CGCtx, ::Nothing) = nothing
-function _cg_consumer(ctx::_CGCtx, c::_ScanConsumer)
+_cg_consumer(ctx::_CGFunction, ::Nothing) = nothing
+function _cg_consumer(ctx::_CGFunction, c::_ScanConsumer)
     _cg_note_nest!(ctx, c.K)
     ix = _consumer_ix(c)
     return _CGConsumer(c.K, ix, c.delta, c.store, _cg_inv!(ctx, c.K))
@@ -360,13 +360,13 @@ _scan_opsym(S::_ScanFold) = _is_numeric_reducer(S.oplus) ? _reducer_fnsym(S.oplu
 # (JuliaLang/julia#63129). With a consumer the section writes the state part
 # of `du`, so the two-buffer bindings are off. `file` names the section in
 # the emitted line numbers.
-function _scan_section_fn(ctx::_CGCtx, K::_AccKernel, blk, consumer, nst::Int, file::Symbol)
+function _scan_section_fn(ctx::_CGFunction, K::_AccKernel, blk, consumer, nst::Int, file::Symbol)
     ln = LineNumberNode(0, file)
     run = Expr(
         :let, _cg_section_bindings(consumer === nothing ? nst : 0, _AccKernel[K]),
         Expr(
             :block,
-            Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue...)),
+            Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, ctx.prologue.stmts...)),
             Expr(:macrocall, Symbol("@inbounds"), ln, blk)
         )
     )
@@ -377,7 +377,7 @@ end
 function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer = nothing)
     opsym = _scan_opsym(S)
     opsym === nothing && return nothing
-    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    ctx = _CGFunction(_codegen_node_budget(); nst = nst)
     acc = _cg_name(ctx, "acc")
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
@@ -389,12 +389,11 @@ function _build_fused_scan(S::_ScanFold, K::_AccKernel; nst::Int = 0, consumer =
         end
         invsyms = _cg_inv!(ctx, K)
         cons = consumer === nothing ? nothing : _cg_consumer(ctx, consumer)
-        ctx.scanmode = _CGScanMode(acc, av, bv, opsym, S.inclusive, cons)
+        store = _CGStoreScan(acc, av, bv, opsym, S.inclusive, cons)
         geo = Any[]
         nest = _cg_with_geosink(ctx, geo) do
-            _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms), ctx)
+            _cg_tbl_versions(() -> _cg_emit_kernel_nest!(ctx, K, invsyms, store), ctx)
         end
-        ctx.scanmode = nothing
         nl = _cg_with_geosink(() -> _cg_geo!(ctx, div(length(S.slots), S.len)), ctx, geo)
         len = _cg_with_geosink(() -> _cg_geo!(ctx, S.len), ctx, geo)
         quote
@@ -654,7 +653,7 @@ end
 function _build_colscan(S::_ScanFold, K::_AccKernel, sh; nst::Int = 0, consumer = nothing)
     opsym = _scan_opsym(S)
     opsym === nothing && return nothing
-    ctx = _CGCtx(_codegen_node_budget(); nst = nst)
+    ctx = _CGFunction(_codegen_node_budget(); nst = nst)
     nlanes = length(sh.r1)
     blk = try
         for Sub in K.subs
@@ -714,7 +713,7 @@ const _COLSCAN_BLOCK = 4096
 const _COLSCAN_MIN_LANES = 1024
 
 function _colscan_nest(
-        ctx::_CGCtx, S::_ScanFold, K::_AccKernel, sh, invsyms, opsym,
+        ctx::_CGFunction, S::_ScanFold, K::_AccKernel, sh, invsyms, opsym,
         consumer, cinv
     )
     cs = K.cells
@@ -776,23 +775,18 @@ function _colscan_nest(
                 sub[ix] = off == po ? xp : xn
             end
             oc = _cg_name(ctx, "oc")
-            kcc = _CGKernCtx(Kc, oc, iv, jv, 1, Symbol[], cinv)
+            kcc = _CGKernCtx(Kc, oc, iv, jv, 1, Symbol[], cinv, Any[], sub)
             push!(st, :(local $oc = $basec + $iv + $jv * $S2))
-            ctx.subst = (Kc, sub)
-            try
-                _cg_emit_recipes!(st, ctx, kcc)
-                cval = _cg_bound_body!(ctx, _cg_emit(ctx, kcc, Kc.spine))
-                push!(st, :(_cg_bufS(du)[$oc] = $cval))
-            finally
-                ctx.subst = nothing
-            end
+            _cg_emit_recipes!(st, ctx, kcc)
+            cval = _cg_bound_body!(ctx, _cg_emit(ctx, kcc, Kc.spine))
+            push!(st, :(_cg_bufS(du)[$oc] = $cval))
         end
         push!(st, f64 ? :($accv[$q] = $nv) : :($acc = $nv))
         return st
     end
     seed = store && !S.inclusive ?
         Any[:(_cg_oview(du)[$base + $iv + $j1 * $S2] = convert(eltype(du), $z))] : Any[]
-    ctx.tblread = false
+    ctx.nest.tblread = false
     c1f = cell(true, true)
     cnf = cell(false, true)
     tvf = _cg_tblread!(ctx)
