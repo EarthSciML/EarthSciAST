@@ -29,7 +29,7 @@ using ..MToken
 using ..MUnits: Factor
 import ..MUnits
 import ..DNumber
-using ..MExpr: REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
+using ..MExpr: DEPRECATED_OPS, REMOVED_OPS, Sym, is_e, is_formula, is_id_char, is_id_start, is_single,
     keys_sorted, name_ok, pieces, seg_ok, split_dots, sub_parts, num_ok
 
 # The package the document module sits in: its unit grammar reads a units
@@ -290,7 +290,7 @@ const FIELD_CALL_OPS =
 """`Math.reservedOpn`: names `\\operatorname{…}` never means a template or an
 open operator by."""
 reserved_opn(n::AbstractString) =
-    n in CALL_OPS || n in ("D", "neg", "pow") || n in REMOVED_OPS
+    n in CALL_OPS || n == "D" || n in DEPRECATED_OPS || n in REMOVED_OPS
 
 """`Math.coreOps` (`coreOpNames` of `Notation`)."""
 const CORE_OPS = Set{String}(

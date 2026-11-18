@@ -277,6 +277,15 @@ end
     )
     @test ESM._DEPRECATED_DOCUMENT_OPS == Dict("neg" => ("-", 1), "pow" => ("^", 2))
 
+    # The removed and deprecated spellings: one list each, which the document
+    # formats share with the loader.
+    @test ESM._REMOVED_OPS == (
+        "arrayop", "fn", "table_lookup", "skolem", "rank", "intersect_polygon",
+        "polygon_intersection_area", "argmin", "argmax", "aggregate",
+    )
+    @test ESM.DocumentFormats.MExpr.REMOVED_OPS === ESM._REMOVED_OPS
+    @test ESM.DocumentFormats.MExpr.DEPRECATED_OPS == ("neg", "pow")
+
     # The reducer table: the schema's `reduce` enum is its numeric rows; `or`
     # (bool_and_or) is not numeric; every reducer names a module function.
     @test Set(keys(ESM._OPLUS_IDENTITY)) == Set(["+", "*", "max", "min"])

@@ -213,29 +213,13 @@ end
 # and op-existence rejections live here.
 function _parse_op_dict(data)
     op = string(_get_field(data, :op, nothing))
-    if op == "arrayop"
-        # The `arrayop` spelling was removed at esm v0.8.0, when the node became
-        # the semiring FAQ (RFC `semiring-faq-unified-ir` §5.6). It is not an
-        # alias and is not normalized — see
-        # `docs/content/rfcs/faq-node-rename.md` §4 for why it nevertheless
-        # survived that removal inside the bindings until esm 1.1.0. The wire
-        # boundary rejects it first; this is the belt-and-braces guard for
-        # callers that build a node directly.
+    if op in _REMOVED_OPS
+        # The wire boundary (`_prepare_document_ops!`) rejects the whole
+        # document first, with the node's path; this guards callers that parse
+        # a node directly.
         throw(
             ParseError(
-                "[E_REMOVED_OP] `arrayop` op was removed in v0.8.0; use `faq` " *
-                    "(the Functional Aggregate Query node). " *
-                    "See docs/content/rfcs/faq-node-rename.md."
-            )
-        )
-    end
-    if op in _REMOVED_OPS_2_0_0
-        # Removed at esm 2.0.0. The wire boundary (`_reject_removed_2_0_0!`)
-        # rejects the whole document first, with the node's path; this guards
-        # callers that build a node directly.
-        throw(
-            ParseError(
-                "[E_REMOVED_OP] `\"op\": \"$(op)\"` was $(_REMOVED_2_0_0_HINT).";
+                "[E_REMOVED_OP] `\"op\": \"$(op)\"` was $(_removed_op_hint(op)).";
                 code = ERROR_CODES.REMOVED_OP
             )
         )

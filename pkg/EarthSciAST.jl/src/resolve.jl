@@ -859,6 +859,22 @@ const _REMOVED_2_0_0_HINT =
     "to rewrite the document onto the `esm:std/*.esm` expression templates"
 
 """
+    _REMOVED_OPS
+
+Every op spelling the format removed (esm-spec §4.2 "Removed ops"): `arrayop`
+(esm 0.8.0) and [`_REMOVED_OPS_2_0_0`](@ref). The document formats refuse the
+same tuple (`DocumentFormats.MExpr.REMOVED_OPS` is this object).
+"""
+const _REMOVED_OPS = ("arrayop", _REMOVED_OPS_2_0_0...)
+
+# What replaces a removed op, for its diagnostic.
+_removed_op_hint(op::AbstractString) =
+    op == "arrayop" ?
+    "removed at esm 0.8.0; use `\"op\": \"faq\"` (the Functional Aggregate Query " *
+    "node), see docs/content/rfcs/faq-node-rename.md" :
+    _REMOVED_2_0_0_HINT
+
+"""
     _removed_2_0_0_finding(doc) -> Union{Nothing, Tuple{String, String}}
 
 `(name, path)` of the first construct esm 2.0.0 removed that `doc` uses: an
