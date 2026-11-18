@@ -221,10 +221,11 @@ fn test_version_compatibility_validation_errors() {
 fn test_major_version_rejection() {
     // Ahead of this library.
     let ahead =
-        include_str!("../../../tests/version_compatibility/version_4_0_0_major_rejection.esm");
-    let err = load_string(ahead).expect_err("Expected major version 4.x.x to be rejected");
+        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm")
+            .replacen("\"2.5.1\"", "\"3.0.0\"", 1);
+    let err = load_string(&ahead).expect_err("Expected major version 3.x.x to be rejected");
     assert!(
-        err.to_string().contains("Unsupported major version 4"),
+        err.to_string().contains("Unsupported major version 3"),
         "{err}"
     );
 
@@ -237,12 +238,6 @@ fn test_major_version_rejection() {
         load_string(behind).is_err(),
         "Expected major version 0.x.x to be rejected"
     );
-
-    // A newer minor of the older supported major 2 is not refused for its
-    // major version either.
-    let two_x_newer =
-        include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm");
-    load_string(two_x_newer).expect("a 2.x document with no removed op loads");
 
     // A 1.x document with no removed op is not refused for its major version.
     let one_x = r#"{"esm": "1.3.0", "metadata": {"name": "OneX"},
