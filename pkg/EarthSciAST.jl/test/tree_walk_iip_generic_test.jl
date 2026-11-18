@@ -314,12 +314,9 @@ end
         doc = _gi_zerod()
         f!, u0, p, _, _ = ESM.Internal.build(doc)
         # The prelude is real: the interpreter build walks the same one (the
-        # native build compiles it, so its closure carries no walked prelude).
+        # native build compiles it, so its right-hand side holds no walked prelude).
         @test !isempty(
-            getfield(
-                ESM.Internal.build(doc; compiler = :interpreter).f!,
-                :cse_prelude
-            )
+            ESM.Internal.build(doc; compiler = :interpreter).f!.state.scalars.cse_prelude
         )
         u = [0.7, -0.4]
 

@@ -9,7 +9,7 @@
 function _index_at(expr::ASTExpr, subscripts::Vector{ASTExpr})::ASTExpr
     expr isa OpExpr || return expr
     _is_array_producer(expr) && return OpExpr("index", ASTExpr[expr, subscripts...])
-    (expr.op == "faq" || expr.op == "makearray" || expr.op == "index") && return expr
+    _is_self_indexed_op(expr.op) && return expr
     return reconstruct(expr; args = ASTExpr[_index_at(a, subscripts) for a in expr.args])
 end
 

@@ -64,7 +64,8 @@ _reset_thread_tally!() = lock(() -> (empty!(_THREAD_TALLY); nothing), _THREAD_TA
 # one empty fork-join of Polyester's pool over the cost of one node evaluation
 # in the cheapest generated loops (array_contraction.jl, codegen_kernel.jl),
 # both measured on a 4-thread run: a chunk below it would spend about as long
-# being dispatched as computing. Override with ESS_THREADS_MIN_WORK: a tuning threshold, not a refusal boundary — both sides of it evaluate the
+# being dispatched as computing. Override with ESS_THREADS_MIN_WORK, read when
+# a build starts: a tuning threshold, not a refusal boundary — both sides of it evaluate the
 # same bits, so no compiler refuses a rule for crossing it.
 const _THREAD_MIN_WORK_DEFAULT = 6000
 
@@ -75,9 +76,6 @@ const _THREAD_MIN_WORK_DEFAULT = 6000
 # that traffic. Not read from the environment: ESS_THREADS_MIN_WORK set to 0
 # still leaves it, and set past a section's work still forces it serial.
 const _THREAD_MIN_RMW_CELLS = 512
-function _thread_min_work()
-    return something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", "")), _THREAD_MIN_WORK_DEFAULT)
-end
 
 @inline _threads_available() = Threads.nthreads() > 1
 
@@ -116,7 +114,7 @@ end
 # `===` serial `du`.
 #
 # One Julia thread ⇒ serial; a section's work below two chunks of the serial
-# work floor (`_thread_min_work`, ESS_THREADS_MIN_WORK) ⇒ serial.
+# work floor (`_SecTCache.min_work`, the build's `_Tuning`) ⇒ serial.
 # Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
 # `:cg_serial_shared_outs`), documented above.
 
@@ -143,9 +141,10 @@ mutable struct _SecTCache
     job1::Any
     job2::Any
     rmw::Bool        # `_CGBuilt.rmw`: chunks also keep `_THREAD_MIN_RMW_CELLS` cells
+    min_work::Int    # the work floor of the build that made the section
 end
 _SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells, rmw::Bool = false) =
-    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing, rmw)
+    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing, rmw, _tuning_now().thread_min_work)
 _sec_tcache(::Nothing) = _SecTCache(0, false)
 
 # Decide once whether this generated function may run chunked: size first
@@ -153,7 +152,7 @@ _sec_tcache(::Nothing) = _SecTCache(0, false)
 # then the build-time disjointness verdict.
 function _sec_prep_threads!(tc::_SecTCache)
     tc.state == 0 || return tc
-    minw = _thread_min_work()
+    minw = tc.min_work
     nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minw, 1))))
     tc.rmw && (nchunks = min(nchunks, max(1, div(tc.ncells, _THREAD_MIN_RMW_CELLS))))
     if nchunks < 2
@@ -187,6 +186,22 @@ end
     jn = J()
     tc.job1 = jn
     return jn
+end
+
+# Run a section: `body(args, c, nchunks)` for every chunk when its verdict
+# allows threading (at most `maxchunks` chunks), else its serial instance
+# `body(args, 1, 1)`. A chunk computes each of its cells exactly as the serial
+# instance does, so both routes give the same bits.
+@inline function _run_section!(
+        tc::_SecTCache, body::B, args::A, maxchunks::Int = typemax(Int)
+    ) where {B, A}
+    if _threads_available() && _sec_prep_threads!(tc).state == 1
+        tc.nchunks = min(tc.nchunks, maxchunks)
+        _run_chunked!(tc, body, args)
+    else
+        body(args, 1, 1)
+    end
+    return nothing
 end
 
 # Run `body(args, c, nchunks)` for every chunk of the section's verdict.

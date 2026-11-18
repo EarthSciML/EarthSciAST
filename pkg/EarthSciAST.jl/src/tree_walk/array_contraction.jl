@@ -227,7 +227,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     elseif k === _NK_CACHED
         # The scalar prelude's CSE scratch. A contraction body is compiled with
         # `memo=nothing` and never goes through `_cse_compile_scalar`, so this
-        # cannot appear today; declining by name keeps it from being emitted as
+        # cannot appear; declining by name keeps it from being emitted as
         # a silently wrong read if it ever can.
         _decline(:cached_scalar_slot)
     elseif k === _NK_CONTRACTION_LOOP

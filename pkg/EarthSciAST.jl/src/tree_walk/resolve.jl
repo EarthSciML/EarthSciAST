@@ -1,217 +1,10 @@
 # ========================================================================
-# tree_walk/resolve.jl — part of the tree-walk evaluator (gt-e8yw).
-# Included by src/tree_walk.jl; see that file for the full layout and
-# include order. Section 5d: index-set registry resolution, build-time index resolution
-# (_resolve_indices and the faq/makearray expansions), live-forcing
-# buffers (_PGatherArray), array-cell discovery, and model selection.
+# tree_walk/resolve.jl — part of the tree-walk evaluator. Included by
+# src/tree_walk.jl; see that file for the full layout and include order.
+# Build-time index resolution: `_resolve_indices` and the faq/makearray
+# expansions, the gathers it lowers (`_PGatherArray` and the run-time gather
+# markers), and the guards a gather is resolved under.
 # ========================================================================
-
-# ============================================================
-# 5d. Index-set registry resolution (RFC semiring-faq-unified-ir §5.2)
-# ============================================================
-#
-# A `ranges[*]` value may be a dense `[lo,hi]`/`[lo,step,hi]` tuple (as today) or
-# an `IndexSetRef` `{from: <name>, of?: [...]}`. The pre-pass below resolves each
-# reference against the model's `index_sets` registry into the dense / dynamic
-# forms the existing range machinery already consumes, so the downstream einsum /
-# scalar-aggregate expansion (and the compiled `_Node` tree) is unchanged (§6):
-#   interval     → dense bound `[1, size]`
-#   categorical  → enumerated members `[1, |members|]`
-#   ragged       → per-cell dynamic bound `[1, index(offsets, of…)]` — exactly the
-#                  existing `_expand_int_range_dyn` mechanism + a `values` gather
-#                  authored in the body (§5.2). offsets/values are keyed factors (§5.4).
-
-# Keyed factors (a ragged set's `offsets`/`values`, RFC §5.4) resolve by BARE
-# name in the model scope; the empty default scope keeps every bare name as-is.
-# Read-only sentinel — see the `_EMPTY_*` invariant block next to
-# `_EMPTY_DERIVED_EXTENTS`.
-const _EMPTY_FACTOR_SCOPE = Dict{String, String}()
-
-# A ragged set's `offsets` / `values` keyed factors bind by BARE name in the
-# model scope (§5.4), but flattening prefixes every variable with its owning
-# component path while the document-scoped registry keeps the authored bare
-# name. Map each bare factor name to its in-scope variable: an exact-name
-# variable wins (and needs no entry); otherwise the dot-suffix match at the
-# SHALLOWEST namespace depth (the model's own re-exposed alias, not the mounted
-# subsystem's original) — unique at that depth, else left bare so the unbound-
-# name error surfaces. Empty for documents without ragged index sets.
-function _ragged_factor_scope(index_sets::AbstractDict, variables::AbstractDict)
-    factor_scope = Dict{String, String}()
-    for (_, iset) in index_sets
-        (iset isa IndexSet && iset.kind == "ragged") || continue
-        for f in (iset.offsets, iset.values)
-            f === nothing && continue
-            fname = String(f)
-            (haskey(factor_scope, fname) || haskey(variables, fname)) && continue
-            cands = String[n for n in keys(variables) if endswith(n, "." * fname)]
-            isempty(cands) && continue
-            mindepth = minimum(count(==('.'), c) for c in cands)
-            best = String[c for c in cands if count(==('.'), c) == mindepth]
-            length(best) == 1 && (factor_scope[fname] = best[1])
-        end
-    end
-    return factor_scope
-end
-
-# Resolve ONE IndexSetRef to a concrete `ranges` value. Errors clearly on an
-# undeclared name — no implicit interval is inferred, so a typo can't silently
-# become an empty set (§5.2). `factor_scope` maps a ragged set's bare keyed-factor
-# name to the in-scope variable that backs it (flattening prefixes variables with
-# their owning component path, e.g. "nEdgesOnCell" → "Divergence.nEdgesOnCell",
-# while the document-scoped registry keeps the bare authored name).
-function _resolve_one_index_set_ref(
-        ref::IndexSetRef, index_sets::AbstractDict,
-        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
-        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE
-    )
-    haskey(index_sets, ref.from) || throw(
-        TreeWalkError(
-            "E_TREEWALK_UNDECLARED_INDEX_SET",
-            "undeclared index set '$(ref.from)' referenced in ranges; declare it in " *
-                "the model's `index_sets` registry (no implicit interval is inferred)"
-        )
-    )
-    is = index_sets[ref.from]
-    if is.kind == "interval"
-        is.size === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_INDEX_SET_INCOMPLETE",
-                "interval index set '$(ref.from)' requires a `size`"
-            )
-        )
-        return Any[1, Int(is.size)]
-    elseif is.kind == "categorical"
-        is.members === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_INDEX_SET_INCOMPLETE",
-                "categorical index set '$(ref.from)' requires `members`"
-            )
-        )
-        return Any[1, length(is.members)]
-    elseif is.kind == "ragged"
-        is.offsets === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_INDEX_SET_INCOMPLETE",
-                "ragged index set '$(ref.from)' requires an `offsets` backing factor"
-            )
-        )
-        isempty(ref.of) && throw(
-            TreeWalkError(
-                "E_TREEWALK_RAGGED_NO_PARENTS",
-                "ragged index set '$(ref.from)' referenced without `of` parent index " *
-                    "variable(s); a ragged set's per-tuple length is a function of its parent"
-            )
-        )
-        # Per-cell dynamic upper bound |set(of…)| = offsets[of…]. The member
-        # gather through `values` is authored in the body (e.g.
-        # index(values, of…, k)) and resolved by the existing const_array path.
-        # The offsets factor binds by BARE name in the model scope (§5.4);
-        # `factor_scope` supplies the in-scope (possibly namespaced) variable.
-        off = String(get(factor_scope, String(is.offsets), String(is.offsets)))
-        idx_args = ASTExpr[VarExpr(off)]
-        append!(idx_args, ASTExpr[VarExpr(p) for p in ref.of])
-        return Any[1, OpExpr("index", idx_args)]
-    elseif is.kind == "derived"
-        # A derived index set names its producing FAQ node via `from_faq`: a
-        # `distinct` value-invention producer materialized at setup
-        # (`materialize_value_invention`, §5.5). Its cardinality is the dense
-        # extent `[1, n]`. A set with no extent
-        # is refused rather than contracted as empty: an empty range would fold
-        # to the additive identity and read as a plausible 0 (esm-spec §9.6.6).
-        faq = is.from_faq
-        faq === nothing && throw(
-            TreeWalkError(
-                "E_TREEWALK_DERIVED_NO_FAQ",
-                "derived index set '$(ref.from)' requires a `from_faq` naming its " *
-                    "producing node (§5.5)"
-            )
-        )
-        haskey(derived_extents, faq) || throw(
-            TreeWalkError(
-                "derived_index_set_unmaterialized",
-                "derived index set '$(ref.from)' (from_faq '$faq') is not materialized: no " *
-                    "geometry or value-invention producer supplied its extent at setup. " *
-                    "Materialized: $(sort(collect(keys(derived_extents))))."
-            )
-        )
-        return Any[1, derived_extents[faq]]
-    end
-    throw(
-        TreeWalkError(
-            "E_TREEWALK_UNKNOWN_INDEX_SET_KIND",
-            "unknown index set kind '$(is.kind)' for '$(ref.from)'"
-        )
-    )
-end
-
-# True iff any node in the subtree carries a `ranges` entry that is an
-# IndexSetRef, in any expression-bearing field (the generated walk).
-_ranges_hold_isr(e::ASTExpr) =
-    e isa OpExpr && (e::OpExpr).ranges !== nothing &&
-    any(v -> v isa IndexSetRef, values((e::OpExpr).ranges))
-_has_index_set_ref(expr::ASTExpr) = _any_subexpr_once(_ranges_hold_isr, expr)
-_has_index_set_ref(eq::Equation) = _has_index_set_ref(eq.lhs) || _has_index_set_ref(eq.rhs)
-
-# Rewrite every IndexSetRef in the subtree's ranges to its resolved concrete
-# form, in every expression-bearing field (`map_children`). Memoized by
-# identity and identity-preserving: a shared node resolves to one shared output
-# node, and a node with no IndexSetRef below it is returned as it is, so a
-# shared expression is neither walked once per path nor re-inflated into a tree.
-function _resolve_isr(
-        expr::OpExpr, index_sets::AbstractDict,
-        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
-        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE,
-        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
-    )
-    cached = get(memo, expr, nothing)
-    cached === nothing || return cached
-    e = map_children(x -> _resolve_isr(x, index_sets, derived_extents, factor_scope, memo), expr)
-    if _ranges_hold_isr(e)
-        resolved = Dict{String, Any}()
-        for (k, v) in (e::OpExpr).ranges
-            resolved[k] = v isa IndexSetRef ?
-                _resolve_one_index_set_ref(v, index_sets, derived_extents, factor_scope) : v
-        end
-        e = reconstruct(e::OpExpr; ranges = resolved)
-    end
-    memo[expr] = e
-    return e
-end
-_resolve_isr(
-    expr::ASTExpr, ::AbstractDict, ::AbstractDict = _EMPTY_DERIVED_EXTENTS,
-    ::AbstractDict = _EMPTY_FACTOR_SCOPE,
-    ::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
-) = expr
-_resolve_isr(
-    eq::Equation, index_sets::AbstractDict,
-    derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
-    factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE,
-    memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
-) =
-    Equation(
-    _resolve_isr(eq.lhs, index_sets, derived_extents, factor_scope, memo),
-    _resolve_isr(eq.rhs, index_sets, derived_extents, factor_scope, memo);
-    _comment = eq._comment
-)
-
-# Resolve all index-set references across a vector of equations. Returns the
-# input unchanged when no equation uses a `{from}` reference — preserving
-# byte-identical behaviour (and the compiled tree) for existing files (§6).
-# One shared memo across the vector: the registries are fixed for the whole
-# call, so a subtree shared BETWEEN equations also resolves once and stays
-# shared.
-function _resolve_index_set_ranges(
-        eqs::Vector{Equation}, index_sets::AbstractDict,
-        derived_extents::AbstractDict = _EMPTY_DERIVED_EXTENTS,
-        factor_scope::AbstractDict = _EMPTY_FACTOR_SCOPE
-    )
-    any(_has_index_set_ref, eqs) || return eqs
-    memo = IdDict{OpExpr, ASTExpr}()
-    return Equation[
-        _resolve_isr(eq, index_sets, derived_extents, factor_scope, memo)
-            for eq in eqs
-    ]
-end
 
 # ---- Shared aggregate/einsum expansion core (one spelling, three sites) --------
 # The three aggregate expansions — the LHS-faq einsum
@@ -870,28 +663,21 @@ function _resolve_index_of_makearray(
     # holds an aggregate over `j` alone).
     if _is_array_producer(result_expr)
         re = result_expr::OpExpr
-        rank = re.op == "makearray" ?
-            ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-            length(_output_idx_strings(re))
-        sel = if rank == ndim
-            k_vals
-        else
-            nonsingleton = [
-                d for d in 1:ndim
-                    if result_region === nothing ||
-                    result_region[d][1] != result_region[d][2]
-            ]
-            rank == length(nonsingleton) ||
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_MAKEARRAY_VALUE_RANK",
-                    "makearray region value produces a rank-$(rank) array " *
-                        "but the region has $(length(nonsingleton)) non-singleton " *
-                        "axis/axes of $(ndim) total"
-                )
+        rank = _producer_rank(re)
+        axes = _region_value_axes(
+            rank, ndim,
+            d -> result_region !== nothing && result_region[d][1] == result_region[d][2]
+        )
+        rank == length(axes) ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_MAKEARRAY_VALUE_RANK",
+                "makearray region value produces a rank-$(rank) array " *
+                    "but the region has $(length(axes)) non-singleton " *
+                    "axis/axes of $(ndim) total"
             )
-            k_vals[nonsingleton]
-        end
+        )
+        sel = k_vals[axes]
         sel_exprs = ASTExpr[IntExpr(Int64(v)) for v in sel]
         return re.op == "makearray" ?
             _resolve_index_of_makearray(
@@ -1005,11 +791,8 @@ function _resolve_index_of_makearray_symbolic(
         branch = val_expr
         if _is_array_producer(val_expr)
             re = val_expr::OpExpr
-            rank = re.op == "makearray" ?
-                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
-                length(_output_idx_strings(re))
-            sel = rank == ndim ? collect(1:ndim) :
-                [d for d in 1:ndim if region[d][1] != region[d][2]]
+            rank = _producer_rank(re)
+            sel = _region_value_axes(rank, ndim, d -> region[d][1] == region[d][2])
             rank == length(sel) ||
                 throw(
                 TreeWalkError(
@@ -1084,13 +867,13 @@ function _remap_operand_shape(
     e isa IntExpr && return (Int[], Int[])
     if e isa VarExpr
         n = (e::VarExpr).name
-        if haskey(array_var_info, n)
+        src = _array_source(n, array_var_info, pgather, const_arrays)
+        if src === :state
             lo, hi = array_var_info[n]
             return (copy(lo), hi .- lo .+ 1)
-        end
-        haskey(pgather, n) &&
+        elseif src === :forcing
             return (ones(Int, length(pgather[n].dims)), copy(pgather[n].dims))
-        if haskey(const_arrays, n)
+        elseif src === :const
             arr = const_arrays[n]
             (arr isa AbstractArray && !_is_scalar_const_field(arr)) || return (Int[], Int[])
             return (ones(Int, ndims(arr)), collect(Int, size(arr)))
@@ -1325,10 +1108,7 @@ const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
 # tier compiles the equation and therefore whether the compiler can express it.
 _contraction_loop_enabled() = _compiler_plan_now().contraction_loop
 # The build reads it once, when it starts (`_BuildContext`, compiler.jl).
-_contraction_loop_min() = (
-    c = _build_ctx();
-    c === nothing ? _env_floor("ESS_CONTRACTION_LOOP_MIN", 8) : c.contraction_loop_min
-)
+_contraction_loop_min() = _tuning_now().contraction_loop_min
 
 # Resolve `body` with each of `names` replaced by a fresh reserved loop-var
 # name (`_fresh_loopvar_name`) kept symbolic, plus the bound names in
@@ -1424,10 +1204,7 @@ end
 # between this tier and the per-cell build.
 _array_contraction_enabled() =
     _compiler_plan_now().array_contraction && _contraction_loop_enabled()
-_array_contraction_min() = (
-    c = _build_ctx();
-    c === nothing ? _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024) : c.array_contraction_min
-)
+_array_contraction_min() = _tuning_now().array_contraction_min
 
 # The term of an array einsum resolved ONCE with its output and its contracted
 # indices all symbolic (reserved loop-var names), and no reduction around it:
@@ -2161,326 +1938,19 @@ function _resolve_indices_op(
         memo::_MaybeMemo = nothing,
         bound_syms::Set{String} = _EMPTY_BOUND_SYMS
     )
-    if (
-            expr.op == "ifelse" && length(expr.args) == 3 ||
-                (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2
-        ) &&
+    if _is_guarded_node_op(expr.op, length(expr.args)) &&
             expr.expr_body === nothing && expr.values === nothing
         return _resolve_guarded_op(
             expr, array_var_info, var_map, const_arrays,
             pgather, memo, bound_syms
         )
     end
-    if expr.op == "index"
-        isempty(expr.args) &&
-            throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
-        first_arg = expr.args[1]
-        # Expression-position faq: index(faq(...), k1, k2, ...)
-        # Expand the faq at build time by substituting output_idx and
-        # unrolling contracted indices (the strategy `_compile_faq_percell!`
-        # uses for a whole-array derivative equation).
-        if first_arg isa OpExpr && _is_faq_op(first_arg.op)
-            return _resolve_index_of_faq(
-                first_arg::OpExpr, expr.args[2:end],
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-            )
-        end
-        # Expression-position makearray: index(makearray(...), k1, k2, ...)
-        # Select the value whose region covers (k1,...); later regions win.
-        if first_arg isa OpExpr && first_arg.op == "makearray"
-            return _resolve_index_of_makearray(
-                first_arg::OpExpr, expr.args[2:end],
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-            )
-        end
-        # Expression-position shape op: index(reshape|transpose|concat(X), k…) is
-        # the gather index(X, k′…) (see `_index_through_shape_op`).
-        if first_arg isa OpExpr && (first_arg::OpExpr).op in _SHAPE_REMAP_OPS
-            return _resolve_indices(
-                _index_through_shape_op(
-                    first_arg::OpExpr, expr.args[2:end],
-                    array_var_info, const_arrays, pgather
-                ),
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-            )
-        end
-
-        # Expression-position ELEMENTWISE COMBINATION:
-        #     index(op(a, b, ...), k1, k2, ...)  ->  op(index(a, k...), index(b, k...), ...)
-        #
-        # Indexing an elementwise combination IS the combination of the indexed
-        # operands, so distributing is exact, not an approximation. Only operands
-        # that are themselves array-valued are wrapped; a scalar operand (a
-        # literal, a scalar parameter) broadcasts and must be left alone, exactly
-        # as it does under the §4.3.4 name-aligned rules.
-        #
-        # Without this, an observed whose expression COMBINES array-valued
-        # subexpressions cannot be indexed at all. The motivating case is a
-        # column integral of a discretised operator:
-        #     divh = D(Mx, lon) + D(My, lat)            # two lowered stencils
-        #     divh_col = aggregate_k index(divh, i, j, k)
-        # `divh` inlines to `+(makearray, makearray)`, the `+` has no index
-        # handler, so the generic recurse below walked INTO the makearrays and
-        # their stencils' own bound `i`/`j`/`k` — which the aggregate above never
-        # binds — escaped as `E_TREEWALK_UNBOUND_LOOP_VAR: j`. The two single-node
-        # cases (`index(aggregate,…)`, `index(makearray,…)`) were already handled
-        # right above; this closes the combination case they left open.
-        if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
-            fa = first_arg::OpExpr
-            subs = expr.args[2:end]
-            # The operand test is `_index_pushdown_arrayish` (build_helpers.jl),
-            # shared with `_stencilize_index`: it looks THROUGH nested elementwise
-            # ops, so `index(1 + cos(pi*zc), j)` — an elementwise-defined array
-            # observed folded into a reader that gathers it — distributes down to
-            # `1 + cos(pi*index(zc, j))` instead of dropping the gather and
-            # leaving `zc` bare (issue #175). The leaf test spans every array
-            # SOURCE the branches below can gather: an array state slot, a live
-            # forcing buffer, and a const array.
-            _leaf_is_array(n) = haskey(array_var_info, n) || haskey(pgather, n) ||
-                (
-                haskey(const_arrays, n) &&
-                    !_is_scalar_const_field(const_arrays[n])
-            )
-            _amemo = IdDict{OpExpr, Bool}()
-            _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
-            if _anyof(_arrayish, fa.args)
-                # A combination with a shape-op operand is anonymous, and its
-                # operands broadcast positionally (§4.3.4): each reads the
-                # subscripts its own shape admits. A combination of variables
-                # alone is left to the name-aligned lift, which has already
-                # written each operand's own subscripts.
-                fshape = _mentions_shape_op(fa) ?
-                    _remap_operand_shape(fa, array_var_info, const_arrays, pgather) : nothing
-                rext = fshape === nothing ? nothing : fshape[2]
-                _subs_for(a) = (rext === nothing || length(rext) != length(subs)) ? subs :
-                    something(
-                        _broadcast_operand_subs(
-                            a, subs, rext, array_var_info,
-                            const_arrays, pgather
-                        ), subs
-                    )
-                pushed = ASTExpr[
-                    _arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
-                        for a in fa.args
-                ]
-                return _resolve_indices(
-                    reconstruct(fa; args = pushed), array_var_info,
-                    var_map, const_arrays, pgather, memo, bound_syms
-                )
-            end
-        end
-        # Expression-position INLINE `const` array literal:
-        # index({op:const, value:[…]}, k1, …). A non-scalar `const` used as an
-        # index target (e.g. the duo's `index({const [n][3][3]}, gt, d, k)`) is
-        # build-time literal data — the same shape as a REGISTERED const-array
-        # observed, only authored inline. Intern it (dedup by value) and gather it
-        # through the shared const-array path so a constant index folds to the
-        # element and a symbolic loop var lowers to a `_ConstGatherRef`. Without
-        # this the literal survives untouched to `_compile` and hits the
-        # `non-scalar const outside an array-consuming position` dead-end. A SCALAR
-        # `const` (a `Real` value) is not an array target — it falls through to the
-        # generic recurse and const-folds in `_compile` as before.
-        if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" &&
-                (first_arg::OpExpr).value isa AbstractVector
-            vals, cname = memo === nothing ?
-                _intern_inline_const(first_arg::OpExpr, const_arrays) :
-                get!(() -> _intern_inline_const(first_arg::OpExpr, const_arrays), memo.inline, first_arg::OpExpr)
-            return _resolve_const_array_gather(
-                vals, cname, expr.args[2:end],
-                array_var_info, var_map, const_arrays, pgather, memo, bound_syms
-            )
-        end
-        if first_arg isa VarExpr && haskey(array_var_info, first_arg.name)
-            vname = first_arg.name
-            lo, hi = array_var_info[vname]
-            idx_args = expr.args[2:end]
-            length(idx_args) == length(lo) ||
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_INDEX_NDIM",
-                    "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"
-                )
-            )
-            # Runtime state gather: a subscript depends on
-            # a contraction loop variable, so the slot is not a build-time constant.
-            # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
-            # the loop-build path (`__esm_lv_*` names); the concrete path below is
-            # untouched otherwise.
-            # A subscript computed at run time from a parameter, a state or an
-            # observed (bound symbols keep their own path) reads its slot the
-            # same way.
-            if any(
-                    a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
-                    idx_args
-                )
-                return _resolve_state_gather(
-                    vname, lo, hi, idx_args, array_var_info,
-                    var_map, const_arrays, pgather, memo, bound_syms
-                )
-            end
-            # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
-            # resolved: _eval_const_int will look up conn[c,k] as an integer. A
-            # lookup out of range under a guard the build cannot show taken
-            # reads its slot at run time instead (see `_resolve_guarded_op`).
-            indices = try
-                [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
-            catch err
-                (
-                    err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
-                        !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())
-                ) ||
-                    rethrow()
-                return _resolve_state_gather(
-                    vname, lo, hi, idx_args, array_var_info,
-                    var_map, const_arrays, pgather, memo, bound_syms
-                )
-            end
-            for d in 1:length(indices)
-                if indices[d] < lo[d] || indices[d] > hi[d]
-                    return NumExpr(0.0)  # ghost cell
-                end
-            end
-            cname = _cell_key(vname, indices)
-            haskey(var_map, cname) ||
-                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
-            return VarExpr(cname)
-        end
-        # Live forcing buffer bound via `param_arrays`: reroute
-        # this gather to a LIVE read instead of the frozen const-fold below. The
-        # array is a discrete-cadence loader buffer (the driver routes const-cadence
-        # data to `const_arrays` and discrete-cadence data here), so its contents
-        # change at refresh boundaries and MUST NOT be inlined as a build-time
-        # literal. Bounds-check and column-major-linearize the constant indices at
-        # build time, then carry the aliased flat buffer + the offset to `_compile`
-        # (which emits a `_NK_PARAM_GATHER`) as a typed `_PGatherRef` in `value`.
-        # The ref also carries the buffer's registry NAME, which is what gives the
-        # gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
-        # the gather from being hoisted itself, it does NOT keep the ref out of
-        # `canonical_json`, which sees it as a child of every hoistable ancestor
-        # (see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
-        if first_arg isa VarExpr && haskey(pgather, first_arg.name)
-            pg = pgather[first_arg.name]::_PGatherArray
-            idx_args_expr = expr.args[2:end]
-            length(idx_args_expr) == length(pg.dims) ||
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_PGATHER_NDIM",
-                    "forcing array '$(first_arg.name)' is $(length(pg.dims))D " *
-                        "but got $(length(idx_args_expr)) indices"
-                )
-            )
-            # A subscript a symbolic resolve keeps symbolic (a contraction's loop
-            # counter, `F[i]`) has no build-time value: the gather stays a read of
-            # the live buffer at an offset computed per call (`_LiveGatherRef`),
-            # with each constant subscript bounds-checked here as below. Only
-            # loop counters and literals qualify; any other run-time subscript
-            # (one reading a state, a parameter or `t`) is refused below.
-            if !isempty(bound_syms) &&
-                    _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr) &&
-                    all(
-                    a -> !_subscript_is_runtime(a, const_arrays) ||
-                        _subscript_from_counters(a, bound_syms),
-                    idx_args_expr
-                )
-                sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
-                for d in eachindex(idx_args_expr)
-                    a = idx_args_expr[d]
-                    if _subscript_is_runtime(a, const_arrays)
-                        sub_nodes[d] = _resolve_indices(
-                            a, array_var_info, var_map, const_arrays,
-                            pgather, memo, bound_syms
-                        )
-                    else
-                        ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                        # Out of range under a guard the build cannot show
-                        # taken: the run-time gather checks it if evaluated.
-                        (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred() ||
-                            _throw_pgather_oob(first_arg.name, ci, pg.dims[d], d)
-                        sub_nodes[d] = IntExpr(Int64(ci))
-                    end
-                end
-                return OpExpr(
-                    "index", sub_nodes;
-                    value = _LiveGatherRef(pg.flat, pg.dims, first_arg.name)
-                )
-            end
-            int_indices = [
-                _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
-                    for a in idx_args_expr
-            ]
-            for d in 1:length(pg.dims)
-                (1 <= int_indices[d] <= pg.dims[d]) && continue
-                # The guarded out-of-range rule (above): a read the build
-                # cannot show evaluated becomes the run-time gather, which
-                # raises the same error if it is.
-                _guarded_oob_deferred() && return OpExpr(
-                    "index", ASTExpr[IntExpr(Int64(i)) for i in int_indices];
-                    value = _LiveGatherRef(pg.flat, pg.dims, first_arg.name)
-                )
-                _throw_pgather_oob(first_arg.name, int_indices[d], pg.dims[d], d)
-            end
-            lin = LinearIndices(Tuple(pg.dims))[int_indices...]
-            return OpExpr(
-                "index", ASTExpr[];
-                value = _PGatherRef(pg.flat, lin, first_arg.name)
-            )
-        end
-        # Pre-computed constant arrays (1D Fornberg weights, or ND mesh arrays).
-        # RUNTIME-VARYING vs. fully-constant subscripts are handled uniformly by
-        # `_resolve_const_array_gather` (see there).
-        if first_arg isa VarExpr && haskey(const_arrays, first_arg.name)
-            return _resolve_const_array_gather(
-                const_arrays[first_arg.name],
-                first_arg.name, expr.args[2:end], array_var_info, var_map,
-                const_arrays, pgather, memo, bound_syms
-            )
-        end
-        # scalar or unknown variable inside index — recurse on sub-exprs only
-        new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
-        changed || return expr   # nothing under this index resolved → keep node intact
-        return reconstruct(expr; args = new_args)
-    end
+    expr.op == "index" && return _resolve_index_op(
+        expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+    )
     if expr.op == "integral"
-        # Euler/midpoint quadrature: integral(u, var=x) → dx * sum(u[k] for k in lo..hi)
-        # Only expands when the integrand is a 1D array state variable known to
-        # array_var_info. Falls through to generic recurse when integrand is not
-        # an array var (e.g. a scalar parameter expression).
-        isempty(expr.args) &&
-            throw(
-            TreeWalkError(
-                "E_TREEWALK_INTEGRAL_EMPTY",
-                "integral op requires at least one arg"
-            )
-        )
-        integrand = expr.args[1]
-        iv = expr.int_var
-        iv === nothing &&
-            throw(
-            TreeWalkError(
-                "E_TREEWALK_INTEGRAL_NO_INTVAR",
-                "integral op requires `var` field (integration variable name)"
-            )
-        )
-        if integrand isa VarExpr && haskey(array_var_info, integrand.name)
-            vname = integrand.name
-            lo_vec, hi_vec = array_var_info[vname]
-            length(lo_vec) == 1 ||
-                throw(
-                TreeWalkError(
-                    "E_TREEWALK_INTEGRAL_NDIM",
-                    "euler_integral supports 1D integration only; " *
-                        "'$vname' has $(length(lo_vec)) dimensions"
-                )
-            )
-            lo1 = lo_vec[1]; hi1 = hi_vec[1]
-            cells = ASTExpr[VarExpr(_cell_key(vname, [i])) for i in lo1:hi1]
-            for c in cells
-                cname = (c::VarExpr).name
-                haskey(var_map, cname) ||
-                    throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
-            end
-            return OpExpr("*", ASTExpr[VarExpr("d$(iv)"), OpExpr("+", cells)])
-        end
+        r = _resolve_integral(expr, array_var_info, var_map)
+        r === nothing || return r
     end
     # Scalar aggregate (empty output_idx) in expression position: expand inline.
     # Non-scalar aggregate (non-empty output_idx) must be wrapped in index() —
@@ -2511,243 +1981,380 @@ function _resolve_indices_op(
     return reconstruct(expr; args = new_args, expr_body = new_body, values = new_values)
 end
 
-# Detect which state variables are used in array context (inside index ops)
-# by scanning equation LHS patterns and initial_condition keys.
-function _detect_array_vars(
-        equations::Vector{Equation},
-        state_var_names::Set{String},
-        initial_conditions::AbstractDict
-    )
-    detected = Set{String}()
-    # From initial conditions: "u[3]" style keys imply array usage.
-    _foreach_ic_cell(
-        initial_conditions,
-        (vname, _) -> (vname in state_var_names && push!(detected, vname)),
-        (vname, _, _) -> (vname in state_var_names && push!(detected, vname))
-    )
-    # From equation LHS patterns.
-    for eq in equations
-        lhs = eq.lhs
-        if _is_indexed_D_lhs(lhs)
-            inner = (lhs::OpExpr).args[1]::OpExpr
-            first_arg = inner.args[1]
-            if first_arg isa VarExpr && first_arg.name in state_var_names
-                push!(detected, first_arg.name)
-            end
-        elseif lhs isa OpExpr && _is_faq_op(lhs.op)
-            body = lhs.expr_body
-            if body isa OpExpr && body.op == "D" && !isempty(body.args)
-                inner = body.args[1]
-                if inner isa OpExpr && inner.op == "index" && !isempty(inner.args)
-                    fa = inner.args[1]
-                    if fa isa VarExpr && fa.name in state_var_names
-                        push!(detected, fa.name)
-                    end
-                end
-            end
-        end
-    end
-    return detected
+
+# ---- `index(target, k…)` --------------------------------------------------
+# What `index(target, …)` indexes, judged from the form of `target` alone (a
+# name's array source is `_array_source`). The order is significant: an inline
+# `const` array is tested before the elementwise case, and every operator
+# form before a name. The range analyses (src/range/) classify their targets
+# with the same function.
+@enum _IndexTarget::UInt8 begin
+    _IT_FAQ             # a faq producer: its body at the output indices
+    _IT_MAKEARRAY       # a makearray: the covering region's value
+    _IT_SHAPE_OP        # reshape / transpose / concat: an index map onto the operand
+    _IT_CONST_ARRAY     # an inline non-scalar `const`
+    _IT_INDEX           # a nested `index`
+    _IT_ELEMENTWISE     # an elementwise operator: the index pushes into its array operands
+    _IT_NAME            # a variable name
+    _IT_OTHER
 end
 
-# Scan equations and initial_conditions to discover all array cells.
-# Returns Dict{String,_DiscoveredCells}: var_name → the cells its equation LHSs and
-# per-cell initial-condition keys name. A `faq` LHS whose subscripts are each a
-# constant or ±(one loop index) + constant, with no loop index shared between
-# subscripts, names a box, recorded arithmetically; any other LHS is enumerated
-# cell by cell.
-function _discover_array_cells(
-        equations::Vector{Equation},
-        initial_conditions::AbstractDict,
-        array_var_names::Set{String}
-    )
-    cells = Dict{String, _DiscoveredCells}()
+function _index_target_kind(t::ASTExpr)::_IndexTarget
+    t isa VarExpr && return _IT_NAME
+    t isa OpExpr || return _IT_OTHER
+    o = t::OpExpr
+    _is_faq_op(o.op) && return _IT_FAQ
+    o.op == "makearray" && return _IT_MAKEARRAY
+    o.op in _SHAPE_REMAP_OPS && return _IT_SHAPE_OP
+    o.op == "const" && return o.value isa AbstractVector ? _IT_CONST_ARRAY : _IT_OTHER
+    o.op == "index" && return _IT_INDEX
+    _is_scalar_op(o.op) && return _IT_ELEMENTWISE
+    return _IT_OTHER
+end
 
-    # From initial conditions: "u[3]" or "u[2,3]" style keys, and whole inline
-    # array profiles.
-    _foreach_ic_cell(
-        initial_conditions,
-        (vname, indices) -> (
-            vname in array_var_names &&
-                _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)
-        ),
-        (vname, lo, hi) -> (
-            vname in array_var_names &&
-                _cellset_push_box!(get!(_DiscoveredCells, cells, vname), lo, hi, vname)
+# Where the name `n` reads array values from, in the one precedence the
+# resolve uses: an array state, a live forcing buffer, a const array (`:const`
+# also for a scalar const field, which `_is_scalar_const_field` tells apart), or
+# `:none`.
+function _array_source(n::AbstractString, array_var_info, pgather, const_arrays)::Symbol
+    haskey(array_var_info, n) && return :state
+    haskey(pgather, n) && return :forcing
+    haskey(const_arrays, n) && return :const
+    return :none
+end
+
+# Whether the name `n` holds an array value (a scalar const field does not).
+_array_name(n::AbstractString, array_var_info, pgather, const_arrays) =
+    (
+    s = _array_source(n, array_var_info, pgather, const_arrays);
+    s === :state || s === :forcing || (s === :const && !_is_scalar_const_field(const_arrays[n]))
+)
+
+function _resolve_index_op(
+        expr::OpExpr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+    )
+    isempty(expr.args) &&
+        throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
+    target = expr.args[1]
+    subs = expr.args[2:end]
+    kind = _index_target_kind(target)
+    if kind === _IT_FAQ
+        # Expanded at build time by substituting the output indices and
+        # unrolling the contracted ones, as `_compile_faq_percell!` does for a
+        # whole-array derivative equation.
+        return _resolve_index_of_faq(
+            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
         )
+    elseif kind === _IT_MAKEARRAY
+        # The value whose region covers (k1, …); later regions win.
+        return _resolve_index_of_makearray(
+            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+    elseif kind === _IT_SHAPE_OP
+        return _resolve_indices(
+            _index_through_shape_op(target::OpExpr, subs, array_var_info, const_arrays, pgather),
+            array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+    elseif kind === _IT_ELEMENTWISE
+        r = _resolve_index_of_elementwise(
+            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+        r === nothing || return r
+    elseif kind === _IT_CONST_ARRAY
+        return _resolve_index_of_inline_const(
+            target::OpExpr, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+    elseif kind === _IT_NAME
+        n = (target::VarExpr).name
+        src = _array_source(n, array_var_info, pgather, const_arrays)
+        src === :state && return _resolve_index_of_state(
+            n, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+        src === :forcing && return _resolve_index_of_forcing(
+            n, subs, array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+        )
+        # Pre-computed constant arrays: run-time and constant subscripts alike
+        # go through `_resolve_const_array_gather`.
+        src === :const && return _resolve_const_array_gather(
+            const_arrays[n], n, subs, array_var_info, var_map,
+            const_arrays, pgather, memo, bound_syms
+        )
+    end
+    # A scalar or unknown target: resolve the arguments only.
+    new_args, changed = _resolve_arg_vec(expr.args, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
+    changed || return expr
+    return reconstruct(expr; args = new_args)
+end
+
+# Expression-position ELEMENTWISE COMBINATION:
+#     index(op(a, b, ...), k1, k2, ...)  ->  op(index(a, k...), index(b, k...), ...)
+#
+# Indexing an elementwise combination IS the combination of the indexed
+# operands, so distributing is exact, not an approximation. Only operands
+# that are themselves array-valued are wrapped; a scalar operand (a
+# literal, a scalar parameter) broadcasts and must be left alone, exactly
+# as it does under the §4.3.4 name-aligned rules.
+#
+# Without this, an observed whose expression COMBINES array-valued
+# subexpressions cannot be indexed at all. The motivating case is a
+# column integral of a discretised operator:
+#     divh = D(Mx, lon) + D(My, lat)            # two lowered stencils
+#     divh_col = aggregate_k index(divh, i, j, k)
+# `divh` inlines to `+(makearray, makearray)`, the `+` has no index
+# handler, so the generic recurse below walked INTO the makearrays and
+# their stencils' own bound `i`/`j`/`k` — which the aggregate above never
+# binds — escaped as `E_TREEWALK_UNBOUND_LOOP_VAR: j`. The two single-node
+# cases (`index(aggregate,…)`, `index(makearray,…)`) were already handled
+# right above; this closes the combination case they left open. `nothing`
+# when no operand is array-valued.
+function _resolve_index_of_elementwise(
+        fa::OpExpr, subs::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
     )
-
-    # From equation LHS.
-    for eq in equations
-        _scan_lhs_cells!(cells, eq.lhs, array_var_names)
+    # The operand test is `_index_pushdown_arrayish` (build_helpers.jl),
+    # shared with `_stencilize_index`: it looks THROUGH nested elementwise
+    # ops, so `index(1 + cos(pi*zc), j)` — an elementwise-defined array
+    # observed folded into a reader that gathers it — distributes down to
+    # `1 + cos(pi*index(zc, j))` instead of dropping the gather and
+    # leaving `zc` bare. The leaf test spans every array source an index
+    # can gather (`_array_name`).
+    _leaf_is_array(n) = _array_name(n, array_var_info, pgather, const_arrays)
+    _amemo = IdDict{OpExpr, Bool}()
+    _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
+    if _anyof(_arrayish, fa.args)
+        # A combination with a shape-op operand is anonymous, and its
+        # operands broadcast positionally (§4.3.4): each reads the
+        # subscripts its own shape admits. A combination of variables
+        # alone is left to the name-aligned lift, which has already
+        # written each operand's own subscripts.
+        fshape = _mentions_shape_op(fa) ?
+            _remap_operand_shape(fa, array_var_info, const_arrays, pgather) : nothing
+        rext = fshape === nothing ? nothing : fshape[2]
+        _subs_for(a) = (rext === nothing || length(rext) != length(subs)) ? subs :
+            something(
+                _broadcast_operand_subs(
+                    a, subs, rext, array_var_info,
+                    const_arrays, pgather
+                ), subs
+            )
+        pushed = ASTExpr[
+            _arrayish(a) ? OpExpr("index", ASTExpr[a, _subs_for(a)...]) : a
+                for a in fa.args
+        ]
+        return _resolve_indices(
+            reconstruct(fa; args = pushed), array_var_info,
+            var_map, const_arrays, pgather, memo, bound_syms
+        )
     end
-    return cells
+    return nothing
 end
 
-# The affine form `coef * loop_index[pos] + c` of an index expression, as
-# `(pos, coef, c)` with `pos = 0` for a constant, or `nothing` when the
-# expression is not one (`_affine_form`, with no subexpression moving with two
-# different loop indices).
-function _lhs_index_affine(a::ASTExpr, idx_names::Vector{String})
-    f = _affine_form(a, idx_names; single = true)
-    f === nothing && return nothing
-    pos = findfirst(!iszero, f.c)
-    return pos === nothing ? (0, 0, f.c0) : (pos, f.c[pos], f.c0)
+# Expression-position INLINE `const` array literal:
+# index({op:const, value:[…]}, k1, …). A non-scalar `const` used as an
+# index target (e.g. the duo's `index({const [n][3][3]}, gt, d, k)`) is
+# build-time literal data — the same shape as a REGISTERED const-array
+# observed, only authored inline. Intern it (dedup by value) and gather it
+# through the shared const-array path so a constant index folds to the
+# element and a symbolic loop var lowers to a `_ConstGatherRef`. Without
+# this the literal survives untouched to `_compile` and hits the
+# `non-scalar const outside an array-consuming position` dead-end. A SCALAR
+# `const` (a `Real` value) is not an array target — it falls through to the
+# generic recurse and const-folds in `_compile` as before.
+function _resolve_index_of_inline_const(
+        c::OpExpr, subs::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
+    )
+    vals, cname = memo === nothing ?
+        _intern_inline_const(c, const_arrays) :
+        get!(() -> _intern_inline_const(c, const_arrays), memo.inline, c)
+    return _resolve_const_array_gather(
+        vals, cname, subs,
+        array_var_info, var_map, const_arrays, pgather, memo, bound_syms
+    )
 end
 
-# The box a `faq` LHS's subscripts sweep over `range_iters`, as `(lo, hi)`, or
-# `nothing` when the cells do not form a box (a stride other than ±1, a loop
-# index in two subscripts, or a subscript `_lhs_index_affine` cannot read).
-# Only called with every range non-empty.
-function _lhs_cells_box(idx_args, idx_names::Vector{String}, range_iters)
-    n = length(idx_args)
-    lo = Vector{Int}(undef, n)
-    hi = Vector{Int}(undef, n)
-    used = falses(length(idx_names))
-    for d in 1:n
-        t = _lhs_index_affine(idx_args[d], idx_names)
-        t === nothing && return nothing
-        pos, coef, k = t
-        if pos == 0
-            lo[d] = hi[d] = k
-            continue
-        end
-        used[pos] && return nothing
-        used[pos] = true
-        r = range_iters[pos]
-        (length(r) == 1 || step(r) == 1 || step(r) == -1) || return nothing
-        (coef == 1 || coef == -1 || length(r) == 1) || return nothing
-        a = coef * first(r) + k
-        b = coef * last(r) + k
-        lo[d] = min(a, b)
-        hi[d] = max(a, b)
-    end
-    return lo, hi
-end
-
-function _scan_lhs_cells!(cells, lhs::ASTExpr, array_var_names::Set{String})
-    if _is_time_derivative(lhs) &&
-            length(lhs.args) == 1 && lhs.args[1] isa OpExpr &&
-            lhs.args[1].op == "index"
-        # D(index(var, k...))
-        inner = lhs.args[1]
-        first_arg = inner.args[1]
-        first_arg isa VarExpr || return
-        first_arg.name in array_var_names || return
-        idx_args = inner.args[2:end]
-        try
-            indices = [_eval_const_int(a, _EMPTY_IDX_ENV) for a in idx_args]
-            vname = first_arg.name
-            _cellset_push_point!(get!(_DiscoveredCells, cells, vname), indices, vname)
-        catch err
-            # A non-constant index expression is simply not discoverable here
-            # (the faq path enumerates it); anything else is a real bug.
-            err isa TreeWalkError || rethrow()
-        end
-        return
-    end
-    if lhs isa OpExpr && _is_faq_op(lhs.op)
-        # aggregate(expr=D(index(var, idx_exprs...)), output_idx=[...], ranges={...})
-        lhs_body = lhs.expr_body
-        lhs_body === nothing && return
-        _is_time_derivative(lhs_body) &&
-            length(lhs_body.args) == 1 && lhs_body.args[1] isa OpExpr &&
-            lhs_body.args[1].op == "index" || return
-        inner = lhs_body.args[1]
-        first_arg = inner.args[1]
-        first_arg isa VarExpr || return
-        first_arg.name in array_var_names || return
-        vname = first_arg.name
-
-        idx_names = _output_idx_strings(lhs)
-        ranges_dict = _ranges_dict(lhs)
-        range_iters = [_expand_int_range(ranges_dict[n]) for n in idx_names]
-
-        cs = get!(_DiscoveredCells, cells, vname)
-        any(isempty, range_iters) && return
-        idx_args = inner.args[2:end]
-        box = _lhs_cells_box(idx_args, idx_names, range_iters)
-        if box !== nothing
-            _cellset_push_box!(cs, box[1], box[2], vname)
-            return
-        end
-        try
-            idx_env = Dict{String, Int}()
-            indices = Vector{Int}(undef, length(idx_args))
-            for idx_tuple in Iterators.product(range_iters...)
-                for d in 1:length(idx_names)
-                    idx_env[idx_names[d]] = idx_tuple[d]
-                end
-                for d in eachindex(idx_args)
-                    indices[d] = _eval_const_int(idx_args[d], idx_env)
-                end
-                _cellset_push_point!(cs, indices, vname)
-            end
-        catch err
-            # An index expression that is not constant under the loop bindings
-            # is not discoverable here; anything else is a real bug.
-            err isa TreeWalkError || rethrow()
-        end
-        return
-    end
-end
-
-# Every LHS predicate below reads "is this a time derivative?" through
-# `_is_time_derivative`, which applies esm-spec §4.2's default: an ABSENT `wrt`
-# MEANS `t`. Spelling the test `lhs.wrt == "t"` dropped that default on this
-# pathway while `classification.jl` kept it, so the tree-walk runner refused
-# `{"op": "D", "args": ["z"]}` with `E_TREEWALK_UNSUPPORTED_EQUATION` for a
-# document `ode_states` had already reported `z` as a state of
-# (EarthSciAST#407).
-
-# Identify D(scalar_var) — the classic scalar ODE LHS.
-function _is_scalar_D_lhs(lhs)
-    return _is_time_derivative(lhs) &&
-        length(lhs.args) == 1 && isa(lhs.args[1], VarExpr)
-end
-
-# Identify D(index(var, k...)) — indexed scalar derivative.
-function _is_indexed_D_lhs(lhs)
-    return _is_time_derivative(lhs) &&
-        length(lhs.args) == 1 &&
-        isa(lhs.args[1], OpExpr) && lhs.args[1].op == "index"
-end
-
-# Identify faq(D(index(var, ...)), ...) — array-loop derivative LHS.
-function _is_faq_D_lhs(lhs)
-    lhs isa OpExpr && _is_faq_op(lhs.op) || return false
-    body = lhs.expr_body
-    body === nothing && return false
-    return _is_time_derivative(body) &&
-        length(body.args) == 1 &&
-        body.args[1] isa OpExpr && body.args[1].op == "index"
-end
-
-# Extract the scalar body from a faq node (or return expr unchanged).
-# Used to unwrap the RHS of a faq equation.
-function _extract_faq_body(expr::ASTExpr)
-    if expr isa OpExpr && _is_faq_op(expr.op)
-        expr.expr_body !== nothing && return expr.expr_body
-    end
-    return expr
-end
-
-function _select_model(file::EsmFile, name::Union{Nothing, AbstractString})
-    file.models === nothing &&
-        throw(TreeWalkError("E_TREEWALK_NO_MODEL", "EsmFile.models is nothing"))
-    models = file.models
-    if name !== nothing
-        haskey(models, String(name)) ||
-            throw(TreeWalkError("E_TREEWALK_NO_MODEL", String(name)))
-        return models[String(name)]
-    end
-    length(models) == 1 ||
+# `index(v, k…)` of an array state `v`: the cell's state reference, a ghost
+# cell's `0.0`, or a run-time state gather when a subscript is only known per
+# call.
+function _resolve_index_of_state(
+        vname::String, idx_args::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
+    )
+    lo, hi = array_var_info[vname]
+    length(idx_args) == length(lo) ||
         throw(
         TreeWalkError(
-            "E_TREEWALK_AMBIGUOUS_MODEL",
-            "specify model_name; have: " *
-                join(collect(keys(models)), ", ")
+            "E_TREEWALK_INDEX_NDIM",
+            "$(vname) has $(length(lo))D but got $(length(idx_args)) index args"
         )
     )
-    return first(values(models))
+    # Runtime state gather: a subscript depends on
+    # a contraction loop variable, so the slot is not a build-time constant.
+    # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
+    # the loop-build path (`__esm_lv_*` names); the concrete path below is
+    # untouched otherwise.
+    # A subscript computed at run time from a parameter, a state or an
+    # observed (bound symbols keep their own path) reads its slot the
+    # same way.
+    if any(
+            a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
+            idx_args
+        )
+        return _resolve_state_gather(
+            vname, lo, hi, idx_args, array_var_info,
+            var_map, const_arrays, pgather, memo, bound_syms
+        )
+    end
+    # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
+    # resolved: _eval_const_int will look up conn[c,k] as an integer. A
+    # lookup out of range under a guard the build cannot show taken
+    # reads its slot at run time instead (see `_resolve_guarded_op`).
+    indices = try
+        [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
+    catch err
+        (
+            err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
+                !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())
+        ) ||
+            rethrow()
+        return _resolve_state_gather(
+            vname, lo, hi, idx_args, array_var_info,
+            var_map, const_arrays, pgather, memo, bound_syms
+        )
+    end
+    for d in 1:length(indices)
+        if indices[d] < lo[d] || indices[d] > hi[d]
+            return NumExpr(0.0)  # ghost cell
+        end
+    end
+    cname = _cell_key(vname, indices)
+    haskey(var_map, cname) ||
+        throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+    return VarExpr(cname)
+end
+
+# Live forcing buffer bound via `param_arrays`: reroute
+# this gather to a LIVE read instead of the frozen const-fold below. The
+# array is a discrete-cadence loader buffer (the driver routes const-cadence
+# data to `const_arrays` and discrete-cadence data here), so its contents
+# change at refresh boundaries and MUST NOT be inlined as a build-time
+# literal. Bounds-check and column-major-linearize the constant indices at
+# build time, then carry the aliased flat buffer + the offset to `_compile`
+# (which emits a `_NK_PARAM_GATHER`) as a typed `_PGatherRef` in `value`.
+# The ref also carries the buffer's registry NAME, which is what gives the
+# gather a canonicalizable CSE identity — `index` being CSE-opaque only stops
+# the gather from being hoisted itself, it does NOT keep the ref out of
+# `canonical_json`, which sees it as a child of every hoistable ancestor
+# (see `_PGatherRef` in node.jl / `_pgather_key_expr` in scalar_cse.jl).
+function _resolve_index_of_forcing(
+        name::String, idx_args_expr::Vector{ASTExpr}, array_var_info, var_map, const_arrays,
+        pgather, memo, bound_syms
+    )
+    pg = pgather[name]::_PGatherArray
+    length(idx_args_expr) == length(pg.dims) ||
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_PGATHER_NDIM",
+            "forcing array '$(name)' is $(length(pg.dims))D " *
+                "but got $(length(idx_args_expr)) indices"
+        )
+    )
+    # A subscript a symbolic resolve keeps symbolic (a contraction's loop
+    # counter, `F[i]`) has no build-time value: the gather stays a read of
+    # the live buffer at an offset computed per call (`_LiveGatherRef`),
+    # with each constant subscript bounds-checked here as below. Only
+    # loop counters and literals qualify; any other run-time subscript
+    # (one reading a state, a parameter or `t`) is refused below.
+    if !isempty(bound_syms) &&
+            _anyof(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr) &&
+            all(
+            a -> !_subscript_is_runtime(a, const_arrays) ||
+                _subscript_from_counters(a, bound_syms),
+            idx_args_expr
+        )
+        sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
+        for d in eachindex(idx_args_expr)
+            a = idx_args_expr[d]
+            if _subscript_is_runtime(a, const_arrays)
+                sub_nodes[d] = _resolve_indices(
+                    a, array_var_info, var_map, const_arrays,
+                    pgather, memo, bound_syms
+                )
+            else
+                ci = _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+                # Out of range under a guard the build cannot show
+                # taken: the run-time gather checks it if evaluated.
+                (1 <= ci <= pg.dims[d]) || _guarded_oob_deferred() ||
+                    _throw_pgather_oob(name, ci, pg.dims[d], d)
+                sub_nodes[d] = IntExpr(Int64(ci))
+            end
+        end
+        return OpExpr(
+            "index", sub_nodes;
+            value = _LiveGatherRef(pg.flat, pg.dims, name)
+        )
+    end
+    int_indices = [
+        _eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
+            for a in idx_args_expr
+    ]
+    for d in 1:length(pg.dims)
+        (1 <= int_indices[d] <= pg.dims[d]) && continue
+        # The guarded out-of-range rule (above): a read the build
+        # cannot show evaluated becomes the run-time gather, which
+        # raises the same error if it is.
+        _guarded_oob_deferred() && return OpExpr(
+            "index", ASTExpr[IntExpr(Int64(i)) for i in int_indices];
+            value = _LiveGatherRef(pg.flat, pg.dims, name)
+        )
+        _throw_pgather_oob(name, int_indices[d], pg.dims[d], d)
+    end
+    lin = LinearIndices(Tuple(pg.dims))[int_indices...]
+    return OpExpr(
+        "index", ASTExpr[];
+        value = _PGatherRef(pg.flat, lin, name)
+    )
+end
+
+# `integral(u, var = x)` by Euler/midpoint quadrature, `dx * Σ u[k]`, when the
+# integrand is a 1-D array state; `nothing` otherwise (a scalar integrand
+# resolves as any other operator).
+function _resolve_integral(expr::OpExpr, array_var_info, var_map)
+    isempty(expr.args) &&
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_INTEGRAL_EMPTY",
+            "integral op requires at least one arg"
+        )
+    )
+    integrand = expr.args[1]
+    iv = expr.int_var
+    iv === nothing &&
+        throw(
+        TreeWalkError(
+            "E_TREEWALK_INTEGRAL_NO_INTVAR",
+            "integral op requires `var` field (integration variable name)"
+        )
+    )
+    if integrand isa VarExpr && haskey(array_var_info, integrand.name)
+        vname = integrand.name
+        lo_vec, hi_vec = array_var_info[vname]
+        length(lo_vec) == 1 ||
+            throw(
+            TreeWalkError(
+                "E_TREEWALK_INTEGRAL_NDIM",
+                "euler_integral supports 1D integration only; " *
+                    "'$vname' has $(length(lo_vec)) dimensions"
+            )
+        )
+        lo1 = lo_vec[1]; hi1 = hi_vec[1]
+        cells = ASTExpr[VarExpr(_cell_key(vname, [i])) for i in lo1:hi1]
+        for c in cells
+            cname = (c::VarExpr).name
+            haskey(var_map, cname) ||
+                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+        end
+        return OpExpr("*", ASTExpr[VarExpr("d$(iv)"), OpExpr("+", cells)])
+    end
+    return nothing
 end

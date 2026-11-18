@@ -196,8 +196,8 @@ end
     # ----------------------------------------------------------------
     # EVALUATE-ONCE (the counting test). All K bands share ONE coefficient, so
     # the model contains exactly ONE distinct rate. The per-call rate
-    # evaluation count is read off the closure's own captured containers
-    # (`_make_rhs`'s `f!` captures `cse_prelude` / `acc_kernels`): prelude
+    # evaluation count is read off the right-hand side's own containers
+    # (`f!.state.scalars.cse_prelude` and the kernels): prelude
     # defs run once per call, kernel inv recipes once per call per kernel,
     # and `_xc_percall_fn` asserts the spines/cell tiers are exp-free.
     # ----------------------------------------------------------------
@@ -222,8 +222,7 @@ end
             @test dmg.n_acc_kernels == 1
             @test dmg.n_classmerge_in == K
             @test dmg.n_xcse_slots == 0
-            preludem = getfield(fmg!, :cse_prelude)
-            @test :cse_prelude in fieldnames(typeof(fmg!))
+            preludem = fmg!.state.scalars.cse_prelude
             @test _xc_percall_fn(preludem, kernelsm) == 1
 
             # And where the merge CANNOT group the bands, xcse is what shares
@@ -237,7 +236,7 @@ end
             )
             @test du.n_acc_kernels == K
             @test du.n_xcse_slots == 2
-            preludeu = getfield(fu!, :cse_prelude)
+            preludeu = fu!.state.scalars.cse_prelude
             @test _xc_percall_fn(preludeu, kernelsu) == K
         end
     end

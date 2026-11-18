@@ -3,7 +3,7 @@
 # Included by src/tree_walk.jl; see that file for the full layout and
 # include order. Section 4d: the OUT-OF-PLACE build product — the compiled
 # intermediate representation a COMPILED backend lowers, built from the same
-# `_Node` spines and `_AccKernel`s that `_make_rhs` (acc_merge.jl) lowers
+# `_Node` spines and `_AccKernel`s that `_make_rhs` (rhs_assembly.jl) lowers
 # into `f!(du, u, p, t)`.
 # ========================================================================
 

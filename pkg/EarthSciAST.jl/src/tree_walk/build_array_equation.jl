@@ -216,21 +216,6 @@ struct _OopFillLevel
     contractions::Vector{_ArrayContraction}
 end
 
-# One in-place fill level (`_FillLevel`) as `_fill_obs_levels!` runs it, the
-# kernels class-merged first. The kernel section's emission refuses what it
-# cannot generate, naming the rule open at the time; `section_label` (a
-# function of the build, `f -> …`) opens the right one around it.
-function _inplace_fill_level(
-        scalars, kernels, scans, contractions, recurrences;
-        nst::Int = 0, section_label = f -> f()
-    )
-    merged, _ = _merge_acc_kernel_classes(kernels)
-    section = section_label(() -> _make_kernel_section(merged; nst = nst))
-    return _FillLevel(
-        scalars, section, scans, _make_contraction_section(contractions), Tuple(recurrences)
-    )
-end
-
 # ---- Stage: one faq derivative equation → whole-array kernels ----
 # `faq(expr=D(index(var, ...)), output_idx=[...], ranges={...}) = rhs_faq(...)`
 # Expand by iterating the Cartesian product of output_ranges.
@@ -1636,10 +1621,8 @@ function _makearray_region_rhs(
     nd = length(loops)
     if _is_array_producer(val)
         v = val::OpExpr
-        rank = v.op == "makearray" ?
-            ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
-            length(_output_idx_strings(v))
-        sel = rank == nd ? loops : String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+        rank = _producer_rank(v)
+        sel = loops[_region_value_axes(rank, nd, d -> box[d][1] == box[d][2])]
         length(sel) == rank || return nothing
         return OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
     end

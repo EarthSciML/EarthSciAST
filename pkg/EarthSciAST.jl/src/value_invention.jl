@@ -294,7 +294,7 @@ function _vi_eval(node, ctx::_ViCtx, bindings::AbstractDict)
         elseif op == "-"
             return length(args) == 1 ? -Float64(_vi_num(args[1], ctx, bindings)) :
                 Float64(_vi_num(args[1], ctx, bindings)) - Float64(_vi_num(args[2], ctx, bindings))
-        elseif op in ("<", ">", "<=", ">=", "==", "!=")
+        elseif _is_comparison_op(op)
             a = Float64(_vi_num(args[1], ctx, bindings))
             b = Float64(_vi_num(args[2], ctx, bindings))
             op == "<"  && return a < b

@@ -208,13 +208,59 @@ produced (`_relower_options`).
 function _build_selected(
         file::EsmFile, model_name::Union{Nothing, AbstractString}, opts::BuildOptions
     )
-    model = _select_model(file, model_name)
+    model = _time_spelled_t(_select_model(file, model_name), _indep_var(file))
     # Thread the document-scoped index-set registry into the typed evaluator.
     return _build_evaluator_impl(
         model; index_sets = file.index_sets,
         _template_reg = _component_template_reg(file, model_name),
         _build_kwargs(opts)...
     )
+end
+
+# The build spells the time variable `t`: `_compile` lowers a bare `t` to the
+# time node, and the cadence classifiers, the initial-state pass and the
+# synthesized fill equations (`D(…; wrt = "t")`) test that name. A document
+# whose independent variable has another name (`domain.independent_variable`,
+# esm-spec §11.3) has every free read of it, and every `wrt` naming it,
+# respelled `t` at this boundary. After flatten every declared name is
+# qualified (`Component.var`), so the respelling cannot capture one; a bare
+# `t` declared in the model would be one, and is refused. A scope binding the
+# name (an aggregate's index, an integral's variable) keeps its own reads.
+function _time_spelled_t(model::Model, iv::String)
+    iv == "t" && return model
+    _refuse_bare_t(model, iv)
+    return map_expressions(_time_respeller(iv), model)
+end
+# The whole document (the front door's pre-passes read its selected model).
+function _time_spelled_t(file::EsmFile)
+    iv = _indep_var(file)
+    iv == "t" && return file
+    file.models === nothing || foreach(m -> _refuse_bare_t(m, iv), values(file.models))
+    return map_expressions(_time_respeller(iv), file)
+end
+
+function _refuse_bare_t(model::Model, iv::String)
+    return haskey(model.variables, "t") && throw(
+        TreeWalkError(
+            "E_TREEWALK_TIME_NAME_CLASH",
+            "the independent variable is '$iv', but the model declares a bare variable " *
+                "named 't', the build's spelling of time"
+        )
+    )
+end
+
+function _time_respeller(iv::String)
+    function respell(e::ASTExpr)::ASTExpr
+        e isa VarExpr && return (e::VarExpr).name == iv ? VarExpr("t") : e
+        e isa OpExpr || return e
+        o = e::OpExpr
+        binds = (o.output_idx !== nothing && any(==(iv), o.output_idx)) ||
+            (o.ranges !== nothing && haskey(o.ranges, iv)) || o.int_var == iv
+        binds && return o
+        r = map_children(respell, o)
+        return (r isa OpExpr && (r::OpExpr).wrt == iv) ? reconstruct(r::OpExpr; wrt = "t") : r
+    end
+    return respell
 end
 
 # The selected model's surviving-reference registry ("models.<name>" in
@@ -352,6 +398,7 @@ function _front_door(
     )::_FrontDoor
     opts = BuildOptions(; kwargs...)
     _refuse_float32(file, model_name)
+    file = _time_spelled_t(file)
 
     # ---- Value-invention front-door (RFC §6.1), on the TYPED IR ----
     # `OpExpr` preserves the full value-invention vocabulary (`id`, `distinct`,

@@ -214,11 +214,8 @@ function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
         )
         rhs = if _is_array_producer(val)
             v = val::OpExpr
-            rank = v.op == "makearray" ?
-                ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
-                length(_output_idx_strings(v))
-            sel = rank == nd ? loops :
-                String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+            rank = _producer_rank(v)
+            sel = loops[_region_value_axes(rank, nd, d -> box[d][1] == box[d][2])]
             length(sel) == rank || return nothing
             g = OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
             # The downstream unwrap sees only a gather at every loop of the

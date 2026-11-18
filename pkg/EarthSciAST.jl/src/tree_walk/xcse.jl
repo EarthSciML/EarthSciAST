@@ -45,7 +45,7 @@
 #      bare `_NK_CACHED` read of that slot — `_fill_invariant!` then copies one
 #      field load into the kernel's inv scratch instead of re-walking the
 #      subtree, and the kernel's spine / cell recipes are
-#      byte-identical to before (they keep reading the kernel-local inv slot);
+#      unchanged (they keep reading the kernel-local inv slot);
 #   5. scalar `rhs_list` occurrences of a NEWLY slotted value are rewritten to
 #      cache reads too (the kernel↔scalar direction the scalar count pass
 #      cannot see).
@@ -83,7 +83,7 @@
 # `_CSECache` this pass's kernel-side reads would consult, so rewritten kernels
 # would read unfilled slots there. `:oop` kernels are left byte-identical; the
 # traced tier removes its own redundancy at EMISSION instead, by value-numbering
-# emitted SSA values (ess-oop-gvn, tree_walk/oop.jl).
+# emitted SSA values (tree_walk/oop.jl).
 #
 # `compiler=:interpreter` skips the pass entirely. Fixture-level differential
 # oracles (test/tree_walk_xcse_test.jl) compare the two compilers bit for bit.

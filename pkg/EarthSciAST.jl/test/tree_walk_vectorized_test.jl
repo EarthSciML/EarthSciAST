@@ -199,7 +199,8 @@ end
 # generic op arm it read as an n-ary `+` over three children, so two distinct
 # ragged loops, or a ragged loop and a plain three-way sum, shared a signature.
 @testset "a ragged loop's merge signature is its own" begin
-    sig(n) = String(take!(ESM._struct_sig!(IOBuffer(), n)))
+    intern = ESM._SigIntern()
+    sig(n) = ESM._struct_sig_id(n, intern)
     st(i) = ESM._mknode(kind = ESM._NK_STATE, idx = i)
     lit(x) = ESM._mknode(kind = ESM._NK_LITERAL, literal = x)
     ragged(lo, hi) = ESM._mknode(

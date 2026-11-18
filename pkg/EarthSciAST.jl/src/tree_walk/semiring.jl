@@ -925,7 +925,7 @@ function _key_at_cell(e::ASTExpr, c::Vector{Int})
     o = e::OpExpr
     (_is_array_producer(o) || (o.op == "const" && o.value isa AbstractVector)) &&
         return OpExpr("index", ASTExpr[o, (IntExpr(Int64(x)) for x in c)...])
-    (o.op == "faq" || o.op == "makearray" || o.op == "index") && return o
+    _is_self_indexed_op(o.op) && return o
     return reconstruct(o; args = ASTExpr[_key_at_cell(a, c) for a in o.args])
 end
 

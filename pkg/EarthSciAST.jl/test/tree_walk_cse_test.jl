@@ -1053,8 +1053,8 @@ _ct_k(p) = p.var"M.A" * exp(-p.var"M.Ea" / (p.var"M.R" * p.var"M.Tref"))
             param_arrays = Dict("F" => bufB)
         )
         @test dA.stats.n_time_slots >= 1
-        eA = getfield(fA, :cse_cache).epoch
-        eB = getfield(fB, :cse_cache).epoch
+        eA = fA.state.scalars.cse_cache.epoch
+        eB = fB.state.scalars.cse_cache.epoch
         @test eA !== eB
         @test _ct_call(fA, uA, pA, 0.5)[vmA["M.y"]] === 5.0 * 2.0 + 5.0 * 2.0
         _ct_call(fB, uB, pB, 0.5)

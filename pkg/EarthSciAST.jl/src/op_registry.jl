@@ -596,6 +596,41 @@ The registry row for op `name`, or `nothing` for an op outside the registry
 _op_spec(name::AbstractString) = get(_OP_INDEX, String(name), nothing)
 
 """
+    _op_category(name) -> Union{Symbol,Nothing}
+
+The registry category of op `name` (see [`_OpSpec`](@ref)), or `nothing` for
+an op outside the registry. The class predicates below read it, so a test of
+a registry property names the property instead of listing op spellings.
+"""
+_op_category(name::AbstractString) = (s = _op_spec(name); s === nothing ? nothing : s.category)
+
+"`<`, `<=`, `>`, `>=`, `==`, `!=`: a registered comparison."
+_is_comparison_op(name::AbstractString) = _op_category(name) === :comparison
+"`and`, `or`, `not`: a registered boolean connective."
+_is_logical_op(name::AbstractString) = _op_category(name) === :logical
+"`D`, `ic`, `grad`, `div`, `laplacian`: a registered calculus operator."
+_is_calculus_op(name::AbstractString) = _op_category(name) === :calculus
+
+"""
+    _is_self_indexed_op(name) -> Bool
+
+An op that carries its own indexing (`faq`, `makearray`, `index`): a rewrite
+that indexes array leaves stops at it (the `self_indexed` flag).
+"""
+_is_self_indexed_op(name::AbstractString) = (s = _op_spec(name); s !== nothing && s.self_indexed)
+
+"""
+    _is_guarded_node_op(name, nargs) -> Bool
+
+An op whose evaluation may skip operands (`ifelse`, `and`, `or`: `lazy_from >
+0`) applied to an admissible operand count.
+"""
+function _is_guarded_node_op(name::AbstractString, nargs::Int)
+    s = _op_spec(name)
+    return s !== nothing && s.lazy_from > 0 && s.arity !== nothing && nargs in s.arity
+end
+
+"""
     _ops_with(flag::Symbol) -> Set{String}
 
 The op names whose [`_OpSpec`](@ref) has `flag` set — the derivation behind

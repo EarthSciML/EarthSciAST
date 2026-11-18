@@ -82,8 +82,8 @@ end
 # Threading is deliberately NOT a plan field. A chunked kernel is
 # value-identical to the serial one by construction — the chunks write disjoint
 # slots — so it is not a choice of evaluator; how much work is worth a thread
-# dispatch is a tuning threshold (`ESS_THREADS_MIN_WORK`), read on the
-# right-hand-side call where the build's plan is no longer in scope.
+# dispatch is a tuning threshold (`_Tuning.thread_min_work`), which each
+# section keeps from the build that made it.
 
 # A plan by keyword: every tier flag defaults to `compiled` (all on for a
 # compiling plan, all off for the interpreter's). Tests and bisections switch
@@ -524,11 +524,12 @@ _with_build_record(f, rec::_BuildRecord) =
 # ---------------------------------------------------------------------------
 #
 # Everything that decides what ONE build produces and is not an argument: the
-# plan, the record, the build's mutable scratch (`_BuildState`), the tuning
-# floors (read from the environment once when the build starts) and the
+# plan, the record, the build's mutable scratch (`_BuildState`), its tuning
+# (`_Tuning`, read from the environment once when the build starts) and the
 # settings a caller fixes for everything it starts (a range spec, a workspace
-# capture, the engagement-count sink, the merge re-check). It is installed under one task-local key, so two
-# builds on two tasks never share any of it; concurrent builds are supported.
+# capture, the engagement-count sink, the merge re-check). It is installed
+# under one task-local key, so two builds on two tasks never share any of it;
+# concurrent builds are supported.
 #
 # The state is per build. `_build_evaluator_impl` starts every build with a
 # fresh one (`_new_build_ctx`); an output-time compile, which builds against a
@@ -585,15 +586,61 @@ _BuildState(
     Dict{String, Float64}()
 )
 
+"""
+    _Tuning
+
+The build's tuning thresholds, read from the environment once when a build
+starts (`_tuning_from_env`) and held on its `_BuildContext`, so every stage of
+one build sees one value of each and a section's first call reads no
+environment. None changes a computed value; the first two are refusal
+boundaries under `compiler = :native` (crossing one decides whether a rule is
+compiled or refused), the rest move work between equivalent forms.
+
+| Field | Variable | Default | Meaning |
+|---|---|---|---|
+| `node_budget` | `ESS_CODEGEN_NODE_BUDGET` | 64,000,000 | emitted nodes one generated section may hold; past it the section is refused (strict) or walked |
+| `contraction_loop_min` | `ESS_CONTRACTION_LOOP_MIN` | 8 | reduction length at and above which a scalar reduction loops at run time instead of unrolling |
+| `array_contraction_min` | `ESS_ARRAY_CONTRACTION_MIN` | 1024 | reduction length at and above which an out-of-place array einsum takes the whole-array contraction nest |
+| `fn_node_cap` | `ESS_CODEGEN_FN_NODE_CAP` | 20,000 | emitted nodes per generated sub-function before a body is split; 0 never splits |
+| `split_transport` | `ESS_CODEGEN_SPLIT_TRANSPORT` | `""` | `"value"` or `"definition"` forces how split sub-functions are carried; empty decides by size |
+| `by_value_min_nodes` | (`_CG_BY_VALUE_MIN_NODES[]`) | 100,000 | function size above which split sub-functions are carried by value |
+| `thread_min_work` | `ESS_THREADS_MIN_WORK` | 6,000 | least node evaluations per chunk of a threaded section |
+
+A non-numeric value falls back to the default; the two contraction floors
+also ignore values below 1.
+"""
+struct _Tuning
+    node_budget::Int
+    contraction_loop_min::Int
+    array_contraction_min::Int
+    fn_node_cap::Int
+    split_transport::String
+    by_value_min_nodes::Int
+    thread_min_work::Int
+end
+
+_env_int(name::String, default::Int) = something(tryparse(Int, get(ENV, name, "")), default)
+
+function _env_floor(name::String, default::Int)
+    n = tryparse(Int, get(ENV, name, ""))
+    return (n === nothing || n < 1) ? default : n
+end
+
+_tuning_from_env() = _Tuning(
+    _env_int("ESS_CODEGEN_NODE_BUDGET", 64_000_000),
+    _env_floor("ESS_CONTRACTION_LOOP_MIN", 8),
+    _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024),
+    _env_int("ESS_CODEGEN_FN_NODE_CAP", 20_000),
+    get(ENV, "ESS_CODEGEN_SPLIT_TRANSPORT", ""),
+    _CG_BY_VALUE_MIN_NODES[],
+    _env_int("ESS_THREADS_MIN_WORK", _THREAD_MIN_WORK_DEFAULT),
+)
+
 struct _BuildContext
     plan::CompilerPlan
     record::Union{Nothing, _BuildRecord}
     state::_BuildState
-    # The reduction length at and above which a scalar reduction loops at run
-    # time (`ESS_CONTRACTION_LOOP_MIN`, default 8), and the one for the
-    # whole-array contraction nest (`ESS_ARRAY_CONTRACTION_MIN`, default 1024).
-    contraction_loop_min::Int
-    array_contraction_min::Int
+    tuning::_Tuning
     # Caller settings, inherited by every context started inside this one.
     range_spec::Union{Nothing, _RangeSpec}
     ws_capture::Union{Nothing, _WsCapture}
@@ -604,11 +651,6 @@ struct _BuildContext
     merge_recheck::Bool
 end
 
-function _env_floor(name::String, default::Int)
-    n = tryparse(Int, get(ENV, name, ""))
-    return (n === nothing || n < 1) ? default : n
-end
-
 const _BUILD_CTX_KEY = :earthsci_build_context
 
 _build_ctx()::Union{Nothing, _BuildContext} =
@@ -616,16 +658,17 @@ _build_ctx()::Union{Nothing, _BuildContext} =
 
 _with_build_ctx(f, ctx::_BuildContext) = task_local_storage(f, _BUILD_CTX_KEY, ctx)
 
-# A context over `state` with the floors read now and `outer`'s caller settings
-# (none when `outer` is `nothing`).
+# The open build's tuning, or the environment's now when no build is open.
+_tuning_now()::_Tuning = (c = _build_ctx(); c === nothing ? _tuning_from_env() : c.tuning)
+
+# A context over `state` with the tuning read now and `outer`'s caller
+# settings (none when `outer` is `nothing`).
 function _fresh_ctx(
         plan::CompilerPlan, record::Union{Nothing, _BuildRecord}, state::_BuildState,
         outer::Union{Nothing, _BuildContext}
     )
     return _BuildContext(
-        plan, record, state,
-        _env_floor("ESS_CONTRACTION_LOOP_MIN", 8),
-        _env_floor("ESS_ARRAY_CONTRACTION_MIN", 1024),
+        plan, record, state, _tuning_from_env(),
         outer === nothing ? nothing : outer.range_spec,
         outer === nothing ? nothing : outer.ws_capture,
         outer === nothing ? nothing : outer.counts,
@@ -633,7 +676,7 @@ function _fresh_ctx(
     )
 end
 
-# `c` with its plan, record or a caller setting replaced, the state and floors
+# `c` with its plan, record or a caller setting replaced, the state and tuning
 # kept; a fresh context when no build is open.
 function _ctx_with(
         c::Union{Nothing, _BuildContext}; plan = nothing, record = nothing,
@@ -644,8 +687,7 @@ function _ctx_with(
         c = _fresh_ctx(something(plan, _DEFAULT_COMPILER_PLAN), record, _BuildState(), nothing)
     )
     return _BuildContext(
-        something(plan, c.plan), something(record, Some(c.record)), c.state,
-        c.contraction_loop_min, c.array_contraction_min,
+        something(plan, c.plan), something(record, Some(c.record)), c.state, c.tuning,
         something(range_spec, Some(c.range_spec)),
         something(ws_capture, Some(c.ws_capture)),
         something(counts, Some(c.counts)),
@@ -654,7 +696,7 @@ function _ctx_with(
 end
 
 # The context a build runs in: its plan and record, fresh state (with the
-# build's scatter set), the floors read now. The loop-variable counter and the
+# build's scatter set), the tuning read now. The loop-variable counter and the
 # caller settings continue the enclosing context's.
 function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord})
     outer = _build_ctx()
@@ -666,7 +708,7 @@ function _new_build_ctx(plan::CompilerPlan, record::Union{Nothing, _BuildRecord}
 end
 
 # A compile against a layout of its own, inside or after a build: the current
-# plan, record, floors and caller settings, fresh slot tables and loop registry,
+# plan, record, tuning and caller settings, fresh slot tables and loop registry,
 # no parameter-read sink. Inside a build it holds out the build's scatter set.
 function _child_build_ctx()
     outer = _build_ctx()
@@ -674,8 +716,7 @@ function _child_build_ctx()
     return _BuildContext(
         outer.plan, outer.record,
         _BuildState(outer.state.loopvar_count; scatter_keep = outer.state.scatter_keep),
-        outer.contraction_loop_min, outer.array_contraction_min,
-        outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
+        outer.tuning, outer.range_spec, outer.ws_capture, outer.counts, outer.merge_recheck
     )
 end
 

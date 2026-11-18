@@ -199,8 +199,8 @@ end
         @test _scg_tiers(bn.report) == Dict(:scalar_codegen => 3B + 1)
         @test _scg_tiers(bi.report) == Dict(:scalar => 3B + 1)
         # A fully emitted build walks no tree.
-        @test isempty(getfield(bn.f!, :cse_prelude))
-        @test isempty(getfield(bn.f!, :resid_rhs))
+        @test isempty(bn.f!.state.scalars.cse_prelude)
+        @test isempty(bn.f!.state.scalars.resid_rhs)
 
         # The state Jacobian: the same generated code at `Dual`.
         u = _scg_probe(length(bn.u0), 6)
@@ -209,8 +209,8 @@ end
 
         # Chunked as the threaded path runs it: chunk c of every generated
         # function, in order, for c in 1:nc, is the serial call.
-        dynp = getfield(bn.f!, :dynp)
-        cache = ESM._cse_buf(getfield(bn.f!, :cse_cache), Float64)
+        dynp = bn.f!.state.scalars.dynp
+        cache = ESM._cse_buf(bn.f!.state.scalars.cse_cache, Float64)
         d1 = zeros(length(u)); d3 = zeros(length(u))
         bn.f!(d1, u, bn.p, 0.8)                 # fills the const/time tiers
         ESM._run_scgens!(dynp.gens, d1, u, bn.p, 0.8, cache, 1, 1)
@@ -224,7 +224,7 @@ end
     @testset "the generated code does not grow with the number of boxes" begin
         exprs(f!) = [
             ESM.RuntimeGeneratedFunctions.get_expression(g.f)
-                for g in getfield(f!, :dynp).gens
+                for g in f!.state.scalars.dynp.gens
         ]
         e3 = exprs(_scg_build(_scg_model(3)).f!)
         e7 = exprs(_scg_build(_scg_model(7)).f!)
@@ -256,7 +256,7 @@ end
             lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
             bl = _scg_build(_scg_model(3); compiler = lax)
             @test _scg_tiers(bl.report) == Dict(:scalar => 10)
-            @test !isempty(getfield(bl.f!, :cse_prelude))
+            @test !isempty(bl.f!.state.scalars.cse_prelude)
             @test _scg_agree(bl, bi)
         end
     end
@@ -266,7 +266,7 @@ end
             bn = _scg_build(_scg_model(3))
             bi = _scg_build(_scg_model(3); compiler = :interpreter)
             @test _scg_tiers(bn.report) == Dict(:scalar_codegen => 10)
-            @test length(getfield(bn.f!, :dynp).gens) > 1
+            @test length(bn.f!.state.scalars.dynp.gens) > 1
             @test _scg_agree(bn, bi)
             u = _scg_probe(length(bn.u0), 7)
             J(f!, p) = ForwardDiff.jacobian(
@@ -321,23 +321,23 @@ end
         # Cut at the large slots, the terms of each template are one class
         # whose tables are per-member holes, and the sum runs a level later.
         tiny = _scg_sites_build(1)
-        @test getfield(tiny.f!, :dynp) isa ESM._ScalarProgram     # small: not cut
+        @test tiny.f!.state.scalars.dynp isa ESM._ScalarProgram     # small: not cut
         for S in (12, 24)
             bn = _scg_sites_build(S)
             bi = _scg_sites_build(S; compiler = :interpreter)
-            @test getfield(bn.f!, :dynp) isa ESM._ScalarLevels
+            @test bn.f!.state.scalars.dynp isa ESM._ScalarLevels
             @test _scg_sites_agree(bn, bi)
             u = bn.u0 .+ 0.25
             J(b) = ForwardDiff.jacobian((d, uu) -> b.f!(d, uu, b.p, 0.8), zeros(length(u)), u)
             @test _scg_bitsame(J(bn), J(bi))
             # Each level chunked as the threaded path runs it.
-            cache = ESM._cse_buf(getfield(bn.f!, :cse_cache), Float64)
+            cache = ESM._cse_buf(bn.f!.state.scalars.cse_cache, Float64)
             d1 = zeros(length(u)); d3 = zeros(length(u))
             bn.f!(d1, u, bn.p, 0.8)
-            for P in getfield(bn.f!, :dynp).progs
+            for P in bn.f!.state.scalars.dynp.progs
                 ESM._run_scgens!(P.gens, d1, u, bn.p, 0.8, cache, 1, 1)
             end
-            for P in getfield(bn.f!, :dynp).progs, c in 1:3
+            for P in bn.f!.state.scalars.dynp.progs, c in 1:3
                 ESM._run_scgens!(P.gens, d3, u, bn.p, 0.8, cache, c, 3)
             end
             @test _scg_bitsame(d1, d3)
@@ -346,7 +346,7 @@ end
         # grow); the sum reads each term, so it grows with them.
         sz(b) = [
             [ESM._cg_expr_size(ESM.RuntimeGeneratedFunctions.get_expression(g.f)) for g in P.gens]
-                for P in getfield(b.f!, :dynp).progs
+                for P in b.f!.state.scalars.dynp.progs
         ]
         # A site reads each of its tables at many subscripts; the reads of one
         # table are one per-member array (two tables per `linear` site, three
@@ -354,7 +354,7 @@ end
         b12 = _scg_sites_build(12)
         code = join(
             string(ESM.RuntimeGeneratedFunctions.get_expression(g.f))
-                for g in getfield(b12.f!, :dynp).progs[1].gens
+                for g in b12.f!.state.scalars.dynp.progs[1].gens
         )
         @test length(unique(m.match for m in eachmatch(r"_cgot\d+", code))) <= 5
         s12, s24 = sz(b12), sz(_scg_sites_build(24))

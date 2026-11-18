@@ -614,9 +614,10 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
     end
     t isa OpExpr || return t
     o = t::OpExpr
+    kind = _index_target_kind(o)
     (
-        o.op == "index" || o.op == "makearray" || o.op == "const" ||
-            (_is_faq_op(o.op) && o.expr_body !== nothing)
+        kind === _IT_INDEX || kind === _IT_MAKEARRAY || o.op == "const" ||
+            (kind === _IT_FAQ && o.expr_body !== nothing)
     ) && return _seam_rewrite(rw, o, tag)
     # An elementwise combination of arrays: each array operand is read at the
     # cells of `node` itself.

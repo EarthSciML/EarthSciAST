@@ -221,7 +221,7 @@ end
 function _strippable_implicit(lhs::ASTExpr)
     first(_lhs_role(lhs)) === :implicit || return false
     head = _lhs_unwrap(lhs)
-    return !(head isa OpExpr && head.op in ("ic", "D", "grad", "div", "laplacian"))
+    return !(head isa OpExpr && _is_calculus_op(head.op))
 end
 
 function _strips_update(rules, classes::Vector{String})
