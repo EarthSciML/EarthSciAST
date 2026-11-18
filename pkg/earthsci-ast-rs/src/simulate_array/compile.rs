@@ -117,18 +117,12 @@ pub(super) fn expr_has_array_op(expr: &Expr) -> bool {
 /// Walk an expression and reject every operator node that may not reach an
 /// evaluator (esm-spec §4.2 / §9.6.8).
 ///
-/// This is the crate's single compile-time operator gate. It used to check only
-/// for unlowered *spatial* ops — which meant a malformed-but-schema-valid node
-/// (`atan2` with one argument, `min` with one, a ragged `makearray`, a typo'd
-/// `"expp"`) sailed straight into the evaluators. There it either **panicked**
-/// on an out-of-bounds `args[1]`, or, more insidiously, was quietly assigned two
-/// *different* values by the per-cell oracle and the vectorized overlay
-/// depending on whether the enclosing body happened to vectorize.
-///
-/// Delegating to [`crate::op_registry`] closes all of that at once: past this
-/// gate, every surviving node is an evaluable-core op with a legal arity, so the
-/// evaluators only ever have to agree on nodes that are *legal* — and for those
-/// they agree by construction.
+/// This is the crate's single compile-time operator gate, delegating to
+/// [`crate::op_registry`]: a malformed-but-schema-valid node (`atan2` with one
+/// argument, `min` with one, a ragged `makearray`, a typo'd `"expp"`) is
+/// refused here rather than reaching an evaluator. Past this gate every
+/// surviving node is an evaluable-core op with a legal arity, so the
+/// evaluators only ever have to agree on nodes that are *legal*.
 ///
 /// The walk uses `for_each_child`, so it descends into sidecar expression fields
 /// (`aggregate.expr`, `makearray.values`, `filter`, `key`, …), not just `args`.
@@ -437,6 +431,7 @@ impl ArrayCompiled {
         Self::from_document(
             std::borrow::Cow::Owned(alone),
             None,
+            None,
             runtime_array_parameters,
             compiler,
         )
@@ -460,6 +455,7 @@ impl ArrayCompiled {
         Self::from_document(
             std::borrow::Cow::Owned(model_alone(file)),
             None,
+            None,
             runtime_array_parameters,
             compiler,
         )
@@ -474,9 +470,14 @@ impl ArrayCompiled {
     /// document that is exactly one model ([`crate::simulate::whole_document_is_one_model`])
     /// records that model as [`Self::namespace`], and an error the build
     /// raises names its variables without it, as the document spells them.
+    ///
+    /// `invented` is the value invention a build already ran over this same
+    /// system ([`InventedSets`]); the compile then sizes the derived sets from
+    /// it rather than running value invention again.
     pub(crate) fn from_document(
         file: std::borrow::Cow<'_, EsmFile>,
         flattened: Option<&FlattenedSystem>,
+        invented: Option<InventedSets<'_>>,
         runtime_array_parameters: bool,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
@@ -503,8 +504,13 @@ impl ArrayCompiled {
             }
         };
         drop(file);
+        let supplied = BuildTimeData {
+            vi_arrays: None,
+            invented,
+        };
         let mut compiled =
-            Self::from_flattened_with(flat, runtime_array_parameters, compiler).map_err(show)?;
+            Self::compile_flattened(flat, runtime_array_parameters, None, supplied, compiler)
+                .map_err(show)?;
         compiled.namespace = shown;
         Ok(compiled)
     }
@@ -540,16 +546,22 @@ impl ArrayCompiled {
         inherited: Option<&ShapeTable>,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
-        Self::compile_flattened(flat, runtime_array_parameters, inherited, None, compiler)
+        Self::compile_flattened(
+            flat,
+            runtime_array_parameters,
+            inherited,
+            BuildTimeData::default(),
+            compiler,
+        )
     }
 
-    /// [`Self::from_flattened_shaped`], with `vi_arrays` as
-    /// [`Self::from_model_with_arrays`] takes it.
+    /// [`Self::from_flattened_shaped`], with what the build supplies beyond
+    /// the system ([`BuildTimeData`]).
     fn compile_flattened(
         flat: &FlattenedSystem,
         runtime_array_parameters: bool,
         inherited: Option<&ShapeTable>,
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+        supplied: BuildTimeData<'_>,
         compiler: crate::Compiler,
     ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
@@ -615,7 +627,7 @@ impl ArrayCompiled {
         let mut compiled = Self::compile_normalized(
             normalized,
             &flat.field_ics,
-            vi_arrays,
+            supplied,
             runtime_array_parameters,
         )?;
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
@@ -697,14 +709,13 @@ impl ArrayCompiled {
                 .map(|(k, v)| (crate::problem::qualify(NAME, k), v.clone()))
                 .collect()
         });
-        let mut compiled = Self::compile_flattened(
-            &flat,
-            false,
-            None,
-            vi_arrays.as_ref(),
-            crate::Compiler::Native,
-        )
-        .map_err(show)?;
+        let supplied = BuildTimeData {
+            vi_arrays: vi_arrays.as_ref(),
+            invented: None,
+        };
+        let mut compiled =
+            Self::compile_flattened(&flat, false, None, supplied, crate::Compiler::Native)
+                .map_err(show)?;
         compiled.namespace = Some(NAME.to_string());
         Ok(compiled)
     }
@@ -715,7 +726,7 @@ impl ArrayCompiled {
     fn compile_normalized(
         normalized: NormalizedModel,
         flat_ics: &[(String, Expr)],
-        vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+        supplied: BuildTimeData<'_>,
         runtime_array_parameters: bool,
     ) -> Result<Self, CompileError> {
         let NormalizedModel {
@@ -729,7 +740,7 @@ impl ArrayCompiled {
             runtime_params,
             const_scope,
             any_index,
-        } = resolve_for_compile(model, index_sets, vi_arrays, runtime_array_parameters)?;
+        } = resolve_for_compile(model, index_sets, supplied, runtime_array_parameters)?;
         let index_sets = &index_sets;
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
@@ -868,7 +879,7 @@ struct ResolvedModel {
 fn resolve_for_compile(
     mut model: Model,
     mut index_sets: HashMap<String, IndexSet>,
-    vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    supplied: BuildTimeData<'_>,
     runtime_array_parameters: bool,
 ) -> Result<ResolvedModel, CompileError> {
     // Lower every SHAPED parameter whose value the document supplies —
@@ -881,7 +892,7 @@ fn resolve_for_compile(
     let runtime_params = lower_inline_array_parameters(
         &mut model,
         &index_sets,
-        vi_arrays,
+        supplied.vi_arrays,
         runtime_array_parameters,
     )?;
     apply_ragged_factor_scope(&mut index_sets, &model.variables)?;
@@ -902,9 +913,10 @@ fn resolve_for_compile(
     // Build-time value invention for every derived index set (a
     // `distinct` producer, RFC §6.1): the producer's member count sizes a
     // range over the set. Runs before `strip_value_invention` drops the
-    // producer. A producer that cannot run is recorded rather than raised, and
-    // is refused below only if a surviving expression ranges over its set.
-    let derived = materialize_derived_extents(&model, &index_sets, vi_arrays);
+    // producer, unless the build already ran it over this system. A producer
+    // that cannot run is recorded rather than raised, and is refused below
+    // only if a surviving expression ranges over its set.
+    let derived = materialize_derived_extents(&model, &index_sets, supplied);
     bind_member_factors(&mut model, &derived.member_factors);
     // Drop value-invention (relational) scaffolding — `distinct` producers
     // and membership sets over `kind: "derived"` index sets — plus the
@@ -4119,13 +4131,25 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
     overrides: &HashMap<String, f64>,
 ) -> Result<ValueInventionResult, CompileError> {
+    let params = collect_scalar_params(model, overrides);
+    run_value_invention_in_scope(model, index_sets, caller_arrays, &params)
+}
+
+/// [`run_value_invention`] with the scalar `params` already decided: the
+/// build pipeline's own scalar scope, so its value invention reads each
+/// parameter as its observeds do.
+pub(crate) fn run_value_invention_in_scope<S: std::hash::BuildHasher>(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
+    params: &HashMap<String, f64>,
+) -> Result<ValueInventionResult, CompileError> {
     let own = collect_const_factor_arrays(model);
     let factors = match caller_arrays {
         Some(caller) => Factors::overlaid(&own, caller),
         None => Factors::of(&own),
     };
-    let params = collect_scalar_params(model, overrides);
-    invent_values(model, index_sets, &factors, &params, &HashMap::new()).map_err(|e| {
+    invent_values(model, index_sets, &factors, params, &HashMap::new()).map_err(|e| {
         // A NaN key or join column already names its column (esm-spec §9.6.6).
         match e.code {
             Some(code) => CompileError::ValueInventionRefused {
@@ -4140,6 +4164,28 @@ pub fn run_value_invention_with_params<S: std::hash::BuildHasher>(
     })
 }
 
+/// A build's value-invention products, handed to the compile by a build that
+/// ran value invention over the same system (the build pipeline), so the
+/// compile sizes its derived index sets from them instead of running value
+/// invention, its build-time coordinates and its scalar scope again. Both are
+/// keyed by producer id (`from_faq`), which no build renames.
+#[derive(Clone, Copy)]
+pub(crate) struct InventedSets<'a> {
+    /// Producer id → member count.
+    pub(crate) extents: &'a HashMap<String, i64>,
+    /// Producer id → member ids ([`ValueInventionResult::member_ids`]).
+    pub(crate) members: &'a HashMap<String, Vec<i64>>,
+}
+
+/// What a build supplies to the compile beyond the system it compiles.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BuildTimeData<'a> {
+    /// Caller factor arrays ([`ArrayCompiled::from_model_with_arrays`]).
+    pub(crate) vi_arrays: Option<&'a HashMap<String, ArrayD<f64>>>,
+    /// Value invention the build already ran.
+    pub(crate) invented: Option<InventedSets<'a>>,
+}
+
 /// The build-time extents of a model's derived index sets, and why value
 /// invention failed when it did.
 pub(super) struct DerivedMaterialization {
@@ -4147,19 +4193,19 @@ pub(super) struct DerivedMaterialization {
     pub(super) extents: HashMap<String, i64>,
     /// The engine's error, if it could not run.
     failure: Option<CompileError>,
-    /// Each derived set's `member_factor` parameter with the member ids the
-    /// engine invented for it, in member order: the column the build pipeline
-    /// feeds back (`crate::prepare`'s `feed_member_factors`), so a read of the
-    /// factor over the set sees the same values on this route.
-    member_factors: Vec<(String, Vec<f64>)>,
+    /// Each derived set's `member_factor` column ([`member_factor_columns`]),
+    /// so a read of the factor over the set sees the same values as on the
+    /// build pipeline's route.
+    member_factors: Vec<MemberFactorColumn>,
 }
 
-/// Run value invention when the model has a derived index set. A model without
-/// one pays only the scan.
+/// Size the derived index sets when the model has one: from
+/// `supplied.invented` when the build ran value invention already, else by
+/// running it here. A model without one pays only the scan.
 fn materialize_derived_extents(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
-    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    supplied: BuildTimeData<'_>,
 ) -> DerivedMaterialization {
     let mut out = DerivedMaterialization {
         extents: HashMap::new(),
@@ -4169,47 +4215,67 @@ fn materialize_derived_extents(
     let needs_value_invention = index_sets
         .values()
         .any(|is| is.kind == "derived" && is.from_faq.is_some());
-    if needs_value_invention {
-        let factors = value_invention_factors(model, index_sets, caller_arrays);
-        match run_value_invention(model, index_sets, Some(&factors)) {
-            Ok(result) => {
-                out.member_factors = member_factor_columns(index_sets, &result, caller_arrays);
-                out.extents = result.extents;
+    if !needs_value_invention {
+        return out;
+    }
+    let caller_arrays = supplied.vi_arrays;
+    match supplied.invented {
+        Some(invented) => {
+            out.member_factors = member_factor_columns(index_sets, invented.members, caller_arrays);
+            out.extents = invented.extents.clone();
+        }
+        None => {
+            let factors = value_invention_factors(model, index_sets, caller_arrays);
+            match run_value_invention(model, index_sets, Some(&factors)) {
+                Ok(result) => {
+                    out.member_factors =
+                        member_factor_columns(index_sets, &result.member_ids(), caller_arrays);
+                    out.extents = result.extents;
+                }
+                Err(e) => out.failure = Some(e),
             }
-            Err(e) => out.failure = Some(e),
         }
     }
     out
 }
 
-/// The member ids each derived set with a `member_factor` feeds back, sorted by
-/// set name. A factor the caller supplies stays the caller's.
-fn member_factor_columns(
+/// One derived set's `member_factor` column: the member ids value invention
+/// gave the set, in member order.
+pub(crate) struct MemberFactorColumn {
+    /// The derived index set (the build pipeline's narration names it).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) set: String,
+    /// Its `member_factor`, as the registry spells it.
+    pub(crate) factor: String,
+    pub(crate) ids: Vec<f64>,
+}
+
+/// The member ids each derived set with a `member_factor` feeds back, sorted
+/// by set name, from `members` (producer id → ids). A factor in
+/// `caller_arrays` stays the caller's. The build pipeline publishes each
+/// column in its evaluation scope; the compile binds it onto the parameter
+/// ([`bind_member_factors`]).
+pub(crate) fn member_factor_columns(
     index_sets: &HashMap<String, IndexSet>,
-    result: &ValueInventionResult,
+    members: &HashMap<String, Vec<i64>>,
     caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Vec<(String, Vec<f64>)> {
+) -> Vec<MemberFactorColumn> {
     let mut sets: Vec<(&String, &IndexSet)> = index_sets
         .iter()
         .filter(|(_, is)| is.kind == "derived")
         .collect();
     sets.sort_by(|a, b| a.0.cmp(b.0));
     sets.into_iter()
-        .filter_map(|(_, is)| {
+        .filter_map(|(set, is)| {
             let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
             if caller_arrays.is_some_and(|a| a.contains_key(mf)) {
                 return None;
             }
-            let ids: Option<Vec<f64>> = result
-                .members
-                .get(faq)?
-                .iter()
-                .map(|k| match k {
-                    crate::relational::Key::Int(i) => Some(*i as f64),
-                    _ => None,
-                })
-                .collect();
-            Some((mf.clone(), ids?))
+            Some(MemberFactorColumn {
+                set: set.clone(),
+                factor: mf.clone(),
+                ids: members.get(faq)?.iter().map(|&i| i as f64).collect(),
+            })
         })
         .collect()
 }
@@ -4218,8 +4284,13 @@ fn member_factor_columns(
 /// data (an observed over the derived set, which [`strip_value_invention`]
 /// keeps). The parameter is found under its declared name, else under the one
 /// mounted name that ends in it; a factor no parameter declares is left alone.
-fn bind_member_factors(model: &mut Model, columns: &[(String, Vec<f64>)]) {
-    for (mf, values) in columns {
+fn bind_member_factors(model: &mut Model, columns: &[MemberFactorColumn]) {
+    for MemberFactorColumn {
+        factor: mf,
+        ids: values,
+        ..
+    } in columns
+    {
         let name = if model.variables.contains_key(mf) {
             Some(mf.clone())
         } else {

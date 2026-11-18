@@ -40,15 +40,20 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 /// pipeline's whole-document build); it is used in place of flattening `file`
 /// again, unless a per-variable element type makes the build work from an
 /// annotated copy, which is flattened afresh.
+///
+/// `invented` is the build pipeline's value invention over this same system,
+/// which the compile then uses rather than running it again.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
     flattened: Option<&crate::flatten::FlattenedSystem>,
+    invented: Option<crate::simulate_array::InventedSets<'_>>,
     runtime_array_parameters: bool,
     compiler: crate::Compiler,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     build_array(
         std::borrow::Cow::Borrowed(file),
         flattened,
+        invented,
         runtime_array_parameters,
         compiler,
     )
@@ -59,6 +64,7 @@ pub(crate) fn build_array_compiled(
 fn build_array(
     file: std::borrow::Cow<'_, EsmFile>,
     flattened: Option<&crate::flatten::FlattenedSystem>,
+    invented: Option<crate::simulate_array::InventedSets<'_>>,
     runtime_array_parameters: bool,
     compiler: crate::Compiler,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
@@ -82,6 +88,7 @@ fn build_array(
     Ok(crate::simulate_array::ArrayCompiled::from_document(
         file,
         flattened,
+        invented,
         runtime_array_parameters,
         compiler,
     )?)
@@ -118,6 +125,7 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
     }
     build_array(
         std::borrow::Cow::Owned(file),
+        None,
         None,
         false,
         crate::Compiler::Native,

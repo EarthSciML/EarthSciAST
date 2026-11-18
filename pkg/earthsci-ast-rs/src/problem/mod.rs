@@ -1517,6 +1517,11 @@ fn build_problem(
     // are then the answer even when the cone held no observed.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut pipeline_evaluated_cone = false;
+    // Whether the build pipeline ran value invention over the system the
+    // compile builds, so the compile takes `build.members` and
+    // `build.extents` rather than running it again.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut pipeline_invented = false;
 
     // What the caller supplied for the document's shaped parameters, captured
     // before the build pipeline consumes `const_arrays` and the providers it consumes:
@@ -1608,6 +1613,9 @@ fn build_problem(
             // metaparameters: that typed form is the one compiled below, and
             // the raw form is kept for `EsmProblem::document`.
             *raw = prepared.doc;
+            // The pipeline's flattened system is the compile's, so its value
+            // invention is too.
+            pipeline_invented = prepared.flattened.is_some();
             owned_file = Some(prepared.file);
             json_from_text = false;
             source_text = None;
@@ -1765,10 +1773,15 @@ fn build_problem(
     }
 
     // ---- (4) Compile the right-hand side. ---------------------------------
+    let invented = pipeline_invented.then_some(crate::simulate_array::InventedSets {
+        extents: &build.extents,
+        members: &build.members,
+    });
     let backend = compile_backend(
         owned_file.as_ref(),
         flat_only,
         pipeline_flat.as_ref(),
+        invented,
         model_name.as_deref(),
         opts.rhs,
         compiler,
@@ -2434,6 +2447,7 @@ fn compile_backend(
     file: Option<&EsmFile>,
     flat: Option<&FlattenedSystem>,
     file_flattened: Option<&FlattenedSystem>,
+    invented: Option<crate::simulate_array::InventedSets<'_>>,
     model_name: Option<&str>,
     mode: Rhs,
     compiler: Compiler,
@@ -2524,6 +2538,7 @@ fn compile_backend(
     let mut compiled = crate::simulate::build_array_compiled(
         file,
         file_flattened,
+        invented,
         runtime_array_parameters,
         compiler,
     )?;

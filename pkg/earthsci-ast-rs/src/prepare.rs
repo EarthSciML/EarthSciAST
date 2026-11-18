@@ -89,8 +89,8 @@ use crate::pushdown_rewrite::{
 };
 use crate::simulate::{KeyMatch, KeyPolicy, KeyResolver, SimulateError, namespace_scope};
 use crate::simulate_array::{
-    ArrMap, BuildInput, BuiltVariables, ConstArrayScope, NormalizedModel, StandaloneScope,
-    Value as EvalValue, run_value_invention_with_params,
+    ArrMap, BuildInput, BuiltVariables, ConstArrayScope, MemberFactorColumn, NormalizedModel,
+    StandaloneScope, Value as EvalValue, member_factor_columns, run_value_invention_in_scope,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -293,9 +293,13 @@ pub struct PreparedBuild {
     /// discovered loader extents that it still declares: the one typed form
     /// of the prepared document, which the Problem compiles.
     pub(crate) file: crate::EsmFile,
-    /// The whole-document build's flattened system, flattened from
-    /// [`Self::file`], so the compile path may use it in place of flattening
-    /// that document again. `None` for a one-model build.
+    /// The flattened system the pipeline built, when it is `flatten` of
+    /// [`Self::file`] — the whole-document build, or a model built alone in a
+    /// document that is that model and nothing else
+    /// ([`builds_alone_as_itself`]) — so the compile path may use it in place
+    /// of flattening that document again, and the pipeline's value invention
+    /// in place of running its own. `None` for a model built alone out of a
+    /// larger document.
     pub(crate) flattened: Option<crate::flatten::FlattenedSystem>,
     /// What the Problem keeps of this build: the observed fields, the
     /// value-invention members and extents, the gated provider keys and the
@@ -1571,7 +1575,14 @@ impl<'o> BuildState<'o> {
             None => Spelling::Qualified,
         };
         let (normalized, flattened, bound_inputs) = match &spelling {
-            Spelling::ModelLocal(n) => (Self::model_alone(&mut file, n, index_sets)?, None, None),
+            Spelling::ModelLocal(n) => {
+                let (normalized, flat) = Self::model_alone(&mut file, n, index_sets)?;
+                (
+                    normalized,
+                    builds_alone_as_itself(&file).then_some(flat),
+                    None,
+                )
+            }
             Spelling::Qualified => {
                 let (flat, index_sets) = Self::whole_document(&file, index_sets)?;
                 crate::compile_error::refuse_reserved_lifting(&flat)
@@ -1648,7 +1659,7 @@ impl<'o> BuildState<'o> {
         file: &mut crate::EsmFile,
         name: &str,
         mut index_sets: HashMap<String, IndexSet>,
-    ) -> Result<NormalizedModel, SimulateError> {
+    ) -> Result<(NormalizedModel, crate::flatten::FlattenedSystem), SimulateError> {
         let model = file
             .models
             .as_ref()
@@ -1675,14 +1686,15 @@ impl<'o> BuildState<'o> {
         for (k, v) in &flat.index_sets {
             index_sets.entry(k.clone()).or_insert_with(|| v.clone());
         }
-        crate::simulate_array::normalize(
+        let normalized = crate::simulate_array::normalize(
             BuildInput::Local {
                 flat: &flat,
                 model: name,
             },
             index_sets,
         )
-        .map_err(|e| stage_err(format_args!("model '{name}'"), e))
+        .map_err(|e| stage_err(format_args!("model '{name}'"), e))?;
+        Ok((normalized, flat))
     }
 
     /// A document of several models, with none selected, built WHOLE — the
@@ -2220,29 +2232,24 @@ impl<'o> BuildState<'o> {
     /// VALUE INVENTION: the graph derives its own support set.
     fn invent_values(&mut self) -> Result<(), SimulateError> {
         self.report(PreparePhase::ValueInvention, 0, None, "")?;
-        let vi = run_value_invention_with_params(
+        // The producers read each scalar parameter from this build's scalar
+        // scope, as its observeds do.
+        let params: HashMap<String, f64> = self
+            .param_names
+            .iter()
+            .cloned()
+            .zip(self.param_vals.iter().copied())
+            .collect();
+        let vi = run_value_invention_in_scope(
             &self.model,
             &self.index_sets,
             Some(&self.arrays),
-            &self.opts.problem.p,
+            &params,
         )
         .map_err(|e| stage_err("value invention", e))?;
         // A member id is needed where a set feeds one back (a `member_factor`,
-        // a gated fetch). Every key is a scalar integer.
-        let members: HashMap<String, Vec<i64>> = vi
-            .members
-            .iter()
-            .map(|(faq, mem)| {
-                let ids = mem
-                    .iter()
-                    .map(|k| match k {
-                        crate::relational::Key::Int(i) => *i,
-                        other => unreachable!("value-invention keys are scalar: {other:?}"),
-                    })
-                    .collect();
-                (faq.clone(), ids)
-            })
-            .collect();
+        // a gated fetch).
+        let members = vi.member_ids();
         let mut producers: Vec<&String> = members.keys().collect();
         producers.sort();
         for faq in producers {
@@ -2253,30 +2260,24 @@ impl<'o> BuildState<'o> {
             });
         }
         self.members = members;
-        self.extents = vi.extents.clone();
+        self.extents = vi.extents;
         Ok(())
     }
 
-    /// Hook 1: derived-set member ids fed back as the member_factor.
-    ///
-    /// Collected and SORTED first, so both the observed event stream and the
-    /// verbose narration are deterministic; `index_sets` is a `HashMap` and
-    /// iterating it directly made the order vary run to run.
+    /// Hook 1: derived-set member ids fed back as the member_factor, in
+    /// set-name order ([`member_factor_columns`], the compile's own columns),
+    /// so the observed event stream and the verbose narration are
+    /// deterministic.
     fn feed_member_factors(&mut self) -> Result<(), SimulateError> {
-        let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
-            .index_sets
-            .iter()
-            .filter(|(_, is)| is.kind == "derived")
-            .filter_map(|(sname, is)| {
-                let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
-                Some((sname, mf, self.members.get(faq)?))
-            })
-            .collect();
-        mf_sets.sort_by(|a, b| a.0.cmp(b.0));
-        let n_mf = mf_sets.len();
-        for (i, (sname, mf, mem)) in mf_sets.into_iter().enumerate() {
+        let columns = member_factor_columns(&self.index_sets, &self.members, None);
+        let n_mf = columns.len();
+        for (i, column) in columns.into_iter().enumerate() {
+            let MemberFactorColumn {
+                set: sname,
+                factor: mf,
+                ids: v,
+            } = column;
             self.report(PreparePhase::MemberFactors, i, Some(n_mf), mf.as_str())?;
-            let v: Vec<f64> = mem.iter().map(|&m| m as f64).collect();
             self.log(&format!(
                 "  [prepare] member_factor {mf} <- |{sname}| = {}",
                 v.len()
@@ -2285,7 +2286,7 @@ impl<'o> BuildState<'o> {
                 .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
             // The registry names the factor as its model declares it; the
             // whole-document build reads it as `Model.<factor>`.
-            let name = self.declared_name(mf)?;
+            let name = self.declared_name(&mf)?;
             self.arrays.insert(name, arr);
         }
         self.report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
@@ -2743,6 +2744,16 @@ pub(crate) fn run_build_pipeline(
         refuse_per_cell: opts.compiler.unwrap_or_default().is_strict(),
     };
     run_prepare(doc, const_arrays, providers, &ctx)
+}
+
+/// Whether `file`'s one model built alone is the whole system `flatten(file)`
+/// builds: the document is that model, with no reaction system and no
+/// coupling beside it, which is exactly what [`BuildState::model_alone`]
+/// removes.
+fn builds_alone_as_itself(file: &crate::EsmFile) -> bool {
+    file.models.as_ref().is_some_and(|m| m.len() == 1)
+        && file.reaction_systems.as_ref().is_none_or(|r| r.is_empty())
+        && file.coupling.as_ref().is_none_or(|c| c.is_empty())
 }
 
 /// Whether `doc` still carries an unresolved §4.7 mount — a `models.<k>` /
@@ -3250,6 +3261,7 @@ mod whole_document_tests {
     //! are spelled, and the flattened system it hands the compile path.
 
     use super::{BuildContext, Spelling, run_prepare};
+    use crate::problem::{ProblemOptions, esm_problem};
     use crate::simulate::KeyMatch;
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -3328,30 +3340,115 @@ mod whole_document_tests {
         json!({"esm": "2.0.0", "metadata": {"name": "w"}, "models": models})
     }
 
-    #[test]
-    fn the_whole_document_build_hands_its_flattened_system_forward() {
-        let problem = crate::problem::ProblemOptions::default();
+    fn prepared_with(d: &Value, model_name: Option<&str>) -> super::PreparedBuild {
+        let problem = crate::problem::ProblemOptions {
+            model_name: model_name.map(str::to_string),
+            ..Default::default()
+        };
         let opts = BuildContext {
             problem: &problem,
             t0: 0.0,
             refuse_per_cell: false,
         };
-        let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
-        let prepared = run_prepare(&two, HashMap::new(), Vec::new(), &opts).unwrap();
-        assert_eq!(prepared.model_name, None);
+        run_prepare(d, HashMap::new(), Vec::new(), &opts).unwrap()
+    }
+
+    /// The flattened system the pipeline hands forward is `flatten` of the
+    /// document it loaded.
+    fn assert_is_flatten_of(prepared: super::PreparedBuild, d: &Value) {
         let flat = prepared
             .flattened
-            .expect("the whole-document build's flattened system");
-        let again =
-            crate::flatten::flatten(&crate::load_string(&two.to_string()).unwrap()).unwrap();
+            .expect("a flattened system handed forward");
+        let again = crate::flatten::flatten(&crate::load_string(&d.to_string()).unwrap()).unwrap();
         assert_eq!(
             serde_json::to_value(&flat).unwrap(),
             serde_json::to_value(&again).unwrap()
         );
+    }
 
+    #[test]
+    fn the_pipeline_hands_its_flattened_system_forward_when_it_is_the_documents() {
+        let two = doc(json!({"A": model(1.0), "B": model(2.0)}));
+        let prepared = prepared_with(&two, None);
+        assert_eq!(prepared.model_name, None);
+        assert_is_flatten_of(prepared, &two);
+
+        // A document that is one model: built alone, it is the whole system.
         let one = doc(json!({"A": model(1.0)}));
-        let prepared = run_prepare(&one, HashMap::new(), Vec::new(), &opts).unwrap();
+        let prepared = prepared_with(&one, None);
+        assert_eq!(prepared.model_name.as_deref(), Some("A"));
+        assert_is_flatten_of(prepared, &one);
+
+        // One model selected out of two is not the document's system.
+        let prepared = prepared_with(&two, Some("A"));
         assert_eq!(prepared.model_name.as_deref(), Some("A"));
         assert!(prepared.flattened.is_none());
+    }
+
+    struct Column(Vec<f64>);
+
+    impl crate::provider::DataProvider for Column {
+        fn sample(&mut self) -> Result<ndarray::ArrayD<f64>, crate::provider::ProviderError> {
+            Ok(
+                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[self.0.len()]), self.0.clone())
+                    .unwrap(),
+            )
+        }
+    }
+
+    /// A dynamic document whose derived set is invented from a provider's
+    /// data: the compile sizes the set from the pipeline's value invention,
+    /// which read that data, so a rate over the set compiles.
+    #[test]
+    fn the_compile_sizes_a_derived_set_from_the_pipelines_value_invention() {
+        let key = json!({"op": "index", "args": ["code", "f"]});
+        let d = json!({
+            "esm": "2.0.0", "metadata": {"name": "Codes"},
+            "index_sets": {
+                "faces": {"kind": "interval", "size": 4},
+                "kinds": {"kind": "derived", "from_faq": "kind_set"}
+            },
+            "data_sources": {"src": {"kind": "static",
+                                     "source": {"url_template": "never-read.parquet"}}},
+            "models": {"Codes": {
+                "variables": {
+                    "code": {"type": "parameter", "shape": ["faces"], "default": 0.0,
+                             "update": {"kind": "data", "source": "src",
+                                        "from": {"file_variable": "code"}}},
+                    "kind_exists": {"type": "unknown", "shape": ["kinds"]},
+                    "n": {"type": "unknown"},
+                    "x": {"type": "unknown", "default": 0.0}
+                },
+                "equations": [
+                    {"lhs": {"op": "index", "args": ["kind_exists", "k"]},
+                     "rhs": {"op": "faq", "args": [], "id": "kind_set",
+                             "semiring": "bool_and_or", "distinct": true,
+                             "output_idx": ["k"], "ranges": {"f": {"from": "faces"}},
+                             "key": key, "expr": {"op": "true", "args": []}}},
+                    {"lhs": "n",
+                     "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                             "output_idx": [], "ranges": {"k": {"from": "kinds"}},
+                             "expr": 1.0}},
+                    {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "n"}
+                ]
+            }}
+        });
+        let mut providers: HashMap<String, Box<dyn crate::provider::DataProvider>> = HashMap::new();
+        providers.insert(
+            "Codes.code".to_string(),
+            Box::new(Column(vec![3.0, 1.0, 3.0, 2.0])),
+        );
+        let prob = esm_problem(
+            &d,
+            (0.0, 1.0),
+            ProblemOptions {
+                build_pipeline: true,
+                providers,
+                ..Default::default()
+            },
+        )
+        .expect("the compile takes the pipeline's three members");
+        assert_eq!(prob.extents().get("kind_set"), Some(&3));
+        assert_eq!(prob.members()["kind_set"], vec![1, 2, 3]);
     }
 }
