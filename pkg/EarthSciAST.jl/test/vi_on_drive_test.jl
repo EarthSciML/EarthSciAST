@@ -2,7 +2,7 @@
 # (`_vi_equality_candidates` / `_vi_enumerate_driven`, value_invention.jl).
 #
 # A `join.on [[src_bx, tgt_bx]]` producer — the regridder's candidate set over
-# integer bin columns — used to test the gate on every tuple of the full
+# integer bin columns — must not test the gate on every tuple of the full
 # product. The driven walk visits the ranges in the product's
 # order and restricts the second gated symbol to the first one's partners, so
 # the admitted tuples are the same ones in the same order. Every case compares
@@ -11,15 +11,13 @@
 # driven walk's allocation is bounded too: linear in the first gated range and
 # the candidates, never a list of the second range per binding of the first.
 
-module ViOnDriveTests
-
 using Test
+include("testutils.jl")
 using EarthSciAST
 import JSON3
 const EA = EarthSciAST
 
 _ix(a...) = Dict{String, Any}("op" => "index", "args" => Any[a...])
-_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 
 # The regridder's candidate set over `n` source and `n` target cells: a bin
 # column `floor(lon / dx)` per grid, and a `distinct` producer over (i, j)
@@ -30,7 +28,7 @@ function _regrid(n)
         "rhs" => Dict{String, Any}(
             "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[sym],
             "ranges" => Dict{String, Any}(sym => Dict{String, Any}("from" => cells)),
-            "args" => Any[coord, step], "expr" => _op("floor", _op("/", _ix(coord, sym), step))
+            "args" => Any[coord, step], "expr" => jop("floor", jop("/", _ix(coord, sym), step))
         )
     )
     par(shape) = Dict{String, Any}("type" => "parameter", "shape" => Any[shape...])
@@ -54,8 +52,8 @@ function _regrid(n)
                 ),
                 "join" => Any[Dict{String, Any}("on" => Any[Any["src_bx", "tgt_bx"]])],
                 "args" => Any["src_bx", "tgt_bx"],
-                "key" => _op("+", _op("*", _op("-", "i", 1), n), _op("-", "j", 1)),
-                "expr" => _op("true")
+                "key" => jop("+", jop("*", jop("-", "i", 1), n), jop("-", "j", 1)),
+                "expr" => jop("true")
             )
         ),
     ]
@@ -96,7 +94,6 @@ _lcg(n, seed, scale) = let s = UInt64(seed)
         end for _ in 1:n
     ]
 end
-
 
 @testset "value-invention bin-equality drive" begin
 
@@ -168,5 +165,3 @@ end
         @test big < 2 * 2000^2
     end
 end
-
-end # module

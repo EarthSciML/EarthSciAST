@@ -6,11 +6,11 @@
 # pins the same documents and values (PR #692).
 
 using Test
+include("testutils.jl")
 using EarthSciAST
 
 const E_IMA = EarthSciAST
 
-_ima_op(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
 _ima_cellwise(lhs, rhs) = Dict{String, Any}(
     "lhs" => lhs, "rhs" => Dict{String, Any}(
         "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
@@ -24,16 +24,16 @@ _ima_index_set() = Dict{String, Any}("cell" => Dict{String, Any}("kind" => "inte
 # `D = index(const [31, 28, 31], 2)`, either arm order, read per cell by a
 # state or not read at all.
 function _ima_gathered_doc(; lev, reversed::Bool, read::Bool)
-    fd = _ima_op("/", "F", "D")
-    x = reversed ? _ima_op("ifelse", _ima_op(">=", "lev", 2.0), 0.0, fd) :
-        _ima_op("ifelse", _ima_op("<", "lev", 2.0), fd, 0.0)
+    fd = jop("/", "F", "D")
+    x = reversed ? jop("ifelse", jop(">=", "lev", 2.0), 0.0, fd) :
+        jop("ifelse", jop("<", "lev", 2.0), fd, 0.0)
     table = Dict{String, Any}("op" => "const", "args" => Any[], "value" => [31.0, 28.0, 31.0])
     dq = Dict{String, Any}(
         "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
         "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "cell")),
-        "expr" => Dict{String, Any}("op" => "D", "args" => Any[_ima_op("index", "q", "i")], "wrt" => "t")
+        "expr" => Dict{String, Any}("op" => "D", "args" => Any[jop("index", "q", "i")], "wrt" => "t")
     )
-    q_rhs = read ? _ima_op("index", "X", "i") : _ima_op("*", -1.0, _ima_op("index", "q", "i"))
+    q_rhs = read ? jop("index", "X", "i") : jop("*", -1.0, jop("index", "q", "i"))
     rhs = Dict{String, Any}(
         "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
         "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "cell")), "expr" => q_rhs
@@ -54,7 +54,7 @@ function _ima_gathered_doc(; lev, reversed::Bool, read::Bool)
                 ),
                 "equations" => Any[
                     Dict{String, Any}("lhs" => "X", "rhs" => x),
-                    Dict{String, Any}("lhs" => "D", "rhs" => _ima_op("index", table, 2)),
+                    Dict{String, Any}("lhs" => "D", "rhs" => jop("index", table, 2)),
                     Dict{String, Any}("lhs" => dq, "rhs" => rhs),
                 ]
             )
@@ -79,17 +79,17 @@ function _ima_data_fed_doc(; f_shape = nothing)
         "lev_off" => Dict{String, Any}("type" => "parameter", "units" => "1", "default" => 3.0),
     )
     eqs = Any[]
-    f2 = _ima_op("*", "F", 2.0)
+    f2 = jop("*", "F", 2.0)
     for (suffix, lev, reversed) in (
             ("on", "lev_on", false), ("off", "lev_off", false),
             ("rev_on", "lev_on", true), ("rev_off", "lev_off", true),
         )
         vars["X_$suffix"] = Dict{String, Any}("type" => "unknown", "units" => "1")
         vars["R_$suffix"] = Dict{String, Any}("type" => "unknown", "units" => "1", "shape" => Any["cell"])
-        x = reversed ? _ima_op("ifelse", _ima_op(">=", lev, 2.0), 0.25, f2) :
-            _ima_op("ifelse", _ima_op("<", lev, 2.0), f2, 0.25)
+        x = reversed ? jop("ifelse", jop(">=", lev, 2.0), 0.25, f2) :
+            jop("ifelse", jop("<", lev, 2.0), f2, 0.25)
         push!(eqs, Dict{String, Any}("lhs" => "X_$suffix", "rhs" => x))
-        push!(eqs, _ima_cellwise("R_$suffix", _ima_op("index", "X_$suffix", "i")))
+        push!(eqs, _ima_cellwise("R_$suffix", jop("index", "X_$suffix", "i")))
     end
     return Dict{String, Any}(
         "esm" => "1.2.0", "metadata" => Dict{String, Any}("name" => "ifelse_data_fed_unshaped"),
@@ -105,6 +105,7 @@ function _ima_data_fed_doc(; f_shape = nothing)
 end
 
 # A const provider of `F`'s data.
+
 struct _IMAProvider
     data::Vector{Float64}
 end

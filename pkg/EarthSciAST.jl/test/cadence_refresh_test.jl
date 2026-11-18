@@ -29,11 +29,6 @@ include("testutils.jl")
 const ESM = EarthSciAST
 
 # A discrete provider: one field per refresh time.
-struct _CRProvider
-    fields::Dict{Float64, Dict{String, Vector{Float64}}}
-end
-ESM.provider_refresh_times(p::_CRProvider) = sort!(collect(keys(p.fields)))
-ESM.provider_sample(p::_CRProvider, t::Real) = p.fields[Float64(t)]
 
 #   c[i] = k·sin(i)                         const cadence (p only)
 #   w[i] = t·F[i] + c[i]                    time cadence (t, a live buffer)
@@ -210,7 +205,7 @@ else
                 f!, u0, p = b
                 cb, tstops = if how === :provider
                     ESM.build_refresh_callback(;
-                        providers = Dict("F" => _CRProvider(fields)),
+                        providers = Dict("F" => SeriesProvider(fields)),
                         buffers = ESM.RefreshBuffers(Dict("F" => F)), owner = b
                     )
                 else

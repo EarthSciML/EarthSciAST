@@ -15,8 +15,6 @@ include("testutils.jl")
 
 const _MOI = EarthSciAST
 
-_moi_idx(v, args...) = Dict{String, Any}("op" => "index", "args" => Any[v, args...])
-_moi_op(op, args...) = Dict{String, Any}("op" => op, "args" => Any[args...])
 
 # makearray(output_idx = [sym]): cell 1 holds 10·u[1], cells 2..N hold
 # u[sym] - u[sym - 1].
@@ -24,8 +22,8 @@ _moi_ma(N, sym) = Dict{String, Any}(
     "op" => "makearray", "args" => Any[], "output_idx" => Any[sym],
     "regions" => Any[Any[Any[1, 1]], Any[Any[2, N]]],
     "values" => Any[
-        _moi_op("*", 10, _moi_idx("u", sym)),
-        _moi_op("-", _moi_idx("u", sym), _moi_idx("u", _moi_op("-", sym, 1))),
+        jop("*", 10, jidx("u", sym)),
+        jop("-", jidx("u", sym), jidx("u", jop("-", sym, 1))),
     ],
 )
 
@@ -84,14 +82,14 @@ _moi_cell(c) = c == 1 ? 10 * _moi_u(1) : _moi_u(c) - _moi_u(c - 1)
     N = 5
     cases = (
         # The lift's form: read at the makearray's own symbols.
-        ("read at its own symbol", _moi_idx(_moi_ma(N, "i"), "i"), i -> _moi_cell(i)),
+        ("read at its own symbol", jidx(_moi_ma(N, "i"), "i"), i -> _moi_cell(i)),
         # Another loop's symbol: `k` is bound by the makearray alone.
-        ("read at another loop's symbol", _moi_idx(_moi_ma(N, "k"), "i"), i -> _moi_cell(i)),
+        ("read at another loop's symbol", jidx(_moi_ma(N, "k"), "i"), i -> _moi_cell(i)),
         # Read in reverse: inside the makearray `i` is the cell N + 1 - i, not
         # the outer `i`.
         (
             "read at an expression of the outer symbol",
-            _moi_idx(_moi_ma(N, "i"), _moi_op("-", N + 1, "i")), i -> _moi_cell(N + 1 - i),
+            jidx(_moi_ma(N, "i"), jop("-", N + 1, "i")), i -> _moi_cell(N + 1 - i),
         ),
     )
     @testset "$name ($compiler)" for (name, body, want) in cases,

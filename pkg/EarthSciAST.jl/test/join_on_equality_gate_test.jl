@@ -1,19 +1,18 @@
 # The value-equality (`join.on`) GATE — CONFORMANCE_SPEC §5.5.8,
 # ESM_COMPLIANCE_VALIDATION_MATRIX BEHAV-10-B-001 … -006.
 #
-# `join.on` used to resolve to bucket CODES and nothing else: the equality was
-# tested per tuple, but enumeration still walked the full cross product, so a
-# contraction cost O(N_l·N_r) to reach O(|matches|) surviving terms. And a key
-# column could only be an index-set member column or a value-invention bin
-# buffer — never the ordinary declared 1-D variable a relational port (EPA
-# MOVES/NONROAD) actually joins on.
+# The gate drives enumeration from the matches, so a contraction costs
+# O(|matches|) rather than walking the full O(N_l·N_r) cross product and testing
+# the equality per tuple. A key column may be an index-set member column, a
+# value-invention bin buffer, or an ordinary declared 1-D variable (what a
+# relational port such as EPA MOVES/NONROAD joins on).
 #
-# THE TWO DIFFERENTIAL ARMS. Both halves are pinned against the pre-change
-# behaviour rather than against hand-computed numbers alone:
+# THE TWO DIFFERENTIAL ARMS. Both halves are pinned against the undriven
+# filter path rather than against hand-computed numbers alone:
 #
 #   * `compiler=:interpreter` rebuilds the SAME document with the driver
-#     killed — the gate resolves to codes only and filters the full product, the
-#     exact pre-§5.5.8 path. The answer must be bit-identical (BEHAV-10-B-005)
+#     killed — the gate resolves to codes only and filters the full product.
+#     The answer must be bit-identical (BEHAV-10-B-005)
 #     and the visit count must differ, or the gate never fired.
 #   * `_foreach_aggregate_term` is driven and undriven over the same gate, and
 #     the EMITTED TERM SEQUENCES are compared element for element — the driven
@@ -22,10 +21,6 @@
 #
 # A visit count of 0 means the gate declined and the filter path ran, so a
 # silent fallback fails these tests too.
-#
-# Wrapped in a module so the local JSON AST builders stay out of `Main` (see the
-# header of vi_overlap_scaling_test.jl for why that matters).
-module JoinOnEqualityGateTests
 
 using Test
 using EarthSciAST
@@ -34,8 +29,6 @@ import JSON3
 const ESS = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
-
-_ix(f, a...) = Dict("op" => "index", "args" => Any[f, a...])
 
 # A scalar rollup `D(count)/dt = Σ_{l∈src_rows, r∈emf_rows : on} body` whose key
 # columns are DATA COLUMNS — declared 1-D parameters fed as const arrays. This
@@ -645,5 +638,3 @@ end
         @test observed_field(prob, "M.total") == [2.0, 2.0, 0.0]
     end
 end
-
-end # module

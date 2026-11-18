@@ -19,7 +19,6 @@ const _RT_TIER = joinpath(_RT_ROOT, "tests", "conformance", "relational_template
 # A candidate as `num / den`, so a non-finite one fits in a `const`.
 _rt_num_den(v) = v == "NaN" ? (0.0, 0.0) : v == "Inf" ? (1.0, 0.0) :
     v == "-Inf" ? (-1.0, 0.0) : (Float64(v), 1.0)
-_rt_const(a) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => a)
 _rt_doc(model) = Dict{String, Any}(
     "esm" => "2.0.0",
     "metadata" => Dict{String, Any}("name" => "relational_template_probe", "authors" => Any["t"]),
@@ -32,8 +31,8 @@ function _rt_template_values(op::String, values)
     nd = [_rt_num_den(v) for v in values]
     f = Dict{String, Any}(
         "op" => "/", "args" => Any[
-            Dict{String, Any}("op" => "index", "args" => Any[_rt_const(first.(nd)), sym]),
-            Dict{String, Any}("op" => "index", "args" => Any[_rt_const(last.(nd)), sym]),
+            Dict{String, Any}("op" => "index", "args" => Any[jconst(first.(nd)), sym]),
+            Dict{String, Any}("op" => "index", "args" => Any[jconst(last.(nd)), sym]),
         ]
     )
     model = Dict{String, Any}(

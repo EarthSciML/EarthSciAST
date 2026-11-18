@@ -1,10 +1,10 @@
 # The affine tier's run-time contraction fold (`_AffineReduce` /
 # `_NK_AREDUCE`, stencil_affine.jl + access_kernel.jl + codegen_kernel.jl).
 #
-# A constant-bound contraction the affine tier used to UNROLL — one term per
-# contracted index in every kernel body, so the emitted code and its first-call
-# compile grew with the contraction length — is compiled with its contracted
-# indices kept symbolic as extra loop dims of the box, and the kernel folds the
+# A constant-bound contraction is not UNROLLED by the affine tier (one term per
+# contracted index in every kernel body would make the emitted code and its
+# first-call compile grow with the contraction length): it is compiled with its
+# contracted indices kept symbolic as extra loop dims of the box, and the kernel folds the
 # body over them at run time. This pins:
 #
 #   * BIT-IDENTITY, `===` per element, against `compiler=:interpreter` (which
@@ -33,8 +33,6 @@ _ar_lhs(v, idxs, ranges) = Dict(
         ], "wrt" => "t"
     )
 )
-_ar_idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
-_ar_op(o, a...) = Dict("op" => o, "args" => Any[a...])
 
 # D(y[i…]) = ⊕_{k…} body, with the source `e` a state decaying at a unit rate.
 function _ar_doc(
@@ -105,22 +103,22 @@ end
 # into the document (the scaling tier's source-receptor K is the same kind of
 # thing): the kernel evaluates it from the loop indices at every term, so its
 # reduction-dim reads are the loop-index leaf of the fold's bound dims.
-_ar_w(i, k) = _ar_op(
+_ar_w(i, k) = jop(
     "+",
-    _ar_op(
-        "*", 0.001, _ar_op(
-            "+", 1, _ar_op(
+    jop(
+        "*", 0.001, jop(
+            "+", 1, jop(
                 "sin",
-                _ar_op("+", _ar_op("*", 0.7, i, k), 0.3)
+                jop("+", jop("*", 0.7, i, k), 0.3)
             )
         )
     ),
-    _ar_op("/", 0.25, _ar_op("+", i, k))
+    jop("/", 0.25, jop("+", i, k))
 )
 
 # The dense source-receptor shape: y[i] = Σ_k W(i,k)·e[k].
 function _ar_sr_doc(n, m; red = "+", filter = nothing, body = nothing)
-    b = body === nothing ? _ar_op("*", _ar_w("i", "k"), _ar_idx("e", "k")) : body
+    b = body === nothing ? jop("*", _ar_w("i", "k"), jidx("e", "k")) : body
     doc = _ar_doc(
         ["i"], [(1, n)], ["k"], [(1, m)], b; red = red, filter = filter,
         evars = Dict("e" => Dict("type" => "unknown", "shape" => Any["k"]))
@@ -131,7 +129,7 @@ function _ar_sr_doc(n, m; red = "+", filter = nothing, body = nothing)
             "rhs" => Dict(
                 "op" => "faq", "args" => Any[], "output_idx" => Any["k"],
                 "ranges" => Dict("k" => Any[1, m]),
-                "expr" => _ar_op("-", _ar_idx("e", "k"))
+                "expr" => jop("-", jidx("e", "k"))
             )
         )
     )
@@ -152,7 +150,7 @@ _ar_sr_ics(n, m) = merge(
     end
 
     @testset "filter (the unroll's per-term ifelse guard)" begin
-        filt = _ar_op(">", _ar_w("i", "k"), 0.02)
+        filt = jop(">", _ar_w("i", "k"), 0.02)
         same, tally, _, _ = _ar_agree(_ar_sr_doc(12, 40; filter = filt), _ar_sr_ics(12, 40))
         @test same
         @test get(tally, :affine_reduce, 0) >= 1
@@ -170,9 +168,9 @@ _ar_sr_ics(n, m) = merge(
 
     @testset "two contracted indices, the first fastest" begin
         n, m1, m2 = 5, 7, 6
-        body = _ar_op(
-            "*", _ar_w("i", "k"), _ar_op("+", 1, _ar_op("*", 0.1, "l")),
-            _ar_op("+", _ar_idx("e", "k"), _ar_op("*", 0.5, _ar_idx("g", "l")))
+        body = jop(
+            "*", _ar_w("i", "k"), jop("+", 1, jop("*", 0.1, "l")),
+            jop("+", jidx("e", "k"), jop("*", 0.5, jidx("g", "l")))
         )
         doc = _ar_doc(
             ["i"], [(1, n)], ["k", "l"], [(1, m1), (1, m2)], body;
@@ -193,9 +191,9 @@ _ar_sr_ics(n, m) = merge(
 
     @testset "rank-3 output: the fold binds a fourth loop dim" begin
         ni, nj, nk, m = 3, 4, 2, 9
-        body = _ar_op(
-            "*", _ar_w(_ar_op("+", "i", "j"), "q"),
-            _ar_op("+", 1, _ar_op("*", 0.1, "k")), _ar_idx("e", "q")
+        body = jop(
+            "*", _ar_w(jop("+", "i", "j"), "q"),
+            jop("+", 1, jop("*", 0.1, "k")), jidx("e", "q")
         )
         doc = _ar_doc(
             ["i", "j", "k"], [(1, ni), (1, nj), (1, nk)], ["q"], [(1, m)], body;
@@ -221,7 +219,7 @@ _ar_sr_ics(n, m) = merge(
         n, m = 13, 29
         doc = _ar_sr_doc(
             n, m; red = red,
-            body = _ar_op("*", _ar_idx("K", "i", "k"), _ar_idx("e", "k"))
+            body = jop("*", jidx("K", "i", "k"), jidx("e", "k"))
         )
         doc["models"]["R"]["variables"]["K"] =
             Dict("type" => "unknown", "shape" => Any["i", "k"])
@@ -231,7 +229,7 @@ _ar_sr_ics(n, m) = merge(
                 "rhs" => Dict(
                     "op" => "faq", "args" => Any[], "output_idx" => Any["i", "k"],
                     "ranges" => Dict("i" => Any[1, n], "k" => Any[1, m]),
-                    "expr" => _ar_op("*", -0.5, _ar_idx("K", "i", "k"))
+                    "expr" => jop("*", -0.5, jidx("K", "i", "k"))
                 )
             )
         )
@@ -287,9 +285,9 @@ _ar_sr_ics(n, m) = merge(
         # y[i] = Σ_k w[k]·e[i+k-2]: the source is a ghost past either end, so the
         # contracted axis is cut and the loop form declines.
         n = 10
-        body = _ar_op(
-            "*", _ar_op("+", 0.25, _ar_op("*", 0.1, "k")),
-            _ar_idx("e", _ar_op("-", _ar_op("+", "i", "k"), 2))
+        body = jop(
+            "*", jop("+", 0.25, jop("*", 0.1, "k")),
+            jidx("e", jop("-", jop("+", "i", "k"), 2))
         )
         doc = _ar_doc(
             ["i"], [(1, n)], ["k"], [(1, 3)], body;
@@ -301,7 +299,7 @@ _ar_sr_ics(n, m) = merge(
                 "rhs" => Dict(
                     "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
                     "ranges" => Dict("i" => Any[1, n]),
-                    "expr" => _ar_op("-", _ar_idx("e", "i"))
+                    "expr" => jop("-", jidx("e", "i"))
                 )
             )
         )

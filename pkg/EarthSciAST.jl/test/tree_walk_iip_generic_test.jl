@@ -4,12 +4,11 @@
 # `_CSECache`).
 #
 # `f!` is the production evaluator: type-stable, zero-allocation, called every
-# Runge–Kutta stage. It used to be Float64-ONLY, not because it mutates — ForwardDiff
-# is perfectly happy with in-place functions — but because its scratch was
-# eltype-hardwired at BUILD time: a `Vector{Float64}` per access-kernel CSE tier and one for the
-# CSE prelude. A `Dual` cannot be stored in either, so a Jacobian through `f!` threw.
+# Runge–Kutta stage. Mutation is no obstacle to ForwardDiff, but scratch
+# eltype-hardwired at BUILD time is: a `Dual` cannot be stored in a
+# `Vector{Float64}` access-kernel CSE tier or CSE prelude.
 #
-# It is now generic in `T = _rhs_value_type(u, p, t)` while keeping BOTH properties
+# `f!` is generic in `T = _rhs_value_type(u, p, t)` while keeping BOTH properties
 # that made it worth having. The tests below are organised around exactly that pair,
 # because a change that wins one by losing the other is not a fix:
 #
@@ -44,10 +43,6 @@ const ESM = EarthSciAST
 
 # Locally-prefixed doc builders (every tree-walk test file is `include`d into the same
 # namespace, so shared short names would clobber each other).
-_gi_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_gi_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
-_gi_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
-_gi_cst(v) = Dict{String, Any}("op" => "const", "args" => Any[], "value" => v)
 _gi_apply(nm; b...) = Dict{String, Any}(
     "op" => "apply_expression_template", "args" => Any[], "name" => nm,
     "bindings" => Dict{String, Any}(String(k) => v for (k, v) in b)
@@ -92,14 +87,14 @@ end
 # 1-D reaction–diffusion. `c[i]^2` is the literal-exponent case, and `exp(-Ea/T)`
 # hoists to a `_VK_INVARIANT` whose scalar subtree is walked once per call.
 function _gi_rd(N)
-    stencil = _gi_o(
-        "+", _gi_o(
-            "-", _gi_ix("c", _gi_o("-", "i", 1.0)),
-            _gi_o("*", 2.0, _gi_ix("c", "i"))
+    stencil = jop(
+        "+", jop(
+            "-", jidx("c", jop("-", "i", 1.0)),
+            jop("*", 2.0, jidx("c", "i"))
         ),
-        _gi_ix("c", _gi_o("+", "i", 1.0))
+        jidx("c", jop("+", "i", 1.0))
     )
-    rate = _gi_o("*", "k_rxn", _gi_o("exp", _gi_o("neg", _gi_o("/", "Ea", "T"))))
+    rate = jop("*", "k_rxn", jop("exp", jop("neg", jop("/", "Ea", "T"))))
     return _gi_doc(
         "RDG",
         Dict{String, Any}(
@@ -109,11 +104,11 @@ function _gi_rd(N)
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _gi_ao(_gi_Dt(_gi_ix("c", "i"))),
+                "lhs" => _gi_ao(jD(jidx("c", "i"))),
                 "rhs" => _gi_ao(
-                    _gi_o(
-                        "-", _gi_o("*", "k_diff", stencil),
-                        _gi_o("*", rate, _gi_o("^", _gi_ix("c", "i"), 2.0))
+                    jop(
+                        "-", jop("*", "k_diff", stencil),
+                        jop("*", rate, jop("^", jidx("c", "i"), 2.0))
                     )
                 )
             ),
@@ -125,9 +120,9 @@ end
 # 0-D with a subexpression shared across two equations → a non-empty CSE prelude, so
 # `_NK_CACHED` (which reads the OTHER eltype-hardwired buffer) is actually exercised.
 function _gi_zerod()
-    shared = _gi_o(
-        "*", _gi_o("exp", _gi_o("neg", _gi_o("/", "Ea", "T"))),
-        _gi_o("*", "x", "y")
+    shared = jop(
+        "*", jop("exp", jop("neg", jop("/", "Ea", "T"))),
+        jop("*", "x", "y")
     )
     return _gi_doc(
         "ZG",
@@ -138,10 +133,10 @@ function _gi_zerod()
         ),
         Any[
             Dict{String, Any}(
-                "lhs" => _gi_Dt("x"),
-                "rhs" => _gi_o("neg", _gi_o("*", "k", shared))
+                "lhs" => jD("x"),
+                "rhs" => jop("neg", jop("*", "k", shared))
             ),
-            Dict{String, Any}("lhs" => _gi_Dt("y"), "rhs" => shared),
+            Dict{String, Any}("lhs" => jD("y"), "rhs" => shared),
         ]
     )
 end
@@ -149,19 +144,19 @@ end
 # Time + trig + comparison/ifelse: the comparison arms produce plain `1.0`/`0.0`
 # Float64 constants that must promote into a Dual buffer on store.
 function _gi_tv(N)
-    body = _gi_o(
+    body = jop(
         "*",
-        _gi_o(
-            "ifelse", _gi_o(">", _gi_ix("c", "i"), 0.0),
-            _gi_o("sin", _gi_o("*", 2.0, "t")), _gi_o("cos", "t")
+        jop(
+            "ifelse", jop(">", jidx("c", "i"), 0.0),
+            jop("sin", jop("*", 2.0, "t")), jop("cos", "t")
         ),
-        _gi_o("+", _gi_ix("c", "i"), _gi_o("sqrt", _gi_o("abs", _gi_ix("c", "i"))))
+        jop("+", jidx("c", "i"), jop("sqrt", jop("abs", jidx("c", "i"))))
     )
     return _gi_doc(
         "TVG", Dict{String, Any}("c" => _gi_state(shape = Any["n"])),
         Any[
             Dict{String, Any}(
-                "lhs" => _gi_ao(_gi_Dt(_gi_ix("c", "i"))),
+                "lhs" => _gi_ao(jD(jidx("c", "i"))),
                 "rhs" => _gi_ao(body)
             ),
         ]; index_sets = N
@@ -178,11 +173,11 @@ function _gi_interp()
         Dict{String, Any}("y" => _gi_state(default = 1.5), "k" => _gi_param(2.0)),
         Any[
             Dict{String, Any}(
-                "lhs" => _gi_Dt("y"),
-                "rhs" => _gi_o(
+                "lhs" => jD("y"),
+                "rhs" => jop(
                     "*", "k",
                     _gi_apply(
-                        "linear"; table = _gi_cst(table), axis = _gi_cst(axis),
+                        "linear"; table = jconst(table), axis = jconst(axis),
                         x = "y", n = length(axis)
                     )
                 )
@@ -200,7 +195,6 @@ _gi_seed(n) = [0.6sin(0.7k) - 0.15 for k in 1:n]
 
 # `f!` writes only the slots it has equations for, so it is only correct when handed a
 # zeroed `du` (which is what an integrator does).
-_gi_call(f!, u, p, t) = (du = zero(u); f!(du, u, p, t); du)
 
 # The PARAMETER axis needs its own caller: `u` must stay `Vector{Float64}` (that is the
 # whole failure mode), so `du` cannot be sized from it — it is sized from the promoted
@@ -223,7 +217,7 @@ function _gi_fd_state_jac(f!, u, p, t; h = 1.0e-6)
     for j in 1:n
         up = copy(u); up[j] += h
         um = copy(u); um[j] -= h
-        J[:, j] = (_gi_call(f!, up, p, t) .- _gi_call(f!, um, p, t)) ./ 2h
+        J[:, j] = (rhs_du(f!, up, p, t) .- rhs_du(f!, um, p, t)) ./ 2h
     end
     return J
 end
@@ -251,7 +245,7 @@ end
                 _, u0, p, _, _ = ESM.Internal.build(doc)
                 u = length(u0) == 1 ? [1.5] : _gi_seed(length(u0))
                 for t in (0.0, 0.37, 1.9)
-                    @test _gi_call(fi, u, p, t) == _gi_call(fo, u, p, t)
+                    @test rhs_du(fi, u, p, t) == rhs_du(fo, u, p, t)
                 end
             end
         end
@@ -280,12 +274,12 @@ end
         fi, fo = _gi_both(doc)
         _, u0, p, _, _ = ESM.Internal.build(doc)
         u = _gi_seed(length(u0))
-        want = _gi_call(fo, u, p, 0.0)
+        want = rhs_du(fo, u, p, 0.0)
 
         du = zero(u)
         @test rhs_alloc_bytes(fi, du, u, p, 0.0) == 0
         ForwardDiff.jacobian(uu -> (d = similar(uu); fill!(d, 0); fi(d, uu, p, 0.0); d), u)
-        @test _gi_call(fi, u, p, 0.0) == want          # same bits after the Dual run
+        @test rhs_du(fi, u, p, 0.0) == want          # same bits after the Dual run
         @test rhs_alloc_bytes(fi, du, u, p, 0.0) == 0  # and still no allocations
     end
 
@@ -355,8 +349,8 @@ end
                 up = copy(pv); up[i] += h
                 um = copy(pv); um[i] -= h
                 fd = (
-                    sum(_gi_call(f!, u, mk(up), 0.0)) -
-                        sum(_gi_call(f!, u, mk(um), 0.0))
+                    sum(rhs_du(f!, u, mk(up), 0.0)) -
+                        sum(rhs_du(f!, u, mk(um), 0.0))
                 ) / 2h
                 @test isapprox(g[i], fd; rtol = 1.0e-5, atol = 1.0e-7)
             end
@@ -382,7 +376,7 @@ end
         f!(du, u, pd, 0.0)                              # Float64 u, Dual p, Dual du
         @test eltype(u) === Float64                     # u was NOT promoted
         @test all(isfinite ∘ ForwardDiff.value, du)
-        @test ForwardDiff.value.(du) == _gi_call(f!, u, p, 0.0)   # primal unchanged
+        @test ForwardDiff.value.(du) == rhs_du(f!, u, p, 0.0)   # primal unchanged
         @test any(!iszero, ForwardDiff.partials.(du, 1))          # and it moved
     end
 
@@ -410,13 +404,13 @@ end
             Dict{String, Any}("x" => _gi_state(default = -1.3), "k" => _gi_param(2.0)),
             Any[
                 Dict{String, Any}(
-                    "lhs" => _gi_Dt("x"),
-                    "rhs" => _gi_o("*", "k", _gi_o("^", "x", 2.0))
+                    "lhs" => jD("x"),
+                    "rhs" => jop("*", "k", jop("^", "x", 2.0))
                 ),
             ]
         )
         f!, _, p, _, _ = ESM.Internal.build(doc)
-        d = ForwardDiff.derivative(x -> _gi_call(f!, [x], p, 0.0)[1], -1.3)
+        d = ForwardDiff.derivative(x -> rhs_du(f!, [x], p, 0.0)[1], -1.3)
         @test !isnan(d)
         @test d ≈ 2 * 2 * (-1.3)                        # d/dx (k·x²) = 2kx
     end
@@ -430,7 +424,7 @@ end
                 (-1.0, 0.0),       # below the table: flat extrapolation
                 (9.9, 0.0),
             )        # above the table: flat extrapolation
-            d = ForwardDiff.derivative(yy -> _gi_call(f!, [yy], p, 0.0)[1], y)
+            d = ForwardDiff.derivative(yy -> rhs_du(f!, [yy], p, 0.0)[1], y)
             @test d ≈ want
         end
     end
@@ -438,10 +432,10 @@ end
     # ---- 4. What it is FOR: a stiff solve on the AD Jacobian ------------------
 
     @testset "Rosenbrock23 solves through f! with an autodiff Jacobian" begin
-        # The end-to-end reason for the change. Rosenbrock23 is implicit: it needs
+        # The end-to-end reason `f!` is generic. Rosenbrock23 is implicit: it needs
         # ∂f/∂u every step. `autodiff = AutoForwardDiff()` (SciML's default) drives
-        # the SAME `f!` with Dual state, which is exactly what used to throw
-        # `MethodError: Float64(::Dual)` and forced a finite-difference fallback.
+        # the SAME `f!` with Dual state, which must not throw
+        # `MethodError: Float64(::Dual)` or force a finite-difference fallback.
         doc = _gi_rd(24)
         f!, u0, p, _, _ = ESM.Internal.build(doc)
         u = _gi_seed(length(u0))
