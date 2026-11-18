@@ -482,8 +482,9 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
         ax = sw.order[j]
         len = _cg_geo!(ctx, sw.dims[ax], (sw.dims, ax))
         lo = _cg_geo!(ctx, sw.lo[ax], (sw.lo, ax))
-        push!(seek, :(local $(isyms[ax]) = $lo + $rv % $len))
-        push!(seek, :($rv = div($rv, $len)))
+        _cg_decode_digit!(seek, rv, len) do q
+            Any[:(local $(isyms[ax]) = $(_cg_axis_index(lo, q, nothing)))]
+        end
     end
     offv = _cg_name(ctx, "off")
     off = Any[0]

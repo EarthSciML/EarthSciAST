@@ -570,10 +570,9 @@ function _try_codegen_scatter(
         len = _cg_geo!(ctx, lens[d], (lens, d))
         st = _cg_geo!(ctx, steps[d], (steps, d), true)
         sd = _cg_geo!(ctx, stride[d], (stride, d), true)
-        push!(dec, :(local $qv = $rv % $len))
-        push!(dec, :(local $iv = $lo + $qv * $st))
-        push!(dec, :($base += $qv * $sd))
-        push!(dec, :($rv = div($rv, $len)))
+        _cg_decode_digit!(dec, rv, len; qv = qv) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st))), :($base += $q * $sd)]
+        end
     end
     # The pinned counters, bound per point from the keys.
     pinv = Symbol[]
@@ -704,8 +703,9 @@ function _try_codegen_scatter(
     for d in pinpos
         len = _cg_geo!(ctx, lens[d], (lens, d))
         sd = _cg_geo!(ctx, stride[d], (stride, d), true)
-        push!(pdec, :($po += ($pr % $len) * $sd))
-        push!(pdec, :($pr = div($pr, $len)))
+        _cg_decode_digit!(pdec, pr, len) do q
+            Any[:($po += $q * $sd)]
+        end
     end
     npinv = _cg_geo!(ctx, npin)
     init_plain = quote

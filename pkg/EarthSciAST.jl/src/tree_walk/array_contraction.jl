@@ -1367,13 +1367,14 @@ function _try_codegen_array_contraction(
         lo = _cg_geo!(ctx, los[d], (los, d))
         len = _cg_geo!(ctx, lens[d], (lens, d))
         st = _cg_geo!(ctx, steps[d], (steps, d), true)
-        push!(seek, :(local $iv = $lo + ($rv % $len) * $st))
-        push!(seek, :($rv = div($rv, $len)))
+        _cg_decode_digit!(seek, rv, len) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st)))]
+        end
         qv = _cg_name(ctx, "q")
         push!(qs, qv)
-        push!(start, :(local $qv = $rv % $len))
-        push!(start, :(local $iv = $lo + $qv * $st))
-        push!(start, :($rv = div($rv, $len)))
+        _cg_decode_digit!(start, rv, len; qv = qv) do q
+            Any[:(local $iv = $(_cg_axis_index(lo, q, st)))]
+        end
         push!(stepper, (qv, iv, lo, len, st))
         lens[d] >= 1 && (
             kc.spans[refs[d]] =

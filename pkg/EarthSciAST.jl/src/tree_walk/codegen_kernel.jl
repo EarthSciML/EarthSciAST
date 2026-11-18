@@ -1138,6 +1138,32 @@ function _cg_nest_header!(ctx::_CGFunction, cs::_CellSet, sm::_CGStore)
     return hdr, av, bv
 end
 
+# ---- Loop-position decoding ---------------------------------------------------
+# A flat 0-based loop position held in the local `r` is decoded into one
+# position per axis, the first axis varying fastest: along an axis of extent
+# `len` the digit is `r % len`, and `r` divided by `len` goes on to the next
+# axis. `_cg_decode_digit!` appends one axis's statements to `stmts`: the
+# digit bound to the local `qv` first when one is given, then `use(q)`, the
+# statements that read the digit `q` (that local, or the expression
+# `r % len`), then the division.
+function _cg_decode_digit!(
+        use, stmts::Vector{Any}, r::Symbol, len;
+        qv::Union{Nothing, Symbol} = nothing
+    )
+    q = :($r % $len)
+    if qv !== nothing
+        push!(stmts, :(local $qv = $q))
+        q = qv
+    end
+    append!(stmts, use(q))
+    push!(stmts, :($r = div($r, $len)))
+    return stmts
+end
+
+# The index digit `q` names on an axis that starts at `lo` and steps by `st`
+# (`nothing` for a unit step written as none).
+_cg_axis_index(lo, q, st) = st === nothing ? :($lo + $q) : :($lo + $q * $st)
+
 # A listed-slots kernel: the chunk's ordinals index the out-slot table.
 function _cg_emit_outs_nest!(ctx::_CGFunction, K::_AccKernel, sm::_CGStore, invsyms, hdr, av, bv)
     outs = _cg_tab!(ctx, K.cells.outs)
