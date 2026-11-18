@@ -1636,24 +1636,16 @@ end
 
 # Dependency order over the setup vars (A_ij before its row sums).
 function _geom_setup_order(setup, defs)
-    order = String[]; done = Set{String}()
     deps = Dict{String, Set{String}}(n => intersect(_referenced_var_names(defs[n]), setup) for n in setup)
-    while length(order) < length(setup)
-        progressed = false
-        for n in setup
-            n in done && continue
-            if all(d -> d in done, deps[n])
-                push!(order, n); push!(done, n); progressed = true
-            end
-        end
-        progressed || throw(
+    return _dependency_order(
+        setup, n -> deps[n];
+        on_cycle = _ -> throw(
             TreeWalkError(
                 "E_TREEWALK_GEOMETRY_SETUP",
                 "cyclic setup-time geometry dependency"
             )
         )
-    end
-    return order
+    )
 end
 
 # A materialized value-invention join column (`Dict(position => integer key)`,
