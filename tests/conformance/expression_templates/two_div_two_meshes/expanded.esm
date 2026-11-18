@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "two_div_two_meshes",
-    "description": "Expected post-lowering form of two_div_two_meshes/fixture.esm: each div lowered by its own mesh's shape-constrained rule."
+    "description": "Expected post-lowering form of two_div_two_meshes/fixture.esm: each fv_div lowered by its own mesh's shape-constrained rule."
   },
   "index_sets": {
     "cells_a": {

@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "fixpoint_nested_deriv",
-    "description": "A laplacian-sugar rule lowering laplacian(u) -> D(D(u,x),x) + D(D(u,y),y) (pass 1), plus second-derivative stencil rules matching D(D(f,·),·) (pass 2). Exercises the bounded-fixpoint engine (esm-spec §9.6.3): the nested D produced by pass 1 is only lowered in a SUBSEQUENT pass. Converges in exactly 2 productive passes to an identical tree in every binding. See docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8.",
+    "description": "A sugar rule lowering the user op lap_xy(u) -> D(D(u,x),x) + D(D(u,y),y) (pass 1), plus second-derivative stencil rules matching D(D(f,·),·) (pass 2). Exercises the bounded-fixpoint engine (esm-spec §9.6.3): the nested D produced by pass 1 is only lowered in a SUBSEQUENT pass. Converges in exactly 2 productive passes to an identical tree in every binding. See docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md §8.",
     "authors": [
       "open-op-namespace-fixpoint-rewrite conformance"
     ]
@@ -31,7 +31,7 @@
         "lap": {
           "type": "unknown",
           "units": "1",
-          "description": "Laplacian of u via sugar + nested-D stencils"
+          "description": "Laplacian of u via the lap_xy sugar rule + nested-D stencils"
         }
       },
       "equations": [

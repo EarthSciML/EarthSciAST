@@ -26,11 +26,11 @@
         {
           "lhs": "w",
           "rhs": {
-            "op": "grad",
+            "op": "D",
             "args": [
               "u"
             ],
-            "dim": "x"
+            "wrt": "x"
           }
         }
       ],
@@ -41,24 +41,24 @@
           ],
           "priority": 0,
           "match": {
-            "op": "grad",
+            "op": "D",
             "args": [
               "f"
             ],
-            "dim": "x"
+            "wrt": "x"
           },
           "body": {
-            "op": "grad",
+            "op": "D",
             "args": [
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "f"
                 ],
-                "dim": "x"
+                "wrt": "x"
               }
             ],
-            "dim": "x"
+            "wrt": "x"
           }
         }
       }

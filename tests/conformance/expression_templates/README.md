@@ -80,8 +80,12 @@ set. A bound name that is not a declared index set is `undefined_index_set`
 These exercise the auto-applied `match` rewrite engine (esm-spec §9.6.3) and the
 `unlowered_operator` gate (§9.6.3 constraint 6 / §9.6.8) introduced by the
 open-op-namespace RFC (`docs/content/rfcs/open-op-namespace-fixpoint-rewrite.md`).
-grad/div/laplacian/`D` here are **rewrite-target sugar**, privileged in no way —
-this format ships no discretization rules (they live in `../earthscidiscretizations`).
+A spatial `D` (a `wrt` naming an axis) and the user ops here are **rewrite
+targets**, privileged in no way — this format ships no discretization rules (they
+live in `../earthscidiscretizations`). The `grad`/`div`/`laplacian` sugar these
+fixtures once used was removed at esm 3.0.0; each fixture now spells the same
+pattern with spatial `D`, or with a user op where a `D` pattern would change what
+the fixture tests (said in its section below).
 
 **Two fixture shapes.** A fixture that lowers cleanly ships a `fixture.esm` + an
 `expanded.esm` golden (compare post-lowering trees, as with `arrhenius_smoke`). A
@@ -107,8 +111,11 @@ parts.
 
 ### `fixpoint_nested_deriv/` (expanded.esm)
 
-`laplacian(u)` lowered by a sugar rule to `D(D(u,x),x) + D(D(u,y),y)` (pass 1),
-whose nested `D`s are then lowered to stencils by second-derivative rules (pass 2).
+The user op `lap_xy(u)` lowered by a sugar rule to `D(D(u,x),x) + D(D(u,y),y)`
+(pass 1), whose nested `D`s are then lowered to stencils by second-derivative rules
+(pass 2). The pass-1 rule is a user op (it was the `laplacian` sugar until esm
+3.0.0): a spatial-`D` pattern for it would also match its own nested-`D` output,
+and the fixture needs a pass-1 rewrite target that only pass 1 lowers.
 Asserts convergence in exactly 2 productive passes to
 `inv_dx2·u + inv_dy2·u`, identical in every binding — exercising the bounded
 fixpoint (a produced body is re-scanned in a SUBSEQUENT pass, never within the
@@ -116,8 +123,8 @@ pass that produced it).
 
 ### `nonterminating_rewrite/` (error.json, `rewrite_rule_nonterminating`, load)
 
-A self-reintroducing rule (`grad(f) → grad(grad(f))`) that grows the tree every
-pass and never converges. Asserts the engine rejects the file with
+A self-reintroducing rule (`D(f, wrt: x) → D(D(f, wrt: x), wrt: x)`) that grows
+the tree every pass and never converges. Asserts the engine rejects the file with
 `rewrite_rule_nonterminating` once `MAX_REWRITE_PASSES = 64` productive passes have
 run — nontermination is caught by the pass bound, NOT by a static pre-check.
 
@@ -139,19 +146,23 @@ priority/declaration-order selection.
 
 ### `constrained_match_scope/` (expanded.esm)
 
-One shape-constrained div rule (`where: {F: {shape: ["edges"]}}`), two shaped
-variables. `div(F_edge)` (over `["edges"]`) is rewritten; `div(F_cell)` (over
-`["cells"]`) is constraint-excluded and survives lowering intact — positive
-and negative case in one golden. The surviving `div` would be rejected by
-`unlowered_operator` only at evaluation (loading is permissive).
+One shape-constrained spatial-`D` rule (`D(F, wrt: x)` with
+`where: {F: {shape: ["edges"]}}`), two shaped variables. `D(F_edge, wrt: x)`
+(over `["edges"]`) is rewritten; `D(F_cell, wrt: x)` (over `["cells"]`) is
+constraint-excluded and survives lowering intact — positive and negative case in
+one golden. The surviving spatial `D` would be rejected by `unlowered_operator`
+only at evaluation (loading is permissive).
 
 ### `two_div_two_meshes/` (expanded.esm)
 
-Two structurally IDENTICAL equal-priority `{op: "div", args: ["F"]}` rules,
+Two structurally IDENTICAL equal-priority `{op: "fv_div", args: ["F"]}` rules,
 each `where`-scoped to its own mesh's edge set (`edges_a` / `edges_b`). Each
-`div` lowers by its own mesh's rule. Without the constraints, the §9.6.3
+`fv_div` lowers by its own mesh's rule. Without the constraints, the §9.6.3
 declaration-order tie-break would send both nodes to the first-declared rule —
-the two-grids-two-schemes inexpressibility this mechanism closes.
+the two-grids-two-schemes inexpressibility this mechanism closes. `fv_div` is a
+user op (the fixture used the `div` sugar until esm 3.0.0): a finite-volume
+divergence from edges to cells on an unstructured mesh is not a derivative along
+one axis, so it cannot be written as spatial `D`.
 
 ### `per_variable_scheme_literal_args/` (expanded.esm)
 
@@ -168,6 +179,21 @@ A `where` shape constraint naming an index set the consuming document's merged
 registry does not declare. Rejected at rule registration — a constraint typo
 fails loudly (mirroring `template_import_unknown_name`); a constrained rule
 that merely never fires is NOT an error.
+
+### `import_where_rename_two_instances/` (expanded.esm) and `import_where_rename_unknown_index_set/` (error.json, `template_constraint_unknown_index_set`, load)
+
+`where` scoping across a §9.7.7 import-edge rename. One grid-family library
+(`fv_div_grid.esm`) carries a `where`-constrained rule on the user op `fv_div`
+(`where: {F: {shape: ["x"]}}`) and is imported twice under `prefix: "meshA"` /
+`"meshB"`: the rename must rewrite the `where` shape to `meshA.x` / `meshB.x`
+in lockstep with the index set, and each instance then fires only on its own
+mesh's field. The unknown-index-set variant (`fv_div_grid_badwhere.esm`)
+constrains on an index set the library never declares, which the rename leaves
+as spelled, and is rejected at rule registration. The pattern is a user op (the
+`div` sugar until esm 3.0.0) because it must name NO axis: a spatial-`D` pattern
+carries its axis in `wrt`, which the same rename rewrites, so the instances
+would differ by `wrt` and the renamed `where` would no longer be the only thing
+telling them apart. The `wrt`-renaming case is `import_rename_two_instances/`.
 
 ## Template-library import fixtures (esm-spec §9.7, 0.8.0)
 
@@ -283,7 +309,7 @@ like the structural string field standing beside them in the same node:
 
 | metaparameter | default | collides with |
 |---|---|---|
-| `lev` | 4 | the axis-naming scalars `dim` (§4.9.1), `wrt`, and `integral`'s `var` (§4.2) |
+| `lev` | 4 | the axis-naming scalars `dim` (§4.9.1, carried here by the user op `upwind_gradient`), `wrt`, and `integral`'s `var` (§4.2) |
 | `max` | 3 | the `op` operator name, and the `reduce` / `fn` / `attrs` registry values |
 | `flux` | 7 | a node `id` |
 | `continuous` | 5 | an `expect_cadence` enum value |

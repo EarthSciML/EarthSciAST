@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "AdvectionReactionLoadedICBC",
-    "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose two-arg grad templates each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data source through the ChemistryICs parameters the scoped-reference ic equations name. Runs end to end through EarthSciAST.simulate. From 1.0.0 every loaded field is a PARAMETER carrying an `update` that names its `data_sources` entry and binds one of its file variables (esm-spec 8.5) -- there is no loader component and no coupling edge: the initial fields are ChemistryICs.{O3,NO,NO2}_init read from InitialConditions, and the wind field and per-species western inflow BCs are Advection.u_wind read from Meteorology and Advection.*_inflow read from BoundaryConditions (spec 11.5 'BCs from data'). lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",
+    "description": "Runnable worked example of the v0.8.0 scoped-reference `ic` pattern (spec 11.4.1) for a REAL reaction system spatially lifted by advection. A 0-D O3-NOx reaction network (`Chemistry`) is lowered to generic per-species ODEs, spatially LIFTED onto a 4x2 lon/lat grid by operator_compose(Chemistry, Advection) with lifting:pointwise, and transported by per-species lon advection whose spatial-D templates (a spatial D with one trailing boundary operand) each read that species' own loaded western Dirichlet inflow. The lifted species draw their initial FIELDS from a data source through the ChemistryICs parameters the scoped-reference ic equations name. Runs end to end through EarthSciAST.simulate. From 1.0.0 every loaded field is a PARAMETER carrying an `update` that names its `data_sources` entry and binds one of its file variables (esm-spec 8.5) -- there is no loader component and no coupling edge: the initial fields are ChemistryICs.{O3,NO,NO2}_init read from InitialConditions, and the wind field and per-species western inflow BCs are Advection.u_wind read from Meteorology and Advection.*_inflow read from BoundaryConditions (spec 11.5 'BCs from data'). lat advection is dropped (lon-only transport on the tiny grid) for a minimal, self-contained run.",
     "authors": [
       "EarthSciML Test Suite"
     ],
@@ -112,7 +112,7 @@
       "tests": [
         {
           "id": "lifted_reaction_advection_loaded_ic_bc",
-          "description": "End-to-end tree-walk run (EarthSciAST.simulate) of the SPATIALLY-LIFTED reaction network: Chemistry is lowered to generic per-species ODEs, operator_compose merges each with its per-species advection (two-arg grad, per-species loaded western inflow), and the pointwise lift array-ifies the merged equations onto the 4x2 grid. The lifted species are seeded from the loaded InitialConditions.* fields by scoped-reference ic equations (spec 11.4.1). t=0 assertions pin the loaded initial fields; t=600 assertions pin the coupled reaction+advection trajectory. Loaded fields (const arrays) are supplied by the runner; see loaded_ic_bc_simulation_test.jl.",
+          "description": "End-to-end tree-walk run (EarthSciAST.simulate) of the SPATIALLY-LIFTED reaction network: Chemistry is lowered to generic per-species ODEs, operator_compose merges each with its per-species advection (spatial D with a trailing inflow operand, per-species loaded western inflow), and the pointwise lift array-ifies the merged equations onto the 4x2 grid. The lifted species are seeded from the loaded InitialConditions.* fields by scoped-reference ic equations (spec 11.4.1). t=0 assertions pin the loaded initial fields; t=600 assertions pin the coupled reaction+advection trajectory. Loaded fields (const arrays) are supplied by the runner; see loaded_ic_bc_simulation_test.jl.",
           "time_span": {
             "start": 0,
             "end": 600
@@ -191,7 +191,7 @@
   "models": {
     "Advection": {
       "reference": {
-        "notes": "Per-species (non-generic) lon advection operator. Each equation transports ONE lifted chemistry species and carries its OWN loaded western Dirichlet inflow via a TWO-ARG grad template grad(<sp>, <sp>_inflow, dim:lon) — the schema does not constrain grad arity, so a second metavariable binds the per-species boundary field. operator_compose(Chemistry, Advection) MERGES each D(Chemistry.<sp>) advection contribution with the reaction ODE for that species (additive coupling), and the pointwise lift then array-ifies the merged equations onto the grid. Naming the reaction species explicitly (vs. the generic `_var` operator) is what lets each species bind its own inflow field; this is a legitimate additive operator contribution, not an over-determination."
+        "notes": "Per-species (non-generic) lon advection operator. Each equation transports ONE lifted chemistry species and carries its OWN loaded western Dirichlet inflow via a spatial-D template D(<sp>, <sp>_inflow, wrt:lon) — a spatial D may carry trailing auxiliary operands (esm-spec §4.2), so a second metavariable binds the per-species boundary field. operator_compose(Chemistry, Advection) MERGES each D(Chemistry.<sp>) advection contribution with the reaction ODE for that species (additive coupling), and the pointwise lift then array-ifies the merged equations onto the grid. Naming the reaction species explicitly (vs. the generic `_var` operator) is what lets each species bind its own inflow field; this is a legitimate additive operator contribution, not an over-determination."
       },
       "variables": {
         "u_wind": {
@@ -264,18 +264,18 @@
       },
       "expression_templates": {
         "grad_lon_inflow": {
-          "description": "Two-arg grad template: grad(f, inflow, dim:lon) binds the species field to `f` and its own loaded western-inflow field to `inflow`. Lowers to a makearray over the 4x2 grid: interior central difference, a loaded Dirichlet inflow on the west face (i=1) reading index(inflow, j), and a one-sided outflow on the east face (i=4).",
+          "description": "Spatial D with a trailing boundary operand: D(f, inflow, wrt:lon) binds the species field to `f` and its own loaded western-inflow field to `inflow`. Lowers to a makearray over the 4x2 grid: interior central difference, a loaded Dirichlet inflow on the west face (i=1) reading index(inflow, j), and a one-sided outflow on the east face (i=4).",
           "params": [
             "f",
             "inflow"
           ],
           "match": {
-            "op": "grad",
+            "op": "D",
             "args": [
               "f",
               "inflow"
             ],
-            "dim": "lon"
+            "wrt": "lon"
           },
           "body": {
             "op": "makearray",
@@ -453,12 +453,12 @@
                 ]
               },
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "Chemistry.O3",
                   "O3_inflow"
                 ],
-                "dim": "lon"
+                "wrt": "lon"
               }
             ]
           }
@@ -482,12 +482,12 @@
                 ]
               },
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "Chemistry.NO",
                   "NO_inflow"
                 ],
-                "dim": "lon"
+                "wrt": "lon"
               }
             ]
           }
@@ -511,12 +511,12 @@
                 ]
               },
               {
-                "op": "grad",
+                "op": "D",
                 "args": [
                   "Chemistry.NO2",
                   "NO2_inflow"
                 ],
-                "dim": "lon"
+                "wrt": "lon"
               }
             ]
           }
