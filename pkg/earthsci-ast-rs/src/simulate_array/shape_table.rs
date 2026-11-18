@@ -5,9 +5,11 @@
 //! compiled one, the inline-test runner — reads this table rather than
 //! inferring the shape again from a system that may no longer decide it.
 //!
-//! The table holds axes, not extents: the extents of an index set are not
-//! final until the build has scoped its ragged factors and sized its derived
-//! sets, so a reader resolves the axes it reads against the registry it holds
+//! The table holds axes, not extents. Most of a build's extents are not the
+//! table's to give: a state or a forcing parameter whose declared axes the
+//! registry cannot size is sized from how the equations index it, and a
+//! derived set from value invention, both after normalization. A reader
+//! resolves the axes it reads against the registry it holds
 //! ([`super::resolve_declared_shape`]).
 
 use super::HashMap;
@@ -31,6 +33,9 @@ pub(crate) enum ShapeSource {
     Lifted,
     /// The shape the program a restricted system was cut from built it at.
     Inherited,
+    /// The stacked variable of a recurrence group (esm-spec §4.3.1.2): the
+    /// members' frame axes and the member axis, which the stacking declares.
+    Stacked,
 }
 
 impl ShapeSource {
@@ -45,6 +50,15 @@ impl ShapeSource {
     }
 }
 
+impl ShapeSource {
+    /// Whether the build's model declares this shape: written into the
+    /// variable's declaration by the document, a shape rewrite or the
+    /// stacking. A lifted shape and an inferred one are recorded here only.
+    fn is_declared(self) -> bool {
+        !matches!(self, ShapeSource::Inferred | ShapeSource::Lifted)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ShapeEntry {
     pub(super) axes: Vec<String>,
@@ -53,7 +67,8 @@ pub(super) struct ShapeEntry {
 
 /// Every shaped variable of a build, keyed by the name the build gives it,
 /// and the unshaped variables whose shape only data can decide. A variable
-/// absent from the table is a scalar.
+/// absent from the table is a scalar, and so is one declared `shape: []`,
+/// which the table records as declared with no axes.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ShapeTable {
     pub(super) entries: HashMap<String, ShapeEntry>,
@@ -91,6 +106,16 @@ impl ShapeTable {
                 (name, ShapeEntry { axes, source })
             })
             .collect();
+        // A `shape: []` declaration states a scalar, which a reader of the
+        // declarations tells apart from no `shape` at all.
+        for (name, var) in &model.variables {
+            if var.shape.as_ref().is_some_and(Vec::is_empty) {
+                entries.entry(name.clone()).or_insert(ShapeEntry {
+                    axes: Vec::new(),
+                    source: ShapeSource::Declared,
+                });
+            }
+        }
         let mut set = |name: String, axes: Vec<String>, source: ShapeSource| {
             entries.insert(name, ShapeEntry { axes, source });
         };
@@ -113,9 +138,60 @@ impl ShapeTable {
         }
     }
 
+    /// Record each stacked recurrence-group variable ([`ShapeSource::Stacked`]),
+    /// which the stacking adds after the shape rewrites.
+    pub(super) fn record_stacked(&mut self, stacked: Vec<(String, Vec<String>)>) {
+        for (name, axes) in stacked {
+            self.entries.insert(
+                name,
+                ShapeEntry {
+                    axes,
+                    source: ShapeSource::Stacked,
+                },
+            );
+        }
+    }
+
     /// `name`'s axes, declared or decided by the build; `None` for a scalar.
     pub(crate) fn axes(&self, name: &str) -> Option<&[String]> {
-        self.entries.get(name).map(|e| e.axes.as_slice())
+        self.entries
+            .get(name)
+            .filter(|e| !e.axes.is_empty())
+            .map(|e| e.axes.as_slice())
+    }
+
+    /// `name`'s axes as the build's model declares them: the document's
+    /// `shape` (`Some(&[])` for `shape: []`), or the one a shape rewrite or
+    /// the stacking wrote into the declaration. `None` for a variable whose
+    /// declaration has no `shape`, though the table may hold axes for it
+    /// ([`ShapeSource::Inferred`], [`ShapeSource::Lifted`]).
+    pub(crate) fn declared(&self, name: &str) -> Option<&[String]> {
+        self.entries
+            .get(name)
+            .filter(|e| e.source.is_declared())
+            .map(|e| e.axes.as_slice())
+    }
+
+    /// `name`'s axes as the flattened system declares them, else as the
+    /// build decided them where no declaration records them
+    /// ([`Self::built_axes`]): every source but an inferred shape and a
+    /// stacked recurrence group, which the flattened system does not hold.
+    pub(crate) fn flattened_or_built_axes(&self, name: &str) -> Option<&[String]> {
+        self.entries
+            .get(name)
+            .filter(|e| !matches!(e.source, ShapeSource::Inferred | ShapeSource::Stacked))
+            .map(|e| e.axes.as_slice())
+    }
+
+    /// [`Self::declared`] for every name `keep` admits, as the join lowering
+    /// takes it ([`crate::join::declared_var_shapes`] is the same map read
+    /// from a model's declarations).
+    pub(crate) fn declared_map(&self, keep: impl Fn(&str) -> bool) -> HashMap<String, Vec<String>> {
+        self.entries
+            .iter()
+            .filter(|(n, e)| e.source.is_declared() && keep(n))
+            .map(|(n, e)| (n.clone(), e.axes.clone()))
+            .collect()
     }
 
     /// `name`'s axes when the build decided them where no declaration
@@ -245,6 +321,88 @@ mod tests {
         assert_eq!(table.built_axes("M.G"), None);
         assert_eq!(table.axes("M.S"), None);
         assert_eq!(table.axes("M.lev"), None);
+    }
+
+    /// The declarations view gives what the build's model declares: a
+    /// `shape: []` scalar is declared with no axes, a rewrite's shape is
+    /// declared, an inferred one is not.
+    #[test]
+    fn the_declared_view_is_what_the_model_declares() {
+        let table = table_of(
+            doc(serde_json::json!([
+                {"lhs": "X", "rhs": {"op": "ifelse", "args": [
+                    {"op": "<", "args": ["lev", 2.0]},
+                    {"op": "*", "args": ["F", 2.0]}, 0.0]}},
+                {"lhs": "G", "rhs": {"op": "*", "args": ["F", 3.0]}},
+                {"lhs": "S", "rhs": 1.0}
+            ])),
+            None,
+        );
+        let cell = ["cell".to_string()];
+        assert_eq!(table.declared("M.F"), Some(&cell[..]));
+        assert_eq!(table.declared("M.X"), Some(&cell[..]));
+        assert_eq!(table.declared("M.G"), None);
+        assert_eq!(table.declared("M.S"), Some(&[][..]));
+        assert_eq!(table.declared("M.lev"), None);
+        let map = table.declared_map(|n| n != "M.F");
+        assert_eq!(map.get("M.S"), Some(&Vec::new()));
+        assert_eq!(map.get("M.X"), Some(&cell.to_vec()));
+        assert!(!map.contains_key("M.F") && !map.contains_key("M.G"));
+    }
+
+    /// Normalization records a recurrence group's stacked variable, which the
+    /// shape rewrites never see: declared, but not a shape the flattened
+    /// system holds.
+    #[test]
+    fn a_stacked_recurrence_group_is_recorded() {
+        let doc = serde_json::json!({
+            "esm": "2.0.0",
+            "metadata": {"name": "stacked"},
+            "index_sets": {"lev": {"kind": "interval", "size": 4}},
+            "models": {"M": {
+                "variables": {
+                    "a": {"type": "unknown", "shape": ["lev"]},
+                    "b": {"type": "unknown", "shape": ["lev"]}
+                },
+                "equations": [
+                    {"lhs": "a", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                        "ranges": {"k": {"from": "lev"}},
+                        "expr": {"op": "ifelse", "args": [{"op": "<=", "args": ["k", 1]}, 1.0,
+                            {"op": "index", "args": ["b", {"op": "-", "args": ["k", 1]}]}]}}},
+                    {"lhs": "b", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                        "ranges": {"k": {"from": "lev"}},
+                        "expr": {"op": "ifelse", "args": [{"op": "<=", "args": ["k", 1]}, 2.0,
+                            {"op": "index", "args": ["a", {"op": "-", "args": ["k", 1]}]}]}}}
+                ]
+            }}
+        });
+        let file = crate::parse::load_string(&doc.to_string()).expect("loads");
+        let flat = crate::flatten::flatten(&file).expect("flattens");
+        let index_sets: HashMap<String, IndexSet> = flat
+            .index_sets
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let normalized = crate::simulate_array::normalize(
+            crate::simulate_array::BuildInput::Flattened {
+                flat: &flat,
+                inherited: None,
+            },
+            index_sets,
+        )
+        .expect("normalizes");
+        let (name, var) = normalized
+            .model
+            .variables
+            .iter()
+            .find(|(n, _)| n.contains("__esm_recurrence_group__"))
+            .expect("the group is stacked");
+        let table = &normalized.shapes;
+        assert_eq!(table.source(name), Some(ShapeSource::Stacked));
+        assert_eq!(table.declared(name), var.shape.as_deref());
+        assert_eq!(table.axes(name), var.shape.as_deref());
+        assert_eq!(table.flattened_or_built_axes(name), None);
+        assert_eq!(table.built_axes(name), None);
     }
 
     /// A system cut from a build keeps the shapes that build decided, though

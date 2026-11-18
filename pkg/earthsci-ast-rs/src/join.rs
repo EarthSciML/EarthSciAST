@@ -279,28 +279,30 @@ fn next_gate_id() -> u64 {
 pub fn resolve_aggregate_joins(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
+    declared_shapes: impl FnOnce(&Model) -> HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
     // Resolve each OVERLAP clause's two range symbols FIRST — that resolution
-    // needs the declared shapes of the model's variables. The same shapes are
-    // what let an `on` key column name a genuine DATA COLUMN (a 1-D variable
-    // over the index set its loop symbol draws from), so they are computed once
-    // here and threaded into the per-node lowering too.
+    // needs the declared shapes of the model's variables, which
+    // `declared_shapes` gives as [`declared_var_shapes`] reads them. The same
+    // shapes are what let an `on` key column name a genuine DATA COLUMN (a
+    // 1-D variable over the index set its loop symbol draws from), so they
+    // are read once here and threaded into the per-node lowering too.
     // Both passes below touch only expressions that carry a `join`; one look
     // decides that for the whole model.
     if !model_contains_join(model) {
         return Ok(());
     }
-    let var_shapes = declared_var_shapes(model);
-    resolve_overlap_join_syms(model);
-    check_model_overlap_factor_ranks(model, &var_shapes)?;
+    let var_shapes = &declared_shapes(model);
+    resolve_overlap_join_syms(model, var_shapes);
+    check_model_overlap_factor_ranks(model, var_shapes)?;
     for eq in &mut model.equations {
-        lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
-        lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
+        lower_expr_joins(&mut eq.lhs, index_sets, var_shapes)?;
+        lower_expr_joins(&mut eq.rhs, index_sets, var_shapes)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
-            lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
+            lower_expr_joins(&mut eq.lhs, index_sets, var_shapes)?;
+            lower_expr_joins(&mut eq.rhs, index_sets, var_shapes)?;
         }
     }
     // Parameter-update expressions are the only Expressions still carried on a
@@ -308,7 +310,7 @@ pub fn resolve_aggregate_joins(
     // above.
     for var in model.variables.values_mut() {
         var.try_for_each_expression_mut(&mut |expr| {
-            lower_expr_joins(expr, index_sets, &var_shapes)
+            lower_expr_joins(expr, index_sets, var_shapes)
         })?;
     }
     Ok(())
@@ -926,20 +928,19 @@ fn raw_key_expr(s: &ResolvedSide) -> Result<Expr, CompileError> {
 /// drive that gate. The §5.5.6 errors Julia raises from the same resolver —
 /// a list of the wrong length, a factor of the wrong rank — are raised by
 /// [`check_overlap_factor_ranks`], which every caller runs beside this.
-pub fn resolve_overlap_join_syms(model: &mut Model) {
-    let var_shapes = declared_var_shapes(model);
+pub fn resolve_overlap_join_syms(model: &mut Model, var_shapes: &HashMap<String, Vec<String>>) {
     for eq in &mut model.equations {
-        resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
-        resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+        resolve_overlap_syms_expr(&mut eq.lhs, var_shapes);
+        resolve_overlap_syms_expr(&mut eq.rhs, var_shapes);
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            resolve_overlap_syms_expr(&mut eq.lhs, &var_shapes);
-            resolve_overlap_syms_expr(&mut eq.rhs, &var_shapes);
+            resolve_overlap_syms_expr(&mut eq.lhs, var_shapes);
+            resolve_overlap_syms_expr(&mut eq.rhs, var_shapes);
         }
     }
     for var in model.variables.values_mut() {
-        var.for_each_expression_mut(&mut |expr| resolve_overlap_syms_expr(expr, &var_shapes));
+        var.for_each_expression_mut(&mut |expr| resolve_overlap_syms_expr(expr, var_shapes));
     }
 }
 
@@ -1010,8 +1011,10 @@ pub fn check_overlap_factor_ranks(
     out
 }
 
-/// Every declared variable's shape (index-set names), for
-/// [`resolve_overlap_join_syms`]. Mirrors the Julia `_declared_var_shapes`.
+/// Every declared variable's shape (index-set names), `shape: []` included,
+/// for [`resolve_overlap_join_syms`]. Mirrors the Julia `_declared_var_shapes`.
+/// A build reads the same map from its shape table
+/// ([`crate::simulate_array::ShapeTable::declared_map`]).
 pub fn declared_var_shapes(model: &Model) -> HashMap<String, Vec<String>> {
     model
         .variables

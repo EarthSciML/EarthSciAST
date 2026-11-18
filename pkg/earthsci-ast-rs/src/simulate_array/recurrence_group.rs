@@ -258,26 +258,27 @@ fn eq_node(a: Expr, b: Expr) -> Expr {
 }
 
 /// Rewrite every recurrence group of `model` into its stacked single
-/// recurrence plus one slice per member (module docs). A model with no group —
-/// every model that does not use the construct — is returned untouched after
-/// one classification pass.
+/// recurrence plus one slice per member (module docs), and return each
+/// stacked variable's name and the axes it is declared over. A model with no
+/// group — every model that does not use the construct — is returned
+/// untouched after one classification pass.
 pub(crate) fn lower_recurrence_groups(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
-) -> Result<(), CompileError> {
+) -> Result<Vec<(String, Vec<String>)>, CompileError> {
     let groups: Vec<BTreeSet<String>> =
         crate::structural::recurrence_groups_of_parts(&model.variables, &model.equations);
-    for group in groups {
-        lower_one_group(model, index_sets, &group)?;
-    }
-    Ok(())
+    groups
+        .iter()
+        .map(|group| lower_one_group(model, index_sets, group))
+        .collect()
 }
 
 fn lower_one_group(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,
     group: &BTreeSet<String>,
-) -> Result<(), CompileError> {
+) -> Result<(String, Vec<String>), CompileError> {
     // Members in equation order first; `order_within_cell` then puts them in
     // the order §4.3.1.2 fixes for the member axis.
     let mut members: Vec<Member> = Vec::new();
@@ -452,7 +453,7 @@ fn lower_one_group(
         "type": "unknown",
     }))
     .expect("an unknown deserializes");
-    w_decl.shape = Some(w_shape);
+    w_decl.shape = Some(w_shape.clone());
     w_decl.element_type = element_type;
     w_decl.description = Some(format!(
         "the stacked recurrence group {names:?} (esm-spec §4.3.1.2), introduced by the build"
@@ -466,10 +467,10 @@ fn lower_one_group(
     model.equations.insert(
         insert_at,
         Equation {
-            lhs: Expr::Variable(w),
+            lhs: Expr::Variable(w.clone()),
             rhs: w_rhs,
             comment: None,
         },
     );
-    Ok(())
+    Ok((w, w_shape))
 }

@@ -1475,15 +1475,16 @@ impl<'o> BuildState<'o> {
     /// shape — the build's, for an unshaped mixed-rank `ifelse` — or, for one
     /// whose shape the data of its data-fed parameters decides, the shape that
     /// data has here. `None` when neither gives one the registry can size.
+    /// Both come from the build's shape table; an inferred shape is not a
+    /// declared one, as rule lowering reads it.
     fn fill_shape(&self, name: &str) -> Option<Vec<usize>> {
-        self.model
-            .variables
-            .get(name)
-            .and_then(|v| v.shape.as_deref())
+        let shapes = &self.built_variables.shapes;
+        shapes
+            .declared(name)
             .filter(|s| !s.is_empty())
             .and_then(|s| crate::simulate_array::resolve_declared_shape(s, &self.index_sets))
             .or_else(|| {
-                let fed = self.built_variables.shapes.data_shaped(name)?;
+                let fed = shapes.data_shaped(name)?;
                 crate::flatten::data_fill_shape(fed, |n| {
                     self.arrays.get(n).map(|a| a.shape().to_vec())
                 })
@@ -2119,7 +2120,10 @@ impl<'o> BuildState<'o> {
     fn collect_observed_defs(&mut self) -> Result<(), SimulateError> {
         let mut defs = observed_defs(&self.model);
         {
-            let var_shapes = crate::join::declared_var_shapes(&self.model);
+            let var_shapes = self
+                .built_variables
+                .shapes
+                .declared_map(|n| self.model.variables.contains_key(n));
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
                 crate::join::check_overlap_factor_ranks(e, &var_shapes)
