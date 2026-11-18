@@ -1784,7 +1784,7 @@ function _ac_take_consumers(
         c = _scan_consumer(outs, free, nst)
         g2 = c === nothing ? nothing : emit(c)
         if g2 isa _ArrayContraction
-            consumed[c[1]] = true
+            consumed[c.K] = true
             _tally_cascade!(:array_contraction_consumer)
             push!(out, g2)
         else

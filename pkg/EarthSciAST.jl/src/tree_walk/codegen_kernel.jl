@@ -169,10 +169,9 @@ mutable struct _CGCtx
     olnext::IdDict{Any, Tuple{Int, Int}}
     subks::IdDict{Any, Bool}
     sidememo::IdDict{Any, Tuple{Int, Int}}
-    # A fused scan's consumer body (scan_fused.jl): `nothing`, `(K, ix, v)` —
-    # kernel `K`'s descriptor `ix` reads as the local `v` — or `(K, Dict(ix =>
-    # v))` for several descriptors.
-    subst::Any
+    # A scan consumer's body (scan_fused.jl): `nothing`, or `(K, Dict(ix =>
+    # v))` — kernel `K`'s descriptor `ix` reads as the local `v`.
+    subst::Union{Nothing, Tuple{_AccKernel, Dict{Int, Any}}}
     # Shared invariant prologue (see `_cg_inv!`): the geometry local the
     # prologue already holds for a (field, value) pair, the invariant local
     # already holding an emitted invariant expression, and the keys of both in
@@ -675,13 +674,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     if k === _NK_ACCESS
         sb = ctx.subst
         if sb !== nothing && kc.K === sb[1]
-            # One descriptor `(K, ix, v)`, or several `(K, Dict(ix => v))`.
-            if sb[2] isa Int
-                nd.idx == sb[2] && return sb[3]
-            else
-                v = get(sb[2], nd.idx, nothing)
-                v === nothing || return v
-            end
+            v = get(sb[2], nd.idx, nothing)
+            v === nothing || return v
         end
         return _cg_fetch(ctx, kc, kc.K.acc[nd.idx], (kc.K.acc, nd.idx))
     elseif k === _NK_LITERAL
@@ -991,7 +985,7 @@ function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
     d = _cg_geo!(ctx, cons.delta, (Kc, :scan_consumer_delta))
     kc = _CGKernCtx(Kc, oc, 1, 1, 1, Symbol[], cons.invsyms)
     stmts = Any[:(local $oc = $oln - $d)]
-    ctx.subst = (Kc, cons.ix, xv)
+    ctx.subst = (Kc, Dict{Int, Any}(cons.ix => xv))
     try
         _cg_emit_recipes!(stmts, ctx, kc)
         val = _cg_bound_body!(ctx, _cg_emit(ctx, kc, Kc.spine))
@@ -2292,17 +2286,6 @@ end
 # …), packed in a small tuple, plus the split helpers in the by-value transport.
 _cg_tabpack(ctx::_CGCtx, fns) =
     _cg_pack_fns(ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), length(ctx.tab_types)), fns)
-
-# A state consumer `(K, ix, delta[, …])` taken into a generated section, as the
-# emitter reads it: the kernel, the descriptor it reads the section's value
-# through, the slot offset, whether the value is still stored, and the
-# consumer's invariant symbols (registered with the function's prologue).
-function _cg_consumer(ctx::_CGCtx, consumer, store::Bool = true)
-    consumer === nothing && return nothing
-    Kc, ix, delta = consumer[1], consumer[2], consumer[3]
-    _cg_note_nest!(ctx, Kc)
-    return (K = Kc, ix = ix, delta = delta, store = store, invsyms = _cg_inv!(ctx, Kc))
-end
 
 # The signature of a section's generated function.
 const _CG_SECTION_ARGS = (:du, :u, :p, :t, :tabs, :_cgci, :_cgnc)
