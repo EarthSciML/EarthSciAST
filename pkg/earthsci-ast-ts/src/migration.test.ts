@@ -4,9 +4,11 @@
  * A migration changes only the `esm` marker. It is sound along an ADDITIVE line
  * — a run of releases whose changes were additive, so an older file already
  * loads under the newer schema; the current line is
- * `2.0.0 … <current schema version>` — and across the 2.0.0 break for a 1.x
- * document that uses none of the constructs 2.0.0 removed. A 1.x document that
- * does use one is refused with `removed_op`, naming the codemod.
+ * `3.0.0 … <current schema version>` — and across the 2.0.0 and 3.0.0 breaks
+ * for a 1.x or 2.x document that uses none of the constructs those majors
+ * removed. A 1.x or 2.x document that does use one is refused with
+ * `removed_op`: naming the codemod for a 2.0.0 removal, and spatial `D`
+ * (MIGRATION.md, "esm 3.0.0") for `grad`, `div` and `laplacian`.
  *
  * Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
  * declared variable types collapse to two, an observed variable's `expression`
@@ -14,8 +16,8 @@
  * registry, and parameter mutation moves off events onto the parameter. Each of
  * those RESHAPES the document, so a 0.x source has no supported target at all.
  *
- * The 1.x cases need a build that implements major 2; they are skipped while
- * the embedded schema still declares 1.x.
+ * The 1.x and 2.x cases need a build that implements major 3; they are
+ * skipped while the embedded schema still declares an older major.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -32,12 +34,12 @@ import type { EsmFile } from './types.js'
 const fileAt = (version: string): EsmFile =>
   ({ esm: version, metadata: { name: 'test' } }) as unknown as EsmFile
 
-const IMPLEMENTS_V2 = SCHEMA_VERSION.startsWith('2.')
+const IMPLEMENTS_V3 = SCHEMA_VERSION.startsWith('3.')
 
-/** A 1.3.0 document whose one equation's right-hand side is `rhs`. */
-const v1WithRhs = (rhs: unknown, extra: Record<string, unknown> = {}): EsmFile =>
+/** A document at `esm` (1.3.0 by default) whose one equation's right-hand side is `rhs`. */
+const v1WithRhs = (rhs: unknown, extra: Record<string, unknown> = {}, esm = '1.3.0'): EsmFile =>
   ({
-    esm: '1.3.0',
+    esm,
     metadata: { name: 'v1' },
     models: {
       M: {
@@ -60,21 +62,28 @@ describe('migration', () => {
       expect(getSupportedMigrationTargets(SCHEMA_VERSION)).toEqual([SCHEMA_VERSION])
     })
 
-    it.runIf(IMPLEMENTS_V2)('offers the current schema to every 1.x source', () => {
+    it.runIf(IMPLEMENTS_V3)('offers the current schema to every 1.x source', () => {
       for (const source of ['1.0.0', '1.1.0', '1.2.0', '1.3.0']) {
         expect(getSupportedMigrationTargets(source)).toEqual([SCHEMA_VERSION])
       }
     })
 
+    it.runIf(IMPLEMENTS_V3)('offers the current schema to every 2.x source', () => {
+      for (const source of ['2.0.0', '2.1.0', '2.2.0', '2.3.0']) {
+        expect(getSupportedMigrationTargets(source)).toEqual([SCHEMA_VERSION])
+      }
+    })
+
     it('returns [] for a version newer than the current schema', () => {
-      // Same major, but beyond the current additive ceiling; and a 1.x minor
-      // newer than the last 1.x release.
+      // Same major, but beyond the current additive ceiling; and a 1.x or 2.x
+      // minor newer than the last release of that major.
+      expect(getSupportedMigrationTargets('3.99.0')).toEqual([])
       expect(getSupportedMigrationTargets('2.99.0')).toEqual([])
       expect(getSupportedMigrationTargets('1.99.0')).toEqual([])
     })
 
     it('returns [] for a higher major version', () => {
-      expect(getSupportedMigrationTargets('3.0.0')).toEqual([])
+      expect(getSupportedMigrationTargets('4.0.0')).toEqual([])
     })
 
     it('returns [] for a malformed version string', () => {
@@ -90,9 +99,14 @@ describe('migration', () => {
       expect(canMigrate('0.9.0', SCHEMA_VERSION)).toBe(false)
     })
 
-    it.runIf(IMPLEMENTS_V2)('accepts a 1.x source bumped to the current schema', () => {
+    it.runIf(IMPLEMENTS_V3)('accepts a 1.x source bumped to the current schema', () => {
       expect(canMigrate('1.0.0', SCHEMA_VERSION)).toBe(true)
       expect(canMigrate('1.3.0', SCHEMA_VERSION)).toBe(true)
+    })
+
+    it.runIf(IMPLEMENTS_V3)('accepts a 2.x source bumped to the current schema', () => {
+      expect(canMigrate('2.0.0', SCHEMA_VERSION)).toBe(true)
+      expect(canMigrate('2.3.0', SCHEMA_VERSION)).toBe(true)
     })
 
     it('accepts a current-version file migrated to itself (identity no-op)', () => {
@@ -102,7 +116,9 @@ describe('migration', () => {
     it('rejects an additive-line source targeting an intermediate (non-current) version', () => {
       // Only the current schema is a valid target; per-minor jumps are not offered.
       expect(canMigrate('1.0.0', '1.0.1')).toBe(false)
-      expect(canMigrate('1.0.0', '3.0.0')).toBe(false)
+      expect(canMigrate('1.0.0', '2.3.0')).toBe(false)
+      expect(canMigrate('2.0.0', '2.3.0')).toBe(false)
+      expect(canMigrate('1.0.0', '4.0.0')).toBe(false)
     })
   })
 
@@ -114,7 +130,7 @@ describe('migration', () => {
       expect(source.esm).toBe('0.9.0')
     })
 
-    it.runIf(IMPLEMENTS_V2)('relabels a 1.x file that uses no removed construct', () => {
+    it.runIf(IMPLEMENTS_V3)('relabels a 1.x file that uses no removed construct', () => {
       const source = fileAt('1.0.0')
       const migrated = migrate(source, SCHEMA_VERSION)
 
@@ -123,7 +139,7 @@ describe('migration', () => {
       expect(source.esm).toBe('1.0.0')
     })
 
-    it.runIf(IMPLEMENTS_V2)('relabels a 1.x file that calls an esm:std template', () => {
+    it.runIf(IMPLEMENTS_V3)('relabels a 1.x file that calls an esm:std template', () => {
       const source = v1WithRhs({
         op: 'apply_expression_template',
         args: [],
@@ -148,7 +164,7 @@ describe('migration', () => {
       ['aggregate', { op: 'aggregate', args: [], output_idx: [], expr: 'x', ranges: {} }],
     ]
     for (const [op, node] of removed) {
-      it.runIf(IMPLEMENTS_V2)(`refuses a 1.x file using \`${op}\` with removed_op`, () => {
+      it.runIf(IMPLEMENTS_V3)(`refuses a 1.x file using \`${op}\` with removed_op`, () => {
         const source = v1WithRhs({ op: '+', args: [1, node] })
         let err: unknown
         try {
@@ -165,8 +181,38 @@ describe('migration', () => {
       })
     }
 
+    it.runIf(IMPLEMENTS_V3)('relabels a 2.x file that uses no removed construct', () => {
+      const source = v1WithRhs({ op: 'D', args: ['x'], wrt: 'y' }, {}, '2.3.0')
+      const migrated = migrate(source, SCHEMA_VERSION)
+      expect(migrated.esm).toBe(SCHEMA_VERSION)
+      expect(source.esm).toBe('2.3.0')
+    })
+
+    for (const esm of ['1.3.0', '2.3.0']) {
+      for (const op of ['grad', 'div', 'laplacian']) {
+        it.runIf(IMPLEMENTS_V3)(`refuses a ${esm} file using \`${op}\` with removed_op`, () => {
+          const source = v1WithRhs({ op: '+', args: [1, { op, args: ['x'], dim: 'y' }] }, {}, esm)
+          let err: unknown
+          try {
+            migrate(source, SCHEMA_VERSION)
+          } catch (e) {
+            err = e
+          }
+          expect(err).toBeInstanceOf(MigrationError)
+          expect((err as MigrationError).code).toBe('removed_op')
+          const message = (err as MigrationError).message
+          expect(message).toContain(`"op": "${op}"`)
+          expect(message).toContain('/models/M/equations/0/rhs/args/1')
+          expect(message).toContain('was removed at esm 3.0.0')
+          expect(message).toContain('MIGRATION.md, "esm 3.0.0"')
+          expect(message).not.toContain('python -m earthsci_ast.migrate')
+          expect(source.esm).toBe(esm)
+        })
+      }
+    }
+
     for (const where of ['top-level', 'component-level']) {
-      it.runIf(IMPLEMENTS_V2)(`refuses a 1.x file with a ${where} function_tables block`, () => {
+      it.runIf(IMPLEMENTS_V3)(`refuses a 1.x file with a ${where} function_tables block`, () => {
         const block = { T: { axes: [{ name: 'a', values: [0, 1] }], data: [0, 1] } }
         const source =
           where === 'top-level'
@@ -203,7 +249,8 @@ describe('migration', () => {
     })
 
     it('throws MigrationError for an unsupported version pair', () => {
-      expect(() => migrate(fileAt('1.0.0'), '3.0.0')).toThrow(MigrationError)
+      expect(() => migrate(fileAt('1.0.0'), '4.0.0')).toThrow(MigrationError)
+      expect(() => migrate(fileAt('2.3.0'), '2.3.0')).toThrow(MigrationError)
       expect(() => migrate(fileAt('0.1.0'), SCHEMA_VERSION)).toThrow(MigrationError)
     })
 

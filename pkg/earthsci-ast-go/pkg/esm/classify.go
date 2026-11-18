@@ -169,8 +169,8 @@ func ConstantParameters(model *Model) []string {
 //  4. otherwise                                => "ode"
 //
 // The order is normative and two orderings that look interchangeable are not.
-// "pde" is tested BEFORE "nonlinear" so a steady-state PDE (laplacian(phi) ~ f,
-// which has no time derivative) does not fall through to "nonlinear"; "sde" is
+// "pde" is tested BEFORE "nonlinear" so a steady-state PDE
+// (D(D(phi, wrt: x), wrt: x) ~ f, which has no time derivative) does not fall through to "nonlinear"; "sde" is
 // tested BEFORE "pde" because there is no SPDESystem constructor to select for
 // a model that is both.
 //
@@ -381,8 +381,7 @@ func hasTimeDerivative(model *Model) bool {
 }
 
 // hasDifferentialOperator reports whether any equation uses a SPATIAL
-// differential operator — a `D` with an explicit non-temporal `wrt`, or one of
-// the named vector-calculus ops.
+// differential operator — a `D` with an explicit non-temporal `wrt`.
 func hasDifferentialOperator(model *Model) bool {
 	for _, eq := range model.Equations {
 		if exprHasSpatialOperator(eq.LHS) || exprHasSpatialOperator(eq.RHS) {
@@ -392,21 +391,13 @@ func hasDifferentialOperator(model *Model) bool {
 	return false
 }
 
-// spatialOperatorOps is exactly the three sugar ops esm-spec 6.3.1 names. The
-// open rewrite-target tier is unbounded, so the rule cannot be "any op that
-// looks differential" and still agree across five bindings; anything else
-// spatial is written as a `D` with a non-`t` `wrt`, handled just below.
-var spatialOperatorOps = map[string]struct{}{
-	"grad": {}, "div": {}, "laplacian": {},
-}
-
+// The open rewrite-target tier is unbounded, so the rule cannot be "any op
+// that looks differential" and still agree across five bindings: a spatial
+// derivative is written as a `D` with a non-`t` `wrt`.
 func exprHasSpatialOperator(expr Expression) bool {
 	node, ok := asExprNode(expr)
 	if !ok {
 		return false
-	}
-	if _, isSpatial := spatialOperatorOps[node.Op]; isSpatial {
-		return true
 	}
 	if node.Op == OpDerivative && node.Wrt != nil && *node.Wrt != DefaultIndepVar {
 		return true

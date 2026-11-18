@@ -7,160 +7,160 @@
       "id": "unit_simple",
       "kind": "print",
       "description": "A number, a thin space, the unit upright.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3\\,\\mathrm{m/s}", "typst": "y = k dot 3 thin upright(\"m\") thin upright(\"s\")^(-1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{m/s}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"m\") thin upright(\"s\")^(-1) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{m/s}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"m\") thin upright(\"s\")^(-1) $\n"
     },
     {
       "id": "unit_power",
       "kind": "print",
       "description": "A unit power.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg/m^3", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg/m^3", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3\\,\\mathrm{kg/m^{3}}", "typst": "y = k dot 3 thin upright(\"kg\") thin upright(\"m\")^(-3)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{kg/m^{3}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"kg\") thin upright(\"m\")^(-3) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{kg/m^{3}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"kg\") thin upright(\"m\")^(-3) $\n"
     },
     {
       "id": "unit_reciprocal",
       "kind": "print",
       "description": "A reciprocal unit; Typst writes each factor with its exponent.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3\\,\\mathrm{1/s}", "typst": "y = k dot 3 thin upright(\"s\")^(-1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1/s}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"s\")^(-1) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1/s}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"s\")^(-1) $\n"
     },
     {
       "id": "unit_product",
       "kind": "print",
       "description": "A product of units.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg*m/s^2", "value": 9.81}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg*m/s^2", "value": 9.81}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 9.81\\,\\mathrm{kg\\,m/s^{2}}", "typst": "y = k dot 9.81 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 9.81\\,\\mathrm{kg\\,m/s^{2}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 9.81 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 9.81\\,\\mathrm{kg\\,m/s^{2}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 9.81 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2) $\n"
     },
     {
       "id": "unit_fractional_power",
       "kind": "print",
       "description": "A fractional exponent.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m^(1/2)", "value": 2}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m^(1/2)", "value": 2}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 2\\,\\mathrm{m^{1/2}}", "typst": "y = k dot 2 thin upright(\"m\")^(1\\/2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2\\,\\mathrm{m^{1/2}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 2 thin upright(\"m\")^(1\\/2) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2\\,\\mathrm{m^{1/2}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 2 thin upright(\"m\")^(1\\/2) $\n"
     },
     {
       "id": "unit_number_density",
       "kind": "print",
       "description": "A count per volume.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "molec/cm^3", "value": 2.5e19}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "molec/cm^3", "value": 2.5e19}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 2.5 \\times 10^{19}\\,\\mathrm{molec/cm^{3}}", "typst": "y = k dot 2.5 times 10^19 thin upright(\"molec\") thin upright(\"cm\")^(-3)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2.5 \\times 10^{19}\\,\\mathrm{molec/cm^{3}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 2.5 times 10^19 thin upright(\"molec\") thin upright(\"cm\")^(-3) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 2.5 \\times 10^{19}\\,\\mathrm{molec/cm^{3}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 2.5 times 10^19 thin upright(\"molec\") thin upright(\"cm\")^(-3) $\n"
     },
     {
       "id": "unit_small_decimal",
       "kind": "print",
       "description": "A small decimal with a unit.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m", "value": 0.0025}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m", "value": 0.0025}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k + 0.0025\\,\\mathrm{m}", "typst": "y = k + 0.0025 thin upright(\"m\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k + 0.0025\\,\\mathrm{m}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k + 0.0025 thin upright(\"m\") $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k + 0.0025\\,\\mathrm{m}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k + 0.0025 thin upright(\"m\") $\n"
     },
     {
       "id": "unit_negative",
       "kind": "print",
       "description": "A negative value with a unit.",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "degC", "value": -40}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "degC", "value": -40}], "op": "+"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k + -40\\,\\mathrm{degC}", "typst": "y = k + -40 thin upright(\"degC\")"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k + -40\\,\\mathrm{degC}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k + -40 thin upright(\"degC\") $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k + -40\\,\\mathrm{degC}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k + -40 thin upright(\"degC\") $\n"
     },
     {
       "id": "unit_canon_reciprocal",
       "kind": "print",
       "description": "The canonical form respells s^-1 as 1/s.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "s^-1"}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "s^-1"}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "1/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3\\,\\mathrm{1/s}", "typst": "y = k dot 3 thin upright(\"s\")^(-1)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1/s}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"s\")^(-1) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{1/s}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"s\")^(-1) $\n"
     },
     {
       "id": "unit_canon_order",
       "kind": "print",
       "description": "The canonical form sorts the factors and keeps one /.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "m*kg/s/s"}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg*m/s^2", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "m*kg/s/s"}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "kg*m/s^2", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3\\,\\mathrm{kg\\,m/s^{2}}", "typst": "y = k dot 3 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{kg\\,m/s^{2}}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{kg\\,m/s^{2}}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 thin upright(\"kg\") thin upright(\"m\") thin upright(\"s\")^(-2) $\n"
     },
     {
       "id": "unit_dimensionless_word",
       "kind": "print",
       "description": "A const in units dimensionless drops them: the bare number.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "dimensionless"}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "dimensionless"}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
     },
     {
       "id": "unit_dimensionless_one",
       "kind": "print",
       "description": "A const in units 1 drops them: the bare number.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "1"}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": "1"}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
     },
     {
       "id": "unit_dimensionless_empty",
       "kind": "print",
       "description": "A const in units \"\" drops them: the bare number.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": ""}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": 3, "units": ""}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", 3], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\cdot 3", "typst": "y = k dot 3"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k dot 3 $\n"
     },
     {
       "id": "unit_dimensionless_array",
       "kind": "print",
       "description": "An array const in the dimensionless unit drops its units.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": [1, 2], "units": "dimensionless"}]}}]}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "value": [1, 2]}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}, "equations": [{"lhs": "y", "rhs": {"op": "*", "args": ["k", {"op": "const", "args": [], "value": [1, 2], "units": "dimensionless"}]}}]}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "value": [1, 2]}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
       "math": {"latex": "y = k \\begin{bmatrix}1 \\\\ 2\\end{bmatrix}", "typst": "y = k vec(1, 2)"},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\begin{bmatrix}1 \\\\ 2\\end{bmatrix}\n$$\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k vec(1, 2) $\n"
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\begin{bmatrix}1 \\\\ 2\\end{bmatrix}\n$$\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($k$)\n\n#var($y$)\n\n$ y = k vec(1, 2) $\n"
     },
     {
       "id": "unit_dimensionless_declaration",
       "kind": "print",
       "description": "A declaration keeps units \"1\" (respelled from dimensionless).",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"f": {"type": "parameter", "units": "dimensionless", "default": 0.5}}, "equations": []}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [], "variables": {"f": {"default": 0.5, "type": "parameter", "units": "1"}}}}},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{default=0.5 units=\"1\"}\n\n```esm:equations\n[]\n```\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$, default: 0.5, units: \"1\")\n\n#esm-block(\"equations\", ())\n"
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"f": {"type": "parameter", "units": "dimensionless", "default": 0.5}}, "equations": []}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [], "variables": {"f": {"default": 0.5, "type": "parameter", "units": "1"}}}}},
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$f$]{default=0.5 units=\"1\"}\n\n```esm:equations\n[]\n```\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($f$, default: 0.5, units: \"1\")\n\n#esm-block(\"equations\", ())\n"
     },
     {
       "id": "unit_canon_declaration",
       "kind": "print",
       "description": "A declaration's units are respelled too.",
-      "written": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"rho": {"type": "parameter", "units": "kg m^-3", "default": 1.2}}, "equations": []}}},
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [], "variables": {"rho": {"default": 1.2, "type": "parameter", "units": "kg/m^3"}}}}},
-      "markdown": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$\\rho$]{default=1.2 units=\"kg/m^3\"}\n\n```esm:equations\n[]\n```\n",
-      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"2.3.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($rho$, default: 1.2, units: \"kg/m^3\")\n\n#esm-block(\"equations\", ())\n"
+      "written": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"variables": {"rho": {"type": "parameter", "units": "kg m^-3", "default": 1.2}}, "equations": []}}},
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [], "variables": {"rho": {"default": 1.2, "type": "parameter", "units": "kg/m^3"}}}}},
+      "markdown": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$\\rho$]{default=1.2 units=\"kg/m^3\"}\n\n```esm:equations\n[]\n```\n",
+      "typst": "#import \"@preview/esm:0.1.0\": *\n#show: esm-document.with(esm: \"3.0.0\", name: \"fixture\")\n\n#model(\"M\")\n\n#param($rho$, default: 1.2, units: \"kg/m^3\")\n\n#esm-block(\"equations\", ())\n"
     },
     {
       "id": "unit_thin_space_spaced",
       "kind": "variant",
       "description": "\\, with spaces around it before the unit.",
       "surface": "markdown",
-      "input": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3 \\, \\mathrm{m/s}\n$$\n",
-      "esm": {"esm": "2.3.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
-      "canonical": "---\nesm: \"2.3.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{m/s}\n$$\n"
+      "input": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3 \\, \\mathrm{m/s}\n$$\n",
+      "esm": {"esm": "3.0.0", "metadata": {"name": "fixture"}, "models": {"M": {"equations": [{"lhs": "y", "rhs": {"args": ["k", {"args": [], "op": "const", "units": "m/s", "value": 3}], "op": "*"}}], "variables": {"k": {"type": "parameter"}, "y": {"type": "unknown"}}}}},
+      "canonical": "---\nesm: \"3.0.0\"\nname: \"fixture\"\n---\n\n::model[M]\n\n:param[$k$]{}\n\n:var[$y$]{}\n\n$$\ny = k \\cdot 3\\,\\mathrm{m/s}\n$$\n"
     }
   ]
 }

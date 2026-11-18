@@ -230,10 +230,11 @@ end
 
 /-! ## Operators -/
 
-/-- Spec §4.2 "Removed ops": refused by name. -/
+/-- Spec §4.2 "Removed ops": refused by name. The last three (`grad`, `div`,
+`laplacian`) were removed at esm 3.0.0; the rest at 0.8.0 or 2.0.0. -/
 def removedOps : List String :=
   ["arrayop", "aggregate", "fn", "table_lookup", "skolem", "rank", "argmin", "argmax",
-    "polygon_intersection_area", "intersect_polygon"]
+    "polygon_intersection_area", "intersect_polygon", "grad", "div", "laplacian"]
 
 /-- Deprecated: read in the call form and rewritten, never printed. -/
 def deprecatedOps : List String := ["neg", "pow"]

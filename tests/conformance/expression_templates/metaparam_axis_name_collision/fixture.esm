@@ -29,7 +29,7 @@
           "rhs": {
             "op": "+",
             "args": [
-              { "op": "grad", "args": ["c"], "dim": "lev" },
+              { "op": "upwind_gradient", "args": ["c"], "dim": "lev" },
               { "op": "D", "args": ["c"], "wrt": "lev" },
               { "op": "integral", "args": ["c"], "var": "lev", "lower": 0, "upper": 1 },
               "lev"

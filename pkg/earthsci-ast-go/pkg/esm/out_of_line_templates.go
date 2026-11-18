@@ -34,10 +34,10 @@ import (
 // evaluable-core meaning and therefore would not be caught by the generic
 // `!evaluableCoreOps` fallback in opInT: `D` (evaluable-core in its structural
 // equation-LHS role, a rewrite target everywhere else) and the load-eliminated
-// forms `enum`/`integral`. Every OTHER open-tier rewrite target —
-// an unregistered user op, and the spatial-calculus sugar grad/div/laplacian,
-// which carry NO privileged semantics — is NOT in evaluableCoreOps and so
-// reaches T through that generic fallback, not this hand-list.
+// forms `enum`/`integral`. Every OTHER open-tier rewrite target — an
+// unregistered user op, which carries NO privileged semantics — is NOT in
+// evaluableCoreOps and so reaches T through that generic fallback, not this
+// hand-list.
 // `apply_expression_template` itself is excluded — nested references are handled
 // through the §9.7.3 reference DAG, not by op membership. Mirrors the Julia
 // `_REWRITE_TARGET_OPS`.
@@ -72,11 +72,9 @@ var evaluableCoreOps = map[string]struct{}{
 	"call": {},
 	// Const data / enum marker
 	"const": {}, "enum": {},
-	// Calculus / IC markers. NOTE: grad/div/laplacian are NOT evaluable-core —
-	// they are ordinary open-tier rewrite-target sugar (esm-spec §4.2 / §9.6.8)
-	// with no privileged semantics, so they are deliberately absent here and
-	// reach tier T through the generic `!evaluableCoreOps` fallback in opInT,
-	// exactly like an unregistered user op (`godunov_hamiltonian`).
+	// Calculus / IC markers. An unregistered user op (`godunov_hamiltonian`)
+	// is deliberately absent here and reaches tier T through the generic
+	// `!evaluableCoreOps` fallback in opInT.
 	"D": {}, "ic": {},
 	// Array producers / gathers / reshapes
 	"index": {}, "makearray": {}, "broadcast": {}, "reshape": {}, "transpose": {}, "concat": {},

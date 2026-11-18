@@ -296,6 +296,9 @@ export const REMOVED_OPS: readonly string[] = [
   'argmax',
   'polygon_intersection_area',
   'intersect_polygon',
+  'grad',
+  'div',
+  'laplacian',
 ]
 
 /** `Math.deprecatedOps`: read in the call form and rewritten, never printed. */
