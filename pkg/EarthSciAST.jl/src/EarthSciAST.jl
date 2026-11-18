@@ -28,11 +28,13 @@ using JSON3
 using JSONSchema
 using LinearAlgebra   # BLAS `mul!` accelerator for linear mat-vec observeds (inline_tests.jl)
 # The threaded RHS tier needs a thread dispatch that does NOT allocate a task
-# per call (see access_kernel.jl, "Threaded cell axis"). Base
-# `Threads.@threads :static` allocates ~1.6 kB per dispatch; Polyester reuses a
-# persistent, spin-then-sleep pool. It is a hard dependency: native threads its
-# compiled sections whenever Julia runs with more than one thread.
+# per call (tree_walk/threading.jl): Polyester's persistent, spin-then-sleep
+# worker pool, driven through ThreadingUtilities and PolyesterWeave directly.
+# A hard dependency: native threads its compiled sections whenever Julia runs
+# with more than one thread.
 using Polyester: Polyester
+using PolyesterWeave: PolyesterWeave
+using ThreadingUtilities: ThreadingUtilities
 using RuntimeGeneratedFunctions
 using SHA: SHA
 using Serialization: Serialization

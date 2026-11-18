@@ -2699,115 +2699,11 @@ function _build_codegen_rhs(
     return _CGBuilt(f, tabpack, covered, reasons, ncells, disjoint, work, rmw)
 end
 
-# ---- Threaded cell axis for the codegen tier (RFC threaded-eval-tier) -------
-# The shared threading infrastructure (batch-runner hook, verdict tally,
-# static partition) lives in access_kernel.jl ("Threading infrastructure" —
-# the safety argument lives there). This section threads the generated
-# functions themselves; since the Float64 lane tape was retired it is the only
-# threaded tier.
-#
-# GRANULARITY: the WHOLE SECTION is chunked, not each kernel. One batch
-# dispatch runs chunk `c` of every emitted kernel back to back —
-# `f(du, u, p, t, tabs, c, nchunks)` — with no inter-kernel barrier. That is
-# safe because the section builder proves the strong property up front:
-# `_cg_covered_outs_disjoint` verifies at build time that every covered
-# out-slot is globally unique ACROSS all emitted kernels. When that holds, no
-# two cells anywhere in the section touch the same `du` slot, kernels share no
-# other mutable state (locals only; `u`/`p`/`t`/tabs are read-only here), and
-# the inter-kernel barrier is unnecessary — one dispatch per RHS call, so the
-# per-dispatch wake-up latency is paid ONCE instead of #kernels times. When it
-# does NOT hold (`:cg_serial_shared_outs`), the section never chunks and every
-# generated function runs its serial `(1, 1)` instance.
-#
-# BIT-IDENTITY, per kernel: chunk boundaries are not observable (a cell
-# computes the same instruction sequence on the same inputs whichever chunk it
-# lands in; every ⊕-fold is WITHIN a cell — REDUCE/CONTRACTION loops are
-# per-cell in the emitted body), the partition is the static
-# `_chunk_ordinals`, and disjoint writes commute. Threaded `du` is bitwise
-# `===` serial `du`.
-#
-# One Julia thread ⇒ serial; a section's work below two chunks of the serial
-# work floor (`_thread_min_work`, ESS_THREADS_MIN_WORK) ⇒ serial.
-# Verdicts land in `_THREAD_TALLY` (`:cg_threaded` / `:cg_serial_small` /
-# `:cg_serial_shared_outs`), documented with the existing keys.
-
-# One-time threading verdict for one generated function's cell axes:
-# `state` is 0 unexamined, 1 chunked, -1 serial (too little work), -2 serial
-# (globally shared out-slots — permanent, decided at build).
-# `ncells`/`disjoint` are build facts (`_CGBuilt`); `nchunks` is fixed
-# at the first threaded call, so the partition is identical call to call.
-# `work` is what the work floor is held against: the section's node
-# evaluations per call (`_acc_kernel_work` per cell for a kernel section, the
-# fold terms for a contraction, array_contraction.jl), the cell count when the
-# builder gives none; the chunk count never exceeds `ncells`.
-# `job1`/`job2` hold the section's dispatch jobs (thread_dispatch.jl) for the
-# last two argument types it ran at, so a caller alternating between Float64
-# and dual-number calls (a solver and its Jacobian) reuses both.
-mutable struct _SecTCache
-    state::Int
-    ncells::Int
-    disjoint::Bool
-    work::Int
-    nchunks::Int
-    job1::Any
-    job2::Any
-    rmw::Bool        # `_CGBuilt.rmw`: chunks also keep `_THREAD_MIN_RMW_CELLS` cells
-end
-_SecTCache(ncells::Int, disjoint::Bool, work::Int = ncells, rmw::Bool = false) =
-    _SecTCache(0, ncells, disjoint, work, 1, nothing, nothing, rmw)
+# ---- Threaded cell axis for the codegen tier ---------------------------------
+# The verdict, the partition and the dispatch are threading.jl's (the safety
+# argument lives there). A generated function runs chunk `c` of every emitted
+# kernel back to back, `f(du, u, p, t, tabs, c, nchunks)`.
 _sec_tcache(cg::_CGBuilt) = _SecTCache(cg.ncells, cg.outs_disjoint, cg.work, cg.rmw)
-_sec_tcache(::Nothing) = _SecTCache(0, false)
-
-# Decide once whether this generated function may run chunked: size first
-# (the work floor guards per-DISPATCH work, and the section is one dispatch),
-# then the build-time disjointness verdict.
-function _sec_prep_threads!(tc::_SecTCache)
-    tc.state == 0 || return tc
-    minw = _thread_min_work()
-    nchunks = min(Threads.nthreads(), tc.ncells, max(1, div(tc.work, max(minw, 1))))
-    tc.rmw && (nchunks = min(nchunks, max(1, div(tc.ncells, _THREAD_MIN_RMW_CELLS))))
-    if nchunks < 2
-        tc.state = -1                 # too little work to be worth a dispatch
-        _tally_thread!(:cg_serial_small)
-        return tc
-    end
-    if !tc.disjoint
-        tc.state = -2                 # shared out-slots: chunks would race
-        _tally_thread!(:cg_serial_shared_outs)
-        return tc
-    end
-    tc.nchunks = nchunks
-    tc.state = 1
-    _tally_thread!(:cg_threaded)
-    return tc
-end
-
-# This section's job for body type `B` and argument type `A`, from the two
-# cached slots or freshly made (the only allocation, once per argument type).
-@inline function _section_job!(tc::_SecTCache, ::Type{B}, ::Type{A}) where {B, A}
-    J = _ThreadJob{B, A}
-    j = tc.job1
-    j isa J && return j
-    j2 = tc.job2
-    tc.job2 = j
-    if j2 isa J
-        tc.job1 = j2
-        return j2
-    end
-    jn = J()
-    tc.job1 = jn
-    return jn
-end
-
-# Run `body(args, c, nchunks)` for every chunk of the section's verdict.
-@inline function _run_chunked!(tc::_SecTCache, body::B, args::A) where {B, A}
-    j = _section_job!(tc, B, A)
-    j.body = body
-    j.args = args
-    j.nchunks = tc.nchunks
-    _dispatch_job!(j)
-    return nothing
-end
 
 # A generated function's chunk: the static partition (`_chunk_ordinals`) is
 # computed inside it, and each chunk re-runs the (pure) tab-hoist + invariant

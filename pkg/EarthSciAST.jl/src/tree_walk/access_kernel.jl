@@ -788,84 +788,6 @@ _acc(id::Int) = _mknode(kind = _NK_ACCESS, idx = id)
 _aop(op::Symbol, kids::_Node...) = _mknode(kind = _NK_OP, op = op, children = collect(_Node, kids))
 _alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
 
-# ---- Threading infrastructure (RFC threaded-eval-tier) ----------------------
-#
-# The consumer of everything below is the CODEGEN tier's chunked cell axis
-# ("Threaded cell axis for the codegen tier", codegen_kernel.jl): the section
-# builder proves at build time that every emitted `du` slot is globally unique,
-# and the runtime then runs the generated function as `nchunks` static
-# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: a
-# verdict tally and the partition arithmetic.
-#
-# WHY THE CELL AXIS IS THE SAFE ONE. Every ⊕-fold a kernel hosts is WITHIN a
-# cell (`_NK_CONTRACTION` / `_NK_AREDUCE` loops are per-cell); nothing
-# accumulates across cells or into `du` — each cell's value is computed from
-# `u`/`p`/`t` alone and stored to exactly one `du` slot. So chunk boundaries
-# are not observable (any split of the ordinal axis reproduces the serial
-# values BIT FOR BIT), and chunks race only if two cells target the same `du`
-# slot — which the codegen build's `_cg_covered_outs_disjoint` rules out up
-# front.
-#
-# ON BY DEFAULT. Polyester is a hard dependency and the chunked cell axis runs
-# whenever Julia has more than one thread; with one thread (`julia -t 1`, the
-# default without `JULIA_NUM_THREADS`) every section runs its serial `(1, 1)`
-# instance. Inside an ODE solve a stiff solver calls the RHS in short bursts
-# separated by linear-algebra work, so the pool may sleep between calls and a
-# dispatch pays a wake-up; the per-chunk work floor (`ESS_THREADS_MIN_WORK`)
-# keeps small sections serial for that reason. Raising that floor past a
-# section's work forces a serial run — chunking changes no bit, so it is
-# not a choice of evaluator and has no `compiler` value of its own.
-
-# The dispatch itself is thread_dispatch.jl's: Polyester's worker pool, driven
-# without a per-call allocation.
-
-# One-time threading verdicts: bumped once per
-# generated SECTION (not per eval) by `_sec_prep_threads!` (codegen_kernel.jl).
-# Read it via `EarthSciAST._THREAD_TALLY`, reset with
-# `EarthSciAST._reset_thread_tally!()`.
-#   :cg_threaded              — the section's cell axes run as static chunks
-#   :cg_serial_small          — fewer than 2 chunks' worth of work (node
-#                               evaluations summed across the section's
-#                               emitted kernels' cells; a contraction counts
-#                               its fold terms too)
-#   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
-#                               target the same `du` slot; the section never
-#                               chunks (see `_cg_covered_outs_disjoint`)
-#
-# Problems first called from different tasks tally concurrently, so every
-# write takes `_THREAD_TALLY_LOCK`.
-const _THREAD_TALLY = Dict{Symbol, Int}()
-const _THREAD_TALLY_LOCK = ReentrantLock()
-_tally_thread!(k::Symbol) = lock(_THREAD_TALLY_LOCK) do
-    _THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1
-    nothing
-end
-_reset_thread_tally!() = lock(() -> (empty!(_THREAD_TALLY); nothing), _THREAD_TALLY_LOCK)
-
-# The serial work floor: the least work, in node evaluations (the `work` of a
-# section's `_SecTCache`), one chunk of a thread dispatch must carry. A section
-# with less than two chunks' worth runs serially, so turning threads on never
-# makes a small section slower than its serial run. The default is the cost of
-# one empty fork-join of Polyester's pool over the cost of one node evaluation
-# in the cheapest generated loops (array_contraction.jl, codegen_kernel.jl),
-# both measured on a 4-thread run: a chunk below it would spend about as long
-# being dispatched as computing. Override with ESS_THREADS_MIN_WORK: a tuning threshold, not a refusal boundary — both sides of it evaluate the
-# same bits, so no compiler refuses a rule for crossing it.
-const _THREAD_MIN_WORK_DEFAULT = 6000
-
-# The least cells per chunk for a section whose loops may read-modify-write
-# each `du` slot once per reduced term (an interchanged affine reduction): the
-# cache line two neighbouring chunks share at their boundary is then written by
-# both threads on every term, so a chunk must hold enough cells to outweigh
-# that traffic. Not read from the environment: ESS_THREADS_MIN_WORK set to 0
-# still leaves it, and set past a section's work still forces it serial.
-const _THREAD_MIN_RMW_CELLS = 512
-function _thread_min_work()
-    return something(tryparse(Int, get(ENV, "ESS_THREADS_MIN_WORK", "")), _THREAD_MIN_WORK_DEFAULT)
-end
-
-@inline _threads_available() = Threads.nthreads() > 1
-
 # Total cells in a cell set, in the runners' own enumeration.
 function _cellset_ncells(cs::_CellSet)
     _is_outs(cs) && return length(cs.outs)
@@ -1012,18 +934,4 @@ function _mark_list_slots!(seen::BitVector, lo::Int, outs::Vector{Int})
         seen[k] = true
     end
     return true
-end
-
-# The static partition itself: chunk `c` of `nchunks` covers the half-open
-# 0-based ordinal range `[a, b)` of `n` cells, sizes differing by at most one.
-# A pure function of `(n, nchunks, c)` — identical run to run, no dynamic work
-# stealing, nothing that could reorder a fold. Consumed by the codegen tier's
-# chunked loop emission (codegen_kernel.jl, "Threaded cell axis"): every
-# emitted loop nest computes its own `[a, b)` from this exact arithmetic.
-@inline function _chunk_ordinals(n::Int, c::Int, nchunks::Int)
-    base = div(n, nchunks)
-    rem = n - base * nchunks
-    a = (c - 1) * base + min(c - 1, rem)
-    b = c * base + min(c, rem)
-    return a, b
 end

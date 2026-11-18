@@ -46,6 +46,80 @@
 # its store is dropped (`_scan_consumer_plan`).
 # ========================================================================
 
+# ---- Threading the folds ------------------------------------------------------
+# A lane's running accumulation is sequential, but lanes are independent of
+# each other — within one fold and across folds (each state slot belongs to
+# exactly one equation, so no two lanes share a slot). A `_ScanSection` numbers
+# every lane of its folds globally and runs them as static chunks of that
+# numbering: a lane is folded whole, ascending, by whichever thread owns it, so
+# each slot gets the same value as the serial fold.
+# `fused` holds the section's fused scans (scan_fused.jl), a tuple of
+# `_FusedScan`s, each its own generated function that computes its terms too.
+struct _ScanSection{FS}
+    folds::Vector{_ScanFold}
+    lanecum::Vector{Int}      # lanes before fold f; the last entry is the total
+    tcache::_SecTCache
+    fused::FS
+end
+
+function _make_scan_section(folds::AbstractVector{_ScanFold}, fused::Tuple = ())
+    lanecum = Vector{Int}(undef, length(folds) + 1)
+    lanecum[1] = 0
+    nslots = 0
+    for (k, S) in enumerate(folds)
+        nl = S.len >= 1 ? div(length(S.slots), S.len) : 0
+        lanecum[k + 1] = lanecum[k] + nl
+        nslots += length(S.slots)
+    end
+    # Fewer than two lanes leave nothing to split; the verdict sees no cells.
+    return _ScanSection(
+        collect(folds), lanecum,
+        _SecTCache(lanecum[end] >= 2 ? nslots : 0, true), fused
+    )
+end
+
+Base.isempty(s::_ScanSection) = isempty(s.folds) && isempty(s.fused)
+
+struct _ScanChunk
+    folds::Vector{_ScanFold}
+    lanecum::Vector{Int}
+end
+function (b::_ScanChunk)(args, c::Int, nchunks::Int)
+    du = args[1]
+    a, z = _chunk_ordinals(b.lanecum[end], c, nchunks)   # global lanes [a, z)
+    @inbounds for f in eachindex(b.folds)
+        lo = max(a, b.lanecum[f])
+        hi = min(z, b.lanecum[f + 1])
+        lo < hi && _apply_scan_fold!(
+            du, b.folds[f], lo - b.lanecum[f] + 1,
+            hi - b.lanecum[f]
+        )
+    end
+    return nothing
+end
+
+# The section's unfused folds, over the terms already in `du`.
+function _apply_scan_folds!(du, s::_ScanSection)
+    isempty(s.folds) && return nothing
+    tc = s.tcache
+    if _threads_available() && _sec_prep_threads!(tc).state == 1
+        tc.nchunks = min(tc.nchunks, s.lanecum[end])
+        _run_chunked!(tc, _ScanChunk(s.folds, s.lanecum), (du,))
+    else
+        _apply_scan_folds!(du, s.folds)
+    end
+    return nothing
+end
+
+# The whole section: the fused scans (which compute their own terms from
+# `u`), then the unfused folds. They write disjoint slots and read none the
+# other writes, so the order between them is free.
+function _apply_scan_folds!(du, u, p, t, s::_ScanSection)
+    _run_fused_scans!(s.fused, du, u, p, t)
+    _apply_scan_folds!(du, s)
+    return nothing
+end
+
 # One fused scan: the generated function `f(du, u, p, t, tabs, ci, nc)`, which
 # runs lanes `[a, b)` of chunk `ci` of `nc`, its tables, and the most chunks its
 # lanes split into (its lane count; fewer for a column scan).

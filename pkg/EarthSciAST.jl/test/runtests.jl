@@ -147,6 +147,7 @@ const GROUPS = [
         "cg_foreign_scratch_test.jl",
         "scalar_codegen_test.jl",
         "codegen_threaded_test.jl",
+        "thread_dispatch_test.jl",
         "codegen_body_split_test.jl",
         "stencil_indexed_contraction_test.jl",
         "cross_eq_class_emission_test.jl",
