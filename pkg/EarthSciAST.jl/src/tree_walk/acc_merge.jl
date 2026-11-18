@@ -269,29 +269,10 @@ function _acc_from_cell_entries(entries::Vector{Tuple{Int, _Node}})::Vector{_Acc
     return kernels
 end
 
-# Inner closure generator — separated so the closure's body is small
-# enough to stay inferable. `rhs_list` and `acc_kernels` are captured by the
-# closure; Julia specializes the generated method to the captured types.
-# Scalar/indexed-D equations evaluate through `rhs_list` (one slot each); array
-# (`faq`) equations evaluate through `acc_kernels` as whole-array access
-# kernels (codegen-compiled loop nests, the eltype-generic scalar walk for
-# declined kernels). Accepts any AbstractVector so both the pre-allocated and the
-# dynamically-grown forms produced by _build_evaluator work. The whole RHS is
-# allocation-free in steady state (ess-9cc), so it can be reused across every
-# RK stage without GC pressure — pinned by the `@allocated f!(du,u,p,t) == 0`
-# test.
-#
-# ELTYPE-GENERIC, STILL ZERO-ALLOC. `f!` computes in `T = _rhs_value_type(u, p, t)`,
-# which is a compile-time constant per specialization — so at `T === Float64` the
-# scratch lookups below (`_cse_buf`, and the acc scratch tiers) are field
-# loads and this is exactly the Float64 RHS it always was. Hand it `Dual` state
-# (a ForwardDiff Jacobian for a stiff solver) or a `Dual`-valued parameter
-# NamedTuple (a sensitivity) and the SAME closure evaluates in `Dual`, reusing the
-# per-node Dual buffers created on the first such call. `t` is folded into the value
-# type alongside `u` and `p` precisely so the parameter axis works: there `u` stays
-# `Vector{Float64}` and only the parameter VALUES are `Dual`, so a scratch sized
-# from `eltype(u)` alone would compile and then throw `Float64(::Dual)` on its first
-# store.
+# The in-place right-hand side over the build's sections (`_rhs_closure`,
+# scalar_codegen.jl). With a scalar section the scalar equations and the
+# prelude run as generated code and only what it left behind is walked;
+# without one every prelude slot and scalar equation is walked.
 function _make_rhs(
         rhs_list::AbstractVector{Tuple{Int, _Node}},
         cse_prelude::AbstractVector{_Node},
@@ -304,126 +285,11 @@ function _make_rhs(
         array_contractions = _make_contraction_section(_ArrayContraction[]);
         scalar = nothing, fused_scans::Tuple = (), nst::Int = 0
     )
-    # The prefix scans: the unfused folds and the fused ones (scan_fused.jl).
-    scan_section = _make_scan_section(scan_folds, fused_scans)
-    # The scalar codegen tier (scalar_codegen.jl): with a scalar section the
-    # equations and the prelude run as generated code, and only what it left
-    # behind is walked.
-    scalar === nothing ||
-        return _make_rhs_scalar_cg(
-        scalar, cse_prelude, cse_cache, acc_kernels,
-        const_slots, time_slots, scan_section,
-        array_contractions; nst = nst
+    sec = scalar === nothing ?
+        _walked_scalar_section(rhs_list, cse_prelude, const_slots, time_slots, dyn_slots) :
+        scalar
+    return _rhs_closure(
+        sec, cse_prelude, cse_cache, acc_kernels, const_slots, time_slots,
+        _make_scan_section(scan_folds, fused_scans), array_contractions; nst = nst
     )
-    # B1 codegen tier (codegen_kernel.jl): every kernel the emitter can model is
-    # compiled ONCE, here at build time, into a single RuntimeGeneratedFunction
-    # (bit-identical, eltype-generic); the rest keep the per-cell scalar
-    # runner. With the tier off this is exactly the interpreter kernel loop.
-    # `shared_cache = cse_cache` (ess-cgfsc): THIS call site may compile
-    # shared-prelude (`_CSECache`) reads into the generated kernels, because
-    # `f!` below fills every prelude tier into that exact cache — at the same
-    # value type `T` — before `kernel_section(du, u, p, t, T)` runs.
-    kernel_section = _make_kernel_section(
-        acc_kernels;
-        shared_cache = cse_cache, nst = nst
-    )
-    # Without a scalar section every prelude slot and scalar equation is walked:
-    # the interpreter's walker, which takes a license (scalar_codegen.jl).
-    n_slots = length(const_slots) + length(time_slots) + length(dyn_slots)
-    walk = _scalar_walk_license(
-        n_slots + length(rhs_list) > 0,
-        isempty(rhs_list) ? "the scalar prelude" : "state slot $(rhs_list[1][1])",
-        "$(length(rhs_list)) scalar equations and $n_slots shared-subexpression slots",
-        () -> vcat(_Node[nd for (_, nd) in rhs_list], cse_prelude)
-    )
-    function f!(du, u, p, t)
-        _reject_float32_state(u)   # loud, statically-folded (see rhs_seams.jl)
-        T = _rhs_value_type(u, p, t)
-        # CSE prelude (ess-r7h), in its THREE CADENCE TIERS (4qf + B3, const_tier.jl):
-        # evaluate each distinct shared subexpression once into the scratch cache,
-        # in slot order. `defs[s]` references only slots < s (topological), so each
-        # read is already filled. The cache makes `f!` non-reentrant (one instance
-        # per integrator, which is how ODE RHS closures are used). Empty prelude ⇒
-        # both loops are no-ops and `f!` is identical to the pre-CSE evaluator.
-        #
-        # Both loops are UNCONDITIONAL — every slot is evaluated before any equation
-        # runs, whether or not the guard above its occurrence would have fired. That
-        # is safe only because `_cse_compile_scalar` refuses to hoist a key whose
-        # every occurrence sits under a lazy `ifelse`/`and`/`or` arm (see the GUARDS
-        # note in scalar_cse.jl); a slot that exists always has an occurrence the walk
-        # would have evaluated anyway.
-        cache = _cse_buf(cse_cache, T)
-
-        # ---- Tier 1: CONST-cadence slots — refilled only when `p` moved ----
-        # These slots' defs read no state, no time and no live forcing buffer, and
-        # every cache ref in them lands on another CONST slot (the classification
-        # rule, const_tier.jl), so their values are a pure function of `p`. They stay
-        # good in THIS buffer until `p` changes or the buffer is replaced — which is
-        # exactly what `_cse_const_stale` tests. This is the whole point of the tier:
-        # a parameter-only Arrhenius chain `A*exp(-Ea/(R*Tref))` is evaluated once per
-        # parameter epoch instead of once per stage of every step, forever.
-        #
-        # NOT constant-folded at build time, deliberately: `p` legitimately changes
-        # (sweeps, `remake`) and under ForwardDiff-over-parameters its VALUES are
-        # `Dual`s. Freezing these slots would zero every parameter sensitivity.
-        if !isempty(const_slots) && _cse_const_stale(cse_cache, T, p)
-            _walk_prelude_slots!(walk, cache, const_slots, cse_prelude, u, p, t, T)
-            _cse_mark_const!(cse_cache, T, p)
-        end
-
-        # ---- Tier 2: TIME-cadence slots — refilled when (p, t, epoch) moved ----
-        # These slots' defs read no state; they are pure functions of `p`, `t`, and
-        # the CONTENTS of any live forcing buffer they gather (const_tier.jl). They
-        # stay good in THIS buffer while `p` and `t` are egal to the stamp and no
-        # in-place forcing refresh has bumped the build's forcing epoch — exactly what
-        # `_cse_t_stale` tests. The payoff is the FD-Jacobian shape: N+1 calls at
-        # the bit-same `t` with perturbed `u` evaluate the FastJX-style photolysis /
-        # met-gather / w_time chains ONCE instead of N+1 times. A time def may read
-        # const slots (valid or refilled above — every trigger that refills them
-        # also invalidates this stamp: `p` egal is part of it, and buffer
-        # replacement clears `tpalt`) and lower time slots (this loop, ascending).
-        # Memoizing on `t` is safe under step rejection: the defs carry no history,
-        # so revisiting a `t` reuses/recomputes the same pure function of it.
-        if !isempty(time_slots) && _cse_t_stale(cse_cache, T, p, t)
-            _walk_prelude_slots!(walk, cache, time_slots, cse_prelude, u, p, t, T)
-            _cse_mark_t!(cse_cache, T, p, t)
-        end
-
-        # ---- Tier 3: DYNAMIC slots — refilled every call ----
-        # A dynamic def may read const/time slots (valid or filled, above) and lower
-        # dynamic slots (filled by this loop, which is ascending) — so every read is
-        # already filled, exactly as in the single-loop prelude this replaces.
-        _walk_prelude_slots!(walk, cache, dyn_slots, cse_prelude, u, p, t, T)
-        _walk_scalar_rhs!(walk, du, rhs_list, u, p, t, T)
-
-        # ---- Access kernels (the unified array IR, access_kernel.jl) ----
-        # Each resolves its gathers at runtime from an access-descriptor table over
-        # a strided output box — no per-lane slot vectors were built. The reduction
-        # bound / connectivity are data, so one kernel covers every valence.
-        # The kernel section (codegen_kernel.jl) runs the codegen-emitted kernels
-        # through their compiled loop nests (any value type), then each residual
-        # kernel through the eltype-generic scalar runner (or, when the Float64
-        # overflow routing is armed, the compiled overflow function).
-        kernel_section(du, u, p, t, T)
-
-        # ---- Cumulative (prefix) reductions (ess-scan, scan.jl) ----
-        # Each fold reads back the per-cell TERMS its own kernels just wrote
-        # into `du` and accumulates them along the scanned axis in place. Runs
-        # here, after the whole kernel section, so it is ordered behind every
-        # threaded chunk and every codegen'd loop nest. A fused scan
-        # (scan_fused.jl) computes its terms itself in the same pass. Empty on
-        # every model without a forward prefix reduction, which is the common
-        # case.
-        isempty(scan_section) || _apply_scan_folds!(du, u, p, t, scan_section)
-
-        # ---- Whole-array contractions (ess-array-contraction) ----
-        # Each runs its own output loop nest over disjoint `du` slots, so it is
-        # ordered behind the kernel section for the same reason the folds are:
-        # every other section has finished writing. Empty on every model whose
-        # reductions stay under the tier's length floor, which is the common case.
-        isempty(array_contractions) ||
-            _apply_array_contractions!(du, u, p, t, array_contractions, T)
-        return nothing
-    end
-    return f!
 end
