@@ -691,7 +691,7 @@ function _warn_deprecated_domain_bc(raw_data)
                 "[E_DEPRECATED_DOMAIN_BC] domains.", domain_name,
                 ".boundary_conditions is deprecated in ESM v0.2.0; migrate ",
                 "to models.<M>.boundary_conditions ",
-                "(docs/rfcs/discretization.md §9)."
+                "(docs/content/rfcs/discretization.md §9)."
             )
         end
     end
