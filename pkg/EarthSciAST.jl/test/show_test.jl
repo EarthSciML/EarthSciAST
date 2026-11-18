@@ -36,7 +36,9 @@ using EarthSciAST
         # The summary, not the struct dump: no field names, no type names.
         @test !occursin("ModelVariable", plain)
         @test !occursin("OpExpr", plain)
-        @test sprint(show, [model]) == "Model[Model(2 variables, 1 equations)]"
+        # The element type prints module-qualified unless EarthSciAST is loaded
+        # in Main, as `string(Model)` does.
+        @test sprint(show, [model]) == "$(Model)[Model(2 variables, 1 equations)]"
     end
 
     @testset "ReactionSystem" begin

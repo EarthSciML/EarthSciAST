@@ -1141,16 +1141,18 @@ function namespaceEquations(
 }
 
 /**
- * Every data-fed parameter of `model`, as a {@link LoaderField} (esm-spec §8.5).
+ * Every data-fed parameter of one component, as a {@link LoaderField}
+ * (esm-spec §8.5), in declaration order. `variables` is a model's variables or
+ * a reaction system's parameters; both count (esm-libraries-spec §4.7.5 step 4).
  * Cadence follows the SOURCE, not the parameter's own declaration.
  */
 function dataSourceFields(
-  model: Model,
+  variables: Record<string, ModelVariable>,
   fullPrefix: string,
   dataSources: Record<string, DataSource>,
 ): LoaderField[] {
   const fields: LoaderField[] = []
-  for (const [varName, variable] of Object.entries(model.variables ?? {})) {
+  for (const [varName, variable] of Object.entries(variables)) {
     if (variable.type !== 'parameter' || variable.update === undefined) continue
     for (const rule of updateRules(variable.update)) {
       if (rule.kind !== 'data') continue
@@ -1339,7 +1341,7 @@ function collectModel(
   // An observed unknown's defining relation is an ORDINARY equation with a
   // bare-variable LHS, so it travels through `equations` like any other.
   namespaceEquations(model.equations ?? [], component, fullPrefix, subKeys, locals)
-  component.loaderFields.push(...dataSourceFields(model, fullPrefix, dataSources))
+  component.loaderFields.push(...dataSourceFields(model.variables ?? {}, fullPrefix, dataSources))
 
   for (const [subName, subModel] of Object.entries(subs)) {
     mergeComponent(component, collectModel(subModel, `${fullPrefix}.${subName}`, dataSources))
@@ -1348,7 +1350,11 @@ function collectModel(
 }
 
 /** Collect a ReactionSystem (lowered to ODEs) into a {@link ComponentSystem}. */
-function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): ComponentSystem {
+function collectReactionSystem(
+  rs: ReactionSystem,
+  fullPrefix: string,
+  dataSources: Record<string, DataSource>,
+): ComponentSystem {
   const component = newComponent(fullPrefix)
 
   for (const [name, species] of Object.entries(rs.species ?? {})) {
@@ -1368,6 +1374,7 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
     else component.stateVars[namespaced] = flat
   }
 
+  const paramVariables: Record<string, ModelVariable> = {}
   for (const [name, param] of Object.entries(rs.parameters ?? {})) {
     const namespaced = `${fullPrefix}.${name}`
     // Route through the same helper the model path uses, rather than
@@ -1379,6 +1386,7 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
     // `Parameter` and the hand-written `ModelVariable` describe the same shape,
     // but json2ts widens nested objects with index signatures.
     const asVariable = { ...param, type: 'parameter' } as unknown as ModelVariable
+    paramVariables[name] = asVariable
     component.parameters[namespaced] = flattenedVariableOf(
       namespaced,
       'parameter',
@@ -1386,6 +1394,9 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
       fullPrefix,
     )
   }
+
+  // Data-fed parameters (esm-spec §8.5), after the models' in the flattened order.
+  component.loaderFields.push(...dataSourceFields(paramVariables, fullPrefix, dataSources))
 
   const locals = new Set([...Object.keys(rs.species ?? {}), ...Object.keys(rs.parameters ?? {})])
 
@@ -1395,7 +1406,7 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
   namespaceEquations(rs.constraint_equations ?? [], component, fullPrefix, undefined, locals)
 
   for (const [subName, subRs] of Object.entries(reactionSubsystems(rs))) {
-    mergeComponent(component, collectReactionSystem(subRs, `${fullPrefix}.${subName}`))
+    mergeComponent(component, collectReactionSystem(subRs, `${fullPrefix}.${subName}`, dataSources))
   }
   return component
 }
@@ -2414,7 +2425,7 @@ function collectComponents(file: EsmFile): {
   }
   for (const [name, rs] of Object.entries(file.reaction_systems ?? {})) {
     if (isSubsystemRef(rs)) continue
-    components[name] = collectReactionSystem(rs as ReactionSystem, name)
+    components[name] = collectReactionSystem(rs as ReactionSystem, name, dataSources)
     sourceSystems.push(name)
   }
   return { components, sourceSystems }

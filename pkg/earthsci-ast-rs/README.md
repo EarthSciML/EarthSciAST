@@ -176,7 +176,7 @@ Lint:
 # Every feature EXCEPT `xla`, which is what CI lints -- `--all-features`
 # would pull in `xla` and fail without a fetched `xla_extension` release.
 cargo clippy --all-targets --features \
-  conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
+  conformance-adapters,wasm,benchmarks,esio,integrator \
   -- -D warnings
 ```
 
@@ -186,12 +186,7 @@ cargo clippy --all-targets --features \
 - `solve`: the diffsol ODE solver behind `solve` / `init` /
   `solve_to_completion` (building an `EsmProblem` and computing its
   `initial_state` never need it)
-- `cli`: does nothing; kept so manifests that name it still resolve. The `esm`
-  binary is the `earthsci-ast-cli` crate (`cli/`).
 - `wasm`: WebAssembly bindings (requires wasm-bindgen)
-- `parallel` / `simd` / `zero_copy` / `custom_alloc` / `performance`:
-  opt-in experimental performance utilities in the `performance` module
-  (benchmark support; not used by the core simulate paths)
 - `benchmarks`: enables the criterion bench target
 - `conformance-adapters`: the cross-language conformance adapter binaries
 - `esio`: the EarthSciIO data-provider bridge

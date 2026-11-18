@@ -1404,9 +1404,10 @@ pub(crate) struct ConditionalShapes {
 /// whose subscripts are all scalars, and a `faq` with no output indices, are
 /// scalars whatever they read, so a table lookup (`days_in_month =
 /// index(const [...], m)`, an `interp.linear` expansion) is a scalar operand.
-/// It gives up — leaving the variable unshaped — wherever that cannot decide
-/// the shape: any other op that consumes an operand whole on the value path,
-/// operands over different index sets, or a name whose rank is not known
+/// Operands over different index sets span their union, in order of first
+/// appearance (esm-spec §4.3.4). It gives up — leaving the variable unshaped —
+/// wherever that cannot decide the shape: any other op that consumes an
+/// operand whole on the value path, or a name whose rank is not known
 /// statically (see [`ShapeInference::var_spans`]). Each inferred shape feeds
 /// the inference of the variables that read it, so a chain
 /// `Y = ifelse(c, X, 0.0)` over a promoted `X` is promoted too. A body with no
@@ -1575,7 +1576,8 @@ impl ShapeInference<'_, '_> {
 
     /// What an expression that is elementwise down to its leaves spans, and
     /// whether an `ifelse` is on its value path; or `None` when an op in it
-    /// consumes an operand whole, or two operands span different index sets.
+    /// consumes an operand whole. Operands over different index sets span
+    /// their union, in order of first appearance (esm-spec §4.3.4).
     /// A gather with scalar subscripts, a `faq` with no output indices, a
     /// `const` whose value is a number and `true`/`false` are leaves: scalars,
     /// with no `ifelse` on the value path.
@@ -1619,13 +1621,11 @@ impl ShapeInference<'_, '_> {
                     let (spans, ifelse) = self.body_spans(a)?;
                     saw_ifelse |= ifelse;
                     out.fed.extend(spans.fed);
-                    if spans.axes.is_empty() || spans.axes == out.axes {
-                        continue;
+                    for axis in spans.axes {
+                        if !out.axes.contains(&axis) {
+                            out.axes.push(axis);
+                        }
                     }
-                    if !out.axes.is_empty() {
-                        return None;
-                    }
-                    out.axes = spans.axes;
                 }
                 Some((out, saw_ifelse))
             }
@@ -6199,10 +6199,9 @@ fn bare_definitions(equations: &[FlatEq]) -> HashMap<&str, &Expr> {
 /// Memoized over definitions, so the answer does not depend on the order the
 /// equations are visited in; a definition cycle is undecided. This is not
 /// [`ShapeInference`]: that one decides a single shape for a mixed-rank
-/// `ifelse` and gives up where two arrays meet, while the lift takes the
-/// union of the operands' index sets, follows a structural `D`, reads a
-/// lifted state at its lift index sets and a `faq` at the index sets it
-/// ranges over.
+/// `ifelse` and tracks the data-fed parameters it reads, while the lift
+/// follows a structural `D`, reads a lifted state at its lift index sets and
+/// a `faq` at the index sets it ranges over.
 struct LiftShapes<'a, 'd> {
     parameters: &'d IndexMap<String, ModelVariable>,
     observed_variables: &'d IndexMap<String, ModelVariable>,
@@ -6289,6 +6288,15 @@ impl<'a, 'd> LiftShapes<'a, 'd> {
                     .collect()
             }
             "D" if is_structural_time_derivative(node) => self.expr_axes(&node.args[0]),
+            // A number written as a node (a unit-bearing `const`, esm-spec
+            // §4.8.5) and `true`/`false` are scalars. An array `const` is
+            // anonymous: it has no index sets to align by.
+            "const" => node
+                .value
+                .as_ref()
+                .is_some_and(crate::ConstValue::is_number)
+                .then(Vec::new),
+            "true" | "false" => Some(Vec::new()),
             _ if crate::op_registry::is_elementwise_node(node) => {
                 let mut out: Vec<String> = Vec::new();
                 for a in &node.args {
