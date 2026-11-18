@@ -580,15 +580,17 @@ end
 # under the name the build reads, so the refresh callback and the re-seed at a
 # run's start find it under the buffer's own name. One wrapper per provider
 # object, so a provider serving several fields is still sampled once per
-# refresh. A discrete provider was described before it was wrapped
-# (`_provider_traits`), so the wrapper answers only what a refresh asks: its
-# cadence and its whole sample.
+# refresh. Every function of the provider protocol is forwarded, so the
+# wrapper answers each one as the provider it wraps does.
 struct _RekeyedProvider
     inner::Any
     fields::Vector{Pair{String, String}}   # name the build reads => caller's key
 end
 provider_refresh_times(p::_RekeyedProvider) = provider_refresh_times(p.inner)
 provider_is_const(p::_RekeyedProvider) = provider_is_const(p.inner)
+provider_supports_selection(p::_RekeyedProvider) = provider_supports_selection(p.inner)
+provider_gate_spec(p::_RekeyedProvider) = provider_gate_spec(p.inner)
+provider_extent_metaparameter(p::_RekeyedProvider) = provider_extent_metaparameter(p.inner)
 function provider_sample(p::_RekeyedProvider, t::Real; selection = nothing)
     s = selection === nothing ? provider_sample(p.inner, t) :
         provider_sample(p.inner, t; selection = selection)
