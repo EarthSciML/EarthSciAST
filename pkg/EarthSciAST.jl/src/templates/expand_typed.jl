@@ -612,4 +612,3 @@ function _expand_reaction_system_refs!(
     map_expressions!(e -> _expand_expr_refs(e, reg, sites, memo), rs)
     return
 end
-

@@ -896,8 +896,10 @@ function _removed_2_0_0_finding(doc)
         end
     end
     removed = Ref("")
-    hit(n) = (op = _raw_get(n, "op", nothing);
-        (op isa AbstractString && op in _REMOVED_OPS_2_0_0) && (removed[] = String(op); true))
+    hit(n) = (
+        op = _raw_get(n, "op", nothing);
+        (op isa AbstractString && op in _REMOVED_OPS_2_0_0) && (removed[] = String(op); true)
+    )
     path = _find_json_path(hit, doc)
     return path === nothing ? nothing : (removed[], path)
 end
