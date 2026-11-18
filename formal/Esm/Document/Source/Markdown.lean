@@ -9,7 +9,7 @@ blocks, YAML front matter and directives:
 
 ```
 ---
-esm: "2.3.0"
+esm: "3.0.0"
 name: "Decay"
 ---
 

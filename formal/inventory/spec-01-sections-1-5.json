@@ -196,7 +196,7 @@
       "class": "semantic",
       "phase": 2,
       "area": "units",
-      "note": "grad/div/laplacian/integral and every other open-tier op have undeterminable dimension, so the enclosing check is skipped."
+      "note": "integral and every other open-tier op have undeterminable dimension, so the enclosing check is skipped (grad, div and laplacian were removed at esm 3.0.0)."
     },
     {
       "id": "spec.4.2.sugar-ops-not-privileged",
@@ -205,7 +205,7 @@
       "class": "semantic",
       "phase": 4,
       "area": "rewrite",
-      "note": "Matching, lowering and checking treat grad/div/laplacian/curl/integral exactly as any other open-tier op name (renaming invariance)."
+      "note": "Matching, lowering and checking treat curl/integral exactly as any other open-tier op name (renaming invariance)."
     },
     {
       "id": "spec.4.2.minmax-arity",
