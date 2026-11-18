@@ -522,6 +522,35 @@ _sx_ragged_ics(uval) = Dict{String, Any}("M.u[$i]" => v for (i, v) in enumerate(
         end
     end
 
+    @testset "integer-bound operands lift with the left-hand side's shape" begin
+        # `D(v) = faq(_j1; _j1 ∈ [1, 8], i ∈ [2, 7]; i - 1 == _j1) … + faq(…)`
+        # over an `[n8]` unknown: each operand's output bounds are integers, not
+        # index sets, and they match `v`'s declared extents, so the hoisting
+        # pass lifts each to an observed shaped like `v` and the scatter fills
+        # it. Both forms must build and lift (a "(hoisted aggregate)" rule per
+        # summed variable), and native must agree with the interpreter bit for
+        # bit.
+        path = joinpath(
+            @__DIR__, "..", "..", "..", "tests", "conformance", "faq_equality_scatter",
+            "fixtures", "derived_sum.esm"
+        )
+        dus = map((:native, :interpreter)) do c
+            f!, u0, p, _t, vm, rep = ESX.Internal.build(path; compiler = c)
+            du = fill(NaN, length(u0))
+            f!(du, u0, p, 0.0)
+            names = sort!(collect(keys(vm)))
+            (Float64[du[vm[nm]] for nm in names], rep)
+        end
+        @test _sx_bits(dus[1][1]) == _sx_bits(dus[2][1])
+        oop = ESX.Internal.build(path; compiler = :native, form = :oop)
+        for rep in (dus[1][2], oop.report), v in ("v", "g", "q")
+            @test any(
+                r -> occursin("D(Scatter.$v) (hoisted aggregate)", r.rule),
+                rep.compiler_report.rules
+            )
+        end
+    end
+
     @testset "a ragged nest scatter: one scatter pass, and the call allocates nothing" begin
         for rt in (false, true)
             builds = Float64[]
