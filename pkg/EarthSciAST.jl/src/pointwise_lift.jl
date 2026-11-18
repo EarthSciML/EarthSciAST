@@ -292,72 +292,17 @@ _lift_top_component(name::AbstractString)::String = String(first(split(name, '.'
 _lift_is_scalar(v::ModelVariable)::Bool = v.shape === nothing || isempty(v.shape)
 
 # The lift's shape inference (esm-libraries-spec §4.7.5, "Pointwise lift: which
-# states are lifted"): the ordered index sets an expression's value spans under
-# esm-spec §4.3.4, empty for a scalar, or `nothing` when undecided.
-#
-# Memoized over definitions, so the answer does not depend on the order the
-# equations are visited in; a definition cycle is undecided. `masked` names read
-# as scalars: the sources of the non-pointwise `variable_map` entries into the
-# component being decided.
-struct _LiftShapes
-    variables::Dict{String, ModelVariable}
-    defs::Dict{String, ASTExpr}
-    lifted::Dict{String, Vector{String}}
-    masked::Set{String}
-    memo::Dict{String, Union{Vector{String}, Nothing}}
-end
-_LiftShapes(variables, defs, lifted, masked = Set{String}()) = _LiftShapes(
-    variables, defs, lifted, masked, Dict{String, Union{Vector{String}, Nothing}}()
-)
-
-function _lift_name_axes(s::_LiftShapes, name::String)::Union{Vector{String}, Nothing}
-    (name == "t" || name in s.masked) && return String[]
-    haskey(s.lifted, name) && return copy(s.lifted[name])
-    haskey(s.memo, name) && return s.memo[name]
-    var = get(s.variables, name, nothing)
-    var === nothing && return nothing
-    var.shape === nothing || return String[string(x) for x in var.shape]
-    body = get(s.defs, name, nothing)
-    body === nothing && return String[]
-    s.memo[name] = nothing
-    out = _lift_expr_axes(s, body)
-    s.memo[name] = out
-    return out
-end
-
-function _lift_expr_axes(s::_LiftShapes, e::ASTExpr)::Union{Vector{String}, Nothing}
-    (e isa NumExpr || e isa IntExpr) && return String[]
-    e isa VarExpr && return _lift_name_axes(s, e.name)
-    e isa OpExpr || return nothing
-    if e.op == "index"
-        for k in 2:length(e.args)
-            ax = _lift_expr_axes(s, e.args[k])
-            (ax !== nothing && isempty(ax)) || return nothing
-        end
-        return String[]
-    elseif e.op == "faq"
-        (e.output_idx === nothing || isempty(e.output_idx)) && return String[]
-        axes = String[]
-        for sym in e.output_idx
-            spec = (sym isa AbstractString && e.ranges !== nothing) ?
-                get(e.ranges, sym, nothing) : nothing
-            spec isa IndexSetRef || return nothing
-            push!(axes, spec.from)
-        end
-        return axes
-    elseif e.op == "D" && (e.wrt === nothing || e.wrt == "t") && length(e.args) == 1
-        return _lift_expr_axes(s, e.args[1])
+# states are lifted") is `_expr_axes` (expr_axes.jl) over every declared
+# variable, the bare definitions, the states already lifted at their grids, and
+# `masked` names read as scalars: the sources of the non-pointwise
+# `variable_map` entries into the component being decided.
+function _lift_shape_env(variables, defs, lifted, masked)
+    known = Dict{String, Vector{String}}()
+    for (k, v) in variables
+        v.shape === nothing || (known[k] = String[string(x) for x in v.shape])
     end
-    _is_elementwise_node(e) || return nothing
-    out = String[]
-    for a in e.args
-        ax = _lift_expr_axes(s, a)
-        ax === nothing && return nothing
-        for x in ax
-            x in out || push!(out, x)
-        end
-    end
-    return out
+    merge!(known, lifted)
+    return _ShapeEnv(known; defs = defs, scalar = masked, names = Set{String}(keys(variables)))
 end
 
 # Every name `exprs` reads or binds: variable references, `ranges` keys and
@@ -412,7 +357,7 @@ lift: which states are lifted").
 
 A scalar state is a lift candidate when its merged equation carries an operator
 `makearray` (the operator route) or its right-hand side is an array under the
-lift's shape inference ([`_LiftShapes`](@ref)). A candidate lifts its whole
+lift's shape inference ([`_expr_axes`](@ref)). A candidate lifts its whole
 top-level component: every scalar state of that model or reaction system goes
 onto the same grid. Lifting can make further right-hand sides arrays, so the
 search repeats until no new component is lifted. Each lifted equation is
@@ -531,7 +476,7 @@ function _apply_pointwise_lift!(
     # each read with the component's own states scalar and every other lifted
     # state at its lift index sets.
     function candidates_of(wanted)
-        inference = Dict{String, _LiftShapes}()
+        inference = Dict{String, _ShapeEnv{Nothing}}()
         found = OrderedDict{String, Vector{Tuple{String, Vector{String}}}}()
         for (target, n) in tendencies
             comp = _lift_top_component(target)
@@ -544,9 +489,9 @@ function _apply_pointwise_lift!(
                 others = Dict{String, Vector{String}}(
                     s => a for (s, a) in lifted_axes if _lift_top_component(s) != comp
                 )
-                _LiftShapes(variables, defs, others, get(masks, comp, Set{String}()))
+                _lift_shape_env(variables, defs, others, get(masks, comp, Set{String}()))
             end
-            axes = _lift_expr_axes(shapes, equations[n].rhs)
+            axes = _expr_axes(shapes, equations[n].rhs)
             (axes === nothing || isempty(axes)) && continue
             push!(get!(found, comp, Tuple{String, Vector{String}}[]), (target, axes))
         end
@@ -617,7 +562,7 @@ function _apply_pointwise_lift!(
     # it there (esm-libraries-spec §4.7.5, "Pointwise lift: operands read per
     # cell"). Read after the states above have their shapes, so a definition
     # reading a lifted state is an array too.
-    read_shapes, _ = _flat_array_shapes(
+    read_shapes = _flat_array_shapes(
         states, params, observeds, equations,
         _ElementwiseContext(template_registry === nothing || isempty(template_registry) ? nothing : template_registry)
     )

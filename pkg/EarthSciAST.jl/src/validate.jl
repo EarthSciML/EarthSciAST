@@ -2767,8 +2767,9 @@ function _wholearray_result_axes(
     return (name, axes)
 end
 
-# Walk `expr` in ELEMENT-WISE position — descending ONLY through SCALAR
-# operators ([`_is_scalar_op`](@ref)) — and report every array-variable leaf
+# Walk `expr` in ELEMENT-WISE position — descending ONLY through elementwise
+# nodes ([`_is_elementwise_node`](@ref): a scalar operator, or a `broadcast`
+# whose `fn` is one, esm-spec §4.3.4) — and report every array-variable leaf
 # declared over an index set absent from the result `axes`. Anything that is not
 # a scalar operator ends the walk: an `index` gather and the array producers
 # carry their own indexing, and an unlowered rewrite target (`div`/`grad`/a
@@ -2813,7 +2814,7 @@ function _check_broadcast_axes!(
                 )
             end
         elseif e isa OpExpr
-            _is_scalar_op((e::OpExpr).op) || return nothing
+            _is_elementwise_node(e::OpExpr) || return nothing
             for a in (e::OpExpr).args
                 walk(a)
             end

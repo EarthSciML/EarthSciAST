@@ -163,8 +163,9 @@ end
     end
 end
 
-@testset "shape promotion errors use the typed flatten taxonomy" begin
-    # Conflicting operand shapes -> DimensionPromotionError (was ArgumentError).
+@testset "operands over disjoint index sets promote to their union" begin
+    # esm-spec §4.3.4, "An undeclared result takes the union": `a = f + g` with
+    # `f` over `c` and `g` over `d` spans `[c, d]`, the outer product.
     d = Dict{String, Any}(
         "esm" => "0.8.0", "metadata" => Dict("name" => "X"),
         "index_sets" => Dict{String, Any}(
@@ -189,7 +190,8 @@ end
         )
     )
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
-    @test_throws E.DimensionPromotionError E.promote_downstream_shapes(flat)
+    promoted = E.promote_downstream_shapes(flat)
+    @test promoted.observed_variables["M.a"].shape == ["c", "d"]
 end
 
 # `_pointwise_lifted_species` must consider ONLY still-scalar states.
