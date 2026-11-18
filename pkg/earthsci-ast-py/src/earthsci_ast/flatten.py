@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import warnings
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -1294,9 +1295,15 @@ def _namespace_equations(
 
 
 def _data_source_fields(
-    model: Model, full_prefix: str, data_sources: dict[str, DataSource] | None
+    parameters: Iterable[tuple[str, Any]],
+    full_prefix: str,
+    data_sources: dict[str, DataSource] | None,
 ) -> list[LoaderField]:
-    """Every data-fed parameter of ``model``, as a :class:`LoaderField`.
+    """Every data-fed parameter of one component, as a :class:`LoaderField`.
+
+    ``parameters`` yields ``(local name, declaration)`` pairs in declaration
+    order: a model's ``parameter`` variables or a reaction system's
+    ``parameters`` (esm-libraries-spec §4.7.5 step 4 counts both).
 
     A parameter whose ``update`` is ``kind: "data"`` reads one ``file_variable``
     of the named document-scoped source (esm-spec §8.5). Its cadence follows the
@@ -1307,8 +1314,8 @@ def _data_source_fields(
     """
     sources = data_sources or {}
     fields: list[LoaderField] = []
-    for var_name, var in model.variables.items():
-        if var.type != "parameter" or var.update is None:
+    for var_name, var in parameters:
+        if var.update is None:
             continue
         rules = var.update if isinstance(var.update, list) else [var.update]
         for rule in rules:
@@ -1602,7 +1609,8 @@ def _collect_model(
 
     # Data-fed parameters (esm-spec §8.5): the simulator executes each source at
     # its cadence and binds the array under the parameter's namespaced name.
-    component.loader_fields.extend(_data_source_fields(model, full_prefix, data_sources))
+    model_parameters = ((n, v) for n, v in model.variables.items() if v.type == "parameter")
+    component.loader_fields.extend(_data_source_fields(model_parameters, full_prefix, data_sources))
 
     for sub_name, sub_model in model.subsystems.items():
         sub_prefix = f"{full_prefix}.{sub_name}"
@@ -1613,7 +1621,10 @@ def _collect_model(
 
 
 def _collect_reaction_system(
-    name: str, rs: ReactionSystem, prefix: str | None = None
+    name: str,
+    rs: ReactionSystem,
+    prefix: str | None = None,
+    data_sources: dict[str, DataSource] | None = None,
 ) -> _ComponentSystem:
     """Collect a ReactionSystem (lowered through derive_odes) into a _ComponentSystem.
 
@@ -1688,6 +1699,12 @@ def _collect_reaction_system(
             distribution=param.distribution,
         )
 
+    # Data-fed parameters (esm-spec §8.5), after the models' and in the
+    # reaction system's declaration order.
+    component.loader_fields.extend(
+        _data_source_fields(((p.name, p) for p in rs.parameters), full_prefix, data_sources)
+    )
+
     # Declared local names for the §5.5.6 `join` gate: a reaction system's
     # species and parameters (mirrors Julia `_collect_reaction_system!`).
     rs_locals = {sp.name for sp in rs.species} | {p.name for p in rs.parameters}
@@ -1703,7 +1720,7 @@ def _collect_reaction_system(
 
     for sub_name, sub_rs in rs.subsystems.items():
         sub_prefix = f"{full_prefix}.{sub_name}"
-        sub_component = _collect_reaction_system(sub_name, sub_rs, sub_prefix)
+        sub_component = _collect_reaction_system(sub_name, sub_rs, sub_prefix, data_sources)
         component.merge(sub_component)
 
     return component
@@ -2835,7 +2852,7 @@ def _collect_components(
         components[name] = _collect_model(name, model, data_sources=doc_data_sources)
         source_systems.append(name)
     for name, rs in esm_file.reaction_systems.items():
-        components[name] = _collect_reaction_system(name, rs)
+        components[name] = _collect_reaction_system(name, rs, data_sources=doc_data_sources)
         source_systems.append(name)
     return components, source_systems
 
