@@ -252,7 +252,7 @@ end
     # ========================================================
     # Default tspan from inline tests block
     # ========================================================
-    @testset "tspan picked from tests block" begin
+    @testset "an inline test's time span is not the build's default" begin
         vars = Dict{String, ModelVariable}(
             "x" => ModelVariable(UnknownVariable; default = 1.0),
             "k" => ModelVariable(ParameterVariable; default = 0.1),
@@ -267,7 +267,7 @@ end
         ]
         model = ESM.Model(vars, [eq]; tests = tests)
         _, _, _, tspan_default, _ = EarthSciAST._build_evaluator(model)
-        @test tspan_default == (0.0, 25.0)
+        @test tspan_default == (0.0, 1.0)
     end
 
     # ========================================================

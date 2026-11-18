@@ -5403,7 +5403,7 @@ function _build_compile_evaluator(
         _retier_scalar_rules!(var_map, rhs_list, scalar_section)
 
     # ---- Default tspan ----
-    tspan_default = _pick_tspan(tspan, model)
+    tspan_default = _pick_tspan(tspan)
 
     # ---- Build observability: the live forcing buffers (see BuildInspection) --
     # Published for BOTH forms, from the same `pgather` the out-of-place product
@@ -5920,7 +5920,7 @@ function _build_evaluator_impl_inner(
         param_arrays = param_arrays, parameter_overrides = parameter_overrides, vi_vars = _vi_vars,
         vi_extents = _vi_extents, vi_maps = _vi_maps,
         param_reads = param_reads,
-        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan, model)[1] : Float64(_ic_t0),
+        ic_t0 = _ic_t0 === nothing ? _pick_tspan(tspan)[1] : Float64(_ic_t0),
         ic_data = _ic_data
     )
     # A range-restricted program (src/range_restricted.jl) clips the equation
@@ -8381,8 +8381,7 @@ including `const_arrays`, `param_arrays`, `const_array_boundaries`,
   §6.6.5 reference / observed assertion scope reported via `inspect` —
   not just the runtime parameter NamedTuple.
 * `tspan::Union{Nothing,Tuple{Real,Real}}` — explicit time span. If
-  `nothing`, the first inline `tests` block's `time_span` is used; if
-  the model has no tests, the null default `(0.0, 1.0)` is returned.
+  `nothing`, the default `(0.0, 1.0)` is returned.
 * `form::Symbol` — what to return in the RHS slot (`:inplace`, the
   default, or `:oop`). `:inplace` gives the `f!(du, u, p, t)` above:
   zero-allocation at Float64 AND eltype-generic, so it both solves and
