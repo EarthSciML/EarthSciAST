@@ -569,15 +569,13 @@ end
 
 # The array variable whose block holds state slot `s` (a slot past the scalars).
 function _layout_block_name(layout::StateLayout, s::Int)
-    for b in _layout_blocks(layout)
-        b.base <= s < b.base + b.len && return b.name
-    end
-    return ""
+    i = _block_index_of_slot(layout, s)
+    return i == 0 ? "" : layout.blocks[i].name
 end
 
 # One array cell's default value: its parent variable's declared default, or 0
-# when the cell's key names no variable (`_parse_cell_key` reads no name out of
-# a negative index).
+# for a cell at a negative index (a ghost cell outside the declared grid) and
+# for a block that names no variable.
 function _cell_default(model::Model, name::String, idxs::Vector{Int})
     (any(<(0), idxs) || !haskey(model.variables, name)) && return 0.0
     d = model.variables[name].default
