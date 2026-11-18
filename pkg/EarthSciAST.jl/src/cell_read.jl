@@ -9,10 +9,11 @@
 # `faq` that wraps the result, and the rule that names its loop symbols.
 
 # Expands the template references the lift meets, against the flattened
-# system's merged registry, each once.
+# system's merged registry, each once. A `nothing` memo expands every
+# reference afresh: the uncached route the cache is checked against.
 struct _ElementwiseContext
     registry::Any
-    memo::_ExpandCache
+    memo::_ExpandMemo
 end
 
 _ElementwiseContext(registry) = _ElementwiseContext(registry, _ExpandCache())

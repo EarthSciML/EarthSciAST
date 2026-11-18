@@ -69,6 +69,22 @@ _acc_node_has_lazy(n::_Node) =
 # The stage runs whenever the class merge does.
 _cross_eq_class_emit_enabled() = !_oop_merge_disabled()
 
+# Does a per-cell node hold a kind only the scalar walker evaluates: a state
+# read at a slot computed per call, a recurrence's causal self-read, or a
+# run-time loop? An access-kernel spine has no form for these, so a cell
+# holding one is walked per cell (`percell_scalar`) and never reaches the merge
+# below. Memoized on node identity: a compiled cell is a DAG.
+function _acc_scalar_only(n::_Node, seen::IdDict{_Node, Bool} = IdDict{_Node, Bool}())
+    hit = get(seen, n, nothing)
+    hit === nothing || return hit
+    k = n.kind
+    r = k === _NK_STATE_GATHER || k === _NK_RECUR_GATHER || k === _NK_LOOPVAR ||
+        k === _NK_CONTRACTION_LOOP || k === _NK_RAGGED_LOOP ||
+        _anyof(c -> _acc_scalar_only(c, seen), n.children)
+    seen[n] = r
+    return r
+end
+
 # ---- Structural grouping signature ------------------------------------------
 
 # A structural id, equal for two per-cell nodes iff they have an identical tree
@@ -107,8 +123,10 @@ function _struct_sig_token(n::_Node)
     elseif k === _NK_CONTRACTION_LOOP || k === _NK_LOOPVAR || k === _NK_RAGGED_LOOP ||
             k === _NK_LIVE_GATHER
         # A run-time contraction loop or a ragged loop is confined to scalar
-        # contexts: a cell holding one is walked by the scalar walker and never
-        # reaches the array-equation merge. Should one arrive, it is keyed by
+        # contexts: a cell holding one is walked by the scalar walker
+        # (`_acc_scalar_only`) and never reaches the array-equation merge. A
+        # live gather merges as an operator node (`_acc_merge_nodes`) but is
+        # never grouped with another cell's. Should a loop arrive, it is keyed by
         # object identity so distinct loops never share a group, and
         # `_acc_merge_nodes` then refuses it by name (`_unknown_kind`).
         return (:loop, objectid(n))

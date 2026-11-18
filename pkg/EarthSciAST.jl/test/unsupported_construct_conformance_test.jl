@@ -55,7 +55,9 @@ const _UC_EVALUATOR = "Julia tree-walk evaluator"
                 for r in results
                     @test r.passed == false
                     @test r.actual === nothing
-                    @test occursin("unsupported_construct: $(construct)", r.message)
+                    # The refusal as `showerror` renders it:
+                    # `TreeWalkError [unsupported_construct]: <construct> …`.
+                    @test occursin("[unsupported_construct]: $(construct)", r.message)
                     @test occursin(_UC_EVALUATOR, r.message)
                 end
             else

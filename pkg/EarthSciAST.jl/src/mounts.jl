@@ -1373,13 +1373,19 @@ function _inline_toplevel_form!(
                 )
                 leaf_components[sel]
             else
+                # A top-level mount names its component with a selector, so a
+                # leaf of several without one is a ref that does not resolve:
+                # `unresolved_subsystem_ref`, as every binding answers
+                # (tests/conformance/toplevel_reaction_system_ref/expected.json).
+                # `ambiguous_subsystem_ref` is the subsystem edge's code, which
+                # has no selector to add.
                 length(leaf_components) == 1 || throw(
                     SubsystemRefError(
                         "Top-level $(form.noun) ref '$(ref)' resolves to " *
                             "$(length(leaf_components)) $(form.plural); " *
                             "add a \"$(form.selector)\" selector to choose one " *
                             "(available: $(available))";
-                        code = ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF
+                        code = ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF
                     )
                 )
                 first(values(leaf_components))
