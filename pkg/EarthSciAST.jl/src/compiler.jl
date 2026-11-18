@@ -47,8 +47,6 @@ struct CompilerPlan
     strict::Bool          # refuse a rule this compiler cannot express
     # ---- kernel emission ----
     codegen::Bool                 # the RuntimeGeneratedFunction emitter
-    dual_codegen::Bool            # its overflow (typemax-budget) second pass
-    f64_overflow::Bool            # …also serving Float64 calls
     codegen_body_split::Bool
     cg_foreign_scratch::Bool
     cg_helper_dedup::Bool
@@ -94,7 +92,7 @@ end
 _plan_all(name::Symbol, strict::Bool, on::Bool) =
     CompilerPlan(
     name, strict,
-    on, on, on, on, on, on, on, on, on,
+    on, on, on, on, on, on, on,
     on, on, on, on,
     on, on, on, on, on, on,
     on, on,

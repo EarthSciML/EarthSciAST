@@ -144,8 +144,6 @@ const GROUPS = [
         "array_obs_materialize_test.jl",
         "cadence_refresh_test.jl",
         "codegen_kernel_test.jl",
-        "dual_fast_path_test.jl",
-        "f64_overflow_codegen_test.jl",
         "cg_foreign_scratch_test.jl",
         "scalar_codegen_test.jl",
         "codegen_threaded_test.jl",

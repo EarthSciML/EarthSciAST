@@ -43,10 +43,9 @@
 # SSA-style locals, never writes into the kernel's `_AccScratch` buffers — so
 # an emitted kernel and an interpreted one coexist within one RHS call.
 #
-# With the tier off (`compiler=:interpreter`) BOTH generated functions (primary
-# and overflow) stand down and every kernel runs the per-cell interpreter: that
-# is the differential oracle, slower but bit-identical by the emitter's
-# contract.
+# With the tier off (`compiler=:interpreter`) the generated function stands
+# down and every kernel runs the per-cell interpreter: that is the differential
+# oracle, slower but bit-identical by the emitter's contract.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
 # 64_000_000 across all kernels of one build) that backstops a runaway build.
 # ========================================================================
@@ -54,70 +53,18 @@
 _codegen_disabled() = !_compiler_plan_now().codegen
 # CUMULATIVE emitted-node budget across all kernels in one build call — a
 # build-latency backstop, NOT a per-function compile bound (the intra-kernel
-# split, ess-iip-split, handles that: every generated function stays under
-# `_codegen_fn_node_cap` regardless of a kernel's total size). Since a kernel
-# that exceeds this used to DECLINE to the interpreter — which is forbidden
-# (runtime speed is critical) — the default is high enough that realistic
-# models always emit fully; it only backstops a runaway. The duo LMARS `:inplace`
-# state RHS is ~1.5e6 nodes (13 spine-dominated momentum kernels, ~1.1e5–1.6e5
-# each); the AST build of that is ~3 GB and cheap. Override with
-# ESS_CODEGEN_NODE_BUDGET — a REFUSAL BOUNDARY under `native`, since a kernel
-# past it that the overflow emission also declines is a refused rule, not a
-# quiet demotion.
+# split handles that: every generated function stays under
+# `_codegen_fn_node_cap` regardless of a kernel's total size). The default is
+# high enough that realistic models always emit fully; it only backstops a
+# runaway. It is a REFUSAL BOUNDARY under `native`: a kernel past it is a
+# refused rule, never a quiet demotion to the per-cell runner. Override with
+# ESS_CODEGEN_NODE_BUDGET.
 _codegen_node_budget() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_NODE_BUDGET", "")), 64_000_000)
 
 # Emitted-node size of a tree: a node shared by several parents is counted
 # once per parent, as the emitter writes it once per use.
 _cg_node_tree_size(n::_Node) = _node_tree_size(n)
-
-# ---- Dual overflow tier (ess-dualfp) ----------------------------------------
-# Kernels the primary emission declines — in practice on the node BUDGET, which
-# exists to bound Float64 build latency — used to drop to the per-cell
-# interpreter `_run_acc_kernel!` under non-Float64 `T` (ForwardDiff `Dual` in a
-# stiff-solver Jacobian). The dual overflow tier re-emits those residual
-# kernels into a SECOND generated function with its own (default unbounded)
-# budget. Under non-Float64 `T` it is called unconditionally, so its
-# native-compile cost is paid at the first Dual call.
-# (Since ess-f64ofl, below, the same function also serves Float64 calls when
-# the Float64 overflow routing is armed.)
-# Off, the routing is the pre-dual one; the tier is also off under
-# `compiler=:interpreter`, which disables codegen wholesale, so the oracle stays
-# a pure interpreter build.
-# Budget: ESS_DUAL_CODEGEN_NODE_BUDGET overrides the overflow emission budget
-# (default unbounded — per-function size is still capped by
-# ESS_CODEGEN_FN_NODE_CAP chunking, which is what bounds LLVM memory). It is a
-# REFUSAL BOUNDARY under `native`: this is the emission whose decline is what
-# leaves a tree walk in the right-hand side.
-# Build tally: `:dual_codegen_kernel` / `:dual_codegen_decline_<reason>` in the
-# build's cascade tally — the observability hook for which tier Dual evaluation
-# uses.
-_dual_codegen_disabled() = !_compiler_plan_now().dual_codegen
-_dual_codegen_node_budget() =
-    something(tryparse(Int, get(ENV, "ESS_DUAL_CODEGEN_NODE_BUDGET", "")), typemax(Int))
-
-# ---- Float64 overflow routing (ess-f64ofl) ----------------------------------
-# The SAME overflow generated function, called at Float64 too — so a
-# budget-declined kernel runs compiled code, like every other kernel. The
-# overflow RGF is eltype-generic and its emission is already paid at build (a
-# few ms); what this routing adds is the residual kernels' NATIVE compile at the
-# first Float64 call — roughly linear in emitted nodes, the per-function
-# `ESS_CODEGEN_FN_NODE_CAP` chunking being what keeps it linear, and the same
-# latency a Dual caller already pays at its first call. With more than one
-# thread, the overflow RGF runs CHUNKED on its own threaded cell axis (see
-# "Threaded cell axis for the codegen tier" below).
-#
-# Off, every residual Float64 kernel routes to the per-cell interpreter
-# instead — the differential oracle for this routing.
-# Kernels even the overflow emission declines (`dual_resid`) keep the
-# interpreter at Float64.
-# The routing is inert unless the PRIMARY emission declined something and the
-# overflow function exists, so turning the overflow tier off turns this off
-# too. On every model within the primary budget — all repo fixtures — nothing
-# changes at all.
-# Build tally: `:f64_overflow_armed` when a section is built with the routing
-# armed (overflow function present + feature on).
-_f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 
 # ---- Shared-prelude (xcse) cache reads (ess-cgfsc) ---------------------------
 # The cross-kernel CSE pass (xcse.jl, plan B4) rewrites kernel invariant-tier
@@ -133,17 +80,17 @@ _f64_overflow_codegen_enabled() = _compiler_plan_now().f64_overflow
 # the build threads in (`shared_cache` below): `_make_rhs` fills every prelude
 # tier (const/time/dynamic) into that exact cache — for the SAME value type `T`
 # the kernel section is about to run at — before `kernel_section(du,u,p,t,T)`
-# is called, in the same `f!` body (acc_merge.jl). Both generated functions
-# (primary and dual/f64 overflow) are only ever invoked from inside that
-# section, so every accepted read lands on a slot filled this call. Call sites
+# is called, in the same `f!` body (acc_merge.jl). The generated function is
+# only ever invoked from inside that section, so every accepted read lands on
+# a slot filled this call. Call sites
 # that cannot pin that ordering (the materialized-observed fill sections in
 # build_observed_fills.jl, hand-built test sections) pass `shared_cache = nothing` and keep
 # today's decline — as does ANY payload that is not that one cache object.
 #
 # Off, every such read is an unconditional `:foreign_scratch` decline.
 # Build tally: `:cg_foreign_scratch_emit` — one bump per kernel that COMPILED
-# carrying at least one shared-prelude read (primary or overflow emission; a
-# kernel that later declines for another reason is not counted).
+# carrying at least one shared-prelude read (a kernel that later declines for
+# another reason is not counted).
 _cg_foreign_scratch_disabled() = !_compiler_plan_now().cg_foreign_scratch
 
 # A kernel the emitter cannot model declines through `_Decline` (compiler.jl);
@@ -2569,7 +2516,6 @@ end
 function _build_codegen_rhs(
         acc_kernels::AbstractVector{_AccKernel};
         budget::Int = _codegen_node_budget(),
-        tally::Symbol = :codegen,
         shared_cache::Union{Nothing, _CSECache} = nothing,
         nst::Int = 0
     )
@@ -2598,7 +2544,7 @@ function _build_codegen_rhs(
                 for m in js
                     covered[m] = true
                     ingroup[m] = true
-                    _tally_cascade!(Symbol(tally, :_kernel))
+                    _tally_cascade!(:codegen_kernel)
                 end
                 _tally_cascade!(:cg_rowfused_group)
                 ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
@@ -2629,7 +2575,7 @@ function _build_codegen_rhs(
             lx = _cg_emit_kernel!(ctx, K)
             push!(kloops, (lx, ctx.nodes - nodes0))
             covered[j] = true
-            _tally_cascade!(Symbol(tally, :_kernel))
+            _tally_cascade!(:codegen_kernel)
             # Shared-prelude read observability (ess-cgfsc): this kernel
             # compiled carrying at least one such read.
             ctx.fscratch > fscratch0 && _tally_cascade!(:cg_foreign_scratch_emit)
@@ -2645,7 +2591,7 @@ function _build_codegen_rhs(
             ctx.nodes = nodes0
             ctx.fscratch = fscratch0
             reasons[j] = err.reason
-            _tally_cascade!(Symbol(tally, "_decline_", err.reason))
+            _tally_cascade!(Symbol("codegen_decline_", err.reason))
         end
     end
     any(covered) || return nothing
@@ -2900,88 +2846,53 @@ end
 
 # ---- The RHS's kernel section (wired into `_make_rhs`, acc_merge.jl) --------
 # One concretely-typed callable holding the generated function (or `Nothing`)
-# plus the residual kernels that keep the per-cell interpreter. The
-# `F === Nothing` branch folds away per closure specialization, so with the
-# tier disabled (or nothing emitted) `f!` is instruction-for-instruction the
-# pre-codegen RHS. Emitted kernels write disjoint du slots from residual ones
-# (each state slot has exactly one equation/cell), so running the generated
-# section first is value-identical to the original in-order kernel loop.
+# plus the residual kernels the emitter declined. The `F === Nothing` branch
+# folds away per closure specialization. Emitted kernels write disjoint du
+# slots from residual ones (each state slot has exactly one equation/cell), so
+# running the generated section first is value-identical to the in-order
+# kernel loop.
 #
 # The per-cell runner is the interpreter's: a section that runs any kernel on
-# it, at any value type, holds a `_PerCellLicense` in `walk` (W), and one that
-# runs none holds `nothing`. The constructor checks the two agree, so a strict
-# plan, which has no license, cannot build a section that walks; with
-# `W === Nothing` the runner's loops are not in the compiled call at all.
-struct _KernelSection{F, TB, G, GTB, W}
+# it holds a `_PerCellLicense` in `walk` (W), and one that runs none holds
+# `nothing`. The constructor checks the two agree, so a strict plan, which has
+# no license, cannot build a section that walks; with `W === Nothing` the
+# runner's loops are not in the compiled call at all.
+struct _KernelSection{F, TB, W}
     cgf::F
     cgtabs::TB
     n_emitted::Int                # kernels compiled into the generated function
     kernels::Vector{_AccKernel}   # residual kernels (interpreter runner)
-    # Dual overflow tier (ess-dualfp): a second generated function covering the
-    # residual kernels the PRIMARY emission declined (in practice on the node
-    # budget). Under non-Float64 `T` it is called unconditionally, so Duals run
-    # compiled code instead of the per-cell interpreter; at Float64 it serves
-    # the residual kernels whenever `f64cg` below is armed. `dual_resid`
-    # indexes `kernels`: the kernels even the overflow emission declined, which
-    # keep the eltype-generic interpreter under every `T`.
-    dualf::G
-    dualtabs::GTB
-    n_dual_emitted::Int
-    dual_resid::Vector{Int}
-    # Float64 overflow routing (ess-f64ofl): when true, the overflow function
-    # above also serves Float64 calls (in place of the per-cell interpreter).
-    # Baked at build time from the plan's Float64 overflow routing.
-    f64cg::Bool
-    # Threaded cell axis: one lazily-decided chunk verdict per generated
-    # function (primary / overflow), see `_SecTCache` above.
+    # Threaded cell axis: the lazily-decided chunk verdict of the generated
+    # function, see `_SecTCache` above.
     tcache::_SecTCache
-    dual_tcache::_SecTCache
-    # Serial cell tiling of the primary function: the number of static chunks
-    # a serial call runs back to back (1 = one pass per kernel). See
-    # `_section_tiles`.
+    # Serial cell tiling: the number of static chunks a serial call runs back
+    # to back (1 = one pass per kernel). See `_section_tiles`.
     ntiles::Int
     walk::W
     function _KernelSection(
             cgf::F, cgtabs::TB, n_emitted::Int, kernels::Vector{_AccKernel},
-            dualf::G, dualtabs::GTB, n_dual_emitted::Int,
-            dual_resid::Vector{Int}, f64cg::Bool, tcache::_SecTCache,
-            dual_tcache::_SecTCache, ntiles::Int,
-            walk::W
-        ) where {F, TB, G, GTB, W <: Union{Nothing, _PerCellLicense}}
-        _section_walks(kernels, G !== Nothing, f64cg, dual_resid) == (W !== Nothing) ||
+            tcache::_SecTCache, ntiles::Int, walk::W
+        ) where {F, TB, W <: Union{Nothing, _PerCellLicense}}
+        isempty(kernels) == (W === Nothing) ||
             throw(
             ArgumentError(
                 "a kernel section holds a per-cell license exactly " *
                     "when it runs a kernel on the per-cell runner"
             )
         )
-        return new{F, TB, G, GTB, W}(
-            cgf, cgtabs, n_emitted, kernels, dualf, dualtabs,
-            n_dual_emitted, dual_resid, f64cg, tcache,
-            dual_tcache, ntiles, walk
-        )
+        return new{F, TB, W}(cgf, cgtabs, n_emitted, kernels, tcache, ntiles, walk)
     end
 end
 
-# True when a section with these residual `kernels` runs any of them on the
-# per-cell runner at some value type: every one when there is no overflow
-# function, and with one, those it declined (`dual_resid`) — at Float64 too
-# only when the Float64 routing is armed, and otherwise all of them there.
-_section_walks(kernels, has_dual::Bool, f64cg::Bool, dual_resid) =
-    !isempty(kernels) && !(has_dual && f64cg && isempty(dual_resid))
-
-# The per-cell runner over `kernels[idx]`, in order.
-@inline function _walk_kernels!(
-        ::_PerCellLicense, du, u, p, t, kernels, idx,
-        ::Type{T}
-    ) where {T}
-    @inbounds for j in idx
+# The per-cell runner over `kernels`, in order.
+@inline function _walk_kernels!(::_PerCellLicense, du, u, p, t, kernels, ::Type{T}) where {T}
+    @inbounds for j in eachindex(kernels)
         _run_acc_kernel!(du, u, p, t, kernels[j], T)
     end
     return nothing
 end
 
-# SERIAL TILING. The primary function runs chunk `c` of every emitted kernel
+# SERIAL TILING. The generated function runs chunk `c` of every emitted kernel
 # back to back (the threaded path's granularity, above), so a serial call can
 # run the chunks one after another instead of each kernel over all its cells:
 # several kernels over the same cells — one per species of a reaction system
@@ -3009,74 +2920,46 @@ end
     return nothing
 end
 
-@inline function (s::_KernelSection{F, TB, G, GTB, W})(
+@inline function (s::_KernelSection{F, TB, W})(
         du, u, p, t,
         ::Type{T}
-    ) where {F, TB, G, GTB, W, T}
-    if F !== Nothing
-        # PRIMARY generated function, chunked when the section verdict allows
-        # (threaded cell axis above), at every value type. Any serial verdict
-        # (small, shared outs, one thread) runs it tiled serially.
-        _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
-    end
-    if G !== Nothing && (T !== Float64 || s.f64cg)
-        # The overflow function covers every residual kernel not in
-        # `dual_resid`: under a non-Float64 `T` always (Duals run compiled code),
-        # and at Float64 when the Float64 overflow routing (ess-f64ofl) is
-        # armed — bit-identical to the interpreter by the emitter's contract,
-        # CHUNKED whenever the section verdict allows, serial `(1, 1)`
-        # otherwise. In particular, a shared-outs section
-        # (`:cg_serial_shared_outs`) under threading runs it SERIAL; that
-        # verdict needs two equations writing one state slot, which no real
-        # build has produced. Emitted kernels write disjoint du slots from
-        # residual ones (each state slot has exactly one equation/cell), so the
-        # order generated-first is value-identical to the in-order kernel loop.
-        # Kernels the overflow emission itself declined keep the interpreter.
-        _run_cg_maybe_threaded!(s.dualf, s.dualtabs, du, u, p, t, s.dual_tcache)
-        W === Nothing || _walk_kernels!(s.walk, du, u, p, t, s.kernels, s.dual_resid, T)
-        return nothing
-    end
-    W === Nothing ||
-        _walk_kernels!(s.walk, du, u, p, t, s.kernels, eachindex(s.kernels), T)
+    ) where {F, TB, W, T}
+    # The generated function, chunked when the section verdict allows
+    # (threaded cell axis above), at every value type. Any serial verdict
+    # (small, shared outs, one thread) runs it tiled serially.
+    F !== Nothing && _run_cg_maybe_threaded!(s.cgf, s.cgtabs, du, u, p, t, s.tcache, s.ntiles)
+    W === Nothing || _walk_kernels!(s.walk, du, u, p, t, s.kernels, T)
     return nothing
 end
 
-# Partition the kernels between the codegen tier and the pre-existing runners.
-# With the codegen tier off (or an empty emission) the section is exactly the
-# pre-codegen kernel loop; with only the overflow tier off it is the pre-dual
-# routing (Duals interpret every residual kernel) with the primary tier intact.
-# `shared_cache` (ess-cgfsc): the build's scalar prelude `_CSECache`, passed
-# ONLY by the `_make_rhs` call site (acc_merge.jl) — the one place where the
-# section provably runs after that cache's prelude tiers were filled in the
-# same `f!` call. Every other caller keeps the default `nothing`, which keeps
-# the `:foreign_scratch` decline for shared-prelude reads.
-# A kernel BOTH emissions declined runs on `_run_acc_kernel!` — the `_eval_acc`
-# tree walk, once per output cell, on every right-hand-side call (§0 of the
-# phase-0 census). That is the interpreter's runner, so the section needs a
-# license for it; a strict compiler refuses at BUILD instead, naming the rule
-# the cascade has open and the reason the OVERFLOW emission gave: the primary
-# pass's reasons are not refusals, since the overflow pass compiles what the
-# budget declined.
+# Partition the kernels between the codegen tier and the per-cell runner. With
+# the codegen tier off (or an empty emission) the section is the plain kernel
+# loop.
+# `shared_cache`: the build's scalar prelude `_CSECache`, passed ONLY by the
+# `_make_rhs` call site (acc_merge.jl) — the one place where the section
+# provably runs after that cache's prelude tiers were filled in the same `f!`
+# call. Every other caller keeps the default `nothing`, which keeps the
+# `:foreign_scratch` decline for shared-prelude reads.
+# A kernel the emission declined runs on `_run_acc_kernel!` — the `_eval_acc`
+# tree walk, once per output cell, on every right-hand-side call. That is the
+# interpreter's runner, so the section needs a license for it; a strict
+# compiler refuses at BUILD instead, naming the rule the cascade has open and
+# the reason the emission gave.
 function _kernel_walk_license(
         kernels::AbstractVector{_AccKernel},
-        resid::AbstractVector{Int},
-        reasons::AbstractVector{Symbol},
-        emission_empty::Bool
+        reasons::AbstractVector{Symbol}
     )
     return _percell_license(
         _current_rule_label("the assembled right-hand side"), _ -> begin
             why = :emission_produced_nothing
-            if !emission_empty
-                for j in resid
-                    j <= length(reasons) || continue
-                    reasons[j] === :none && continue
-                    why = reasons[j]
-                    break
-                end
+            for r in reasons
+                r === :none && continue
+                why = r
+                break
             end
-            "$(length(resid)) of $(length(kernels)) access kernel" *
-                (length(kernels) == 1 ? "" : "s") * " reached the end of both codegen " *
-                "emissions undeclared (deepest reason: $why), so they would run on the " *
+            "$(length(kernels)) access kernel" *
+                (length(kernels) == 1 ? "" : "s") * " reached the end of the codegen " *
+                "emission undeclared (deepest reason: $why), so they would run on the " *
                 "per-cell tree-walk kernel runner on every right-hand-side call. Build " *
                 "with compiler=:interpreter to run it, or grow the emitter to cover " *
                 "this construct"
@@ -3094,61 +2977,17 @@ function _make_kernel_section(
     if cg === nothing
         kernels = collect(_AccKernel, acc_kernels)
         n_emitted = 0
-        # No primary emission ran, so there is no per-kernel reason to carry.
-        primary_reasons = Symbol[]
+        reasons = Symbol[]
     else
         resid = [j for j in eachindex(cg.covered) if !cg.covered[j]]
         kernels = _AccKernel[acc_kernels[j] for j in resid]
         n_emitted = count(cg.covered)
-        # Re-indexed onto `kernels`, which is what every consumer below indexes.
-        primary_reasons = Symbol[cg.reasons[j] for j in resid]
+        reasons = Symbol[cg.reasons[j] for j in resid]
     end
-    cgf = cg === nothing ? nothing : cg.f
-    cgtabs = cg === nothing ? nothing : cg.tabs
-    # Dual overflow tier: retry the residual kernels under the dual budget. Its
-    # RGF is only ever CALLED with non-Float64 arguments, so nothing here adds
-    # Float64 compile latency — only the (cheap) AST emission runs at build.
-    # Gated on the primary tier too: with codegen off the build must stay a pure
-    # pre-codegen one, which is the tier's differential oracle.
-    dg = (_codegen_disabled() || _dual_codegen_disabled() || isempty(kernels)) ?
-        nothing :
-        _build_codegen_rhs(
-            kernels; budget = _dual_codegen_node_budget(),
-            tally = :dual_codegen, shared_cache = shared_cache, nst = nst
-        )
-    if dg === nothing
-        walk = isempty(kernels) ? nothing :
-            _kernel_walk_license(
-                kernels, collect(Int, 1:length(kernels)),
-                primary_reasons, isempty(primary_reasons)
-            )
-        return _KernelSection(
-            cgf, cgtabs, n_emitted, kernels,
-            nothing, nothing, 0, collect(Int, 1:length(kernels)),
-            false, _sec_tcache(cg), _sec_tcache(nothing),
-            _cg_section_tiles(cg, n_emitted), walk
-        )
-    end
-    # Float64 overflow routing (ess-f64ofl): armed whenever the overflow
-    # function exists and the plan has not turned the routing off. A build with
-    # either codegen tier off reaches the branch above instead, so both remain
-    # full oracles for their tiers.
-    f64cg = _f64_overflow_codegen_enabled()
-    f64cg && _tally_cascade!(:f64_overflow_armed)
-    dual_resid = Int[j for j in eachindex(dg.covered) if !dg.covered[j]]
-    # With the Float64 routing off, Float64 calls run every residual kernel on
-    # the per-cell runner, not just the ones the overflow emission declined.
-    walk = !_section_walks(kernels, true, f64cg, dual_resid) ? nothing :
-        f64cg ? _kernel_walk_license(kernels, dual_resid, dg.reasons, false) :
-        _kernel_walk_license(
-            kernels, collect(Int, 1:length(kernels)),
-            fill(:f64_overflow_routing_off, length(kernels)), false
-        )
+    walk = isempty(kernels) ? nothing : _kernel_walk_license(kernels, reasons)
     return _KernelSection(
-        cgf, cgtabs, n_emitted, kernels,
-        dg.f, dg.tabs, count(dg.covered), dual_resid, f64cg,
-        _sec_tcache(cg), _sec_tcache(dg),
-        _cg_section_tiles(cg, n_emitted), walk
+        cg === nothing ? nothing : cg.f, cg === nothing ? nothing : cg.tabs,
+        n_emitted, kernels, _sec_tcache(cg), _cg_section_tiles(cg, n_emitted), walk
     )
 end
 

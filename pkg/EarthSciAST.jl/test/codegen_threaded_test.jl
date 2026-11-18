@@ -8,13 +8,13 @@
 #   2. CHUNK-INSTANCE DECOMPOSITION — the generated function's `(c, nchunks)`
 #      instances, run sequentially in THIS process, reproduce the serial
 #      `(1, 1)` du bitwise (`===`, so NaN/-0.0 count) for every cell-set kind
-#      the emitter chunks: outs/contig, rank-1, rank-2, rank-3 and rank-4 boxes.
+#      the emitter chunks: listed slots, rank-1, rank-2, rank-3 and rank-4 boxes.
 #      This pins the chunked loop-bound arithmetic (the row clamps of the
 #      rank-2/3/N nests) with no threads involved — threaded, the chunks
 #      only ever run concurrently, which cannot change per-cell values when
 #      the out-slots are disjoint (the build-time check below).
 #   3. DISJOINTNESS — `_cellsets_outs_unique` catches duplicates within an
-#      outs set AND across cell sets (contiguous ranges included); real builds
+#      outs set AND across cell sets; real builds
 #      carry `outs_disjoint == true` into the section caches, and a poisoned
 #      cache yields the permanent `:cg_serial_shared_outs` verdict.
 #      (A shared-outs section under threading runs the serial `(1, 1)`
@@ -25,8 +25,7 @@
 #      with the work floor above the section, which is what keeps a
 #      section off the threaded route — and vs a `compiler=:interpreter`
 #      build; `:cg_threaded` in `_THREAD_TALLY`; the serial work floor
-#      (`:cg_serial_small` at the default on a small section); and
-#      the budget-0 OVERFLOW function threading the same way.
+#      (`:cg_serial_small` at the default on a small section).
 using Test
 using EarthSciAST
 include("testutils.jl")
@@ -34,9 +33,8 @@ const ESM = EarthSciAST
 
 # ---- shared fixtures ---------------------------------------------------------
 
-# Two-variable 1-D elementwise model: a contig cell set (first state block)
-# plus a base-offset rank-1 box (second block). Fully budget-declinable, so
-# the budget-0 build exercises the overflow function too.
+# Two-variable 1-D elementwise model: a rank-1 box over the first state block
+# plus a base-offset rank-1 box (second block).
 function _cgt_1d_model(N)
     ubody = _op(
         "+",
@@ -151,7 +149,7 @@ _cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict(
         for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl
 )
 
-function _cgt_build(model, ics; compiler::Symbol = :native, env...)
+function _cgt_build(model, ics; compiler = :native, env...)
     return withenv((String(k) => v for (k, v) in pairs(env))...) do
         f!, u0, p, _t, vm, rep = ESM.Internal.build(
             model;
@@ -174,12 +172,13 @@ _cgt_serial(model, ics; env...) =
 end
 _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
-# The section's box-kernel ranks, read off a build whose primary emission
+# The section's box-kernel ranks, read off a non-strict build whose emission
 # declined on the node budget (where `kernels` holds EVERY kernel — the
 # grid_invariance idiom; the kernel IR under the runners is build-invariant, so
 # the ranks apply to the emitting build too).
 function _cgt_ranks(model, ics)
-    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
+    lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+    f!, _, _, _ = _cgt_build(model, ics; compiler = lax, ESS_CODEGEN_NODE_BUDGET = "0")
     ks = getfield(f!, :kernel_section)
     return [length(K.cells.strides) for K in getfield(ks, :kernels)]
 end
@@ -324,31 +323,6 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             # threaded ≡ serial at a size that actually threads.
             @test length(du_thr) == 2000
             @test all(du_thr[k] === du_ser[k] for k in keys(du_thr))
-        end
-
-        @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
-            ESM._reset_thread_tally!()
-            fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            fOS, _uOS, pOS, _ = _cgt_serial(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            fB, uB, pB, _ = _cgt_build(model, ics; compiler = :interpreter)
-            @test get(tallyO, :dual_codegen_kernel, 0) >= 1
-            @test get(tallyO, :f64_overflow_armed, 0) == 1
-            ksO = getfield(fO, :kernel_section)
-            @test getfield(ksO, :dualf) !== nothing
-            @test getfield(ksO, :dual_tcache).disjoint
-            for k in 1:3, t in (0.0, 0.7)
-                u = Float64[
-                    2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
-                        for i in 1:length(uO)
-                ]
-                du_thr = _cgt_du(fO, u, pO, t)
-                du_ser = _cgt_du(fOS, u, pOS, t)   # same program, serial route
-                du_int = _cgt_du(fB, u, pB, t)     # the interpreter
-                @test _cgt_bitsame(du_thr, du_ser)
-                @test _cgt_bitsame(du_thr, du_int)
-            end
-            @test getfield(ksO, :dual_tcache).state == 1
-            @test get(ESM._THREAD_TALLY, :cg_threaded, 0) >= 1
         end
 
         @testset "2-D boxes under real threading" begin
@@ -547,27 +521,6 @@ else
             @test _cgt_bitsame(_cgt_du(f!, u, p, 0.4), du1)
             @test ui == u0
             @test _cgt_bitsame(_cgt_du(fi!, u, pi_, 0.4), du1)
-        end
-
-        @testset "overflow RGF chunk instances (budget 0)" begin
-            model = _cgt_1d_model(41)
-            ics = _cgt_1d_ics(41)
-            f!, u0, p, tally = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
-            @test get(tally, :dual_codegen_kernel, 0) >= 1
-            ks = getfield(f!, :kernel_section)
-            dualf = getfield(ks, :dualf)
-            dtabs = getfield(ks, :dualtabs)
-            @test dualf !== nothing
-            @test getfield(ks, :dual_tcache).disjoint
-            du1 = fill(0.0, length(u0))
-            dualf(du1, u0, p, 0.7, dtabs, 1, 1)
-            for nc in (2, 5)
-                duN = fill(0.0, length(u0))
-                for c in 1:nc
-                    dualf(duN, u0, p, 0.7, dtabs, c, nc)
-                end
-                @test _cgt_bitsame(duN, du1)
-            end
         end
 
         @testset "serial-process verdicts" begin
