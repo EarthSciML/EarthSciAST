@@ -263,7 +263,8 @@ function _apply_initial_conditions!(
             r = resolve_key(table, key)
             r.how === :ambiguous && throw(
                 SimulateError(
-                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"), ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
+                    _override_ambiguous_message("initial_conditions", key, r.candidates; kind = "state"),
+                    ERROR_CODES.OVERRIDE_KEY_AMBIGUOUS
                 )
             )
             r.name === nothing || return r, space
@@ -296,7 +297,8 @@ function _apply_initial_conditions!(
             SimulateError(
                 _override_collision_message(
                     "initial_conditions", "state", name, sort!(claimed[name])
-                ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
+                ),
+                ERROR_CODES.OVERRIDE_KEY_CONFLICT
             )
         )
     end
@@ -309,7 +311,8 @@ function _apply_initial_conditions!(
                 SimulateError(
                     "esm_problem: initial_conditions['$key'] carries inline array data for a " *
                         "single state element; only a SHAPED unknown's whole-variable key takes " *
-                        "a nested array (esm-spec §6.6.2)"
+                        "a nested array (esm-spec §6.6.2)",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
             u0[var_map[resolved]] = Float64(value)
@@ -323,7 +326,8 @@ function _apply_initial_conditions!(
                         "esm_problem: initial_conditions['$key'] has shape $(size(value)), " *
                             "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
                             "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
-                            "shape after metaparameter folding)"
+                            "shape after metaparameter folding)",
+                        ERROR_CODES.ARRAY_SHAPE_MISMATCH
                     )
                 )
                 u0[idx] = Float64(value[idxs...])
@@ -654,7 +658,8 @@ function _callback_set end
 _callback_set(cbs) = throw(
     SimulateError(
         "composing $(length(cbs)) problem-level callbacks needs the SciMLBase extension; " *
-            "add `using SciMLBase` so EarthSciASTSimulateExt is active"
+            "add `using SciMLBase` so EarthSciASTSimulateExt is active",
+        ERROR_CODES.EXTENSION_UNAVAILABLE
     )
 )
 
@@ -695,13 +700,17 @@ function _mtk_problem end
 # --------------------------------------------------------------------------- #
 function _solve_problem end
 _solve_problem(prob, alg; kwargs...) = throw(
-    SimulateError(
-        alg === nothing ?
+    alg === nothing ?
+        SimulateError(
             "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-            "(and `using OrdinaryDiffEqTsit5`)" :
+            "(and `using OrdinaryDiffEqTsit5`)",
+            ERROR_CODES.INVALID_ARGUMENT
+        ) :
+        SimulateError(
             "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
-            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"
-    )
+            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active",
+            ERROR_CODES.EXTENSION_UNAVAILABLE
+        )
 )
 
 # --------------------------------------------------------------------------- #
@@ -979,7 +988,8 @@ function _pushdown_input(input, model_name, metaparams, base_path)
         throw(
             SimulateError(
                 "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
-                "EsmFile input — a FlattenedSystem is already past the rewrite point"
+                "EsmFile input — a FlattenedSystem is already past the rewrite point",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     raw = serialize_esm_file(pfile)
@@ -1014,7 +1024,8 @@ function _discover_loader_extents(
             SimulateError(
                 "provider '$rawk' both GATES on a derived index set and declares the " *
                     "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
-                    "not a discovered one"
+                    "not a discovered one",
+                ERROR_CODES.PROVIDER_EXTENT_CONFLICT
             )
         )
         # Only the record count is read here; the field is checked and
@@ -1026,7 +1037,8 @@ function _discover_loader_extents(
             prev == n || throw(
                 SimulateError(
                     "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
-                        "'$rawk' — the loader's variables are not aligned on one record axis"
+                        "'$rawk' — the loader's variables are not aligned on one record axis",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         elseif haskey(out, mp) && out[mp] != n
@@ -1034,7 +1046,8 @@ function _discover_loader_extents(
                 SimulateError(
                     "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
                         "provider '$rawk' discovers $n records; drop the binding and let the " *
-                        "loader declare its own extent"
+                        "loader declare its own extent",
+                    ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                 )
             )
         end
@@ -1439,7 +1452,8 @@ function _refuse_program_build_request(req::_ProblemRequest)
     req.materialize_out === nothing || throw(
         SimulateError(
             "esm_problem: program_build = true takes no materialize_out: a Problem built as " *
-                "its program has no discrete-cadence cut, so nothing would fill the materializer"
+                "its program has no discrete-cadence cut, so nothing would fill the materializer",
+            ERROR_CODES.INVALID_ARGUMENT
         )
     )
     return nothing
@@ -1461,7 +1475,8 @@ function _stripped_problem(input, req::_ProblemRequest, classes::Vector{String})
     input isa Union{AbstractString, AbstractDict, EsmFile} || throw(
         SimulateError(
             "esm_problem: `strip` removes constructs from a document; pass a path, a " *
-                "native Dict or an EsmFile, not a $(typeof(input))"
+                "native Dict or an EsmFile, not a $(typeof(input))",
+            ERROR_CODES.INVALID_ARGUMENT
         )
     )
     # The providers are described and any loader extent discovered before the
@@ -1512,7 +1527,8 @@ function _discover_extents(input, req::_ProblemRequest)
                 "esm_problem: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
                     "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
                     "are already closed — pass the path or the native Dict to esm_problem (and drop " *
-                    "the pre-`load`), or bind them in that `load` call instead" * why
+                    "the pre-`load`), or bind them in that `load` call instead" * why,
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -1552,7 +1568,8 @@ function _esm_problem(
                     SimulateError(
                         "provider '$k' both GATES on a derived index set and declares the extent " *
                             "metaparameter '$(traits[k].extent_metaparameter)'; a gated " *
-                            "slab's extent is the gating set's, not a discovered one"
+                            "slab's extent is the gating set's, not a discovered one",
+                        ERROR_CODES.PROVIDER_EXTENT_CONFLICT
                     )
                 )
                 traits[k] = _with_gate(traits[k], _GateSpec(gate, k))
@@ -2002,7 +2019,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         length(u0) == length(out) || throw(
             SimulateError(
                 "u0 has $(length(u0)) elements but the flattened state vector has " *
-                    "$(length(out)); pass a Dict of named overrides to set a subset"
+                    "$(length(out)); pass a Dict of named overrides to set a subset",
+                ERROR_CODES.ARRAY_SHAPE_MISMATCH
             )
         )
         out = collect(Float64, u0)
@@ -2010,7 +2028,8 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
         throw(
             SimulateError(
                 "u0 must be an AbstractDict of named overrides or an AbstractVector " *
-                    "replacing the whole state, got a $(typeof(u0))"
+                    "replacing the whole state, got a $(typeof(u0))",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -2139,7 +2158,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
             _override_collision_message(
                 "remake(prob; p)", "parameter",
                 first(sort!(collect(collisions), by = first))...
-            ), ERROR_CODES.OVERRIDE_KEY_CONFLICT
+            ),
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     isempty(unknown) || throw(
@@ -2148,7 +2168,8 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
                 join(("'" * k * "'" for k in sort(unknown)), ", ") *
                 " in the problem (keys may be local or namespaced; a name the " *
                 "flattener's coupling rewired onto a loader variable is spelled by its " *
-                "SURVIVING name). Known: " * _elide_names(sort(collect(names)))
+                "SURVIVING name). Known: " * _elide_names(sort(collect(names))),
+            ERROR_CODES.UNKNOWN_OVERRIDE_KEY
         )
     )
     isempty(ambiguous) || throw(
@@ -2168,14 +2189,15 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     vals = Any[]
     for name in sort(collect(keys(normalized)))
         cls = get(classes, name, haskey(pm, name) ? :numeric : :unclassified)
-        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls)))
+        cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls), ERROR_CODES.PARAMETER_NOT_OVERRIDABLE))
         # A `:numeric` parameter is by definition a slot of `p`; if it somehow is
         # not, refuse rather than silently drop the override.
         haskey(pm, name) || throw(
             SimulateError(
                 "remake(prob; p): '$name' classifies :numeric but is not a " *
                     "slot of the problem's `p` — refusing to apply an override that would " *
-                    "have no effect (this is a build bug; please report it)."
+                    "have no effect (this is a build bug; please report it).",
+                ERROR_CODES.INTERNAL_ERROR
             )
         )
         push!(syms, Symbol(name))

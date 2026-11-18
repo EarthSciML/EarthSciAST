@@ -43,13 +43,15 @@ function _GateSpec(raw::AbstractDict, key::AbstractString)
     applies = get(raw, "applies_to", nothing)
     (axes === nothing || applies === nothing) && throw(
         RefreshError(
-            "gated provider '$key' gate spec needs both `axes` and `applies_to`"
+            "gated provider '$key' gate spec needs both `axes` and `applies_to`",
+            ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     typed = _GateAxisSpec[_gate_axis(ax, ax_i, key) for (ax_i, ax) in enumerate(axes)]
     any(a -> a isa _GatedAxis, typed) || throw(
         RefreshError(
-            "gated provider '$key' declares no {\"gated_by\":…} axis"
+            "gated provider '$key' declares no {\"gated_by\":…} axis",
+            ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
     return _GateSpec(typed, String[String(n) for n in applies])
@@ -68,7 +70,8 @@ function _gate_axis(ax, ax_i::Int, key::AbstractString)::_GateAxisSpec
         step = Int(get(r, "step", 1))
         step >= 1 || throw(
             RefreshError(
-                "gated provider '$key' axis $ax_i: range.step must be >= 1, got $step"
+                "gated provider '$key' axis $ax_i: range.step must be >= 1, got $step",
+                ERROR_CODES.PROVIDER_GATE_INVALID
             )
         )
         return _RangeAxis(Int(get(r, "start", 0)), Int(r["stop"]), step)
@@ -79,7 +82,8 @@ function _gate_axis(ax, ax_i::Int, key::AbstractString)::_GateAxisSpec
         RefreshError(
             "gated provider '$key' axis $ax_i is malformed " *
                 "(expected \"all\", {\"fixed\":[i]}, {\"range\":{start,stop,step}}, " *
-                "or {\"gated_by\":set})"
+                "or {\"gated_by\":set})",
+            ERROR_CODES.PROVIDER_GATE_INVALID
         )
     )
 end
@@ -121,7 +125,8 @@ function _provider_traits(prov, key::AbstractString; gate = nothing)
     _implements(provider_sample, prov) || throw(
         RefreshError(
             "provider '$key': provider_sample not implemented for $(typeof(prov)); " *
-                "the data binding (EarthSciIO) or a mock must add a method"
+                "the data binding (EarthSciIO) or a mock must add a method",
+            ERROR_CODES.PROVIDER_METHOD_MISSING
         )
     )
     raw = gate === nothing ? provider_gate_spec(prov) : gate
@@ -195,7 +200,8 @@ function _gated_const_keys(
                 "to ($(sort!(collect(aliases)))) is also claimed by another gated " *
                 "provider, so the fetched slab has no unambiguous name to be published " *
                 "under. Key the provider \"<Loader>.<var>\" so its own spelling can win, " *
-                "or give the sibling loaders' variables distinct names"
+                "or give the sibling loaders' variables distinct names",
+            ERROR_CODES.OVERRIDE_KEY_CONFLICT
         )
     )
     return ks
@@ -253,14 +259,16 @@ function _fetch_gated_providers(
                 haskey(set_to_faq, sname) || throw(
                     RefreshError(
                         "gated provider '$key' gates on '$sname' which is not a " *
-                            "derived index set with a from_faq"
+                            "derived index set with a from_faq",
+                        ERROR_CODES.UNDEFINED_INDEX_SET
                     )
                 )
                 faq = set_to_faq[sname]
                 haskey(vi_members, faq) || throw(
                     RefreshError(
                         "gated provider '$key' gates on '$sname' (faq '$faq') but its " *
-                            "value-invention members were not materialised"
+                            "value-invention members were not materialised",
+                        ERROR_CODES.DERIVED_INDEX_SET_UNMATERIALIZED
                     )
                 )
                 mem = Int[Int(m) for m in vi_members[faq]]   # 1-based ids, set order
@@ -290,7 +298,8 @@ function _fetch_gated_providers(
                 RefreshError(
                     "gated provider '$key' variable '$nm'" *
                         (pushed ? ": fetched compact axis is " : " (fallback slice): compact axis is ") *
-                        "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent"
+                        "$(size(arr, gated_pos_out)) but the gating set extent is $gated_extent",
+                    ERROR_CODES.ARRAY_SHAPE_MISMATCH
                 )
             )
             for k in _gated_const_keys(alias_claims, model, key, nm)

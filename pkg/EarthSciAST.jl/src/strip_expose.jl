@@ -827,7 +827,7 @@ function compile_kernels(prob::EsmProblem, specs)
         )
     )
     seed = prob.build.seed
-    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed"))
+    seed === nothing && throw(SimulateError("compile_kernels: this Problem carries no program seed", ERROR_CODES.COMPILER_UNAVAILABLE))
     flat = seed.prep.flat
     s = stripped(prob)
     znames = String[b.name for b in s.z_layout]
@@ -1108,7 +1108,7 @@ function _kernel_plans(kname, prog, rhs, outs::Vector{_KernelOutput}, ulay, zlay
     for x in parameters(prog)
         j = findfirst(==(x.name), set_params)
         j === nothing && throw(
-            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not")
+            SimulateError("kernel '$kname' reads parameter '$(x.name)', which the right-hand side does not", ERROR_CODES.KERNEL_OUTPUT_UNRESOLVED)
         )
         push!(p_map, j)
     end

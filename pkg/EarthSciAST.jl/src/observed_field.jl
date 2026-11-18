@@ -144,7 +144,8 @@ function _observed_field_impl(
     file = prob.run_file
     (file.models !== nothing && !isempty(file.models)) || throw(
         SimulateError(
-            "observed_field: prepared document has no model"
+            "observed_field: prepared document has no model",
+            ERROR_CODES.INTERNAL_ERROR
         )
     )
     mname = String(first(keys(file.models)))
@@ -173,7 +174,8 @@ function _observed_field_impl(
                 SimulateError(
                     "observed_field: '$name' is a bare name and this problem has " *
                         "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
-                        "qualify it as one of: $(join(r.candidates, ", "))"
+                        "qualify it as one of: $(join(r.candidates, ", "))",
+                    ERROR_CODES.AMBIGUOUS_OUTPUT_NAME
                 )
             )
         end
@@ -218,7 +220,8 @@ function _observed_field_impl(
         is_obs || throw(
             SimulateError(
                 "observed_field: '$name' is not a build-time-evaluable observed of the " *
-                    "prepared document"
+                    "prepared document",
+                ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
             )
         )
         arr = nothing
@@ -240,7 +243,8 @@ function _observed_field_impl(
         arr === nothing && throw(
             SimulateError(
                 "observed_field: '$name' is not a build-time-evaluable observed of the " *
-                    "prepared document"
+                    "prepared document",
+                ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
             )
         )
         return ndims(arr) > 1 ? vec(permutedims(arr, reverse(1:ndims(arr)))) : vec(arr)
@@ -576,7 +580,8 @@ function _params_at(params::AbstractDict, p::AbstractVector, ctx)
     length(names) == length(p) || throw(
         SimulateError(
             "observed_field: the parameter vector has $(length(p)) elements but the " *
-                "build's parameter set has $(length(names))"
+                "build's parameter set has $(length(names))",
+            ERROR_CODES.ARRAY_SHAPE_MISMATCH
         )
     )
     return _params_at(params, NamedTuple{names}(Tuple(p)), ctx)
@@ -702,7 +707,8 @@ function _route_program(r::_ObservedRead)
         SimulateError(
             "observed '$(r.variable)' reads the continuous state, so it is not " *
                 "a build-time field; pass the state to read it at, " *
-                "`observed_field(prob, name; u = …, t = …)`"
+                "`observed_field(prob, name; u = …, t = …)`",
+            ERROR_CODES.OBSERVED_FIELD_UNAVAILABLE
         )
     )
     vals = _run_observed_program(r.ctx, prog, r.u, r.t, r.p)

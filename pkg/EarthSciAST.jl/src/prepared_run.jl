@@ -121,7 +121,8 @@ function _prepare_run(
         throw(
             SimulateError(
                 "esm_problem: unsupported input of type $(typeof(input)); " *
-                    "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"
+                    "pass a path, EsmFile, FlattenedSystem, or native ESM Dict",
+                ERROR_CODES.INVALID_ARGUMENT
             )
         )
     end
@@ -132,7 +133,7 @@ end
 
 # A path loaded for a run, with the run's metaparameters.
 function _load_run_path(path::String, metaparameters)
-    isfile(path) || throw(SimulateError("esm_problem: no such file '$path'"))
+    isfile(path) || throw(SimulateError("esm_problem: no such file '$path'", ERROR_CODES.INVALID_ARGUMENT))
     return load_path(path; metaparameters = metaparameters)
 end
 

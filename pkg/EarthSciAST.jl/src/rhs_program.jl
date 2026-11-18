@@ -263,7 +263,8 @@ function parameter_vector(x, overrides::AbstractDict = Dict{String, Float64}())
         haskey(idx, String(k)) || throw(
             SimulateError(
                 "parameter_vector: '$k' is not a parameter of this program; its parameters are " *
-                    (isempty(ps) ? "none" : join((s.name for s in ps), ", "))
+                    (isempty(ps) ? "none" : join((s.name for s in ps), ", ")),
+                ERROR_CODES.UNKNOWN_OVERRIDE_KEY
             )
         )
     end
@@ -273,7 +274,8 @@ function parameter_vector(x, overrides::AbstractDict = Dict{String, Float64}())
         v === nothing && (v = s.default)
         v === nothing && throw(
             SimulateError(
-                "parameter_vector: the parameter '$(s.name)' has no default and no override"
+                "parameter_vector: the parameter '$(s.name)' has no default and no override",
+                ERROR_CODES.PARAMETER_UNBOUND
             )
         )
         out[i] = Float64(v)

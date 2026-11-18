@@ -162,6 +162,37 @@ include("testutils.jl")
         @test isempty(intersect(Set(EarthSciAST._LOCAL_ERROR_CODES), Set(error_code_names())))
     end
 
+    @testset "every SimulateError and RefreshError raise passes a code" begin
+        # The one-argument constructor leaves `code` empty; every raise site
+        # names a registered code instead. The data-binding extension's own
+        # RefreshErrors are outside this guard.
+        root = joinpath(@__DIR__, "..")
+        uncoded = String[]
+        function scan(ex, name, file, line)
+            if ex isa LineNumberNode
+                return ex.line
+            elseif ex isa Expr
+                if ex.head == :call && ex.args[1] === name
+                    pos = [a for a in ex.args[2:end] if !(a isa Expr && a.head in (:kw, :parameters))]
+                    typed = any(a -> a isa Expr && a.head == :(::), pos)
+                    (length(pos) < 2 && !typed) && push!(uncoded, "$file:$line")
+                end
+                for a in ex.args
+                    l = scan(a, name, file, line)
+                    l isa Int && (line = l)
+                end
+            end
+            return nothing
+        end
+        for (name, dirs) in ((:SimulateError, ("src", "ext")), (:RefreshError, ("src",))),
+                dir in dirs, (d, _, fs) in walkdir(joinpath(root, dir)), f in fs
+            endswith(f, ".jl") || continue
+            p = joinpath(d, f)
+            scan(Meta.parseall(read(p, String); filename = p), name, relpath(p, root), 0)
+        end
+        @test isempty(uncoded)
+    end
+
     @testset "the corpus-pinned codes are registered" begin
         # Spot-check across every family, so a family dropped wholesale is caught.
         for c in (

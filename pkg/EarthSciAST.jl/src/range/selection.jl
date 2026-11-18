@@ -59,7 +59,8 @@ function _select_flat(
             ws in writable || throw(
                 SimulateError(
                     "select: `writes` names '$ws', which is not a variable this program " *
-                        "writes; it writes $(join(sort!(collect(writable)), ", "))"
+                        "writes; it writes $(join(sort!(collect(writable)), ", "))",
+                    ERROR_CODES.UNDEFINED_VARIABLE
                 )
             )
             push!(W, ws)
