@@ -36,24 +36,33 @@
 # FILE LAYOUT. The evaluator is split along its numbered section seams into
 # the files below (under src/tree_walk/), included here in the original
 # definition order. Definitions used at include time (structs, consts) must
-# stay before their include-time uses — in particular `_Node`/`_BuildMemo`/
-# `_MaybeMemo` (compile.jl) precede the `_resolve_indices` signatures
-# (resolve.jl). Note that build.jl is included BEFORE compile.jl — its
-# function signatures therefore must not annotate compile-layer types
-# (they are used at runtime only; see `_compile_faq_equation!`).
+# stay before their include-time uses — in particular `_Node` (node.jl) and
+# `_BuildMemo`/`_MaybeMemo` (compile.jl) precede the `_resolve_indices`
+# signatures (resolve.jl). The build pipeline
+# (tree_walk/build_*.jl) is included after the compile layer, so its
+# signatures may name compile-layer types; only its records
+# (build_records.jl) and the run-time types a kernel dispatches on
+# (obs_buffers.jl) come earlier.
 # ─────────────────────────────────────────────────────────────────────────────
 
 include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
 include("tree_walk/op_ladder.jl")        #      the operator ladder generator (op registry shapes)
 include("tree_walk/cadence_stamp.jl")    #      parameter stamps + the per-build forcing epoch
 include("tree_walk/state_layout.jl")     #      the flat state layout (`StateLayout`)
+include("tree_walk/node.jl")             # §3   the `_Node` IR and its payload types
+include("tree_walk/dag.jl")              #      unique-node walks over a shared DAG
 include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
-include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
+include("tree_walk/build_helpers.jl")    #      sentinels, claimed-slot set, small utilities
+include("tree_walk/bounded_const_array.jl") #    const-array boundary policy
 include("tree_walk/unlowered_gate.jl")   #      §9.6.3 c.6 pre-build rewrite-target walk
 include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
-include("tree_walk/build.jl")            # §2b  build pipeline, `_build_evaluator`
+include("tree_walk/build_records.jl")    #      the records a build hands back
 include("tree_walk/hoist.jl")            #      nested reductions lifted to internal observeds
-include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
+include("tree_walk/compile.jl")          # §3   expression → `_Node`
+include("tree_walk/prelude_cache.jl")    #      the scalar prelude cache and its stamps
+include("tree_walk/rhs_seams.jl")        #      value type, parameter read, Float32 guard
+include("tree_walk/scalar_cse.jl")       # §3b  scalar common-subexpression elimination
+include("tree_walk/scalar_walk.jl")      # §4   the compiled scalar walker
 include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
 include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
 include("tree_walk/scalar_ops.jl")       #      op ladder, subscript resolver, forcing args
@@ -62,6 +71,7 @@ include("tree_walk/oop.jl")              # §4d  the out-of-place build product
 include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
 include("tree_walk/oop_merge.jl")        #      kernel-CLASS merge, for both forms
 include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude CSE
+include("tree_walk/obs_buffers.jl")      #      run-time observed slot space + discrete refill
 include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
 include("tree_walk/thread_dispatch.jl")  #      allocation-free chunk dispatch (Polyester's pool)
 include("tree_walk/scan_fused.jl")       #      a prefix scan's term and fold in one pass
@@ -74,9 +84,23 @@ include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar
 include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
 include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)
 include("tree_walk/observed_program.jl") #      the compiled output-time observed route
-include("tree_walk/helpers.jl")          # §5   misc + array-variable helpers
+include("tree_walk/field_ic.jl")         # §5   a field `ic` per cell
+include("tree_walk/cellwise.jl")         #      cell-wise evaluation, compile-once cell evaluators
+include("tree_walk/ranges.jl")           #      integer range expansion
+include("tree_walk/memory.jl")           #      zero-filled buffers
+include("tree_walk/const_int.jl")        #      the integer subscript evaluator
 include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
 include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`
 include("tree_walk/setup_fill.jl")       # §5e  construction-time fills through the cascade
 include("tree_walk/range_hooks.jl")      #      the seams of a range-restricted build
+include("tree_walk/build_equation_prep.jl")   #      broadcast lowering, observed LHS, lifts, folds
+include("tree_walk/build_refusals.jl")        #      refusals at the build entry
+include("tree_walk/build_classify.jl")        # §2b  pre-lowering + variable classification
+include("tree_walk/build_caller_data.jl")     #      caller data, keys, parameter scope
+include("tree_walk/build_initial_state.jl")   #      `ic` equations and u0
+include("tree_walk/build_discrete_cache.jl")  #      discrete-cadence caches
+include("tree_walk/build_observed_fills.jl")  #      materialized array-observed fills
+include("tree_walk/build_array_equation.jl")  #      derivative compile + array-equation cascade
+include("tree_walk/build_pipeline.jl")        # §2c  the build phases, `_build_evaluator_impl`
+include("tree_walk/build_front_doors.jl")     #      `_build_evaluator` entry points, `evaluate_expr`
 include("tree_walk/ir_contract.jl")      #      what a back end may rely on in `_CompiledIR`

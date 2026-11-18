@@ -177,7 +177,7 @@ Identity-memoized [`foreach_subexpr`](@ref): each distinct `OpExpr` node
 expression DAG costs O(distinct nodes + edges) instead of once per PATH.
 `foreach_subexpr` on a DAG where a shared node is reachable through `k`
 parents re-walks its whole subtree `k` times — on the resolved observed
-map (`_resolve_observed`, tree_walk/helpers.jl), whose bodies are compact
+map (`_resolve_observed`, tree_walk/build_classify.jl), whose bodies are compact
 DAGs by construction (`_sub_preserving`'s identity memo), a depth-`n`
 chain that references its predecessor twice per level makes that 2^n.
 
@@ -546,7 +546,7 @@ end
 # recursing cannot capture them.
 #
 # THAT IS A PRECONDITION ON THE CALLER, not a property of the AST. The
-# tree-walk's `_sub_preserving` (tree_walk/helpers.jl) substitutes INDEX names —
+# tree-walk's `_sub_preserving` (below) substitutes INDEX names —
 # precisely the symbols binders bind — so it cannot assume this and does
 # capture-avoiding descent instead. Do not carry this paragraph over to a
 # binding map whose keys are loop variables.
@@ -914,4 +914,207 @@ function simplify(expr::OpExpr)::ASTExpr
 
     # If no simplification rules apply, return the fully-recursed expression.
     return recursed
+end
+
+# Variable substitution that preserves every OpExpr field — the
+# package-level `substitute` only carries `wrt`/`dim` and drops
+# `handler_id`, `fn`, etc., which would corrupt `call`/`broadcast`
+# nodes on their way through. Scoped here because this module is the
+# only caller that needs the full preservation.
+#
+# SHARING PRESERVATION. The lowered expression is a DAG: after
+# `lower_expression_templates`, structurally-identical subtrees are stored ONCE
+# and referenced by many parents (a deep reconstruction chain — e.g. a monotone
+# PPM stencil — has interior nodes reached by ~100+ parent edges). An
+# `IdDict{OpExpr,ASTExpr}` memo maps each unique input node to a SINGLE output
+# node, so a shared sub-DAG is substituted once and remains shared. Without the
+# memo a node of in-degree `d` is visited and `reconstruct`ed `d` times,
+# re-inflating the DAG into an exponentially larger tree BEFORE it reaches
+# `_compile` (whose own IdDict memo would otherwise have kept it small). The
+# per-cell faq build (`_compile_faq_percell!`) calls this once per cell,
+# so the re-inflation is paid per cell — the build-time OOM this memo removes.
+# The memo is created fresh per top-level call: `bindings` is fixed within one
+# call, so mapping input identity → output is sound.
+const _SubMemo = IdDict{OpExpr, ASTExpr}
+
+_sub_preserving(expr::NumExpr, ::Dict{String, ASTExpr}) = expr
+_sub_preserving(expr::IntExpr, ::Dict{String, ASTExpr}) = expr
+_sub_preserving(expr::VarExpr, bindings::Dict{String, ASTExpr}) =
+    get(bindings, expr.name, expr)
+_sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}) =
+    _sub_preserving(expr, bindings, _SubMemo())
+
+# 3-arg forms thread the memo. Leaves ignore it (returned verbatim, no allocation).
+_sub_preserving(expr::NumExpr, ::Dict{String, ASTExpr}, ::_SubMemo) = expr
+_sub_preserving(expr::IntExpr, ::Dict{String, ASTExpr}, ::_SubMemo) = expr
+_sub_preserving(expr::VarExpr, bindings::Dict{String, ASTExpr}, ::_SubMemo) =
+    get(bindings, expr.name, expr)
+
+# Substitute each expression in `args`, returning `(substituted, changed)`. Like
+# `_resolve_arg_vec`, the ORIGINAL vector is returned untouched (no allocation)
+# when no element binds, and only the first differing element triggers a copy.
+function _sub_arg_vec(
+        args::Vector{ASTExpr}, bindings::Dict{String, ASTExpr},
+        memo::_SubMemo
+    )
+    changed = false
+    new_args = args
+    @inbounds for i in eachindex(args)
+        a = args[i]
+        # Manual union-split over the four concrete `ASTExpr` subtypes. `args` has the
+        # abstract element type `ASTExpr`, so a bare `_sub_preserving(a, …)` dispatches
+        # dynamically (`ijl_apply_generic`) — the single largest flat cost in the
+        # build profile. Narrowing with `isa` lets the `OpExpr`/`VarExpr` calls
+        # resolve statically and short-circuits the `NumExpr`/`IntExpr` leaves
+        # (which `_sub_preserving` returns verbatim) with no call at all.
+        r = a isa OpExpr ? _sub_preserving(a, bindings, memo) :
+            a isa VarExpr ? get(bindings, a.name, a) :
+            a                                            # NumExpr / IntExpr: verbatim
+        if r !== a
+            if !changed
+                new_args = copy(args)
+                changed = true
+            end
+            new_args[i] = r
+        end
+    end
+    return new_args, changed
+end
+
+# Does `expr` BIND any name `bindings` would replace? Same rule as
+# `_bound_symbols` (expression.jl) but allocation-free on the hot path: a node
+# carrying none of the three binder fields — every plain math op, which is the
+# overwhelming majority of a per-cell substitution — answers `false` after three
+# `=== nothing` checks and no name vector is built.
+function _binds_any(expr::OpExpr, bindings::Dict{String, ASTExpr})
+    isempty(bindings) && return false
+    iv = expr.int_var
+    if iv !== nothing && haskey(bindings, iv::String)
+        return true
+    end
+    rg = expr.ranges
+    if rg !== nothing
+        for k in keys(rg)
+            haskey(bindings, k) && return true
+        end
+    end
+    # A `makearray`'s `output_idx` binds too: its region values read those
+    # symbols at the cell being assembled, and `_resolve_index_of_makearray`
+    # binds them to the subscripts the makearray is read at.
+    oi = expr.output_idx
+    if oi !== nothing
+        for x in oi
+            x isa AbstractString && haskey(bindings, String(x)) && return true
+        end
+    end
+    return false
+end
+
+# `bindings` minus the names `expr` binds — the substitution map that may enter
+# `expr`'s scope. Off the hot path (only reached when `_binds_any` fires), so it
+# reuses `_bound_symbols` directly.
+function _shadowed_bindings(expr::OpExpr, bindings::Dict{String, ASTExpr})
+    bound = Set{String}(_bound_symbols(expr))
+    out = Dict{String, ASTExpr}()
+    for (n, v) in bindings
+        n in bound || (out[n] = v)
+    end
+    return out
+end
+
+function _sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}, memo::_SubMemo)
+    # Identity memo: a shared node substitutes to a single shared output node.
+    cached = get(memo, expr, nothing)
+    cached === nothing || return cached
+    # CAPTURE AVOIDANCE. A node carrying `ranges` / `output_idx` / `int_var` is a
+    # BINDER: those names are loop variables scoped to its own body, filter,
+    # operands and bounds. A substitution for an OUTER variable of the same name
+    # must not penetrate that scope. The shadow set is `_bound_symbols`
+    # (expression.jl) verbatim, so substitution and `free_variables` share ONE
+    # scoping rule rather than two that can drift.
+    #
+    # WHAT IT COSTS TO GET WRONG. The motivating case is an inlined column mean:
+    #
+    #     pbl_sum_O3[gi,gj]     = Σ_gk dp[gi,gj,gk]·pbl_f[gi,gj,gk]·O3[gi,gj,gk]
+    #     pbl_mean_O3[gi,gj,gk] = pbl_sum_O3[gi,gj] / max(pbl_wt[gi,gj], 1)
+    #
+    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
+    # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
+    # is materialized, so the mean reads a buffer gather and the two binders
+    # never meet. In an INLINING build (`compiler=:interpreter`, or an observed
+    # excluded from materialization) the sum is spliced into the mean's body, and
+    # substituting the outer `gk` used to rewrite the inner sum's own loop
+    # variable. The inner body then no longer mentions `gk` while `ranges` still
+    # declares it, so the unroll emits `length(gk)` IDENTICAL terms: a column sum
+    # silently degenerates to `NLEV · body[gk = outer_k]`. It does not always
+    # throw — the ReSEACT PBL model happens to trip `E_TREEWALK_UNBOUND_LOOP_VAR`
+    # in the affine branch-key walk, but the same capture on a plainer model
+    # returns a WRONG NUMBER with no diagnostic at all.
+    if _binds_any(expr, bindings)
+        inner = _shadowed_bindings(expr, bindings)
+        # Every binding shadowed ⇒ nothing in this subtree can substitute.
+        # Otherwise recurse under the reduced map with its OWN memo: `memo` maps
+        # node identity under ONE binding map, and a shared node reachable from
+        # both scopes must not resolve to the inner scope's answer outside it.
+        result = isempty(inner) ? expr : _sub_preserving(expr, inner, _SubMemo())
+        memo[expr] = result
+        return result
+    end
+    new_args, changed = _sub_arg_vec(expr.args, bindings, memo)
+    new_body = expr.expr_body
+    if expr.expr_body !== nothing
+        new_body = _sub_preserving(expr.expr_body, bindings, memo)
+        changed |= new_body !== expr.expr_body
+    end
+    new_values = expr.values
+    if expr.values !== nothing
+        nv, vchanged = _sub_arg_vec(expr.values, bindings, memo)
+        new_values = nv
+        changed |= vchanged
+    end
+    # Substitute loop-var bindings into a `filter` predicate too, so a nested
+    # aggregate's filter sees the outer index values (the join's `join_gates` are
+    # position-keyed and need no substitution — they are carried through).
+    new_filter = expr.filter
+    if expr.filter !== nothing
+        new_filter = _sub_preserving(expr.filter, bindings, memo)
+        changed |= new_filter !== expr.filter
+    end
+    # A node with no bound descendant AND no range bounds to rewrite is returned
+    # verbatim — no ~30-field OpExpr rebuilt. Nodes carrying `ranges` (only nested
+    # aggregates do) always take the reconstruct path so their bound expressions
+    # get substituted; those are rare relative to the plain stencil math ops that
+    # dominate a per-cell substitution.
+    if expr.ranges === nothing && !changed
+        memo[expr] = expr
+        return expr
+    end
+    # Substitute loop-var bindings into range BOUNDS too, so a nested faq
+    # whose reduction bound references an OUTER loop index — e.g. a per-cell
+    # variable-valence reduction `k ∈ [1, index(n_edges_on_cell, i)]` inside an
+    # outer `i`-loop — has `i` resolved when the inner faq is later expanded.
+    # Bounds are Int (pass through) or ASTExpr (recursively substituted).
+    new_ranges = _sub_ranges(expr.ranges, bindings, memo)
+    # `reconstruct` (types.jl) copies every remaining OpExpr field, so the full
+    # preservation this helper promises holds even as fields are added.
+    result = reconstruct(
+        expr; args = new_args, expr_body = new_body,
+        values = new_values, filter = new_filter, ranges = new_ranges
+    )
+    memo[expr] = result
+    return result
+end
+
+# Substitute loop-var bindings into a faq `ranges` dict's bound expressions.
+# Each entry is a vector whose elements are Int (left as-is) or an ASTExpr bound
+# (recursively `_sub_preserving`d). Returns `nothing` unchanged when ranges is
+# nothing; otherwise a fresh Dict so the original is never mutated.
+_sub_ranges(ranges::Nothing, ::Dict{String, ASTExpr}, ::_SubMemo) = nothing
+function _sub_ranges(ranges, bindings::Dict{String, ASTExpr}, memo::_SubMemo)
+    out = Dict{String, Any}()
+    for (k, v) in ranges
+        out[String(k)] = v isa AbstractVector ?
+            Any[(e isa ASTExpr ? _sub_preserving(e, bindings, memo) : e) for e in v] : v
+    end
+    return out
 end

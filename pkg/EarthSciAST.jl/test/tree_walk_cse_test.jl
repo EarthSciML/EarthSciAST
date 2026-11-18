@@ -381,7 +381,7 @@ end
 # latent, is that AN EQUATION'S NUMERIC OUTPUT IS NOT A FUNCTION OF THAT EQUATION
 # ALONE: adding a canonically-equal expression elsewhere in the model can shift it.
 #
-# This is a decision, not a bug (see the header note in compile.jl): canonical form
+# This is a decision, not a bug (see the header note in scalar_cse.jl): canonical form
 # IS this format's notion of expression identity — `discretize` canonicalizes every
 # per-cell RHS before it is compiled, so the format reassociates as a matter of
 # course — and keying structurally instead would lose the commutative sharing the

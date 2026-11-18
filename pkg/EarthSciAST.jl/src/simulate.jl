@@ -436,7 +436,7 @@ function _apply_initial_conditions!(
     # test's `initial_conditions: {"u": 9.0}` died with "unknown state element
     # 'u'". Same defect as `parameter_overrides` had, on the state side; it
     # merely failed loudly instead of silently. Resolve the caller's key onto
-    # the name the build uses with the SAME rules (build.jl
+    # the name the build uses with the SAME rules (build_caller_data.jl
     # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
     # dotted suffix is a state name, else a key that is itself a dotted suffix
     # of exactly one state name (`u` — and equally `sub.u` — for `P.sub.u`) —
@@ -1490,6 +1490,9 @@ the flattener's namespaced one — `"Chem.A"`, not `"A"`. Only a
 is "already flattened". **Snapshot semantics**: the document is fully parsed
 here, so mutating `input` afterwards does not affect the problem (forcing arrays
 are aliased by design; see [`EsmProblem`](@ref)).
+
+Two problems may be built at once on two tasks: each build keeps its state to
+itself. One problem's `f!` is not to be called from several threads at once.
 
 Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 

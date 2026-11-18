@@ -12,7 +12,7 @@
 # those memos mostly miss because the copies are distinct objects. After
 # interning they hit, and the build cost collapses to the unique-node count.
 #
-# WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build.jl),
+# WHERE it runs: once, at the `_build_evaluator_impl` entry (tree_walk/build_pipeline.jl),
 # right after `apply_expression_template` reference expansion — the latest
 # point that covers the whole build hot path. NOT at parse: parse-time
 # interning would also be sound today (the mutation audit in

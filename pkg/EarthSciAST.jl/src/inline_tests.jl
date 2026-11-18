@@ -796,7 +796,7 @@ end
 # an error rather than a silent zero.
 #
 # The suffix enumeration is the override resolver's own `_dotted_suffixes`
-# (src/tree_walk/build.jl), shared rather than re-derived so the two positions
+# (src/tree_walk/build_caller_data.jl), shared rather than re-derived so the two positions
 # cannot drift apart again.
 function _param_scope_with_aliases(
         params::AbstractDict,

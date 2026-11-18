@@ -14,7 +14,7 @@ ForwardDiff for its Jacobian is enough). So the identity is never wrong and this
 method is never missing. The base package stays AD-agnostic.
 
 `_value` is how a build-time gate or a scatter key reads a dual number's primal
-(`src/tree_walk/helpers.jl`).
+(`src/tree_walk/rhs_seams.jl`).
 """
 module EarthSciASTForwardDiffExt
 

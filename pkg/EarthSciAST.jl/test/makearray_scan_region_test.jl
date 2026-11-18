@@ -7,7 +7,7 @@
 # is `prefix_scan + 0.5·f·dz`, whole-array arithmetic over the aggregate. With
 # the aggregate hidden inside a gather, only the per-cell build would take
 # either shape, so the build fills the makearray one region at a time and lifts
-# the filtered operand to its own observed (build.jl `_materialized_fill_equations`,
+# the filtered operand to its own observed (build_observed_fills.jl `_materialized_fill_equations`,
 # hoist.jl `_hoist_operand_walk`), so the scans take the O(N) scan fold (a
 # reverse one descending, esm-spec §4.3.1).
 #

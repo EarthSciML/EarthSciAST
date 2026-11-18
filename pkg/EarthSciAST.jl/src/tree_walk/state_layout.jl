@@ -636,3 +636,36 @@ function Base.iterate(o::_VarMapOverlay, state = (true, nothing))
 end
 @inline _vm_slot(o::_VarMapOverlay, name::AbstractString, idx) = _vm_slot(o.base, name, idx)
 _vm_block(o::_VarMapOverlay, name::AbstractString) = _vm_block(o.base, name)
+
+# Format an array-cell key like "u[3]" (1D) or "u[2,3]" (2D).
+function _cell_key(var_name::String, indices)
+    # The one- and two-index keys (every grid cell of a 1-D or 2-D variable)
+    # are spelled without `join`'s IOBuffer; the string is the same.
+    if indices isa Union{AbstractVector{<:Integer}, Tuple{Vararg{Integer}}}
+        length(indices) == 1 && return string(var_name, "[", indices[1], "]")
+        length(indices) == 2 &&
+            return string(var_name, "[", indices[1], ",", indices[2], "]")
+    end
+    return "$(var_name)[$(join(indices, ","))]"
+end
+
+const _CELL_KEY_RE = r"^([^\[]+)\[([0-9]+(?:,[0-9]+)*)\]$"
+
+"""
+    _parse_cell_key(key) -> Union{Nothing, Tuple{String, Vector{Int}}}
+
+Inverse of [`_cell_key`](@ref): parse a flat array-cell key like `"u[3]"` or
+`"u[2,3]"` into `(name, indices)` — e.g. `("u", [3])` / `("u", [2, 3])`.
+Returns `nothing` when `key` is not a well-formed cell key (no bracket suffix,
+empty variable name, or non-integer indices), so callers can use it both to
+decode known-valid keys and to test whether a string IS a cell key. Accepts
+any `AbstractString`. Shared with simulate.jl / inline_tests.jl — keep the
+signature stable.
+"""
+function _parse_cell_key(key::AbstractString)
+    m = match(_CELL_KEY_RE, key)
+    m === nothing && return nothing
+    name = String(m.captures[1])
+    indices = Int[parse(Int, s) for s in split(m.captures[2], ",")]
+    return (name, indices)
+end

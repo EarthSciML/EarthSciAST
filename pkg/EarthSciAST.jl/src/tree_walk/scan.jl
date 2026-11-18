@@ -4,7 +4,7 @@
 # A cumulative sum is an ordinary `faq` whose `filter` admits the
 # monotone window `j <= i` (esm-spec §4.3.1, "Cumulative (prefix)
 # reductions"). Nothing about that shape is special to the build until you
-# look at what it costs: `_unrolled_contraction_body` (build.jl) expands a
+# look at what it costs: `_unrolled_contraction_body` (build_array_equation.jl) expands a
 # constant-bound contraction into ONE symbolic ⊕-fold shared by every output
 # cell, and with an inequality filter each of the N terms carries a runtime
 # guard, so cell `i` evaluates
@@ -66,7 +66,7 @@
 # term pass runs over the centres, the last node is left unwritten by the term
 # kernels, and the strict fold below writes every cell before reading it — the
 # slot's entry value reaches only an `acc` the loop discards.
-# `_scan_term_iters` (build.jl) states the admission condition and why the
+# `_scan_term_iters` (build_array_equation.jl) states the admission condition and why the
 # inclusive window is excluded. Pinned by the staggered testsets in
 # test/scan_prefix_test.jl, bitwise against the per-cell reference exactly as
 # the same-range cases are.
@@ -280,5 +280,5 @@ function _scan_strided_run!(
 end
 
 # The plain vector `du`'s slots `lo:hi` live in, and the offset to subtract
-# (the two-buffer view's method is with it, in build.jl).
+# (the two-buffer view's method is with it, in obs_buffers.jl).
 _scan_dense(du, lo::Int, hi::Int) = (du, 0)

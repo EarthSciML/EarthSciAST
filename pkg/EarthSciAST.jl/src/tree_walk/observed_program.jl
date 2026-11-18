@@ -145,30 +145,15 @@ function _observed_program!(ctx::_ObsProgramCtx, name::String)
     end
 end
 
-# A compile against a layout of its own must not share the build-scoped state
-# slot tables (`_STATE_SLOT_TABLES`, keyed by array name) with any other
-# layout: a program's extended layout places the materialized observeds
-# differently from the right-hand side's and from another program's, so a table
-# cached under one layout reads the wrong slots under the next. `f` runs with
-# an empty table, and the caller's tables are put back afterwards. One compile
-# at a time, since the table is process-wide.
-const _OWN_SLOT_TABLES_LOCK = ReentrantLock()
-
-function _with_own_state_slot_tables(f)
-    return lock(_OWN_SLOT_TABLES_LOCK) do
-        saved = copy(_STATE_SLOT_TABLES)
-        empty!(_STATE_SLOT_TABLES)
-        try
-            return f()
-        finally
-            empty!(_STATE_SLOT_TABLES)
-            merge!(_STATE_SLOT_TABLES, saved)
-        end
-    end
-end
-
+# A compile against a layout of its own must not share the state slot tables
+# (keyed by array name) with any other layout: a program's extended layout
+# places the materialized observeds differently from the right-hand side's and
+# from another program's, so a table cached under one layout reads the wrong
+# slots under the next. So each program compiles in a child build context
+# (`_child_build_ctx`, compiler.jl) with tables, loop registry and parameter-read
+# sink of its own.
 _build_observed_program(ctx::_ObsProgramCtx, name::String) =
-    _with_own_state_slot_tables(() -> _build_observed_program_impl(ctx, name))
+    _with_build_ctx(() -> _build_observed_program_impl(ctx, name), _child_build_ctx())
 
 function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     model = ctx.model

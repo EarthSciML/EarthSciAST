@@ -12,7 +12,7 @@
 # nothing else.
 #
 # WHERE IT RUNS. A recurrence observed is always a materialized observed — a
-# buffer block above the state in the extended value vector (build.jl,
+# buffer block above the state in the extended value vector (build_classify.jl,
 # "FACTORED array observeds") — under every compiler, and its fill is a sweep
 # instead of the fill equation the other materialized observeds compile. Every
 # route that fills an observed buffer builds its sweep through
@@ -29,7 +29,7 @@
 # its reduction the same `_ACFold` that tier folds with: one accumulator seeded
 # from the Float64 0̄, the contracted tuples in `Iterators.product` order (the
 # first contracted index fastest), a filter as the term's `ifelse(filter, term,
-# 0̄)` guard. A self-read in the term is a `_NK_RECUR_GATHER` (compile.jl): it
+# 0̄)` guard. A self-read in the term is a `_NK_RECUR_GATHER` (node.jl): it
 # reads the observed's own buffer, and only a cell the sweep has already
 # published — any other position is `E_TREEWALK_RECUR_UNAVAILABLE`, never the
 # zero ghost a state gather reads out of range (§5.19.4).

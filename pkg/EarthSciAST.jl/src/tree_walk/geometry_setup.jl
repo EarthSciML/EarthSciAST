@@ -1078,7 +1078,7 @@ end
 # and made build cost scale with the grid.
 #
 # The cure already exists in this package: the compile-once cell evaluator
-# (`_cellwise_compile_once`, tree_walk/helpers.jl), which resolves + compiles ONCE
+# (`_cellwise_compile_once`, tree_walk/cellwise.jl), which resolves + compiles ONCE
 # with the output indices kept SYMBOLIC and bound as reserved parameters. A const
 # read carrying an output index does not constant-fold; it lowers to a runtime
 # `_NK_CONST_GATHER` that recomputes its column-major offset at eval time — exactly

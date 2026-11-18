@@ -1,5 +1,5 @@
 # CROSS-EQUATION + AFFINE-BOX direct class emission (acc_merge.jl
-# `_cross_eq_class_emit_enabled`; build.jl `pooled_cells`; oop_merge.jl
+# `_cross_eq_class_emit_enabled`; build_array_equation.jl `pooled_cells`; oop_merge.jl
 # `_merge_acc_kernel_classes` direct stage).
 #
 # Direct class emission made PER-EQUATION
