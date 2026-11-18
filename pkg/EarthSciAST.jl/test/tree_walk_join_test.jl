@@ -44,7 +44,7 @@ const ESMJ = EarthSciAST
             expr_body = body, ranges = ranges, join = join, filter = filter
         )
         model = ESMJ.Model(
-            Dict("u" => ModelVariable(UnknownVariable)),
+            Dict("u" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(_op("D", _v("u"); wrt = "t"), rhs)]
         )
         f!, u0, p, _, vmap = EarthSciAST.Internal.build(
@@ -199,7 +199,7 @@ const ESMJ = EarthSciAST
             join = Any[[("i", "k")]]
         )
         model = ESMJ.Model(
-            Dict("o" => ModelVariable(UnknownVariable)),
+            Dict("o" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(lhs, rhs)]
         )
         f!, u0, p, _, vmap = EarthSciAST.Internal.build(
@@ -370,7 +370,7 @@ const ESMJ = EarthSciAST
             ranges = Dict("i" => _R("county"), "j" => _R("county")), join = Any[[("i", "j")]],
         )
         mk(tag) = ESMJ.Model(
-            Dict("u" => ModelVariable(UnknownVariable)),
+            Dict("u" => ModelVariable(UnknownVariable; default = 0.0)),
             [ESMJ.Equation(_op("D", _v("u"); wrt = "t"), _op(tag; common...))]
         )
         run1(m) = (r = EarthSciAST.Internal.build(m; index_sets = isets, const_arrays = ca); du = similar(r.u0); r.f!(du, r.u0, r.p, 0.0); du[r.var_map["M.u"]])
@@ -386,7 +386,9 @@ const ESMJ = EarthSciAST
             doc; const_arrays = Dict(
                 "EmissionsAggregate.activity" => [10.0, 20.0],
                 "EmissionsAggregate.base_rate" => [3.0, 5.0]
-            )
+            ),
+            # The fixture's state declares no default.
+            initial_conditions = Dict("EmissionsAggregate.emissions" => 0.0)
         )
         du = similar(u0); f!(du, u0, p, 0.0)
         k = first(key for key in keys(vmap) if endswith(String(key), "emissions"))

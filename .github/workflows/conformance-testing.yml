@@ -157,6 +157,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # reaction_system_ref_test.jl mounts a real EarthSciModels component;
+      # the test finds the checkout through ESM_EARTHSCIMODELS.
+      - uses: actions/checkout@v7
+        with:
+          repository: EarthSciML/EarthSciModels
+          path: EarthSciModels
+
       - name: Setup Julia
         id: setup-julia
         uses: julia-actions/setup-julia@v3
@@ -224,6 +231,8 @@ jobs:
       # faster of the two, so the 90-minute ceiling has the most headroom
       # where the extra cost lands.
       - name: Run Julia tests
+        env:
+          ESM_EARTHSCIMODELS: ${{ github.workspace }}/EarthSciModels
         run: |
           julia --project=. -e 'using Pkg; Pkg.test(coverage=${{ matrix.julia-version == 'lts' }})'
 

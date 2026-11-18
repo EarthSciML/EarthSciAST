@@ -19,6 +19,13 @@ if !isdefined(@__MODULE__, :ESM_TESTUTILS_LOADED)
     # `tests/` fixture tree, `esm-schema.json`, `esm-spec.md`, ...).
     const TESTUTILS_REPO_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 
+    # The EarthSciModels checkout a test reads a real component from:
+    # `ESM_EARTHSCIMODELS` when set (CI checks the repository out inside the
+    # workspace and sets it), else the sibling of this repository's root.
+    earthscimodels_root() = normpath(
+        get(ENV, "ESM_EARTHSCIMODELS", joinpath(TESTUTILS_REPO_ROOT, "..", "EarthSciModels"))
+    )
+
     # ---------------------------------------------------------------------------
     # Canonical expression-builder quartet (+ the `index` shorthand built on it).
     # These keep hand-built AST fixtures readable.

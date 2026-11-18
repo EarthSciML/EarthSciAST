@@ -191,10 +191,22 @@ function component_document(path, model)
     return doc
 end
 
+# The tier evaluates the right-hand side at its probe states, so the build is
+# given the first probe's state as its start: a state the fixture declares no
+# default for has none of its own, and a build refuses it without one
+# (esm-spec §11.4). Every probe writes its own state before it is evaluated.
+function probe_start(fx)
+    isempty(fx.rhs_probes) && return Dict{String, Float64}()
+    model = String(fx.model)
+    return Dict{String, Float64}(
+        "$model.$(String(k))" => Float64(v) for (k, v) in pairs(first(fx.rhs_probes).state)
+    )
+end
+
 build_component(fx, base, compiler; kw...) = EarthSciAST.Internal.build(
     component_document(joinpath(base, String(fx.path)), String(fx.model));
     base_path = dirname(joinpath(base, String(fx.path))),
-    compiler = Symbol(compiler), kw...
+    compiler = Symbol(compiler), initial_conditions = probe_start(fx), kw...
 )
 
 function fixture_rhs(fx, base, compiler)

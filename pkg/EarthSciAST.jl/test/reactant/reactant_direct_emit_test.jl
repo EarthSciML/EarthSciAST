@@ -67,8 +67,9 @@ _de_doc(name, vars, eqs; index_sets = nothing) = begin
     d
 end
 _de_nset(N) = Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => N))
+# A state starts at 0 unless the caller gives a `default`.
 _de_state(; kw...) = Dict{String, Any}(
-    "type" => "unknown",
+    "type" => "unknown", "default" => 0.0,
     (String(k) => v for (k, v) in kw)...
 )
 _de_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
@@ -318,8 +319,8 @@ end
 # equation under test owns `c` alone, and the fold lands on `du`.
 function _de_scan_stag(n::Int; reduce = "+")
     vars = Dict(
-        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable),
-        "c" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable)
+        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; default = 0.0),
+        "c" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; default = 0.0)
     )
     rhs = ESM_DE.OpExpr(
         "faq", ESM_DE.ASTExpr[]; output_idx = Any["i"],
@@ -365,8 +366,8 @@ function _de_scan_stag_obs(n::Int)
         reduce = "+", filter = _op("<", _v("k"), _v("ke"))
     )
     vars = Dict(
-        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["lev"]),
-        "Mz" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; shape = ["levn"]),
+        "u" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; default = 0.0, shape = ["lev"]),
+        "Mz" => ESM_DE.ModelVariable(ESM_DE.UnknownVariable; default = 0.0, shape = ["levn"]),
         "w" => ESM_DE.ModelVariable(ESM_DE.ParameterVariable; default = 0.75)
     )
     eqs = [

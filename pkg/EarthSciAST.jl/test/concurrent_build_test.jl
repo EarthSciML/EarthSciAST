@@ -32,7 +32,7 @@ function _cb_doc_state(N::Int)
         "models" => Dict{String, Any}(
             "A" => Dict{String, Any}(
                 "variables" => Dict{String, Any}(
-                    "u" => Dict{String, Any}("type" => "unknown", "shape" => Any["i"]),
+                    "u" => Dict{String, Any}("type" => "unknown", "shape" => Any["i"], "default" => 0.0),
                     "s" => Dict{String, Any}("type" => "unknown", "default" => 0.0),
                     "x" => Dict{String, Any}("type" => "parameter", "default" => 0.5),
                     "r" => Dict{String, Any}("type" => "parameter", "default" => 0.1),

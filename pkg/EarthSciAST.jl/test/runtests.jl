@@ -217,6 +217,7 @@ const GROUPS = [
         "op_capability_audit_test.jl",
         "tree_walk_audit_fixes_test.jl",
         "independent_variable_build_test.jl",
+        "build_entry_parity_test.jl",
     ],
     :analysis => [
         "reference_graph_test.jl",
