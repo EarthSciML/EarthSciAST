@@ -24,18 +24,24 @@ transparently extends the folder.
 # order is struct-field order: `args`, `lower`, `upper`, `expr_body`, dense
 # `ranges` bounds, `values`, `filter`, `key`, `bindings` (sorted keys).
 
-# Build one visit statement per expression-bearing table row. `wrap` maps the
-# child-element expression (a `Symbol` naming a local bound to one child) to
-# the statement that visits it — spliced INLINE, so the generated walkers stay
-# closure-free (see `_foreach_subexpr_children` note below).
+# Build one visit statement per expression-bearing table row: the one place
+# that says how each field kind holds its children. `wrap(x, f, w, key)` maps a
+# child (a `Symbol` naming a local bound to it), its field `f`, the field's
+# wire key `w` and its position `key` in the field (an expression: `1` for a
+# single-expression field, the 1-based index `i` in a vector, the key `mk` of a
+# map, or `(mk, i)` for a dense `ranges` bound) to the statement that visits
+# it. The statement is spliced INLINE, so the generated walkers stay
+# closure-free (see `_foreach_subexpr_children` note below). Map keys are
+# visited in sorted order.
 function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
     stmts = Expr[]
     for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+        w = string(spec.wire)
         if spec.kind === :expr
             push!(
                 stmts, :(
                     let x = e.$f
-                        x === nothing || $(wrap(:x))
+                        x === nothing || $(wrap(:x, f, w, 1))
                     end
                 )
             )
@@ -45,8 +51,8 @@ function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
                 stmts, :(
                     let v = e.$f
                         if v !== nothing
-                            for x in v
-                                $(wrap(:x))
+                            for (i, x) in enumerate(v)
+                                $(wrap(:x, f, w, :i))
                             end
                         end
                     end
@@ -59,7 +65,7 @@ function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
                         if m !== nothing
                             for mk in sort!(collect(keys(m)))
                                 let x = m[mk]
-                                    $(wrap(:x))
+                                    $(wrap(:x, f, w, :mk))
                                 end
                             end
                         end
@@ -76,8 +82,8 @@ function _opexpr_child_stmts(wrap::Function)::Vector{Expr}
                             for mk in sort!(collect(keys(m)))
                                 v = m[mk]
                                 if v isa AbstractVector
-                                    for x in v
-                                        x isa ASTExpr && $(wrap(:x))
+                                    for (i, x) in enumerate(v)
+                                        x isa ASTExpr && $(wrap(:x, f, w, :((mk, i))))
                                     end
                                 end
                             end
@@ -117,7 +123,7 @@ child_exprs(::VarExpr) = ASTExpr[]
 
 @eval function child_exprs(e::OpExpr)::Vector{ASTExpr}
     out = ASTExpr[]
-    $(_opexpr_child_stmts(x -> :(push!(out, $x)))...)
+    $(_opexpr_child_stmts((x, _...) -> :(push!(out, $x)))...)
     return out
 end
 
@@ -144,7 +150,7 @@ for structure-preserving rewrites use `map_children`.
 # walks (`foreach_subexpr`, `foreach_subexpr_once`) so a whole-tree scan allocates
 # nothing on the common args-only node.
 @eval function foreach_child(f, e::OpExpr)
-    $(_opexpr_child_stmts(x -> :(f($x)))...)
+    $(_opexpr_child_stmts((x, _...) -> :(f($x)))...)
     return nothing
 end
 foreach_child(::Any, ::NumExpr) = nothing
@@ -165,7 +171,7 @@ _foreach_subexpr_children(f, ::NumExpr) = nothing
 _foreach_subexpr_children(f, ::IntExpr) = nothing
 _foreach_subexpr_children(f, ::VarExpr) = nothing
 @eval function _foreach_subexpr_children(f, e::OpExpr)
-    $(_opexpr_child_stmts(x -> :(foreach_subexpr(f, $x)))...)
+    $(_opexpr_child_stmts((x, _...) -> :(foreach_subexpr(f, $x)))...)
     return nothing
 end
 
@@ -212,61 +218,21 @@ _foreach_subexpr_once(f, e::VarExpr, ::IdDict{OpExpr, Nothing}) = (f(e); nothing
     haskey(seen, e) && return nothing
     seen[e] = nothing
     f(e)
-    $(_opexpr_child_stmts(x -> :(_foreach_subexpr_once(f, $x, seen)))...)
+    $(_opexpr_child_stmts((x, _...) -> :(_foreach_subexpr_once(f, $x, seen)))...)
     return nothing
 end
 
+# The pointer segment of a child at `key` in the field with wire key `w`.
+_child_pointer(path, w, ::Int) = string(path, "/", w)
+_child_pointer(path, w, mk::AbstractString) = string(path, "/", w, "/", mk)
+_child_pointer(path, w, (mk, i)::Tuple) = string(path, "/", w, "/", mk, "/", i - 1)
+
 @eval function foreach_child_with_path(g, e::OpExpr, path::String)
     $(
-        (
-            begin
-                w = string(spec.wire)
-                if spec.kind === :expr
-                    :(
-                        let x = e.$f
-                            x === nothing || g(x, string(path, $("/" * w)))
-                        end
-                    )
-                elseif spec.kind === :expr_vec
-                    :(
-                        let v = e.$f
-                            if v !== nothing
-                                for (i, x) in enumerate(v)
-                                    g(x, string(path, $("/" * w * "/"), i - 1))
-                                end
-                            end
-                        end
-                    )
-                elseif spec.kind === :expr_map
-                    :(
-                        let m = e.$f
-                            if m !== nothing
-                                for mk in sort!(collect(keys(m)))
-                                    g(m[mk], string(path, $("/" * w * "/"), mk))
-                                end
-                            end
-                        end
-                    )
-                else # :ranges
-                    :(
-                        let m = e.$f
-                            if m !== nothing
-                                for mk in sort!(collect(keys(m)))
-                                    v = m[mk]
-                                    if v isa AbstractVector
-                                        for (i, x) in enumerate(v)
-                                            x isa ASTExpr &&
-                                                g(x, string(path, $("/" * w * "/"), mk, "/", i - 1))
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    )
-                end
-            end
-                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
+        _opexpr_child_stmts(
+            (x, f, w, key) -> key === :i ?
+                :(g($x, string(path, $("/" * w * "/"), i - 1))) :
+                :(g($x, _child_pointer(path, $w, $key)))
         )...
     )
     return nothing
@@ -274,57 +240,12 @@ end
 
 # `foreach_child_with_path`'s walk (same children, same order) without the path
 # strings: `g(child, field, i)` gets the child's field and its 1-based position
-# in that field (1 for a single-expression field).
+# in that field (1 for a single-expression field or a map value, the position
+# in its bound vector for a dense `ranges` bound).
 @eval function _foreach_child_field(g, e::OpExpr)
     $(
-        (
-            begin
-                fq = QuoteNode(f)
-                if spec.kind === :expr
-                    :(
-                        let x = e.$f
-                            x === nothing || g(x, $fq, 1)
-                        end
-                    )
-                elseif spec.kind === :expr_vec
-                    :(
-                        let v = e.$f
-                            if v !== nothing
-                                for (i, x) in enumerate(v)
-                                    g(x, $fq, i)
-                                end
-                            end
-                        end
-                    )
-                elseif spec.kind === :expr_map
-                    :(
-                        let m = e.$f
-                            if m !== nothing
-                                for mk in sort!(collect(keys(m)))
-                                    g(m[mk], $fq, 1)
-                                end
-                            end
-                        end
-                    )
-                else # :ranges
-                    :(
-                        let m = e.$f
-                            if m !== nothing
-                                for mk in sort!(collect(keys(m)))
-                                    v = m[mk]
-                                    if v isa AbstractVector
-                                        for (i, x) in enumerate(v)
-                                            x isa ASTExpr && g(x, $fq, i)
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    )
-                end
-            end
-                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                if spec.kind in (:expr, :expr_vec, :expr_map, :ranges)
+        _opexpr_child_stmts(
+            (x, f, w, key) -> :(g($x, $(QuoteNode(f)), $(key === :mk ? 1 : key isa Expr ? :i : key)))
         )...
     )
     return nothing
@@ -396,67 +317,89 @@ map_children(f, e::NumExpr)::ASTExpr = e
 map_children(f, e::IntExpr)::ASTExpr = e
 map_children(f, e::VarExpr)::ASTExpr = e
 
-# Generated per-field rebuild statements + the reconstruct kwargs they feed.
-function _opexpr_map_children_parts()
-    stmts = Expr[]
-    kwargs = Expr[]
-    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-        nf = Symbol(:new_, f)
-        if spec.kind === :expr
-            push!(stmts, :($nf = mapf(e.$f)))
-        elseif spec.kind === :expr_vec
-            if f === :args
-                push!(stmts, :($nf = ASTExpr[mapf(x) for x in e.$f]))
-            else
-                push!(
-                    stmts, :(
-                        $nf = e.$f === nothing ? nothing :
-                            ASTExpr[mapf(x) for x in e.$f]
-                    )
-                )
-            end
-        elseif spec.kind === :expr_map
-            push!(
-                stmts, :(
-                    $nf = e.$f === nothing ? nothing :
-                        Dict{String, ASTExpr}(k => mapf(v) for (k, v) in e.$f)
-                )
-            )
-        elseif spec.kind === :ranges
-            push!(
-                stmts, :(
-                    $nf = e.$f === nothing ? nothing :
-                        Dict{String, Any}(
-                            k => (
-                                v isa AbstractVector ?
-                                Any[x isa ASTExpr ? mapf(x) : x for x in v] : v
-                            )
-                            for (k, v) in e.$f
-                        )
-                )
-            )
-        else
-            continue
+# Copy-on-write maps over one field's children: the field's own container is
+# returned, unallocated, when `f` returns every child unchanged (`===`), and a
+# copy holding the new children otherwise.
+_map_child(f::F, ::Nothing) where {F} = nothing
+_map_child(f::F, x::ASTExpr) where {F} = f(x)::ASTExpr
+
+_map_child_vec(f::F, ::Nothing) where {F} = nothing
+function _map_child_vec(f::F, v::AbstractVector) where {F}
+    out = v
+    @inbounds for i in eachindex(v)
+        a = v[i]
+        r = f(a)::ASTExpr
+        if r !== a
+            out === v && (out = copy(v))
+            out[i] = r
         end
-        push!(kwargs, Expr(:kw, f, nf))
     end
-    return stmts, kwargs
+    return out
 end
 
-@eval function map_children(f, e::OpExpr)::ASTExpr
-    # IDENTITY-PRESERVING: when `f` fixes every sub-expression (returns it
-    # `===`-identical), the node itself is returned, not a reconstruct-copy.
-    # This is what lets a whole-tree rewrite pass (enum lowering, substitute
-    # with no hits, …) leave a structurally-SHARED expression DAG shared —
-    # an unconditional rebuild would rematerialize the DAG as an exponential
-    # tree — and it matches the `r !== args[i]` did-this-subtree-change
-    # identity convention used throughout the tree walk (types.jl).
-    changed = false
-    mapf(x) = x === nothing ? nothing :
-        (r = f(x); r === x || (changed = true); r)
-    $(first(_opexpr_map_children_parts())...)
-    changed || return e
-    return reconstruct(e; $(last(_opexpr_map_children_parts())...))
+_map_child_map(f::F, ::Nothing) where {F} = nothing
+function _map_child_map(f::F, m::AbstractDict) where {F}
+    out = m
+    for (k, x) in m
+        r = f(x)::ASTExpr
+        if r !== x
+            out === m && (out = copy(m))
+            out[k] = r
+        end
+    end
+    return out
+end
+
+_map_child_ranges(f::F, ::Nothing) where {F} = nothing
+function _map_child_ranges(f::F, m::AbstractDict) where {F}
+    out = m
+    for (k, v) in m
+        v isa AbstractVector || continue
+        nv = v
+        for i in eachindex(v)
+            b = v[i]
+            b isa ASTExpr || continue
+            r = f(b)::ASTExpr
+            if r !== b
+                nv === v && (nv = copy(v))
+                nv[i] = r
+            end
+        end
+        if nv !== v
+            out === m && (out = copy(m))
+            out[k] = nv
+        end
+    end
+    return out
+end
+
+const _MAP_CHILD_FN = (
+    expr = :_map_child, expr_vec = :_map_child_vec, expr_map = :_map_child_map,
+    ranges = :_map_child_ranges,
+)
+const _MAPPED_FIELDS = Tuple(
+    f for (f, spec) in pairs(OPEXPR_FIELD_TABLE) if haskey(_MAP_CHILD_FN, spec.kind)
+)
+
+# IDENTITY-PRESERVING: when `f` returns every sub-expression unchanged (`===`),
+# the node itself is returned and nothing is allocated. This is what lets a
+# whole-tree rewrite pass (enum lowering, substitute with no hits, interning of
+# an already-canonical subtree, …) leave a structurally-SHARED expression DAG
+# shared — an unconditional rebuild would rematerialize the DAG as an
+# exponential tree.
+@eval function map_children(f::F, e::OpExpr)::ASTExpr where {F}
+    $(
+        (
+            :(
+                $(Symbol(:new_, fld)) = $(getfield(_MAP_CHILD_FN, OPEXPR_FIELD_TABLE[fld].kind))(
+                    f, e.$fld
+                )
+            ) for fld in _MAPPED_FIELDS
+        )...
+    )
+    $(foldl((acc, fld) -> :($acc && $(Symbol(:new_, fld)) === e.$fld), _MAPPED_FIELDS; init = true)) &&
+        return e
+    return reconstruct(e; $((Expr(:kw, fld, Symbol(:new_, fld)) for fld in _MAPPED_FIELDS)...))
 end
 
 """

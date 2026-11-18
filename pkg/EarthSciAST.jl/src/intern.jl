@@ -143,124 +143,18 @@ end
 _plain_hash(x, h::UInt) = hash(objectid(x), hash(0x75, h))   # unknown: identity
 
 # ------------------------------------------------------------------------
-# Child-slot interning helpers (identity-preserving: the ORIGINAL container is
-# returned untouched when no element changed, so an already-canonical subtree
-# costs no allocation on re-intern).
-# ------------------------------------------------------------------------
-function _intern_expr_vec(v::Vector{ASTExpr}, ctx::_InternCtx)
-    out = v
-    @inbounds for i in eachindex(v)
-        a = v[i]
-        r = a isa OpExpr ? _intern_expr(a, ctx) : a
-        if r !== a
-            out === v && (out = copy(v))
-            out[i] = r
-        end
-    end
-    return out
-end
-_intern_expr_map(::Nothing, ::_InternCtx) = nothing
-function _intern_expr_map(m::Dict{String, ASTExpr}, ctx::_InternCtx)
-    out = m
-    for (k, x) in m
-        r = x isa OpExpr ? _intern_expr(x, ctx) : x
-        if r !== x
-            out === m && (out = copy(m))
-            out[k] = r
-        end
-    end
-    return out
-end
-_intern_ranges(::Nothing, ::_InternCtx) = nothing
-function _intern_ranges(m, ctx::_InternCtx)
-    out = m
-    for (k, v) in m
-        v isa AbstractVector || continue        # IndexSetRef etc.: no sub-exprs
-        nv = v
-        for i in eachindex(v)
-            b = v[i]
-            b isa OpExpr || continue
-            r = _intern_expr(b, ctx)
-            if r !== b
-                nv === v && (nv = copy(v))
-                nv[i] = r
-            end
-        end
-        if nv !== v
-            out === m && (out = copy(m))
-            out[k] = nv
-        end
-    end
-    return out
-end
-
-# ------------------------------------------------------------------------
-# The three GENERATED walkers. One statement per `OPEXPR_FIELD_TABLE` row, in
-# struct-field order, dispatched on the row's `kind` — expression-bearing
-# kinds (`:expr`, `:expr_vec`, `:expr_map`, `:ranges`) get child-slot
-# handling (identity compare / objectid hash over interned children); every
-# other kind (`:scalar`, `:join`, `:internal`) routes through the fail-closed
+# The walkers. `_intern_children` interns every expression-bearing field
+# bottom-up through `map_children` (the node itself when nothing changed). The
+# hash and the equality below are GENERATED from `OPEXPR_FIELD_TABLE`, one
+# statement per row in struct-field order, dispatched on the row's `kind`:
+# expression-bearing kinds (`:expr`, `:expr_vec`, `:expr_map`) compare and hash
+# children by identity (they are interned); every other kind (`:scalar`,
+# `:join`, `:internal`, `:ranges`) goes through the fail-closed
 # `_plain_eq`/`_plain_hash` pair. A row added to the table with a new kind
-# would fail the exhaustiveness assert at the bottom of this file.
+# fails the exhaustiveness assert at the bottom of this file.
 # ------------------------------------------------------------------------
 
-const _INTERN_EXPR_KINDS = (:expr, :expr_vec, :expr_map, :ranges)
-
-# (1) Intern every expression-bearing field of `e` bottom-up; return `e`
-# itself when nothing changed, else a `reconstruct` copy with the interned
-# slots (all other fields copied verbatim by `reconstruct`'s contract).
-@eval function _intern_children(e::OpExpr, ctx::_InternCtx)
-    $(
-        (
-            begin
-                nf = Symbol(:new_, f)
-                if spec.kind === :expr
-                    :(
-                        $nf = (
-                            let x = e.$f
-                                x isa OpExpr ? _intern_expr(x, ctx) : x
-                            end
-                        )
-                    )
-                elseif spec.kind === :expr_vec
-                    :(
-                        $nf = (
-                            let v = e.$f
-                                v === nothing ? nothing : _intern_expr_vec(v, ctx)
-                            end
-                        )
-                    )
-                elseif spec.kind === :expr_map
-                    :($nf = _intern_expr_map(e.$f, ctx))
-                else # :ranges
-                    :($nf = _intern_ranges(e.$f, ctx))
-                end
-            end
-                for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                if spec.kind in _INTERN_EXPR_KINDS
-        )...
-    )
-    if $(
-            foldl(
-                (acc, f) -> :($acc && $(Symbol(:new_, f)) === e.$f),
-                [
-                    f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                        if spec.kind in _INTERN_EXPR_KINDS
-                ]; init = true
-            )
-        )
-        return e
-    end
-    return reconstruct(
-        e; $(
-            (
-                Expr(:kw, f, Symbol(:new_, f))
-                    for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                    if spec.kind in _INTERN_EXPR_KINDS
-            )...
-        )
-    )
-end
+_intern_children(e::OpExpr, ctx::_InternCtx) = map_children(x -> _intern_expr(x, ctx), e)::OpExpr
 
 # (2) Shallow structural hash of a node whose expression-bearing slots are
 # already interned: child slots contribute `objectid` (canonical pointer ≡

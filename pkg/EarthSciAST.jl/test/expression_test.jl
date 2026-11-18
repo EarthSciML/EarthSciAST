@@ -414,4 +414,35 @@ using JSON3
         err = UnboundVariableError("x", "variable 'x' is unbound")
         @test sprint(showerror, err) == "UnboundVariableError: variable 'x' is unbound"
     end
+
+    @testset "map_children is copy-on-write; the child walks agree" begin
+        E = EarthSciAST
+        a, b = VarExpr("a"), VarExpr("b")
+        n = OpExpr("+", E.ASTExpr[a, OpExpr("*", E.ASTExpr[b, IntExpr(2)])])
+        keep(x) = x
+        @test E.map_children(keep, n) === n
+        alloc_of(f, x) = @allocated EarthSciAST.map_children(f, x)
+        alloc_of(keep, n)
+        @test alloc_of(keep, n) == 0
+        # A changed child rebuilds the node and copies only that field.
+        m = E.map_children(x -> x === a ? b : x, n)
+        @test m !== n && m.args[1] === b && m.args[2] === n.args[2] && n.args[1] === a
+        # Every expression-bearing field is reached, in one order, by each walk.
+        f = OpExpr(
+            "faq", E.ASTExpr[a]; expr_body = b, filter = VarExpr("c"),
+            ranges = Dict{String, Any}("i" => Any[1, VarExpr("n")]),
+            bindings = Dict{String, E.ASTExpr}("p" => VarExpr("q")),
+            output_idx = Any["i"], semiring = "sum_product"
+        )
+        kids = E.child_exprs(f)
+        paths, fields = String[], Tuple{Symbol, Int}[]
+        E.foreach_child_with_path((x, p) -> push!(paths, p), f, "")
+        E._foreach_child_field((x, fld, i) -> push!(fields, (fld, i)), f)
+        @test length(kids) == length(paths) == length(fields) == 5
+        @test paths == ["/args/0", "/expr", "/ranges/i/1", "/filter", "/bindings/p"]
+        @test fields == [(:args, 1), (:expr_body, 1), (:ranges, 2), (:filter, 1), (:bindings, 1)]
+        g = E.map_children(x -> x isa VarExpr ? VarExpr(x.name * "!") : x, f)
+        @test sort([x.name for x in E.child_exprs(g)]) == ["a!", "b!", "c!", "n!", "q!"]
+        @test f.ranges["i"][2] == VarExpr("n")
+    end
 end
