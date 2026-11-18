@@ -131,9 +131,10 @@ func raiseFaqEsmFloor(jsonStr string) string {
 }
 
 // raiseEsmFloors applies every emit-time version floor: `faq` (1.1.0), then
-// variable bounds (2.1.0). Each only ever raises.
+// declared `units` on an expression node (1.2.0), then variable bounds
+// (2.1.0). Each only ever raises, so the highest that applies wins.
 func raiseEsmFloors(jsonStr string) string {
-	return raiseVariableBoundsEsmFloor(raiseFaqEsmFloor(jsonStr))
+	return raiseVariableBoundsEsmFloor(raiseConstUnitsEsmFloor(raiseFaqEsmFloor(jsonStr)))
 }
 
 // ToJSONCompact validates an ESM file and returns it as a compact canonical
