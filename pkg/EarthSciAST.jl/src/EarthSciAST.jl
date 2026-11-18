@@ -157,7 +157,7 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
-# Structural interning (hash-consing) of the expression AST — perf plan A1.
+# Structural interning (hash-consing) of the expression AST.
 include("intern.jl")
 include("graph.jl")
 include("units.jl")
@@ -173,7 +173,7 @@ include("show.jl")
 # Build-time kernels, MTK-export glue
 include("relational.jl")
 include("mtk_export.jl")
-# Planar spatial-index broad phase (projection-pushdown Phase 3a)
+# Planar spatial-index broad phase behind the `faq` overlap join
 include("broad_phase.jl")
 # MTK-free runtime (tree-walk evaluator, refresh, the run Problem, cadence)
 include("name_table.jl")
@@ -198,13 +198,12 @@ include("range/need_analysis.jl")
 include("range/tile.jl")
 include("range/lanes.jl")
 include("strip_expose.jl")
-# Names that have left the public surface, kept for one minor version.
 include("reference_graph.jl")
 include("cadence.jl")
 include("value_invention.jl")
-# Phase 4: the automatic projection-pushdown desugar (recognises the
-# +-aggregate / sparse-binned-factor pattern and generates the Phase-2b
-# derived-set + producer + member_factor + gated_select constructs).
+# The automatic projection-pushdown desugar: recognises the +-aggregate over a
+# sparse binned factor and generates the derived set, its producer, the member
+# factor and the gated select.
 include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
@@ -388,11 +387,9 @@ cross-binding golden pins. The `@unit` names are distinct from Unitful's
 stores each one's conversion factor in a table LOCAL to this module; Unitful's
 `uconvert` reads a GLOBAL table, and `Unitful.register` is what copies one into
 the other. Without this call the custom units resolve and carry the right
-DIMENSION but throw `KeyError` the moment anyone converts them —
-`uconvert(u"m", 1.0 * ft)` fails, and so does the exact `DU` -> `molec/m^2`
-conversion units.jl's own comment promises. That went unnoticed for as long as
-nothing converted a custom unit; `tests/conformance/unit_registry`, which pins
-SCALES and not only dimensions, is what converts them.
+DIMENSION but throw `KeyError` the moment anyone converts them
+(`uconvert(u"m", 1.0 * ft)`). `tests/conformance/unit_registry` pins the
+scales.
 """
 function __init__()
     _init_stdlib_dir!()

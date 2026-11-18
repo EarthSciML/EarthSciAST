@@ -244,7 +244,7 @@ end
 # against the whole flattened document, where that locality is gone. A key whose
 # `<model>.<key>` form names a real variable of the flattened system is rewritten
 # to it, and one that does not passes through untouched so `esm_problem` reports
-# on it exactly as it would have. This is what `_scope_to_component` does for the
+# on it. This is what `_scope_to_component` does for the
 # library's own inline-test runner, so both paths resolve a test's keys the same
 # way.
 function scope_to_model(overrides, known, mname)

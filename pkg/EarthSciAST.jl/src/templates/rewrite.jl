@@ -927,7 +927,7 @@ widened `1.0`/`8.0` would reach the emitted golden, which spells `[1,8]`.
 
 Narrowing is scoped to `args` array elements (the Expression operand position),
 so scalar CONFIGURATION floats an authored `1.0`/`0.0` legitimately occupies
-(`variables.*.default`, a bare `expression` scalar, …) are left byte-identical;
+(`variables.*.default`, a bare `expression` scalar, …) are left as written;
 only arithmetic operand literals are touched. On the typed-load path this is a
 no-op-equivalent: `coerce_esm_file` reads operands via `expression_from_json`, which
 applies the identical narrowing, so pre-narrowing the tree here changes nothing

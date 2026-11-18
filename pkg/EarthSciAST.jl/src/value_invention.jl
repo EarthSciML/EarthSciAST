@@ -80,8 +80,8 @@ end
 # binned broad phase bins on (`src_lon`/`tgt_lon`). Used by the build-time
 # binning-coordinate derivation to decide which build-time-constant coordinate
 # observeds to materialise into the value-invention `const_arrays` so
-# `index(src_lon,i)` resolves (RFC §8.6.1). Empty (byte-identical) for a model
-# without value invention.
+# `index(src_lon,i)` resolves (RFC §8.6.1). Empty for a model without value
+# invention.
 function _vi_index_targets(model::Model)
     det = _vi_detect(model)
     refs = Set{String}()
@@ -926,7 +926,7 @@ function _vi_materialize_producer(ctx::_ViCtx, node::OpExpr)
     # a single time here). An OVERLAP gate then DRIVES enumeration from its
     # candidate pairs (`_vi_enumerate_join`) — O(|candidates|) rather than
     # O(∏ranges) with a per-tuple membership test; other gate kinds enumerate the
-    # full product exactly as before.
+    # full product.
     join_gates = join === nothing ? nothing : _vi_resolve_join(join, ranges, ctx)
     column = "the `key` of producer '$(something(node.id, ""))'"
     if join_gates === nothing && _setup_compile_once_enabled()
@@ -952,7 +952,7 @@ end
 # `filter` compiled once (`_vi_compile_node`, each range symbol a slot): the
 # keys `_vi_enumerate` would push, in its order (the first symbol outermost),
 # as a concretely typed vector. `nothing` when a range, the filter or the key
-# has no compiled form; the caller then enumerates as before.
+# has no compiled form; the caller then enumerates by tree walk.
 function _vi_producer_compiled(ctx::_ViCtx, ranges, filt, key, column)
     syms = _vi_order_syms(ranges)
     lens = Int[]

@@ -117,8 +117,7 @@ _neutral_selection_to_native(selection) = throw(
 # array means). Returns the bare `AbstractArray` that `_write_forcing!` /
 # `forcing_from_sample` expect for a single-variable sample.
 #
-# `selection===nothing` (default) samples the whole array — byte-identical to the
-# pre-pushdown path. A non-nothing `selection` is translated to the native zarr
+# `selection===nothing` (default) samples the whole array. A non-nothing `selection` is translated to the native zarr
 # `select` and pushed down so only the intersecting chunks are fetched; the gated
 # axis is returned in EXACTLY the requested index order (the reader gathers in the
 # order of the index vector — see EarthSciIO `_resolve_axis`/`_assemble`).
@@ -151,19 +150,16 @@ function provider_sample(p::EarthSciIO.Provider, t::Real; selection = nothing)
 end
 
 # --------------------------------------------------------------------------- #
-# providers_from_document — document-declared provider construction (Phase 1
-# clean consolidation). The document's `data_sources` say WHAT to read (source
-# URL, ingest options) and `metadata.esio_format` says HOW (the EarthSciIO
-# format registry name). This closes the loop: the runner no longer
-# hand-constructs providers — it asks the document.
+# providers_from_document — document-declared provider construction. The
+# document's `data_sources` say WHAT to read (source URL, ingest options) and
+# `metadata.esio_format` says HOW (the EarthSciIO format registry name).
 #
-# esm 1.0.0 moved the BINDING from the source to the consumer: a source exposes
-# no variables of its own, and a model reads one by declaring a PARAMETER whose
-# `update` names the source and binds a `file_variable` (esm-spec §8.5). So the
-# walk is over the models' parameters rather than over a loader's variable
-# table, and each provider is keyed by the CONSUMING PARAMETER's flattened name
-# ("<ModelPath>.<param>") — which is exactly the name `prepare`'s providers
-# contract binds ("one provider per consumer variable"), the name the
+# The BINDING lives on the consumer: a source exposes no variables of its own,
+# and a model reads one by declaring a PARAMETER whose `update` names the source
+# and binds a `file_variable` (esm-spec §8.5). So the walk is over the models'
+# parameters, and each provider is keyed by the CONSUMING PARAMETER's flattened
+# name ("<ModelPath>.<param>") — which is exactly the name `esm_problem`'s
+# providers contract binds ("one provider per consumer variable"), the name the
 # single-variable `provider_sample` adapter returns, and the name the
 # record-derived pushdown path attaches its per-key gate to. All the parameters
 # drawing from one source share that source's Cache (a per-source subdir under
@@ -1298,12 +1294,11 @@ end
 # atomically-committed time-shards. The write-side mirror of the read-side
 # `Provider` adapter above.
 #
-# Wave 2: state-only, host-gather, positional dim names, one store.
-# Wave 3: REAL index-set dim names + CF dimension-coordinate emission (values +
-# standard_name/units/axis) from the document's `coordinates` registry, plus
-# per-variable CF attrs (units, …) — all carried in via the `OutputMeta` a
-# `EsmProblem` derives. Observed fields, auxiliary/source coordinates,
-# checkpoint profiles, and object stores are later waves; the protocol is unchanged.
+# It writes the state only, gathered on the host, into one store, with the
+# index-set dim names, CF dimension coordinates (values + standard_name/units/
+# axis) from the document's `coordinates` registry and per-variable CF attrs
+# (units, …) — all carried in via the `OutputMeta` an `EsmProblem` derives.
+# Observed fields and auxiliary/source coordinates are not written.
 # --------------------------------------------------------------------------- #
 
 mutable struct ZarrSink
@@ -1379,7 +1374,7 @@ build_zarr_sink(prep, base_url::AbstractString; kwargs...) =
     build_zarr_sink(prep.var_map, base_url; meta = prep.output_meta, kwargs...)
 
 sink_output_times(s::ZarrSink) = s.output_times
-sink_observed_names(::ZarrSink) = String[]      # Wave 2/3: state only
+sink_observed_names(::ZarrSink) = String[]      # state only
 
 function sink_open!(s::ZarrSink)
     # The growable time axis FIRST (length 0 placeholder — it grows one shard per

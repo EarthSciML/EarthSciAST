@@ -185,7 +185,7 @@ Fields populated from the MTK IR:
 - `equations` (D(x)~rhs using the spec's Expression ops)
 - `continuous_events`, `discrete_events` (from MTK callback lists)
 
-Fields left as placeholders (filled in Phase 2 per-model migrations):
+Fields left as placeholders (filled in by hand migration):
 - `description`, `version`, `reference`, `tests`, `analyses`
 - `metadata.tags`, `metadata.source_ref` (populated from `metadata` kwarg)
 """
@@ -223,7 +223,7 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata = (;))
     end
     # Always emit placeholder tests/analyses arrays: the schema treats them
     # as optional, but their empty presence is the downstream migration
-    # tooling's "to be filled in Phase 2" signal.
+    # tooling's "to be filled in" signal.
     model_dict["tests"] = Any[]
     model_dict["analyses"] = Any[]
 

@@ -4,7 +4,7 @@
 # ASTs are canonically equal iff their `canonical_json` outputs are
 # byte-identical.
 #
-# See `docs/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
+# See `docs/content/rfcs/discretization.md` §5.4.1–§5.4.7 for the normative rules.
 
 """
     CanonicalizeError(code::String, message::String)
@@ -74,7 +74,6 @@ function canonicalize(e::OpExpr)
     # `reconstruct` copies EVERY OpExpr field (semiring, join, filter,
     # join_gates, id, distinct, key, …) —
     # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
-    # A hand-listed keyword subset here previously dropped ~11 fields.
     work = reconstruct(e; args = new_args)
     return _canonicalize_shallow(work)
 end
@@ -85,7 +84,7 @@ end
 # tree_walk/scalar_cse.jl) can canonicalize a structurally-SHARED expression DAG
 # node-by-unique-node — `canonicalize` is compositional, so
 # `canonicalize(e) == _canonicalize_shallow(e with canonicalized args)` and
-# the memoized driver is byte-identical to the plain recursion.
+# the memoized driver gives the same result as the plain recursion.
 function _canonicalize_shallow(work::OpExpr)
     if work.units !== nothing
         # A `const` node's declared units take the canonical unit spelling
@@ -326,7 +325,7 @@ A node carrying any OTHER set field (aggregate `expr_body`/`ranges`/
 `output_idx`/`semiring`, `join`/`filter`, node `id`, …) has NO faithful
 canonical JSON in this format:
 emitting only the pinned fields would make structurally-different aggregates
-byte-identical (the defect class behind the `fn` bc-node bug). Rather than
+byte-identical. Rather than
 emit ambiguous bytes — or diverge unilaterally from the other bindings by
 emitting more fields — such nodes throw
 `CanonicalizeError("E_CANONICAL_UNSUPPORTED_FIELD", …)`. The one in-package
@@ -387,8 +386,8 @@ const _CANONICAL_IGNORED_FIELDS = (:bindings, :template_origin)
 # explicitly ignored is non-emissible, so a future field cannot be silently
 # dropped from canonical JSON by forgetting to list it here — it must be added
 # to one of the two closed tuples above deliberately. `setdiff` preserves
-# `fieldnames` order, keeping the E_CANONICAL_UNSUPPORTED_FIELD message's
-# field listing byte-identical to the former literal tuple.
+# `fieldnames` order, which fixes the order of the E_CANONICAL_UNSUPPORTED_FIELD
+# message's field listing.
 const _NON_EMISSIBLE_FIELDS = Tuple(
     setdiff(
         fieldnames(OpExpr),
@@ -416,7 +415,7 @@ function _emit_node_json(n::OpExpr, emit::F)::String where {F}
         # (esm-spec §9.2). Emit it symmetrically with `dim`/`wrt` so the kind is
         # preserved in the canonical form — otherwise bc(u,dirichlet,xmin) and
         # bc(u,neumann,xmin) collapse to the same canonical JSON, making the
-        # kind/side matcher's canonical equality kind-blind (ess-tox / G8).
+        # kind/side matcher's canonical equality kind-blind.
         push!(entries, ("fn", _json_string(n.fn::String)))
     end
     if n.name !== nothing
@@ -573,9 +572,7 @@ end
 function _expand_to_plain(f::Float64)::String
     # Expand Julia's shortest-round-trip exponent form (e.g. "1.5e6",
     # "1.0e-5") to plain decimal by shifting the mantissa's decimal point.
-    # This is fully deterministic; an earlier BigFloat re-parse detour was
-    # dead code (`string(::BigFloat)` always kept exponent form here) and was
-    # removed after verifying byte-identical output on the plain range.
+    # This is fully deterministic.
     s = repr(f)
     if !occursin('e', lowercase(s))
         return s

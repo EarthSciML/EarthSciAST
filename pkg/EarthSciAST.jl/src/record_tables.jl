@@ -212,10 +212,10 @@ source of truth from which BOTH wire directions are generated
       (nested `coerce_<of>`/`serialize_<of>`; `T` names the element type),
       `:custom` (`parse_fn` on the fetched value; `emit_fn` on the struct).
     - `mode`: parse-side fetch policy — `:req` (`data[wire]`, KeyError when
-      missing, exactly as the historical direct index), `:req_err`
+      missing), `:req_err`
       (`_raw_haskey` guard throwing the PINNED `req_err` message; a JSON
       `null` value then flows to the converter — or to `default` when the
-      row has one — matching each historical site), `:req_nullerr`
+      row has one), `:req_nullerr`
       (null-or-absent throws `req_err`), `:opt` (absent/null → `nothing`),
       `:opt_empty` (absent/null → `default`), `:default` (absent/null →
       `default`, present → converted), `:force` (fetch null-as-absent and
@@ -371,9 +371,8 @@ const RECORD_FIELD_TABLES = (
             (f = :source, wire = "source", kind = :record, of = :data_source_location, mode = :req, emit = :always, pos = true),
             (f = :temporal, wire = "temporal", kind = :record, of = :data_source_temporal, mode = :opt, emit = :nonnothing),
             # Emit-side residue AS A COLUMN: determinism is emitted only when
-            # present AND its serialized dict is non-empty (the historical
-            # `isempty(det_dict) ||` guard) — a cross-field-free but
-            # doubly-conditional policy, so it names a hand-written hook.
+            # present AND its serialized dict is non-empty — a doubly
+            # conditional policy, so it names a hand-written hook.
             (
                 f = :determinism, wire = "determinism", kind = :record, of = :data_source_determinism, mode = :opt,
                 emit = :custom, emit_fn = :_emit_data_source_determinism,
@@ -616,7 +615,7 @@ const RECORD_FIELD_TABLES = (
             # per-entry lhs/rhs presence check; emit must name a hook too, because
             # `_record_emit_expr` has no `:custom` case and would otherwise emit the
             # `AffectEquation` structs verbatim — a JSON3 field dump carrying `wrt`,
-            # `label`, `output`, … that no longer validates against the schema.
+            # `label`, `output`, … that does not validate against the schema.
             (
                 f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
                 mode = :opt_empty, default = :(AffectEquation[]),
@@ -697,7 +696,7 @@ const RECORD_FIELD_TABLES = (
                 of = :equation, eltype = :Equation, mode = :opt_empty, default = :(Equation[]),
                 emit = :nonempty,
             ),
-            # number-or-Expression solver guesses (gt-ebuq) — a per-value union,
+            # number-or-Expression solver guesses — a per-value union,
             # so a hand-written hook pair.
             (
                 f = :guesses, wire = "guesses", kind = :custom, parse_fn = :_coerce_model_guesses,
@@ -721,7 +720,7 @@ const RECORD_FIELD_TABLES = (
             ),
             # schema §4.7 subsystems: per-entry oneOf [Model, SubsystemRef],
             # sniffed by the hand-written union hooks. A data source is a registry
-            # entry from 1.0.0 and can no longer be a subsystem.
+            # entry, never a subsystem.
             (
                 f = :subsystems, wire = "subsystems", kind = :custom, parse_fn = :_coerce_model_subsystems,
                 mode = :opt_empty, default = :(Dict{String, SubsystemNode}()),

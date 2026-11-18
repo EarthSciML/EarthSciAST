@@ -1423,8 +1423,8 @@ end
     flatten(model::Model; name::String="anonymous") -> FlattenedSystem
 
 Convenience: wrap a single Model in a synthetic EsmFile (with a default system
-name) and run the full flattener. This is the call path used by
-`ModelingToolkit.System(::Model)` in the Julia extension (see gt-fpw).
+name) and run the full flattener. `ModelingToolkit.System(::Model)` in the
+MTK extension calls it.
 """
 function flatten(model::Model; name::String = "anonymous")::FlattenedSystem
     file = EsmFile(
@@ -1459,8 +1459,7 @@ end
 # SAME (prefix, local-name) map `_collect_model!` applies to the component's
 # equations — otherwise a body spliced at the BUILD boundary (the
 # reference-preserving fast path, or `expand_flattened_refs`) references bare
-# names the flat var_map no longer contains (an ESD grid parameter like
-# `dphi_lat` was the motivating failure). Template formal params are EXCLUDED
+# names the flat var_map does not contain. Template formal params are EXCLUDED
 # from the rename set: they are the template's own scope, substituted at
 # expansion, never component variables. Nested reference BINDINGS inside a body
 # are scoped by `namespace_expr`'s apply arm; body-local aggregate loop names

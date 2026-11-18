@@ -1,4 +1,4 @@
-# Julia adapter for the cross-language PDE-simulation conformance tier (ess-fmw).
+# Julia adapter for the cross-language PDE-simulation conformance tier.
 #
 # Reference binding. For every fixture in the manifest it:
 #   * evaluates the discretized RHS f(u, t) at each declared probe state via the

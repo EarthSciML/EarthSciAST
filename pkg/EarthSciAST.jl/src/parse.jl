@@ -15,8 +15,8 @@ using JSONSchema
 # order is deliberately NOT part of the contract:
 #   * raw-passthrough values stored on typed structs and re-emitted verbatim
 #     (`functional_affect`, loader `metadata`, the `_verbatim_decl` snapshots,
-#     serialize.jl's import-entry copies) — historically plain Dicts, and the
-#     JSON3-write byte surface of `save` depends on that staying so;
+#     serialize.jl's import-entry copies), whose JSON3-written bytes depend on
+#     them being plain Dicts;
 #   * carrier-independent input to JSONSchema.jl (`validate_schema`), whose
 #     `type: array` check does not recognize `JSON3.Array`.
 #
@@ -57,10 +57,9 @@ function expression_from_json(data::Any)::ASTExpr
         # here so the AST-literal boundary is uniform even when JSON3's
         # context-dependent structural inference materialises a bare integer
         # token (`1`) as `Float64` in a deeply-nested, schema-repeating document
-        # (e.g. an integer ratio `{op:"/",args:[1,N]}` inside an `aggregate`
-        # `expr` body). Without this an integer ratio inside an aggregate would
-        # round-trip as `1.0/N.0` and could never be byte-identical across the
-        # five bindings. Non-integral floats stay `NumExpr`.
+        # (e.g. an integer ratio `{op:"/",args:[1,N]}` inside a `faq` `expr`
+        # body), so that ratio re-emits as `1/N` in every binding. Non-integral
+        # floats stay `NumExpr`.
         i = _as_int64(data)
         return i === nothing ? NumExpr(Float64(data)) : IntExpr(i)
     elseif isa(data, String)
@@ -116,10 +115,9 @@ end
 # derived from the row's `kind` (expression-bearing shapes) or `parse` recipe
 # tag (scalar coercions). Field lookup goes through `_raw_get` (string-keyed,
 # null-as-absent), so each wire key is named exactly once — in the table.
-# Op-conditional structural validation is spliced in at the same positions the
-# historical hand-written extraction performed it (integral bounds directly
-# after `upper`), so ParseError precedence on multiply-invalid nodes is
-# unchanged.
+# Op-conditional structural validation is spliced in at fixed positions
+# (integral bounds directly after `upper`), which fixes the ParseError
+# precedence on a node with several invalid fields.
 function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr, Nothing}
     (f === :op || f === :args) && return nothing        # structural, hand-parsed
     spec.kind === :internal && return nothing           # never on the wire
@@ -225,10 +223,8 @@ function _parse_op_dict(data)
         )
     end
     if op == "call"
-        # The `call` op + `registered_functions` extension point was removed in
-        # v0.3.0 (esm-spec §9 closure, RFC `closed-function-registry.md`).
-        # Files written against the v0.2.x escape hatch must migrate to AST
-        # ops or `esm:std/*.esm` expression templates.
+        # `call` is not an operator of the format (esm-spec §9 closure); a file
+        # needs AST ops or `esm:std/*.esm` expression templates instead.
         throw(
             ParseError(
                 "`call` op is not valid in v0.3.0+ (removed by esm-spec §9 closure). " *
@@ -260,7 +256,7 @@ end
 #
 # Ops with structural field requirements each get their own checker so the
 # generic field-extraction skeleton in `_parse_op_dict` reads at one level.
-# Error messages are load-rejection behavior — keep them byte-identical.
+# The error messages are part of the load-rejection contract.
 
 # `integral`: requires the integration variable name (wire key `var`) and both
 # bound expressions.
@@ -342,7 +338,7 @@ end
 _valid_env_arity(k::Int) = (k == 1 || k == 2 || k == 4)
 
 # Coerce a `{ "overlap": { "src_env": [...], "tgt_env": [...], "eps": 0.0 } }`
-# join clause (Phase 2a) into the parsed `_OverlapJoinSpec`. Only STRUCTURAL
+# join clause into the parsed `_OverlapJoinSpec`. Only STRUCTURAL
 # validation here (present env arrays, legal arity); factor / range resolution
 # runs at build time against the const-array registry + document index sets.
 function _coerce_overlap_clause(ov)
@@ -630,10 +626,8 @@ function _coerce_esm_file(data::Any, document_base::Union{Nothing, AbstractStrin
     coupling = coupling_raw === nothing ? CouplingEntry[] :
         CouplingEntry[coerce_coupling_entry(c) for c in coupling_raw]
 
-    # esm-spec v0.8.0: a single top-level `domain` object (the one temporal
-    # domain shared by every component), not the old `domains` map of named
-    # domains. Cross-grid coupling is now an ordinary regridding `transform`
-    # expression, so there is no `interfaces` block either.
+    # A single top-level `domain` object: the one temporal domain shared by
+    # every component (esm-spec §11).
     domain = _maybe(coerce_domain, _raw_get(data, "domain", nothing))
 
     # File-local enum mappings (esm-spec §9.3). Used by the `enum` AST op to
@@ -829,8 +823,8 @@ recursively; ref entries become a `SubsystemRef` placeholder that
 `resolve_subsystem_refs!` replaces in place with the loaded component. `name`
 is the subsystem key, used only in metaparameter-binding diagnostics.
 
-From esm 1.0.0 a data source is an ingest registry entry rather than a
-component, so it can no longer appear here (esm-spec §8).
+A data source is an ingest registry entry, not a component, so it never
+appears here (esm-spec §8).
 """
 function _coerce_subsystem_entry(name::String, v)
     if _raw_get(v, "ref", nothing) !== nothing
@@ -923,17 +917,16 @@ function coerce_reaction_system(data::Any)::ReactionSystem
     parameters = haskey(data, "parameters") ?
         [coerce_parameter(string(k), v) for (k, v) in pairs(data["parameters"])] : Parameter[]
 
-    # Inline tests / tolerance (schema gt-cc1) — same shape as on Model.
+    # Inline tests / tolerance — same shape as on Model.
     tolerance = _maybe(coerce_tolerance, _raw_get(data, "tolerance", nothing))
     tests_raw = _raw_get(data, "tests", nothing)
     tests = tests_raw !== nothing ?
         EarthSciAST.InlineTest[coerce_test(t) for t in tests_raw] :
         EarthSciAST.InlineTest[]
 
-    # The rest of the schema's `ReactionSystem` — every one of these used to be
-    # read by nobody, so `load` dropped it. `analyses` stays raw (nothing here
-    # runs one); the events and constraint equations get the same typed forms
-    # they have on a `Model`.
+    # The rest of the schema's `ReactionSystem`. `analyses` stays raw (nothing
+    # here runs one); the events and constraint equations get the same typed
+    # forms they have on a `Model`.
     _raw_vec(key) = _raw_get(data, key, ())
     constraint_equations = Equation[coerce_equation(x) for x in _raw_vec("constraint_equations")]
     discrete_events = DiscreteEvent[coerce_discrete_event(x) for x in _raw_vec("discrete_events")]
@@ -1082,9 +1075,8 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     lifting = _opt_string(data, "lifting")
 
     # The "an expression transform takes no factor" invariant is enforced ONCE,
-    # by the `CouplingVariableMap` constructor (types.jl). The parser rebrands
-    # that `ArgumentError` as a `ParseError` carrying the historical parse-side
-    # message, so the error type/message seen from `load` is unchanged.
+    # by the `CouplingVariableMap` constructor (types.jl). The parser rethrows
+    # that `ArgumentError` as a `ParseError` with the load-side message.
     try
         return CouplingVariableMap(from, to, transform; factor = factor, description = description, lifting = lifting)
     catch e
@@ -1103,14 +1095,14 @@ end
 # One `coerce_<fn>` per `RECORD_FIELD_TABLES` entry (types.jl — the shared
 # per-type field tables; the serialize direction is generated from the SAME
 # table in serialize.jl). Each generated coercer extracts one local per row,
-# in table order (the historical parse order, pinning ParseError precedence),
+# in table order (which fixes ParseError precedence),
 # then calls the type's constructor with the table's positional/keyword
 # split. Irregular residue (discriminated unions, name-keyed-map↔vector
 # conversions, context-threaded messages) stays hand-written above; the
 # `:custom` rows below name their hand-written per-field hooks.
 
 # ── Hand-written `:custom` parse hooks (named by RECORD_FIELD_TABLES rows) ──
-# Model `guesses`: number-or-Expression solver-guess map (gt-ebuq).
+# Model `guesses`: number-or-Expression solver-guess map.
 function _coerce_model_guesses(v)
     guesses = Dict{String, Union{Float64, ASTExpr}}()
     for (k, x) in pairs(v)
@@ -1413,7 +1405,7 @@ for spec in RECORD_FIELD_TABLES
             coerce_$(spec.fn)($(injected ? "name, " : "")data) -> $(spec.T)
 
         Coerce JSON data into `$(spec.T)`. GENERATED from `RECORD_FIELD_TABLES`
-        (types.jl) — one extraction per row in table (historical parse) order;
+        (types.jl) — one extraction per row, in table order;
         the serialize direction is generated from the same table in serialize.jl.
         """
     ) $fname

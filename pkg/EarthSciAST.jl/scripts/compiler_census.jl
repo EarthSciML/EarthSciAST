@@ -3,9 +3,9 @@
 # compiler_census.jl — which tier does every equation of every corpus document
 # land on, and does any kernel still walk the tree per cell at RHS-call time?
 #
-# Phase 0 of the compiler-selection work: the `native` compiler refuses a
-# document whose RHS still runs `_run_acc_kernel!` (the per-cell interpreter),
-# so the census has to separate three things a cascade tally alone conflates:
+# The `native` compiler refuses a document whose RHS still runs
+# `_run_acc_kernel!` (the per-cell interpreter), so the census separates two
+# things a cascade tally alone conflates:
 #
 #   * per-cell BUILD  — `:percell_loop` / `:percell_acc` / `:percell_disabled`.
 #     The faq equation declined every whole-array tier and was scalarized one

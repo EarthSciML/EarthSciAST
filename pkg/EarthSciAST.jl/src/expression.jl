@@ -106,9 +106,8 @@ All immediate sub-expressions of `e`, drawn from EVERY expression-bearing
 faq bodies (`expr_body`), filter predicates (`filter`), integral
 bounds (`lower`/`upper`), makearray `values`, expression-valued dense
 `ranges` bounds, value-invention
-`key` expressions, AND expression-template `bindings` values (historically the
-one field this traversal missed while validate's copy missed `ranges` — both
-walkers are now generated from `OPEXPR_FIELD_TABLE` and traverse both).
+`key` expressions, AND expression-template `bindings` values. The walk is
+generated from `OPEXPR_FIELD_TABLE`, as validate's is.
 
 Non-expression fields (kind `:scalar`/`:join`/`:internal` in the table: `wrt`,
 `dim`, `int_var`, `output_idx`, `join`, `regions`, `shape`, `perm`, `axis`,
@@ -558,15 +557,14 @@ function free_variables(expr::VarExpr)::Set{String}
 end
 
 function free_variables(expr::OpExpr)::Set{String}
-    # IDENTITY-MEMOIZED bottom-up computation (ESS-0hh): the free-variable set
+    # IDENTITY-MEMOIZED bottom-up computation: the free-variable set
     # of a subtree is INTRINSIC to it — a variable bound by an ENCLOSING binder
     # is still free in the subtree, because binder subtraction happens at the
     # binder node itself — so two paths reaching the same shared node always
     # yield the same set, and caching per `OpExpr` identity is sound. Inputs
     # here are routinely DAGs (`_sub_preserving` / template lowering keep
-    # structurally-identical subtrees shared by reference), on which the plain
-    # per-path recursion re-walked a node once per PATH — exponential on a
-    # doubling chain. The memo is per top-level call, so the returned set (a
+    # structurally-identical subtrees shared by reference), on which a per-path
+    # recursion is exponential on a doubling chain. The memo is per top-level call, so the returned set (a
     # fresh `Set` per distinct node) is never aliased across calls.
     return _free_variables_dag(expr, IdDict{OpExpr, Set{String}}())
 end
@@ -1003,18 +1001,12 @@ function _sub_preserving(expr::OpExpr, bindings::Dict{String, ASTExpr}, memo::_S
     #     pbl_sum_O3[gi,gj]     = Σ_gk dp[gi,gj,gk]·pbl_f[gi,gj,gk]·O3[gi,gj,gk]
     #     pbl_mean_O3[gi,gj,gk] = pbl_sum_O3[gi,gj] / max(pbl_wt[gi,gj], 1)
     #
-    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In a
-    # MATERIALIZING build (the default for both emitters since 66b8e9a6) the sum
-    # is materialized, so the mean reads a buffer gather and the two binders
-    # never meet. In an INLINING build (`compiler=:interpreter`, or an observed
-    # excluded from materialization) the sum is spliced into the mean's body, and
-    # substituting the outer `gk` used to rewrite the inner sum's own loop
-    # variable. The inner body then no longer mentions `gk` while `ranges` still
-    # declares it, so the unroll emits `length(gk)` IDENTICAL terms: a column sum
-    # silently degenerates to `NLEV · body[gk = outer_k]`. It does not always
-    # throw — the ReSEACT PBL model happens to trip `E_TREEWALK_UNBOUND_LOOP_VAR`
-    # in the affine branch-key walk, but the same capture on a plainer model
-    # returns a WRONG NUMBER with no diagnostic at all.
+    # `gk` is CONTRACTED in the first and an OUTPUT index in the second. In an
+    # INLINING build (`compiler=:interpreter`, or an observed excluded from
+    # materialization) the sum is spliced into the mean's body. Substituting the
+    # outer `gk` into the inner sum's own loop variable would leave `ranges`
+    # declaring a `gk` the body no longer mentions, so the unroll would emit
+    # `length(gk)` IDENTICAL terms: a wrong number with no diagnostic.
     if _binds_any(expr, bindings)
         inner = _shadowed_bindings(expr, bindings)
         # Every binding shadowed ⇒ nothing in this subtree can substitute.

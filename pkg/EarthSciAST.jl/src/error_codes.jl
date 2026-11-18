@@ -10,11 +10,8 @@ vocabulary off. This file is that place, the Julia twin of TypeScript's
 `ErrorCode` enum (`pkg/earthsci-ast-py/src/earthsci_ast/error_handling.py`),
 Go's `codes.go` and Rust's `diagnostic::codes`.
 
-**The values are a cross-binding contract and must never change.** Every value
-below equals, byte for byte, a literal this package emitted before
-centralization; the shared corpus `tests/invalid/expected_errors.json` pins
-many of them by value. Centralizing them does not (and must not) change any
-emitted string. Adding a new diagnostic means adding an entry here AND
+**The values are a cross-binding contract and must never change.** The shared
+corpus `tests/invalid/expected_errors.json` pins many of them by value. Adding a new diagnostic means adding an entry here AND
 coordinating the value across every binding.
 
 Field names are the SCREAMING_SNAKE_CASE form of the value (mirroring the

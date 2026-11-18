@@ -500,8 +500,7 @@ end
 # which every cross-producer read is refused by construction, whatever the
 # program would have saved. The output assembly is the first casualty, because
 # it spans every producer there is. The budget is therefore a multiple of the
-# extended state, with the old absolute value kept as a FLOOR so a small model
-# still gets the headroom it had.
+# extended state, with an absolute FLOOR so a small model still gets headroom.
 const _DE_GATHER_BASE_FLOOR = 1 << 16
 const _DE_GATHER_BASE_FACTOR = 4
 

@@ -460,9 +460,9 @@ for a set of [`VarGridding`](@ref)s: for each distinct spatial dim, if the regis
 has an entry KEYED BY THAT DIM NAME carrying inline `values`, emit a [`DimCoord`](@ref)
 (validating its length against the dim's grid length) with the entry's
 `standard_name`/`units`/`axis` attrs. Registry entries whose key is not a dim name
-(auxiliary coordinates) and `source`-backed entries are skipped in v1 (the
-dimension-coordinate path handles inline values); they are the documented next
-drop-in. Dims with no registry entry emit no coordinate (bare integer axis, as before).
+(auxiliary coordinates) and `source`-backed entries are skipped (only inline
+values are emitted). Dims with no registry entry emit no coordinate (a bare
+integer axis).
 """
 function plan_dimension_coordinates(gridding::AbstractVector{VarGridding}, meta::OutputMeta)
     dimlen = Dict{String, Int}()
