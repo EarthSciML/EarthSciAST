@@ -43,7 +43,8 @@
 # sequence applied per lane is byte-identical to the unmerged kernel's.
 # A kernel's write is ASSIGNMENT, and the pass merges only when every kernel
 # out-slot is globally unique, so concatenating groups cannot reorder any
-# read-after-write. Op payloads ride from the class representative.
+# read-after-write. A node carrying a payload keeps its kernel out of round 1; round 2
+# checks every member's payload is the same object.
 #
 # SAFETY POSTURE. This is a default-on optimization of a correct baseline,
 # so every "can't" is a fallback, not an error: overlapping out-slots, a
@@ -85,6 +86,9 @@ function _oop_merge_sig!(
     elseif k === _NK_CACHED
         print(io, "C", n.payload === K.cse.scratch ? "c" : "i", n.idx)
     elseif k === _NK_CONTRACTION
+        # The clone takes a node's payload from the class representative, so a
+        # payload the signature cannot compare keeps the kernel out of the merge.
+        n.payload === nothing || (why[] = :op_payload)
         print(io, "K", n.op, "s", n.literal, "(")
         for c in n.children
             _oop_merge_sig!(io, c, K, parentsubs, why)
@@ -95,8 +99,6 @@ function _oop_merge_sig!(
         pos === nothing && (why[] = :subcall_unknown; return)
         print(io, "S", pos)
     elseif k === _NK_OP
-        # The clone takes an op's payload from the class representative, so a
-        # payload the signature cannot compare keeps the kernel out of the merge.
         n.payload === nothing || (why[] = :op_payload)
         print(io, "O", n.op)
         print(io, "(")
@@ -143,8 +145,8 @@ end
 # per-lane cell tier? Deliberately conservative: any access or subcall leaf,
 # any literal that differs across members, or a cached read outside the inv
 # tier declines — the fold-to-cell fallback is always value-correct, this
-# only decides WHERE the (identical) value is computed. fn payloads ride from
-# the rep in the clone, so their specs must be content-equal here.
+# only decides WHERE the (identical) value is computed. No node here carries a
+# payload: the signature keeps such kernels out of this round.
 function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     r = nodes[1]; k = r.kind
     if k === _NK_LITERAL
@@ -168,12 +170,76 @@ function _oop_inv_nodes_identical(nodes::Vector{_Node}, Kof, m::Int)
     end
 end
 
+# ---- Leaf tables shared by both rounds ---------------------------------------
+# A group of aligned leaves, one per class member (`nodes[i]` in member `i`'s
+# context kernel `Kof(i)` and lane plan `Pof(i)`), becomes one table over the
+# merged lanes: member `i`'s `Ls[i]` lanes follow member `i - 1`'s, and each
+# lane's entry is what that member's leaf reads at that lane.
+
+# State family: the slot read (0 = ghost).
+function _lane_state_table(nodes::Vector{_Node}, Kof, Pof, Ls::Vector{Int})
+    tbl = Vector{Int}(undef, sum(Ls)); q = 0
+    for i in eachindex(nodes)
+        lk = Ls[i]; idx = nodes[i].idx
+        a = Kof(i).acc[idx]; pl = Pof(i)
+        if a.kind === _AK_STATE_FIXED
+            tbl[(q + 1):(q + lk)] .= a.idx
+        elseif a.kind === _AK_STATE_AFFINE
+            tbl[(q + 1):(q + lk)] .= pl.gathers[idx]
+        else # TBL_BOX: the raw table, ghosts back to 0
+            g = pl.gathers[idx]; gh = pl.ghost[idx]
+            if isempty(gh)
+                tbl[(q + 1):(q + lk)] .= g
+            else
+                for mm in 1:lk
+                    tbl[q + mm] = gh[mm] ? 0 : g[mm]
+                end
+            end
+        end
+        q += lk
+    end
+    return tbl
+end
+
+# Live forcing family: the index into the one shared buffer.
+function _lane_forcing_table(nodes::Vector{_Node}, Kof, Pof, Ls::Vector{Int})
+    tbl = Vector{Int}(undef, sum(Ls)); q = 0
+    for i in eachindex(nodes)
+        lk = Ls[i]; idx = nodes[i].idx
+        a = Kof(i).acc[idx]
+        tbl[(q + 1):(q + lk)] .= a.kind === _AK_ARR_FIXED ? a.idx : Pof(i).forc[idx]
+        q += lk
+    end
+    return tbl
+end
+
+# Value leaves (literals and frozen-const reads, mixed): the value read.
+function _lane_value_table(nodes::Vector{_Node}, Pof, Ls::Vector{Int})
+    tbl = Vector{Float64}(undef, sum(Ls)); q = 0
+    for i in eachindex(nodes)
+        lk = Ls[i]; nd = nodes[i]
+        if nd.kind === _NK_LITERAL
+            tbl[(q + 1):(q + lk)] .= nd.literal
+        else
+            tbl[(q + 1):(q + lk)] .= Pof(i).consts[nd.idx]
+        end
+        q += lk
+    end
+    return tbl
+end
+
+# Append `desc` to the merged kernel's descriptor table; the access node reading it.
+function _push_lane_desc!(accvec::Vector{_AccDesc}, desc::_AccDesc)
+    push!(accvec, desc)
+    return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
+end
+
 # Merge one class of lockstep-identical kernels (indices `js` into
 # kernels/plans) into a single lane-batched kernel. Members' lanes are
 # concatenated in `js` order; each varying leaf becomes a table over the
 # merged lane ordinal, read through `_outs_cells` addressing (s1=1, off=1).
 function _oop_merge_group(kernels, plans, js::Vector{Int})
-    m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
+    m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
     @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
@@ -207,16 +273,12 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
         function clone(nodes::Vector{_Node})::_Node
             r = nodes[1]; k = r.kind
             if k === _NK_LITERAL
-                vals = Float64[n.literal for n in nodes]
-                if all(==(vals[1]), vals)
+                if _allof(i -> isequal(nodes[i].literal, r.literal), 1:m)
                     return _Node(k, r.op, r.literal, r.idx, r.sym, nothing, _Node[])
                 end
-                tbl = Vector{Float64}(undef, L); q = 0
-                for i in 1:m
-                    tbl[(q + 1):(q + Ls[i])] .= vals[i]; q += Ls[i]
-                end
-                push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
-                return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
+                return _push_lane_desc!(
+                    accvec, _AccConstBox(_lane_value_table(nodes, Pof, Ls), 1, 0, 0, 1)
+                )
             elseif k === _NK_PARAM || k === _NK_TIME
                 return _Node(k, r.op, r.literal, r.idx, r.sym, r.payload, _Node[])
             elseif k === _NK_CACHED
@@ -242,53 +304,18 @@ function _oop_merge_group(kernels, plans, js::Vector{Int})
                 return _Node(k, r.op, r.literal, r.idx, r.sym, merged_subs[pos], _Node[])
             elseif k === _NK_ACCESS
                 akind = Kof(1).acc[r.idx].kind
-                if _oop_x_statefam(akind)
-                    tbl = Vector{Int}(undef, L); q = 0
-                    for i in 1:m
-                        lk = Ls[i]; idx = nodes[i].idx
-                        a = Kof(i).acc[idx]; pl = Pof(i)
-                        if a.kind === _AK_STATE_FIXED
-                            tbl[(q + 1):(q + lk)] .= a.idx
-                        elseif a.kind === _AK_STATE_AFFINE
-                            tbl[(q + 1):(q + lk)] .= pl.gathers[idx]
-                        else # TBL_BOX: reconstruct the raw table (0 = ghost)
-                            g = pl.gathers[idx]; gh = pl.ghost[idx]
-                            if isempty(gh)
-                                tbl[(q + 1):(q + lk)] .= g
-                            else
-                                for mm in 1:lk
-                                    tbl[q + mm] = gh[mm] ? 0 : g[mm]
-                                end
-                            end
-                        end
-                        q += lk
-                    end
-                    push!(accvec, _AccStateTblBox(tbl, 1, 0, 0, 1))
-                elseif akind === _AK_CONST_BOX || akind === _AK_LOOP_IDX
-                    tbl = Vector{Float64}(undef, L); q = 0
-                    for i in 1:m
-                        lk = Ls[i]; idx = nodes[i].idx
-                        tbl[(q + 1):(q + lk)] .= Pof(i).consts[idx]
-                        q += lk
-                    end
-                    push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
-                else # ARR_FIXED / FORCING_BOX / ARR_TBL_BOX (live; same buffer by sig)
-                    arr = Kof(1).acc[r.idx].arr
-                    tbl = Vector{Int}(undef, L); q = 0
-                    for i in 1:m
-                        lk = Ls[i]; idx = nodes[i].idx
-                        a = Kof(i).acc[idx]; pl = Pof(i)
-                        if a.kind === _AK_ARR_FIXED
-                            tbl[(q + 1):(q + lk)] .= a.idx
-                        else
-                            tbl[(q + 1):(q + lk)] .= pl.forc[idx]
-                        end
-                        q += lk
-                    end
-                    push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
+                desc = if _oop_x_statefam(akind)
+                    _AccStateTblBox(_lane_state_table(nodes, Kof, Pof, Ls), 1, 0, 0, 1)
+                elseif _oop_x_constfam(akind)
+                    _AccConstBox(_lane_value_table(nodes, Pof, Ls), 1, 0, 0, 1)
+                else # live forcing (same buffer by the signature)
+                    _AccArrTblBox(
+                        Kof(1).acc[r.idx].arr, _lane_forcing_table(nodes, Kof, Pof, Ls),
+                        1, 0, 0, 1
+                    )
                 end
-                return _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
-            else # any other kind (operator, contraction, reduce): kind and payload ride from the rep
+                return _push_lane_desc!(accvec, desc)
+            else # operator or contraction (payload-free, by the signature)
                 pay = r.payload
                 ch = Vector{_Node}(undef, length(r.children))
                 for ci in eachindex(r.children)
@@ -731,7 +758,7 @@ end
 # by the members' own DAGs wherever their sharing agrees; a node budget guards
 # the pathological case where it does not.
 function _oop_x_merge_group(kernels, plans, js::Vector{Int})
-    m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]; L = sum(Ls)
+    m = length(js); Ls = Int[length(plans[j].out_slots) for j in js]
     rep = kernels[js[1]]
     nsubs = length(rep.subs)
     @assert _allof(j -> length(kernels[j].subs) == nsubs, js)
@@ -751,67 +778,29 @@ function _oop_x_merge_group(kernels, plans, js::Vector{Int})
             isacc(i) = nodes[i].kind === _NK_ACCESS
             akind(i) = Kof(i).acc[nodes[i].idx].kind
             out = if all(i -> isacc(i) && _oop_x_statefam(akind(i)), 1:m)
-                tbl = Vector{Int}(undef, L); q = 0
-                for i in 1:m
-                    lk = Ls[i]; idx = nodes[i].idx
-                    a = Kof(i).acc[idx]; pl = Pof(i)
-                    if a.kind === _AK_STATE_FIXED
-                        tbl[(q + 1):(q + lk)] .= a.idx
-                    elseif a.kind === _AK_STATE_AFFINE
-                        tbl[(q + 1):(q + lk)] .= pl.gathers[idx]
-                    else # TBL_BOX: reconstruct the raw table (0 = ghost)
-                        g = pl.gathers[idx]; gh = pl.ghost[idx]
-                        if isempty(gh)
-                            tbl[(q + 1):(q + lk)] .= g
-                        else
-                            for mm in 1:lk
-                                tbl[q + mm] = gh[mm] ? 0 : g[mm]
-                            end
-                        end
-                    end
-                    q += lk
-                end
-                push!(accvec, _AccStateTblBox(tbl, 1, 0, 0, 1))
-                _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
+                _push_lane_desc!(
+                    accvec,
+                    _AccStateTblBox(_lane_state_table(nodes, Kof, Pof, Ls), 1, 0, 0, 1)
+                )
             elseif all(i -> isacc(i) && _oop_x_forcfam(akind(i)), 1:m)
                 arr = Kof(1).acc[r.idx].arr
                 all(i -> Kof(i).acc[nodes[i].idx].arr === arr, 1:m) ||
                     error("round-2: forcing buffer mismatch in a class")
-                tbl = Vector{Int}(undef, L); q = 0
-                for i in 1:m
-                    lk = Ls[i]; idx = nodes[i].idx
-                    a = Kof(i).acc[idx]; pl = Pof(i)
-                    if a.kind === _AK_ARR_FIXED
-                        tbl[(q + 1):(q + lk)] .= a.idx
-                    else
-                        tbl[(q + 1):(q + lk)] .= pl.forc[idx]
-                    end
-                    q += lk
-                end
-                push!(accvec, _AccArrTblBox(arr, tbl, 1, 0, 0, 1))
-                _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
+                _push_lane_desc!(
+                    accvec,
+                    _AccArrTblBox(arr, _lane_forcing_table(nodes, Kof, Pof, Ls), 1, 0, 0, 1)
+                )
             elseif all(
                     i -> nodes[i].kind === _NK_LITERAL ||
                         (isacc(i) && _oop_x_constfam(akind(i))), 1:m
                 )
-                # VALUE leaf group: literal and frozen-const members mix — each
-                # lane's table entry is exactly the value that member's leaf
-                # reads (a literal's value or the plan-resolved per-lane const). All-equal ⇒ stays a scalar literal.
-                tbl = Vector{Float64}(undef, L); q = 0
-                for i in 1:m
-                    lk = Ls[i]; nd = nodes[i]
-                    if nd.kind === _NK_LITERAL
-                        tbl[(q + 1):(q + lk)] .= nd.literal
-                    else
-                        tbl[(q + 1):(q + lk)] .= Pof(i).consts[nd.idx]
-                    end
-                    q += lk
-                end
+                # Value leaf group: literal and frozen-const members mix. All
+                # lanes equal ⇒ it stays a scalar literal.
+                tbl = _lane_value_table(nodes, Pof, Ls)
                 if all(==(tbl[1]), tbl)
                     _Node(_NK_LITERAL, :lit, tbl[1], 0, Symbol(""), nothing, _Node[])
                 else
-                    push!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
-                    _Node(_NK_ACCESS, :acc, 0.0, length(accvec), Symbol(""), nothing, _Node[])
+                    _push_lane_desc!(accvec, _AccConstBox(tbl, 1, 0, 0, 1))
                 end
             elseif k === _NK_PARAM || k === _NK_TIME
                 all(i -> nodes[i].kind === k && nodes[i].sym === r.sym, 1:m) ||
