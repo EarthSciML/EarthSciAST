@@ -468,10 +468,9 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
 
         // The deprecated word spelling of unary `-` (esm-spec §4.2): the loader
         // rewrites it away, but an expression built in code can still reach
-        // this oracle, and the vectorized overlay already handles it (`vec_negate` / `affine_terms`). Route it
-        // through `negate` — the same primitive the unary-minus arm of
-        // `eval_arith` uses — so oracle and overlay agree. Unary only; a
-        // non-unary `neg` is malformed ⇒ the NaN sentinel.
+        // this oracle. Route it through `negate` — the same primitive the
+        // unary-minus arm of `eval_arith` uses — so the two spellings agree.
+        // Unary only; a non-unary `neg` is malformed ⇒ the NaN sentinel.
         CoreOp::Other(O::Neg) => {
             if node.args.len() != 1 {
                 return Value::Scalar(f64::NAN);
@@ -508,7 +507,7 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         CoreOp::Other(O::Min | O::Max) => eval_arith(op, &node.args, ctx),
 
         // Comparison operators — return 1.0 (true) or 0.0 (false) via the
-        // [`BinCode`] kernels the vectorized overlay uses. BROADCAST when either operand is an array, so a per-cell
+        // [`BinCode`] kernels the tape also runs. BROADCAST when either operand is an array, so a per-cell
         // predicate like `code >= 1` over an [x,y] fuel grid yields an [x,y] mask
         // rather than collapsing to a scalar NaN.
         CoreOp::Compare(_) => {
@@ -628,25 +627,13 @@ pub(super) fn eval_arith(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 
 /// The all-scalar fast path of [`eval_arith`].
 ///
-/// **This function and [`apply_binary`] must compute the same value for every
-/// LEGAL node** — that is the whole contract between the per-cell oracle and the
-/// vectorized overlay, and it is pinned by the
-/// `vectorized_matches_per_cell_oracle` equivalence test.
-///
-/// It did not used to hold. This function special-cased arity — returning `NaN`
-/// for `-`/`/`/`^` unless `len == 2`, and for `min`/`max` unless `len >= 2` —
-/// while the vectorized path left-folded *any* arity through `apply_binary`. So
-/// `-(3,1,1)` was `NaN` here and `1.0` there; `min(5)` was `NaN` here and `5.0`
-/// there. Worse, the oracle contradicted *itself*: the all-scalar guard in
-/// `eval_arith` routed to this function, but a single *array* operand routed to
-/// the left-folding `combine`, so `-(u,1,1)` meant `u-2` for an array `u` and
-/// `NaN` for a scalar one.
-///
-/// Those arities are now rejected before evaluation by [`crate::op_registry`],
-/// so the `NaN` special-cases are not merely unnecessary — they are unreachable,
-/// and keeping them would only re-open the divergence if the gate were ever
-/// bypassed. This is now a plain left-fold of [`apply_binary`], identical in
-/// kernel and in order to the vectorized path.
+/// **This function and the array path of [`eval_arith`] (a left fold of
+/// [`combine`]) must compute the same value for every LEGAL node**, so a
+/// scalar operand and an array operand of the same node mean the same thing.
+/// It is a plain left fold of [`apply_binary`], identical in kernel and in
+/// order to the array path. Arities that would need special-casing (`-`/`/`/`^`
+/// with other than two operands, `min`/`max` with fewer than two) are rejected
+/// before evaluation by [`crate::op_registry`], so none is handled here.
 pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // A zero-arity arithmetic node is not legal (the registry rejects it); the
     // NaN sentinel is the module's convention for an unevaluable node.
@@ -2864,8 +2851,8 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
 /// symbol names, and the origin (lower bound) of each output axis.
 ///
 /// This is what lets an ARRAY-valued `filter` be resolved to *this* cell's
-/// element — the same positional alignment the vectorized overlay's `VecBox`
-/// uses (`element = array[idx - lo]`).
+/// element by positional alignment (`element = array[idx - lo]`), the same
+/// alignment the axis analyses' `VecBox` describes.
 pub(super) struct CellBox<'a> {
     /// The output index symbol names, in axis order.
     pub names: &'a [String],
@@ -2905,8 +2892,8 @@ pub(super) struct ReduceSpec<'a> {
 /// A filter that evaluates to an ARRAY — a regrid `overlap > 0` sparsity gate
 /// or a fuel gate `code >= 1` that names a whole field rather than an indexed
 /// element — is indexed at the current output cell, aligned to the output box
-/// exactly as `VecBox` aligns it, so this oracle and the vectorized overlay
-/// (which feeds the array to `vec_select` as a mask) give one answer.
+/// exactly as `VecBox` aligns it, so this oracle and the tape (which applies
+/// the array as an elementwise mask) give one answer.
 ///
 /// An array that cannot be aligned — its rank is not the output box's, or the
 /// cell lies outside it — is a FAULT, not a verdict: including the cell would
@@ -2971,7 +2958,7 @@ pub(super) fn filter_excludes(
 }
 
 /// The element of an output-box-shaped `a` at the current output cell, aligned
-/// as the vectorized overlay's `VecBox` aligns an array operand to its box
+/// as `VecBox` aligns an array operand to its box
 /// (`element = a[idx - lo]` per output axis). `None` when the rank differs from
 /// the box's or the cell lies outside `a`.
 fn cell_element(a: &ArrayD<f64>, cell: &CellBox, ctx: &EvalCtx) -> Option<f64> {
@@ -3003,8 +2990,8 @@ enum NestedBox {
     Other(String),
 }
 
-/// [`NestedBox`] of `e`, walking only the elementwise operators the
-/// whole-array overlay combines position by position.
+/// [`NestedBox`] of `e`, walking only the elementwise operators, which
+/// combine their operands position by position.
 fn nested_faq_box(e: &Expr, cell: &CellBox) -> NestedBox {
     let Expr::Operator(node) = e else {
         return NestedBox::None;
@@ -3066,12 +3053,13 @@ fn nested_box_message(cell: &CellBox, what: &str) -> String {
 /// nested `faq` under an elementwise operator, `faq_f(Σ_k w[e(f, k)]) - q[f]`
 /// inside the node over `f` — denotes, per cell, its element at that cell: the
 /// nested node rebinds `f` and so is a whole array (esm-spec §4.3.1 shadowing),
-/// and the whole-array overlay combines it with the box's other operands
-/// position by position. This reads the same element ([`cell_element`]), so the
-/// oracle and the overlay agree. The read is taken only when the body's nested
-/// `faq`s are provably over the output box ([`nested_faq_box`]); one over any
-/// other box latches a fault rather than reading an element of a different
-/// cell. Anything else that is not a scalar is NaN, as before.
+/// and a whole-array evaluation (the tape) combines it with the box's other
+/// operands position by position. This reads the same element
+/// ([`cell_element`]), so the oracle and the tape agree. The read is taken
+/// only when the body's nested `faq`s are provably over the output box
+/// ([`nested_faq_box`]); one over any other box latches a fault rather than
+/// reading an element of a different cell. Anything else that is not a
+/// scalar is NaN.
 pub(super) fn cell_term(v: Value, body: &Expr, cell: Option<&CellBox>, ctx: &EvalCtx) -> f64 {
     match v {
         Value::Scalar(s) => s,
@@ -3235,7 +3223,7 @@ pub(super) fn reduce_contraction(
 // to re-check it with — so `crate::join` lowers every resolved `on` pair into a
 // value-equality predicate ANDed into that same `filter` (§5.5.8). Declining to
 // drive therefore costs time, never correctness, on every shape and on every
-// path that never consults a gate at all (the whole-array overlay, the tape).
+// path that never consults a gate at all (the tape).
 //
 // IDENTITY FILL (normative, §5.5.6). Driving means an output cell with no
 // candidate pair emits NO term. That is the correct answer, not a hole: the

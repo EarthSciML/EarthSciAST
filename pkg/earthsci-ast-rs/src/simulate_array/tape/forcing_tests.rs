@@ -3,9 +3,8 @@
 //! run, in the CONST section, or in the SEGMENT section when a provider
 //! refreshes it between segments, and every reader takes the slot.
 //!
-//! Each program here is checked bit for bit against the per-cell oracle and
-//! the whole-array overlay, through the fast executor (fused and unfused) and
-//! the reference executor.
+//! Each program here is checked bit for bit against the per-cell oracle,
+//! through the fast executor (fused and unfused) and the reference executor.
 
 use super::super::ArrayCompiled;
 use super::ir::*;

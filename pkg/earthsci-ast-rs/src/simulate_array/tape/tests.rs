@@ -2421,8 +2421,8 @@ fn ab_superop_extended_pairs() {
 
 /// A method-of-lines model whose tendency is `rhs`, over an `[i]`-shaped state
 /// and an `[i]`-shaped observed `s = 0.5 * u` for `rhs` to consume. Array-shaped
-/// on purpose: a scalar model never engages the whole-array overlay, and the
-/// whole point of #101 is that the three evaluators disagreed.
+/// on purpose: a scalar model never exercises the whole-array broadcast path, and the
+/// array path is where the evaluators could disagree.
 fn bcast_doc(name: &str, n: i64, rhs: serde_json::Value) -> serde_json::Value {
     json!({
         "esm": "2.0.0",

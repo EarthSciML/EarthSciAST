@@ -1,26 +1,19 @@
 //! Lowering: compile the post-CSE expression graph of a model's observed +
 //! RHS rules into a flat [`TapeProgram`].
 //!
-//! The load-bearing principle: **compile the vectorized overlay's own
-//! decision procedures, don't invent new semantics.** Every classification
-//! this pass performs is the overlay's own `pub(super)` classifier
-//! (`classify_axis_role`, `parse_wrap_axis_any`, `lhs_constant_shifts`,
-//! `subblock_dest`, `vec_op_code`, …), and every construct `eval_vec_op`
-//! would bail on becomes a *declined rule* carrying the bail reason — so a
-//! rule is taped essentially when the overlay vectorizes it today. A model
-//! with a declined rule gets no program at all ([`DeclinedTape`]): the
+//! The load-bearing principle: **compile the shared axis analyses, don't
+//! invent new semantics.** Every classification this pass performs is one of
+//! the `pub(super)` classifiers in `vectorized.rs` (`classify_axis_role`,
+//! `parse_wrap_axis_any`, `lhs_constant_shifts`, `subblock_dest`,
+//! `vec_op_code`, …), which the range programs use too, and every construct
+//! they cannot classify becomes a *declined rule* carrying the reason. A
+//! model with a declined rule gets no program at all ([`DeclinedTape`]): the
 //! instruction set cannot hand a rule to the per-cell oracle.
 //!
-//! *Essentially*, because there is exactly one deliberate exception, and it
-//! is documented where it lives ([`TapeBuilder::lower_scalar_reduction`]): a
-//! rank-0 `faq` — every index contracted, scalar result — which the overlay
-//! declines outright (`eval_faq` gates its fast path on a non-empty output
-//! box) and production therefore evaluates in the per-cell oracle. The tape
-//! lowers it as a boxed body plus one [`Instr::Reduce`], whose ROW-MAJOR
-//! visiting order IS the oracle's `CartesianTuples` odometer — so the
-//! reference the lowering is pinned against there is the oracle rather than
-//! the overlay, which is the same equivalence every other arm rests on, just
-//! reached directly.
+//! Every arm is pinned against the per-cell oracle. A rank-0 `faq` — every
+//! index contracted, scalar result — is lowered as a boxed body plus one
+//! [`Instr::Reduce`] ([`TapeBuilder::lower_scalar_reduction`]), whose
+//! ROW-MAJOR visiting order IS the oracle's `CartesianTuples` odometer.
 //!
 //! ## Value numbering
 //!

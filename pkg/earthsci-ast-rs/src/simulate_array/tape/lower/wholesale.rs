@@ -12,8 +12,7 @@ impl<'m> TapeBuilder<'m> {
     // 0-d state's RHS — is evaluated by the per-cell oracle's `eval`
     // WHOLESALE: a variable reference resolves to the whole array, elementwise
     // arithmetic broadcasts over it, and a top-level `faq`/`makearray`
-    // materializes its own box (trying the SAME vectorized overlay this pass
-    // compiles — `eval_faq` / `eval_makearray`). This mirror covers the
+    // materializes its own box (`eval_faq` / `eval_makearray`). This mirror covers the
     // wholesale algebra where it agrees exactly with the tape's instruction
     // semantics:
     //
@@ -738,9 +737,7 @@ impl<'m> TapeBuilder<'m> {
     /// A rank-0 `faq` — every index contracted, no output axis — compiled as
     /// "promote the contracted indices to a box, then fold the box away".
     ///
-    /// This is the one aggregate shape the whole-array overlay declines
-    /// (`eval_faq` gates its fast path on `!shape.is_empty()`), so production
-    /// evaluates it in the per-cell oracle's [`reduce_contraction`]: `acc =
+    /// The per-cell oracle evaluates it in [`reduce_contraction`]: `acc =
     /// identity`, then one `acc = reduce.combine(acc, term)` per contraction
     /// tuple, enumerated by `CartesianTuples` — lexicographic over
     /// `contract_names`, LAST name fastest. [`Instr::Reduce`] folds its source

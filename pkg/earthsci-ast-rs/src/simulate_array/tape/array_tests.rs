@@ -6,10 +6,10 @@
 //! reduction, and a shaped observed defined by a scalar-condition `ifelse`.
 //!
 //! Every case builds with NO fallback rule and is compared bit for bit
-//! against the per-cell oracle (the `interpreter` compiler) and the
-//! whole-array overlay, on the reference executor and on the fast executor,
-//! fused and unfused — together with the fault the evaluation latches, which
-//! is part of what the interpreter answers.
+//! against the per-cell oracle (the `interpreter` compiler), on the
+//! reference executor and on the fast executor, fused and unfused — together
+//! with the fault the evaluation latches, which is part of what the
+//! interpreter answers.
 
 use super::super::{ArrayCompiled, ConstArrayScope, RhsStats};
 use super::taped;

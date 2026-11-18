@@ -9,27 +9,31 @@
 //!
 //! ## Semantics contract
 //!
-//! Every instruction's element semantics is DEFINED to be the corresponding
-//! kernel of the vectorized overlay (`vectorized.rs`), which is itself pinned
-//! bit-identical to the per-cell oracle:
+//! Every instruction's element semantics is DEFINED to be the per-cell
+//! oracle's (`eval`), computed with the oracle's own kernels:
 //!
-//! * [`Instr::Bin`] applies [`binary_kernel_of`] elementwise in `(a, b)` order
-//!   (scalar operands broadcast), exactly like `vec_combine`.
-//! * [`Instr::Un`] applies [`unary_kernel_of`]; [`Instr::Neg`] applies `x → -x`
-//!   (`vec_negate` — NOT `0 - x`, which differs on signed zero).
-//! * [`Instr::Select`] is `vec_select`: `out[k] = cond[k] != 0 ? a[k] : b[k]`,
-//!   with BOTH branches already evaluated. A scalar `cond` operand broadcasts
-//!   (the §5.3 runtime-scalar filter gate), which is elementwise-identical to
-//!   the overlay's whole-term keep/replace.
+//! * [`Instr::Bin`] applies
+//!   [`binary_kernel_of`](super::super::eval::binary_kernel_of) elementwise
+//!   in `(a, b)` order (scalar operands broadcast).
+//! * [`Instr::Un`] applies
+//!   [`unary_kernel_of`](super::super::eval::unary_kernel_of);
+//!   [`Instr::Neg`] applies `x → -x` (the oracle's `negate` — NOT `0 - x`,
+//!   which differs on signed zero).
+//! * [`Instr::Select`] is `out[k] = cond[k] != 0 ? a[k] : b[k]`, with BOTH
+//!   branches already evaluated. A scalar `cond` operand broadcasts (the §5.3
+//!   runtime-scalar filter gate), which is elementwise-identical to keeping
+//!   or replacing the whole term.
 //! * [`Instr::JmpIfZero`] is the scalar-`ifelse` short circuit: the untaken
 //!   branch's instructions are NEVER executed.
-//! * [`Instr::Gather`] is a precompiled `eval_vec_index`: per-axis
-//!   shift/wrap/fixed/broadcast segments with ghost-0 (homogeneous Dirichlet)
-//!   fill outside the source extent.
-//! * [`Instr::Ramp`] is the coordinate-ramp idiom of `eval_vec_variable`.
-//! * [`Instr::Region`] is one `eval_vec_makearray` region write (later regions
+//! * [`Instr::Gather`] is a precompiled affine `index`: per-axis
+//!   shift/wrap/fixed/broadcast segments (the axis classes of
+//!   `vectorized.rs`) with ghost-0 (homogeneous Dirichlet) fill outside the
+//!   source extent.
+//! * [`Instr::Ramp`] is a coordinate ramp: an index symbol read as a value
+//!   along one axis of the box.
+//! * [`Instr::Region`] is one `eval_makearray` region write (later regions
 //!   overwrite earlier ones).
-//! * [`Instr::Assemble`] is a whole `eval_vec_makearray`: the zero-filled
+//! * [`Instr::Assemble`] is a whole `eval_makearray`: the zero-filled
 //!   bounding box with every region written in order, in one instruction.
 //! * [`Instr::ConstArray`] materializes an inline array literal: the elements
 //!   `eval_const` produces for that node, in row-major order,

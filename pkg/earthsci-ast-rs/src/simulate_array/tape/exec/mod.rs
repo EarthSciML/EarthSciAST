@@ -4,16 +4,16 @@
 //! per-call heap allocation** (after warm-up), **no hashing on the kernel
 //! path**, and **zero recursion**. Array kernels are strided loops over raw
 //! `(pointer, shape, strides)` triples dispatched through the SAME
-//! `BinCode`/`UnCode` kernel fn-pointer tables the vectorized overlay uses,
+//! `BinCode`/`UnCode` kernel fn-pointer tables the per-cell oracle uses,
 //! so every element is computed by the same kernel the interpreter would have
 //! called — bit identity is structural, not coincidental:
 //!
 //! * elementwise instructions apply a pure per-element kernel, so iteration
 //!   order cannot change any output bit;
 //! * gathers execute the precompiled segment-copy plans (pure data movement
-//!   over a `+0.0` ghost fill, exactly `eval_vec_index`'s copy phase);
-//! * contractions were already unrolled by the lowering into the overlay's
-//!   own fold order;
+//!   over a `+0.0` ghost fill);
+//! * contractions were already unrolled by the lowering into the per-cell
+//!   oracle's fold order;
 //! * `JmpIfZero` short-circuits with the reference executor's pending-skip
 //!   discipline, so an untaken branch never executes.
 //!
